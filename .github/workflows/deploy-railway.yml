@@ -1,0 +1,41 @@
+# Deploy with Railway CLI using the root Dockerfile (same tree as the commit).
+# This avoids relying on Railway's GitHub integration alone, which can pick Railpack
+# or "redeploy" paths that replay an old image digest.
+#
+# Setup (once): Railway project → Settings → Tokens → create a Project Token.
+# GitHub repo → Settings → Secrets and variables → Actions → New repository secret:
+#   Name: RAILWAY_TOKEN   Value: <project token>
+#
+# Optional: In Railway → service → GitHub, turn OFF auto-deploy for this service
+# if you only want this workflow to deploy (prevents double deploys).
+
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: railway-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@4
+
+      - name: Deploy (Dockerfile build from repo)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set. Add a Railway Project Token (repo Settings → Secrets → Actions)."
+            exit 1
+          fi
+          railway up --ci --service polymarket-bot -m "ci ${{ github.sha }}"

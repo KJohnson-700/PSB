@@ -1,0 +1,27 @@
+# PSB dashboard — REST Client / VS Code REST / compatible runners
+# Base URL: set @host (e.g. http://127.0.0.1:8080) to match dashboard bind.
+
+@host = http://127.0.0.1:8080
+
+### Health + deploy fingerprint
+GET {{host}}/health
+
+### HTML fragment (HTMX poll target)
+GET {{host}}/api/dashboard/health-snippet
+
+### Live status (Command Center source of truth for full payload)
+GET {{host}}/api/status
+
+### SSE stream (browser: EventSource only; curl keeps connection open)
+GET {{host}}/api/events
+
+### Scalar API reference (only when SCALAR_ENABLED=1 on server)
+GET {{host}}/scalar
+
+### Strategy metrics + scans (heavy panels; polled less often than SSE heroes)
+GET {{host}}/api/strategy/metrics
+GET {{host}}/api/scans/latest
+
+### Journal + exposure
+GET {{host}}/api/journal/summary
+GET {{host}}/api/exposure

@@ -1,0 +1,46 @@
+# Runs on GitHub when you mirror or host the repo here (e.g. KJohnson-700/PSB).
+# Primary CI may still be GitLab (.gitlab-ci.yml); this keeps GitHub PRs/pushes gated the same way.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPENAI_API_KEY: ci-placeholder-not-used
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Preflight (config + dashboard index)
+        run: python scripts/preflight.py
+
+      - name: Dashboard bundle tests
+        run: pytest tests/test_dashboard_bundle.py -v
+
+      - name: Security suite (pip-audit + bandit)
+        run: python scripts/run_security_suite.py

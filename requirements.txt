@@ -1,0 +1,45 @@
+# Polymarket Trading Bot
+# Requirements
+
+# Core
+aiohttp>=3.9.0
+pyyaml>=6.0
+requests>=2.28.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Server
+uvicorn>=0.22.0
+fastapi>=0.95.0
+sentry-sdk[fastapi]>=2.0.0
+scalar-fastapi>=1.0.0
+
+# AI & Analysis
+openai>=1.3.0
+google-genai>=1.0.0
+groq>=0.4.0
+anthropic>=0.18.0
+python-dotenv>=0.20.0
+
+# Blockchain/Web3
+web3>=6.11.0
+# Pin to a recent line — review changelog before major bumps: https://github.com/Polymarket/py-clob-client
+# Requires Python >=3.9.10 (use 3.11+ recommended; see README).
+py-clob-client>=0.30.0
+
+# Backtesting (full local install; Docker/Railway uses requirements-railway.txt without Nautilus)
+nautilus_trader>=0.4.0
+pandas>=2.0.0
+rich>=13.0.0
+# polymarketdata-sdk[dataframe]  # Optional: pip install "polymarketdata-sdk[dataframe]" for L2 books, 1m data
+
+# Database (optional - for future use)
+# sqlalchemy>=2.0.0
+# asyncpg>=0.29.0
+
+# Logging
+python-json-logger>=2.0.0
+
+# Testing (optional)
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0

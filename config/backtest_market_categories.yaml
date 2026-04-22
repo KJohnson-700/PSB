@@ -1,0 +1,131 @@
+# Category definitions for backtest market discovery.
+# Used by scripts/build_backtest_market_list.py to fetch real Polymarket slugs.
+# Each category has: strategy (arbitrage | fade | both), keywords (slug/title match, lowercased).
+
+max_markets_per_category: 150
+
+categories:
+  # --- Arbitrage strategy (structured, high-liquidity, clear resolution) ---
+  arbitrage_elections_president:
+    strategy: arbitrage
+    keywords: [president, presidential, winner, 2024, 2028, election]
+  arbitrage_elections_house_senate:
+    strategy: arbitrage
+    keywords: [house, senate, control, congress, republican, democrat]
+  arbitrage_elections_nomination:
+    strategy: arbitrage
+    keywords: [nominee, nomination, primary, republican-presidential-nominee, democratic-presidential-nominee]
+  arbitrage_elections_debate:
+    strategy: arbitrage
+    keywords: [debate]
+  arbitrage_macro_cpi_inflation:
+    strategy: arbitrage
+    keywords: [cpi, inflation, inflation release]
+  arbitrage_macro_unemployment:
+    strategy: arbitrage
+    keywords: [unemployment, jobless, jobs report]
+  arbitrage_macro_gdp:
+    strategy: arbitrage
+    keywords: [gdp]
+  arbitrage_macro_recession:
+    strategy: arbitrage
+    keywords: [recession]
+  arbitrage_macro_fed:
+    strategy: arbitrage
+    keywords: [fed, federal reserve, rate hike, rate cut, fed funds, fomc]
+  arbitrage_crypto_btc:
+    strategy: arbitrage
+    keywords: [bitcoin, btc, 100k, 150k]
+  arbitrage_crypto_eth:
+    strategy: arbitrage
+    keywords: [ethereum, eth price]
+  arbitrage_crypto_etf:
+    strategy: arbitrage
+    keywords: [etf approval, bitcoin etf, spot etf]
+  arbitrage_sports_super_bowl:
+    strategy: arbitrage
+    keywords: [super bowl]
+  arbitrage_sports_nba_champion:
+    strategy: arbitrage
+    keywords: [nba champion, nba finals]
+  arbitrage_sports_world_series:
+    strategy: arbitrage
+    keywords: [world series, mlb]
+  arbitrage_sports_champions_league:
+    strategy: arbitrage
+    keywords: [champions league, ucl]
+  arbitrage_sports_world_cup:
+    strategy: arbitrage
+    keywords: [world cup]
+  arbitrage_range_ladder:
+    strategy: arbitrage
+    keywords: [range, ladder, vote margin, inflation range]
+  arbitrage_date_based:
+    strategy: arbitrage
+    keywords: [before date, by end of, within year]
+  arbitrage_conditional:
+    strategy: arbitrage
+    keywords: [if candidate, if policy, conditional]
+  arbitrage_tech_corporate:
+    strategy: arbitrage
+    keywords: [ipo, acquisition, merger, product launch]
+
+  # --- Fade strategy (breaking news, consensus, contrarian) ---
+  fade_breaking_political:
+    strategy: fade
+    keywords: [resignation, resign, indictment, leadership change]
+  fade_political_election:
+    strategy: fade
+    keywords: [election winner, nomination, nominee]
+  fade_crypto_regulatory:
+    strategy: fade
+    keywords: [sec, etf approval, exchange approval, regulatory]
+  fade_sports_upset:
+    strategy: fade
+    keywords: [underdog, upset, playoff, favorite]
+  fade_corporate:
+    strategy: fade
+    keywords: [merger, ceo resign, bankruptcy]
+  fade_geopolitical:
+    strategy: fade
+    keywords: [ceasefire, invasion, sanctions, ukraine, israel, gaza]
+  fade_tech_ai:
+    strategy: fade
+    keywords: [model release, gpt, ai, openai, breakthrough]
+  fade_weather_disaster:
+    strategy: fade
+    keywords: [hurricane, earthquake, natural disaster]
+  fade_long_dated_macro:
+    strategy: fade
+    keywords: [recession timing, inflation target]
+  fade_celebrity_media:
+    strategy: fade
+    keywords: [awards, oscar, emmy, tv show, entertainment]
+
+  # --- Weather strategy (NOAA/Open-Meteo vs market price; gap >15¢ = edge) ---
+  weather_temperature:
+    strategy: weather
+    keywords: [temperature, degrees, celsius, fahrenheit, weather, hot, cold]
+  weather_precipitation:
+    strategy: weather
+    keywords: [rain, snow, precipitation, weather, storm]
+  weather_city:
+    strategy: weather
+    keywords: [london, new york, nyc, seoul, weather, temperature]
+
+  # --- Both strategies (high value) ---
+  both_elections:
+    strategy: both
+    keywords: [election, president, senate, house, nomination]
+  both_macro:
+    strategy: both
+    keywords: [cpi, inflation, gdp, unemployment, fed, recession]
+  both_crypto:
+    strategy: both
+    keywords: [bitcoin, ethereum, btc, eth, etf, crypto]
+  both_sports:
+    strategy: both
+    keywords: [nba, nfl, super bowl, world series, champions league, world cup]
+  both_geopolitics:
+    strategy: both
+    keywords: [ukraine, russia, israel, gaza, ceasefire, sanctions, invasion]

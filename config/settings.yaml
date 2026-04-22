@@ -1,0 +1,546 @@
+# Polymarket Trading Bot Configuration
+# Version: 1.0.0
+
+# ============================================
+# POLYMARKET CONNECTION
+# ============================================
+polymarket:
+  # API Endpoint (CLOB)
+  api_endpoint: "https://clob.polymarket.com"
+  # GraphQL endpoint for market data
+  graphql_endpoint: "https://graphql.polymarket.com/matic"
+  # WebSocket endpoint
+  ws_endpoint: "wss://ws-subscriptions-clob.polymarket.com/ws"
+  # Default network
+  network: "polygon"
+  chain_id: 137
+  # Minimum liquidity to consider a market (USD)
+  min_liquidity: 10000
+  # Maximum spread to trade (decimal)
+  max_spread: 0.05
+
+# ============================================
+# TRADING PARAMETERS
+# ============================================
+trading:
+  # Dry run mode (no real trades)
+  dry_run: true
+  # Position sizing (USD per trade). Polymarket: BUY=$, SELL=shares; strategies always compute $.
+  # Target band ~$10–$15: Kelly is clamped here; exposure tier caps narrow the band.
+  # Still capped by max_exposure_per_trade (% of bankroll) inside PositionSizer.
+  default_position_size: 10   # min $ per trade (floor for Kelly/sizing)
+  max_position_size: 15      # hard ceiling per trade (operator target: ~$10–$15)
+  # Resolution window: only trade markets resolving within this window. Cuts noise from end-of-year markets.
+  max_days_to_resolution: 365  # Effectively disabled — each strategy enforces its own resolution window
+  min_hours_to_resolution: 1   # Allow crypto/updown markets (resolve in minutes)
+  # Maximum portfolio exposure per trade (%)
+  max_exposure_per_trade: 0.05
+  # Maximum portfolio exposure per topic (%)
+  max_topic_exposure: 0.20
+  # Daily loss limit before stopping (%)
+  daily_loss_limit: 0.15
+  # Kelly criterion fraction (0.0 - 1.0)
+  kelly_fraction: 0.25
+  # Position exit rules (live trading)
+  exit_rules:
+    enabled: true                # Enabled: live data shows positions move 40-50% against without stops
+    take_profit_pct: 0.15        # Tightened from 0.25: only 1/15 fade trades hit TP; lock gains at +15%
+    stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
+    max_hold_hours: 72           # Exit after 72 hours regardless
+
+# ============================================
+# STRATEGY THRESHOLDS
+# ============================================
+# Entry spec: docs/STRATEGY_ENTRY_SPEC.md
+# - No hard floor on entry price; enter when edge > min threshold.
+# - Max position size: Kelly + risk limits. Do not chase random small dips;
+#   remain open to strong mispricings at any price (e.g. 27-30¢) when edge suffices.
+strategies:
+  # Live trading scope: crypto only (bitcoin, sol_lag, eth_lag). Arbitrage, fade, NEH: OFF.
+  # Mode 1: Auto-trade mispriced markets
+  arbitrage:
+    # On/off for this strategy. Crypto path can run quant-only without LLM; use_ai gates blend / non-crypto AI path.
+    enabled: false
+    # When false: crypto markets use quant-only; non-crypto markets are skipped (no AI-only path).
+    use_ai: true
+    # Minimum edge required to auto-trade (decimal)
+    min_edge: 0.10
+    # AI confidence threshold
+    ai_confidence_threshold: 0.70
+    # Fee buffer to account for trading costs
+    fee_buffer: 0.02
+    # Safety margin
+    safety_margin: 0.03
+    # Entry price range (data: 0.2-0.4 is sweet spot; avoid lottery <0.2 and certainty >0.8)
+    entry_price_min: 0.20
+    entry_price_max: 0.40
+    # Convergence arbitrage: when YES+NO sum <= this value, enter on structural spread
+    # regardless of probability edge. Community standard is 0.96 ($0.04/share guaranteed).
+    # Set to 0.0 to disable convergence path entirely.
+    convergence_arb_threshold: 0.96
+
+  # Consensus / "opportunity" Discord alerts removed from the bot — Discord is fills + exits
+  # for crypto strategies only. This block is unused at runtime; kept for tests / reference.
+  consensus:
+    enabled: false
+    # Threshold for consensus alert (decimal)
+    threshold: 0.85
+    # Minimum liquidity on opposite side (USD)
+    min_opposite_liquidity: 500
+    # Hours until expiration to monitor
+    expiration_window_hours: 48
+
+  # Mode 3: Extreme Consensus Fade
+  # Mode 4: Weather (NOAA/Open-Meteo vs market; gap >15¢ = enter) — backup/alternative
+  weather:
+    enabled: false
+    gap_min: 0.15
+    forecast_horizon_days: 2
+    # Data: Open-Meteo (free) or NOAA
+
+  fade:
+    enabled: false  # Disabled: focusing on BTC + SOL crypto strategies only
+    # Fade when consensus is in this range (avoid lottery: don't buy opposite at <0.15)
+    consensus_threshold_lower: 0.80
+    consensus_threshold_upper: 0.95
+    consensus_threshold: 0.95  # deprecated; use lower/upper
+    ai_confidence_threshold: 0.60
+    ipg_min: 0.10
+    fee_buffer: 0.02
+    # Entry price for side we're buying must be in 0.15-0.45 (data: 0.2-0.4 best)
+    entry_price_min: 0.05         # Fixed: 0.15 blocked all signals where consensus>=0.85 (no_price<=0.15)
+    entry_price_max: 0.45
+    kelly_fraction: 0.10 # Strategy-specific Kelly fraction
+    max_strategy_exposure_pct: 0.15 # 15% of bankroll
+    max_trade_size_pct: 0.02 # 2% of bankroll ($10 max on $500)
+    time_based_stop_hours: 48
+    # Optional LLM in ambiguous consensus band; false = synthetic fallback only (when ai.enabled is true).
+    use_ai: true
+
+  # Bitcoin Up/Down strategy — trades BTC price prediction markets
+  bitcoin:
+    enabled: true
+    # LLM tiebreaker for marginal edge and no-threshold markets; false = skip those branches.
+    use_ai: true
+    min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$37k liquidity
+    min_edge: 0.10                # 15m: raised from 0.07 — backtest assumed 0.50 entry (unrealistic); real slippage needs more edge
+    min_edge_5m: 0.05             # 5m: raised from 0.035 — same backtest-price-inflation issue
+    max_edge_updown: 0.15         # Upper cap — above this likely in-progress market (valid range: 0.07-0.15)
+    ai_confidence_threshold: 0.60
+    # Cap LLM calls per scan cycle (marginal / no-threshold / updown assist); raised now that fade/arb/NEH are off.
+    max_ai_calls_per_scan: 12
+    # Second-stage LLM on updown when edge is below min but in marginal band (see STRATEGY_ENTRY_SPEC).
+    use_ai_updown: true
+    ai_updown_marginal_min_edge: 0.03
+    # AI-hold soft veto: if AI said HOLD on a market, the 5m quant path must
+    # clear this higher edge threshold within the TTL window to override it.
+    ai_hold_veto_ttl_sec: 300       # 5 minutes — one full 5m candle window
+    min_edge_5m_ai_override: 0.10   # 2x normal min_edge_5m — strong conviction needed to override AI HOLD
+    kelly_fraction: 0.15
+    entry_price_min: 0.10           # Updown markets can be closer to 50/50
+    entry_price_max: 0.90
+    # 15m-only entry timing window (quality filter; does not touch 5m behavior)
+    entry_window_15m_min: 12.5
+    entry_window_15m_max: 14.5
+    # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 300
+    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_auto_align_jitter_sec: 10
+    # Price zones where AI is skipped (edge is obvious)
+    clear_edge_low: 0.20
+    clear_edge_high: 0.80
+    # 5m scanner look-ahead: how many future 5m windows to fetch
+    look_ahead_15m: 4
+    look_ahead_5m: 8
+    # UTC hours to block for updown markets
+    # 2026-04-21 scope-back (Tier A only): keep hours with strong backtest evidence
+    # at meaningful negative expectancy, drop the borderline ones until live data
+    # (≥15 trades/hour post-fix) confirms or denies them. See strategy-log/bitcoin.md.
+    # Backtest (BTC 15m, Mar 2026, 540 trades ≈ 22 trades/hour):
+    #   Tier A (KEEP, block): H01=26.9%WR -$61.68; H02=27.3%WR -$50.28 — extreme
+    #     WRs unlikely to flip even with wider CIs; H00 also has live-data evidence.
+    #   Tier B (WATCH, unblocked until live-confirmed):
+    #     H03=40.9%WR -$20.35; H09=44%WR -$14.81; H15=42.1%WR -$15.70; H18=41.7%WR -$24.56
+    #     — at n≈22 per hour the 95% CI on 41–44% WR overlaps 50%; "bad-leaning"
+    #     rather than confidently bad. Re-audit weekly via scripts/hourly_heatmap.py --suggest.
+    #   H22 had live-data evidence but no n cited — also moved to watch.
+    # Best hours (reference): H10=76%WR +$66, H21=76%WR +$55, H12=68%WR +$40
+    blocked_utc_hours_updown: [0, 1, 2]  # Tier A only — re-expand from live heatmap, not backtest alone
+    disable_buy_yes: false       # Re-enabled: 6-trade sample too small; tension fix may improve BUY_YES
+
+  # SOL Lag strategy — BTC-to-Solana correlation lag trading
+  sol_lag:
+    enabled: true
+    # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
+    use_ai: true
+    min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
+    min_edge: 0.09                # Raised from 0.06 — backtest entry at 0.50 flatters WR; need real edge to survive live fills
+    min_edge_5m: 0.09             # Aligned with eth_lag (2026-04-18): 0.12 starved 5m volume; monitor 5m WR and ~$10 loss tails
+    max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
+    ai_confidence_threshold: 0.60
+    max_ai_calls_per_scan: 12
+    use_ai_updown: true
+    ai_updown_marginal_min_edge: 0.03
+    kelly_fraction: 0.15
+    entry_price_min: 0.46         # Mid-band 0.47-0.49 was loss-heavy in paper reset_20260416 — stale "100% WR" claim removed; re-verify with ≥15 trades post-change
+                                  # Below 0.46 = fighting market's existing directional view without enough edge
+    entry_price_max: 0.54         # Leave unchanged for now to avoid over-constraining 15m sample
+    # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
+    min_lag_magnitude_pct: 0.40   # Keep until larger live sample confirms raising it helps
+                                  # Higher threshold filters weak/stale lag signals
+    # UTC hours to block for updown markets
+    # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
+    # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
+    # additions whose n falls below or near scripts/hourly_heatmap.py MIN_TRADES=5.
+    # Backtest (SOL 15m, 621 trades ≈ 26 trades/hour):
+    #   Tier A (KEEP, block): H01=38.1%WR -$33.28; H06=42.3%WR -$28.61; H23=40.7%WR -$30.47
+    #   Tier B (WATCH, unblocked):
+    #     H09 — added 2026-04-18 from paper reset_20260416 slice n=7 ~29% WR -$25
+    #       (reasoning was "parity with BTC/ETH" more than standalone evidence;
+    #       below MIN_TRADES=5 bar's margin of safety).
+    #     H18=14%WR -$16.78 and H22=14%WR -$16.82 — implied n≈7 from the WR,
+    #       no explicit sample size cited; too small to confirm.
+    #     H10=-$13.55, H20=-$11.86 — negative in backtest but never blocked; watch.
+    # Do NOT block backtest-best H17 — config author flagged it conflicts with tiny
+    # live samples. Same principle now applied to H9/H18/H22. Re-audit weekly with
+    # scripts/hourly_heatmap.py --suggest once live trades accumulate (≥15/hour).
+    blocked_utc_hours_updown: [1, 6, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
+    # 5m scanner look-ahead: how many future 5m windows to fetch
+    look_ahead_15m: 4
+    look_ahead_5m: 8
+    # Max concurrent SOL positions — prevents stacking 4-5 correlated bets on one macro call
+    max_concurrent_positions: 3
+
+    # ── Entry window (time remaining in candle at entry) ──
+    # 15m candle: widened from 13.0-14.33 (1.3min) to 12.0-14.5 (2.5min)
+    # Scan runs every 5min — need ≥2min window to reliably hit it
+    entry_window_15m_min: 12.0    # minutes remaining — don't enter if less than this left
+    entry_window_15m_max: 14.5    # minutes remaining — don't enter if more than this left
+    # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
+    entry_window_5m_min: 2.5      # minutes remaining
+    entry_window_5m_max: 4.0      # minutes remaining
+    # Auto-align entry windows to scan cadence to reduce timing misses from loop jitter.
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 300
+    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_auto_align_jitter_sec: 10
+
+    # ── BTC minimum dollar move required before entering ──
+    # BTC must have moved at least this many dollars in the relevant window.
+    # Lowered from 72/55: at BTC ~72k, 0.05% move = $36 — previous thresholds
+    # blocked entries in normal volatility. Keep enough to filter dead chop.
+    btc_min_move_dollars_15m: 40.0
+    btc_min_move_dollars_5m: 25.0
+
+  # ETH Lag — same architecture as sol_lag; ETHUSDT on Binance vs BTC lag/correlation.
+  eth_lag:
+    enabled: true
+    use_ai: true
+    min_liquidity: 1000
+    min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
+    min_edge_5m: 0.09             # Raised from 0.12 — keep consistent
+    max_edge_updown: 0.15
+    ai_confidence_threshold: 0.60
+    max_ai_calls_per_scan: 12
+    use_ai_updown: true
+    ai_updown_marginal_min_edge: 0.03
+    kelly_fraction: 0.15
+    entry_price_min: 0.46
+    entry_price_max: 0.54
+    min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
+    # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
+    # Previous [18, 22] was copy-pasted from SOL config — WRONG for ETH (H22=+$31.18 for ETH!)
+    # 2026-04-21 scope-back (Tier A only): keep hours with strong backtest signal
+    # at materially negative expectancy; drop weak-sample live additions.
+    # Backtest 807 trades ≈ 34 trades/hour — strongest base of the three strategies.
+    #   Tier A (KEEP, block): H01=41%WR -$42.19; H15=46.8%WR -$24.77; H23=34.5%WR -$52.71
+    #   Tier B (WATCH, unblocked until live-confirmed):
+    #     H17 — live 0% WR -$35.90 on 6 trades; backtest only -$6.47 (borderline).
+    #       0-for-6 is within CI of a 50% WR hour — not statistically separable
+    #       from noise per scripts/hourly_heatmap.py MIN_TRADES=5 discipline.
+    #     H20 — 47.4%WR -$13.14; borderline WR and small $/trade loss — watch.
+    # GOOD hours (reference): H07=74.1%WR +$74; H05=69%WR +$64; H04=62.2%WR +$58; H00=59.2%WR +$58
+    # Re-audit weekly with scripts/hourly_heatmap.py --suggest; re-promote Tier-B
+    # hours only after ≥15 closed trades with WR<0.46 AND avg PnL<-$2.
+    blocked_utc_hours_updown: [1, 15, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
+    # Direction gate is now ADAPTIVE via 1H trend in sol_lag.py — no manual flag needed.
+    # When 1H trend is BULLISH, SELL_YES is auto-suppressed; when BEARISH, BUY_YES is.
+    look_ahead_15m: 4
+    look_ahead_5m: 8
+    max_concurrent_positions: 3
+    entry_window_15m_min: 12.0
+    entry_window_15m_max: 14.5
+    entry_window_5m_min: 2.5
+    entry_window_5m_max: 4.0
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 300
+    entry_window_auto_align_max_expand_min: 1.5
+    entry_window_auto_align_jitter_sec: 15
+    btc_min_move_dollars_15m: 40.0
+    btc_min_move_dollars_5m: 25.0
+
+  # HYPE Lag — BTC-to-Hyperliquid correlation lag strategy.
+  hype_lag:
+    enabled: true
+    use_ai: true
+    min_liquidity: 100
+    min_edge: 0.09
+    min_edge_5m: 0.09
+    max_edge_updown: 0.15
+    ai_confidence_threshold: 0.60
+    max_ai_calls_per_scan: 12
+    use_ai_updown: true
+    ai_updown_marginal_min_edge: 0.03
+    kelly_fraction: 0.15
+    entry_price_min: 0.46
+    entry_price_max: 0.54
+    min_lag_magnitude_pct: 0.30
+    blocked_utc_hours_updown: []
+    look_ahead_15m: 4
+    look_ahead_5m: 8
+    max_concurrent_positions: 3
+    entry_window_15m_min: 12.0
+    entry_window_15m_max: 14.5
+    entry_window_5m_min: 2.5
+    entry_window_5m_max: 4.0
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 300
+    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_auto_align_jitter_sec: 10
+    btc_min_move_dollars_15m: 40.0
+    btc_min_move_dollars_5m: 25.0
+
+  # XRP 15m Up/Down — dump-and-hedge (quant only; no LLM).
+  xrp_dump_hedge:
+    enabled: true
+    min_liquidity: 1000
+    max_spread: 0.06
+    dump_move_frac: 0.15
+    max_pair_cost: 0.95
+    use_btc_z_gate: true
+    btc_z_min: 2.0
+    kelly_fraction: 0.08
+    pending_ttl_sec: 900
+    price_history_len: 48
+
+  # 'Nothing Ever Happens' (NEH) — long-dated markets. OFF for current live scope (crypto-only: bitcoin / sol_lag / eth_lag).
+  neh:
+    enabled: false
+    # Bet against (sell Yes) on markets with a 'Yes' price below this value.
+    # Lowered from 0.15: 0.08-0.15 range had 12 positions moving against us (teams advancing).
+    # Below 0.08 prices stay near zero; above 0.08 has tournament momentum risk.
+    max_yes_price: 0.015          # Lowered from 0.08: positions 0.015-0.035 = net -$6.73 (NHL/NBA playoff momentum risk)
+                                  # Below 0.015 = +$3.82, 0 losers. Politics at <0.015 = 93.3% WR.
+    # Only consider markets that resolve at least this many days in the future.
+    # Raised from 30: shorter tournaments resolve during an active season = price spikes.
+    min_days_to_resolution: 60
+    # Minimum liquidity for a market to be considered.
+    min_liquidity: 10000
+    # Max positions per tournament bracket (correlated outcomes = concentrated risk)
+    # Lowered from 3: NEH was consuming all 50 position slots, starving other strategies
+    max_positions_per_tournament: 2
+    # Max NEH positions total (leave room for BTC/SOL/Fade)
+    max_positions_neh: 5
+
+# ============================================
+# AI CONFIGURATION
+# ============================================
+ai:
+  # ── Master toggle ──────────────────────────────────────────────────────────
+  # Requires non-empty provider_chain + OPENROUTER_API_KEY in config/secrets.env.
+  enabled: true
+  # When false: live bot never calls LLM providers (quant-only paths). Backtests already use BacktestAIAgent, not real LLMs.
+  live_inferencing: true
+
+  # Soft daily request budget for local WARNING logs at 50% / 75%; 0 = disabled.
+  free_tier_daily_request_budget: 1200
+
+  # Ensemble consensus: when true, call all providers with keys and only return a signal
+  # when at least consensus_min_agree agree on the same recommendation (BUY_YES/BUY_NO).
+  consensus_enabled: false
+  consensus_min_agree: 2
+
+  # Provider chain — tries in order, falls back on failure.
+  provider_chain:
+    # MiniMax M2.7 (coding/token plan). Primary provider.
+    - name: minimax
+      type: minimax
+      model: "MiniMax-M2.7"
+      api_key_secret: MINIMAX_API_KEY
+      json_mode: true
+      cooldown_on_429_seconds: 60
+
+    # OpenRouter free-tier fallback. Key: OPENROUTER_API_KEY in secrets.env.
+    - name: openrouter_free
+      type: openai
+      base_url: "https://openrouter.ai/api/v1"
+      api_key_secret: OPENROUTER_API_KEY
+      http_referer: "https://github.com/samuraifrenchienft/polymarket-bot"
+      x_title: "Polymarket Bot"
+      models:
+        - "google/gemini-2.0-flash-exp:free"
+        - "meta-llama/llama-3.3-70b-instruct:free"
+        - "mistralai/mistral-7b-instruct:free"
+        - "qwen/qwen-2.5-72b-instruct:free"
+      json_mode: true
+      cooldown_on_429_seconds: 90
+
+  # Request timeout (seconds) — higher for MiniMax M2.7 thinking model
+  timeout: 30
+  # Temperature for responses
+  temperature: 0.1
+  # Maximum tokens per response. MiniMax-M2.5 uses ThinkingBlocks before JSON,
+  # so needs ~1500 total (thinking ~800 + JSON ~200). Was 4000, which was wasteful.
+  max_tokens: 1500
+
+  # ── Token conservation ──
+  # Cache AI results per market for this many seconds (avoids re-analyzing same market every cycle)
+  cache_ttl: 600  # 10 minutes
+  # Minimum gap between consecutive API calls (seconds) — prevents burst rate limit hits
+  min_call_gap: 2.0
+
+# ============================================
+# NOTIFICATIONS
+# ============================================
+notifications:
+  # Enable/disable notifications
+  enabled: true
+  # Discord webhook URL
+  discord_webhook: ""
+  # Telegram bot token
+  telegram_bot_token: ""
+  # Telegram chat ID
+  telegram_chat_id: ""
+  # Alert on trades
+  alert_on_trade: true
+  # Alert on position exits (defaults to same as alert_on_trade if omitted)
+  alert_on_exit: true
+  # Startup / periodic status pings (off by default — reduces Discord noise)
+  alert_on_status: false
+  # Alert on errors
+  alert_on_error: true
+
+# ============================================
+# RISK MANAGEMENT
+# ============================================
+risk:
+  # Maximum concurrent positions
+  max_concurrent_positions: 50
+  # Maximum trades per day
+  max_trades_per_day: 200
+  # Position check interval (seconds)
+  check_interval: 60
+  # Emergency stop loss (%)
+  emergency_stop_loss: 0.25
+
+# ============================================
+# TERM-BASED RISK
+# ============================================
+term_risk:
+  # Budget Caps: How much of the TOTAL balance can be locked in each term
+  caps:
+    SHORT_TERM: 0.70  # < 7 days
+    MID_TERM: 0.20    # 7-14 days
+    LONG_TERM: 0.15   # > 14 days — raised from 0.10: sports fade 12/13 winning, budget was blocking good trades
+
+  # Edge Requirements: Demand higher profit for longer lockups
+  min_edge:
+    SHORT_TERM: 0.05  # 5% edge is enough
+    MID_TERM: 0.08    # 8% edge required
+    LONG_TERM: 0.12   # 12% edge required (was 25%, too restrictive for testing)
+
+  # Sizing: Percentage of total balance to risk per trade
+  sizing:
+    SHORT_TERM: 0.05
+    MID_TERM: 0.02
+    LONG_TERM: 0.02
+
+# ============================================
+# DYNAMIC EXPOSURE SCALING
+# ============================================
+exposure:
+  # --- Tier sizing (max trade size per tier) ---
+  # Align with ~$10–$15 target; scale_size() also applies min_trade_usd after tier multiplier.
+  full_size: 15.0        # FULL tier cap
+  moderate_size: 13.0    # MODERATE tier cap
+  minimal_size: 10.0    # MINIMAL tier cap (floor of operator band)
+  # After raw_size * tier_multiplier, never go below this (stops $5→$1 shrink from 0.2x).
+  min_trade_usd: 10.0
+
+  # --- Kill switch ---
+  loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)
+  max_consecutive_losses: 3   # 3 losses in a row = pause (only if kill switch enabled)
+  pause_cycles: 2             # Test mode: pause for 2 trading cycles then check
+  # Live mode resume: "auto" (resume when conditions return) or "manual" (wait for restart)
+  live_resume_mode: "auto"
+
+  # --- Volatility thresholds (ATR as % of price) ---
+  high_vol_pct: 0.015    # 1.5% = high volatility, full exposure
+  low_vol_pct: 0.005     # 0.5% = flat, minimal exposure
+
+  # --- Volume thresholds (current vs 20-bar avg ratio) ---
+  high_volume_ratio: 1.3  # 30% above avg = high participation
+  low_volume_ratio: 0.7   # 30% below avg = low participation
+
+# ============================================
+# BACKTEST
+# ============================================
+backtest:
+  # Data source: "polymarketdata" (API) or "local" (CSV/Parquet)
+  data_source: "polymarketdata"
+  # Early exit: "hold_to_settlement" (default) or "time_and_target"
+  exit_strategy: "time_and_target"
+  max_hold_hours: 72
+  take_profit_pct: 0.20
+  stop_loss_pct: 0.15
+  # Default resolution for historical data
+  resolution: "1m"
+  # Initial bankroll (500 for live test with $3-5 bets)
+  initial_bankroll: 500
+
+  # Execution realism (for accurate backtests)
+  slippage:
+    # Basis points of slippage when spread not available (25 bps = 0.25%)
+    default_bps: 25
+    # Use half-spread as slippage when metrics provide spread (more accurate)
+    use_spread_when_available: true
+  # Per-trade fee in bps (0 = most Polymarket markets are fee-free)
+  fee_bps: 0
+
+  # Min edge thresholds — keep in sync with strategies.* min_edge values
+  # Engine reads these from backtest.min_edge_* (not from strategies directly)
+  min_edge_btc_15m: 0.10   # matches strategies.bitcoin.min_edge
+  min_edge_btc_5m:  0.05   # matches strategies.bitcoin.min_edge_5m
+  min_edge_sol_15m: 0.09   # matches strategies.sol_lag.min_edge
+  min_edge_sol_5m:  0.09   # matches strategies.sol_lag.min_edge_5m
+  min_edge_eth_15m: 0.09   # matches strategies.eth_lag.min_edge
+  min_edge_eth_5m:  0.09   # matches strategies.eth_lag.min_edge_5m
+
+# ============================================
+# LOGGING
+# ============================================
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  # Log file max size (MB)
+  max_file_size: 10
+  # Number of backup files
+  backup_count: 5
+  # Log to console
+  console: true
+  # Log to file
+  file: true
+  # One-line OPS_JSON pulses to stdout (Railway logs) + startup snapshot; disable for quieter local runs
+  ops_pulse: true
+
+# ============================================
+# DASHBOARD
+# ============================================
+dashboard:
+  # Enable/disable the web dashboard
+  enabled: true
+  # Host for the dashboard server
+  host: "127.0.0.1"
+  # Port for the dashboard server
+  dashboard_port: 8081

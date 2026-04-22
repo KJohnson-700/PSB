@@ -1,0 +1,57 @@
+# GitLab CI: https://gitlab.com/ken-johnson/psb
+#
+# Test (MR + default branch): preflight, dashboard bundle pytest, pip-audit + bandit.
+# Deploy: push to default branch → Railway (after checks pass).
+#
+# Variables (GitLab → Settings → CI/CD → Variables):
+#   RAILWAY_TOKEN = Railway project token (masked + protected) — deploy only
+#
+# Optional: In Railway, turn off GitHub auto-deploy if you only want GitLab → Railway.
+
+stages:
+  - test
+  - deploy
+
+variables:
+  GIT_STRATEGY: clone
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # preflight requires at least one AI key non-empty; not used by these jobs
+  OPENAI_API_KEY: "ci-placeholder-not-used"
+
+cache:
+  key:
+    files:
+      - requirements.txt
+      - requirements-dev.txt
+  paths:
+    - .cache/pip
+
+checks:
+  stage: test
+  image: python:3.11-slim-bookworm
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -r requirements-dev.txt
+  script:
+    - python scripts/preflight.py
+    - pytest tests/test_dashboard_bundle.py -v
+    - python scripts/run_security_suite.py
+
+railway_deploy:
+  stage: deploy
+  image: node:20-bookworm
+  needs: ["checks"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - npm install -g @railway/cli@4
+  script:
+    - |
+      if [ -z "$RAILWAY_TOKEN" ]; then
+        echo "Add RAILWAY_TOKEN in GitLab → Settings → CI/CD → Variables"
+        exit 1
+      fi
+    - railway up --ci --service polymarket-bot -m "gitlab ${CI_COMMIT_SHORT_SHA}"

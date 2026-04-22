@@ -1,0 +1,71 @@
+# Rigorous backtest configuration: multiple periods, train/test, stress tests.
+# Used by: python scripts/run_backtest_rigorous.py [--plan config/backtest_rigorous.yaml]
+#
+# Handoff note for senior engineer:
+# - Add/remove periods in periods; each needs enough resolved markets with CLOB history.
+# - train_test controls out-of-sample: train on train_periods, evaluate on test_periods.
+# - stress_scenarios multiply slippage or set fee_bps for robustness checks.
+# - market_list_path and min_markets_per_category filter to high-quality category slugs.
+
+# Multiple non-overlapping periods (regime coverage)
+periods:
+  - start: "2024-01-01"
+    end: "2024-03-31"
+    label: "2024 Q1"
+  - start: "2024-04-01"
+    end: "2024-06-30"
+    label: "2024 Q2"
+  - start: "2024-07-01"
+    end: "2024-09-30"
+    label: "2024 Q3"
+  - start: "2024-10-01"
+    end: "2024-11-30"
+    label: "2024 Q4"
+
+# Out-of-sample: which periods are "train" vs "test"
+# Strategy params can be tuned on train; report test metrics for robustness.
+train_test:
+  enabled: true
+  train_period_labels: ["2024 Q1", "2024 Q2"]   # tune / analyze here
+  test_period_labels: ["2024 Q3", "2024 Q4"]    # evaluate here (no tuning)
+
+# Walk-forward: for each period P (by order), treat P as "test" and earlier as "train"; run backtest only on P.
+walk_forward:
+  enabled: false
+  train_lookback_periods: 1
+
+# Market universe: from pre-built list (real slugs by category)
+market_list_path: "config/backtest_markets.yaml"
+# Only use categories that have at least this many slugs (solid sample size)
+min_markets_per_category: 30
+# Max slugs to use per strategy per period (cap runtime)
+max_slugs_per_strategy_per_period: 150
+
+# Stress scenarios: run same backtest with harsher execution assumptions
+stress_scenarios:
+  baseline:
+    slippage_mult: 1.0
+    fee_bps: null   # use config default
+  high_slippage:
+    slippage_mult: 1.5
+    fee_bps: null
+  very_high_slippage:
+    slippage_mult: 2.0
+    fee_bps: null
+  with_fees:
+    slippage_mult: 1.0
+    fee_bps: 10
+
+# Backtest params (can override from CLI)
+backtest:
+  bankroll: 2000
+  min_bars: 50
+  max_bars: 200
+  max_trades_per_market: 25
+  target_markets_per_strategy: 50   # when not using category list, discovery target
+
+# Output
+output:
+  report_dir: "data/backtest/reports"
+  save_per_period: true
+  save_aggregate: true

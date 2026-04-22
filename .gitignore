@@ -1,0 +1,30 @@
+# Secrets
+config/secrets.env
+*.env
+!*.env.example
+SECRETS_TROUBLESHOOTING.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+src/logs/
+data/bot.log
+logs/
+
+# Data (runtime/ephemeral)
+data/paper_trades/
+data/paper_trades_archive/
+data/live_scans/
+data/backtest/reports/*.json
+
+# IDE / local agents
+.cursor/
+.claude/
+.vscode/
+evan-backtest/
+.DS_Store

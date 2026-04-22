@@ -1,0 +1,23 @@
+# Speed up `railway up` — avoid 413 payload too large (e.g. .venv ~hundreds of MB)
+# The Docker build installs deps from requirements-railway.txt; do not upload local venv.
+.venv/
+__pycache__/
+*.pyc
+# Runtime / research data (not needed for deploy image)
+data/paper_trades/
+data/paper_trades_archive/
+data/live_scans/
+data/logs/
+data/bot.log
+data/backtest/ohlcv/
+data/backtest/reports/
+*.parquet
+*.log
+# Speed up + shrink upload
+data/backtest/reports/*.txt
+BuildersChallegeAiAgent/
+.cursor/
+.claude/
+.agents/
+.vscode/
+node_modules/

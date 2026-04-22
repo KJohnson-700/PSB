@@ -1,0 +1,34 @@
+# Slim deps for Docker / Railway (dashboard + paper/live bot).
+# Omit nautilus_trader — huge wheel, not used by src.main or copied backtesting/ tree.
+# Local / full backtests: pip install -r requirements.txt
+
+# Core
+aiohttp>=3.9.0
+pyyaml>=6.0
+requests>=2.28.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Server
+uvicorn>=0.22.0
+fastapi>=0.95.0
+sentry-sdk[fastapi]>=2.0.0
+scalar-fastapi>=1.0.0
+
+# AI & Analysis
+openai>=1.3.0
+google-genai>=1.0.0
+groq>=0.4.0
+anthropic>=0.18.0
+python-dotenv>=0.20.0
+
+# Blockchain/Web3
+web3>=6.11.0
+py-clob-client>=0.30.0
+
+# Backtest helpers used by scripts/src.backtest (not Nautilus)
+pandas>=2.0.0
+rich>=13.0.0
+
+# Logging
+python-json-logger>=2.0.0
