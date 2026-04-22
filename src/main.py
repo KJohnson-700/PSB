@@ -739,7 +739,7 @@ class PolyBot:
             else:
                 logging.info("[FAST] Crypto SOL: No signals this cycle")
         except Exception as e:
-            logging.error(f"Crypto SOL error: {e}")
+            logging.error(f"Crypto SOL error: {e}", exc_info=True)
 
         # Strategy: ETH Lag
         try:
@@ -1635,13 +1635,25 @@ class PolyBot:
 
         final_size = min(signal.size, term_size)
 
-        token_id = signal.token_id_yes
-        side = "BUY" if signal.action == "BUY_YES" else "SELL"
+        # Side / token_id MUST be set before any read of `side` (e.g. order_size).
+        # A later `side =` makes `side` a local for the whole function; placing
+        # `order_size = ... if side == "SELL"` above the assignment → UnboundLocalError.
+        if signal.action == "BUY_YES":
+            token_id = signal.token_id_yes
+            side = "BUY"
+        elif signal.action == "SELL_YES":
+            token_id = signal.token_id_yes
+            side = "SELL"
+        else:
+            logging.error(
+                f"{strat} skip: unexpected action {signal.action!r} (expected BUY_YES/SELL_YES)"
+            )
+            return
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # SOL/ETH/HYPE lag signals are BUY_YES / SELL_YES — both operate on the
         # YES token, so we verify YES has bids before committing to an entry.
-        token_to_test = signal.token_id_yes
+        token_to_test = token_id
         if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
             logging.warning(
                 f"{strat} unsellable-token skip '{signal.market_question[:40]}' "

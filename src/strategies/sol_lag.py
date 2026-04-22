@@ -142,6 +142,11 @@ class SOLLagStrategy:
                  kelly_sizer=None, exposure_manager: ExposureManager = None):
         self.full_config = config
         self.config = config.get('strategies', {}).get('sol_lag', {})
+        # Thresholds from config first — before any other init work — so
+        # scan_and_analyze always sees instance values from YAML, not class fallbacks.
+        self.min_liquidity = self.config.get("min_liquidity", 1000)
+        self.min_edge = self.config.get("min_edge", 0.09)
+        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
         self.enabled = self.config.get("enabled", True)
         self.ai_agent = ai_agent
         self.position_sizer = position_sizer
@@ -150,12 +155,8 @@ class SOLLagStrategy:
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "sol_lag"
 
-        # Config-derived attributes used across the scan loop.
-        # Must be set here (not only on subclasses like ETHLagStrategy) or
-        # scan_and_analyze raises AttributeError and the whole cycle is skipped.
-        self.min_liquidity = self.config.get("min_liquidity", 1000)
-        self.min_edge = self.config.get("min_edge", 0.09)
-        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
+        # Remaining config-derived attributes (scan loop)
+        # Must be set on SOLLagStrategy (not only subclasses) for scan_and_analyze.
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
