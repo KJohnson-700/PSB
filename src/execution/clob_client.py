@@ -67,6 +67,8 @@ class CLOBClient:
     """CLOB Client Wrapper for Polymarket"""
 
     def __init__(self, config: Dict[str, Any]):
+        # Root config: trading.* lives at top level, not under polymarket.
+        self._root_config = config
         self.config = config.get("polymarket", {})
         self.api_endpoint = self.config.get(
             "api_endpoint", "https://clob.polymarket.com"
@@ -219,7 +221,7 @@ class CLOBClient:
         Returns:
             True if the token can likely be sold, False otherwise.
         """
-        if dry_run := self.config.get("trading", {}).get("dry_run", True):
+        if dry_run := self._root_config.get("trading", {}).get("dry_run", True):
             return True
 
         if not self.client:
