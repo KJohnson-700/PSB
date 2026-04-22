@@ -15,6 +15,8 @@ OBSIDIAN_REST_API_URL=https://127.0.0.1:27124
 OBSIDIAN_API_KEY=<from Obsidian plugin>
 ```
 
+Use this for **local** automation (e.g. appending RCA or pre-HYPE reference notes into `Hermes Second Brain/projects/psb/notes/`). **Railway / Docker** does not load Obsidian; keep these variables out of production service env unless you build a dedicated integration.
+
 ## Common operations (plugin API)
 
 Exact paths match your installed plugin version; confirm in the plugin’s **OpenAPI** or **Active endpoints** UI. Typical patterns:

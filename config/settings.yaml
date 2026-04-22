@@ -18,6 +18,11 @@ polymarket:
   min_liquidity: 10000
   # Maximum spread to trade (decimal)
   max_spread: 0.05
+  # Bundled Gamma + updown HTTP runs in a worker thread; max seconds before empty scan.
+  scanner_sync_timeout_sec: 120
+  # When set to true/false, overrides whether HYPE alt slug markets are fetched.
+  # When omitted, follows strategies.hype_lag.enabled (saves ~minutes of sync HTTP when HYPE off).
+  # fetch_hype_alt_markets: true
 
 # ============================================
 # TRADING PARAMETERS

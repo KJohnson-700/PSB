@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta, timezone
 import aiohttp
 import requests
@@ -122,8 +122,69 @@ class MarketScanner:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.min_liquidity = config.get('polymarket', {}).get('min_liquidity', 10000)
+        _pm = config.get("polymarket", {}) or {}
+        self.min_liquidity = _pm.get("min_liquidity", 10000)
+        # Wall-clock cap for bundled Gamma + updown (+ optional HYPE alt) HTTP in a worker thread.
+        self._scanner_sync_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
         self.session: Optional[aiohttp.ClientSession] = None
+
+    def _should_fetch_hype_alt_markets(self) -> bool:
+        """HYPE alt slug fetch is slow; default follows strategies.hype_lag.enabled.
+
+        Set polymarket.fetch_hype_alt_markets to true/false to override.
+        """
+        pm = self.config.get("polymarket") or {}
+        if "fetch_hype_alt_markets" in pm:
+            return bool(pm.get("fetch_hype_alt_markets"))
+        return bool(
+            (self.config.get("strategies") or {}).get("hype_lag", {}).get("enabled", False)
+        )
+
+    def _sync_network_phase(self) -> Tuple[
+        List[Market], List[Market], List[Market], List[Market], int, int
+    ]:
+        """Blocking HTTP: Gamma list + 15m/5m updown + optional HYPE alt. Runs in a thread."""
+        look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
+        markets = self._fetch_markets_gamma(limit=200)
+        updown: List[Market] = []
+        updown_5m: List[Market] = []
+        hype_alt: List[Market] = []
+        try:
+            updown = self.fetch_updown_markets(look_ahead=look_ahead_15m) or []
+        except Exception as e:
+            logger.error(f"Updown market fetch error: {e}")
+        try:
+            updown_5m = self.fetch_updown_5m_markets(look_ahead=look_ahead_5m) or []
+        except Exception as e:
+            logger.error(f"5m updown market fetch error: {e}")
+        if self._should_fetch_hype_alt_markets():
+            try:
+                hype_alt = self.fetch_hype_alt_updown_markets(limit=100) or []
+            except Exception as e:
+                logger.error(f"HYPE alt updown market fetch error: {e}")
+        return markets, updown, updown_5m, hype_alt, look_ahead_15m, look_ahead_5m
+
+    def _empty_scan_result(self, sync_timeout: bool = False) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {
+            "look_ahead_15m": 0,
+            "look_ahead_5m": 0,
+            "updown_15m_count": 0,
+            "updown_5m_count": 0,
+            "updown_hype_alt_count": 0,
+        }
+        if sync_timeout:
+            meta["sync_phase_timeout"] = True
+        return {
+            "high_liquidity": [],
+            "consensus_yes": [],
+            "consensus_no": [],
+            "low_spread": [],
+            "near_expiration": [],
+            "updown": [],
+            "updown_5m": [],
+            "updown_hype_alt": [],
+            "scanner_meta": meta,
+        }
 
     def _resolve_updown_lookahead(self) -> tuple[int, int]:
         """Resolve scanner look-ahead from enabled strategy configs.
@@ -620,80 +681,80 @@ class MarketScanner:
             logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
         return markets
 
-    async def scan_for_opportunities(self) -> Dict[str, List[Market]]:
-        """Scan for different types of opportunities"""
-        markets = self._fetch_markets_gamma(limit=200)
+    async def scan_for_opportunities(self) -> Dict[str, Any]:
+        """Scan for different types of opportunities.
+
+        Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
+        timeout so the asyncio event loop is not blocked for minutes on slow APIs.
+        """
+        t_scan_start = time.perf_counter()
+        logger.info("Scanner: sync network phase (thread) starting")
+        try:
+            (
+                markets,
+                updown,
+                updown_5m,
+                hype_alt,
+                look_ahead_15m,
+                look_ahead_5m,
+            ) = await asyncio.wait_for(
+                asyncio.to_thread(self._sync_network_phase),
+                timeout=self._scanner_sync_timeout,
+            )
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.perf_counter() - t_scan_start) * 1000)
+            logger.error(
+                "Scanner: sync network phase timed out after %dms (limit=%.1fs) — empty scan",
+                elapsed_ms,
+                self._scanner_sync_timeout,
+            )
+            return self._empty_scan_result(sync_timeout=True)
+
+        sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
+        logger.info("Scanner: sync network phase finished in %dms", sync_ms)
+
         if markets:
             markets = await self.update_market_prices(markets)
-        
-        opportunities = {
-            'high_liquidity': [],
-            'consensus_yes': [],
-            'consensus_no': [],
-            'low_spread': [],
-            'near_expiration': []
+
+        opportunities: Dict[str, Any] = {
+            "high_liquidity": [],
+            "consensus_yes": [],
+            "consensus_no": [],
+            "low_spread": [],
+            "near_expiration": [],
         }
-        
+
         for market in markets:
-            # High liquidity markets (volume already filtered by min_liquidity)
             if market.liquidity >= self.min_liquidity or market.volume >= self.min_liquidity:
-                opportunities['high_liquidity'].append(market)
-            
-            # Consensus YES
+                opportunities["high_liquidity"].append(market)
             if market.is_consensus_yes:
-                opportunities['consensus_yes'].append(market)
-            
-            # Consensus NO
+                opportunities["consensus_yes"].append(market)
             if market.is_consensus_no:
-                opportunities['consensus_no'].append(market)
-            
-            # Low spread
+                opportunities["consensus_no"].append(market)
             if market.spread < 0.03:
-                opportunities['low_spread'].append(market)
-            
-            # Near expiration
+                opportunities["low_spread"].append(market)
             hours = market.hours_to_expiration
             if hours and hours < 48:
-                opportunities['near_expiration'].append(market)
-        
-        look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
+                opportunities["near_expiration"].append(market)
 
-        # Fetch 15-minute BTC/SOL/ETH/XRP/HYPE Up/Down markets (separate event system)
-        try:
-            updown = self.fetch_updown_markets(look_ahead=look_ahead_15m)
-            if updown:
-                # Add to high_liquidity so strategies can see them
-                opportunities['high_liquidity'].extend(updown)
-                opportunities['updown'] = updown
-        except Exception as e:
-            logger.error(f"Updown market fetch error: {e}")
-            opportunities['updown'] = []
+        if updown:
+            opportunities["high_liquidity"].extend(updown)
+            opportunities["updown"] = updown
+        else:
+            opportunities["updown"] = []
 
-        # Fetch 5-minute BTC/SOL/ETH/XRP/HYPE Up/Down markets (dedicated 5m event system)
-        try:
-            updown_5m = self.fetch_updown_5m_markets(look_ahead=look_ahead_5m)
-            if updown_5m:
-                opportunities['high_liquidity'].extend(updown_5m)
-                opportunities['updown_5m'] = updown_5m
-            else:
-                opportunities['updown_5m'] = []
-        except Exception as e:
-            logger.error(f"5m updown market fetch error: {e}")
-            opportunities['updown_5m'] = []
+        if updown_5m:
+            opportunities["high_liquidity"].extend(updown_5m)
+            opportunities["updown_5m"] = updown_5m
+        else:
+            opportunities["updown_5m"] = []
 
-        # Fetch non-timestamp Hyperliquid/HYPE slug families.
-        try:
-            hype_alt = self.fetch_hype_alt_updown_markets(limit=100)
-            if hype_alt:
-                opportunities["high_liquidity"].extend(hype_alt)
-                opportunities["updown_hype_alt"] = hype_alt
-            else:
-                opportunities["updown_hype_alt"] = []
-        except Exception as e:
-            logger.error(f"HYPE alt updown market fetch error: {e}")
+        if hype_alt:
+            opportunities["high_liquidity"].extend(hype_alt)
+            opportunities["updown_hype_alt"] = hype_alt
+        else:
             opportunities["updown_hype_alt"] = []
 
-        # Scanner diagnostics for ops/strategy observability.
         opportunities["scanner_meta"] = {
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
@@ -702,8 +763,18 @@ class MarketScanner:
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
         }
 
-        logger.info(f"Found {len(opportunities['consensus_yes'])} consensus YES opportunities")
-        logger.info(f"Found {len(opportunities['consensus_no'])} consensus NO opportunities")
+        logger.info(
+            f"Found {len(opportunities['consensus_yes'])} consensus YES opportunities"
+        )
+        logger.info(
+            f"Found {len(opportunities['consensus_no'])} consensus NO opportunities"
+        )
+
+        total_ms = int((time.perf_counter() - t_scan_start) * 1000)
+        logger.info(
+            "Scanner: scan_for_opportunities complete in %dms (includes price hydrate)",
+            total_ms,
+        )
 
         return opportunities
     

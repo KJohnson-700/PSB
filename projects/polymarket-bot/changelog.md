@@ -4,6 +4,15 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-04-22 — Scanner: non-blocking network phase (Railway + local)
+
+- **Issue:** Synchronous `requests` inside `async def scan_for_opportunities` blocked the asyncio event loop for minutes (especially **HYPE alt** slug fetches), stalling **both** the main loop and the fast crypto loop — looked like a full freeze.
+- **Code:** [`src/market/scanner.py`](../../src/market/scanner.py) — bundle Gamma + updown (+ optional HYPE alt) HTTP in `asyncio.to_thread`, wrapped with `asyncio.wait_for` using `polymarket.scanner_sync_timeout_sec`. Heartbeat logs for sync phase and total scan time. HYPE alt fetch defaults to `strategies.hype_lag.enabled`; optional `polymarket.fetch_hype_alt_markets` override.
+- **Config:** [`config/settings.yaml`](../../config/settings.yaml) — `scanner_sync_timeout_sec: 120` under `polymarket`.
+- **Railway:** Same module as local — **redeploy from Git** so the new image is built. Confirm deploy logs show `Scanner: sync network phase (thread) starting`. See [`docs/RAILWAY.md`](../../docs/RAILWAY.md) § *Scanner / “frozen bot”*.
+- **Pre-HYPE baseline:** Older operator evidence may live in the Hermes vault (`projects/psb/notes/`), not only in repo `data/logs/`; REST push uses `OBSIDIAN_REST_API_*` locally per [`docs/OBSIDIAN_LOCAL_REST_API.md`](../../docs/OBSIDIAN_LOCAL_REST_API.md).
+- **Inventory / RCA:** [`docs/STRATEGY_AI_EXECUTION_INVENTORY.md`](../../docs/STRATEGY_AI_EXECUTION_INVENTORY.md).
+
 ## 2026-04-22 — Git init, paper-session runbook, `.railwayignore` 413 fix, deploy verified
 
 - **Local repo:** `git init` in project root (this folder previously had no `.git`); first commit includes tree + paper-session documentation. **`.gitignore`:** add `.claude/`, `.DS_Store` (match other agent/IDE noise).

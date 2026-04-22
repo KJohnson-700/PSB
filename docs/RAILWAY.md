@@ -32,6 +32,24 @@ See also [Deploying with the CLI](https://docs.railway.com/cli/deploying) (proje
 
 The dashboard binds **`0.0.0.0:$PORT`** as soon as settings load, **before** the bot finishes journal replay. Point Railway’s HTTP health check at **`/health`** (or `/`) so deploys don’t sit in “Initializing” while `entries.jsonl` is replayed.
 
+## Scanner / “frozen bot” (event loop)
+
+**Symptom:** Main and fast loops go quiet for minutes while the process is still alive — often stuck in **Gamma + updown + HYPE alt** HTTP.
+
+**Fix (in repo):** `scan_for_opportunities` runs that blocking work in a **worker thread** with a timeout (`polymarket.scanner_sync_timeout_sec`, default **120** in the baked `config/settings.yaml`). HYPE alt slug fetch follows `strategies.hype_lag.enabled` unless `polymarket.fetch_hype_alt_markets` overrides. Details: [`docs/STRATEGY_AI_EXECUTION_INVENTORY.md`](STRATEGY_AI_EXECUTION_INVENTORY.md).
+
+**There is no separate Railway patch** — the hosted service uses the same `src/market/scanner.py` as local. Ship the fix by **rebuilding the Docker image** from the commit that contains it (push to `main` with GitHub Actions `deploy-railway`, or `railway up --ci` from a linked repo).
+
+**Verify after deploy:** Deploy logs should show:
+
+- `Scanner: sync network phase (thread) starting`
+- `Scanner: sync network phase finished in …ms`
+- `Scanner: scan_for_opportunities complete in …ms`
+
+If you still only see older patterns (e.g. long gaps between `Gamma API fetched` and `Fetched … HYPE alt` with **no** thread lines), the container is on a **stale image** — trigger a fresh build, not just “Redeploy” of an old digest.
+
+**OPS_JSON:** On scan timeout, `ai_scan_stats.scanner` may include `sync_phase_timeout: true`. If that appears often, raise `scanner_sync_timeout_sec` in `config/settings.yaml` and redeploy, or turn off HYPE alt fetch / disable `hype_lag` per inventory doc.
+
 ## Start command
 
 `Dockerfile` defaults to **`python -m src.main --paper`**. In the Railway service **Settings → Deploy → Custom start command**, you can override, for example:
