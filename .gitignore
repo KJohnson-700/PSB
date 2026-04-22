@@ -20,6 +20,7 @@ logs/
 data/paper_trades/
 data/paper_trades_archive/
 data/live_scans/
+data/coach/
 data/backtest/reports/*.json
 
 # IDE / local agents
