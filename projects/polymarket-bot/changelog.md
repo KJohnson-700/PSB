@@ -4,6 +4,14 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-04-22 — Git init, paper-session runbook, `.railwayignore` 413 fix, deploy verified
+
+- **Local repo:** `git init` in project root (this folder previously had no `.git`); first commit includes tree + paper-session documentation. **`.gitignore`:** add `.claude/`, `.DS_Store` (match other agent/IDE noise).
+- **Operator docs:** [docs/RAILWAY.md](../../docs/RAILWAY.md) — new section *Paper sessions and test data* (`PAPER_SESSION_ID`, `PAPER_RESUME_SESSION`, `test_*` resume pitfall, Mac paths with spaces, heatmap/entries linkage). [docs/DASHBOARD_DATA_SOURCES.md](../../docs/DASHBOARD_DATA_SOURCES.md) — *Session ID and `entries.jsonl`*. [README.md](../../README.md) — short pointer to those sections.
+- **`railway up` 413 Payload Too Large:** root cause was uploading **~250MB** (local **`.venv/`** and other data not meant for the image). **`.railwayignore`** expanded: `.venv/`, `data/paper_trades/`, `data/logs/`, broad `data/backtest/reports/`, and other large/runtime paths. Docker still installs from **`requirements-railway.txt`** inside the build.
+- **Deploy:** `railway up --ci -s polymarket-bot` from linked project → **Deploy complete** (build id in Railway UI). **Verification (hosted):** `GET https://polymarket-bot-production-bf4f.up.railway.app/health` → `dashboard_ui_rev` **`2026-04-21-sse-scalar-sentry-htmx`** (matches `src/dashboard/server.py`); `railway_deployment_id` present. `git_sha` in `/health` is **null** for CLI-upload builds unless `RAILWAY_GIT_COMMIT_SHA` is injected (GitHub Actions / Dockerfile `ARG` path sets it for commit-attributed images).
+- **Tests before deploy (local):** `pytest` `test_bitcoin`, `test_sol_lag`, `test_strategies`, `test_dashboard_bundle` — 104 passed; `py_compile` on `src/main.py`, `src/strategies/sol_lag.py`, `clob_client.py`.
+
 ## 2026-04-22 — Dashboard `/health`, CI guards, and Railway CLI deploy path
 
 ### Dashboard (why the UI looked “dead” while API returned 200)
