@@ -218,21 +218,30 @@ class UpdownBacktestEngine:
         # benefits from market mispricing.  We therefore use lower thresholds
         # tuned for signal-only edge.  A backtest.min_edge_* section in the
         # config can override these defaults if needed.
-        bt_cfg = config.get("backtest", {})
-        btc_cfg = config.get("strategies", {}).get("bitcoin", {})
-        sol_cfg = config.get("strategies", {}).get("sol_lag", {})
-        eth_cfg = config.get("strategies", {}).get("eth_lag", {})
+        bt_cfg   = config.get("backtest", {})
+        strat    = config.get("strategies", {})
+        btc_cfg  = strat.get("bitcoin",  {})
+        sol_cfg  = strat.get("sol_lag",  {})
+        eth_cfg  = strat.get("eth_lag",  {})
+        xrp_cfg  = strat.get("xrp_lag",  {})
+        hype_cfg = strat.get("hype_lag", {})
 
-        self.min_edge_15m      = bt_cfg.get("min_edge_btc_15m",  0.06)
-        self.min_edge_5m       = bt_cfg.get("min_edge_btc_5m",   0.07)
-        self.min_edge_sol_15m  = bt_cfg.get("min_edge_sol_15m",  0.06)
-        self.min_edge_sol_5m   = bt_cfg.get("min_edge_sol_5m",   0.06)
-        self.min_edge_eth_15m  = bt_cfg.get("min_edge_eth_15m",  self.min_edge_sol_15m)
-        self.min_edge_eth_5m   = bt_cfg.get("min_edge_eth_5m",   self.min_edge_sol_5m)
-        # Each symbol now has independent min_edge keys; ETH falls back to SOL if not set.
-        self._kelly_btc   = btc_cfg.get("kelly_fraction", 0.15)
-        self._kelly_sol   = sol_cfg.get("kelly_fraction", self._kelly_btc)
-        self._kelly_eth   = eth_cfg.get("kelly_fraction", self._kelly_sol)
+        self.min_edge_15m       = bt_cfg.get("min_edge_btc_15m",   0.06)
+        self.min_edge_5m        = bt_cfg.get("min_edge_btc_5m",    0.07)
+        self.min_edge_sol_15m   = bt_cfg.get("min_edge_sol_15m",   0.06)
+        self.min_edge_sol_5m    = bt_cfg.get("min_edge_sol_5m",    0.06)
+        self.min_edge_eth_15m   = bt_cfg.get("min_edge_eth_15m",   self.min_edge_sol_15m)
+        self.min_edge_eth_5m    = bt_cfg.get("min_edge_eth_5m",    self.min_edge_sol_5m)
+        self.min_edge_xrp_15m   = bt_cfg.get("min_edge_xrp_15m",  self.min_edge_sol_15m)
+        self.min_edge_xrp_5m    = bt_cfg.get("min_edge_xrp_5m",   self.min_edge_sol_5m)
+        self.min_edge_hype_15m  = bt_cfg.get("min_edge_hype_15m", self.min_edge_sol_15m)
+        self.min_edge_hype_5m   = bt_cfg.get("min_edge_hype_5m",  self.min_edge_sol_5m)
+        # Each symbol has independent min_edge keys; XRP/HYPE fall back to SOL if not set.
+        self._kelly_btc   = btc_cfg.get("kelly_fraction",  0.15)
+        self._kelly_sol   = sol_cfg.get("kelly_fraction",  self._kelly_btc)
+        self._kelly_eth   = eth_cfg.get("kelly_fraction",  self._kelly_sol)
+        self._kelly_xrp   = xrp_cfg.get("kelly_fraction",  self._kelly_sol)
+        self._kelly_hype  = hype_cfg.get("kelly_fraction", self._kelly_sol)
         self.min_4h_hist_magnitude = btc_cfg.get("min_4h_hist_magnitude", 20.0)
 
         trade_cfg         = config.get("trading", {})
@@ -905,7 +914,7 @@ class UpdownBacktestEngine:
         start_date:     "YYYY-MM-DD"
         end_date:       "YYYY-MM-DD"
         window_minutes: 15 or 5
-        symbol:         "BTC", "SOL", or "ETH"
+        symbol:         "BTC", "SOL", "ETH", "XRP", or "HYPE"
         """
         is_btc   = symbol == "BTC"
         tz       = timezone.utc
@@ -915,7 +924,11 @@ class UpdownBacktestEngine:
             self.kelly_fraction = self._kelly_btc
         elif symbol == "ETH":
             self.kelly_fraction = self._kelly_eth
-        else:
+        elif symbol == "XRP":
+            self.kelly_fraction = self._kelly_xrp
+        elif symbol == "HYPE":
+            self.kelly_fraction = self._kelly_hype
+        else:  # SOL
             self.kelly_fraction = self._kelly_sol
 
         # Symbol-specific min_edge thresholds
@@ -923,6 +936,10 @@ class UpdownBacktestEngine:
             min_edge = self.min_edge_5m if window_minutes == 5 else self.min_edge_15m
         elif symbol == "ETH":
             min_edge = self.min_edge_eth_5m if window_minutes == 5 else self.min_edge_eth_15m
+        elif symbol == "XRP":
+            min_edge = self.min_edge_xrp_5m if window_minutes == 5 else self.min_edge_xrp_15m
+        elif symbol == "HYPE":
+            min_edge = self.min_edge_hype_5m if window_minutes == 5 else self.min_edge_hype_15m
         else:  # SOL
             min_edge = self.min_edge_sol_5m if window_minutes == 5 else self.min_edge_sol_15m
 

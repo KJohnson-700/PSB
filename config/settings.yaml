@@ -492,12 +492,16 @@ backtest:
 
   # Min edge thresholds — keep in sync with strategies.* min_edge values
   # Engine reads these from backtest.min_edge_* (not from strategies directly)
-  min_edge_btc_15m: 0.10   # matches strategies.bitcoin.min_edge
-  min_edge_btc_5m:  0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
-  min_edge_sol_15m: 0.10   # matches strategies.sol_lag.min_edge (raised 2026-04-24)
-  min_edge_sol_5m:  0.10   # matches strategies.sol_lag.min_edge_5m (raised 2026-04-24)
-  min_edge_eth_15m: 0.09   # matches strategies.eth_lag.min_edge
-  min_edge_eth_5m:  0.09   # matches strategies.eth_lag.min_edge_5m
+  min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
+  min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
+  min_edge_sol_15m:  0.10   # matches strategies.sol_lag.min_edge (raised 2026-04-24)
+  min_edge_sol_5m:   0.10   # matches strategies.sol_lag.min_edge_5m (raised 2026-04-24)
+  min_edge_eth_15m:  0.09   # matches strategies.eth_lag.min_edge
+  min_edge_eth_5m:   0.09   # matches strategies.eth_lag.min_edge_5m
+  min_edge_xrp_15m:  0.09   # matches strategies.xrp_lag.min_edge (raised 2026-04-24)
+  min_edge_xrp_5m:   0.09   # matches strategies.xrp_lag.min_edge_5m (raised 2026-04-24)
+  min_edge_hype_15m: 0.09   # matches strategies.hype_lag.min_edge
+  min_edge_hype_5m:  0.09   # matches strategies.hype_lag.min_edge_5m
 
 # ============================================
 # LOGGING
