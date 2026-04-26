@@ -253,9 +253,9 @@ def save_report(
     name = f"backtest_crypto_{result.symbol}_{result.window_size}m_{ts}.json"
     path = report_dir / name
 
-    _strategy_map = {"BTC": "bitcoin", "ETH": "eth_lag", "XRP": "xrp_lag",
-                     "HYPE": "hype_lag", "SOL": "sol_lag"}
-    _strategy_key = _strategy_map.get(result.symbol, "sol_lag")
+    _strategy_map = {"BTC": "bitcoin", "ETH": "eth_macro", "XRP": "xrp_macro",
+                     "HYPE": "hype_macro", "SOL": "sol_macro"}
+    _strategy_key = _strategy_map.get(result.symbol, "sol_macro")
 
     payload: dict = {
         # Dashboard-compatibility fields (updateBacktest() reads these from top level)

@@ -13,7 +13,7 @@ open_positions = j.get_open_positions()
 # Filter crypto positions
 crypto = [
     p for p in open_positions
-    if p.get("strategy") in ("bitcoin", "sol_lag", "eth_lag")
+    if p.get("strategy") in ("bitcoin", "sol_macro", "eth_macro")
 ]
 print(f"=== CRYPTO OPEN POSITIONS ({len(crypto)}) ===")
 print(f"Current local time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

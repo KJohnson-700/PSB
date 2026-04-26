@@ -1,5 +1,5 @@
 """
-Tests for SOL Lag Strategy — BTC-to-Solana Correlation Lag Trading
+Tests for SOL Macro Strategy — BTC-to-Solana Correlation Lag Trading
 
 Tests cover:
 1. Macro trend determination (1H)
@@ -16,7 +16,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 
-from src.strategies.sol_lag import SOLLagStrategy, SOLLagSignal
+from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
 from src.analysis.sol_btc_service import (
     SOLBTCService,
     SOLTechnicalAnalysis,
@@ -33,7 +33,7 @@ from tests.async_helpers import run_async
 def _make_config():
     return {
         "strategies": {
-            "sol_lag": {
+            "sol_macro": {
                 "enabled": True,
                 "min_liquidity": 10000,
                 "min_edge": 0.08,
@@ -258,7 +258,7 @@ class TestSOLMacroTrend(unittest.TestCase):
     """LAYER 1: 1H Macro Trend determination."""
 
     def setUp(self):
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             _make_config(),
             MagicMock(),
             MagicMock(),
@@ -301,7 +301,7 @@ class TestSOL15mConfirmation(unittest.TestCase):
     """LAYER 2: 15m MACD confirmation."""
 
     def setUp(self):
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             _make_config(),
             MagicMock(),
             MagicMock(),
@@ -357,7 +357,7 @@ class TestSOLEntryTiming(unittest.TestCase):
     """LAYER 3: 5m entry timing + BTC-SOL lag detection."""
 
     def setUp(self):
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             _make_config(),
             MagicMock(),
             MagicMock(),
@@ -420,7 +420,7 @@ class TestSOLEdgeCalculation(unittest.TestCase):
     """LAYER 4: Probability estimation."""
 
     def setUp(self):
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             _make_config(),
             MagicMock(),
             MagicMock(),
@@ -526,7 +526,7 @@ class TestSOLMarketDetection(unittest.TestCase):
     """Market detection: SOL vs non-SOL markets."""
 
     def setUp(self):
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             _make_config(),
             MagicMock(),
             MagicMock(),
@@ -583,7 +583,7 @@ class TestSOLSignalGating(unittest.TestCase):
         self.sizer = MagicMock()
         self.sizer.kelly_bet = MagicMock(return_value=3.0)
         self.em = ExposureManager(self.config, is_paper=True)
-        self.strategy = SOLLagStrategy(
+        self.strategy = SolMacroStrategy(
             self.config, self.ai, self.sizer, exposure_manager=self.em
         )
 
@@ -613,7 +613,7 @@ class TestSOLExposureIntegration(unittest.TestCase):
 
     def test_conditions_from_bullish_ta(self):
         ta = _make_bullish_ta()
-        conditions = SOLLagStrategy.conditions_from_ta(ta)
+        conditions = SolMacroStrategy.conditions_from_ta(ta)
         self.assertGreater(conditions.volatility, 0)
         self.assertEqual(conditions.trend_direction, "BULLISH")
         # High correlation → volume ratio > 1
@@ -621,20 +621,20 @@ class TestSOLExposureIntegration(unittest.TestCase):
 
     def test_conditions_from_choppy_ta(self):
         ta = _make_choppy_ta()
-        conditions = SOLLagStrategy.conditions_from_ta(ta)
+        conditions = SolMacroStrategy.conditions_from_ta(ta)
         self.assertEqual(conditions.trend_direction, "NEUTRAL")
         # Correlation 0.45 → falls through to default volume_ratio=1.0 (not > 0.8, not < 0.4)
         self.assertLessEqual(conditions.volume_ratio, 1.0)
 
     def test_aligned_tf_gives_full_strength(self):
         ta = _make_bullish_ta()
-        conditions = SOLLagStrategy.conditions_from_ta(ta)
+        conditions = SolMacroStrategy.conditions_from_ta(ta)
         # Aligned = True → trend_strength = 1.0
         self.assertEqual(conditions.trend_strength, 1.0)
 
     def test_unaligned_tf_gives_partial_strength(self):
         ta = _make_choppy_ta()
-        conditions = SOLLagStrategy.conditions_from_ta(ta)
+        conditions = SolMacroStrategy.conditions_from_ta(ta)
         # Not aligned → uses sol.trend_strength
         self.assertLess(conditions.trend_strength, 1.0)
 
@@ -646,7 +646,7 @@ class TestSOLExposureIntegration(unittest.TestCase):
         em = ExposureManager(config, is_paper=True)
         em.manual_pause()
 
-        strategy = SOLLagStrategy(
+        strategy = SolMacroStrategy(
             config,
             MagicMock(),
             MagicMock(),

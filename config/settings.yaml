@@ -21,7 +21,7 @@ polymarket:
   # Bundled Gamma + updown HTTP runs in a worker thread; max seconds before empty scan.
   scanner_sync_timeout_sec: 180
   # When set to true/false, overrides whether HYPE alt slug markets are fetched.
-  # When omitted, follows strategies.hype_lag.enabled (saves ~minutes of sync HTTP when HYPE off).
+  # When omitted, follows strategies.hype_macro.enabled (saves ~minutes of sync HTTP when HYPE off).
   # fetch_hype_alt_markets: true
 
 # ============================================
@@ -63,7 +63,7 @@ trading:
 # - Max position size: Kelly + risk limits. Do not chase random small dips;
 #   remain open to strong mispricings at any price (e.g. 27-30¢) when edge suffices.
 strategies:
-  # Live trading scope: bitcoin, sol_lag, eth_lag, xrp_lag, hype_lag, weather.
+  # Live trading scope: bitcoin, sol_macro, eth_macro, xrp_macro, hype_macro, weather.
 
   # Consensus / "opportunity" Discord alerts removed from the bot — Discord is fills + exits
   # for crypto strategies only. This block is unused at runtime; kept for tests / reference.
@@ -152,8 +152,8 @@ strategies:
     blocked_utc_hours_updown: [0, 1, 2]  # Tier A (confirmed bad, both backtest + live evidence)
     disable_buy_yes: false       # Re-enabled: 6-trade sample too small; tension fix may improve BUY_YES
 
-  # SOL Lag strategy — BTC-to-Solana correlation lag trading
-  sol_lag:
+  # SOL Macro strategy — BTC-to-Solana correlation lag trading
+  sol_macro:
     enabled: true
     # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
@@ -216,8 +216,8 @@ strategies:
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
 
-  # ETH Lag — same architecture as sol_lag; ETHUSDT on Binance vs BTC lag/correlation.
-  eth_lag:
+  # ETH Macro — same architecture as sol_macro; ETHUSDT on Binance vs BTC lag/correlation.
+  eth_macro:
     enabled: true
     use_ai: true
     min_liquidity: 1000
@@ -247,7 +247,7 @@ strategies:
     # Re-audit weekly with scripts/hourly_heatmap.py --suggest; re-promote Tier-B
     # hours only after ≥15 closed trades with WR<0.46 AND avg PnL<-$2.
     blocked_utc_hours_updown: [1, 15, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
-    # Direction gate is now ADAPTIVE via 1H trend in sol_lag.py — no manual flag needed.
+    # Direction gate is now ADAPTIVE via 1H trend in sol_macro.py — no manual flag needed.
     # When 1H trend is BULLISH, SELL_YES is auto-suppressed; when BEARISH, BUY_YES is.
     look_ahead_15m: 4
     look_ahead_5m: 8
@@ -263,8 +263,8 @@ strategies:
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
 
-  # HYPE Lag — BTC-to-Hyperliquid correlation lag strategy.
-  hype_lag:
+  # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy.
+  hype_macro:
     enabled: true
     use_ai: true
     min_liquidity: 100
@@ -294,8 +294,8 @@ strategies:
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
 
-  # XRP Lag — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
-  xrp_lag:
+  # XRP Macro — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
+  xrp_macro:
     enabled: true                # Backtest 2026-01-24→04-22: 58.7% WR, +$1,408 (+281.8%), 1,212 trades
     use_ai: false
     use_ai_updown: false
@@ -494,14 +494,14 @@ backtest:
   # Engine reads these from backtest.min_edge_* (not from strategies directly)
   min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
   min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
-  min_edge_sol_15m:  0.10   # matches strategies.sol_lag.min_edge (raised 2026-04-24)
-  min_edge_sol_5m:   0.10   # matches strategies.sol_lag.min_edge_5m (raised 2026-04-24)
-  min_edge_eth_15m:  0.09   # matches strategies.eth_lag.min_edge
-  min_edge_eth_5m:   0.09   # matches strategies.eth_lag.min_edge_5m
-  min_edge_xrp_15m:  0.09   # matches strategies.xrp_lag.min_edge (raised 2026-04-24)
-  min_edge_xrp_5m:   0.09   # matches strategies.xrp_lag.min_edge_5m (raised 2026-04-24)
-  min_edge_hype_15m: 0.09   # matches strategies.hype_lag.min_edge
-  min_edge_hype_5m:  0.09   # matches strategies.hype_lag.min_edge_5m
+  min_edge_sol_15m:  0.10   # matches strategies.sol_macro.min_edge (raised 2026-04-24)
+  min_edge_sol_5m:   0.10   # matches strategies.sol_macro.min_edge_5m (raised 2026-04-24)
+  min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
+  min_edge_eth_5m:   0.09   # matches strategies.eth_macro.min_edge_5m
+  min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
+  min_edge_xrp_5m:   0.09   # matches strategies.xrp_macro.min_edge_5m (raised 2026-04-24)
+  min_edge_hype_15m: 0.09   # matches strategies.hype_macro.min_edge
+  min_edge_hype_5m:  0.09   # matches strategies.hype_macro.min_edge_5m
 
 # ============================================
 # LOGGING

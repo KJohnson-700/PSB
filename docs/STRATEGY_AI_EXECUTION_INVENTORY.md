@@ -15,9 +15,10 @@ To **push or patch vault files from scripts**, set in **local** `.env`: `OBSIDIA
 | Strategy | `settings.yaml` key | Enabled (default config) | Loop | `scan_and_analyze` | Execution in `main.py` | Exposure manager |
 |----------|---------------------|--------------------------|------|---------------------|------------------------|------------------|
 | Bitcoin up/down | `strategies.bitcoin` | yes | `_unified_cycle` | `BitcoinStrategy` | `_execute_bitcoin_signal` → `_execute_bitcoin_signal_impl` | `btc_exposure_manager` |
-| SOL lag | `strategies.sol_lag` | yes | `_unified_cycle` | `SOLLagStrategy` | `_execute_sol_lag_signal` | `sol_exposure_manager` |
-| ETH lag | `strategies.eth_lag` | yes | `_unified_cycle` | `ETHLagStrategy` | `_execute_sol_lag_signal` | `eth_exposure_manager` |
-| HYPE lag | `strategies.hype_lag` | yes | `_unified_cycle` | `HYPELagStrategy` | `_execute_sol_lag_signal` | `hype_exposure_manager` |
+| SOL macro | `strategies.sol_macro` | yes | `_unified_cycle` | `SolMacroStrategy` | `_execute_sol_macro_signal` | `sol_exposure_manager` |
+| ETH macro | `strategies.eth_macro` | yes | `_unified_cycle` | `ETHMacroStrategy` | `_execute_sol_macro_signal` | `eth_exposure_manager` |
+| HYPE macro | `strategies.hype_macro` | yes | `_unified_cycle` | `HYPEMacroStrategy` | `_execute_sol_macro_signal` | `hype_exposure_manager` |
+| XRP macro | `strategies.xrp_macro` | yes | `_unified_cycle` | `XRPMacroStrategy` | `_execute_xrp_macro_signal` | `xrp_exposure_manager` |
 | XRP dump-hedge | `strategies.xrp_dump_hedge` | yes | `_unified_cycle` | `XRPDumpHedgeStrategy` | `_execute_xrp_dump_hedge_signal` | `xrp_exposure_manager` |
 | Arbitrage | `strategies.arbitrage` | no | `_unified_cycle` | `ArbitrageStrategy` | `_execute_arbitrage_signal` | `event_exposure_manager` (default) |
 | Fade | `strategies.fade` | no | `_unified_cycle` | `FadeStrategy` | `_execute_fade_signal` | `event_exposure_manager` |
@@ -27,7 +28,7 @@ One scan per `trading.cycle_interval_sec` (default 120s): exits, optional arb/fa
 
 ## Discord execution alerts
 
-Only these strategies may emit trade/exit Discord notifications (`src/notifications/notification_manager.py`): `bitcoin`, `sol_lag`, `eth_lag`, `hype_lag`, `xrp_dump_hedge`.
+Only these strategies may emit trade/exit Discord notifications (`src/notifications/notification_manager.py`): `bitcoin`, `sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`, `xrp_dump_hedge`.
 
 ## AI integration matrix
 
@@ -36,7 +37,7 @@ Only these strategies may emit trade/exit Discord notifications (`src/notificati
 | `config/settings.yaml` → `ai.enabled`, `ai.live_inferencing`, `ai.timeout`, `ai.provider_chain` | Master AI config; `live_inferencing: false` skips provider calls early in `AIAgent.analyze_market`. |
 | `src/analysis/ai_agent.py` | `analyze_market` uses `asyncio.wait_for(..., timeout=self.timeout)` per provider call; consensus path aggregates providers. |
 | `src/strategies/bitcoin.py` | `analyze_market` for marginal edge and updown paths when `use_ai` / `use_ai_updown` and `is_available()`. |
-| `src/strategies/sol_lag.py` | Same pattern (ETH/HYPE inherit via `SOLLagStrategy`). |
+| `src/strategies/sol_macro.py` | Same pattern (ETH/HYPE/XRP inherit via `SolMacroStrategy`). |
 | `src/strategies/fade.py` | `analyze_market` when `use_ai` and AI available. |
 | `src/strategies/arbitrage.py` | `use_ai` flag; optional `analyze_market` on paths gated in code. |
 | `src/strategies/neh.py` | Holds `AIAgent`; NEH signal path is quant/filter-based (no `analyze_market` in the main scan loop). |
@@ -62,14 +63,14 @@ Only these strategies may emit trade/exit Discord notifications (`src/notificati
 
 **Log gap analysis (timestamps):**
 
-1. **~900s gap (16:21 → 16:36):** Not a hang — graceful **shutdown** after `HYPELagStrategy` `AttributeError` (missing `scan_and_analyze`), then a **new process** start. Matches the April 2026 fix notes in `projects/polymarket-bot/changelog.md`.
+1. **~900s gap (16:21 → 16:36):** Not a hang — graceful **shutdown** after `HYPEMacroStrategy` `AttributeError` (missing `scan_and_analyze`), then a **new process** start. Matches the April 2026 fix notes in `projects/polymarket-bot/changelog.md`.
 2. **~144s gap during an active fast cycle (21:19:57 → 21:22:30):** Scanner logs show Gamma + 15m/5m updown fetches completing by **21:20:06**, then **“Fetched 51 Hyperliquid/HYPE alt up/down markets”** at **21:22:30** — **~2.5 minutes** inside synchronous HYPE alt slug HTTP. During that window the asyncio event loop was blocked (sync `requests` inside `async def scan_for_opportunities`), so **both** the main loop and fast loop stall — consistent with a “frozen” bot.
 
 ## Hardening implemented (this doc’s engineering follow-up)
 
 1. **Thread offload:** Gamma + updown + optional HYPE alt HTTP runs in `asyncio.to_thread` so the event loop stays responsive.
 2. **Budget:** `polymarket.scanner_sync_timeout_sec` (default **120**) wraps the threaded phase in `asyncio.wait_for`; on timeout the scanner returns an empty structured result and logs `sync_phase_timeout` in `scanner_meta`.
-3. **HYPE alt gate:** HYPE alt markets are fetched only when `strategies.hype_lag.enabled` is true, unless `polymarket.fetch_hype_alt_markets` is set to force on/off.
+3. **HYPE alt gate:** HYPE alt markets are fetched only when `strategies.hype_macro.enabled` is true, unless `polymarket.fetch_hype_alt_markets` is set to force on/off.
 4. **Heartbeat:** Logs `Scanner: sync network phase (thread) starting/finished in Nms` and `Scanner: scan_for_opportunities complete in Nms`.
 
 See `src/market/scanner.py` and `config/settings.yaml` (`scanner_sync_timeout_sec`, optional `fetch_hype_alt_markets`).

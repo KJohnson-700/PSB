@@ -308,9 +308,16 @@ class RiskManager:
         if self.daily_trades >= self.max_trades_per_day:
             return False, "Daily trade limit reached"
 
-        # Crypto strategies (bitcoin, sol_lag, eth_lag) have their own reserved slots
+        # Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own reserved slots
         # so NEH/fade/arb can't crowd them out
-        CRYPTO_STRATEGIES = {"bitcoin", "sol_lag", "eth_lag", "xrp_dump_hedge"}
+        CRYPTO_STRATEGIES = {
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "xrp_dump_hedge",
+        }
         CRYPTO_MAX = 12  # reserved slots for crypto strategies
 
         if strategy in CRYPTO_STRATEGIES:
@@ -360,10 +367,17 @@ class RiskManager:
         Final check before placing order.
         Returns (bool: can_trade, float: position_size, str: reason)
 
-        Crypto strategies (bitcoin, sol_lag, eth_lag) have their own isolated budget
+        Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own isolated budget
         so event-market positions can't crowd them out.
         """
-        CRYPTO_STRATEGIES = {"bitcoin", "sol_lag", "eth_lag", "xrp_dump_hedge"}
+        CRYPTO_STRATEGIES = {
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "xrp_dump_hedge",
+        }
         is_crypto = strategy in CRYPTO_STRATEGIES
 
         term, _ = self._get_market_term(end_date)

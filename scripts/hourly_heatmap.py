@@ -47,11 +47,11 @@ BAD_WR_THRESHOLD  = 0.46   # flag hours below this WR
 BAD_EV_THRESHOLD  = -2.0   # flag hours with avg PnL below this $/trade
 MIN_TRADES        = 5      # ignore hours with fewer trades than this
 
-STRATEGIES = ["bitcoin", "sol_lag", "eth_lag"]
+STRATEGIES = ["bitcoin", "sol_macro", "eth_macro"]
 STRATEGY_CONFIG_KEYS = {
     "bitcoin": "bitcoin",
-    "sol_lag": "sol_lag",
-    "eth_lag": "eth_lag",
+    "sol_macro": "sol_macro",
+    "eth_macro": "eth_macro",
 }
 
 

@@ -21,7 +21,7 @@
 | BTC 15m backtest (example file) | `data/backtest/reports/backtest_crypto_BTC_15m_20260401_002219.json` | Large sample: `win_rate`, `expectancy`, `windows_entered` / `windows_scanned` |
 | SOL 15m backtest | `data/backtest/reports/backtest_crypto_SOL_15m_20260331_173847.json` | Shorter date range than BTC; different universe length |
 
-**Config knobs:** `config/settings.yaml` → `strategies.bitcoin` and `strategies.sol_lag`.  
+**Config knobs:** `config/settings.yaml` → `strategies.bitcoin` and `strategies.sol_macro`.  
 **AI:** `config/settings.yaml` → `ai.enabled` was **false** at time of review (quant-only path unless changed).
 
 ---
@@ -33,7 +33,7 @@ Session id: `20260327_233727` (not necessarily calendar-aligned with “today”
 | Strategy | Closed trades | Win rate | Realized PnL (USD) |
 |----------|---------------|----------|---------------------|
 | **bitcoin** | 71 | **0.549** | **+22.47** |
-| **sol_lag** | 4 | **0.25** | **-5.28** |
+| **sol_macro** | 4 | **0.25** | **-5.28** |
 | fade | 44 | 0.068 | -33.89 |
 | neh | 7 | 0.429 | -4.98 |
 
@@ -64,7 +64,7 @@ Session id: `20260327_233727` (not necessarily calendar-aligned with “today”
 - **Expectancy:** **0.3708**  
 - **Net PnL (report):** +132.76 on 500 bankroll  
 
-**Contrast with paper:** Backtest WR **57.5%** vs paper **25%** on 4 trades — implies **live gating**, **different market mix**, **short sample**, or **sim vs live divergence**; do not merge these without a reconciliation pass (compare `updown_engine` assumptions to live `sol_lag` path).
+**Contrast with paper:** Backtest WR **57.5%** vs paper **25%** on 4 trades — implies **live gating**, **different market mix**, **short sample**, or **sim vs live divergence**; do not merge these without a reconciliation pass (compare `updown_engine` assumptions to live `sol_macro` path).
 
 ---
 
@@ -80,11 +80,11 @@ Session id: `20260327_233727` (not necessarily calendar-aligned with “today”
 - Backtest trades frequently show **`ltf_confirmed: false`**. If the thesis is “15m MACD must confirm,” then either:
   - the engine still enters on **macro-only** paths, or  
   - confirmation is defined such that many bars fail the flag while still trading.  
-  **Worth tracing** in `src/backtest/updown_engine.py` vs `src/strategies/bitcoin.py` / `sol_lag.py` for parity.
+  **Worth tracing** in `src/backtest/updown_engine.py` vs `src/strategies/bitcoin.py` / `sol_macro.py` for parity.
 
 ### C. SOL: paper sample + thesis tension
 
-- Code comments in **`sol_lag.py`** note historical patterns: **lag=None** trades performed **better** than **lag=value** in past samples; **`min_lag_magnitude_pct`** exists to damp weak lag.
+- Code comments in **`sol_macro.py`** note historical patterns: **lag=None** trades performed **better** than **lag=value** in past samples; **`min_lag_magnitude_pct`** exists to damp weak lag.
 - **Blocked UTC hours** (`blocked_utc_hours_updown`) exist because specific hours were negative in past live stats — re-validate after any logic change.
 
 ### D. Regime / macro (BTC dumps)
@@ -93,7 +93,7 @@ Session id: `20260327_233727` (not necessarily calendar-aligned with “today”
 
 ### E. Session contamination (paper)
 
-- **Portfolio-level** PnL mixes **fade** (very negative in this session) with crypto strategies. Attributing “BTC tanked, did we trade?” requires filtering journal by **`strategy == bitcoin`** / **`sol_lag`**, not headline session PnL.
+- **Portfolio-level** PnL mixes **fade** (very negative in this session) with crypto strategies. Attributing “BTC tanked, did we trade?” requires filtering journal by **`strategy == bitcoin`** / **`sol_macro`**, not headline session PnL.
 
 ---
 
@@ -112,14 +112,14 @@ These are **starting points** for the second model / developer; each should be v
 ### SOL
 
 1. **Entry price band:** Code documents **0.47–0.49** as strong vs **0.44–0.46** weak; `entry_price_min` / `entry_price_max` in YAML encode this — **narrowing** may raise WR but drop count.
-2. **`min_edge` for 15m when LTF missing:** Mirror **bitcoin** pattern: higher edge when **no** 15m confirmation (`sol_lag.py` already increases min edge when `ltf_strength == 0` for 15m updown — verify it fires in practice).
+2. **`min_edge` for 15m when LTF missing:** Mirror **bitcoin** pattern: higher edge when **no** 15m confirmation (`sol_macro.py` already increases min edge when `ltf_strength == 0` for 15m updown — verify it fires in practice).
 3. **`blocked_utc_hours_updown: [18, 22]`:** Re-check on latest data; timezone/session boundaries matter for “bad hours.”
 4. **BTC minimum move filters:** `btc_min_move_dollars_15m` / `_5m` — if WR is poor during **low realized BTC move**, consider **raising** thresholds slightly; if too few trades, lower.
 5. **Max concurrent SOL positions:** `max_concurrent_positions: 2` — prevents stacking; good for risk, may hide **true** per-signal WR if opportunities are correlated.
 
 ### Both
 
-1. **Parity check:** Diff **gates** between `updown_engine` (backtest) and **live** `bitcoin` / `sol_lag` scanners — silent drift is the #1 cause of “backtest good, live meh.”
+1. **Parity check:** Diff **gates** between `updown_engine` (backtest) and **live** `bitcoin` / `sol_macro` scanners — silent drift is the #1 cause of “backtest good, live meh.”
 2. **Exit rules:** `trading.exit_rules` (TP/SL/hold) apply in live; backtest crypto reports may use **different** exit assumptions — confirm in report metadata / engine.
 
 ---
@@ -129,11 +129,11 @@ These are **starting points** for the second model / developer; each should be v
 | Topic | File |
 |-------|------|
 | BTC live logic | `src/strategies/bitcoin.py` |
-| SOL live logic | `src/strategies/sol_lag.py` |
+| SOL live logic | `src/strategies/sol_macro.py` |
 | Sabre (Python) | `src/analysis/btc_price_service.py` → `calc_trend_sabre` |
 | SOL/BTC services | `src/analysis/sol_btc_service.py` |
 | Crypto backtest engine | `src/backtest/updown_engine.py` |
-| Config | `config/settings.yaml` → `strategies.bitcoin`, `strategies.sol_lag` |
+| Config | `config/settings.yaml` → `strategies.bitcoin`, `strategies.sol_macro` |
 
 ---
 
@@ -153,9 +153,9 @@ These were applied as **config-only** changes to avoid touching Python indicator
   - `strategies.bitcoin.min_edge: 0.14 -> 0.15`
   - Added `entry_window_15m_min: 13.0`, `entry_window_15m_max: 14.2` (15m-only quality filter)
 - **Tighten weaker SOL 5m path** while preserving SOL 15m baseline:
-  - `strategies.sol_lag.min_edge_5m: 0.09 -> 0.11`
-  - `strategies.sol_lag.entry_window_5m_min/max: 2.75-3.75 -> 2.9-3.6`
-  - `strategies.sol_lag.btc_min_move_dollars_5m: 40.0 -> 55.0`
+  - `strategies.sol_macro.min_edge_5m: 0.09 -> 0.11`
+  - `strategies.sol_macro.entry_window_5m_min/max: 2.75-3.75 -> 2.9-3.6`
+  - `strategies.sol_macro.btc_min_move_dollars_5m: 40.0 -> 55.0`
 - **Left unchanged intentionally** (until larger live sample):
   - Python Sabre (`calc_trend_sabre`)
   - SOL 15m `min_edge` / entry band / lag threshold

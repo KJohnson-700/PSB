@@ -46,7 +46,7 @@ flowchart TB
   CL --> HUB
   HUB --> CEX_OUT[Spike lag correlation CEX-driven]
   HUB --> CL_OUT[btc_chainlink_price updated_at]
-  CEX_OUT --> STRAT[SOLLagStrategy]
+  CEX_OUT --> STRAT[SolMacroStrategy]
   CL_OUT --> DASH[Dashboard]
   STRAT --> AI_OPT[Optional AIAgent]
 ```

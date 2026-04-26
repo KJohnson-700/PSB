@@ -61,7 +61,7 @@ def classify(q: str, strat: str) -> str:
             sym = "SOL"
         size = "5m" if window <= 5 else "15m"
         return f"{sym}_updown_{size}"
-    if strat in ("bitcoin", "sol_lag", "eth_lag"):
+    if strat in ("bitcoin", "sol_macro", "eth_macro"):
         return f"{strat}_threshold"
     return strat
 

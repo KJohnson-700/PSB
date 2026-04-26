@@ -373,8 +373,8 @@ def build_report(
     live_by_strat = segs.get("by_strategy", {})
     strategy_window_map = {
         "bitcoin": [("BTC", 15), ("BTC", 5)],
-        "sol_lag": [("SOL", 15), ("SOL", 5)],
-        "eth_lag": [("ETH", 15), ("ETH", 5)],
+        "sol_macro": [("SOL", 15), ("SOL", 5)],
+        "eth_macro": [("ETH", 15), ("ETH", 5)],
     }
     for strat, windows in strategy_window_map.items():
         live_stats = live_by_strat.get(strat, {})
@@ -438,7 +438,14 @@ async def get_ai_insights(report: dict, config: dict) -> Optional[dict]:
     strat_config = config.get("strategies", {})
     relevant_config = {
         k: v for k, v in strat_config.items()
-        if k in ("bitcoin", "sol_lag", "eth_lag", "xrp_dump_hedge")
+        if k in (
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "xrp_dump_hedge",
+        )
     }
 
     # Build concise report subset for the prompt
@@ -461,7 +468,7 @@ paper-trading bot on Polymarket and propose specific, measurable config changes.
 
 The bot trades crypto Up/Down prediction markets using lag correlation signals
 (BTC leads SOL/ETH price moves). Strategies: bitcoin (BTC 15m/5m updown),
-sol_lag (SOL 15m/5m), eth_lag (ETH 15m/5m).
+sol_macro (SOL 15m/5m), eth_macro (ETH 15m/5m).
 
 Key config knobs available:
 - blocked_utc_hours_updown: list of UTC hours to skip (per strategy)

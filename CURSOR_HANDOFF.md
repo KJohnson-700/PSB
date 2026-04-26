@@ -4,6 +4,8 @@
 **Branch:** main  
 **Implements:** ETH lag strategy by generalizing existing SOL lag architecture
 
+> **Naming (2026-04):** Production identifiers are **`sol_macro`**, **`eth_macro`**, **`hype_macro`**, **`xrp_macro`** — modules `src/strategies/*_macro.py`, classes `*MacroStrategy`, executor **`_execute_sol_macro_signal`** / **`_execute_xrp_macro_signal`**. Sections below may still say “lag” or older symbol names; treat them as the same architecture.
+
 ---
 
 ## Context
@@ -13,7 +15,7 @@ The bot currently runs BTC + SOL updown strategies. ETH updown markets are confi
 Also fixing:
 - BTC spike detection uses fixed thresholds — replace with Z-score (adaptive to vol regime)
 - Live scan dashboard tests disabled strategies — add updown market status section
-- `_execute_sol_lag_signal` in main.py hardcodes "sol_lag" string — parameterize it
+- `_execute_sol_macro_signal` in main.py hardcodes "sol_macro" string — parameterize it
 
 ---
 
@@ -95,29 +97,29 @@ else:
 
 ---
 
-### Step 3 — Add `strategy_name` to `SOLLagSignal` in `src/strategies/sol_lag.py`
+### Step 3 — Add `strategy_name` to `SolMacroSignal` in `src/strategies/sol_macro.py`
 
-Find the `SOLLagSignal` Pydantic model (around line 46-80). Add one field:
+Find the `SolMacroSignal` Pydantic model (around line 46-80). Add one field:
 
 ```python
-strategy_name: str = "sol_lag"
+strategy_name: str = "sol_macro"
 ```
 
 ---
 
-### Step 4 — Create `src/strategies/eth_lag.py` (new file)
+### Step 4 — Create `src/strategies/eth_macro.py` (new file)
 
 ```python
 """
 ETH Lag Strategy — BTC-to-Ethereum correlation lag trading.
 
-Inherits SOLLagStrategy's full 5-layer architecture.
+Inherits SolMacroStrategy's full 5-layer architecture.
 Only overrides: service symbol, market filter patterns, config key.
 """
 import re
 from typing import Dict, Any
 
-from src.strategies.sol_lag import SOLLagStrategy
+from src.strategies.sol_macro import SolMacroStrategy
 from src.analysis.sol_btc_service import SOLBTCService
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
@@ -132,18 +134,18 @@ ETH_PATTERNS = [
 ETH_UPDOWN_PATTERN = re.compile(r'(?:ethereum|eth|ether)\s+up\s+or\s+down', re.IGNORECASE)
 
 
-class ETHLagStrategy(SOLLagStrategy):
+class ETHMacroStrategy(SolMacroStrategy):
     """ETH Lag strategy — identical architecture to SOL lag, different asset."""
 
     def __init__(self, config: Dict[str, Any], ai_agent: AIAgent,
                  position_sizer: PositionSizer, exposure_manager: ExposureManager = None):
         super().__init__(config, ai_agent, position_sizer, exposure_manager)
-        # Override config key to read from strategies.eth_lag
-        self.config = config.get('strategies', {}).get('eth_lag', {})
+        # Override config key to read from strategies.eth_macro
+        self.config = config.get('strategies', {}).get('eth_macro', {})
         self.enabled = self.config.get('enabled', False)
         # Override service to use ETHUSDT
         self.sol_service = SOLBTCService(alt_symbol="ETHUSDT")
-        # Re-read config values that __init__ already set from sol_lag config
+        # Re-read config values that __init__ already set from sol_macro config
         self.min_liquidity = self.config.get('min_liquidity', 1000)
         self.min_edge = self.config.get('min_edge', 0.06)
         self.min_edge_5m = self.config.get('min_edge_5m', self.min_edge)
@@ -189,36 +191,36 @@ Update the log summary lines to count ETH markets. Zero risk — missing slugs a
 
 ---
 
-### Step 6 — Parameterize `_execute_sol_lag_signal` in `src/main.py`
+### Step 6 — Parameterize `_execute_sol_macro_signal` in `src/main.py`
 
-Find `_execute_sol_lag_signal()` (line ~1178). It has 7 hardcoded `"sol_lag"` strings. Replace each with `signal.strategy_name` (which defaults to `"sol_lag"` from Step 3, so SOL behavior is unchanged).
+Find `_execute_sol_macro_signal()` (line ~1178). It has 7 hardcoded `"sol_macro"` strings. Replace each with `signal.strategy_name` (which defaults to `"sol_macro"` from Step 3, so SOL behavior is unchanged).
 
-Key lines to update (search for `"sol_lag"` inside this method):
-- `can_trade, reason = self.risk_manager.can_trade(strategy="sol_lag")`  → `strategy=signal.strategy_name`
-- All `strategy="sol_lag"` in journal/position calls → `strategy=signal.strategy_name`
+Key lines to update (search for `"sol_macro"` inside this method):
+- `can_trade, reason = self.risk_manager.can_trade(strategy="sol_macro")`  → `strategy=signal.strategy_name`
+- All `strategy="sol_macro"` in journal/position calls → `strategy=signal.strategy_name`
 
 Also update the resolution check filter at line ~573:
 ```python
-s.get("strategy") in ("bitcoin", "sol_lag")
+s.get("strategy") in ("bitcoin", "sol_macro")
 ```
 →
 ```python
-s.get("strategy") in ("bitcoin", "sol_lag", "eth_lag")
+s.get("strategy") in ("bitcoin", "sol_macro", "eth_macro")
 ```
 
 ---
 
 ### Step 7 — Wire ETH strategy in `src/main.py`
 
-**Imports** (add near SOLLagStrategy import):
+**Imports** (add near SolMacroStrategy import):
 ```python
-from src.strategies.eth_lag import ETHLagStrategy
+from src.strategies.eth_macro import ETHMacroStrategy
 ```
 
 **In `__init__`** (after SOL strategy init):
 ```python
 self.eth_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-self.eth_lag_strategy = ETHLagStrategy(
+self.eth_macro_strategy = ETHMacroStrategy(
     self.config,
     self.ai_agent,
     self.position_sizer,
@@ -226,27 +228,27 @@ self.eth_lag_strategy = ETHLagStrategy(
 )
 ```
 
-Add `"eth_lag": 0` to `self.last_signal_counts` and `self.cumulative_signal_counts`.
+Add `"eth_macro": 0` to `self.last_signal_counts` and `self.cumulative_signal_counts`.
 
 **In `_crypto_cycle()`** (after SOL block, ~line 525):
 ```python
 # --- ETH Lag ---
-eth_lag_cfg = self.config.get('strategies', {}).get('eth_lag', {})
-if eth_lag_cfg.get('enabled', False):
+eth_macro_cfg = self.config.get('strategies', {}).get('eth_macro', {})
+if eth_macro_cfg.get('enabled', False):
     try:
-        self.eth_lag_strategy._open_positions_snapshot = list(
+        self.eth_macro_strategy._open_positions_snapshot = list(
             self.risk_manager.active_positions.values()
         )
-        eth_signals = await self.eth_lag_strategy.scan_and_analyze(
+        eth_signals = await self.eth_macro_strategy.scan_and_analyze(
             markets=short_horizon, bankroll=self.bankroll
         )
-        self.last_signal_counts["eth_lag"] = len(eth_signals)
-        self.last_cycle_times["eth_lag"] = _now_iso
-        self.cumulative_signal_counts["eth_lag"] = (
-            self.cumulative_signal_counts.get("eth_lag", 0) + len(eth_signals)
+        self.last_signal_counts["eth_macro"] = len(eth_signals)
+        self.last_cycle_times["eth_macro"] = _now_iso
+        self.cumulative_signal_counts["eth_macro"] = (
+            self.cumulative_signal_counts.get("eth_macro", 0) + len(eth_signals)
         )
         for signal in eth_signals:
-            await self._execute_sol_lag_signal(signal)
+            await self._execute_sol_macro_signal(signal)
         logging.info(
             f"[FAST] Crypto ETH: {len(eth_signals)} signal(s)" if eth_signals
             else "[FAST] Crypto ETH: No signals this cycle"
@@ -255,20 +257,20 @@ if eth_lag_cfg.get('enabled', False):
         logging.error(f"Crypto ETH cycle error: {e}", exc_info=True)
 ```
 
-**In exposure manager routing** (find `elif strategy == "sol_lag":` and add after):
+**In exposure manager routing** (find `elif strategy == "sol_macro":` and add after):
 ```python
-elif strategy == "eth_lag":
+elif strategy == "eth_macro":
     return self.eth_exposure_manager
 ```
 
 ---
 
-### Step 8 — Add `eth_lag` config to `config/settings.yaml`
+### Step 8 — Add `eth_macro` config to `config/settings.yaml`
 
-Add after the `sol_lag:` block:
+Add after the `sol_macro:` block:
 
 ```yaml
-  eth_lag:
+  eth_macro:
     enabled: true
     use_ai: true
     min_liquidity: 1000
@@ -363,7 +365,7 @@ def scan_updown_markets(config):
 python -c "from src.analysis.sol_btc_service import SOLBTCService; svc = SOLBTCService('ETHUSDT'); ta = svc.get_full_analysis(); print('ETH price:', ta.sol.current_price)"
 
 # 2. Verify ETH strategy instantiates
-python -c "from src.strategies.eth_lag import ETHLagStrategy; print('ETH strategy OK')"
+python -c "from src.strategies.eth_macro import ETHMacroStrategy; print('ETH strategy OK')"
 
 # 3. Verify live scan works
 python scripts/live_strategy_scan.py
@@ -381,9 +383,9 @@ Add ETH lag strategy + Z-score spike filter + live scan fix
 
 - Generalize SOLBTCService with alt_symbol param (SOLUSDT default)
 - Replace fixed BTC spike thresholds with adaptive Z-score (1.5σ rolling 20-bar)
-- Add ETHLagStrategy subclass — inherits all 5 SOL lag layers unchanged
+- Add ETHMacroStrategy subclass — inherits all 5 SOL lag layers unchanged
 - Add eth-updown-15m/5m slugs to scanner (confirmed live on Polymarket)
-- Parameterize _execute_sol_lag_signal to use signal.strategy_name
-- Add eth_lag config block; wire strategy in main.py crypto cycle
+- Parameterize _execute_sol_macro_signal to use signal.strategy_name
+- Add eth_macro config block; wire strategy in main.py crypto cycle
 - Fix live scan: add updown market status section to live_strategy_scan.py
 ```

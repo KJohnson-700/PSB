@@ -308,7 +308,7 @@ Never output anything else except the JSON."""
         Returns cached result if available (within cache_ttl).
         Otherwise calls providers with rate limiting between calls.
 
-        strategy_hint: optional short tag (e.g. "bitcoin", "sol_lag") so the same
+        strategy_hint: optional short tag (e.g. "bitcoin", "sol_macro") so the same
         market_id gets independent cache entries when analyzed by different strategies.
         """
         # Live quota saver — backtests do not use AIAgent (see BacktestAIAgent).

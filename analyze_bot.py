@@ -106,7 +106,7 @@ for i, line in enumerate(all_lines):
         if 'macd_15m_cross' not in d: d['macd_15m_cross'] = 'NONE'
         timeline.append(d)
 
-    elif 'SOL SIGNAL:' in s:
+    elif 'SOL Macro SIGNAL:' in s:
         d = {'type': 'sol_signal', 'ts': ts_str}
         m = re.search(r'SIGNAL: (\w+)', s)
         if m: d['action'] = m.group(1)
@@ -159,7 +159,7 @@ for tid, e in entry_map.items():
 
 sol_trades = []
 for tid, e in entry_map.items():
-    if e.get('strategy') != 'sol_lag' or tid not in exit_map: continue
+    if e.get('strategy') != 'sol_macro' or tid not in exit_map: continue
     ex = exit_map[tid]
     sol_trades.append({
         'tid': tid, 'action': e.get('action',''),

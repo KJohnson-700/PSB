@@ -72,9 +72,10 @@ class KellySizer:
 
         self._defaults = {
             "bitcoin":        AssetKellyConfig(base_kelly_fraction=0.15, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.08),
-            "sol_lag":        AssetKellyConfig(base_kelly_fraction=0.15, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.08),
-            "eth_lag":        AssetKellyConfig(base_kelly_fraction=0.12, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.06),
-            "hype_lag":       AssetKellyConfig(base_kelly_fraction=0.08, streak_multiplier_max=1.3, streak_threshold=4, min_kelly_fraction=0.04),
+            "sol_macro":        AssetKellyConfig(base_kelly_fraction=0.15, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.08),
+            "eth_macro":        AssetKellyConfig(base_kelly_fraction=0.12, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.06),
+            "hype_macro":       AssetKellyConfig(base_kelly_fraction=0.08, streak_multiplier_max=1.3, streak_threshold=4, min_kelly_fraction=0.04),
+            "xrp_macro":        AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
             "xrp_dump_hedge": AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
         }
 
@@ -98,7 +99,7 @@ class KellySizer:
         """Record trade outcome for streak tracking. outcome=True = win.
 
         Args:
-            strategy: strategy key (bitcoin, sol_lag, etc.)
+            strategy: strategy key (bitcoin, sol_macro, etc.)
             outcome: True = win, False = loss
             window: "5m" or "15m". Auto-detected from market_question if not provided.
         """

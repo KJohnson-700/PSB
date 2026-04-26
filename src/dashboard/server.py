@@ -173,21 +173,28 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
     if "xrp-updown-5m" in mid:
         return "XRP_updown_5m"
 
-    if strategy == "eth_lag":
+    if strategy == "sol_macro":
+        sz = (
+            "5m"
+            if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
+            else "15m"
+        )
+        return f"SOL_updown_{sz}"
+    if strategy == "eth_macro":
         sz = (
             "5m"
             if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
             else "15m"
         )
         return f"ETH_updown_{sz}"
-    if strategy == "hype_lag":
+    if strategy == "hype_macro":
         sz = (
             "5m"
             if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
             else "15m"
         )
         return f"HYPE_updown_{sz}"
-    if strategy in ("xrp_dump_hedge", "xrp_lag"):
+    if strategy in ("xrp_dump_hedge", "xrp_macro"):
         sz = (
             "5m"
             if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
@@ -237,7 +244,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-04-21-sse-scalar-sentry-htmx",
+        "dashboard_ui_rev": "2026-04-25-alt-spot-price-payload",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -379,10 +386,10 @@ def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 _KELLY_STRATEGY_KEYS = (
     "bitcoin",
-    "sol_lag",
-    "eth_lag",
-    "hype_lag",
-    "xrp_lag",
+    "sol_macro",
+    "eth_macro",
+    "hype_macro",
+    "xrp_macro",
     "fade",
     "neh",
     "arbitrage",
@@ -1622,13 +1629,13 @@ async def get_strategy_watchlist(
         except Exception as e:
             logger.warning(f"Watchlist general markets unavailable: {e}")
 
-    # ── Crypto updown watchlist (bitcoin / sol_lag / eth_lag / xrp_lag)
+    # ── Crypto updown watchlist (bitcoin / sol_macro / eth_macro / xrp_macro)
     try:
         btc_cfg = strategies_cfg.get("bitcoin", {})
-        sol_cfg = strategies_cfg.get("sol_lag", {})
-        eth_cfg = strategies_cfg.get("eth_lag", {})
-        hype_cfg = strategies_cfg.get("hype_lag", {})
-        xrp_cfg = strategies_cfg.get("xrp_lag", {})
+        sol_cfg = strategies_cfg.get("sol_macro", {})
+        eth_cfg = strategies_cfg.get("eth_macro", {})
+        hype_cfg = strategies_cfg.get("hype_macro", {})
+        xrp_cfg = strategies_cfg.get("xrp_macro", {})
         btc_e_min = float(btc_cfg.get("entry_price_min", 0.10))
         btc_e_max = float(btc_cfg.get("entry_price_max", 0.90))
         sol_e_min = float(sol_cfg.get("entry_price_min", 0.46))
@@ -1646,12 +1653,12 @@ async def get_strategy_watchlist(
             btc_spot = _get_btc_svc().get_current_price()
 
         sol_spot = None
-        if bot_instance and hasattr(bot_instance, "sol_lag_strategy"):
-            sol_spot = bot_instance.sol_lag_strategy.sol_service.get_current_price("SOLUSDT")
+        if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
+            sol_spot = bot_instance.sol_macro_strategy.sol_service.get_current_price("SOLUSDT")
 
         eth_spot = None
-        if bot_instance and getattr(bot_instance, "eth_lag_strategy", None):
-            eth_spot = bot_instance.eth_lag_strategy.sol_service.get_current_price("ETHUSDT")
+        if bot_instance and getattr(bot_instance, "eth_macro_strategy", None):
+            eth_spot = bot_instance.eth_macro_strategy.sol_service.get_current_price("ETHUSDT")
         if eth_spot is None:
             try:
                 from src.analysis.sol_btc_service import SOLBTCService
@@ -1697,7 +1704,7 @@ async def get_strategy_watchlist(
                         "spot_distance_pct": dist_pct,
                     }
                 )
-            elif strat == "sol_lag":
+            elif strat == "sol_macro":
                 threshold = _parse_threshold(q, asset="sol")
                 if threshold and sol_spot:
                     dist_pct = abs(float(sol_spot) - threshold) / threshold * 100.0
@@ -1706,7 +1713,7 @@ async def get_strategy_watchlist(
                 trigger = sol_e_min if price < sol_e_min else sol_e_max if price > sol_e_max else price
                 watchlist.append(
                     {
-                        "strategy": "sol_lag",
+                        "strategy": "sol_macro",
                         "market_id": s.get("market_id"),
                         "market_question": q,
                         "action_hint": s.get("action", _parse_direction(q)),
@@ -1720,7 +1727,7 @@ async def get_strategy_watchlist(
                         "spot_distance_pct": dist_pct,
                     }
                 )
-            elif strat == "eth_lag":
+            elif strat == "eth_macro":
                 threshold = _parse_threshold(q, asset="eth")
                 if threshold and eth_spot:
                     dist_pct = abs(float(eth_spot) - threshold) / threshold * 100.0
@@ -1729,7 +1736,7 @@ async def get_strategy_watchlist(
                 trigger = eth_e_min if price < eth_e_min else eth_e_max if price > eth_e_max else price
                 watchlist.append(
                     {
-                        "strategy": "eth_lag",
+                        "strategy": "eth_macro",
                         "market_id": s.get("market_id"),
                         "market_question": q,
                         "action_hint": s.get("action", _parse_direction(q)),
@@ -1743,13 +1750,13 @@ async def get_strategy_watchlist(
                         "spot_distance_pct": dist_pct,
                     }
                 )
-            elif strat == "hype_lag":
+            elif strat == "hype_macro":
                 hype_e_min = float(hype_cfg.get("entry_price_min", 0.46))
                 hype_e_max = float(hype_cfg.get("entry_price_max", 0.54))
                 trigger = hype_e_min if price < hype_e_min else hype_e_max if price > hype_e_max else price
                 watchlist.append(
                     {
-                        "strategy": "hype_lag",
+                        "strategy": "hype_macro",
                         "market_id": s.get("market_id"),
                         "market_question": q,
                         "action_hint": s.get("action", _parse_direction(q)),
@@ -1760,7 +1767,7 @@ async def get_strategy_watchlist(
                         "block_reason": "" if hype_e_min <= price <= hype_e_max else "outside_entry_zone",
                     }
                 )
-            elif strat in ("xrp_dump_hedge", "xrp_lag"):
+            elif strat in ("xrp_dump_hedge", "xrp_macro"):
                 threshold = _parse_threshold(q, asset="xrp")
                 xrp_spot = None
                 try:
@@ -1778,7 +1785,7 @@ async def get_strategy_watchlist(
                 in_band = xrp_e_min <= price <= xrp_e_max
                 watchlist.append(
                     {
-                        "strategy": "xrp_lag",
+                        "strategy": "xrp_macro",
                         "market_id": s.get("market_id"),
                         "market_question": q,
                         "action_hint": s.get("action", _parse_direction(q)),
@@ -1837,28 +1844,28 @@ async def get_strategy_metrics():
             "win_rate": None,
             "reports": 0,
         },
-        "sol_lag": {
+        "sol_macro": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
             "reports": 0,
         },
-        "eth_lag": {
+        "eth_macro": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
             "reports": 0,
         },
-        "hype_lag": {
+        "hype_macro": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
             "reports": 0,
         },
-        "xrp_lag": {
+        "xrp_macro": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
@@ -2183,7 +2190,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
         },
-        "sol_lag": {
+        "sol_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
@@ -2191,7 +2198,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
         },
-        "eth_lag": {
+        "eth_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
@@ -2199,7 +2206,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
         },
-        "hype_lag": {
+        "hype_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
@@ -2207,7 +2214,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
         },
-        "xrp_lag": {
+        "xrp_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
@@ -2737,8 +2744,8 @@ async def get_bitcoin_candles(interval: str = "15m", limit: int = 60):
 # ─── SOL / ETH / XRP LIVE ANALYSIS (alt vs BTC) ───────────────
 
 
-def _solbtc_analysis_payload(ta) -> Dict[str, Any]:
-    """Shared JSON shape for SOL / ETH / XRP alt-vs-BTC dashboards."""
+def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
+    """Shared JSON shape for SOL / ETH / HYPE / XRP alt-vs-BTC dashboards."""
     sol = ta.sol
     corr = ta.correlation
     mtt = ta.multi_tf
@@ -2756,8 +2763,13 @@ def _solbtc_analysis_payload(ta) -> Dict[str, Any]:
     elif sol.rsi_14 < 45:
         bear += 1
     macro = "BULLISH" if bull >= 2 else "BEARISH" if bear >= 2 else "NEUTRAL"
-    return {
-        "sol_price": sol.current_price,
+    raw = (alt_symbol or "SOLUSDT").upper()
+    alt_code = raw.replace("USDT", "").replace("USD", "").strip().lower() or "sol"
+    spot = float(sol.current_price)
+    out: Dict[str, Any] = {
+        "spot_price": spot,
+        "alt_asset_code": alt_code,
+        f"{alt_code}_price": spot,
         "btc_price": corr.btc_price,
         "macro_trend": macro,
         "h1_trend": mtt.h1_trend,
@@ -2789,6 +2801,10 @@ def _solbtc_analysis_payload(ta) -> Dict[str, Any]:
         "lag_magnitude": corr.opportunity_magnitude,
         "chainlink_btc": corr.btc_chainlink_price,
     }
+    # Legacy: dashboard/scripts that still read sol_price for the SOL leg only
+    if alt_code == "sol":
+        out["sol_price"] = spot
+    return out
 
 
 @app.get("/api/sol/analysis")
@@ -2796,14 +2812,17 @@ async def get_sol_analysis():
     """Return live SOL-BTC correlation analysis for the dashboard."""
     try:
         ta = None
-        if bot_instance and hasattr(bot_instance, "sol_lag_strategy"):
-            ta = bot_instance.sol_lag_strategy.sol_service.get_full_analysis()
+        alt_sym = "SOLUSDT"
+        if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
+            svc = bot_instance.sol_macro_strategy.sol_service
+            ta = svc.get_full_analysis()
+            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
         if ta is None:
             from src.analysis.sol_btc_service import SOLBTCService
 
             ta = SOLBTCService(alt_symbol="SOLUSDT").get_full_analysis()
         if ta:
-            return _solbtc_analysis_payload(ta)
+            return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "SOL analysis not available"}
     except Exception as e:
         logger.error(f"SOL analysis endpoint error: {e}", exc_info=True)
@@ -2815,14 +2834,17 @@ async def get_eth_analysis():
     """Live ETH–BTC correlation (same machinery as SOL lag)."""
     try:
         ta = None
-        if bot_instance and hasattr(bot_instance, "eth_lag_strategy"):
-            ta = bot_instance.eth_lag_strategy.sol_service.get_full_analysis()
+        alt_sym = "ETHUSDT"
+        if bot_instance and hasattr(bot_instance, "eth_macro_strategy"):
+            svc = bot_instance.eth_macro_strategy.sol_service
+            ta = svc.get_full_analysis()
+            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
         if ta is None:
             from src.analysis.sol_btc_service import SOLBTCService
 
             ta = SOLBTCService(alt_symbol="ETHUSDT").get_full_analysis()
         if ta:
-            return _solbtc_analysis_payload(ta)
+            return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "ETH analysis not available"}
     except Exception as e:
         logger.error(f"ETH analysis endpoint error: {e}", exc_info=True)
@@ -2834,10 +2856,19 @@ async def get_hype_analysis():
     """Live HYPE–BTC correlation for dashboard using HyperliquidHypeService."""
     try:
         from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
-        svc = HyperliquidHypeService()
-        ta = svc.get_full_analysis()
+
+        ta = None
+        alt_sym = "HYPEUSDT"
+        if bot_instance and hasattr(bot_instance, "hype_macro_strategy"):
+            svc = bot_instance.hype_macro_strategy.sol_service
+            ta = svc.get_full_analysis()
+            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
+        if ta is None:
+            svc = HyperliquidHypeService()
+            ta = svc.get_full_analysis()
+            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
         if ta:
-            return _solbtc_analysis_payload(ta)
+            return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "HYPE analysis not available"}
     except Exception as e:
         logger.error(f"HYPE analysis endpoint error: {e}", exc_info=True)
@@ -2850,9 +2881,16 @@ async def get_xrp_analysis():
     try:
         from src.analysis.sol_btc_service import SOLBTCService
 
-        ta = SOLBTCService(alt_symbol="XRPUSDT").get_full_analysis()
+        ta = None
+        alt_sym = "XRPUSDT"
+        if bot_instance and hasattr(bot_instance, "xrp_macro_strategy"):
+            svc = bot_instance.xrp_macro_strategy.sol_service
+            ta = svc.get_full_analysis()
+            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
+        if ta is None:
+            ta = SOLBTCService(alt_symbol="XRPUSDT").get_full_analysis()
         if ta:
-            return _solbtc_analysis_payload(ta)
+            return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "XRP analysis not available"}
     except Exception as e:
         logger.error(f"XRP analysis endpoint error: {e}", exc_info=True)

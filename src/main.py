@@ -25,11 +25,11 @@ from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.strategies.bitcoin import BitcoinStrategy, BitcoinSignal
-from src.strategies.sol_lag import SOLLagStrategy, SOLLagSignal
-from src.strategies.eth_lag import ETHLagStrategy
-from src.strategies.hype_lag import HYPELagStrategy
+from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
+from src.strategies.eth_macro import ETHMacroStrategy
+from src.strategies.hype_macro import HYPEMacroStrategy
 from src.strategies.weather import WeatherStrategy, WeatherSignal
-from src.strategies.xrp_lag import XRPLagStrategy
+from src.strategies.xrp_macro import XRPMacroStrategy
 from src.execution.clob_client import CLOBClient, RiskManager, Position
 from src.execution.trade_journal import TradeJournal
 from src.execution.exposure_manager import ExposureManager
@@ -159,28 +159,28 @@ class PolyBot:
             exposure_manager=self.btc_exposure_manager,
         )
 
-        self.sol_lag_strategy = SOLLagStrategy(
+        self.sol_macro_strategy = SolMacroStrategy(
             self.config,
             self.ai_agent,
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.sol_exposure_manager,
         )
-        self.eth_lag_strategy = ETHLagStrategy(
+        self.eth_macro_strategy = ETHMacroStrategy(
             self.config,
             self.ai_agent,
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.eth_exposure_manager,
         )
-        self.hype_lag_strategy = HYPELagStrategy(
+        self.hype_macro_strategy = HYPEMacroStrategy(
             self.config,
             self.ai_agent,
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.hype_exposure_manager,
         )
-        self.xrp_lag_strategy = XRPLagStrategy(
+        self.xrp_macro_strategy = XRPMacroStrategy(
             self.config,
             self.ai_agent,
             self.position_sizer,
@@ -194,10 +194,10 @@ class PolyBot:
         # Track last signal counts per strategy (for dashboard)
         self.last_signal_counts = {
             "bitcoin": 0,
-            "sol_lag": 0,
-            "eth_lag": 0,
-            "hype_lag": 0,
-            "xrp_lag": 0,
+            "sol_macro": 0,
+            "eth_macro": 0,
+            "hype_macro": 0,
+            "xrp_macro": 0,
             "weather": 0,
         }
         # ISO timestamp of the last time each strategy completed a cycle
@@ -589,13 +589,13 @@ class PolyBot:
         """Return the correct exposure manager for a given strategy."""
         if strategy == "bitcoin":
             return self.btc_exposure_manager
-        elif strategy == "sol_lag":
+        elif strategy == "sol_macro":
             return self.sol_exposure_manager
-        elif strategy == "eth_lag":
+        elif strategy == "eth_macro":
             return self.eth_exposure_manager
-        elif strategy == "hype_lag":
+        elif strategy == "hype_macro":
             return self.hype_exposure_manager
-        elif strategy == "xrp_lag":
+        elif strategy == "xrp_macro":
             return self.xrp_exposure_manager
         return self.event_exposure_manager
 
@@ -628,13 +628,13 @@ class PolyBot:
                 s
                 for s in settled
                 if s.get("strategy")
-                in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag")
+                in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
             ]
             event_settled = [
                 s
                 for s in settled
                 if s.get("strategy")
-                not in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag")
+                not in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
             ]
             if crypto_settled:
                 crypto_pnl = sum(s["pnl"] for s in crypto_settled)
@@ -738,7 +738,7 @@ class PolyBot:
                 "Kill switch active (data/KILL_SWITCH present). Skipping trading cycle."
             )
             log_ops_pulse(self, "main")
-            for st in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag"):
+            for st in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"):
                 asyncio.create_task(
                     self.notifier.notify_kill_global(st, "global kill switch")
                 )
@@ -814,7 +814,7 @@ class PolyBot:
             except Exception as e:
                 logging.error(f"Weather strategy error: {e}", exc_info=True)
 
-        # Crypto: Bitcoin, SOL/ETH/HYPE lag, XRP lag
+        # Crypto: Bitcoin, SOL/ETH/HYPE macro, XRP macro
 
         try:
             btc_signals = await self.bitcoin_strategy.scan_and_analyze(
@@ -849,20 +849,20 @@ class PolyBot:
             logging.error(f"Crypto BTC error: {e}", exc_info=True)
 
         try:
-            self.sol_lag_strategy._open_positions_snapshot = list(
+            self.sol_macro_strategy._open_positions_snapshot = list(
                 self.risk_manager.active_positions.values()
             )
-            sol_signals = await self.sol_lag_strategy.scan_and_analyze(
+            sol_signals = await self.sol_macro_strategy.scan_and_analyze(
                 markets=short_horizon, bankroll=self.bankroll
             )
             _now_iso = datetime.now().isoformat(timespec="seconds")
-            self.last_signal_counts["sol_lag"] = len(sol_signals)
-            self.last_cycle_times["sol_lag"] = _now_iso
-            self.cumulative_signal_counts["sol_lag"] = (
-                self.cumulative_signal_counts.get("sol_lag", 0) + len(sol_signals)
+            self.last_signal_counts["sol_macro"] = len(sol_signals)
+            self.last_cycle_times["sol_macro"] = _now_iso
+            self.cumulative_signal_counts["sol_macro"] = (
+                self.cumulative_signal_counts.get("sol_macro", 0) + len(sol_signals)
             )
             for signal in sol_signals:
-                await self._execute_sol_lag_signal(signal)
+                await self._execute_sol_macro_signal(signal)
             if sol_signals:
                 logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
             else:
@@ -871,22 +871,22 @@ class PolyBot:
             logging.error(f"Crypto SOL error: {e}", exc_info=True)
 
         try:
-            eth_lag_cfg = self.config.get("strategies", {}).get("eth_lag", {})
-            if eth_lag_cfg.get("enabled", False):
-                self.eth_lag_strategy._open_positions_snapshot = list(
+            eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
+            if eth_macro_cfg.get("enabled", False):
+                self.eth_macro_strategy._open_positions_snapshot = list(
                     self.risk_manager.active_positions.values()
                 )
-                eth_signals = await self.eth_lag_strategy.scan_and_analyze(
+                eth_signals = await self.eth_macro_strategy.scan_and_analyze(
                     markets=short_horizon, bankroll=self.bankroll
                 )
                 _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["eth_lag"] = len(eth_signals)
-                self.last_cycle_times["eth_lag"] = _now_iso
-                self.cumulative_signal_counts["eth_lag"] = (
-                    self.cumulative_signal_counts.get("eth_lag", 0) + len(eth_signals)
+                self.last_signal_counts["eth_macro"] = len(eth_signals)
+                self.last_cycle_times["eth_macro"] = _now_iso
+                self.cumulative_signal_counts["eth_macro"] = (
+                    self.cumulative_signal_counts.get("eth_macro", 0) + len(eth_signals)
                 )
                 for signal in eth_signals:
-                    await self._execute_sol_lag_signal(signal)
+                    await self._execute_sol_macro_signal(signal)
                 if eth_signals:
                     logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
                 else:
@@ -895,22 +895,22 @@ class PolyBot:
             logging.error(f"Crypto ETH error: {e}", exc_info=True)
 
         try:
-            hype_lag_cfg = self.config.get("strategies", {}).get("hype_lag", {})
-            if hype_lag_cfg.get("enabled", False):
-                self.hype_lag_strategy._open_positions_snapshot = list(
+            hype_macro_cfg = self.config.get("strategies", {}).get("hype_macro", {})
+            if hype_macro_cfg.get("enabled", False):
+                self.hype_macro_strategy._open_positions_snapshot = list(
                     self.risk_manager.active_positions.values()
                 )
-                hype_signals = await self.hype_lag_strategy.scan_and_analyze(
+                hype_signals = await self.hype_macro_strategy.scan_and_analyze(
                     markets=short_horizon, bankroll=self.bankroll
                 )
                 _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["hype_lag"] = len(hype_signals)
-                self.last_cycle_times["hype_lag"] = _now_iso
-                self.cumulative_signal_counts["hype_lag"] = (
-                    self.cumulative_signal_counts.get("hype_lag", 0) + len(hype_signals)
+                self.last_signal_counts["hype_macro"] = len(hype_signals)
+                self.last_cycle_times["hype_macro"] = _now_iso
+                self.cumulative_signal_counts["hype_macro"] = (
+                    self.cumulative_signal_counts.get("hype_macro", 0) + len(hype_signals)
                 )
                 for signal in hype_signals:
-                    await self._execute_sol_lag_signal(signal)
+                    await self._execute_sol_macro_signal(signal)
                 if hype_signals:
                     logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
                 else:
@@ -919,28 +919,28 @@ class PolyBot:
             logging.error(f"Crypto HYPE error: {e}", exc_info=True)
 
         try:
-            xrp_cfg = self.config.get("strategies", {}).get("xrp_lag", {})
-            if xrp_cfg.get("enabled", False) and self.xrp_lag_strategy:
-                self.xrp_lag_strategy._open_positions_snapshot = list(
+            xrp_cfg = self.config.get("strategies", {}).get("xrp_macro", {})
+            if xrp_cfg.get("enabled", False) and self.xrp_macro_strategy:
+                self.xrp_macro_strategy._open_positions_snapshot = list(
                     self.risk_manager.active_positions.values()
                 )
-                xrp_signals = await self.xrp_lag_strategy.scan_and_analyze(
+                xrp_signals = await self.xrp_macro_strategy.scan_and_analyze(
                     markets=short_horizon, bankroll=self.bankroll
                 )
                 _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["xrp_lag"] = len(xrp_signals)
-                self.last_cycle_times["xrp_lag"] = _now_iso
-                self.cumulative_signal_counts["xrp_lag"] = (
-                    self.cumulative_signal_counts.get("xrp_lag", 0) + len(xrp_signals)
+                self.last_signal_counts["xrp_macro"] = len(xrp_signals)
+                self.last_cycle_times["xrp_macro"] = _now_iso
+                self.cumulative_signal_counts["xrp_macro"] = (
+                    self.cumulative_signal_counts.get("xrp_macro", 0) + len(xrp_signals)
                 )
                 for signal in xrp_signals:
-                    await self._execute_xrp_lag_signal(signal)
+                    await self._execute_xrp_macro_signal(signal)
                 if xrp_signals:
-                    logging.info(f"[TRADING] Crypto XRP lag: {len(xrp_signals)} signals")
+                    logging.info(f"[TRADING] Crypto XRP macro: {len(xrp_signals)} signals")
                 else:
-                    logging.info("[TRADING] Crypto XRP lag: No signals this cycle")
+                    logging.info("[TRADING] Crypto XRP macro: No signals this cycle")
         except Exception as e:
-            logging.error(f"Crypto XRP lag error: {e}", exc_info=True)
+            logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
 
         try:
             async with self._execution_lock:
@@ -1095,13 +1095,13 @@ class PolyBot:
                 }
             )
 
-    async def _execute_sol_lag_signal(self, signal: SOLLagSignal):
-        """Execute a SOL or ETH lag trade signal (same execution path)."""
+    async def _execute_sol_macro_signal(self, signal: SolMacroSignal):
+        """Execute a SOL or ETH macro trade signal (same execution path)."""
         async with self._execution_lock:
-            await self._execute_sol_lag_signal_impl(signal)
+            await self._execute_sol_macro_signal_impl(signal)
 
-    async def _execute_sol_lag_signal_impl(self, signal: SOLLagSignal):
-        """SOL/ETH lag entry (holds _execution_lock via caller)."""
+    async def _execute_sol_macro_signal_impl(self, signal: SolMacroSignal):
+        """SOL/ETH macro entry (holds _execution_lock via caller)."""
         strat = signal.strategy_name
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
         if not can_trade:
@@ -1151,7 +1151,7 @@ class PolyBot:
             return
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        # SOL/ETH/HYPE lag signals are BUY_YES / SELL_YES — both operate on the
+        # SOL/ETH/HYPE macro signals are BUY_YES / SELL_YES — both operate on the
         # YES token, so we verify YES has bids before committing to an entry.
         token_to_test = token_id
         if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
@@ -1214,7 +1214,7 @@ class PolyBot:
                 bankroll=self.bankroll,
                 edge=signal.edge,
                 confidence=signal.confidence,
-                reason=f"{strat}_{signal.direction} lag={signal.lag_magnitude} side={signal.action} ai={signal.ai_used} | {signal.reason[:120]}",
+                reason=f"{strat}_{signal.direction} macro_leg={signal.lag_magnitude} side={signal.action} ai={signal.ai_used} | {signal.reason[:120]}",
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
@@ -1222,7 +1222,7 @@ class PolyBot:
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
                     "yes_price": signal.price,
-                    "sol_price": signal.sol_current,
+                    signal.spot_price_journal_key(): signal.sol_current,
                     "btc_price": signal.btc_current,
                     "lag_magnitude": signal.lag_magnitude,
                     "edge": signal.edge,
@@ -1248,10 +1248,10 @@ class PolyBot:
                 }
             )
 
-    async def _execute_xrp_lag_signal(self, signal: SOLLagSignal):
-        """Execute an XRP lag trade signal (same execution path as SOL lag)."""
+    async def _execute_xrp_macro_signal(self, signal: SolMacroSignal):
+        """Execute an XRP macro trade signal (same execution path as SOL macro)."""
         async with self._execution_lock:
-            await self._execute_sol_lag_signal_impl(signal)
+            await self._execute_sol_macro_signal_impl(signal)
 
     async def _execute_weather_signal(self, signal: WeatherSignal):
         """Execute a weather forecast vs market price trade signal."""

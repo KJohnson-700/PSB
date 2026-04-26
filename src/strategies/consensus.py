@@ -73,7 +73,7 @@ class ConsensusStrategy:
 
         for market in markets:
             # Crypto 15m/5m up-down windows: lopsided prices are usually resolution flow, not
-            # generic "contrarian" setups. bitcoin / sol_lag / eth_lag own these markets.
+            # generic "contrarian" setups. bitcoin / sol_macro / eth_macro own these markets.
             if is_crypto_updown_market(market):
                 continue
             # Skip if already alerted

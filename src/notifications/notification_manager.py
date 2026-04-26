@@ -11,15 +11,23 @@ logger = logging.getLogger(__name__)
 
 # Discord: only these strategies may trigger trade / exit alerts (execution outcomes).
 DISCORD_TRADE_STRATEGIES: FrozenSet[str] = frozenset(
-    {"bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_dump_hedge"}
+    {
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "xrp_dump_hedge",
+    }
 )
 
 # Short Discord titles for executed trades / exits (per-strategy)
 STRATEGY_ALERT_TITLE = {
     "bitcoin": "BTC",
-    "sol_lag": "SOL lag",
-    "eth_lag": "ETH lag",
-    "hype_lag": "HYPE lag",
+    "sol_macro": "SOL macro",
+    "eth_macro": "ETH macro",
+    "hype_macro": "HYPE macro",
+    "xrp_macro": "XRP macro",
     "xrp_dump_hedge": "XRP dump-hedge",
 }
 

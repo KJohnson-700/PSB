@@ -812,7 +812,7 @@ class SOLBTCService:
 
             # Populate sol_trend on the correlation object from the multi-TF 1H reading.
             # BTCSOLCorrelation.sol_trend defaults to "NEUTRAL" and calc_correlation()
-            # doesn't set it — so the NEUTRAL macro fallback path in sol_lag.py always
+            # doesn't set it — so the NEUTRAL macro fallback path in sol_macro.py always
             # got sol_trend="NEUTRAL", making allowed_side=None and return [].
             # Use 1H trend as the directional bias for NEUTRAL macro fallback.
             correlation.sol_trend = multi_tf.h1_trend

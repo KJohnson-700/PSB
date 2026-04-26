@@ -376,7 +376,7 @@
           <div class="hero-item"><div class="hero-val" id="sol-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">SOL Price</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="sol-lag">-</div><div class="hero-lbl">BTC-SOL Lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="sol-macro">-</div><div class="hero-lbl">BTC-SOL Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-sol-move">-</div><div class="hero-lbl">SOL 5m</div></div>
         </div>
@@ -416,7 +416,7 @@
           <div class="hero-item"><div class="hero-val" id="eth-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">ETH Price</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="eth-lag">-</div><div class="hero-lbl">BTC-ETH Lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="eth-macro">-</div><div class="hero-lbl">BTC-ETH Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-eth-move">-</div><div class="hero-lbl">ETH 5m</div></div>
         </div>
@@ -452,7 +452,7 @@
           <div class="hero-item"><div class="hero-val" id="hype-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">HYPE Price</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="hype-lag">-</div><div class="hero-lbl">BTC-HYPE Lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="hype-macro">-</div><div class="hero-lbl">BTC-HYPE Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-hype-move">-</div><div class="hero-lbl">HYPE 5m</div></div>
         </div>
@@ -488,7 +488,7 @@
           <div class="hero-item"><div class="hero-val" id="xrp-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">XRP Price</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="xrp-lag">-</div><div class="hero-lbl">BTC-XRP Lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="xrp-macro">-</div><div class="hero-lbl">BTC-XRP Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-xrp-move">-</div><div class="hero-lbl">XRP 5m</div></div>
         </div>
@@ -654,10 +654,10 @@
                     <select id="trade-journey-strategy" onchange="fetchTradeJourney()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.72rem;">
                         <option value="">All crypto</option>
                         <option value="bitcoin">bitcoin</option>
-                        <option value="sol_lag">sol_lag</option>
-                        <option value="eth_lag">eth_lag</option>
-                        <option value="hype_lag">hype_lag</option>
-                        <option value="xrp_lag">xrp_lag</option>
+                        <option value="sol_macro">sol_macro</option>
+                        <option value="eth_macro">eth_macro</option>
+                        <option value="hype_macro">hype_macro</option>
+                        <option value="xrp_macro">xrp_macro</option>
                         <option value="weather">weather</option>
                     </select>
                     <span id="trade-journey-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
@@ -859,10 +859,10 @@
                 <div class="tab" data-strat="arbitrage" onclick="switchScanTab('arbitrage')">Arb</div>
                 <div class="tab" data-strat="neh" onclick="switchScanTab('neh')">NEH</div>
                 <div class="tab" data-strat="bitcoin" onclick="switchScanTab('bitcoin')">BTC</div>
-                <div class="tab" data-strat="sol_lag" onclick="switchScanTab('sol_lag')">SOL</div>
-                <div class="tab" data-strat="eth_lag" onclick="switchScanTab('eth_lag')">ETH</div>
-                <div class="tab" data-strat="hype_lag" onclick="switchScanTab('hype_lag')">HYPE</div>
-                <div class="tab" data-strat="xrp_lag" onclick="switchScanTab('xrp_lag')">XRP</div>
+                <div class="tab" data-strat="sol_macro" onclick="switchScanTab('sol_macro')">SOL</div>
+                <div class="tab" data-strat="eth_macro" onclick="switchScanTab('eth_macro')">ETH</div>
+                <div class="tab" data-strat="hype_macro" onclick="switchScanTab('hype_macro')">HYPE</div>
+                <div class="tab" data-strat="xrp_macro" onclick="switchScanTab('xrp_macro')">XRP</div>
                 <div class="tab" data-strat="weather" onclick="switchScanTab('weather')">Weather</div>
             </div>
             <div id="weather-scan-diag" style="display:none;padding:8px 4px 4px;"></div>
@@ -898,9 +898,9 @@
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-fade-use_ai"> <span>Fade: use_ai</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-arbitrage-use_ai"> <span>Arbitrage: use_ai</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-bitcoin-use_ai"> <span>Bitcoin: use_ai</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_lag-use_ai"> <span>SOL Lag: use_ai</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_lag-use_ai"> <span>ETH Lag: use_ai</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_lag-use_ai"> <span>HYPE Lag: use_ai</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_macro-use_ai"> <span>SOL Macro: use_ai</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_macro-use_ai"> <span>ETH Macro: use_ai</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_macro-use_ai"> <span>HYPE Macro: use_ai</span></label></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Strategies on/off</h3>
@@ -908,10 +908,10 @@
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-fade-enabled"> <span>Fade enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-arbitrage-enabled"> <span>Arbitrage enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-bitcoin-enabled"> <span>Bitcoin enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_lag-enabled"> <span>SOL Lag enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_lag-enabled"> <span>ETH Lag enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_lag-enabled"> <span>HYPE Lag enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_lag-enabled"> <span>XRP Lag enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_macro-enabled"> <span>SOL Macro enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_macro-enabled"> <span>ETH Macro enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_macro-enabled"> <span>HYPE Macro enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_macro-enabled"> <span>XRP Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-weather-enabled"> <span>Weather enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-neh-enabled"> <span>NEH enabled</span></label></div>
                 </div>
@@ -956,32 +956,32 @@
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-bitcoin-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
-                    <h3>SOL Lag Strategy</h3>
-                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-sol_lag-min_edge" step="0.01" value="0.08"></div>
-                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-sol_lag-entry_price_min" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-sol_lag-entry_price_max" step="0.01" value="0.85"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-sol_lag-kelly_fraction" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-sol_lag-ai_confidence_threshold" step="0.01" value="0.60"></div>
+                    <h3>SOL Macro Strategy</h3>
+                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-sol_macro-min_edge" step="0.01" value="0.08"></div>
+                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-sol_macro-entry_price_min" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-sol_macro-entry_price_max" step="0.01" value="0.85"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-sol_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-sol_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
-                    <h3>ETH Lag Strategy</h3>
-                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-eth_lag-min_edge" step="0.01" value="0.06"></div>
-                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-eth_lag-entry_price_min" step="0.01" value="0.46"></div>
-                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-eth_lag-entry_price_max" step="0.01" value="0.54"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-eth_lag-kelly_fraction" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-eth_lag-ai_confidence_threshold" step="0.01" value="0.60"></div>
+                    <h3>ETH Macro Strategy</h3>
+                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-eth_macro-min_edge" step="0.01" value="0.06"></div>
+                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-eth_macro-entry_price_min" step="0.01" value="0.46"></div>
+                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-eth_macro-entry_price_max" step="0.01" value="0.54"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-eth_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-eth_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
-                    <h3>XRP Lag Strategy</h3>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_lag-kelly_fraction" step="0.01" value="0.08"></div>
+                    <h3>XRP Macro Strategy</h3>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_macro-kelly_fraction" step="0.01" value="0.08"></div>
                 </div>
                 <div class="cfg-group">
-                    <h3>HYPE Lag Strategy</h3>
-                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-hype_lag-min_edge" step="0.01" value="0.09"></div>
-                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-hype_lag-entry_price_min" step="0.01" value="0.46"></div>
-                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-hype_lag-entry_price_max" step="0.01" value="0.54"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-hype_lag-kelly_fraction" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-hype_lag-ai_confidence_threshold" step="0.01" value="0.60"></div>
+                    <h3>HYPE Macro Strategy</h3>
+                    <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-hype_macro-min_edge" step="0.01" value="0.09"></div>
+                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-hype_macro-entry_price_min" step="0.01" value="0.46"></div>
+                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-hype_macro-entry_price_max" step="0.01" value="0.54"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-hype_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-hype_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Exposure Scaling</h3>
@@ -1526,18 +1526,18 @@ function updateMetrics(d) {
 
     boxes.innerHTML =
         sigBox('bitcoin', 'var(--green)', 'BTC Signals') +
-        sigBox('sol_lag', 'var(--purple)', 'SOL Signals') +
-        sigBox('eth_lag', '#fb923c', 'ETH Signals') +
-        sigBox('hype_lag', '#a78bfa', 'HYPE Signals') +
-        sigBox('xrp_lag', '#38bdf8', 'XRP Signals') +
+        sigBox('sol_macro', 'var(--purple)', 'SOL Signals') +
+        sigBox('eth_macro', '#fb923c', 'ETH Signals') +
+        sigBox('hype_macro', '#a78bfa', 'HYPE Signals') +
+        sigBox('xrp_macro', '#38bdf8', 'XRP Signals') +
         sigBox('weather', '#86efac', 'Weather Signals');
 
-    const breakEven = {bitcoin:'Trend-based', sol_lag:'Lag-based', eth_lag:'Lag-based', hype_lag:'Lag-based', xrp_lag:'Lag-based', weather:'Event-based'};
-    const riskProfile = {bitcoin:'Hierarchical', sol_lag:'Correlated', eth_lag:'Correlated', hype_lag:'Correlated', xrp_lag:'Correlated', weather:'Independent'};
-    tbody.innerHTML = ['bitcoin','sol_lag','eth_lag','hype_lag','xrp_lag','weather'].map(s => {
+    const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', weather:'Event-based'};
+    const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', weather:'Independent'};
+    tbody.innerHTML = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'].map(s => {
         const m = d[s]||{};
         const pnlCls = (m.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-        const colors = {bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
+        const colors = {bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
         const ageStr = m.last_cycle ? ` <span style="color:var(--text-muted);font-size:0.7rem;" title="${m.last_cycle}">${_cycleAge(m.last_cycle)}</span>` : '';
         const totalStr = m.total_signals > 0 ? ` <span style="color:var(--text-muted);font-size:0.7rem;">(${m.total_signals}Σ)</span>` : '';
         return `<tr><td><span class="badge ${colors[s]}">${s}</span></td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.reports||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
@@ -1577,8 +1577,8 @@ function renderScanSignals() {
     if (!sigs.length) { el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">No ${currentScanFilter} signals in latest scan.</p>`; return; }
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
-        const colors = {fade:'var(--yellow)',arbitrage:'var(--accent)',neh:'var(--purple)',bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_lag:'#38bdf8',weather:'#86efac'};
-        const stratShort = {fade:'FAD',arbitrage:'ARB',neh:'NEH',bitcoin:'BTC',sol_lag:'SOL',eth_lag:'ETH',hype_lag:'HYP',xrp_lag:'XRP',weather:'WX'};
+        const colors = {fade:'var(--yellow)',arbitrage:'var(--accent)',neh:'var(--purple)',bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
+        const stratShort = {fade:'FAD',arbitrage:'ARB',neh:'NEH',bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
@@ -2008,33 +2008,33 @@ function updateBacktest(d) {
         ${cryptoCard('BTC', 5)}
     </div>`;
 
-    // ── Section 2: SOL Lag Strategy ──────────────────────────────────────────
+    // ── Section 2: SOL Macro Strategy ──────────────────────────────────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        SOL Lag Strategy — Updown</h3>`;
+        SOL Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
         ${cryptoCard('SOL', 15)}
         ${cryptoCard('SOL', 5)}
     </div>`;
 
-    // ── Section 3: ETH Lag Strategy — Updown ─────────────────────────────────
+    // ── Section 3: ETH Macro Strategy — Updown ─────────────────────────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        ETH Lag Strategy — Updown</h3>`;
+        ETH Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
         ${cryptoCard('ETH', 15)}
         ${cryptoCard('ETH', 5)}
     </div>`;
 
-    // ── Section 4: HYPE Lag Strategy — Updown ───────────────────────────────────
+    // ── Section 4: HYPE Macro Strategy — Updown ───────────────────────────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        HYPE Lag Strategy — Updown</h3>`;
+        HYPE Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
         ${cryptoCard('HYPE', 15)}
         ${cryptoCard('HYPE', 5)}
     </div>`;
 
-    // ── Section 5: XRP Lag Strategy ───────────────────────────��──────────────
+    // ── Section 5: XRP Macro Strategy ───────────────────────────────────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        XRP Lag Strategy — Updown</h3>`;
+        XRP Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
         ${cryptoCard('XRP', 15)}
         ${cryptoCard('XRP', 5)}
@@ -2049,7 +2049,7 @@ function updateBacktest(d) {
             const pnl = (r.final_bankroll||0) - (r.initial_bankroll||0);
             const ret = r.initial_bankroll ? ((pnl/r.initial_bankroll)*100).toFixed(1) : '0.0';
             const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-            const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
+            const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
             return `<tr><td><span class="badge ${stratColors[r.strategy]||'badge-blue'}">${r.strategy}</span></td><td style="font-size:0.8rem;">${r.start_date||''} → ${r.end_date||''}</td><td>${r.trades_count||0}</td><td>$${(r.initial_bankroll||0).toLocaleString()}</td><td>$${(r.final_bankroll||0).toLocaleString()}</td><td class="${pnlCls}">$${pnl.toFixed(2)}</td><td class="${pnlCls}">${ret}%</td></tr>`;
         }).join('');
         html += '</tbody></table>';
@@ -2072,7 +2072,7 @@ function updateBacktest(d) {
                 const ta = testAgg[s] || [0,0];
                 const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
                 const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
+                const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                 html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td><span class="badge ${stratColors[s]||'badge-blue'}">${s}</span></td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
             });
         });
@@ -2252,9 +2252,9 @@ function updateJournal(d) {
     // Strategy breakdown — always show all active strategies
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
-    const ACTIVE_STRATS = ['bitcoin','sol_lag','eth_lag','hype_lag','xrp_lag','weather'];
-    const stratColors = {bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_lag:'#38bdf8',weather:'#86efac'};
-    const stratLabels = {bitcoin:'BTC',sol_lag:'SOL',eth_lag:'ETH',hype_lag:'HYPE',xrp_lag:'XRP',weather:'WX'};
+    const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
+    const stratColors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
+    const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',weather:'WX'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
     // also include any extra strategies with data (e.g. old fade entries)
@@ -2316,7 +2316,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Current</th><th>PnL</th><th>Opened</th></tr></thead><tbody>' +
                 d.positions.map(p => {
                     const pnlCls = (p.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
+                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[p.strategy]||'badge-blue'}">${p.strategy||'?'}</span></td>
                         <td style="color:${p.action?.includes('BUY')?'var(--green)':'var(--red)'}">${p.action||''}</td>
@@ -2338,7 +2338,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Reason</th></tr></thead><tbody>' +
                 d.trades.slice(-50).reverse().map(t => {
                     const pnlCls = (t.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',xrp_lag:'badge-blue',weather:'badge-green'};
+                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[t.strategy]||'badge-blue'}">${t.strategy||'?'}</span></td>
                         <td>${t.action||''}</td>
@@ -2565,16 +2565,16 @@ async function loadConfig() {
             'cfg-strategies-fade-use_ai': d.strategies?.fade?.use_ai,
             'cfg-strategies-arbitrage-use_ai': d.strategies?.arbitrage?.use_ai,
             'cfg-strategies-bitcoin-use_ai': d.strategies?.bitcoin?.use_ai,
-            'cfg-strategies-sol_lag-use_ai': d.strategies?.sol_lag?.use_ai,
-            'cfg-strategies-eth_lag-use_ai': d.strategies?.eth_lag?.use_ai,
-            'cfg-strategies-hype_lag-use_ai': d.strategies?.hype_lag?.use_ai,
+            'cfg-strategies-sol_macro-use_ai': d.strategies?.sol_macro?.use_ai,
+            'cfg-strategies-eth_macro-use_ai': d.strategies?.eth_macro?.use_ai,
+            'cfg-strategies-hype_macro-use_ai': d.strategies?.hype_macro?.use_ai,
             'cfg-strategies-fade-enabled': d.strategies?.fade?.enabled,
             'cfg-strategies-arbitrage-enabled': d.strategies?.arbitrage?.enabled,
             'cfg-strategies-bitcoin-enabled': d.strategies?.bitcoin?.enabled,
-            'cfg-strategies-sol_lag-enabled': d.strategies?.sol_lag?.enabled,
-            'cfg-strategies-eth_lag-enabled': d.strategies?.eth_lag?.enabled,
-            'cfg-strategies-hype_lag-enabled': d.strategies?.hype_lag?.enabled,
-            'cfg-strategies-xrp_lag-enabled': d.strategies?.xrp_lag?.enabled,
+            'cfg-strategies-sol_macro-enabled': d.strategies?.sol_macro?.enabled,
+            'cfg-strategies-eth_macro-enabled': d.strategies?.eth_macro?.enabled,
+            'cfg-strategies-hype_macro-enabled': d.strategies?.hype_macro?.enabled,
+            'cfg-strategies-xrp_macro-enabled': d.strategies?.xrp_macro?.enabled,
             'cfg-strategies-weather-enabled': d.strategies?.weather?.enabled,
             'cfg-strategies-neh-enabled': d.strategies?.neh?.enabled,
             'cfg-exposure-loss_kill_switch_enabled': d.exposure?.loss_kill_switch_enabled,
@@ -2609,22 +2609,22 @@ async function loadConfig() {
             'cfg-strategies-bitcoin-entry_price_max': d.strategies?.bitcoin?.entry_price_max,
             'cfg-strategies-bitcoin-kelly_fraction': d.strategies?.bitcoin?.kelly_fraction,
             'cfg-strategies-bitcoin-ai_confidence_threshold': d.strategies?.bitcoin?.ai_confidence_threshold,
-            'cfg-strategies-sol_lag-min_edge': d.strategies?.sol_lag?.min_edge,
-            'cfg-strategies-sol_lag-entry_price_min': d.strategies?.sol_lag?.entry_price_min,
-            'cfg-strategies-sol_lag-entry_price_max': d.strategies?.sol_lag?.entry_price_max,
-            'cfg-strategies-sol_lag-kelly_fraction': d.strategies?.sol_lag?.kelly_fraction,
-            'cfg-strategies-sol_lag-ai_confidence_threshold': d.strategies?.sol_lag?.ai_confidence_threshold,
-            'cfg-strategies-eth_lag-min_edge': d.strategies?.eth_lag?.min_edge,
-            'cfg-strategies-eth_lag-entry_price_min': d.strategies?.eth_lag?.entry_price_min,
-            'cfg-strategies-eth_lag-entry_price_max': d.strategies?.eth_lag?.entry_price_max,
-            'cfg-strategies-eth_lag-kelly_fraction': d.strategies?.eth_lag?.kelly_fraction,
-            'cfg-strategies-eth_lag-ai_confidence_threshold': d.strategies?.eth_lag?.ai_confidence_threshold,
-            'cfg-strategies-hype_lag-min_edge': d.strategies?.hype_lag?.min_edge,
-            'cfg-strategies-hype_lag-entry_price_min': d.strategies?.hype_lag?.entry_price_min,
-            'cfg-strategies-hype_lag-entry_price_max': d.strategies?.hype_lag?.entry_price_max,
-            'cfg-strategies-hype_lag-kelly_fraction': d.strategies?.hype_lag?.kelly_fraction,
-            'cfg-strategies-hype_lag-ai_confidence_threshold': d.strategies?.hype_lag?.ai_confidence_threshold,
-            'cfg-strategies-xrp_lag-kelly_fraction': d.strategies?.xrp_lag?.kelly_fraction,
+            'cfg-strategies-sol_macro-min_edge': d.strategies?.sol_macro?.min_edge,
+            'cfg-strategies-sol_macro-entry_price_min': d.strategies?.sol_macro?.entry_price_min,
+            'cfg-strategies-sol_macro-entry_price_max': d.strategies?.sol_macro?.entry_price_max,
+            'cfg-strategies-sol_macro-kelly_fraction': d.strategies?.sol_macro?.kelly_fraction,
+            'cfg-strategies-sol_macro-ai_confidence_threshold': d.strategies?.sol_macro?.ai_confidence_threshold,
+            'cfg-strategies-eth_macro-min_edge': d.strategies?.eth_macro?.min_edge,
+            'cfg-strategies-eth_macro-entry_price_min': d.strategies?.eth_macro?.entry_price_min,
+            'cfg-strategies-eth_macro-entry_price_max': d.strategies?.eth_macro?.entry_price_max,
+            'cfg-strategies-eth_macro-kelly_fraction': d.strategies?.eth_macro?.kelly_fraction,
+            'cfg-strategies-eth_macro-ai_confidence_threshold': d.strategies?.eth_macro?.ai_confidence_threshold,
+            'cfg-strategies-hype_macro-min_edge': d.strategies?.hype_macro?.min_edge,
+            'cfg-strategies-hype_macro-entry_price_min': d.strategies?.hype_macro?.entry_price_min,
+            'cfg-strategies-hype_macro-entry_price_max': d.strategies?.hype_macro?.entry_price_max,
+            'cfg-strategies-hype_macro-kelly_fraction': d.strategies?.hype_macro?.kelly_fraction,
+            'cfg-strategies-hype_macro-ai_confidence_threshold': d.strategies?.hype_macro?.ai_confidence_threshold,
+            'cfg-strategies-xrp_macro-kelly_fraction': d.strategies?.xrp_macro?.kelly_fraction,
             'cfg-exposure-full_size': d.exposure?.full_size,
             'cfg-exposure-moderate_size': d.exposure?.moderate_size,
             'cfg-exposure-minimal_size': d.exposure?.minimal_size,
@@ -2804,7 +2804,8 @@ function updateAltLagAnalysis(d, prefix) {
         if (priceEl) priceEl.textContent = '-';
         return;
     }
-    const sp = d.sol_price || 0;
+    const spotKey = prefix + '_price';
+    const sp = d.spot_price ?? d[spotKey] ?? d.sol_price ?? 0;
     const dec = prefix === 'xrp' ? 4 : 2;
     if (priceEl) priceEl.textContent = '$' + sp.toFixed(dec);
     const macro = d.macro_trend || '-';
@@ -2904,13 +2905,13 @@ function updateLivePerf(d) {
     }
     const ws = d.kelly_state._window_stats;
     const stratColors = {
-        bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c',
-        hype_lag: '#a78bfa', xrp_lag: '#38bdf8',
+        bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c',
+        hype_macro: '#a78bfa', xrp_macro: '#38bdf8',
         fade: '#ffe600', neh: '#b388ff', arbitrage: '#0055ff',
     };
     const stratLabel = {
-        bitcoin: 'BTC', sol_lag: 'SOL', eth_lag: 'ETH',
-        hype_lag: 'HYPE', xrp_lag: 'XRP', fade: 'FADE',
+        bitcoin: 'BTC', sol_macro: 'SOL', eth_macro: 'ETH',
+        hype_macro: 'HYPE', xrp_macro: 'XRP', fade: 'FADE',
         neh: 'NEH', arbitrage: 'ARB',
     };
     const stratKeys = Object.entries(d.kelly_state)
@@ -3024,10 +3025,10 @@ function updateReasonBuckets(d) {
     }
 
     btcEl.innerHTML = render('BTC', rb.bitcoin);
-    solEl.innerHTML = render('SOL', rb.sol_lag);
-    ethEl.innerHTML = render('ETH', rb.eth_lag);
-    hypeEl.innerHTML = render('HYPE', rb.hype_lag);
-    xrpEl.innerHTML = render('XRP', rb.xrp_lag);
+    solEl.innerHTML = render('SOL', rb.sol_macro);
+    ethEl.innerHTML = render('ETH', rb.eth_macro);
+    hypeEl.innerHTML = render('HYPE', rb.hype_macro);
+    xrpEl.innerHTML = render('XRP', rb.xrp_macro);
     if (updEl) {
         const ts = d.updated_at ? String(d.updated_at).replace('T', ' ').slice(0, 19) + ' UTC' : new Date().toLocaleTimeString();
         updEl.textContent = 'updated ' + ts;
@@ -3483,7 +3484,7 @@ async function loadAllocationChart() {
 
         const colors = {
             neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
-            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_lag: '#38bdf8', weather: '#86efac',
+            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
 
@@ -3669,7 +3670,7 @@ async function loadStrategyPnLChart() {
         const spacing = totalBarSpace / labels.length;
         const colors = {
             neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
-            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_lag: '#38bdf8', weather: '#86efac',
+            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
 
@@ -3877,10 +3878,10 @@ async function loadSessionHistory() {
             // Per-strategy PnL
             const ss = s.strategy_stats || {};
             const btcPnl = ss.bitcoin?.pnl ?? null;
-            const solPnl = ss.sol_lag?.pnl ?? null;
-            const ethPnl = ss.eth_lag?.pnl ?? null;
-            const hypePnl = ss.hype_lag?.pnl ?? null;
-            const xrpPnl = ss.xrp_lag?.pnl ?? null;
+            const solPnl = ss.sol_macro?.pnl ?? null;
+            const ethPnl = ss.eth_macro?.pnl ?? null;
+            const hypePnl = ss.hype_macro?.pnl ?? null;
+            const xrpPnl = ss.xrp_macro?.pnl ?? null;
             const fadePnl = ss.fade?.pnl ?? null;
             const fmtStrat = (v) => v !== null ? `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text-muted)'};">${v>0?'+':''}$${v.toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
 
@@ -4313,10 +4314,10 @@ function _formatAltWatchlistTriggers(watchlist) {
     const el = document.getElementById('btc-chart-alt-triggers');
     if (!el) return;
     const cfg = [
-        ['sol_lag', 'SOL', 2],
-        ['eth_lag', 'ETH', 2],
-        ['xrp_lag', 'XRP', 4],
-        ['hype_lag', 'HYPE', 2],
+        ['sol_macro', 'SOL', 2],
+        ['eth_macro', 'ETH', 2],
+        ['xrp_macro', 'XRP', 4],
+        ['hype_macro', 'HYPE', 2],
     ];
     const bits = [];
     for (const [strat, sym, dec] of cfg) {
@@ -4355,10 +4356,10 @@ function _formatAltWatchlistTriggers(watchlist) {
 function _tradeMarkersFromPoints(points, strategy) {
     const meta = {
         bitcoin: { key: 'BTC', win: '#22d3ee', loss: '#0891b2' },
-        sol_lag: { key: 'SOL', win: '#a855f7', loss: '#7e22ce' },
-        eth_lag: { key: 'ETH', win: '#fb923c', loss: '#c2410c' },
-        xrp_lag: { key: 'XRP', win: '#38bdf8', loss: '#0369a1' },
-        hype_lag: { key: 'HYPE', win: '#a78bfa', loss: '#7c3aed' },
+        sol_macro: { key: 'SOL', win: '#a855f7', loss: '#7e22ce' },
+        eth_macro: { key: 'ETH', win: '#fb923c', loss: '#c2410c' },
+        xrp_macro: { key: 'XRP', win: '#38bdf8', loss: '#0369a1' },
+        hype_macro: { key: 'HYPE', win: '#a78bfa', loss: '#7c3aed' },
     };
     const m = meta[strategy] || { key: (strategy || '?').slice(0, 3).toUpperCase(), win: '#94a3b8', loss: '#64748b' };
     const key = m.key;
@@ -4453,10 +4454,10 @@ async function loadBTCChart() {
             let markers = [];
             // Sabre flip markers removed (sabre lines removed)
             if (_btcChartDisplay.btcTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'bitcoin'));
-            if (_btcChartDisplay.solTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'sol_lag'));
-            if (_btcChartDisplay.ethTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'eth_lag'));
-            if (_btcChartDisplay.xrpTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'xrp_lag'));
-            if (_btcChartDisplay.hypeTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'hype_lag'));
+            if (_btcChartDisplay.solTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'sol_macro'));
+            if (_btcChartDisplay.ethTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'eth_macro'));
+            if (_btcChartDisplay.xrpTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'xrp_macro'));
+            if (_btcChartDisplay.hypeTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'hype_macro'));
             _btcCandleSeries.setMarkers(markers.slice(-220));
         }
 

@@ -81,7 +81,7 @@ _HYPE_ALT_UPDOWN_SLUG_RE = re.compile(
 
 
 def is_crypto_updown_market(market: Market) -> bool:
-    """True for crypto up/down candle markets (bitcoin/sol_lag/eth_lag), not price-threshold markets."""
+    """True for crypto up/down candle markets (bitcoin/sol_macro/eth_macro), not price-threshold markets."""
     slug = (market.slug or "").strip()
     if slug and _CRYPTO_UPDOWN_SLUG_RE.search(slug):
         return True
@@ -130,7 +130,7 @@ class MarketScanner:
         self.session: Optional[aiohttp.ClientSession] = None
 
     def _should_fetch_hype_alt_markets(self) -> bool:
-        """HYPE alt slug fetch is slow; default follows strategies.hype_lag.enabled.
+        """HYPE alt slug fetch is slow; default follows strategies.hype_macro.enabled.
 
         Set polymarket.fetch_hype_alt_markets to true/false to override.
         """
@@ -138,7 +138,7 @@ class MarketScanner:
         if "fetch_hype_alt_markets" in pm:
             return bool(pm.get("fetch_hype_alt_markets"))
         return bool(
-            (self.config.get("strategies") or {}).get("hype_lag", {}).get("enabled", False)
+            (self.config.get("strategies") or {}).get("hype_macro", {}).get("enabled", False)
         )
 
     def _sync_network_phase(self) -> Tuple[
@@ -209,7 +209,7 @@ class MarketScanner:
             (lookahead_15m, lookahead_5m)
         """
         strategies = self.config.get("strategies", {}) or {}
-        keys = ["bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag"]
+        keys = ["bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"]
 
         enabled_cfgs = []
         for key in keys:

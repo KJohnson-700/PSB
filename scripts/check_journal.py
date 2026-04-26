@@ -19,7 +19,7 @@ print(f"Open positions: {len(j.get_open_positions())}")
 
 crypto = [
     p for p in j.get_open_positions()
-    if p.get("strategy") in ("bitcoin", "sol_lag", "eth_lag")
+    if p.get("strategy") in ("bitcoin", "sol_macro", "eth_macro")
 ]
 print(f"Open crypto: {len(crypto)}")
 for p in crypto:

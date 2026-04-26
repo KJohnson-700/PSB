@@ -33,7 +33,7 @@ Use as a **Skill** (copy to `.cursor/skills/strategy-test-review/SKILL.md` local
 | `data/paper_trades/*/entries.jsonl`, `summary.json` | ENTRY/EXIT pairing; PnL sign; strategy tag; sizes vs `trading`/`exposure` config |
 | `src/strategies/*.py` | Alignment with `docs/STRATEGY_ENTRY_SPEC.md`; edge gates; sizing path (`PositionSizer`, `scale_size`) |
 | `src/backtest/updown_engine.py`, `engine.py` | No look-ahead (`_before` / bar timing); sizing defaults vs `settings.yaml` |
-| `tests/test_bitcoin*.py`, `test_sol_lag.py`, `test_scenarios.py` | Whether tests encode wrong assumptions; missing edge cases |
+| `tests/test_bitcoin*.py`, `test_sol_macro.py`, `test_scenarios.py` | Whether tests encode wrong assumptions; missing edge cases |
 | `docs/BACKTEST.md`, `HANDOFF_STRATEGY_ENTRY_AND_BACKTEST.md` | Doc vs implementation drift |
 
 ---
@@ -90,7 +90,7 @@ Use as a **Skill** (copy to `.cursor/skills/strategy-test-review/SKILL.md` local
 ## Invocation examples
 
 - “Review `data/backtest/reports/BACKTEST_RIGOROUS_REPORT.md` and last session journal for contradictions; cite lines.”
-- “Audit `sol_lag` vs `docs/STRATEGY_ENTRY_SPEC.md` for sizing and entry gates; list drift only.”
+- “Audit `sol_macro` vs `docs/STRATEGY_ENTRY_SPEC.md` for sizing and entry gates; list drift only.”
 - “Scan `tests/test_bitcoin_scenarios.py` scenarios against `bitcoin.py` branches; flag untested critical paths.”
 
 ## Escalation

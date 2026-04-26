@@ -150,14 +150,14 @@ Two issues combined:
 
 ### Fixes Applied:
 1. Added `hypeData` parameter to `updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData)`
-2. Added `hype_lag` to `EXPOSURE_KEYS` array
+2. Added `hype_macro` to `EXPOSURE_KEYS` array
 3. Added `HYPE_updown_15m` and `HYPE_updown_5m` to all TARGET arrays in reason buckets and updown breakdown
 4. Added `hypeTrades` to `_btcChartDisplay` object and all toggle/preset logic
-5. Added `['hype_lag', 'HYPE', 2]` to `_formatAltWatchlistTriggers` cfg
-6. Added `hype_lag` to `_tradeMarkersFromPoints` meta
-7. Added `hype_lag` to allocation chart colors
+5. Added `['hype_macro', 'HYPE', 2]` to `_formatAltWatchlistTriggers` cfg
+6. Added `hype_macro` to `_tradeMarkersFromPoints` meta
+7. Added `hype_macro` to allocation chart colors
 8. Fixed `solData.macd_5m_hist` → `altData.macd_5m_hist` bug inside `applyAltLagGates`
-9. Fixed missing `hype_lag` in rigorous backtest table `stratColors`
+9. Fixed missing `hype_macro` in rigorous backtest table `stratColors`
 
 ### Files Changed:
 - `src/dashboard/index.html` — multiple locations

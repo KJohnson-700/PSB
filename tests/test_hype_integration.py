@@ -4,8 +4,8 @@ from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
 from src.analysis.math_utils import PositionSizer
 from src.market.scanner import Market, is_crypto_updown_market
-from src.strategies.hype_lag import HYPELagStrategy
-from src.strategies.sol_lag import SOLLagStrategy
+from src.strategies.hype_macro import HYPEMacroStrategy
+from src.strategies.sol_macro import SolMacroStrategy
 
 
 def _market(question: str, slug: str = "") -> Market:
@@ -29,14 +29,14 @@ def _market(question: str, slug: str = "") -> Market:
 def _config() -> dict:
     return {
         "strategies": {
-            "sol_lag": {
+            "sol_macro": {
                 "enabled": True,
                 "entry_window_auto_align": True,
                 "entry_window_align_scan_interval_sec": 300,
                 "entry_window_auto_align_max_expand_min": 1.0,
                 "entry_window_auto_align_jitter_sec": 10,
             },
-            "hype_lag": {
+            "hype_macro": {
                 "enabled": True,
                 "entry_window_auto_align": True,
                 "entry_window_align_scan_interval_sec": 300,
@@ -97,8 +97,8 @@ def test_hype_strategy_keeps_entry_window_parity_with_sol():
     cfg = _config()
     ai = BacktestAIAgent(cfg)
     sizer = PositionSizer(kelly_fraction=0.25, max_position_pct=0.05)
-    sol = SOLLagStrategy(cfg, ai, sizer)
-    hype = HYPELagStrategy(cfg, ai, sizer)
+    sol = SolMacroStrategy(cfg, ai, sizer)
+    hype = HYPEMacroStrategy(cfg, ai, sizer)
 
     sol_bounds = sol._resolve_entry_window_bounds(is_5m=False, default_min=13.0, default_max=14.33)
     hype_bounds = hype._resolve_entry_window_bounds(is_5m=False, default_min=13.0, default_max=14.33)

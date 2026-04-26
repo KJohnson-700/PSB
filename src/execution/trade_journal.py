@@ -21,7 +21,7 @@ JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "paper_tr
 # Append-only log of actual CLOB fill prices for updown markets.
 # Used by updown_engine to replace N(0.50, 0.02) with empirical distribution.
 ENTRY_PRICE_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "entry_prices" / "updown_fills.jsonl"
-_UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_lag", "xrp_lag", "eth_lag", "hype_lag"})
+_UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_macro", "xrp_macro", "eth_macro", "hype_macro"})
 
 
 @dataclass

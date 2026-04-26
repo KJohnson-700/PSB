@@ -1,5 +1,5 @@
 """
-SOL Lag Strategy — BTC-to-Solana Correlation Lag Trading
+SOL Macro Strategy — BTC-to-Solana Correlation Lag Trading
 
 THESIS (Updated from live data):
 ═════════════════════════════════
@@ -61,7 +61,7 @@ from src.strategies.strategy_ai_context import (
 logger = logging.getLogger(__name__)
 
 
-class SOLLagSignal(BaseModel):
+class SolMacroSignal(BaseModel):
     """Represents a signal on a Solana price market."""
     market_id: str = Field(..., description="Market identifier")
     market_question: str = Field(..., description="The market question")
@@ -77,7 +77,9 @@ class SOLLagSignal(BaseModel):
     sol_threshold: Optional[float] = Field(None, description="SOL price threshold")
     sol_current: Optional[float] = Field(None, description="Current SOL price")
     btc_current: Optional[float] = Field(None, description="Current BTC price")
-    lag_magnitude: Optional[float] = Field(None, description="BTC-SOL lag %")
+    lag_magnitude: Optional[float] = Field(
+        None, description="Signed BTC-alt catch-up gap % (opportunity mag or alt lag vs BTC)"
+    )
     ai_used: bool = Field(default=False, description="Whether AI was consulted")
     # Coach features — logged to journal extra dict for pattern analysis
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
@@ -87,7 +89,14 @@ class SOLLagSignal(BaseModel):
     rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
     corr_1h: Optional[float] = Field(None, description="BTC-SOL 1H correlation at entry")
     reason: str = Field(default="", description="Why this signal was generated")
-    strategy_name: str = Field(default="sol_lag", description="Journal/risk strategy key")
+    strategy_name: str = Field(default="sol_macro", description="Journal/risk strategy key")
+    alt_asset_code: str = Field(
+        default="sol",
+        description="Alt leg ticker (sol/eth/hype/xrp) for logs and journal spot price key",
+    )
+
+    def spot_price_journal_key(self) -> str:
+        return f"{self.alt_asset_code}_price"
 
 
 # Patterns to detect Solana markets
@@ -138,13 +147,13 @@ UP_WORDS = {'above', 'over', 'exceed', 'reach', 'hit', 'surpass', 'higher', 'ris
 DOWN_WORDS = {'below', 'under', 'drop', 'fall', 'crash', 'decline', 'lower', 'down'}
 
 
-class SOLLagStrategy:
-    """SOL Lag strategy — capitalize on BTC-to-SOL price lag."""
+class SolMacroStrategy:
+    """SOL Macro strategy — capitalize on BTC-to-SOL price lag."""
 
     def __init__(self, config: Dict[str, Any], ai_agent: AIAgent, position_sizer: PositionSizer,
                  kelly_sizer=None, exposure_manager: ExposureManager = None):
         self.full_config = config
-        self.config = config.get('strategies', {}).get('sol_lag', {})
+        self.config = config.get('strategies', {}).get('sol_macro', {})
         # Thresholds from config first — before any other init work — so
         # scan_and_analyze always sees instance values from YAML, not class fallbacks.
         self.min_liquidity = self.config.get("min_liquidity", 1000)
@@ -158,10 +167,10 @@ class SOLLagStrategy:
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
-        self._signal_strategy_name = "sol_lag"
+        self._signal_strategy_name = "sol_macro"
 
         # Remaining config-derived attributes (scan loop)
-        # Must be set on SOLLagStrategy (not only subclasses) for scan_and_analyze.
+        # Must be set on SolMacroStrategy (not only subclasses) for scan_and_analyze.
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
@@ -177,6 +186,30 @@ class SOLLagStrategy:
     # ──────────────────────────────────────────────────────────────
     # Helpers
     # ──────────────────────────────────────────────────────────────
+
+    def _alt_asset_code(self) -> str:
+        """Lowercase spot code for reason strings and journal keys (sol/eth/hype/xrp)."""
+        raw = (getattr(self.sol_service, "alt_symbol", None) or "SOLUSDT").upper()
+        base = raw.replace("USDT", "").replace("USD", "").strip()
+        if not base:
+            base = "SOL"
+        return base.lower()
+
+    def _alt_log_label(self) -> str:
+        """Uppercase label for log lines (SOL, ETH, HYPE, XRP)."""
+        return self._alt_asset_code().upper()
+
+    def _btc_alt_corr_log_label(self) -> str:
+        return f"BTC-{self._alt_log_label()} corr"
+
+    @staticmethod
+    def _signal_lag_magnitude(corr) -> Optional[float]:
+        """Alt-aware lag % for journaling: opportunity mag when flagged, else signed alt lag vs BTC."""
+        if corr.lag_opportunity:
+            return round(float(corr.opportunity_magnitude), 4)
+        if corr.btc_spike_detected and abs(float(corr.sol_lag_pct)) >= 1e-6:
+            return round(float(corr.sol_lag_pct), 4)
+        return None
 
     def _is_solana_market(self, market: Market) -> bool:
         text = f"{market.question} {market.description}".lower()
@@ -505,24 +538,31 @@ class SOLLagStrategy:
         )
 
 
-    async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SOLLagSignal]:
+    async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
         """Scan SOL markets with BTC-lag detection."""
         if not self.enabled:
             return []
 
+        _alt_label = self._alt_log_label()
+        _spot_key = self._alt_asset_code()
+        _brand = f"{_alt_label} Macro"
+        _corr_lbl = self._btc_alt_corr_log_label()
+
         # Filter to updown markets ONLY — long-dated SOL threshold markets
-        # ("Will SOL hit $200?") are noise for the 15m/5m lag strategy.
+        # ("Will SOL hit $200?") are noise for the 15m/5m macro strategy.
         sol_markets = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
         if not sol_markets:
-            logger.info(f"SOL Lag strategy: 0 SOL updown markets found out of {len(markets)} total markets")
+            logger.info(
+                f"{_brand} strategy: 0 {_alt_label} updown markets found out of {len(markets)} total markets"
+            )
             return []
 
-        logger.info(f"SOL Lag strategy: Found {len(sol_markets)} SOL markets")
+        logger.info(f"{_brand} strategy: Found {len(sol_markets)} {_alt_label} markets")
 
         # Fetch full technical analysis ONCE per cycle
         ta = self.sol_service.get_full_analysis()
         if not ta:
-            logger.warning("SOL Lag strategy: Could not fetch SOL/BTC price data")
+            logger.warning(f"{_brand} strategy: Could not fetch {_alt_label}/BTC price data")
             return []
 
         sol_price = ta.sol.current_price
@@ -537,7 +577,7 @@ class SOLLagStrategy:
         exp_tier, exp_multiplier, exp_max_size, exp_reason = self.exposure_manager.get_exposure(conditions)
 
         if exp_tier == ExposureTier.PAUSED:
-            logger.info(f"SOL Lag strategy: PAUSED — {exp_reason}")
+            logger.info(f"{_brand} strategy: PAUSED — {exp_reason}")
             return []
 
         # ═══════════════════════════════════════════════
@@ -546,11 +586,11 @@ class SOLLagStrategy:
         macro_trend = self._get_macro_trend(ta)
 
         logger.info(
-            f"SOL ${sol_price:,.2f} | MACRO: {macro_trend} | "
+            f"{_alt_label} ${sol_price:,.2f} | MACRO: {macro_trend} | "
             f"1H={mtt.h1_trend} 15m={mtt.m15_trend} 5m={mtt.m5_trend} | "
             f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover} | "
             f"RSI={sol.rsi_14:.0f} | "
-            f"BTC-SOL corr={corr.correlation_1h:.2f} lag_opp={corr.lag_opportunity} "
+            f"{_corr_lbl}={corr.correlation_1h:.2f} lag_opp={corr.lag_opportunity} "
             f"lag_dir={corr.opportunity_direction} lag_mag={corr.opportunity_magnitude:+.2f}% | "
             f"BTC spike={corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)"
         )
@@ -562,18 +602,18 @@ class SOLLagStrategy:
 
         if _is_neutral_macro:
             if not has_updown:
-                logger.info("SOL Lag strategy: Macro trend NEUTRAL — sitting out")
+                logger.info(f"{_brand} strategy: Macro trend NEUTRAL — sitting out")
                 return []
             # NEUTRAL macro with updown markets: use LTF as primary signal.
             # Live data: lag=None trades 63% WR outperform lag=value 50% WR.
             # Allow entry when LTF is confirmed; lag is a SECONDARY boost only.
             # Track these trades separately via NEUTRAL_MACRO tag in reason_parts.
             if corr.btc_spike_detected:
-                # BTC spike but SOL hasn't moved → trade the catch-up direction
+                # BTC spike but alt hasn't moved → trade the catch-up direction
                 allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
                 logger.info(
-                    f"SOL Lag: Macro NEUTRAL, BTC spike detected ({corr.btc_move_5m_pct:+.2f}%). "
-                    f"Trading SOL catch-up: {allowed_side}"
+                    f"{_brand}: Macro NEUTRAL, BTC spike detected ({corr.btc_move_5m_pct:+.2f}%). "
+                    f"Trading {_alt_label} catch-up: {allowed_side}"
                 )
             elif corr.lag_opportunity:
                 _min_lag_mag = self.config.get("min_lag_magnitude_pct", 0.30)
@@ -581,23 +621,25 @@ class SOLLagStrategy:
                 if _lag_mag >= _min_lag_mag:
                     allowed_side = corr.opportunity_direction
                     logger.info(
-                        f"SOL Lag: Macro NEUTRAL, strong lag ({_lag_mag:.2f}%) — "
+                        f"{_brand}: Macro NEUTRAL, strong lag ({_lag_mag:.2f}%) — "
                         f"using lag direction: {allowed_side}"
                     )
                 else:
-                    # Weak lag during NEUTRAL — allow but use SOL's own 1H bias as direction
+                    # Weak lag during NEUTRAL — allow but use alt's own 1H bias as direction
                     allowed_side = "LONG" if corr.sol_trend == "BULLISH" else "SHORT" if corr.sol_trend == "BEARISH" else None
                     if allowed_side is None:
-                        logger.info("SOL Lag: Macro NEUTRAL, weak lag, no SOL bias — sitting out")
+                        logger.info(f"{_brand}: Macro NEUTRAL, weak lag, no {_alt_label} bias — sitting out")
                         return []
-                    logger.info(f"SOL Lag: Macro NEUTRAL, weak lag — using SOL 1H bias: {allowed_side}")
+                    logger.info(
+                        f"{_brand}: Macro NEUTRAL, weak lag — using {_alt_label} 1H bias: {allowed_side}"
+                    )
             else:
-                # No lag, no spike — use SOL's own 1H trend as direction
+                # No lag, no spike — use alt's own 1H trend as direction
                 allowed_side = "LONG" if corr.sol_trend == "BULLISH" else "SHORT" if corr.sol_trend == "BEARISH" else None
                 if allowed_side is None:
-                    logger.info("SOL Lag: Macro NEUTRAL, no lag, no SOL bias — sitting out")
+                    logger.info(f"{_brand}: Macro NEUTRAL, no lag, no {_alt_label} bias — sitting out")
                     return []
-                logger.info(f"SOL Lag: Macro NEUTRAL, no lag — using SOL 1H bias: {allowed_side}")
+                logger.info(f"{_brand}: Macro NEUTRAL, no lag — using {_alt_label} 1H bias: {allowed_side}")
         else:
             # BULLISH or BEARISH macro — set default direction from macro
             allowed_side = "LONG" if macro_trend == "BULLISH" else "SHORT"
@@ -608,7 +650,7 @@ class SOLLagStrategy:
             # Just log alignment status; entry price filter (0.46-0.49) is the gatekeeper.
             if has_updown and ta.multi_tf.aligned:
                 logger.info(
-                    f"SOL Lag: MTF fully aligned — entry price filter will gate quality "
+                    f"{_brand}: MTF fully aligned — entry price filter will gate quality "
                     f"(lag is secondary; macro+LTF is primary signal)"
                 )
 
@@ -618,12 +660,12 @@ class SOLLagStrategy:
             # Macro + LTF is the primary signal; lag adds a small probability boost only.
             if corr.lag_opportunity:
                 logger.info(
-                    f"SOL Lag: Lag confirmer active — {corr.opportunity_direction} "
+                    f"{_brand}: Lag confirmer active — {corr.opportunity_direction} "
                     f"mag={corr.opportunity_magnitude:+.2f}% (secondary boost applied)"
                 )
             elif corr.btc_spike_detected:
                 logger.info(
-                    f"SOL Lag: BTC spike ({corr.btc_move_5m_pct:+.2f}%) — timing boost applied"
+                    f"{_brand}: BTC spike ({corr.btc_move_5m_pct:+.2f}%) — timing boost applied"
                 )
 
         # ═══════════════════════════════════════════════
@@ -639,7 +681,7 @@ class SOLLagStrategy:
         # selects for early-momentum windows within established 1H trends = 65% WR.
         if ltf_confirmed:
             logger.info(
-                f"SOL Lag: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
+                f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
                 f"skipping. strength={ltf_strength:.2f}"
             )
             return []
@@ -684,7 +726,7 @@ class SOLLagStrategy:
                 _now_utc_hour = datetime.now(timezone.utc).hour
                 if _now_utc_hour in _blocked_hours:
                     logger.info(
-                        f"  SOL skip updown at UTC hour {_now_utc_hour}:xx — "
+                        f"  {_alt_label} skip updown at UTC hour {_now_utc_hour}:xx — "
                         f"blocked dead zone (config: {_blocked_hours})"
                     )
                     continue
@@ -693,7 +735,7 @@ class SOLLagStrategy:
                 # Only enter within a tight window of the candle. If end_date is None
                 # we skip — entering a market with unknown resolution time is too risky.
                 if not market.end_date:
-                    logger.debug(f"  SOL skip '{market.question[:40]}' — no end_date, can't check window")
+                    logger.debug(f"  {_brand} skip '{market.question[:40]}' — no end_date, can't check window")
                     continue
                 _end_utc = (
                     market.end_date.replace(tzinfo=timezone.utc)
@@ -714,7 +756,7 @@ class SOLLagStrategy:
                     )
                 if _mins_left < _win_min or _mins_left > _win_max:
                     logger.debug(
-                        f"  SOL skip '{market.question[:40]}' — "
+                        f"  {_brand} skip '{market.question[:40]}' — "
                         f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
                     )
                     continue
@@ -732,7 +774,7 @@ class SOLLagStrategy:
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
                     logger.debug(
-                        f"  SOL skip '{market.question[:40]}' — "
+                        f"  {_brand} skip '{market.question[:40]}' — "
                         f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
                     )
                     continue
@@ -740,7 +782,7 @@ class SOLLagStrategy:
                 # Skip windows where price has already drifted far from 50/50
                 if yes_price < 0.20 or yes_price > 0.80:
                     logger.debug(
-                        f"  SOL skip '{market.question[:40]}' — price {yes_price:.2f} "
+                        f"  {_brand} skip '{market.question[:40]}' — price {yes_price:.2f} "
                         f"too far from 50/50, window in progress"
                     )
                     continue
@@ -800,13 +842,13 @@ class SOLLagStrategy:
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if allowed_side == "LONG" and not _h1_bull_ok:
                         logger.info(
-                            f"  SOL [5m] skip '{market.question[:40]}' — "
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
                     if allowed_side == "SHORT" and not _h1_bear_ok:
                         logger.info(
-                            f"  SOL [5m] skip '{market.question[:40]}' — "
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
@@ -887,7 +929,7 @@ class SOLLagStrategy:
                     reason_parts.extend([
                         "[5m]",
                         "UPDOWN_5m",
-                        f"sol=${sol_price:,.2f}",
+                        f"{_spot_key}=${sol_price:,.2f}",
                         f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                         f"est_up={est_prob_up:.3f}",
                         f"mkt_yes={yes_price:.3f}",
@@ -898,7 +940,7 @@ class SOLLagStrategy:
                     reason_parts.extend(m5_reasons)
 
                     logger.debug(
-                        f"  [5m] SOL updown '{market.question[:45]}' "
+                        f"  [5m] {_alt_label} updown '{market.question[:45]}' "
                         f"macro={macro_trend} m5_adj={m5_adj:+.2f} "
                         f"est_up={est_prob_up:.3f} edge={edge:.4f}"
                     )
@@ -927,13 +969,13 @@ class SOLLagStrategy:
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if allowed_side == "LONG" and not _h1_bull_ok:
                         logger.info(
-                            f"  SOL [15m] skip '{market.question[:40]}' — "
+                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                             f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
                     if allowed_side == "SHORT" and not _h1_bear_ok:
                         logger.info(
-                            f"  SOL [15m] skip '{market.question[:40]}' — "
+                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                             f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
@@ -975,7 +1017,7 @@ class SOLLagStrategy:
 
                     reason_parts.extend([
                         "UPDOWN_15m",
-                        f"sol=${sol_price:,.2f}",
+                        f"{_spot_key}=${sol_price:,.2f}",
                         f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                         f"est_up={est_prob_up:.3f}",
                         f"mkt_yes={yes_price:.3f}",
@@ -1023,14 +1065,14 @@ class SOLLagStrategy:
                 edge = abs(edge) if edge > 0 else edge
 
                 reason_parts.extend([
-                    f"sol=${sol_price:,.2f}",
+                    f"{_spot_key}=${sol_price:,.2f}",
                     f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                     f"target=${threshold:,.2f}",
                     f"dist={distance_pct:.1%}",
                     f"est_prob={estimated_prob:.2f}",
                     f"mkt_yes={yes_price:.2f}",
                     f"corr={corr.correlation_1h:.2f}",
-                    f"lag={corr.opportunity_magnitude:+.2f}%" if corr.lag_opportunity else "",
+                    f"macro_leg={corr.opportunity_magnitude:+.2f}%" if corr.lag_opportunity else "",
                 ])
                 reason_parts.extend(ltf_reasons)
                 if timing_reasons:
@@ -1055,31 +1097,31 @@ class SOLLagStrategy:
                 if edge < self.min_edge and edge > 0.03:
                     if not self.config.get("use_ai", True):
                         logger.debug(
-                            f"SOL Lag: use_ai=false — skipping marginal trade "
+                            f"{_brand}: use_ai=false — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
                         )
                         continue
                     if not self.ai_agent.is_available():
                         logger.debug(
-                            f"SOL Lag: AI offline — skipping marginal trade "
+                            f"{_brand}: AI offline — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
                         )
                         continue
                     if ai_calls >= self.max_ai_calls_per_scan:
                         logger.debug(
-                            f"SOL Lag: max AI calls per scan ({self.max_ai_calls_per_scan}) — "
+                            f"{_brand}: max AI calls per scan ({self.max_ai_calls_per_scan}) — "
                             f"skipping marginal '{market.question[:40]}...'"
                         )
                         continue
                     ai_context = (
                         f"{market.description}\n\n"
-                        f"=== LIVE SOL DATA ===\n"
-                        f"SOL Price: ${sol_price:,.2f} | Threshold: ${threshold:,.2f} ({direction})\n"
+                        f"=== LIVE {_alt_label} DATA ===\n"
+                        f"{_alt_label} Price: ${sol_price:,.2f} | Threshold: ${threshold:,.2f} ({direction})\n"
                         f"Distance: {distance_pct:.1%} | Days left: {days_to_resolution}\n\n"
-                        f"=== BTC-SOL CORRELATION ===\n"
+                        f"=== BTC-{_alt_label} CORRELATION ===\n"
                         f"BTC: ${corr.btc_price:,.2f} | Correlation: {corr.correlation_1h:.2f}\n"
                         f"BTC spike: {corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)\n"
-                        f"SOL lag: {corr.lag_opportunity} dir={corr.opportunity_direction} mag={corr.opportunity_magnitude:+.2f}%\n\n"
+                        f"{_alt_label} macro leg: {corr.lag_opportunity} dir={corr.opportunity_direction} mag={corr.opportunity_magnitude:+.2f}%\n\n"
                         f"=== MACRO (1H) — {macro_trend} ===\n"
                         f"EMA: 9=${sol.ema_9:,.2f} 21=${sol.ema_21:,.2f} 50=${sol.ema_50:,.2f}\n"
                         f"RSI: {sol.rsi_14:.1f}\n\n"
@@ -1108,19 +1150,19 @@ class SOLLagStrategy:
                         )
                     if not ai_analysis or ai_analysis.recommendation == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
-                        logger.debug(f"SOL Lag: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
+                        logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
                     if not ai_recommendation_supports_action(
                         ai_analysis.recommendation, action
                     ):
                         logger.debug(
-                            f"SOL Lag: AI {ai_analysis.recommendation} conflicts with {action} "
+                            f"{_brand}: AI {ai_analysis.recommendation} conflicts with {action} "
                             f"on '{market.question[:40]}...'"
                         )
                         continue
                     if ai_analysis.confidence_score < self.ai_confidence_threshold:
                         logger.debug(
-                            f"SOL Lag: AI confidence {ai_analysis.confidence_score:.2f} "
+                            f"{_brand}: AI confidence {ai_analysis.confidence_score:.2f} "
                             f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
                         )
                         continue
@@ -1132,7 +1174,7 @@ class SOLLagStrategy:
                     )
                     if ai_edge <= 0:
                         logger.debug(
-                            f"SOL Lag: non-positive ai_edge={ai_edge:.4f} marginal "
+                            f"{_brand}: non-positive ai_edge={ai_edge:.4f} marginal "
                             f"'{market.question[:40]}...'"
                         )
                         continue
@@ -1159,11 +1201,11 @@ class SOLLagStrategy:
                 _win = "5m" if is_5m else "15m"
                 ai_context2 = (
                     f"{market.description}\n\n"
-                    f"=== SOL UPDOWN CONTEXT ({_win}) ===\n"
-                    f"SOL: ${sol_price:,.2f} | YES={yes_price:.3f} | action={action} | allowed={allowed_side}\n"
+                    f"=== {_alt_label} UPDOWN CONTEXT ({_win}) ===\n"
+                    f"{_alt_label}: ${sol_price:,.2f} | YES={yes_price:.3f} | action={action} | allowed={allowed_side}\n"
                     f"Macro={macro_trend} | Quant edge={edge:.4f} required>={effective_min_edge:.4f}\n"
                     f"BTC ${corr.btc_price:,.2f} corr1h={corr.correlation_1h:.3f} "
-                    f"lag={corr.lag_opportunity} mag={corr.opportunity_magnitude:+.2f}%\n"
+                    f"macro_opp={corr.lag_opportunity} mag={corr.opportunity_magnitude:+.2f}%\n"
                     f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover}\n"
                     f"LTF_strength={ltf_strength:.2f}\n\n"
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
@@ -1179,13 +1221,13 @@ class SOLLagStrategy:
                 ai_calls += 1
                 ai_used = True
                 if not ai2 or ai2.recommendation == "HOLD":
-                    logger.debug(f"SOL Lag: AI HOLD updown marginal '{market.question[:40]}...'")
+                    logger.debug(f"{_brand}: AI HOLD updown marginal '{market.question[:40]}...'")
                 elif not ai_recommendation_supports_action(ai2.recommendation, action):
                     logger.debug(
-                        f"SOL Lag: AI veto updown marginal {ai2.recommendation} vs {action}"
+                        f"{_brand}: AI veto updown marginal {ai2.recommendation} vs {action}"
                     )
                 elif ai2.confidence_score < self.ai_confidence_threshold:
-                    logger.debug("SOL Lag: AI low conf updown marginal")
+                    logger.debug(f"{_brand}: AI low conf updown marginal")
                 else:
                     ap = float(ai2.estimated_probability)
                     ae = ap - yes_price if action == "BUY_YES" else yes_price - ap
@@ -1200,7 +1242,7 @@ class SOLLagStrategy:
                     ("15m" if is_updown else "threshold")
                 )
                 logger.info(
-                    f"  SOL skip '{market.question[:40]}...' edge={edge:.4f} < min={effective_min_edge} ({_mkt_type})"
+                    f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} < min={effective_min_edge} ({_mkt_type})"
                 )
                 continue
 
@@ -1233,7 +1275,7 @@ class SOLLagStrategy:
                 _max_edge_updown = self.config.get("max_edge_updown", 0.09)
                 if edge > _max_edge_updown:
                     logger.info(
-                        f"  SOL skip '{market.question[:40]}...' edge={edge:.4f} "
+                        f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} "
                         f"> max={_max_edge_updown} updown cap (catch-up already priced in)"
                     )
                     continue
@@ -1251,7 +1293,7 @@ class SOLLagStrategy:
 
             reason_str = " | ".join(r for r in reason_parts if r)
 
-            signal = SOLLagSignal(
+            signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
                 action=action,
@@ -1266,10 +1308,11 @@ class SOLLagStrategy:
                 sol_threshold=self._extract_price_threshold(market.question) if not is_updown else None,
                 sol_current=round(sol_price, 2),
                 btc_current=round(corr.btc_price, 2) if corr.btc_price else None,
-                lag_magnitude=round(corr.opportunity_magnitude, 4) if corr.lag_opportunity else None,
+                lag_magnitude=self._signal_lag_magnitude(corr),
                 ai_used=ai_used,
                 reason=reason_str,
                 strategy_name=self._signal_strategy_name,
+                alt_asset_code=_spot_key,
                 htf_bias=macro_trend,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
@@ -1280,15 +1323,15 @@ class SOLLagStrategy:
             signals.append(signal)
 
             logger.info(
-                f"  SOL SIGNAL: {action} '{market.question[:50]}...' "
+                f"  {_brand} SIGNAL: {action} '{market.question[:50]}...' "
                 f"edge={edge:.3f} prob={estimated_prob:.2f} "
                 f"size=${final_size:.2f} conf={confidence:.2f}"
             )
 
         if signals:
-            logger.info(f"SOL Lag strategy: {len(signals)} signals generated")
+            logger.info(f"{_brand} strategy: {len(signals)} signals generated")
         elif sol_markets:
-            logger.info(f"SOL Lag strategy: 0 signals from {len(sol_markets)} markets (MACRO={macro_trend})")
+            logger.info(f"{_brand} strategy: 0 signals from {len(sol_markets)} markets (MACRO={macro_trend})")
         return signals
 
 

@@ -16,7 +16,7 @@ import pytest
 
 from src.main import PolyBot
 from src.strategies.bitcoin import BitcoinSignal
-from src.strategies.sol_lag import SOLLagSignal
+from src.strategies.sol_macro import SolMacroSignal
 
 
 def _bare_polybot() -> PolyBot:
@@ -52,8 +52,8 @@ def _attach_mocks(bot: PolyBot) -> None:
     bot.clob_client.place_order = AsyncMock(return_value=order)
 
 
-def _sol_like_signal(*, action: str, strategy_name: str = "hype_lag") -> SOLLagSignal:
-    return SOLLagSignal(
+def _sol_like_signal(*, action: str, strategy_name: str = "hype_macro") -> SolMacroSignal:
+    return SolMacroSignal(
         market_id="m_exec_drv_1",
         market_question="Hyperliquid Up or Down — test",
         action=action,
@@ -87,8 +87,8 @@ def _bitcoin_signal(*, action: str = "BUY_YES") -> BitcoinSignal:
     )
 
 
-def _xrp_signal(*, action: str = "BUY_YES") -> SOLLagSignal:
-    return SOLLagSignal(
+def _xrp_signal(*, action: str = "BUY_YES") -> SolMacroSignal:
+    return SolMacroSignal(
         market_id="m_xrp_1",
         market_question="XRP Up or Down — test",
         action=action,
@@ -100,17 +100,17 @@ def _xrp_signal(*, action: str = "BUY_YES") -> SOLLagSignal:
         token_id_no="0x" + "f" * 64,
         end_date=datetime.now(timezone.utc) + timedelta(hours=1),
         direction="UP",
-        strategy_name="xrp_lag",
-        reason="xrp lag test",
+        strategy_name="xrp_macro",
+        reason="xrp macro test",
     )
 
 
 @pytest.mark.asyncio
-async def test_execute_sol_lag_impl_hype_lag_buy_yes_no_unbound_side():
+async def test_execute_sol_macro_impl_hype_macro_buy_yes_no_unbound_side():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    sig = _sol_like_signal(action="BUY_YES", strategy_name="hype_lag")
-    await bot._execute_sol_lag_signal_impl(sig)
+    sig = _sol_like_signal(action="BUY_YES", strategy_name="hype_macro")
+    await bot._execute_sol_macro_signal_impl(sig)
     bot.clob_client.place_order.assert_called_once()
     kwargs = bot.clob_client.place_order.call_args.kwargs
     assert kwargs["side"] == "BUY"
@@ -118,21 +118,21 @@ async def test_execute_sol_lag_impl_hype_lag_buy_yes_no_unbound_side():
 
 
 @pytest.mark.asyncio
-async def test_execute_sol_lag_impl_sell_yes():
+async def test_execute_sol_macro_impl_sell_yes():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    sig = _sol_like_signal(action="SELL_YES", strategy_name="sol_lag")
-    await bot._execute_sol_lag_signal_impl(sig)
+    sig = _sol_like_signal(action="SELL_YES", strategy_name="sol_macro")
+    await bot._execute_sol_macro_signal_impl(sig)
     assert bot.clob_client.place_order.call_args.kwargs["side"] == "SELL"
 
 
 @pytest.mark.asyncio
-async def test_execute_sol_lag_impl_unknown_action_returns_without_place():
+async def test_execute_sol_macro_impl_unknown_action_returns_without_place():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    raw = _sol_like_signal(action="BUY_YES", strategy_name="sol_lag")
+    raw = _sol_like_signal(action="BUY_YES", strategy_name="sol_macro")
     sig = raw.model_copy(update={"action": "BUY_NO"})
-    await bot._execute_sol_lag_signal_impl(sig)
+    await bot._execute_sol_macro_signal_impl(sig)
     bot.clob_client.place_order.assert_not_called()
 
 
@@ -145,9 +145,9 @@ async def test_execute_bitcoin_impl_sets_side_before_order():
 
 
 @pytest.mark.asyncio
-async def test_execute_xrp_lag_impl_buy_yes():
+async def test_execute_xrp_macro_impl_buy_yes():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    await bot._execute_sol_lag_signal_impl(_xrp_signal(action="BUY_YES"))
+    await bot._execute_sol_macro_signal_impl(_xrp_signal(action="BUY_YES"))
     bot.clob_client.place_order.assert_called_once()
     assert bot.clob_client.place_order.call_args.kwargs["side"] == "BUY"

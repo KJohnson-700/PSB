@@ -28,7 +28,7 @@ Signal fidelity
 ───────────────
 BTC: mirrors bitcoin.py exactly (HTF 3-vote with early_bull/early_bear/
      recovery, graduated 15m boost, anti-LTF gate, 5m candle momentum).
-SOL: mirrors sol_lag.py (1H EMA trend + 15m EMA alignment + 15m RSI for
+SOL: mirrors sol_macro.py (1H EMA trend + 15m EMA alignment + 15m RSI for
      HTF, SOL-specific LTF weights, 5m MACD with live weights).
      Lag/correlation signals are omitted (require live BTC feed).
 
@@ -221,10 +221,10 @@ class UpdownBacktestEngine:
         bt_cfg   = config.get("backtest", {})
         strat    = config.get("strategies", {})
         btc_cfg  = strat.get("bitcoin",  {})
-        sol_cfg  = strat.get("sol_lag",  {})
-        eth_cfg  = strat.get("eth_lag",  {})
-        xrp_cfg  = strat.get("xrp_lag",  {})
-        hype_cfg = strat.get("hype_lag", {})
+        sol_cfg  = strat.get("sol_macro",  {})
+        eth_cfg  = strat.get("eth_macro",  {})
+        xrp_cfg  = strat.get("xrp_macro",  {})
+        hype_cfg = strat.get("hype_macro", {})
 
         self.min_edge_15m       = bt_cfg.get("min_edge_btc_15m",   0.06)
         self.min_edge_5m        = bt_cfg.get("min_edge_btc_5m",    0.07)
@@ -430,13 +430,13 @@ class UpdownBacktestEngine:
         return bias
 
     # ==========================================================================
-    # HTF bias -- SOL (matches sol_lag.py _get_macro_trend exactly)
+    # HTF bias -- SOL (matches sol_macro.py _get_macro_trend exactly)
     # ==========================================================================
 
     def _get_sol_htf_bias(
         self, ta: TechnicalAnalysis, df_15m: pd.DataFrame,
     ) -> str:
-        """SOL 3-vote system -- matches sol_lag._get_macro_trend().
+        """SOL 3-vote system -- matches sol_macro._get_macro_trend().
 
         Vote 1: 1H trend (approximated from 1H EMA cross, since ta is built on 1H)
         Vote 2: 15m EMA alignment (ema_9 > ema_21 > ema_50)
@@ -495,7 +495,7 @@ class UpdownBacktestEngine:
         return confirmed, min(1.0, s)
 
     # ==========================================================================
-    # LTF strength -- SOL (matches sol_lag.py _check_15m_confirmation)
+    # LTF strength -- SOL (matches sol_macro.py _check_15m_confirmation)
     # ==========================================================================
 
     @staticmethod
@@ -604,7 +604,7 @@ class UpdownBacktestEngine:
         return edge, confidence
 
     # ==========================================================================
-    # SOL 15m edge (matches sol_lag.py 15m updown path)
+    # SOL 15m edge (matches sol_macro.py 15m updown path)
     # ==========================================================================
 
     def _edge_15m_sol(
@@ -618,14 +618,14 @@ class UpdownBacktestEngine:
 
         est_prob_up = 0.50
 
-        # Macro trend boost (matches live sol_lag 15m: +/-0.07)
+        # Macro trend boost (matches live sol_macro 15m: +/-0.07)
         # htf_bias is already known to be BULLISH or BEARISH at this point
         if allowed_side == "LONG":
             est_prob_up += 0.07
         else:
             est_prob_up -= 0.07
 
-        # 1H histogram hard gate (matches live sol_lag)
+        # 1H histogram hard gate (matches live sol_macro)
         if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
         if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
 
@@ -633,7 +633,7 @@ class UpdownBacktestEngine:
         ltf_adj = ltf_strength * 0.22
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
-        # RSI extremes (matches live sol_lag 15m: >75/-0.03, <25/+0.03)
+        # RSI extremes (matches live sol_macro 15m: >75/-0.03, <25/+0.03)
         if   ta.rsi_14 > 75: est_prob_up -= 0.03
         elif ta.rsi_14 < 25: est_prob_up += 0.03
 
@@ -723,7 +723,7 @@ class UpdownBacktestEngine:
         """Estimate edge for a 5m updown window.
 
         BTC: HTF boost + 4H hist gate + candle momentum (matches bitcoin.py 5m path).
-        SOL: macro boost + 1H hist gate + 5m MACD (matches sol_lag.py 5m path).
+        SOL: macro boost + 1H hist gate + 5m MACD (matches sol_macro.py 5m path).
         """
         macd_htf = ta.macd_4h   # 4H for BTC, 1H for SOL (built from htf_key data)
 
@@ -787,19 +787,19 @@ class UpdownBacktestEngine:
         df_5m: pd.DataFrame,
         macd_1h: MACDResult,
     ) -> Tuple[float, float]:
-        """SOL 5m path -- matches sol_lag.py 5m updown.
+        """SOL 5m path -- matches sol_macro.py 5m updown.
 
         Omits: mtt.m5_trend bonus, lag/spike, correlation dampen.
         """
         est_prob_up = 0.50
 
-        # Macro boost (matches live sol_lag 5m: +/-0.03)
+        # Macro boost (matches live sol_macro 5m: +/-0.03)
         if allowed_side == "LONG":
             est_prob_up += 0.03
         else:
             est_prob_up -= 0.03
 
-        # 1H histogram hard gate (matches live sol_lag)
+        # 1H histogram hard gate (matches live sol_macro)
         if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
         if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
 
@@ -831,7 +831,7 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= m5_adj
 
-        # RSI extremes (matches live sol_lag 5m: >75/-0.02, <25/+0.02)
+        # RSI extremes (matches live sol_macro 5m: >75/-0.02, <25/+0.02)
         if   ta.rsi_14 > 75: est_prob_up -= 0.02
         elif ta.rsi_14 < 25: est_prob_up += 0.02
 

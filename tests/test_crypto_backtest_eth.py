@@ -54,7 +54,7 @@ class TestOHLCVLoaderETH(unittest.TestCase):
 
 
 class TestBacktestReportStrategyKey(unittest.TestCase):
-    def test_save_report_maps_eth_to_eth_lag(self):
+    def test_save_report_maps_eth_to_eth_macro(self):
         save_report = _load_run_backtest_crypto_module().save_report
         from src.backtest.updown_engine import UpdownBacktestResult
 
@@ -74,7 +74,7 @@ class TestBacktestReportStrategyKey(unittest.TestCase):
         path = save_report(r, {"1m": 0})
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload.get("strategy"), "eth_lag_15m")
+            self.assertEqual(payload.get("strategy"), "eth_macro_15m")
         finally:
             path.unlink(missing_ok=True)
 

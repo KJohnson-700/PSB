@@ -93,7 +93,16 @@ class PositionExitManager:
     # Stop losses destroy value on these — they convert potential winners into
     # guaranteed losers because the market temporarily moves against you but
     # resolves correctly.  Keep take-profit; skip stop-loss.
-    _CRYPTO_UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_dump_hedge"})
+    _CRYPTO_UPDOWN_STRATEGIES = frozenset(
+        {
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "xrp_dump_hedge",
+        }
+    )
 
     def __init__(self, config: Dict[str, Any]):
         exit_cfg = config.get("trading", {}).get("exit_rules", {})

@@ -1,7 +1,7 @@
 """
-ETH Lag Strategy — BTC-to-Ethereum correlation lag trading.
+ETH Macro Strategy — BTC-to-Ethereum correlation lag trading.
 
-Inherits SOLLagStrategy's full layered architecture.
+Inherits SolMacroStrategy's full layered architecture.
 Overrides: alt-coin service symbol, market filter patterns, config key, journal strategy name.
 """
 import re
@@ -12,7 +12,7 @@ from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
-from src.strategies.sol_lag import SOLLagStrategy
+from src.strategies.sol_macro import SolMacroStrategy
 
 ETH_PATTERNS = [
     re.compile(r"\bethereum\b", re.IGNORECASE),
@@ -24,8 +24,8 @@ ETH_UPDOWN_PATTERN = re.compile(
 )
 
 
-class ETHLagStrategy(SOLLagStrategy):
-    """ETH Lag strategy — same structure as SOL lag, ETHUSDT as the alt leg."""
+class ETHMacroStrategy(SolMacroStrategy):
+    """ETH Macro strategy — same structure as SOL macro, ETHUSDT as the alt leg."""
 
     def __init__(
         self,
@@ -36,7 +36,7 @@ class ETHLagStrategy(SOLLagStrategy):
         exposure_manager: ExposureManager = None,
     ):
         super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
-        self.config = config.get("strategies", {}).get("eth_lag", {})
+        self.config = config.get("strategies", {}).get("eth_macro", {})
         self.enabled = self.config.get("enabled", False)
         self.sol_service = SOLBTCService(alt_symbol="ETHUSDT")
         self.min_liquidity = self.config.get("min_liquidity", 10000)
@@ -47,7 +47,7 @@ class ETHLagStrategy(SOLLagStrategy):
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
         self.entry_price_min = self.config.get("entry_price_min", 0.15)
         self.entry_price_max = self.config.get("entry_price_max", 0.85)
-        self._signal_strategy_name = "eth_lag"
+        self._signal_strategy_name = "eth_macro"
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect ETH (not BTC-only) prediction markets."""

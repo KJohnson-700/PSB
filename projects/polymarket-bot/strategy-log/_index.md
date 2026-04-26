@@ -3,7 +3,7 @@
 Authoritative layout for strategy files in this vault. **Append only**; add new entries at the **top** of each section.
 ## One file per strategy
 
-- `bitcoin.md`, `sol_lag.md`, `fade.md`, `neh.md`, `eth_lag.md`, `xrp_dump_hedge.md`, …
+- `bitcoin.md`, `sol_macro.md`, `fade.md`, `neh.md`, `eth_macro.md`, `xrp_dump_hedge.md`, …
 
 ## Per-strategy file sections (top to bottom)
 
