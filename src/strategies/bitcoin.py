@@ -69,6 +69,8 @@ class BitcoinSignal(BaseModel):
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
+    est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
+    rsi: Optional[float] = Field(None, description="BTC RSI-14 at entry")
 
 
 # Patterns to detect Bitcoin price markets
@@ -133,6 +135,8 @@ class BitcoinStrategy:
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "bitcoin"
+        if self.exposure_manager:
+            self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
 
         self.enabled = self.config.get('enabled', True)
         self.min_liquidity = self.config.get('min_liquidity', 10000)
@@ -156,6 +160,30 @@ class BitcoinStrategy:
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
+
+    async def _ai_kill_switch_analysis(self, reason: str, loss_count: int) -> None:
+        if not self.ai_agent or not self.ai_agent.is_available():
+            return
+        try:
+            context = (
+                f"Lane: BITCOIN\n"
+                f"Kill switch triggered: {reason}\n"
+                f"Consecutive losses: {loss_count}\n"
+                f"This is a diagnostic call to understand why the lane is struggling."
+            )
+            result = await self.ai_agent.analyze_market(
+                market_question=f"Why is bitcoin strategy losing? {reason}",
+                market_description=context,
+                current_yes_price=0.5,
+                market_id="kill_switch_bitcoin",
+            )
+            if result:
+                logger.warning(
+                    f"OPS_JSON kill_switch_ai lane=bitcoin "
+                    f"reasoning={result.reasoning!r} confidence={result.confidence_score:.2f}"
+                )
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -711,10 +739,12 @@ class BitcoinStrategy:
                 # is_5m was already detected above (True = 5m window, False = 15m window)
 
                 # ── UTC hour filter ──
-                # Live data (72 closed trades): hours 17/19/21/22 UTC have <35% WR, -$33 PnL combined.
-                # Best hours 18/20/23 UTC have 63-83% WR, +$28 PnL. Block the dead zones.
+                # Loaded from config (strategies.bitcoin.blocked_utc_hours_updown).
+                # OVERFIT RISK: these hours were identified from the same live sessions
+                # they now gate. Only add an hour after it has ≥15 out-of-sample trades
+                # with WR<0.46 AND avg_pnl<-$2. See config comment for full criteria.
                 _now_utc_hour = datetime.now(timezone.utc).hour
-                _blocked_hours = self.config.get("blocked_utc_hours_updown", [17, 19, 21, 22])
+                _blocked_hours = self.config.get("blocked_utc_hours_updown", [])
                 if _now_utc_hour in _blocked_hours:
                     _bump_skip("blocked_utc_hour")
                     logger.info(
@@ -1160,6 +1190,7 @@ class BitcoinStrategy:
                             market_description=ai_context,
                             current_yes_price=yes_price,
                             market_id=market.id,
+                            strategy_hint="bitcoin",
                         )
                         ai_calls += 1
                         ai_used = True
@@ -1216,6 +1247,7 @@ class BitcoinStrategy:
                         market_description=ai_context,
                         current_yes_price=yes_price,
                         market_id=market.id,
+                        strategy_hint="bitcoin",
                     )
                     ai_calls += 1
                     ai_used = True
@@ -1234,8 +1266,10 @@ class BitcoinStrategy:
 
             # ── Final filters ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
-            # NEUTRAL HTF: no confirmed bias — demand stronger edge for updown leans
-            if htf_bias == "NEUTRAL" and is_updown and not is_5m:
+            # NEUTRAL HTF: no confirmed bias — demand stronger edge for updown leans.
+            # Applies to both 5m and 15m: the 5m path has zero backtest coverage under NEUTRAL
+            # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).
+            if htf_bias == "NEUTRAL" and is_updown:
                 effective_min_edge = max(effective_min_edge, 0.09)
 
             # ── AI-hold soft veto ────────────────────────────────────────────
@@ -1286,6 +1320,7 @@ class BitcoinStrategy:
                     market_description=ai_context,
                     current_yes_price=yes_price,
                     market_id=market.id,
+                    strategy_hint="bitcoin",
                 )
                 ai_calls += 1
                 ai_used = True
@@ -1366,6 +1401,21 @@ class BitcoinStrategy:
                     )
                     continue
 
+                # Updown-specific entry price band — symmetric around 0.50.
+                # self.entry_price_min/max are for directional threshold markets (0.10-0.90).
+                # Updown markets need a tighter band to avoid betting against strong consensus.
+                #   BUY_YES at yes_price < 0.46: market is already bearish → no momentum edge
+                #   SELL_YES at yes_price > 0.54: market is already bullish → no momentum edge
+                _up_min = self.config.get("entry_price_min_updown", 0.46)
+                _up_max = self.config.get("entry_price_max_updown", 0.54)
+                if yes_price < _up_min or yes_price > _up_max:
+                    _bump_skip("entry_price_out_of_range_updown")
+                    logger.info(
+                        f"  BTC skip '{market.question[:45]}' {action} "
+                        f"yes_price={yes_price:.3f} outside updown band [{_up_min:.2f}, {_up_max:.2f}]"
+                    )
+                    continue
+
             entry_price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
             if entry_price < self.entry_price_min or entry_price > self.entry_price_max:
                 _bump_skip("entry_price_out_of_range")
@@ -1392,6 +1442,14 @@ class BitcoinStrategy:
 
             reason = " | ".join(reason_parts)
 
+            # Reconstruct est_prob from edge + yes_price for journal logging.
+            # BUY_YES:  edge = est_prob - yes_price  → est_prob = edge + yes_price
+            # SELL_YES: edge = yes_price - est_prob  → est_prob = yes_price - edge
+            _signal_est_prob = round(
+                (edge + yes_price) if action == "BUY_YES" else (yes_price - edge),
+                4,
+            )
+
             signal = BitcoinSignal(
                 market_id=market.id,
                 market_question=market.question,
@@ -1411,6 +1469,8 @@ class BitcoinStrategy:
                 htf_bias=htf_bias,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
+                est_prob=_signal_est_prob,
+                rsi=round(ta.rsi_14, 1),
             )
             signals.append(signal)
             logger.info(

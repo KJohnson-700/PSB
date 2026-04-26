@@ -147,15 +147,20 @@ Never output anything else except the JSON."""
             return "BUY_NO"
         return "HOLD"
 
-    def _get_cached(self, market_id: str, current_price: float = 0.0) -> Optional[AIAnalysis]:
+    def _cache_key(self, market_id: str, strategy_hint: str = "") -> str:
+        """Cache key includes strategy so the same market gets fresh analysis per strategy."""
+        return f"{market_id}:{strategy_hint}" if strategy_hint else market_id
+
+    def _get_cached(self, market_id: str, current_price: float = 0.0, strategy_hint: str = "") -> Optional[AIAnalysis]:
         """Return cached analysis if still fresh and price hasn't moved significantly.
 
         Invalidates cache if yes_price moved >0.05 (5 cents) since caching —
         a significant price move means market sentiment shifted and the old
         analysis is no longer valid.
         """
-        if market_id in self._cache:
-            cached_time, cached_result, cached_price = self._cache[market_id]
+        key = self._cache_key(market_id, strategy_hint)
+        if key in self._cache:
+            cached_time, cached_result, cached_price = self._cache[key]
             age = time.time() - cached_time
             if age < self._cache_ttl:
                 # Price-based invalidation: skip if price moved materially
@@ -164,7 +169,7 @@ Never output anything else except the JSON."""
                         f"AI cache INVALIDATED {market_id}: "
                         f"price {cached_price:.3f}->{current_price:.3f} (delta>{0.05})"
                     )
-                    del self._cache[market_id]
+                    del self._cache[key]
                     return None
                 logger.debug(
                     f"AI cache HIT {market_id} (age={age:.0f}s, "
@@ -172,12 +177,13 @@ Never output anything else except the JSON."""
                 )
                 return cached_result
             else:
-                del self._cache[market_id]
+                del self._cache[key]
         return None
 
-    def _set_cache(self, market_id: str, result: AIAnalysis, price: float = 0.0):
+    def _set_cache(self, market_id: str, result: AIAnalysis, price: float = 0.0, strategy_hint: str = ""):
         """Store analysis result in cache with the yes_price at time of caching."""
-        self._cache[market_id] = (time.time(), result, price)
+        key = self._cache_key(market_id, strategy_hint)
+        self._cache[key] = (time.time(), result, price)
         logger.debug(f"AI CACHE SET: {market_id} price={price:.3f} (size={len(self._cache)}, ttl={self._cache_ttl}s)")
         # Prune old entries if cache gets large
         if len(self._cache) > 200:
@@ -294,12 +300,16 @@ Never output anything else except the JSON."""
         market_description: str,
         current_yes_price: float,
         market_id: str,
-        news_context: str = ""
+        news_context: str = "",
+        strategy_hint: str = "",
     ) -> Optional[AIAnalysis]:
         """
         Analyze a market with caching and rate limiting.
         Returns cached result if available (within cache_ttl).
         Otherwise calls providers with rate limiting between calls.
+
+        strategy_hint: optional short tag (e.g. "bitcoin", "sol_lag") so the same
+        market_id gets independent cache entries when analyzed by different strategies.
         """
         # Live quota saver — backtests do not use AIAgent (see BacktestAIAgent).
         if not self.config.get("live_inferencing", True):
@@ -310,7 +320,7 @@ Never output anything else except the JSON."""
             return None
 
         # Check cache first — avoid burning tokens on repeat analysis
-        cached = self._get_cached(market_id, current_yes_price)
+        cached = self._get_cached(market_id, current_yes_price, strategy_hint)
         if cached is not None:
             return cached
 
@@ -324,7 +334,7 @@ Never output anything else except the JSON."""
         if self.consensus_enabled:
             result = await self._analyze_consensus(user_prompt, market_id)
             if result:
-                self._set_cache(market_id, result, current_yes_price)
+                self._set_cache(market_id, result, current_yes_price, strategy_hint)
             return result
 
         # Skip entirely if no providers configured
@@ -343,8 +353,11 @@ Never output anything else except the JSON."""
             api_key = self.api_keys.get(api_key_name)
 
             if not api_key:
-                logger.warning(f"API key '{api_key_name}' not found for provider '{provider_name}'. Skipping.")
-                continue
+                if provider_config.get("local", False):
+                    api_key = "local"
+                else:
+                    logger.warning(f"API key '{api_key_name}' not found for provider '{provider_name}'. Skipping.")
+                    continue
 
             logger.info(f"Attempting analysis with provider: {provider_name} (Model: {model})")
 
@@ -363,7 +376,7 @@ Never output anything else except the JSON."""
                         f"AI analysis OK: {provider_name} -> {market_id} "
                         f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f}"
                     )
-                    self._set_cache(market_id, analysis_result, current_yes_price)
+                    self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint)
                     return analysis_result
 
             except (asyncio.TimeoutError, Exception) as e:

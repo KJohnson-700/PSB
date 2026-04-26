@@ -8,23 +8,20 @@ signal logic that runs live, then prints a detailed results report.
 
 Usage
 -----
-  # BTC 15m windows, last 3 months
+  # BTC 15m — full in-sample run (no validation, prints a warning)
   python scripts/run_backtest_crypto.py --symbol BTC --window 15
 
-  # BTC 5m windows over a specific date range
-  python scripts/run_backtest_crypto.py --symbol BTC --window 5 --start 2025-01-01 --end 2025-03-20
+  # BTC 15m with train/test split — RECOMMENDED
+  # Train on Jan–Mar, test on Apr (never tune on the test window)
+  python scripts/run_backtest_crypto.py --symbol BTC --window 15 \\
+      --start 2026-01-01 --end 2026-04-24 --test-start 2026-04-01
 
-  # SOL 15m windows
-  python scripts/run_backtest_crypto.py --symbol SOL --window 15
-
-  # ETH 15m windows (same signal path as SOL in updown_engine)
-  python scripts/run_backtest_crypto.py --symbol ETH --window 15
+  # SOL 15m with walk-forward split
+  python scripts/run_backtest_crypto.py --symbol SOL --window 15 \\
+      --start 2026-01-01 --end 2026-04-24 --test-start 2026-04-01
 
   # Force fresh download (ignore cache)
   python scripts/run_backtest_crypto.py --symbol BTC --window 15 --no-cache
-
-  # Save JSON report
-  python scripts/run_backtest_crypto.py --symbol BTC --window 15 --save-report
 
 What it tests
 -------------
@@ -90,18 +87,23 @@ def _default_dates() -> tuple:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def _print_plain(result: UpdownBacktestResult, data_size: dict) -> None:
+def _print_plain(result: UpdownBacktestResult, data_size: dict,
+                 label: str = "") -> None:
     """Plain-text output (no Rich dependency)."""
     sep = "=" * 60
+    header = f"CRYPTO UPDOWN BACKTEST -- {result.symbol} {result.window_size}m"
+    if label:
+        header += f"  [{label}]"
     print(f"\n{sep}")
-    print(f"  CRYPTO UPDOWN BACKTEST -- {result.symbol} {result.window_size}m")
+    print(f"  {header}")
     print(sep)
     print(f"  Period         : {result.start_date}  ->  {result.end_date}")
     print(f"  Initial bankroll : ${result.initial_bankroll:,.2f}")
     print(f"  Final bankroll   : ${result.final_bankroll:,.2f}")
     print(f"  Net PnL          : ${result.net_pnl:+,.2f}  ({result.total_return_pct:+.1f}%)")
     print(sep)
-    print(f"  Windows scanned  : {result.windows_scanned:,}")
+    if result.windows_scanned:
+        print(f"  Windows scanned  : {result.windows_scanned:,}")
     print(f"  Trades entered   : {result.windows_entered:,}")
     print(f"  Wins / Losses    : {result.wins} / {result.losses}")
     print(f"  Win rate         : {result.win_rate:.1%}")
@@ -109,9 +111,10 @@ def _print_plain(result: UpdownBacktestResult, data_size: dict) -> None:
     print(f"  Expectancy       : ${result.expectancy:+.3f} per trade")
     print(f"  Slippage paid    : ${result.slippage_total:,.2f}")
     print(sep)
-    print(f"\n  OHLCV bars used:")
-    for iv, n in data_size.items():
-        print(f"    {iv:>4}  ->  {n:,} bars")
+    if data_size:
+        print(f"\n  OHLCV bars used:")
+        for iv, n in data_size.items():
+            print(f"    {iv:>4}  ->  {n:,} bars")
 
     if result.trades:
         print(f"\n  Last 10 trades:")
@@ -129,7 +132,8 @@ def _print_plain(result: UpdownBacktestResult, data_size: dict) -> None:
     print()
 
 
-def _print_rich(result: UpdownBacktestResult, data_size: dict) -> None:
+def _print_rich(result: UpdownBacktestResult, data_size: dict,
+                label: str = "") -> None:
     """Rich-formatted output."""
     console = Console()
 
@@ -139,15 +143,17 @@ def _print_rich(result: UpdownBacktestResult, data_size: dict) -> None:
     summary.add_column(style="bold cyan", min_width=22)
     summary.add_column()
 
-    def row(label, value):
-        summary.add_row(label, str(value))
+    def row(lbl, value):
+        summary.add_row(lbl, str(value))
 
+    title_suffix = f"  [{label}]" if label else ""
     row("Symbol / Window",    f"{result.symbol}  {result.window_size}m Up/Down")
     row("Period",             f"{result.start_date}  ->  {result.end_date}")
     row("Initial bankroll",   f"${result.initial_bankroll:,.2f}")
     row("Final bankroll",     f"${result.final_bankroll:,.2f}")
     row("Net PnL",            f"[{colour}]${result.net_pnl:+,.2f}  ({result.total_return_pct:+.1f}%)[/]")
-    row("Windows scanned",    f"{result.windows_scanned:,}")
+    if result.windows_scanned:
+        row("Windows scanned", f"{result.windows_scanned:,}")
     row("Trades entered",     f"{result.windows_entered:,}")
     row("Win / Loss",         f"{result.wins} / {result.losses}")
     row("Win rate",           f"{result.win_rate:.1%}")
@@ -155,15 +161,16 @@ def _print_rich(result: UpdownBacktestResult, data_size: dict) -> None:
     row("Expectancy",         f"${result.expectancy:+.3f} per trade")
     row("Slippage paid",      f"${result.slippage_total:,.2f}")
 
-    console.print(Panel(summary, title=f"[bold]Crypto Updown Backtest -- {result.symbol} {result.window_size}m"))
+    panel_title = f"[bold]Crypto Updown Backtest -- {result.symbol} {result.window_size}m{title_suffix}"
+    console.print(Panel(summary, title=panel_title))
 
-    # Data sizes
-    data_tbl = Table(title="OHLCV data used", show_header=True)
-    data_tbl.add_column("Interval", style="cyan")
-    data_tbl.add_column("Bars",     justify="right")
-    for iv, n in data_size.items():
-        data_tbl.add_row(iv, f"{n:,}")
-    console.print(data_tbl)
+    if data_size:
+        data_tbl = Table(title="OHLCV data used", show_header=True)
+        data_tbl.add_column("Interval", style="cyan")
+        data_tbl.add_column("Bars",     justify="right")
+        for iv, n in data_size.items():
+            data_tbl.add_row(iv, f"{n:,}")
+        console.print(data_tbl)
 
     # Trades table
     if result.trades:
@@ -193,31 +200,9 @@ def _print_rich(result: UpdownBacktestResult, data_size: dict) -> None:
         console.print(tbl)
 
 
-def save_report(result: UpdownBacktestResult, data_size: dict) -> Path:
-    report_dir = Path(__file__).resolve().parent.parent / "data" / "backtest" / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    name = f"backtest_crypto_{result.symbol}_{result.window_size}m_{ts}.json"
-    path = report_dir / name
-
-    if result.symbol == "BTC":
-        _strategy_key = "bitcoin"
-    elif result.symbol == "ETH":
-        _strategy_key = "eth_lag"
-    elif result.symbol == "XRP":
-        _strategy_key = "xrp_dump_hedge"
-    elif result.symbol == "HYPE":
-        _strategy_key = "hype_lag"
-    else:
-        _strategy_key = "sol_lag"
-    payload = {
-        # Dashboard-compatibility fields (used by updateBacktest() simple table)
-        "strategy":         f"{_strategy_key}_{result.window_size}m",
-        "trades_count":     result.wins + result.losses,
-        "report_type":      "crypto_updown",   # lets dashboard distinguish this from fade/arb
-        # Crypto-specific fields
-        "symbol":           result.symbol,
-        "window_minutes":   result.window_size,
+def _result_to_dict(result: UpdownBacktestResult) -> dict:
+    """Serialise one UpdownBacktestResult to a JSON-compatible dict."""
+    return {
         "start_date":       result.start_date,
         "end_date":         result.end_date,
         "initial_bankroll": result.initial_bankroll,
@@ -232,7 +217,6 @@ def save_report(result: UpdownBacktestResult, data_size: dict) -> Path:
         "avg_edge":         round(result.avg_edge, 4),
         "expectancy":       round(result.expectancy, 4),
         "slippage_total":   round(result.slippage_total, 4),
-        "data_bars":        data_size,
         "trades": [
             {
                 "window_open":   str(t.window_open)[:19],
@@ -254,9 +238,93 @@ def save_report(result: UpdownBacktestResult, data_size: dict) -> Path:
         ],
     }
 
+
+def save_report(
+    result: UpdownBacktestResult,
+    data_size: dict,
+    test_result: "UpdownBacktestResult | None" = None,
+) -> Path:
+    """Save a JSON report.  If test_result is provided the file contains separate
+    'train' and 'test' sections; the top-level summary fields reflect the full run.
+    """
+    report_dir = Path(__file__).resolve().parent.parent / "data" / "backtest" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = f"backtest_crypto_{result.symbol}_{result.window_size}m_{ts}.json"
+    path = report_dir / name
+
+    _strategy_map = {"BTC": "bitcoin", "ETH": "eth_lag", "XRP": "xrp_lag",
+                     "HYPE": "hype_lag", "SOL": "sol_lag"}
+    _strategy_key = _strategy_map.get(result.symbol, "sol_lag")
+
+    payload: dict = {
+        # Dashboard-compatibility fields (updateBacktest() reads these from top level)
+        "strategy":         f"{_strategy_key}_{result.window_size}m",
+        "trades_count":     result.wins + result.losses,
+        "report_type":      "crypto_updown",
+        "symbol":           result.symbol,
+        "window_minutes":   result.window_size,
+        "data_bars":        data_size,
+    }
+
+    if test_result is not None:
+        # Walk-forward split: surface the TEST metrics at top level for dashboard
+        # (the held-out window is the only one that counts for evaluation)
+        payload.update({
+            "split_mode":       True,
+            "test_start_date":  test_result.start_date,
+            # Top-level metrics come from the test window
+            "start_date":       test_result.start_date,
+            "end_date":         test_result.end_date,
+            "initial_bankroll": test_result.initial_bankroll,
+            "final_bankroll":   test_result.final_bankroll,
+            "net_pnl":          round(test_result.net_pnl, 4),
+            "total_return_pct": round(test_result.total_return_pct, 2),
+            "windows_scanned":  test_result.windows_scanned,
+            "windows_entered":  test_result.windows_entered,
+            "wins":             test_result.wins,
+            "losses":           test_result.losses,
+            "win_rate":         round(test_result.win_rate, 4),
+            "avg_edge":         round(test_result.avg_edge, 4),
+            "expectancy":       round(test_result.expectancy, 4),
+            "slippage_total":   round(test_result.slippage_total, 4),
+            "trades":           _result_to_dict(test_result)["trades"],
+            # Full detail in sub-sections
+            "train":            _result_to_dict(_get_train(result, test_result)),
+            "test":             _result_to_dict(test_result),
+        })
+    else:
+        payload.update(_result_to_dict(result))
+
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
     return path
+
+
+def _get_train(full: UpdownBacktestResult,
+               test: UpdownBacktestResult) -> UpdownBacktestResult:
+    """Extract the train portion by removing test trades from the full result."""
+    import pandas as pd
+    test_ts = pd.Timestamp(test.start_date).tz_localize("UTC")
+    train_trades = [t for t in full.trades if t.window_open < test_ts]
+    wins   = sum(1 for t in train_trades if t.outcome == "WIN")
+    losses = sum(1 for t in train_trades if t.outcome == "LOSS")
+    pnl    = sum(t.pnl  for t in train_trades)
+    slip   = sum(t.slip for t in train_trades)
+    return UpdownBacktestResult(
+        symbol=full.symbol,
+        window_size=full.window_size,
+        start_date=full.start_date,
+        end_date=test.start_date,
+        initial_bankroll=full.initial_bankroll,
+        final_bankroll=full.initial_bankroll + pnl,
+        trades=train_trades,
+        windows_scanned=0,
+        windows_entered=len(train_trades),
+        wins=wins,
+        losses=losses,
+        slippage_total=round(slip, 4),
+    )
 
 
 def main() -> int:
@@ -273,10 +341,15 @@ def main() -> int:
         "--window", type=int, choices=[5, 15], default=15,
         help="Window size in minutes (default: 15)"
     )
-    parser.add_argument("--start",    default=default_start,
+    parser.add_argument("--start",      default=default_start,
                         help=f"Start date YYYY-MM-DD (default: {default_start})")
-    parser.add_argument("--end",      default=default_end,
+    parser.add_argument("--end",        default=default_end,
                         help=f"End date   YYYY-MM-DD (default: {default_end})")
+    parser.add_argument("--test-start", default=None, metavar="DATE",
+                        help="Split date YYYY-MM-DD: data before this date is TRAIN "
+                             "(tune here), data from this date is TEST (validate only, "
+                             "never tune on it).  Omitting this flag runs fully in-sample "
+                             "— results cannot be used to validate parameters.")
     parser.add_argument("--bankroll", type=float, default=500.0,
                         help="Initial paper bankroll (default: $500)")
     parser.add_argument("--no-cache", action="store_true",
@@ -289,10 +362,23 @@ def main() -> int:
 
     config = load_config()
 
+    # -- 0. Warn loudly when no test split is requested --------------------
+    if args.test_start is None:
+        _IN_SAMPLE_WARNING = (
+            "\n" + "!" * 60 + "\n"
+            "  IN-SAMPLE RUN — no --test-start provided.\n"
+            "  Results cannot validate parameters: the backtest period\n"
+            "  overlaps the data used to tune thresholds.\n"
+            "  Use --test-start YYYY-MM-DD to get a held-out test window.\n"
+            "  Example: --start 2026-01-01 --test-start 2026-04-01\n"
+            + "!" * 60
+        )
+        print(_IN_SAMPLE_WARNING)
+
     # -- 1. Download / load OHLCV ------------------------------------------
     print(f"\nLoading {args.symbol} OHLCV data ({args.start} -> {args.end}) ...")
-    loader  = OHLCVLoader(no_cache=args.no_cache)
-    data    = loader.load_all(args.symbol, args.start, args.end)
+    loader    = OHLCVLoader(no_cache=args.no_cache)
+    data      = loader.load_all(args.symbol, args.start, args.end)
     data_size = {iv: len(df) for iv, df in data.items()}
 
     # Sanity check
@@ -309,7 +395,7 @@ def main() -> int:
     print(f"  Total bars loaded: {total_bars:,}  "
           f"({' | '.join(f'{iv}:{n:,}' for iv, n in data_size.items())})\n")
 
-    # -- 2. Run backtest ----------------------------------------------------
+    # -- 2. Run backtest (single pass over full range) ---------------------
     engine = UpdownBacktestEngine(config=config, initial_bankroll=args.bankroll)
     print(f"Running {args.symbol} {args.window}m backtest ...")
     result = engine.run(
@@ -320,12 +406,25 @@ def main() -> int:
         symbol=args.symbol,
     )
 
-    # -- 3. Print results ---------------------------------------------------
-    use_rich = _RICH_AVAILABLE and not args.no_ui
-    if use_rich:
-        _print_rich(result, data_size)
+    # -- 3. Split and print results ----------------------------------------
+    use_rich     = _RICH_AVAILABLE and not args.no_ui
+    test_result  = None
+
+    if args.test_start:
+        train_result, test_result = result.split(args.test_start)
+        print(f"\n  Split: TRAIN {args.start} → {args.test_start}  |  "
+              f"TEST {args.test_start} → {args.end}\n")
+        if use_rich:
+            _print_rich(train_result, {}, label="TRAIN — in-sample, tune here")
+            _print_rich(test_result,  {}, label="TEST  — out-of-sample, validate only")
+        else:
+            _print_plain(train_result, {}, label="TRAIN — in-sample, tune here")
+            _print_plain(test_result,  {}, label="TEST  — out-of-sample, validate only")
     else:
-        _print_plain(result, data_size)
+        if use_rich:
+            _print_rich(result, data_size)
+        else:
+            _print_plain(result, data_size)
 
     if result.windows_entered == 0:
         print(
@@ -334,9 +433,9 @@ def main() -> int:
             "Try a longer date range (--start further back)."
         )
 
-    # -- 4. Save report (always, unless --no-save-report) -------------------
+    # -- 4. Save report (always, unless --no-save-report) ------------------
     if not args.no_save_report:
-        rpath = save_report(result, data_size)
+        rpath = save_report(result, data_size, test_result=test_result)
         print(f"\nReport saved: {rpath}")
 
     return 0

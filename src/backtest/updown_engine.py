@@ -16,8 +16,9 @@ Architecture
 5.  Candle-momentum (early-spike detection) is set to NEUTRAL because it
     requires intra-window 1m bars that would introduce look-ahead bias.
     For BTC 5m, we use the last COMPLETED 5m bar direction instead.
-6.  Entry sampled from N(0.50, 0.02) clipped to [0.44, 0.56] — models the
-    real spread of live fill prices on updown markets (observed 0.46–0.54).
+6.  Entry sampled from empirical fill-price distribution loaded from
+    data/entry_prices/updown_fills.jsonl (recorded by TradeJournal at live fills).
+    Falls back to N(0.50, 0.02) clipped to [0.44, 0.56] when <20 recorded prices.
     Previous hardcoded 0.50 inflated WR by 15-21% vs live results.
 7.  Settlement: 1m close at window end vs 1m open at window start
     -> YES won (price went UP) or NO won (price went DOWN).
@@ -40,9 +41,11 @@ Checklist (from docs/BACKTEST.md)
 [x] Timestamp alignment: all slices use open_time < T (strict)
 [x] Exit strategy: hold to settlement (15m / 5m window close)
 """
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
@@ -93,6 +96,7 @@ class UpdownTrade:
     outcome:       Optional[str] = None   # "WIN" | "LOSS"
     exit_price:    float = 0.0
     pnl:           float = 0.0
+    slip:          float = 0.0   # Slippage cost in $ for this trade
     asset_open:    float = 0.0   # BTC / SOL / ETH price at window open
     asset_close:   float = 0.0   # BTC / SOL / ETH price at window close
 
@@ -145,6 +149,47 @@ class UpdownBacktestResult:
             return 0.0
         return sum(t.pnl for t in self.trades) / len(self.trades)
 
+    def split(self, test_start: str) -> tuple["UpdownBacktestResult", "UpdownBacktestResult"]:
+        """Partition trades into (train, test) at test_start date.
+
+        Returns two independent UpdownBacktestResult objects.  The engine runs
+        once over the full date range; this method partitions the output so
+        train and test metrics are computed separately.  The test result is the
+        only one that can be used to evaluate whether a parameter set generalises
+        — never tune on it.
+
+        Parameters
+        ----------
+        test_start : "YYYY-MM-DD"  first date of the held-out test period
+        """
+        test_ts = pd.Timestamp(test_start).tz_localize("UTC")
+
+        train_trades = [t for t in self.trades if t.window_open <  test_ts]
+        test_trades  = [t for t in self.trades if t.window_open >= test_ts]
+
+        def _build(trades: list, start: str, end: str) -> "UpdownBacktestResult":
+            wins   = sum(1 for t in trades if t.outcome == "WIN")
+            losses = sum(1 for t in trades if t.outcome == "LOSS")
+            pnl    = sum(t.pnl  for t in trades)
+            slip   = sum(t.slip for t in trades)
+            return UpdownBacktestResult(
+                symbol=self.symbol,
+                window_size=self.window_size,
+                start_date=start,
+                end_date=end,
+                initial_bankroll=self.initial_bankroll,
+                final_bankroll=self.initial_bankroll + pnl,
+                trades=trades,
+                windows_scanned=0,      # per-period scan count not tracked; aggregate is in parent
+                windows_entered=len(trades),
+                wins=wins,
+                losses=losses,
+                slippage_total=round(slip, 4),
+            )
+
+        return _build(train_trades, self.start_date, test_start), \
+               _build(test_trades,  test_start,      self.end_date)
+
 
 # ==============================================================================
 # Engine
@@ -188,6 +233,7 @@ class UpdownBacktestEngine:
         self._kelly_btc   = btc_cfg.get("kelly_fraction", 0.15)
         self._kelly_sol   = sol_cfg.get("kelly_fraction", self._kelly_btc)
         self._kelly_eth   = eth_cfg.get("kelly_fraction", self._kelly_sol)
+        self.min_4h_hist_magnitude = btc_cfg.get("min_4h_hist_magnitude", 20.0)
 
         trade_cfg         = config.get("trading", {})
         self.default_size  = trade_cfg.get("default_position_size", 10.0)
@@ -195,6 +241,62 @@ class UpdownBacktestEngine:
 
         # Reuse live indicator methods via an instance (static methods underneath)
         self._svc = BTCPriceService()
+
+        # Load empirical fill-price distribution from live sessions.
+        # Falls back to N(0.50, 0.02) when fewer than 20 recorded prices exist.
+        self._fill_prices: Optional[np.ndarray] = self._load_fill_prices()
+
+    # -- fill price distribution -----------------------------------------------
+
+    _FILL_PRICE_LOG = (
+        Path(__file__).resolve().parent.parent.parent
+        / "data" / "entry_prices" / "updown_fills.jsonl"
+    )
+    _MIN_EMPIRICAL_FILLS = 20
+
+    @classmethod
+    def _load_fill_prices(cls) -> Optional[np.ndarray]:
+        """Load actual CLOB fill prices recorded by TradeJournal.
+
+        Returns an ndarray for np.random.choice sampling, or None to fall back
+        to the synthetic N(0.50, 0.02) distribution.
+        """
+        if not cls._FILL_PRICE_LOG.exists():
+            return None
+        prices = []
+        try:
+            with cls._FILL_PRICE_LOG.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        p = json.loads(line).get("yes_price")
+                        if p is not None and 0.40 <= float(p) <= 0.60:
+                            prices.append(float(p))
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+        except OSError:
+            return None
+        if len(prices) < cls._MIN_EMPIRICAL_FILLS:
+            logger.debug(
+                f"updown_engine: only {len(prices)} recorded fill prices "
+                f"(need {cls._MIN_EMPIRICAL_FILLS}) — using N(0.50, 0.02) fallback"
+            )
+            return None
+        arr = np.array(prices, dtype=float)
+        logger.info(
+            f"updown_engine: loaded {len(arr)} empirical fill prices "
+            f"mean={arr.mean():.4f} std={arr.std():.4f} — replacing N(0.50,0.02)"
+        )
+        return arr
+
+    def _sample_entry_price(self) -> float:
+        """Sample a realistic YES entry price for a backtest trade."""
+        if self._fill_prices is not None:
+            return float(np.random.choice(self._fill_prices))
+        raw = float(np.random.normal(0.50, 0.02))
+        return float(np.clip(raw, 0.44, 0.56))
 
     # -- slice helpers ---------------------------------------------------------
 
@@ -272,7 +374,7 @@ class UpdownBacktestEngine:
     # ==========================================================================
 
     @staticmethod
-    def _get_htf_bias(ta: TechnicalAnalysis) -> str:
+    def _get_htf_bias(ta: TechnicalAnalysis, min_hist: float = 20.0) -> str:
         """BTC 3-vote system -- exact copy of BitcoinStrategy._get_higher_tf_bias().
 
         Vote 1: Trend Sabre direction
@@ -312,9 +414,9 @@ class UpdownBacktestEngine:
             return "NEUTRAL"
 
         # Conviction gate -- matches bitcoin.py _get_higher_tf_bias().
-        # Require |4H MACD histogram| >= 20 to confirm direction.
+        # Threshold read from config (min_4h_hist_magnitude); default 20.0.
         # Near-zero histograms with a 2/3 vote produce coin-flip entries.
-        if abs(macd_4h.histogram) < 20.0:
+        if abs(macd_4h.histogram) < min_hist:
             return "NEUTRAL"
         return bias
 
@@ -868,7 +970,7 @@ class UpdownBacktestEngine:
             # Layer 1: HTF bias (symbol-specific)
             # ==================================================================
             if is_btc:
-                htf_bias = self._get_htf_bias(ta)
+                htf_bias = self._get_htf_bias(ta, min_hist=self.min_4h_hist_magnitude)
             else:
                 htf_bias = self._get_sol_htf_bias(ta, df_15m)
 
@@ -923,13 +1025,9 @@ class UpdownBacktestEngine:
                 current += step_td
                 continue
 
-            # Fill at realistic mid-price sampled from live fill distribution.
-            # Live fills on updown markets range 0.46–0.54 (observed across BTC/SOL/ETH).
-            # Always using 0.50 inflated WR by 15-21% — thresholds were calibrated on
-            # those inflated numbers. Sample from N(0.50, 0.02) clipped to [0.44, 0.56]
-            # to model the actual spread of entry prices seen in production.
-            raw_mid = float(np.random.normal(0.50, 0.02))
-            mid_price = float(np.clip(raw_mid, 0.44, 0.56))
+            # Fill at realistic mid-price: use empirical distribution from live fills
+            # when available (>=20 recorded), else N(0.50, 0.02) clipped to [0.44, 0.56].
+            mid_price = self._sample_entry_price()
             fill_price, slip_cost = self._simulate_fill(mid_price, fill_side)
             slippage_total += slip_cost * size
 
@@ -980,6 +1078,7 @@ class UpdownBacktestEngine:
                 outcome=outcome,
                 exit_price=exit_price,
                 pnl=pnl,
+                slip=slip_cost * size,
                 asset_open=asset_open,
                 asset_close=asset_close,
             ))

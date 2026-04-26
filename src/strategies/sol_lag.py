@@ -83,6 +83,9 @@ class SOLLagSignal(BaseModel):
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
+    est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
+    rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
+    corr_1h: Optional[float] = Field(None, description="BTC-SOL 1H correlation at entry")
     reason: str = Field(default="", description="Why this signal was generated")
     strategy_name: str = Field(default="sol_lag", description="Journal/risk strategy key")
 
@@ -153,6 +156,8 @@ class SOLLagStrategy:
         self.kelly_sizer = kelly_sizer
         self.sol_service = SOLBTCService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
+        if self.exposure_manager:
+            self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
         self._signal_strategy_name = "sol_lag"
 
         # Remaining config-derived attributes (scan loop)
@@ -370,6 +375,31 @@ class SOLLagStrategy:
             reasons.append(f"low corr ({corr.correlation_1h:.2f})")
 
         return bonus, reasons
+
+    async def _ai_kill_switch_analysis(self, reason: str, loss_count: int) -> None:
+        if not self.ai_agent or not self.ai_agent.is_available():
+            return
+        try:
+            context = (
+                f"Lane: {self._signal_strategy_name.upper()}\n"
+                f"Kill switch triggered: {reason}\n"
+                f"Consecutive losses: {loss_count}\n"
+                f"This is a diagnostic call to understand why the lane is struggling."
+            )
+            result = await self.ai_agent.analyze_market(
+                market_question=f"Why is {self._signal_strategy_name} losing? {reason}",
+                market_description=context,
+                current_yes_price=0.5,
+                market_id=f"kill_switch_{self._signal_strategy_name}",
+            )
+            if result:
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"OPS_JSON kill_switch_ai lane={self._signal_strategy_name} "
+                    f"reasoning={result.reasoning!r} confidence={result.confidence_score:.2f}"
+                )
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 4: Edge Estimation
@@ -826,28 +856,6 @@ class SOLLagStrategy:
                         est_prob_up -= 0.02
                         m5_reasons.append("5m_trend_bear")
 
-                    # BTC-SOL lag — SECONDARY confirmer for 5m (same hierarchy as 15m)
-                    # 5m windows are short enough that lag still plays out, but the entry
-                    # price filter (0.46-0.49) is the real gatekeeper — not the lag signal.
-                    if corr.lag_opportunity:
-                        lag_dir = corr.opportunity_direction
-                        lag_mag = abs(corr.opportunity_magnitude)
-                        if (allowed_side == "LONG" and lag_dir == "LONG") or \
-                           (allowed_side == "SHORT" and lag_dir == "SHORT"):
-                            lag_adj = min(0.04, lag_mag * 0.20)  # Reduced: was min(0.12, lag_mag*0.6)
-                            if allowed_side == "LONG":
-                                est_prob_up += lag_adj
-                            else:
-                                est_prob_up -= lag_adj
-                            reason_parts.append(f"LAG_CONFIRM {lag_dir} {lag_mag:.1%}")
-                        if corr.btc_spike_detected:
-                            spike_adj = 0.02  # Reduced: was 0.04
-                            if allowed_side == "LONG":
-                                est_prob_up += spike_adj
-                            else:
-                                est_prob_up -= spike_adj
-                            reason_parts.append(f"BTC_SPIKE({corr.btc_move_5m_pct:+.2f}%)")
-
                     # RSI extremes (very light for 5m)
                     if sol.rsi_14 > 75:
                         est_prob_up -= 0.02
@@ -870,10 +878,10 @@ class SOLLagStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge) if edge > 0 else edge
+                    edge = abs(edge)
 
-                    # Confidence: 5m MACD momentum is PRIMARY for 5m markets; lag is secondary
-                    lag_conf_5m = 0.05 if corr.lag_opportunity else 0.0
+                    # Confidence: 5m MACD momentum is PRIMARY for 5m markets; lag removed
+                    lag_conf_5m = 0.0
                     confidence = max(0.50, min(0.85, 0.50 + abs(m5_adj) * 2.5 + lag_conf_5m + abs(timing_bonus) * 0.3))
 
                     reason_parts.extend([
@@ -940,28 +948,6 @@ class SOLLagStrategy:
                     else:
                         est_prob_up -= timing_bonus
 
-                    # BTC-SOL lag — SECONDARY confirmer (small boost only)
-                    # Live data: lag=None = 63% WR; lag=value = 50% WR.
-                    # Lag arrives AFTER the move is partially priced in — only a minor edge.
-                    if corr.lag_opportunity:
-                        lag_dir = corr.opportunity_direction
-                        lag_mag = abs(corr.opportunity_magnitude)
-                        if (allowed_side == "LONG" and lag_dir == "LONG") or \
-                           (allowed_side == "SHORT" and lag_dir == "SHORT"):
-                            lag_adj = min(0.03, lag_mag * 0.15)  # Reduced: was min(0.10, lag_mag*0.5)
-                            if allowed_side == "LONG":
-                                est_prob_up += lag_adj
-                            else:
-                                est_prob_up -= lag_adj
-                            reason_parts.append(f"LAG_CONFIRM {lag_dir} {lag_mag:.1%}")
-                        if corr.btc_spike_detected:
-                            spike_adj = 0.02  # Reduced: was 0.03
-                            if allowed_side == "LONG":
-                                est_prob_up += spike_adj
-                            else:
-                                est_prob_up -= spike_adj
-                            reason_parts.append(f"BTC_SPIKE({corr.btc_move_5m_pct:+.2f}%)")
-
                     # RSI extremes
                     if sol.rsi_14 > 75:
                         est_prob_up -= 0.03
@@ -982,11 +968,10 @@ class SOLLagStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge) if edge > 0 else edge
+                    edge = abs(edge)
 
-                    # Confidence driven by LTF strength (primary) + optional lag confirmer
-                    lag_conf_boost = 0.05 if corr.lag_opportunity else 0.0
-                    confidence = min(0.85, 0.50 + ltf_strength * 0.22 + lag_conf_boost + abs(timing_bonus) * 0.5)
+                    # Confidence driven by LTF strength (primary); lag signal removed
+                    confidence = min(0.85, 0.50 + ltf_strength * 0.22 + abs(timing_bonus) * 0.5)
 
                     reason_parts.extend([
                         "UPDOWN_15m",
@@ -1110,6 +1095,7 @@ class SOLLagStrategy:
                         market_description=ai_context,
                         current_yes_price=yes_price,
                         market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
                     )
                     ai_calls += 1
                     ai_used = True
@@ -1188,6 +1174,7 @@ class SOLLagStrategy:
                     market_description=ai_context2,
                     current_yes_price=yes_price,
                     market_id=market.id,
+                    strategy_hint=self._signal_strategy_name,
                 )
                 ai_calls += 1
                 ai_used = True
@@ -1218,32 +1205,24 @@ class SOLLagStrategy:
                 continue
 
             # ── Entry price filter for updown markets ──
-            # The entry_price_max / entry_price_min config was only enforced on the
-            # threshold-market path (line below).  Updown markets need the same gate.
+            # Only trade when yes_price is within [1-entry_price_max, entry_price_max].
+            # This symmetric band prevents entering when the market has already moved:
+            #   - BUY_YES at yes_price > max: market too bullish, lag already priced in
+            #   - BUY_YES at yes_price < min: market too bearish, going long against consensus
+            #   - SELL_YES at yes_price < min: market too bearish, lag already priced in
+            #   - SELL_YES at yes_price > max: market too bullish, going short against consensus
             #
-            # Live data:
-            #   BUY_YES  yes_price 0.50-0.55 → 28% WR  -$16.31  (lag already priced in)
-            #   BUY_YES  yes_price 0.45-0.50 → 62% WR  -$ 0.33  (correct range)
-            #   SELL_YES yes_price 0.45-0.50 → 60% WR  +$ 0.76  (sweet spot)
-            #   SELL_YES yes_price 0.40-0.45 → 25% WR  -$ 5.89  (market already bearish)
-            #
-            # Rule: the price we are PAYING must be below entry_price_max.
-            #   BUY_YES  → paying yes_price  → block if yes_price > entry_price_max
-            #   SELL_YES → paying no_price   → block if (1 - yes_price) > entry_price_max
-            #              equivalently: yes_price < (1 - entry_price_max)
+            # Live data (2026-04-24 session, 29 trades):
+            #   market YES in [0.46, 0.54] → 72% WR  (sweet spot)
+            #   market YES < 0.46 or > 0.54 → ~30% WR (market consensus fighting signal)
             if is_updown:
-                if action == "BUY_YES" and yes_price > self.entry_price_max:
+                _yp_low  = 1.0 - self.entry_price_max  # 0.46 with default max=0.54
+                _yp_high = self.entry_price_max          # 0.54
+                if yes_price < _yp_low or yes_price > _yp_high:
                     logger.info(
-                        f"  SOL skip '{market.question[:40]}...' "
-                        f"BUY_YES yes_price={yes_price:.3f} > max={self.entry_price_max} "
-                        f"(lag already priced in)"
-                    )
-                    continue
-                if action == "SELL_YES" and yes_price < (1.0 - self.entry_price_max):
-                    logger.info(
-                        f"  SOL skip '{market.question[:40]}...' "
-                        f"SELL_YES yes_price={yes_price:.3f} < {1.0 - self.entry_price_max:.3f} "
-                        f"(market already bearish, no edge)"
+                        f"  {self._signal_strategy_name} skip '{market.question[:40]}...' "
+                        f"yes_price={yes_price:.3f} outside [{_yp_low:.3f}, {_yp_high:.3f}] "
+                        f"(market already moved, signal has no edge)"
                     )
                     continue
 
@@ -1294,6 +1273,9 @@ class SOLLagStrategy:
                 htf_bias=macro_trend,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
+                est_prob=round(estimated_prob, 4),
+                rsi=round(sol.rsi_14, 1),
+                corr_1h=round(corr.correlation_1h, 4),
             )
             signals.append(signal)
 
@@ -1317,15 +1299,15 @@ def _get_weekend_penalty() -> float:
     HYPE-style manipulation (a4385 CEX pump) is most likely to occur.
     """
     now_utc = datetime.now(timezone.utc)
-    hour = now_utc.weekday()
+    weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour
 
     # Weekend (Sat/Sun full UTC days)
-    if hour >= 5:  # Saturday = 5, Sunday = 6
+    if weekday >= 5:  # Saturday = 5, Sunday = 6
         return 0.50
 
     # Friday 20:00 UTC through Saturday 08:00 UTC — elevated manipulation risk
-    if hour == 4 and utc_hour >= 20:
+    if weekday == 4 and utc_hour >= 20:
         return 0.70
 
     return 1.0

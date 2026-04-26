@@ -61,7 +61,9 @@ def _make_config():
                 # Strategy only scans updown markets; tests must not depend on live UTC hour.
                 "blocked_utc_hours_updown": [],
                 # Production caps edges to avoid inflated updown signals; scenarios use strong TA.
-                "max_edge_updown": 0.20,
+                # Raised to 0.30 so the test TA (est_prob_up≈0.75) can produce signals at
+                # yes_price=0.50 (edge≈0.25) within the [0.46, 0.54] updown entry price band.
+                "max_edge_updown": 0.30,
             },
         },
         "exposure": {
@@ -143,6 +145,34 @@ def _ltf_unconfirmed_bear(ta: TechnicalAnalysis) -> TechnicalAnalysis:
         crossover="NONE",
         histogram_rising=False,
         above_zero=False,
+    )
+    return ta
+
+
+def _no_timing_ltf_bull(ta: TechnicalAnalysis) -> TechnicalAnalysis:
+    """Strip LTF/timing signals so only HTF boost contributes to est_prob_up (≈0.58).
+
+    Used to test the AI marginal edge path: at yes_price=0.52 the quant edge is
+    0.06 (below min_edge=0.08 but above ai_updown_marginal_min_edge=0.03), which
+    triggers the AI confirmation flow.
+    """
+    ta.macd_15m = MACDResult(
+        macd_line=5.0,
+        signal_line=8.0,
+        histogram=-0.5,
+        prev_histogram=-0.3,
+        crossover="NONE",
+        histogram_rising=False,
+        above_zero=False,
+    )
+    ta.candle_momentum = CandleMomentum(
+        m15_direction="FLAT",
+        m15_move_pct=0.00,
+        m15_in_prediction_window=False,
+        m5_direction="FLAT",
+        m5_move_pct=0.00,
+        m5_in_prediction_window=False,
+        momentum_strength=0.0,
     )
     return ta
 
@@ -347,8 +377,9 @@ class TestBitcoinBullScenario:
     def test_strong_bull_buys_yes_on_up_market(self):
         """BTC at 82k, strong bullish, 15m up/down market → BUY_YES (quant path)."""
         ta = _ltf_unconfirmed_bull(_make_bullish_ta(82000))
-        # yes_price 0.60 keeps model edge under max_edge_updown (0.12) with bullish TA stack.
-        market = _make_btc_updown_market(yes_price=0.60, mins_until_end=13.0)
+        # yes_price 0.50 is at the centre of the [0.46, 0.54] updown entry band.
+        # With this TA est_prob_up≈0.75 → edge≈0.25 which passes max_edge_updown=0.30.
+        market = _make_btc_updown_market(yes_price=0.50, mins_until_end=13.0)
         with patch.object(
             self.strategy.btc_service, "get_full_analysis", return_value=ta
         ):
@@ -371,9 +402,14 @@ class TestBitcoinBullScenario:
         assert not any(s.action == "SELL_YES" for s in signals)
 
     def test_bull_scenario_exposure_full_tier(self):
-        """High vol + bull trend → FULL exposure tier ($5 max)."""
+        """High vol + bull trend → FULL exposure tier ($5 max).
+
+        Patches _get_weekend_penalty to 1.0 so the size assertion is deterministic
+        regardless of which day of the week the test suite runs.
+        """
         ta = _make_bullish_ta(82000)
-        conditions = ExposureManager.conditions_from_ta(ta)
+        with patch('src.execution.exposure_manager._get_weekend_penalty', return_value=1.0):
+            conditions = ExposureManager.conditions_from_ta(ta)
         em = ExposureManager(self.config, is_paper=True)
         tier, mult, size, reason = em.get_exposure(conditions)
         assert tier == ExposureTier.FULL
@@ -597,14 +633,16 @@ class TestBitcoinAIIntegration:
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
 
     def test_updown_marginal_edge_uses_ai_confirmation(self):
-        ta = _ltf_unconfirmed_bull(_make_bullish_ta(82000))
-        # Quant edge is marginal (< min_edge=0.08), AI should confirm and lift.
-        market = _make_btc_updown_market(yes_price=0.69, mins_until_end=13.0)
+        # _no_timing_ltf_bull strips LTF/timing so est_prob_up≈0.58 (HTF-only).
+        # At yes_price=0.52: quant_edge≈0.06 — below min_edge (0.08) but above
+        # ai_updown_marginal_min_edge (0.03), so the AI confirmation path fires.
+        ta = _no_timing_ltf_bull(_make_bullish_ta(82000))
+        market = _make_btc_updown_market(yes_price=0.52, mins_until_end=13.0)
         self.ai.analyze_market = AsyncMock(
             return_value=AIAnalysis(
                 reasoning="Momentum continuation likely",
                 confidence_score=0.80,
-                estimated_probability=0.84,
+                estimated_probability=0.65,  # ai_edge=0.13 lifts quant_edge=0.06 above min_edge
                 recommendation="BUY_YES",
                 market_id=market.id,
                 timestamp=datetime.now(),

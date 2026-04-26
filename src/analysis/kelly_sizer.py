@@ -76,9 +76,6 @@ class KellySizer:
             "eth_lag":        AssetKellyConfig(base_kelly_fraction=0.12, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.06),
             "hype_lag":       AssetKellyConfig(base_kelly_fraction=0.08, streak_multiplier_max=1.3, streak_threshold=4, min_kelly_fraction=0.04),
             "xrp_dump_hedge": AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
-            "fade":           AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.2, streak_threshold=5, min_kelly_fraction=0.05),
-            "neh":            AssetKellyConfig(base_kelly_fraction=0.08, streak_multiplier_max=1.2, streak_threshold=5, min_kelly_fraction=0.04),
-            "arbitrage":      AssetKellyConfig(base_kelly_fraction=0.15, streak_multiplier_max=1.2, streak_threshold=5, min_kelly_fraction=0.08),
         }
 
         for strat, cfg in self._defaults.items():

@@ -24,14 +24,12 @@ from src.market.scanner import MarketScanner, Market
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
-from src.strategies.arbitrage import ArbitrageStrategy, TradeSignal
-from src.strategies.fade import FadeStrategy, FadeSignal
-from src.strategies.neh import NothingEverHappensStrategy, NEHSignal
 from src.strategies.bitcoin import BitcoinStrategy, BitcoinSignal
 from src.strategies.sol_lag import SOLLagStrategy, SOLLagSignal
 from src.strategies.eth_lag import ETHLagStrategy
 from src.strategies.hype_lag import HYPELagStrategy
-from src.strategies.xrp_dump_hedge import XRPDumpHedgeStrategy, XRPDumpHedgeSignal
+from src.strategies.weather import WeatherStrategy, WeatherSignal
+from src.strategies.xrp_lag import XRPLagStrategy
 from src.execution.clob_client import CLOBClient, RiskManager, Position
 from src.execution.trade_journal import TradeJournal
 from src.execution.exposure_manager import ExposureManager
@@ -140,21 +138,16 @@ class PolyBot:
             max_position=self.config.get("trading", {}).get("max_position_size", 15),
         )
         self.kelly_sizer = get_kelly_sizer(self.config)
-        self.fade_strategy = FadeStrategy(
-            self.config, self.ai_agent, self.position_sizer, self.kelly_sizer
-        )
-        self.neh_strategy = NothingEverHappensStrategy(
-            self.config, self.ai_agent, self.position_sizer
-        )
+        self.notifier = NotificationManager(self.config)
         is_paper = self.config.get("trading", {}).get("dry_run", True)
         # Each crypto strategy gets its OWN exposure manager so losses
         # in one don't pause the other.
-        self.btc_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-        self.sol_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-        self.eth_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-        self.hype_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-        self.xrp_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
-        self.event_exposure_manager = ExposureManager(self.config, is_paper=is_paper)
+        self.btc_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='BTC')
+        self.sol_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='SOL')
+        self.eth_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='ETH')
+        self.hype_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='HYPE')
+        self.xrp_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='XRP')
+        self.event_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='EVENT')
         # Keep a reference for resolution tracker settlements
         self.exposure_manager = self.btc_exposure_manager
 
@@ -164,16 +157,6 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.btc_exposure_manager,
-        )
-
-        # ArbitrageStrategy shares the BTC price service so it can use live
-        # OHLCV data (ATR-based vol) as its PRIMARY signal for crypto price
-        # markets.  AI is still used as a 30% optional confirmer.
-        self.arbitrage_strategy = ArbitrageStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            btc_service=self.bitcoin_strategy.btc_service,
         )
 
         self.sol_lag_strategy = SOLLagStrategy(
@@ -197,27 +180,25 @@ class PolyBot:
             self.kelly_sizer,
             exposure_manager=self.hype_exposure_manager,
         )
-        self.xrp_dump_hedge_strategy = XRPDumpHedgeStrategy(
+        self.xrp_lag_strategy = XRPLagStrategy(
             self.config,
+            self.ai_agent,
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.xrp_exposure_manager,
-            btc_service=self.bitcoin_strategy.btc_service,
         )
+        self.weather_strategy = WeatherStrategy(self.config, self.position_sizer)
         self.clob_client = CLOBClient(self.config)
         self.risk_manager = RiskManager(self.config)
-        self.notifier = NotificationManager(self.config)
 
         # Track last signal counts per strategy (for dashboard)
         self.last_signal_counts = {
-            "fade": 0,
-            "arbitrage": 0,
-            "neh": 0,
             "bitcoin": 0,
             "sol_lag": 0,
             "eth_lag": 0,
             "hype_lag": 0,
-            "xrp_dump_hedge": 0,
+            "xrp_lag": 0,
+            "weather": 0,
         }
         # ISO timestamp of the last time each strategy completed a cycle
         self.last_cycle_times: Dict[str, str] = {}
@@ -268,8 +249,7 @@ class PolyBot:
 
         # State
         self.running = False
-        # Serialize order placement, exits, resolution settlement — avoids races between
-        # _main_loop and _crypto_fast_loop mutating bankroll / active_positions.
+        # Serialize order placement, exits, resolution settlement — one trading loop, same lock.
         self._execution_lock = asyncio.Lock()
         self._dashboard_server = None
         _initial_bankroll = self.config.get("backtest", {}).get("initial_bankroll", 1000.0)
@@ -292,7 +272,8 @@ class PolyBot:
                 )
             else:
                 self.bankroll = _initial_bankroll
-        self.scan_interval = 300  # 5 minutes — conserve API tokens, accuracy > speed
+        _cint = self.config.get("trading", {}).get("cycle_interval_sec", 120)
+        self.scan_interval = max(30, int(_cint))  # single unified loop: scan + crypto + exits
 
         # Sync open positions AFTER bankroll is known so risk manager has correct baseline
         self._sync_journal_to_risk_manager()
@@ -382,9 +363,7 @@ class PolyBot:
                 "kelly_fraction": 0.25,
                 "max_exposure_per_trade": 0.05,
             },
-            "strategies": {
-                "arbitrage": {"min_edge": 0.10, "ai_confidence_threshold": 0.70},
-            },
+            "strategies": {},
             "ai": {"provider": "openai", "model": "gpt-4o"},
             "notifications": {"enabled": False},
             "risk": {"max_concurrent_positions": 10, "daily_loss_limit": 0.15},
@@ -547,10 +526,9 @@ class PolyBot:
                 {"positions": 0, "daily_pnl": 0, "trades_today": 0, "running": True}
             )
 
-        # Run main loop + fast crypto loop + daily coach concurrently
+        # Single trading loop (scan, legacy strategies if enabled, crypto, resolution) + daily coach
         await asyncio.gather(
-            self._main_loop(),
-            self._crypto_fast_loop(),
+            self._unified_trading_loop(),
             self._daily_coach_loop(),
         )
 
@@ -562,11 +540,12 @@ class PolyBot:
 
         _os._exit(0)
 
-    async def _main_loop(self):
-        """Main trading cycle — all strategies, runs every scan_interval."""
+    async def _unified_trading_loop(self):
+        """Single loop: one scan per cycle_interval, exits + optional legacy + crypto + resolution."""
+        await asyncio.sleep(30)
         while self.running:
             try:
-                await self._trading_cycle()
+                await self._unified_cycle()
                 await asyncio.sleep(self.scan_interval)
             except Exception as e:
                 logging.error(f"Error in trading cycle: {e}", exc_info=True)
@@ -574,32 +553,7 @@ class PolyBot:
                     await self.notifier.notify_error(str(e))
                 except Exception as notify_err:
                     logging.error(f"Failed to send error notification: {notify_err}")
-                await asyncio.sleep(30)  # Back off before retry, don't tight-loop on errors
-
-    async def _crypto_fast_loop(self):
-        """Fast 5-minute loop for BTC and SOL crypto strategies only.
-
-        These need rapid scanning because they trade 5m/15m candle markets
-        that resolve quickly.  Running them on the same slow 15-min main
-        cycle means we miss most opportunities.
-        """
-        CRYPTO_INTERVAL = (
-            120  # 2 minutes — entry windows are 2-2.5 min wide; 60s scan catches MACD after crossing
-        )
-        # Wait a short delay so the first main cycle can populate market data
-        await asyncio.sleep(30)
-
-        while self.running:
-            try:
-                await self._crypto_cycle()
-                await asyncio.sleep(CRYPTO_INTERVAL)
-            except Exception as e:
-                logging.error(f"Error in crypto fast cycle: {e}", exc_info=True)
-                try:
-                    await self.notifier.notify_error(str(e))
-                except Exception:
-                    pass
-                await asyncio.sleep(30)  # Back off before retry
+                await asyncio.sleep(30)
 
     async def _daily_coach_loop(self):
         """Run the strategy coach once per day at UTC 06:00 to analyze yesterday's trades."""
@@ -631,199 +585,6 @@ class PolyBot:
             except Exception as e:
                 logging.error(f"[coach] Daily analysis error: {e}", exc_info=True)
 
-    async def _crypto_cycle(self):
-        """Execute BTC + SOL strategies only (fast cycle)."""
-        from src.ops_pulse import log_ops_pulse
-
-        if self._kill_switch_active():
-            logging.warning("[FAST] Kill switch active — skipping crypto cycle.")
-            log_ops_pulse(self, "crypto")
-            return
-        logging.info("[FAST] Crypto fast cycle starting...")
-
-        # Scan markets (same scanner, just need BTC/SOL markets)
-        opportunities = await self.market_scanner.scan_for_opportunities()
-        high_liquidity = opportunities.get("high_liquidity", [])
-        scanner_meta = opportunities.get("scanner_meta", {})
-        if scanner_meta:
-            self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
-            logging.info(
-                "[FAST] Scanner lookahead: 15m=%s 5m=%s | counts: 15m=%s 5m=%s hype_alt=%s",
-                scanner_meta.get("look_ahead_15m"),
-                scanner_meta.get("look_ahead_5m"),
-                scanner_meta.get("updown_15m_count"),
-                scanner_meta.get("updown_5m_count"),
-                scanner_meta.get("updown_hype_alt_count"),
-            )
-
-        if not high_liquidity:
-            logging.info("Crypto cycle: No markets available")
-            log_ops_pulse(self, "crypto")
-            return
-
-        # For crypto, we do NOT filter out held markets — we want to see
-        # if new up/down candle markets appeared even if we hold other BTC/SOL positions
-        # (each candle market is a different market_id)
-        held_market_ids = set()
-        for pos in self.risk_manager.active_positions.values():
-            held_market_ids.add(pos.market_id)
-        for pos in self.journal.get_open_positions():
-            held_market_ids.add(pos.get("market_id", ""))
-
-        available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
-        short_horizon = _filter_short_horizon(available_markets, self.config)
-
-        xrp_horizon = short_horizon
-        xrp_cfg = self.config.get("strategies", {}).get("xrp_dump_hedge", {})
-        if xrp_cfg.get("enabled", False):
-            extra = self.xrp_dump_hedge_strategy.markets_for_followup(
-                high_liquidity, self.journal, self.risk_manager
-            )
-            merged = {m.id: m for m in short_horizon}
-            for m in extra:
-                merged[m.id] = m
-            xrp_horizon = list(merged.values())
-
-        # Strategy: Bitcoin Up/Down
-        try:
-            btc_signals = await self.bitcoin_strategy.scan_and_analyze(
-                markets=short_horizon, bankroll=self.bankroll
-            )
-            _now_iso = datetime.now().isoformat(timespec="seconds")
-            self.last_signal_counts["bitcoin"] = len(btc_signals)
-            self.last_cycle_times["bitcoin"] = _now_iso
-            self.cumulative_signal_counts["bitcoin"] = (
-                self.cumulative_signal_counts.get("bitcoin", 0) + len(btc_signals)
-            )
-            self.last_ai_scan_stats["bitcoin"] = dict(
-                getattr(self.bitcoin_strategy, "last_scan_stats", {}) or {}
-            )
-            for signal in btc_signals:
-                await self._execute_bitcoin_signal(signal)
-            if btc_signals:
-                logging.info(f"[FAST] Crypto BTC: {len(btc_signals)} signals")
-            else:
-                logging.info("[FAST] Crypto BTC: No signals this cycle")
-            _btc_stats = self.last_ai_scan_stats.get("bitcoin", {})
-            if _btc_stats:
-                logging.info(
-                    "[FAST] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s top_skips=%s",
-                    _btc_stats.get("ai_calls", 0),
-                    _btc_stats.get("ai_assists", 0),
-                    _btc_stats.get("ai_vetos", 0),
-                    _btc_stats.get("ai_holds", 0),
-                    _btc_stats.get("top_skip_reasons", {}),
-                )
-        except Exception as e:
-            logging.error(f"Crypto BTC error: {e}")
-
-        # Strategy: SOL Lag
-        try:
-            # Pass current open positions so strategy can enforce concurrent position cap
-            self.sol_lag_strategy._open_positions_snapshot = list(
-                self.risk_manager.active_positions.values()
-            )
-            sol_signals = await self.sol_lag_strategy.scan_and_analyze(
-                markets=short_horizon, bankroll=self.bankroll
-            )
-            _now_iso = datetime.now().isoformat(timespec="seconds")
-            self.last_signal_counts["sol_lag"] = len(sol_signals)
-            self.last_cycle_times["sol_lag"] = _now_iso
-            self.cumulative_signal_counts["sol_lag"] = (
-                self.cumulative_signal_counts.get("sol_lag", 0) + len(sol_signals)
-            )
-            for signal in sol_signals:
-                await self._execute_sol_lag_signal(signal)
-            if sol_signals:
-                logging.info(f"[FAST] Crypto SOL: {len(sol_signals)} signals")
-            else:
-                logging.info("[FAST] Crypto SOL: No signals this cycle")
-        except Exception as e:
-            logging.error(f"Crypto SOL error: {e}", exc_info=True)
-
-        # Strategy: ETH Lag
-        try:
-            eth_lag_cfg = self.config.get("strategies", {}).get("eth_lag", {})
-            if eth_lag_cfg.get("enabled", False):
-                self.eth_lag_strategy._open_positions_snapshot = list(
-                    self.risk_manager.active_positions.values()
-                )
-                eth_signals = await self.eth_lag_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["eth_lag"] = len(eth_signals)
-                self.last_cycle_times["eth_lag"] = _now_iso
-                self.cumulative_signal_counts["eth_lag"] = (
-                    self.cumulative_signal_counts.get("eth_lag", 0) + len(eth_signals)
-                )
-                for signal in eth_signals:
-                    await self._execute_sol_lag_signal(signal)
-                if eth_signals:
-                    logging.info(f"[FAST] Crypto ETH: {len(eth_signals)} signals")
-                else:
-                    logging.info("[FAST] Crypto ETH: No signals this cycle")
-        except Exception as e:
-            logging.error(f"Crypto ETH error: {e}", exc_info=True)
-
-        # Strategy: HYPE Lag
-        try:
-            hype_lag_cfg = self.config.get("strategies", {}).get("hype_lag", {})
-            if hype_lag_cfg.get("enabled", False):
-                self.hype_lag_strategy._open_positions_snapshot = list(
-                    self.risk_manager.active_positions.values()
-                )
-                hype_signals = await self.hype_lag_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["hype_lag"] = len(hype_signals)
-                self.last_cycle_times["hype_lag"] = _now_iso
-                self.cumulative_signal_counts["hype_lag"] = (
-                    self.cumulative_signal_counts.get("hype_lag", 0) + len(hype_signals)
-                )
-                for signal in hype_signals:
-                    await self._execute_sol_lag_signal(signal)
-                if hype_signals:
-                    logging.info(f"[FAST] Crypto HYPE: {len(hype_signals)} signals")
-                else:
-                    logging.info("[FAST] Crypto HYPE: No signals this cycle")
-        except Exception as e:
-            logging.error(f"Crypto HYPE error: {e}", exc_info=True)
-
-        # Strategy: XRP dump-and-hedge (15m up/down)
-        try:
-            if xrp_cfg.get("enabled", False):
-                xrp_signals = await self.xrp_dump_hedge_strategy.scan_and_analyze(
-                    markets=xrp_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["xrp_dump_hedge"] = len(xrp_signals)
-                self.last_cycle_times["xrp_dump_hedge"] = _now_iso
-                self.cumulative_signal_counts["xrp_dump_hedge"] = (
-                    self.cumulative_signal_counts.get("xrp_dump_hedge", 0)
-                    + len(xrp_signals)
-                )
-                for signal in xrp_signals:
-                    await self._execute_xrp_dump_hedge_signal(signal)
-                if xrp_signals:
-                    logging.info(f"[FAST] Crypto XRP dump-hedge: {len(xrp_signals)} signals")
-                else:
-                    logging.info("[FAST] Crypto XRP dump-hedge: No signals this cycle")
-        except Exception as e:
-            logging.error(f"Crypto XRP dump-hedge error: {e}", exc_info=True)
-
-        # ── Resolution check for crypto positions ──
-        # 15-min candle markets resolve FAST — we need to settle them
-        # promptly so the budget frees up for the next candle window.
-        try:
-            async with self._execution_lock:
-                self._run_resolution_check(label="[FAST]")
-        except Exception as e:
-            logging.error(f"Crypto resolution check error: {e}")
-
-        log_ops_pulse(self, "crypto")
-
     def _get_exposure_manager_for(self, strategy: str):
         """Return the correct exposure manager for a given strategy."""
         if strategy == "bitcoin":
@@ -834,7 +595,7 @@ class PolyBot:
             return self.eth_exposure_manager
         elif strategy == "hype_lag":
             return self.hype_exposure_manager
-        elif strategy == "xrp_dump_hedge":
+        elif strategy == "xrp_lag":
             return self.xrp_exposure_manager
         return self.event_exposure_manager
 
@@ -867,13 +628,13 @@ class PolyBot:
                 s
                 for s in settled
                 if s.get("strategy")
-                in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_dump_hedge")
+                in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag")
             ]
             event_settled = [
                 s
                 for s in settled
                 if s.get("strategy")
-                not in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_dump_hedge")
+                not in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag")
             ]
             if crypto_settled:
                 crypto_pnl = sum(s["pnl"] for s in crypto_settled)
@@ -963,13 +724,10 @@ class PolyBot:
                     f"Exit order failed for {exit_decision.position_id}: {e}"
                 )
 
-    async def _trading_cycle(self):
-        """Execute one trading cycle.
+    async def _unified_cycle(self):
+        """One scan per interval: TP/SL exits, crypto strategies, resolution.
 
-        NOTE: We do NOT do a blanket can_trade() check at the top anymore.
-        Each strategy execution handler checks can_trade() individually so that
-        hitting the daily trade limit mid-cycle doesn't block ALL strategies —
-        only the ones that actually try to place a new trade.
+        No separate fast loop — `trading.cycle_interval_sec` controls cadence (default 120s).
         """
         logging.info("Starting trading cycle...")
 
@@ -980,11 +738,25 @@ class PolyBot:
                 "Kill switch active (data/KILL_SWITCH present). Skipping trading cycle."
             )
             log_ops_pulse(self, "main")
+            for st in ("bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag"):
+                asyncio.create_task(
+                    self.notifier.notify_kill_global(st, "global kill switch")
+                )
             return
 
-        # Scan markets
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])
+        scanner_meta = opportunities.get("scanner_meta", {})
+        if scanner_meta:
+            self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
+            logging.info(
+                "[TRADING] Scanner lookahead: 15m=%s 5m=%s | counts: 15m=%s 5m=%s hype_alt=%s",
+                scanner_meta.get("look_ahead_15m"),
+                scanner_meta.get("look_ahead_5m"),
+                scanner_meta.get("updown_15m_count"),
+                scanner_meta.get("updown_5m_count"),
+                scanner_meta.get("updown_hype_alt_count"),
+            )
 
         if not high_liquidity:
             logging.info("No high liquidity markets found")
@@ -1018,444 +790,170 @@ class PolyBot:
             f"Markets: {len(high_liquidity)} total, {len(held_market_ids)} held, {len(available_markets)} available, {len(short_horizon)} in resolution window"
         )
 
-        # Strategy 1: Arbitrage (short-horizon) — off by default; not in current live scope
-        if self.arbitrage_strategy.enabled:
+        # Strategy 1: Weather — forecast vs market price
+        if self.weather_strategy.enabled:
             try:
-                arbitrage_signals = await self.arbitrage_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
+                weather_signals = await self.weather_strategy.scan_and_analyze(
+                    markets=available_markets, bankroll=self.bankroll
                 )
                 _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["arbitrage"] = len(arbitrage_signals)
-                self.last_cycle_times["arbitrage"] = _now_iso
-                self.cumulative_signal_counts["arbitrage"] = (
-                    self.cumulative_signal_counts.get("arbitrage", 0)
-                    + len(arbitrage_signals)
+                self.last_signal_counts["weather"] = len(weather_signals)
+                self.last_cycle_times["weather"] = _now_iso
+                self.cumulative_signal_counts["weather"] = (
+                    self.cumulative_signal_counts.get("weather", 0) + len(weather_signals)
                 )
-                for signal in arbitrage_signals:
-                    if signal.auto_execute:
-                        await self._execute_arbitrage_signal(signal)
-                    else:
-                        logging.info(
-                            f"Arb signal below threshold: {signal.market_question[:40]}... edge={signal.edge:.3f}"
-                        )
-                if arbitrage_signals:
-                    logging.info(f"Arbitrage: {len(arbitrage_signals)} signals generated")
-            except Exception as e:
-                logging.error(f"Arbitrage strategy error: {e}")
-
-        # Strategy 2: Fade — off by default; not in current live scope
-        if self.fade_strategy.enabled:
-            try:
-                fade_signals = await self.fade_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
+                self.last_ai_scan_stats["weather"] = dict(
+                    getattr(self.weather_strategy, "_scan_stats", {}) or {}
                 )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["fade"] = len(fade_signals)
-                self.last_cycle_times["fade"] = _now_iso
-                self.cumulative_signal_counts["fade"] = (
-                    self.cumulative_signal_counts.get("fade", 0) + len(fade_signals)
-                )
-                for signal in fade_signals:
-                    await self._execute_fade_signal(signal)
-                if fade_signals:
-                    logging.info(f"Fade: {len(fade_signals)} signals generated")
-            except Exception as e:
-                logging.error(f"Fade strategy error: {e}")
-
-        # Strategy 4: NEH — off for crypto-only live; enable in YAML when re-testing long-dated book
-        if self.neh_strategy.enabled:
-            try:
-                _open_neh = sum(
-                    1 for p in self.journal.get_open_positions()
-                    if p.get("strategy") == "neh"
-                )
-                neh_signals = await self.neh_strategy.scan_and_analyze(
-                    markets=available_markets,
-                    bankroll=self.bankroll,
-                    current_neh_count=_open_neh,
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["neh"] = len(neh_signals)
-                self.last_cycle_times["neh"] = _now_iso
-                self.cumulative_signal_counts["neh"] = (
-                    self.cumulative_signal_counts.get("neh", 0) + len(neh_signals)
-                )
-                _neh_can_trade, _neh_reason = self.risk_manager.can_trade()
-                if not _neh_can_trade and neh_signals:
-                    logging.info(f"NEH: {len(neh_signals)} signals blocked ({_neh_reason})")
+                for signal in weather_signals:
+                    await self._execute_weather_signal(signal)
+                if weather_signals:
+                    logging.info(f"[TRADING] Weather: {len(weather_signals)} signals")
                 else:
-                    for signal in neh_signals:
-                        await self._execute_neh_signal(signal)
-                if neh_signals:
-                    logging.info(f"NEH: {len(neh_signals)} signals generated")
+                    logging.info("[TRADING] Weather: No signals this cycle")
             except Exception as e:
-                logging.error(f"NEH strategy error: {e}")
+                logging.error(f"Weather strategy error: {e}", exc_info=True)
 
-        # NOTE: Bitcoin and SOL Lag strategies run in _crypto_fast_loop() only.
-        # They were removed from the main loop to avoid double-analyzing the same
-        # markets and burning 2x the API tokens. The fast loop handles them on its
-        # own 5-minute cadence.
+        # Crypto: Bitcoin, SOL/ETH/HYPE lag, XRP lag
 
-        # Check for market resolutions and settle positions with REAL outcomes
+        try:
+            btc_signals = await self.bitcoin_strategy.scan_and_analyze(
+                markets=short_horizon, bankroll=self.bankroll
+            )
+            _now_iso = datetime.now().isoformat(timespec="seconds")
+            self.last_signal_counts["bitcoin"] = len(btc_signals)
+            self.last_cycle_times["bitcoin"] = _now_iso
+            self.cumulative_signal_counts["bitcoin"] = (
+                self.cumulative_signal_counts.get("bitcoin", 0) + len(btc_signals)
+            )
+            self.last_ai_scan_stats["bitcoin"] = dict(
+                getattr(self.bitcoin_strategy, "last_scan_stats", {}) or {}
+            )
+            for signal in btc_signals:
+                await self._execute_bitcoin_signal(signal)
+            if btc_signals:
+                logging.info(f"[TRADING] Crypto BTC: {len(btc_signals)} signals")
+            else:
+                logging.info("[TRADING] Crypto BTC: No signals this cycle")
+            _btc_stats = self.last_ai_scan_stats.get("bitcoin", {})
+            if _btc_stats:
+                logging.info(
+                    "[TRADING] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s top_skips=%s",
+                    _btc_stats.get("ai_calls", 0),
+                    _btc_stats.get("ai_assists", 0),
+                    _btc_stats.get("ai_vetos", 0),
+                    _btc_stats.get("ai_holds", 0),
+                    _btc_stats.get("top_skip_reasons", {}),
+                )
+        except Exception as e:
+            logging.error(f"Crypto BTC error: {e}", exc_info=True)
+
+        try:
+            self.sol_lag_strategy._open_positions_snapshot = list(
+                self.risk_manager.active_positions.values()
+            )
+            sol_signals = await self.sol_lag_strategy.scan_and_analyze(
+                markets=short_horizon, bankroll=self.bankroll
+            )
+            _now_iso = datetime.now().isoformat(timespec="seconds")
+            self.last_signal_counts["sol_lag"] = len(sol_signals)
+            self.last_cycle_times["sol_lag"] = _now_iso
+            self.cumulative_signal_counts["sol_lag"] = (
+                self.cumulative_signal_counts.get("sol_lag", 0) + len(sol_signals)
+            )
+            for signal in sol_signals:
+                await self._execute_sol_lag_signal(signal)
+            if sol_signals:
+                logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
+            else:
+                logging.info("[TRADING] Crypto SOL: No signals this cycle")
+        except Exception as e:
+            logging.error(f"Crypto SOL error: {e}", exc_info=True)
+
+        try:
+            eth_lag_cfg = self.config.get("strategies", {}).get("eth_lag", {})
+            if eth_lag_cfg.get("enabled", False):
+                self.eth_lag_strategy._open_positions_snapshot = list(
+                    self.risk_manager.active_positions.values()
+                )
+                eth_signals = await self.eth_lag_strategy.scan_and_analyze(
+                    markets=short_horizon, bankroll=self.bankroll
+                )
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["eth_lag"] = len(eth_signals)
+                self.last_cycle_times["eth_lag"] = _now_iso
+                self.cumulative_signal_counts["eth_lag"] = (
+                    self.cumulative_signal_counts.get("eth_lag", 0) + len(eth_signals)
+                )
+                for signal in eth_signals:
+                    await self._execute_sol_lag_signal(signal)
+                if eth_signals:
+                    logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto ETH: No signals this cycle")
+        except Exception as e:
+            logging.error(f"Crypto ETH error: {e}", exc_info=True)
+
+        try:
+            hype_lag_cfg = self.config.get("strategies", {}).get("hype_lag", {})
+            if hype_lag_cfg.get("enabled", False):
+                self.hype_lag_strategy._open_positions_snapshot = list(
+                    self.risk_manager.active_positions.values()
+                )
+                hype_signals = await self.hype_lag_strategy.scan_and_analyze(
+                    markets=short_horizon, bankroll=self.bankroll
+                )
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["hype_lag"] = len(hype_signals)
+                self.last_cycle_times["hype_lag"] = _now_iso
+                self.cumulative_signal_counts["hype_lag"] = (
+                    self.cumulative_signal_counts.get("hype_lag", 0) + len(hype_signals)
+                )
+                for signal in hype_signals:
+                    await self._execute_sol_lag_signal(signal)
+                if hype_signals:
+                    logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto HYPE: No signals this cycle")
+        except Exception as e:
+            logging.error(f"Crypto HYPE error: {e}", exc_info=True)
+
+        try:
+            xrp_cfg = self.config.get("strategies", {}).get("xrp_lag", {})
+            if xrp_cfg.get("enabled", False) and self.xrp_lag_strategy:
+                self.xrp_lag_strategy._open_positions_snapshot = list(
+                    self.risk_manager.active_positions.values()
+                )
+                xrp_signals = await self.xrp_lag_strategy.scan_and_analyze(
+                    markets=short_horizon, bankroll=self.bankroll
+                )
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["xrp_lag"] = len(xrp_signals)
+                self.last_cycle_times["xrp_lag"] = _now_iso
+                self.cumulative_signal_counts["xrp_lag"] = (
+                    self.cumulative_signal_counts.get("xrp_lag", 0) + len(xrp_signals)
+                )
+                for signal in xrp_signals:
+                    await self._execute_xrp_lag_signal(signal)
+                if xrp_signals:
+                    logging.info(f"[TRADING] Crypto XRP lag: {len(xrp_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto XRP lag: No signals this cycle")
+        except Exception as e:
+            logging.error(f"Crypto XRP lag error: {e}", exc_info=True)
+
         try:
             async with self._execution_lock:
-                self._run_resolution_check(label="[MAIN]")
+                self._run_resolution_check(label="[TRADING]")
         except Exception as e:
             logging.error(f"Resolution tracking error: {e}")
 
-        # Take portfolio snapshot for charting
-        self.journal.take_snapshot(self.bankroll)
-
-        # Summary
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades
         logging.info(
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{self.risk_manager.max_trades_per_day}"
         )
         log_ops_pulse(self, "main")
-
-    async def _execute_arbitrage_signal(self, signal: TradeSignal):
-        """Execute an arbitrage trade signal"""
-        async with self._execution_lock:
-            await self._execute_arbitrage_signal_impl(signal)
-
-    async def _execute_arbitrage_signal_impl(self, signal: TradeSignal):
-        """Arbitrage entry (holds _execution_lock via caller)."""
-        # Check term-based risk
-        can_trade, term_size, reason = self.risk_manager.evaluate_entry(
-            end_date=signal.end_date, current_edge=signal.edge, bankroll=self.bankroll
-        )
-        if not can_trade:
-            logging.warning(f"Arbitrage trade risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "arbitrage",
-                reason,
-                self.bankroll,
-            )
-            return
-
-        # Final position size is the minimum of the Kelly size and the term-based budget
-        final_size = min(signal.size, term_size)
-
-        # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        # For arbitrage: test that we can sell the token we're buying (exit path).
-        token_to_test = (
-            signal.token_id_yes if signal.action == "BUY_YES"
-            else signal.token_id_no if signal.action == "BUY_NO"
-            else signal.token_id_yes  # SELL_YES → selling YES token
-        )
-        if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
-            logging.warning(
-                f"Arbitrage unsellable-token skip '{signal.market_question[:40]}' "
-                f"— token={token_to_test[:20]} has no bids"
-            )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "arbitrage",
-                "unsellable_token",
-                self.bankroll,
-            )
-            return
-
-        logging.info(
-            f"Executing trade: {signal.action} {final_size:.2f} @ {signal.price}"
-        )
-
-        # Determine token ID and side based on action
-        if signal.action == "BUY_YES":
-            token_id = signal.token_id_yes
-            side = "BUY"
-        elif signal.action == "BUY_NO":
-            token_id = signal.token_id_no
-            side = "BUY"
-        else:
-            token_id = signal.token_id_yes
-            side = "SELL"
-
-        # Polymarket: BUY = dollars, SELL = shares. Strategies return dollars.
-        order_size = (final_size / max(0.01, 1.0 - signal.price)) if side == "SELL" and signal.price > 0 else final_size
-
-        # Place order
-        order = await self.clob_client.place_order(
-            token_id=token_id,
-            side=side,
-            price=signal.price,
-            size=order_size,
-            market_id=signal.market_id,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
-        )
-
-        if order:
-            outcome = signal.action.replace("BUY_", "")
-            # Position stores shares (cost=size*price). BUY: pass $, get shares. SELL: pass shares.
-            pos_size = final_size / max(0.01, 1.0 - signal.price) if side == "SELL" and signal.price > 0 else final_size
-            position = Position(
-                position_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
-                pnl=0.0,
-                opened_at=datetime.now(),
-                end_date=signal.end_date,
-                strategy="arbitrage",
-            )
-            self.risk_manager.add_position(position)
-
-            # Persistent journal entry
-            self.journal.log_entry(
-                trade_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                strategy="arbitrage",
-                action=signal.action,
-                side=side,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                bankroll=self.bankroll,
-                edge=signal.edge,
-                confidence=getattr(signal, "confidence", 0),
-                reason=f"edge={signal.edge:.3f}",
-                market_end_at=signal.end_date,
-            )
-
-            await self.notifier.notify_trade(
-                {
-                    "question": signal.market_question,
-                    "side": side,
-                    "outcome": outcome,
-                    "size": final_size,
-                    "price": signal.price,
-                    "auto_execute": True,
-                    "strategy": "arbitrage",
-                }
-            )
-
-    async def _execute_fade_signal(self, signal: FadeSignal):
-        """Execute a fade trade signal"""
-        async with self._execution_lock:
-            await self._execute_fade_signal_impl(signal)
-
-    async def _execute_fade_signal_impl(self, signal: FadeSignal):
-        """Fade entry (holds _execution_lock via caller)."""
-        can_trade, term_size, reason = self.risk_manager.evaluate_entry(
-            end_date=signal.end_date,
-            current_edge=signal.implied_probability_gap,
-            bankroll=self.bankroll,
-        )
-        if not can_trade:
-            logging.warning(f"Fade trade term risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "fade",
-                f"term_risk: {reason}",
-                self.bankroll,
-            )
-            return
-
-        can_trade, reason = self.risk_manager.check_strategy_risk(
-            strategy_name="fade", trade_size=signal.size, bankroll=self.bankroll
-        )
-        if not can_trade:
-            logging.warning(f"Fade trade strategy risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "fade",
-                f"strategy_risk: {reason}",
-                self.bankroll,
-            )
-            return
-
-        final_size = min(signal.size, term_size)
-
-        # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        token_to_test = signal.token_id_yes if signal.action == "BUY_YES" else signal.token_id_yes
-        if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
-            logging.warning(
-                f"Fade unsellable-token skip '{signal.market_question[:40]}' "
-                f"— token={token_to_test[:20]} has no bids"
-            )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "fade",
-                "unsellable_token",
-                self.bankroll,
-            )
-            return
-
-        logging.info(
-            f"Executing FADE trade: {signal.action} {final_size:.2f} @ {signal.price}"
-        )
-
-        token_id = signal.token_id_yes
-        side = "BUY" if signal.action == "BUY_YES" else "SELL"
-        order_size = (final_size / max(0.01, 1.0 - signal.price)) if side == "SELL" and signal.price > 0 else final_size
-        pos_size = final_size / max(0.01, 1.0 - signal.price) if side == "SELL" and signal.price > 0 else final_size
-
-        order = await self.clob_client.place_order(
-            token_id=token_id,
-            side=side,
-            price=signal.price,
-            size=order_size,
-            market_id=signal.market_id,
-            post_only=True,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
-        )
-
-        if order:
-            outcome = signal.action.replace("BUY_", "").replace("SELL_", "")
-            position = Position(
-                position_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
-                pnl=0.0,
-                opened_at=datetime.now(),
-                end_date=signal.end_date,
-                strategy="fade",
-            )
-            self.risk_manager.add_position(position)
-
-            self.journal.log_entry(
-                trade_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                strategy="fade",
-                action=signal.action,
-                side=side,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                bankroll=self.bankroll,
-                edge=signal.implied_probability_gap,
-                confidence=getattr(signal, "confidence", 0),
-                reason=f"IPG={signal.implied_probability_gap:.3f}",
-                market_end_at=signal.end_date,
-            )
-
-            await self.notifier.notify_trade(
-                {
-                    "question": signal.market_question,
-                    "side": side,
-                    "outcome": outcome,
-                    "size": final_size,
-                    "price": signal.price,
-                    "auto_execute": True,
-                    "strategy": "fade",
-                }
-            )
-
-    async def _execute_neh_signal(self, signal: NEHSignal):
-        """Execute a Nothing Ever Happens trade signal."""
-        async with self._execution_lock:
-            await self._execute_neh_signal_impl(signal)
-
-    async def _execute_neh_signal_impl(self, signal: NEHSignal):
-        """NEH entry (holds _execution_lock via caller)."""
-        can_trade, reason = self.risk_manager.can_trade()
-        if not can_trade:
-            logging.debug(f"NEH trade skipped: {reason}")
-            self.journal.log_skip(
-                signal.market_id, signal.market_question, "neh", reason, self.bankroll
-            )
-            return
-
-        # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        # NEH sells YES tokens — verify we can buy them back (orderbook has bids).
-        if not await self.clob_client.can_sell_token(signal.token_id_yes, signal.market_id):
-            logging.warning(
-                f"NEH unsellable-token skip '{signal.market_question[:40]}' "
-                f"— token={signal.token_id_yes[:20]} has no bids"
-            )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "neh",
-                "unsellable_token",
-                self.bankroll,
-            )
-            return
-
-        logging.info(
-            f"Executing NEH trade: {signal.action} {signal.size:.2f} of {signal.market_question[:40]}... @ {signal.price}"
-        )
-
-        token_id = signal.token_id_yes
-        side = "SELL"
-        # Polymarket SELL_YES: risk per share = (1.0 - entry_price), NOT entry_price.
-        # At price=0.01, risk is $0.99/share. Divide by risk to get correct share count.
-        # OLD BUG: divided by price (0.01) → 500 shares → $495 risk on a $5 bet
-        # FIX: divide by (1 - price) → 5.05 shares → $5 risk as intended
-        risk_per_share = max(0.01, 1.0 - signal.price)
-        order_size = signal.size / risk_per_share
-        pos_size = order_size
-
-        order = await self.clob_client.place_order(
-            token_id=token_id,
-            side=side,
-            price=signal.price,
-            size=order_size,
-            market_id=signal.market_id,
-            post_only=True,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
-        )
-
-        if order and hasattr(order, "order_id"):
-            position = Position(
-                position_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                outcome="NO",
-                size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
-                pnl=0.0,
-                opened_at=datetime.now(),
-                end_date=signal.end_date,
-                strategy="neh",
-            )
-            self.risk_manager.add_position(position)
-
-            self.journal.log_entry(
-                trade_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                strategy="neh",
-                action=signal.action,
-                side=side,
-                outcome="NO",
-                size=pos_size,
-                entry_price=signal.price,
-                bankroll=self.bankroll,
-                edge=getattr(signal, "edge", 0),
-                confidence=getattr(signal, "confidence", 0),
-                reason=f"yes_price={signal.price:.3f}",
-                market_end_at=signal.end_date,
-            )
-
-            await self.notifier.notify_trade(
-                {
-                    "question": signal.market_question,
-                    "side": side,
-                    "outcome": "NO",
-                    "size": signal.size,
-                    "price": signal.price,
-                    "auto_execute": True,
-                    "strategy": "neh",
-                }
-            )
 
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
@@ -1574,6 +1072,8 @@ class PolyBot:
                     "yes_price": signal.price,
                     "btc_price": signal.btc_current,
                     "edge": signal.edge,
+                    "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
+                    "rsi": signal.rsi,
                     # Learning context: direction, threshold, and full signal reason
                     # so exit records can explain why a trade was entered.
                     "direction": signal.direction,
@@ -1726,6 +1226,9 @@ class PolyBot:
                     "btc_price": signal.btc_current,
                     "lag_magnitude": signal.lag_magnitude,
                     "edge": signal.edge,
+                    "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
+                    "rsi": signal.rsi,
+                    "corr_1h": signal.corr_1h,
                     # Learning context: direction and full signal reason
                     "direction": signal.direction,
                     "signal_reason": signal.reason,
@@ -1745,13 +1248,18 @@ class PolyBot:
                 }
             )
 
-    async def _execute_xrp_dump_hedge_signal(self, signal: XRPDumpHedgeSignal):
-        """Execute XRP dump (leg1 YES) or hedge (leg2 NO). Quant-only strategy."""
+    async def _execute_xrp_lag_signal(self, signal: SOLLagSignal):
+        """Execute an XRP lag trade signal (same execution path as SOL lag)."""
         async with self._execution_lock:
-            await self._execute_xrp_dump_hedge_signal_impl(signal)
+            await self._execute_sol_lag_signal_impl(signal)
 
-    async def _execute_xrp_dump_hedge_signal_impl(self, signal: XRPDumpHedgeSignal):
-        strat = "xrp_dump_hedge"
+    async def _execute_weather_signal(self, signal: WeatherSignal):
+        """Execute a weather forecast vs market price trade signal."""
+        async with self._execution_lock:
+            await self._execute_weather_signal_impl(signal)
+
+    async def _execute_weather_signal_impl(self, signal: WeatherSignal):
+        strat = "weather"
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
         if not can_trade:
             logging.warning(f"{strat} trade risk check failed: {reason}")
@@ -1766,7 +1274,7 @@ class PolyBot:
 
         can_trade, term_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
-            current_edge=signal.edge,
+            current_edge=signal.gap,
             bankroll=self.bankroll,
             strategy=strat,
         )
@@ -1783,8 +1291,18 @@ class PolyBot:
 
         final_size = min(signal.size, term_size)
 
+        if signal.action == "BUY_YES":
+            token_id = signal.token_id_yes
+            side = "BUY"
+        elif signal.action == "BUY_NO":
+            token_id = signal.token_id_no
+            side = "BUY"
+        else:
+            logging.warning(f"{strat}: unsupported action {signal.action}")
+            return
+
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        token_to_test = signal.token_id_no if signal.action == "BUY_YES" else signal.token_id_yes
+        token_to_test = token_id
         if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
             logging.warning(
                 f"{strat} unsellable-token skip '{signal.market_question[:40]}' "
@@ -1799,29 +1317,12 @@ class PolyBot:
             )
             return
 
+        order_size = final_size
+        pos_size = final_size
+
         logging.info(
-            f"Executing {strat} leg{signal.leg}: {signal.action} {final_size:.2f} @ {signal.price}"
-        )
-
-        if signal.action == "BUY_YES":
-            token_id = signal.token_id_yes
-            side = "BUY"
-        elif signal.action == "BUY_NO":
-            token_id = signal.token_id_no
-            side = "BUY"
-        else:
-            logging.warning(f"{strat}: unsupported action {signal.action}")
-            return
-
-        order_size = (
-            (final_size / max(0.01, 1.0 - signal.price))
-            if side == "SELL" and signal.price > 0
-            else final_size
-        )
-        pos_size = (
-            final_size / max(0.01, 1.0 - signal.price)
-            if side == "SELL" and signal.price > 0
-            else final_size
+            f"Executing {strat}: {signal.action} {final_size:.2f} @ {signal.price} "
+            f"(forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f})"
         )
 
         order = await self.clob_client.place_order(
@@ -1862,9 +1363,9 @@ class PolyBot:
                 size=pos_size,
                 entry_price=signal.price,
                 bankroll=self.bankroll,
-                edge=signal.edge,
-                confidence=signal.confidence,
-                reason=f"{strat} leg={signal.leg} | {signal.reason[:160]}",
+                edge=signal.gap,
+                confidence=signal.gap,
+                reason=f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
                 market_end_at=signal.end_date,
             )
 
@@ -2240,6 +1741,14 @@ async def main():
         # Cancel all running asyncio tasks so sleeping loops wake up immediately
         for task in asyncio.all_tasks():
             task.cancel()
+        # Force-exit after 8s in case scanner threads are still blocking
+        import threading, os
+        def _force_exit():
+            import time; time.sleep(8)
+            logging.warning("Force exit — scanner threads did not stop in time.")
+            os._exit(0)
+        t = threading.Thread(target=_force_exit, daemon=True)
+        t.start()
 
     signal.signal(signal.SIGINT, signal_handler)
     if hasattr(signal, "SIGTERM"):

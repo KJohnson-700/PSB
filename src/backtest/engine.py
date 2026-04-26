@@ -12,12 +12,7 @@ import pandas as pd
 from src.market.scanner import Market
 from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.math_utils import PositionSizer
-from src.strategies.fade import FadeStrategy
-from src.strategies.arbitrage import ArbitrageStrategy
-from src.strategies.fade_models import FadeSignal
-from src.strategies.arbitrage import TradeSignal
 from src.strategies.weather_models import WeatherSignal
-from src.strategies.neh import NothingEverHappensStrategy, NEHSignal
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +100,7 @@ class BacktestEngine:
     def __init__(
         self,
         config: Dict[str, Any],
-        strategy_name: str = "fade",
+        strategy_name: str = "weather",
         initial_bankroll: float = 10000.0,
         *,
         slippage_mult: float = 1.0,
@@ -129,17 +124,7 @@ class BacktestEngine:
             min_position=config.get("trading", {}).get("default_position_size", 50),
             max_position=config.get("trading", {}).get("max_position_size", 200),
         )
-        if strategy_name == "fade":
-            self.strategy = FadeStrategy(config, self.backtest_ai, self.position_sizer)
-        elif strategy_name == "arbitrage":
-            self.strategy = ArbitrageStrategy(
-                config, self.backtest_ai, self.position_sizer
-            )
-        elif strategy_name == "neh":
-            self.strategy = NothingEverHappensStrategy(
-                config, self.backtest_ai, self.position_sizer
-            )
-        elif strategy_name == "weather":
+        if strategy_name == "weather":
             from src.strategies.weather import WeatherStrategy
 
             self.strategy = WeatherStrategy(config, self.position_sizer)
@@ -412,17 +397,7 @@ class BacktestEngine:
             signals = await self.strategy.scan_and_analyze([market], self.bankroll)
 
             for sig in signals:
-                if isinstance(sig, FadeSignal):
-                    action = sig.action
-                    price = sig.price
-                    size = sig.size
-                    edge = sig.implied_probability_gap
-                elif isinstance(sig, NEHSignal):
-                    action = sig.action
-                    price = sig.price
-                    size = sig.size
-                    edge = 1.0 - sig.price  # Edge is betting price decays to 0
-                elif isinstance(sig, WeatherSignal):
+                if isinstance(sig, WeatherSignal):
                     action = sig.action
                     price = sig.price
                     size = sig.size

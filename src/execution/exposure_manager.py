@@ -24,7 +24,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,18 @@ class MarketConditions:
 class ExposureManager:
     """Dynamically scales trade exposure based on conditions and performance."""
 
-    def __init__(self, config: Dict[str, Any], is_paper: bool = True):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        is_paper: bool = True,
+        notifications: Any = None,
+        lane_name: str = "UNKNOWN",
+    ):
         exposure_config = config.get('exposure', {})
+
+        self.is_paper = is_paper
+        self._notifications = notifications
+        self.lane_name = lane_name
 
         self.is_paper = is_paper
 
@@ -112,6 +122,7 @@ class ExposureManager:
         self._manual_pause: bool = False  # User explicitly paused
         self._current_tier: ExposureTier = ExposureTier.FULL
         self._last_conditions: Optional[MarketConditions] = None
+        self._on_pause_ai_callback: Optional[Callable] = None
 
     def reload_from_config(self, exposure_config: Dict[str, Any]) -> None:
         """Refresh sizing, kill-switch, and condition thresholds from YAML/dashboard.
@@ -330,6 +341,30 @@ class ExposureManager:
                 f"KILL SWITCH: {reason} — paused until {mode_desc}"
             )
 
+        if self._notifications is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self._notifications.notify_kill_lane(
+                            self.lane_name, reason, self._consecutive_losses
+                        )
+                    )
+            except Exception:
+                pass
+
+        if self._on_pause_ai_callback is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self._on_pause_ai_callback(reason, self._consecutive_losses)
+                    )
+            except Exception:
+                pass
+
     def _unpause(self, reason: str):
         """Deactivate the kill switch."""
         self._paused = False
@@ -447,13 +482,13 @@ def _get_weekend_penalty() -> float:
     HYPE-style manipulation (a4385 CEX pump) is most likely to occur.
     """
     now_utc = datetime.now(timezone.utc)
-    hour = now_utc.weekday()
+    weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour
 
-    if hour >= 5:
+    if weekday >= 5:
         return 0.50
 
-    if hour == 4 and utc_hour >= 20:
+    if weekday == 4 and utc_hour >= 20:
         return 0.70
 
     return 1.0

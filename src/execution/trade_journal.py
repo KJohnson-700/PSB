@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "paper_trades"
 
+# Append-only log of actual CLOB fill prices for updown markets.
+# Used by updown_engine to replace N(0.50, 0.02) with empirical distribution.
+ENTRY_PRICE_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "entry_prices" / "updown_fills.jsonl"
+_UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_lag", "xrp_lag", "eth_lag", "hype_lag"})
+
 
 @dataclass
 class JournalEntry:
@@ -64,10 +69,12 @@ class TradeJournal:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
         if session_id:
             self.session_id = session_id
-            # If session not in active dir, check archive dir
-            ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
-            if not (JOURNAL_DIR / session_id).exists() and (ARCHIVE_DIR / session_id).exists():
-                self.session_dir = ARCHIVE_DIR / session_id
+            # Check active dir first, then archive (flat or nested under ui_reset_* subdirs)
+            archived_path = TradeJournal._find_archive_session_path(session_id)
+            if (JOURNAL_DIR / session_id).exists():
+                self.session_dir = JOURNAL_DIR / session_id
+            elif archived_path:
+                self.session_dir = archived_path
             else:
                 self.session_dir = JOURNAL_DIR / session_id
                 self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +122,8 @@ class TradeJournal:
         self.realized_pnl = 0.0
         self._last_snapshot_time = 0.0
         self._last_summary_save_time = 0.0
+        # get_summary() cache — invalidated on every ENTRY or EXIT
+        self._summary_cache: Optional[Dict] = None
 
         # Resume from existing session
         self._load_state()
@@ -185,10 +194,20 @@ class TradeJournal:
             "entry_signal": merged_extra,
         }
         self.total_entries += 1
+        self._summary_cache = None  # invalidate on new entry
         self._save_positions()
         logger.info(
             f"JOURNAL ENTRY: {strategy}/{action} {outcome} ${size:.0f} @ {entry_price:.3f} | {market_question[:50]}"
         )
+        # Record actual fill price for updown strategies so backtest can use
+        # the empirical distribution instead of synthetic N(0.50, 0.02).
+        if strategy in _UPDOWN_STRATEGIES and 0.0 < entry_price < 1.0:
+            try:
+                ENTRY_PRICE_LOG.parent.mkdir(parents=True, exist_ok=True)
+                with ENTRY_PRICE_LOG.open("a") as _f:
+                    _f.write(json.dumps({"ts": entry.timestamp, "strategy": strategy, "yes_price": entry_price}) + "\n")
+            except OSError:
+                pass
 
     def log_price_update(self, trade_id: str, current_price: float, bankroll: float):
         """Log a price update on an open position."""
@@ -309,6 +328,7 @@ class TradeJournal:
         del self.open_positions[trade_id]
         self.total_exits += 1
         self.realized_pnl += pnl
+        self._summary_cache = None  # invalidate on exit
         self._save_positions()
         self._save_summary()
         logger.info(
@@ -450,10 +470,9 @@ class TradeJournal:
                 pass
         return last_br
 
-    def get_summary(self) -> Dict:
-        """Get current session summary."""
-        unrealized = sum(p.get("pnl", 0) for p in self.open_positions.values())
-        # Filter phantom exits from display — token-flip or dollar cap
+    def _build_closed_stats(self) -> Dict:
+        """Compute closed-trade stats from self.closed_trades. Called once per ENTRY/EXIT,
+        cached in self._summary_cache between events."""
         real_trades = [
             ct for ct in self.closed_trades
             if not (ct.get("entry_price", 0) > 0 and abs(ct.get("entry_price", 0) + ct.get("exit_price", ct.get("current_price", 0)) - 1.0) < 0.02)
@@ -461,9 +480,7 @@ class TradeJournal:
         ]
         wins = sum(1 for ct in real_trades if ct.get("pnl", 0) > 0)
         losses = sum(1 for ct in real_trades if ct.get("pnl", 0) <= 0)
-
-        # Per-strategy stats (use real_trades only — no phantoms)
-        strat_stats = {}
+        strat_stats: Dict = {}
         real_pnl = 0.0
         for ct in real_trades:
             s = ct["strategy"]
@@ -479,13 +496,38 @@ class TradeJournal:
             s["avg_pnl"] = round(s["pnl"] / s["trades"], 2) if s["trades"] else 0
             s["pnl"] = round(s["pnl"], 2)
 
-        # Total cost (dollars) = sum of size * entry_price for open positions
+        def _notional(d: Dict) -> float:
+            try:
+                return float(d.get("size", 0) or 0) * float(d.get("entry_price", 0) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        return {
+            "total_exits": len(real_trades),
+            "realized_pnl": round(real_pnl, 2),
+            "win_rate_parts": (wins, losses),
+            "strategy_stats": strat_stats,
+            "closed_notional": round(sum(_notional(ct) for ct in real_trades), 2),
+        }
+
+    def get_summary(self) -> Dict:
+        """Get current session summary.
+
+        Closed-trade stats are cached between ENTRY/EXIT events (they can only
+        change then). Open-position stats (unrealized, total_cost) are always
+        recomputed since they change on price updates.
+        """
+        if self._summary_cache is None:
+            self._summary_cache = self._build_closed_stats()
+        closed = self._summary_cache
+
+        wins, losses = closed["win_rate_parts"]
+        unrealized = sum(p.get("pnl", 0) for p in self.open_positions.values())
         total_cost = sum(
             p.get("size", 0) * p.get("entry_price", 0)
             for p in self.open_positions.values()
         )
-        # Cumulative entry notional for the session (open + closed, phantoms excluded on
-        # closed side). Explains why "Spent" can be small when most positions are flat.
+
         def _notional(d: Dict) -> float:
             try:
                 return float(d.get("size", 0) or 0) * float(d.get("entry_price", 0) or 0)
@@ -493,24 +535,23 @@ class TradeJournal:
                 return 0.0
 
         session_staked_notional = round(
-            sum(_notional(p) for p in self.open_positions.values())
-            + sum(_notional(ct) for ct in real_trades),
+            sum(_notional(p) for p in self.open_positions.values()) + closed["closed_notional"],
             2,
         )
         out = {
             "session_id": self.session_id,
             "total_entries": self.total_entries,
-            "total_exits": len(real_trades),
+            "total_exits": closed["total_exits"],
             "open_positions": len(self.open_positions),
             "total_cost": round(total_cost, 2),
             "session_staked_notional": session_staked_notional,
-            "realized_pnl": round(real_pnl, 2),
+            "realized_pnl": closed["realized_pnl"],
             "unrealized_pnl": round(unrealized, 2),
-            "total_pnl": round(real_pnl + unrealized, 2),
+            "total_pnl": round(closed["realized_pnl"] + unrealized, 2),
             "win_rate": round(wins / (wins + losses), 3) if (wins + losses) > 0 else 0,
             "wins": wins,
             "losses": losses,
-            "strategy_stats": strat_stats,
+            "strategy_stats": closed["strategy_stats"],
         }
         src = (
             "archived"
@@ -570,6 +611,34 @@ class TradeJournal:
         }
 
     @staticmethod
+    def _find_archive_session_path(session_id: str) -> Optional[Path]:
+        """Find a session dir inside paper_trades_archive (flat or nested under ui_reset_* subdirs)."""
+        ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
+        if not ARCHIVE_DIR.exists():
+            return None
+        flat = ARCHIVE_DIR / session_id
+        if flat.is_dir():
+            return flat
+        for sub in ARCHIVE_DIR.iterdir():
+            if sub.is_dir() and (sub / session_id).is_dir():
+                return sub / session_id
+        return None
+
+    @staticmethod
+    def _iter_session_dirs(base_dir: Path, source: str):
+        """Yield (session_dir, source) for all session dirs, recursing one level into non-session subdirs."""
+        for d in sorted(base_dir.iterdir(), reverse=True):
+            if not d.is_dir():
+                continue
+            if (d / "summary.json").exists() or (d / "entries.jsonl").exists():
+                yield d, source
+            elif source == "archived":
+                # Recurse one level into batch-archive subdirs (e.g. ui_reset_ts/)
+                for sub in sorted(d.iterdir(), reverse=True):
+                    if sub.is_dir() and ((sub / "summary.json").exists() or (sub / "entries.jsonl").exists()):
+                        yield sub, source
+
+    @staticmethod
     def list_sessions() -> List[Dict]:
         """List all past paper trade sessions from both active and archive directories."""
         ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
@@ -582,8 +651,8 @@ class TradeJournal:
         sessions = []
         seen = set()
         for base_dir, source in search_dirs:
-            for d in sorted(base_dir.iterdir(), reverse=True):
-                if not d.is_dir() or d.name in seen:
+            for d, src in TradeJournal._iter_session_dirs(base_dir, source):
+                if d.name in seen:
                     continue
                 seen.add(d.name)
                 summary_file = d / "summary.json"
@@ -591,11 +660,11 @@ class TradeJournal:
                     try:
                         with open(summary_file) as f:
                             data = json.load(f)
-                            data["_source"] = source
+                            data["_source"] = src
                             data["_path"] = str(d)
                             data.update(
                                 TradeJournal.session_time_meta_for_dir(
-                                    d, d.name, source
+                                    d, d.name, src
                                 )
                             )
                             # Apply phantom filter to realized_pnl for display

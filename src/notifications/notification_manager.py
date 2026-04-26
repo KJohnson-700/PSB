@@ -123,45 +123,35 @@ class NotificationManager:
         return any(results)
 
     async def notify_trade(self, trade_info: Dict[str, Any]) -> bool:
-        """Notify about executed trade (crypto auto-trade strategies only)."""
-        if not self.alert_on_trade:
+        """Notify about a new trade entry (crypto auto-trade strategies only)."""
+        if not self.enabled or not self.discord_webhook:
             return False
         st_raw = trade_info.get("strategy")
         if not _discord_trade_allowed(st_raw):
             return False
 
-        side_emoji = "\U0001f7e2" if trade_info.get("side") == "BUY" else "\U0001f534"
         st = _strategy_trade_title(st_raw)
-
-        message = f"""
-{side_emoji} {st} — filled
-
-Market: {trade_info.get('question', 'N/A')[:50]}...
-Action: {trade_info.get('side')} {trade_info.get('outcome')}
-Size: ${trade_info.get('size', 0):.2f}
-Price: ${trade_info.get('price', 0):.2f}
-Auto: {'Yes' if trade_info.get('auto_execute') else 'No'}
-"""
+        side = trade_info.get("side", "N/A")
+        size = float(trade_info.get("size") or 0)
+        edge = float(trade_info.get("edge") or 0)
+        price = float(trade_info.get("price") or 0)
+        q = trade_info.get("question", "N/A")
 
         embed = {
-            "title": f"{st} — filled",
-            "color": 65280 if trade_info.get("side") == "BUY" else 16711680,
+            "title": f"{st} — entry  [{side}]",
+            "color": 3447003,  # blue
             "fields": [
-                {"name": "Strategy", "value": st},
-                {"name": "Market", "value": trade_info.get("question", "N/A")[:100]},
-                {
-                    "name": "Action",
-                    "value": f"{trade_info.get('side')} {trade_info.get('outcome')}",
-                },
-                {"name": "Size", "value": f"${trade_info.get('size', 0):.2f}"},
-                {"name": "Price", "value": f"${trade_info.get('price', 0):.2f}"},
+                {"name": "Market", "value": q[:90], "inline": False},
+                {"name": "Side", "value": side, "inline": True},
+                {"name": "Price", "value": f"${price:.3f}", "inline": True},
+                {"name": "Size", "value": f"${size:.2f}", "inline": True},
+                {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
             ],
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
             },
         }
-
-        return await self.send_discord(message, embed)
+        return await self.send_discord(None, embed)
 
     async def notify_exit(self, exit_info: Dict[str, Any]) -> bool:
         """Notify about a closed position (crypto auto-trade strategies only)."""
@@ -173,38 +163,90 @@ Auto: {'Yes' if trade_info.get('auto_execute') else 'No'}
 
         st = _strategy_trade_title(st_raw)
         pnl = float(exit_info.get("pnl") or 0)
-        pnl_emoji = "\U0001f7e2" if pnl >= 0 else "\U0001f534"
+        win = pnl >= 0
         reason = exit_info.get("reason", "N/A")
         q = exit_info.get("question", "N/A")
+        entry_price = float(exit_info.get("entry_price") or 0)
+        size = float(exit_info.get("size") or 0)
+        pnl_pct = ""
+        if entry_price > 0 and size > 0:
+            pnl_pct = f" ({100 * pnl / (size * entry_price):+.0f}%)"
 
-        message = f"""
-{pnl_emoji} {st} — closed
-
-Market: {q[:80]}
-PnL: ${pnl:+.2f}
-Reason: {reason}
-Exit @ ${exit_info.get('price', 0):.2f} ({exit_info.get('side', '')})
-"""
+        result_text = "WIN ✅" if win else "LOSS ❌"
+        result_color = "✅ WIN" if win else "❌ LOSS"
 
         embed = {
-            "title": f"{st} — closed",
-            "color": 65280 if pnl >= 0 else 16711680,
+            "title": f"{st} — closed  [{pnl:+.2f}]",
+            "color": 65280 if win else 16711680,
             "fields": [
-                {"name": "Strategy", "value": st},
-                {"name": "Market", "value": q[:100]},
-                {"name": "PnL", "value": f"${pnl:+.2f}"},
-                {"name": "Reason", "value": str(reason)[:200]},
+                {"name": "Market", "value": q[:90], "inline": True},
                 {
-                    "name": "Exit",
+                    "name": "Entry→Exit",
+                    "value": f"${entry_price:.2f}  →  ${exit_info.get('price', 0):.2f}",
+                    "inline": True,
+                },
+                {
+                    "name": "PnL",
+                    "value": f"${pnl:+.2f}{pnl_pct}",
+                    "inline": True,
+                },
+                {"name": "Result", "value": result_text, "inline": True},
+                {"name": "Reason", "value": str(reason)[:200], "inline": False},
+                {
+                    "name": "Exited",
                     "value": f"{exit_info.get('side', '')} @ ${exit_info.get('price', 0):.2f}",
+                    "inline": True,
                 },
             ],
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
             },
         }
 
-        return await self.send_discord(message, embed)
+        return await self.send_discord(None, embed)
+
+    async def notify_kill_global(self, strategy: str, reason: str = "global kill switch") -> bool:
+        """Notify when global kill switch halts a strategy."""
+        if not self.enabled or not self.discord_webhook:
+            return False
+        st = _strategy_trade_title(strategy)
+        embed = {
+            "title": f"⛔ {st} — KILLED",
+            "color": 16711680,
+            "fields": [
+                {"name": "Strategy", "value": st, "inline": True},
+                {"name": "Trigger", "value": reason, "inline": True},
+                {
+                    "name": "Action",
+                    "value": "all trades suspended for this lane",
+                    "inline": False,
+                },
+            ],
+            "footer": {
+                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
+            },
+        }
+        return await self.send_discord(None, embed)
+
+    async def notify_kill_lane(self, lane: str, reason: str, streak: int) -> bool:
+        """Notify when a lane is paused due to consecutive losses."""
+        if not self.enabled or not self.discord_webhook:
+            return False
+        lane_upper = lane.upper()
+        embed = {
+            "title": f"⚠️ {lane_upper} — LANE PAUSED",
+            "color": 16776960,
+            "fields": [
+                {"name": "Lane", "value": lane_upper, "inline": True},
+                {"name": "Streak", "value": f"{streak} consecutive losses", "inline": True},
+                {"name": "Reason", "value": reason, "inline": True},
+                {"name": "Status", "value": "paused (kill switch)", "inline": False},
+            ],
+            "footer": {
+                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
+            },
+        }
+        return await self.send_discord(None, embed)
 
     async def notify_error(self, error_msg: str) -> bool:
         """Notify about error"""

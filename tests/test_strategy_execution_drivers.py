@@ -17,7 +17,6 @@ import pytest
 from src.main import PolyBot
 from src.strategies.bitcoin import BitcoinSignal
 from src.strategies.sol_lag import SOLLagSignal
-from src.strategies.xrp_dump_hedge import XRPDumpHedgeSignal
 
 
 def _bare_polybot() -> PolyBot:
@@ -88,17 +87,21 @@ def _bitcoin_signal(*, action: str = "BUY_YES") -> BitcoinSignal:
     )
 
 
-def _xrp_signal(*, action: str = "BUY_YES") -> XRPDumpHedgeSignal:
-    return XRPDumpHedgeSignal(
+def _xrp_signal(*, action: str = "BUY_YES") -> SOLLagSignal:
+    return SOLLagSignal(
         market_id="m_xrp_1",
         market_question="XRP Up or Down — test",
         action=action,
         price=0.4,
         size=10.0,
+        confidence=0.6,
+        edge=0.08,
         token_id_yes="0x" + "e" * 64,
         token_id_no="0x" + "f" * 64,
         end_date=datetime.now(timezone.utc) + timedelta(hours=1),
-        leg="1",
+        direction="UP",
+        strategy_name="xrp_lag",
+        reason="xrp lag test",
     )
 
 
@@ -142,9 +145,9 @@ async def test_execute_bitcoin_impl_sets_side_before_order():
 
 
 @pytest.mark.asyncio
-async def test_execute_xrp_dump_hedge_impl_buy_yes_leg():
+async def test_execute_xrp_lag_impl_buy_yes():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    await bot._execute_xrp_dump_hedge_signal_impl(_xrp_signal(action="BUY_YES"))
+    await bot._execute_sol_lag_signal_impl(_xrp_signal(action="BUY_YES"))
     bot.clob_client.place_order.assert_called_once()
     assert bot.clob_client.place_order.call_args.kwargs["side"] == "BUY"

@@ -6,11 +6,11 @@
     <title>PolyBot AI - Dashboard</title>
     <style>
         :root {
-            --bg: #000000; --card: #111820; --card-hover: #151d28; --border: #1e2a3a;
-            --border-glow: #0a2a5c; --text: #c8d6e5; --text-muted: #7a8da0;
+            --bg: #000000; --card: rgba(0,0,0,0.92); --card-hover: rgba(0,0,0,0.96); --border: rgba(255,255,255,0.08);
+            --border-glow: rgba(255,255,255,0.08); --text: #c8d6e5; --text-muted: #7a8da0;
             --cyan: #0055ff; --green: #00e676; --red: #ff1744; --yellow: #ffe600;
             --magenta: #e040fb; --purple: #b388ff; --accent: #0044cc;
-            --glow-cyan: 0 0 12px rgba(0,85,255,0.15); --glow-green: 0 0 12px rgba(0,230,118,0.15);
+            --glow-cyan: 0 0 12px rgba(255,255,255,0.12); --glow-green: 0 0 12px rgba(0,230,118,0.15);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -18,6 +18,7 @@
             background: var(--bg);
             color: var(--text); padding: 20px; font-size: 13px;
             position: relative;
+            overflow-x: hidden;
         }
         /* Semi-opaque grid — visible but not distracting, blue lines with white accent */
         body::before {
@@ -27,13 +28,13 @@
             z-index: 0;
             pointer-events: none;
             background-image:
-                linear-gradient(rgba(0,85,255,0.22) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0,85,255,0.22) 1px, transparent 1px),
-                linear-gradient(rgba(255,255,255,0.15) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.15) 1px, transparent 1px);
+                linear-gradient(rgba(255,255,255,0.12) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px),
+                linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
             background-size: 50px 50px, 50px 50px, 50px 50px, 50px 50px;
         }
-        .container { max-width: 1440px; margin: auto; position: relative; z-index: 1; }
+        .container { max-width: calc(100vw - 40px); margin: auto; position: relative; z-index: 1; }
         h1 { color: #ffffff; margin-bottom: 4px; font-size: 1.4rem; letter-spacing: 1px; text-shadow: 0 0 12px rgba(255,255,255,0.25); }
         h2 { color: var(--cyan); font-size: 0.95rem; margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; opacity: 0.9; }
         h3 { color: var(--text); font-size: 0.9rem; margin: 12px 0 8px; }
@@ -42,27 +43,27 @@
         .grid-3cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
         .full { grid-column: 1 / -1; }
-        .card { background: rgba(6,8,12,0.85); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid rgba(0,85,255,0.15); border-radius: 6px; padding: 16px; transition: all 0.3s; }
-        .card:hover { border-color: rgba(0,85,255,0.35); box-shadow: 0 0 20px rgba(0,85,255,0.08); }
-        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .card { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.8); }
+        .card:hover { border-color: rgba(255,255,255,0.2); box-shadow: 0 4px 24px rgba(0,0,0,0.8); }
+        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; table-layout: fixed; }
         th { text-align: left; padding: 8px; background: rgba(0,85,255,0.06); color: var(--cyan); border-bottom: 1px solid var(--border); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
         td { padding: 8px; border-bottom: 1px solid rgba(30,42,58,0.5); }
-        tr:hover { background: rgba(0,85,255,0.02); }
+        tr:hover { background: rgba(255,255,255,0.02); }
         .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.3px; }
         .badge-green { background: rgba(0,230,118,0.12); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
         .badge-red { background: rgba(255,23,68,0.12); color: var(--red); border: 1px solid rgba(255,23,68,0.2); }
         .badge-yellow { background: rgba(255,230,0,0.12); color: var(--yellow); border: 1px solid rgba(255,230,0,0.2); }
         .badge-blue { background: rgba(0,85,255,0.1); color: var(--cyan); border: 1px solid rgba(0,85,255,0.2); }
         .badge-purple { background: rgba(224,64,251,0.1); color: var(--magenta); border: 1px solid rgba(224,64,251,0.2); }
-        .metric-box { background: rgba(4,6,10,0.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(0,85,255,0.1); border-radius: 4px; padding: 12px; text-align: center; transition: all 0.3s; }
-        .metric-box:hover { border-color: rgba(0,85,255,0.4); box-shadow: var(--glow-cyan); }
+        .metric-box { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 12px; text-align: center; }
+        .metric-box:hover { border-color: rgba(255,255,255,0.2); }
         .metric-box .value { font-size: 1.4rem; font-weight: 700; color: #fff; }
         .metric-box .label { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
         .pnl-pos { color: var(--green); text-shadow: var(--glow-green); }
         .pnl-neg { color: var(--red); }
         .signal-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(30,42,58,0.4); font-size: 0.82rem; }
         .signal-row:last-child { border-bottom: none; }
-        .signal-row:hover { background: rgba(0,85,255,0.02); }
+        .signal-row:hover { background: rgba(255,255,255,0.02); }
         .signal-action { font-weight: 700; min-width: 80px; }
         .signal-market { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .signal-meta { color: var(--text-muted); font-size: 0.75rem; }
@@ -70,14 +71,14 @@
         button:hover { opacity: 0.85; box-shadow: var(--glow-cyan); }
         button:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none; }
         .btn-sm { padding: 5px 12px; font-size: 0.75rem; }
-        dialog.ai-review-modal { max-width: min(720px, 94vw); width: 100%; background: rgba(6,8,12,0.96); color: var(--text); border: 1px solid rgba(0,85,255,0.25); border-radius: 8px; padding: 0; box-shadow: 0 12px 48px rgba(0,0,0,0.55); }
+        dialog.ai-review-modal { max-width: min(720px, 94vw); width: 100%; background: rgba(0,0,0,0.97); color: var(--text); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0; box-shadow: 0 12px 48px rgba(0,0,0,0.55); }
         dialog.ai-review-modal::backdrop { background: rgba(0,0,0,0.65); }
         .btn-green { background: linear-gradient(135deg, #00c853, var(--green)); }
         .btn-red { background: linear-gradient(135deg, #d50000, var(--red)); color: #fff; }
         .btn-purple { background: linear-gradient(135deg, #9c27b0, #7b1fa2); color: #fff; }
         .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
         .form-row input, .form-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 3px; flex: 1; font-family: inherit; font-size: 0.82rem; }
-        .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 6px rgba(0,85,255,0.15); }
+        .form-row input:focus, .form-row select:focus { outline: none; border-color: rgba(255,255,255,0.2); box-shadow: 0 0 6px rgba(255,255,255,0.05); }
         #trade-status { margin-top: 8px; padding: 8px; border-radius: 4px; font-size: 0.82rem; }
         .status-ok { background: rgba(0,230,118,0.1); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
         .status-err { background: rgba(255,23,68,0.1); color: var(--red); border: 1px solid rgba(255,23,68,0.2); }
@@ -106,9 +107,9 @@
         .collapsible .collapse-body { display: none; }
         .collapsible.open .collapse-body { display: block; }
         /* Status hero */
-        .status-hero { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 12px 0; }
-        .hero-item { background: rgba(4,6,10,0.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(0,85,255,0.1); border-radius: 4px; padding: 10px 12px; text-align: center; transition: all 0.3s; }
-        .hero-item:hover { border-color: var(--cyan); box-shadow: var(--glow-cyan); }
+        .status-hero { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
+        .hero-item { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 10px 12px; text-align: center; }
+        .hero-item:hover { border-color: rgba(255,255,255,0.2); }
         .hero-item .hero-val { font-size: 1.2rem; font-weight: 700; color: #fff; }
         .hero-item .hero-sub { font-size: 0.62rem; color: var(--text-muted); margin-top: 3px; line-height: 1.25; min-height: 2.4em; }
         .hero-item .hero-lbl { font-size: 0.65rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -118,13 +119,13 @@
         .controls button { font-size: 0.72rem; padding: 5px 12px; }
         /* Config panel */
         .cfg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-        .cfg-group { background: rgba(4,6,10,0.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(0,85,255,0.1); border-radius: 4px; padding: 12px; }
+        .cfg-group { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 12px; }
         .cfg-group h3 { color: var(--cyan); font-size: 0.78rem; margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.5px; }
         .cfg-field { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
         .cfg-field:last-child { margin-bottom: 0; }
         .cfg-field label { font-size: 0.78rem; color: var(--text-muted); }
         .cfg-field input { background: var(--card); border: 1px solid var(--border); color: var(--cyan); padding: 4px 8px; border-radius: 3px; width: 90px; text-align: right; font-family: inherit; font-size: 0.82rem; }
-        .cfg-field input:focus { outline: none; border-color: var(--cyan); box-shadow: 0 0 6px rgba(0,85,255,0.15); }
+        .cfg-field input:focus { outline: none; border-color: rgba(255,255,255,0.2); box-shadow: 0 0 6px rgba(255,255,255,0.05); }
         .cfg-save-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
         #cfg-status { font-size: 0.78rem; color: var(--text-muted); }
         /* BTC Chart Panel */
@@ -133,7 +134,7 @@
             position: relative;
             border-radius: 4px;
             overflow: hidden;
-            background: #131722;
+            background: transparent;
             width: 100%;
             height: min(520px, max(280px, 45dvh));
         }
@@ -146,9 +147,50 @@
         .cmd-ref .cmd-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
         .cmd-ref pre { flex: 1; min-width: 200px; background: var(--bg); border: 1px solid var(--border); padding: 10px 12px; border-radius: 4px; font-size: 0.76rem; line-height: 1.45; overflow-x: auto; margin: 0; white-space: pre-wrap; word-break: break-all; }
         .cmd-ref .cmd-note { font-size: 0.72rem; color: var(--text-muted); margin: -4px 0 10px 0; line-height: 1.4; }
+
+        /* AOS overrides — premium card entrance */
+        [data-aos] {
+            opacity: 0;
+            transform: translateY(16px) scale(0.97);
+            transition-property: opacity, transform;
+        }
+        [data-aos].aos-animate {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Value flash — JS toggles .flash-green / .flash-red */
+        @keyframes flashGlow {
+            0%   { text-shadow: 0 0 0px currentColor; color: inherit; }
+            40%  { text-shadow: 0 0 16px currentColor; }
+            100% { text-shadow: 0 0 0px currentColor; color: inherit; }
+        }
+        .flash-green {
+            animation: flashGlow 0.45s ease-out forwards;
+            color: var(--green) !important;
+        }
+        .flash-red {
+            animation: flashGlow 0.45s ease-out forwards;
+            color: var(--red) !important;
+        }
+
+        /* Table row slide-in */
+        @keyframes rowSlide {
+            from { opacity: 0; transform: translateX(-10px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        .tr-enter { animation: rowSlide 0.3s cubic-bezier(0.22,1,0.36,1) both; }
+
+        /* Button press */
+        button:active { transform: scale(0.96); transition: transform 0.1s; }
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- AOS — scroll-triggered entrance animations -->
+    <link rel="stylesheet" href="https://unpkg.com/aos@2.3.4/dist/aos.css" />
+    <script src="https://unpkg.com/aos@2.3.4/dist/aos.js"></script>
+    <!-- Motion One — spring animations for modal -->
+    <script src="https://unpkg.com/motion@10/dist/motion.js"></script>
     <!-- DASHBOARD_HEAD_INJECT -->
     <!-- HTMX + Alpine: Phase 4 progressive enhancement (fragment poll below; Alpine available for future UI state). -->
     <script defer src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
@@ -176,7 +218,7 @@
     <div id="view-live">
 
     <!-- COMMAND CENTER — top of live tab -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" data-aos-delay="0" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <h2 style="margin-bottom:0;">Command Center</h2>
             <div class="status-bar" id="status-badges"><span class="badge badge-yellow">Loading...</span></div>
@@ -190,8 +232,6 @@
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions</div></div>
             <div class="hero-item" title="Paper session: total ENTRY events since this session started (journal).">
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills</div></div>
-            <div class="hero-item" title="Open notional = size×entry on open positions only. Subline = cumulative entry notional (open+closed) this session.">
-                <div class="hero-val" id="hero-exposure">-</div><div class="hero-sub" id="hero-exposure-sub"></div><div class="hero-lbl">Open notional</div></div>
         </div>
         <p id="command-center-hint" style="font-size:0.68rem;color:var(--text-muted);margin:10px 0 0 0;line-height:1.45;">Session metrics come from the trade journal. Daily (UTC) metrics come from the risk manager and reset at UTC midnight on the host.</p>
         <div class="controls">
@@ -204,8 +244,7 @@
             <button class="btn-sm btn-green" onclick="runScan()">Scan Markets</button>
             <button class="btn-sm" onclick="runTests()">Run Unit Tests</button>
             <button class="btn-sm btn-red" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
-            <button class="btn-sm" style="background:linear-gradient(135deg,#e65100,#bf360c);color:#fff;" onclick="resetPaperSession()" title="Fresh paper journal + bankroll; archives other session folders">New paper round</button>
-            <button class="btn-sm" onclick="refreshDashboardData()" title="Clear journal cache, reload journal from disk, refresh Command Center (no container restart)">Restart / refresh data</button>
+            <button class="btn-sm" style="background:linear-gradient(135deg,#e65100,#bf360c);color:#fff;" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div id="trade-section" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
@@ -233,7 +272,7 @@
     </div>
 
     <!-- BTC LIVE CHART — hero top -->
-    <div class="card" id="btc-chart-section" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" data-aos-delay="80" id="btc-chart-section" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <h2 style="margin-bottom:0;">BTC Live Chart</h2>
             <div style="display:flex;gap:6px;align-items:center;">
@@ -292,7 +331,7 @@
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
 
       <!-- LEFT: BTC combined -->
-      <div class="card" id="btc-analysis-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="160" id="btc-analysis-panel">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <h2 style="margin-bottom:0;">&#8383; BTC</h2>
           <div class="status-bar" id="btc-signal-badges"></div>
@@ -331,7 +370,7 @@
       </div>
 
       <!-- RIGHT: SOL combined -->
-      <div class="card" id="sol-analysis-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="240" id="sol-analysis-panel">
         <h2 style="margin-bottom:8px;">&#9784; SOL</h2>
         <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
           <div class="hero-item"><div class="hero-val" id="sol-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">SOL Price</div></div>
@@ -371,7 +410,7 @@
     <!-- ETH + XRP (same lag-style gates as SOL; XRP dump-hedge uses book logic — panels show XRP–BTC context) -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
 
-      <div class="card" id="eth-analysis-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="320" id="eth-analysis-panel">
         <h2 style="margin-bottom:8px;">ETH</h2>
         <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
           <div class="hero-item"><div class="hero-val" id="eth-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">ETH Price</div></div>
@@ -406,7 +445,7 @@
         </div>
       </div>
 
-      <div class="card" id="hype-analysis-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="400" id="hype-analysis-panel">
         <h2 style="margin-bottom:8px;">HYPE</h2>
         <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">BTC→Hyperliquid HYPE correlation lag. Spot vs BTC momentum context.</p>
         <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
@@ -442,7 +481,7 @@
         </div>
       </div>
 
-      <div class="card" id="xrp-analysis-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="480" id="xrp-analysis-panel">
         <h2 style="margin-bottom:8px;">XRP</h2>
         <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">Spot vs BTC (lag view). Dump-hedge entries use book + BTC z-score — see Performance blockers.</p>
         <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
@@ -480,15 +519,38 @@
 
     </div>
 
+    <!-- Weather Strategy Panel -->
+    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h2 style="margin-bottom:0;">&#9928; Weather</h2>
+        <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;" id="weather-hero">
+        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Scanned</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-city">-</div><div class="hero-lbl">City Match</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-temp">-</div><div class="hero-lbl">Temp Mkts</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-precip">-</div><div class="hero-lbl">Precip Mkts</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-signals" style="color:var(--green);">-</div><div class="hero-lbl">Signals</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-trades">-</div><div class="hero-lbl">Open Trades</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div>Skip vol: <span id="wx-skip-vol" style="color:var(--text);">-</span></div>
+        <div>Skip hrs: <span id="wx-skip-hrs" style="color:var(--text);">-</span></div>
+        <div>Skip EV: <span id="wx-skip-ev" style="color:var(--text);">-</span></div>
+        <div>Skip thresh: <span id="wx-skip-thresh" style="color:var(--text);">-</span></div>
+      </div>
+      <div id="wx-last-signal" style="margin-top:8px;font-size:0.75rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;line-height:1.5;"></div>
+    </div>
+
     <!-- Recent Trades + AI Summary row -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-      <div class="card" id="recent-trades-panel">
+      <div class="card" data-aos="fade-up" data-aos-delay="560" id="recent-trades-panel">
         <h2>Recent Trades</h2>
         <div class="scrollbox" id="recent-trades-body" style="max-height:200px;font-size:0.75rem;">
           <p style="color:var(--text-muted);">No trades yet</p>
         </div>
       </div>
-      <div class="card" id="ai-summary-card">
+      <div class="card" data-aos="fade-up" data-aos-delay="640" id="ai-summary-card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <h2 style="margin:0;">Last Session &#8212; AI Review</h2>
           <button type="button" class="btn-sm btn-purple" onclick="openAIReviewDialog()" title="Open full review in a window">Review window</button>
@@ -513,7 +575,7 @@
     <span id="signal-status-updated" style="display:none;"></span>
 
     <!-- Exposure Manager (live tab) -->
-    <div class="card" id="exposure-panel" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" data-aos-delay="720" id="exposure-panel" style="margin-bottom:16px;">
         <h2>Exposure Manager</h2>
         <div id="exposure-managers" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:6px;">
@@ -530,7 +592,7 @@
     <div id="view-performance" style="display:none;">
 
     <!-- ROW 4: Live Test History -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <h2 style="margin-bottom:0;">Live Test Results</h2>
             <button class="btn-sm btn-purple" onclick="loadLivePerformance()">Refresh</button>
@@ -595,7 +657,8 @@
                         <option value="sol_lag">sol_lag</option>
                         <option value="eth_lag">eth_lag</option>
                         <option value="hype_lag">hype_lag</option>
-                        <option value="xrp_dump_hedge">xrp_dump_hedge</option>
+                        <option value="xrp_lag">xrp_lag</option>
+                        <option value="weather">weather</option>
                     </select>
                     <span id="trade-journey-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
                 </div>
@@ -608,11 +671,10 @@
     </div>
 
     <!-- Session Summary -->
-    <div class="card" id="session-summary-panel" style="margin-top:16px;">
+    <div class="card" data-aos="fade-up" id="session-summary-panel" style="margin-top:16px;">
         <h2>Session Summary</h2>
         <div id="session-summary-body" style="font-size:0.85rem;line-height:1.8;">
-            <div>Session: <span id="ss-session" style="color:var(--cyan);">-</span></div>
-            <div>Bankroll: <span id="ss-bankroll">$0</span> | Spent: <span id="ss-spent">$0</span></div>
+            <div>Session: <span id="ss-session" style="color:var(--cyan);">-</span> &nbsp;|&nbsp; Spent: <span id="ss-spent">$0</span></div>
             <div>Open: <span id="ss-open">0</span> | Trades: <span id="ss-trades">0</span></div>
             <div>Wins: <span id="ss-wins">0</span> | Losses: <span id="ss-losses">0</span> | WR: <span id="ss-wr">-</span></div>
             <div>Realized PnL: <span id="ss-rpnl">$0</span> | Total PnL: <span id="ss-tpnl">$0</span></div>
@@ -620,17 +682,15 @@
     </div>
 
     <!-- Strategy Performance -->
-    <div class="card" style="margin-top:16px;margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" style="margin-top:16px;margin-bottom:16px;">
         <h2>Strategy Performance</h2>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;" id="strategy-boxes">
-            <div class="metric-box"><div class="value">-</div><div class="label">Fade Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">Arb Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">NEH Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">BTC Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">SOL Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">ETH Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">HYPE Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">XRP-DH Signals</div></div>
+            <div class="metric-box"><div class="value">-</div><div class="label">XRP Signals</div></div>
+            <div class="metric-box"><div class="value">-</div><div class="label">Weather Signals</div></div>
         </div>
         <table id="strategy-table" style="margin-top:8px;">
             <thead><tr><th>Strategy</th><th>Live Signals</th><th>Backtest Trades</th><th>Backtest PnL</th><th>Reports</th><th>Break-even</th></tr></thead>
@@ -639,7 +699,7 @@
     </div>
 
     <!-- Session History -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <h2>Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
         <div id="session-history-body" style="font-size:0.78rem;">
             <p style="color:var(--text-muted);">Loading sessions...</p>
@@ -648,11 +708,11 @@
 
     <!-- Analytics Charts -->
     <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
-        <div class="card">
+        <div class="card" data-aos="fade-up">
             <h2 style="margin-bottom:8px;">Strategy Allocation</h2>
             <canvas id="allocation-chart" height="220" style="width:100%;"></canvas>
         </div>
-        <div class="card">
+        <div class="card" data-aos="fade-up">
             <h2 style="margin-bottom:8px;">Strategy PnL Breakdown</h2>
             <canvas id="strategy-pnl-chart" height="220" style="width:100%;"></canvas>
         </div>
@@ -666,12 +726,12 @@
     <div id="view-journal" style="display:none;">
 
     <!-- Test runs: pick a session to review (summary + tabs + chart scope to that run) -->
-    <div class="card" style="margin-bottom:16px;" id="journal-runs-card">
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="journal-runs-card">
         <h2 style="margin-bottom:4px;">Test runs</h2>
         <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
             Each row is one paper session. <strong style="color:var(--text);">Started</strong> / <strong style="color:var(--text);">Ended</strong> come from the journal log (archived runs have an end time; the live folder shows ongoing). Click a row to load that run into the journal below.
         </p>
-        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,85,255,0.06);">
+        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.3);">
             <span style="font-size:0.78rem;">Reviewing a past session (positions / closed / log / chart are scoped to it).</span>
             <button type="button" class="btn-sm btn-green" onclick="resetJournalViewToLive()">Back to live session</button>
         </div>
@@ -682,7 +742,7 @@
     </div>
 
     <!-- Paper Trade Journal -->
-    <div class="card" id="paper-journal-card" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" id="paper-journal-card" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
             <div style="flex:1;min-width:200px;">
                 <h2 style="margin-bottom:0;">Paper Trade Journal</h2>
@@ -724,7 +784,7 @@
     </div>
 
     <!-- AI Usage -->
-    <div class="card" id="ai-usage-panel" style="margin-top:16px;">
+    <div class="card" data-aos="fade-up" id="ai-usage-panel" style="margin-top:16px;">
         <h2>AI System Usage</h2>
         <div class="scrollbox" id="ai-usage-summary" style="max-height:80px;font-size:0.75rem;margin-bottom:8px;"></div>
         <div class="scrollbox" id="ai-usage-records" style="max-height:100px;font-size:0.7rem;">
@@ -746,7 +806,7 @@
     </p>
 
     <!-- Backtest Controls -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <h2>Backtest Controls</h2>
         <div class="controls">
             <button class="btn-sm btn-purple" id="backtest-start-btn" onclick="startBacktest()">Run Backtest</button>
@@ -760,8 +820,12 @@
                 <option value="ETH-5">ETH 5m</option>
                 <option value="HYPE-15">HYPE 15m</option>
                 <option value="HYPE-5">HYPE 5m</option>
-                <option value="XRP-DH-15">XRP Dump-Hedge (sim)</option>
+                <option value="XRP-15">XRP 15m</option>
+                <option value="XRP-5">XRP 5m</option>
             </select>
+            <input type="date" id="crypto-bt-test-start"
+                title="Optional: walk-forward test-start date. Data before this date = TRAIN (tune here). Data from this date = TEST (validate only, never tune on it). Leave blank for in-sample run."
+                style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
             <button class="btn-sm btn-purple" onclick="startCryptoBacktest()">Run Crypto BT</button>
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
@@ -769,7 +833,7 @@
 
     <!-- Test Results + Live Scan -->
     <div class="grid" style="margin-bottom:16px;">
-        <div class="card">
+        <div class="card" data-aos="fade-up">
             <h2>Test Results</h2>
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
                 <button id="run-tests-btn" class="btn-sm" onclick="runTests()">Run Tests</button>
@@ -782,7 +846,7 @@
             </div>
             <div class="scrollbox" id="test-list" style="margin-top:8px;"></div>
         </div>
-        <div class="card">
+        <div class="card" data-aos="fade-up">
             <h2>Live Market Scan</h2>
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
                 <button id="run-scan-btn" class="btn-sm btn-green" onclick="runScan()">Run Live Scan</button>
@@ -798,14 +862,16 @@
                 <div class="tab" data-strat="sol_lag" onclick="switchScanTab('sol_lag')">SOL</div>
                 <div class="tab" data-strat="eth_lag" onclick="switchScanTab('eth_lag')">ETH</div>
                 <div class="tab" data-strat="hype_lag" onclick="switchScanTab('hype_lag')">HYPE</div>
-                <div class="tab" data-strat="xrp_dump_hedge" onclick="switchScanTab('xrp_dump_hedge')">XRP</div>
+                <div class="tab" data-strat="xrp_lag" onclick="switchScanTab('xrp_lag')">XRP</div>
+                <div class="tab" data-strat="weather" onclick="switchScanTab('weather')">Weather</div>
             </div>
+            <div id="weather-scan-diag" style="display:none;padding:8px 4px 4px;"></div>
             <div class="scrollbox" id="scan-signals" style="min-height:100px;"></div>
         </div>
     </div>
 
     <!-- Backtest Reports -->
-    <div class="card">
+    <div class="card" data-aos="fade-up">
         <h2>Backtest Reports</h2>
         <div id="backtest-reports"><p style="color:var(--text-muted)">Loading...</p></div>
     </div>
@@ -845,7 +911,8 @@
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_lag-enabled"> <span>SOL Lag enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_lag-enabled"> <span>ETH Lag enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_lag-enabled"> <span>HYPE Lag enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_dump_hedge-enabled"> <span>XRP Dump-Hedge enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_lag-enabled"> <span>XRP Lag enabled</span></label></div>
+                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-weather-enabled"> <span>Weather enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-neh-enabled"> <span>NEH enabled</span></label></div>
                 </div>
                 <div class="cfg-group">
@@ -905,10 +972,8 @@
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-eth_lag-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
-                    <h3>XRP Dump-Hedge</h3>
-                    <div class="cfg-field"><label>Dump move frac</label><input type="number" id="cfg-strategies-xrp_dump_hedge-dump_move_frac" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>Max pair cost</label><input type="number" id="cfg-strategies-xrp_dump_hedge-max_pair_cost" step="0.01" value="0.95"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_dump_hedge-kelly_fraction" step="0.01" value="0.08"></div>
+                    <h3>XRP Lag Strategy</h3>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_lag-kelly_fraction" step="0.01" value="0.08"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>HYPE Lag Strategy</h3>
@@ -1297,23 +1362,6 @@ function applyHeroMetrics(d) {
         else tradesSub.textContent = '';
     }
 
-    const openStake = (s.open_stake !== undefined && s.open_stake !== null)
-        ? Number(s.open_stake)
-        : Number((p && (p.total_cost ?? p.total_exposure)) ?? 0);
-    const sessionStaked = (s.session_staked_notional !== undefined && s.session_staked_notional !== null)
-        ? Number(s.session_staked_notional) : null;
-    const expPct = bankroll > 0 ? (openStake / bankroll) * 100 : 0;
-    const expEl = document.getElementById('hero-exposure');
-    if (expEl) {
-        expEl.textContent = '$' + openStake.toFixed(2) + (bankroll > 0 ? ' · ' + expPct.toFixed(0) + '% bankroll' : '');
-        expEl.style.color = expPct > 50 ? 'var(--red)' : expPct > 25 ? 'var(--yellow)' : 'var(--green)';
-    }
-    const expSub = document.getElementById('hero-exposure-sub');
-    if (expSub) {
-        if (sessionStaked !== null && !Number.isNaN(sessionStaked))
-            expSub.textContent = 'cumulative session entries ≈ $' + sessionStaked.toFixed(2);
-        else expSub.textContent = '';
-    }
 }
 
 function updateStatusBadgesAndKill(d) {
@@ -1442,6 +1490,7 @@ async function toggleKillSwitch() {
 
 function updateMetrics(d) {
     if (!d || typeof d !== 'object') return;
+    updateWeatherDiag(d);
     const boxes = document.getElementById('strategy-boxes');
     const tbody = document.querySelector('#strategy-table tbody');
     if (!boxes || !tbody) return;
@@ -1476,21 +1525,19 @@ function updateMetrics(d) {
     }
 
     boxes.innerHTML =
-        sigBox('fade', 'var(--yellow)', 'Fade Signals') +
-        sigBox('arbitrage', 'var(--cyan)', 'Arb Signals') +
-        sigBox('neh', 'var(--magenta)', 'NEH Signals') +
         sigBox('bitcoin', 'var(--green)', 'BTC Signals') +
         sigBox('sol_lag', 'var(--purple)', 'SOL Signals') +
         sigBox('eth_lag', '#fb923c', 'ETH Signals') +
         sigBox('hype_lag', '#a78bfa', 'HYPE Signals') +
-        sigBox('xrp_dump_hedge', '#38bdf8', 'XRP-DH Signals');
+        sigBox('xrp_lag', '#38bdf8', 'XRP Signals') +
+        sigBox('weather', '#86efac', 'Weather Signals');
 
-    const breakEven = {fade:'~64%', arbitrage:'~31%', neh:'~75%', bitcoin:'Trend-based', sol_lag:'Lag-based', eth_lag:'Lag-based', hype_lag:'Lag-based', xrp_dump_hedge:'Dump+hedge'};
-    const riskProfile = {fade:'Moderate', arbitrage:'Favorable', neh:'Against you', bitcoin:'Hierarchical', sol_lag:'Correlated', eth_lag:'Correlated', hype_lag:'Correlated', xrp_dump_hedge:'Box hedge'};
-    tbody.innerHTML = ['fade','arbitrage','neh','bitcoin','sol_lag','eth_lag','hype_lag','xrp_dump_hedge'].map(s => {
+    const breakEven = {bitcoin:'Trend-based', sol_lag:'Lag-based', eth_lag:'Lag-based', hype_lag:'Lag-based', xrp_lag:'Lag-based', weather:'Event-based'};
+    const riskProfile = {bitcoin:'Hierarchical', sol_lag:'Correlated', eth_lag:'Correlated', hype_lag:'Correlated', xrp_lag:'Correlated', weather:'Independent'};
+    tbody.innerHTML = ['bitcoin','sol_lag','eth_lag','hype_lag','xrp_lag','weather'].map(s => {
         const m = d[s]||{};
         const pnlCls = (m.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-        const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_dump_hedge:'badge-blue'};
+        const colors = {bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
         const ageStr = m.last_cycle ? ` <span style="color:var(--text-muted);font-size:0.7rem;" title="${m.last_cycle}">${_cycleAge(m.last_cycle)}</span>` : '';
         const totalStr = m.total_signals > 0 ? ` <span style="color:var(--text-muted);font-size:0.7rem;">(${m.total_signals}Σ)</span>` : '';
         return `<tr><td><span class="badge ${colors[s]}">${s}</span></td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.reports||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
@@ -1530,8 +1577,8 @@ function renderScanSignals() {
     if (!sigs.length) { el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">No ${currentScanFilter} signals in latest scan.</p>`; return; }
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
-        const colors = {fade:'var(--yellow)',arbitrage:'var(--accent)',neh:'var(--purple)',bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_dump_hedge:'#38bdf8'};
-        const stratShort = {fade:'FAD',arbitrage:'ARB',neh:'NEH',bitcoin:'BTC',sol_lag:'SOL',eth_lag:'ETH',hype_lag:'HYP',xrp_dump_hedge:'XRP'};
+        const colors = {fade:'var(--yellow)',arbitrage:'var(--accent)',neh:'var(--purple)',bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_lag:'#38bdf8',weather:'#86efac'};
+        const stratShort = {fade:'FAD',arbitrage:'ARB',neh:'NEH',bitcoin:'BTC',sol_lag:'SOL',eth_lag:'ETH',hype_lag:'HYP',xrp_lag:'XRP',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
@@ -1549,7 +1596,61 @@ function switchScanTab(filter) {
         const ds = t.getAttribute('data-strat');
         t.classList.toggle('active', ds === filter);
     });
+    const wxDiag = document.getElementById('weather-scan-diag');
+    if (wxDiag) wxDiag.style.display = filter === 'weather' ? 'block' : 'none';
     renderScanSignals();
+}
+
+function updateWeatherDiag(metricsData) {
+    const wx = metricsData?.weather?.scan_stats;
+    const wm = metricsData?.weather || {};
+
+    // ── Live tab weather panel ──────────────────────────────────────
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    if (wx) {
+        set('wx-scanned', wx.markets_scanned ?? '-');
+        set('wx-city',    wx.city_matches ?? '-');
+        set('wx-temp',    wx.temp_markets ?? '-');
+        set('wx-precip',  wx.precip_markets ?? '-');
+        set('wx-signals', wx.signals_generated ?? '-');
+        set('wx-skip-vol',   wx.skipped_volume ?? '-');
+        set('wx-skip-hrs',   wx.skipped_hours ?? '-');
+        set('wx-skip-ev',    wx.skipped_ev ?? '-');
+        set('wx-skip-thresh',wx.skipped_no_threshold ?? '-');
+    }
+    const wxTrades = document.getElementById('wx-trades');
+    if (wxTrades) wxTrades.textContent = wm.trades ?? '-';
+    const wxLast = document.getElementById('wx-last-signal');
+    if (wxLast && wm.last_cycle) {
+        const ago = Math.round((Date.now() - new Date(wm.last_cycle).getTime()) / 1000);
+        const agoStr = ago < 60 ? ago + 's ago' : Math.floor(ago/60) + 'm ago';
+        wxLast.textContent = `Last cycle: ${agoStr} | PnL: $${(wm.pnl||0).toFixed(2)} | ${wm.signals||0} signals this session`;
+    }
+
+    // ── Backtest-tab scan diagnostics div ──────────────────────────
+    const el = document.getElementById('weather-scan-diag');
+    if (!el) return;
+    if (!wx) { el.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;padding:4px 0;">No scan data yet — waiting for first weather cycle.</p>'; return; }
+    const row = (label, val, color) =>
+        `<span style="margin-right:14px;font-size:0.78rem;"><span style="color:var(--text-muted);">${label}:</span> <span style="color:${color||'var(--text)'}">${val}</span></span>`;
+    el.innerHTML = `
+        <div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:8px 12px;margin-bottom:6px;">
+            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Weather Scan Diagnostics</div>
+            <div style="flex-wrap:wrap;display:flex;gap:4px 0;">
+                ${row('scanned', wx.markets_scanned, 'var(--text)')}
+                ${row('city match', wx.city_matches, wx.city_matches > 0 ? 'var(--green)' : 'var(--text-muted)')}
+                ${row('temp', wx.temp_markets, '#fb923c')}
+                ${row('precip', wx.precip_markets, '#38bdf8')}
+                ${row('signals', wx.signals_generated, wx.signals_generated > 0 ? '#86efac' : 'var(--text-muted)')}
+            </div>
+            <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
+                <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Skipped:</span>
+                ${row('volume', wx.skipped_volume, wx.skipped_volume > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('timing', wx.skipped_hours, wx.skipped_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('ev', wx.skipped_ev, wx.skipped_ev > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('no threshold', wx.skipped_no_threshold, wx.skipped_no_threshold > 0 ? 'var(--red)' : 'var(--text-muted)')}
+            </div>
+        </div>`;
 }
 
 async function runTests() {
@@ -1660,24 +1761,22 @@ async function startCryptoBacktest() {
     const val = sel.value;
     if (!val) { alert('Select a crypto backtest first (BTC 15m, SOL 5m, etc.)'); return; }
     let symbol, window;
-    if (val.startsWith('XRP-DH')) {
-        const parts = val.split('-');
-        symbol = 'XRP-DH';
-        window = parseInt(parts[2] || '15', 10);
-    } else {
-        [symbol, window] = val.split('-');
-        window = parseInt(window, 10);
-    }
+    [symbol, window] = val.split('-');
+    window = parseInt(window, 10);
+    const testStart = (document.getElementById('crypto-bt-test-start')?.value || '').trim();
     const btn = document.querySelector('button[onclick="startCryptoBacktest()"]');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
-    status.textContent = `Running ${symbol} ${window}m backtest…`;
+    const splitLabel = testStart ? ` (test from ${testStart})` : ' ⚠ in-sample';
+    status.textContent = `Running ${symbol} ${window}m backtest${splitLabel}…`;
     status.style.color = 'var(--yellow)';
     try {
+        const body = {symbol, window};
+        if (testStart) body.test_start = testStart;
         const r = await fetch('/api/backtest/start', {
             method: 'POST',
             headers: dashAuthHeaders({'Content-Type': 'application/json'}),
-            body: JSON.stringify({symbol, window})
+            body: JSON.stringify(body)
         });
         const d = await r.json();
         if (d.status === 'started' && d.job_id) {
@@ -1933,28 +2032,13 @@ function updateBacktest(d) {
         ${cryptoCard('HYPE', 5)}
     </div>`;
 
-    // ── XRP dump-hedge synthetic sim ────────────────────
-    const xrpSims = allReports.filter((r) => r.report_type === 'xrp_dump_hedge_sim');
-    const xrpLatest = xrpSims.sort((a, b) => (b.run_at || '').localeCompare(a.run_at || ''))[0] || null;
+    // ── Section 5: XRP Lag Strategy ───────────────────────────��──────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        XRP dump-hedge — synthetic simulation</h3>`;
-    if (!xrpLatest) {
-        html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:16px;color:var(--text-muted);font-size:0.82rem;">
-            No sim report yet. Use <strong>Run Crypto BT</strong> → XRP Dump-Hedge (sim). Reports are saved under <code style="font-size:0.7rem;">data/backtest/reports/</code> (use a Railway volume on <code>/app/data</code> so they survive redeploys).
-        </div>`;
-    } else {
-        const leg1 = xrpLatest.leg1_signals ?? 0;
-        const leg2 = xrpLatest.leg2_signals ?? 0;
-        const bars = xrpLatest.bars_scanned ?? xrpLatest.bars ?? '—';
-        const per = `${(xrpLatest.start_date || '').slice(0, 10)} – ${(xrpLatest.end_date || '').slice(0, 10)}`;
-        html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:16px;font-size:0.82rem;">
-            <div style="margin-bottom:6px;"><span style="background:#38bdf8;color:#000;padding:2px 8px;border-radius:4px;font-weight:700;">XRP-DH</span>
-            <span style="color:var(--text-muted);margin-left:8px;">${per}</span></div>
-            <div>Leg1 (dump BUY_YES) signals: <strong>${leg1}</strong></div>
-            <div>Leg2 (hedge BUY_NO) signals: <strong>${leg2}</strong></div>
-            <div style="color:var(--text-muted);">Bars scanned: ${bars} · step ${xrpLatest.step_minutes ?? '—'}m · file <code style="font-size:0.7rem;">${xrpLatest.filename || ''}</code></div>
-        </div>`;
-    }
+        XRP Lag Strategy — Updown</h3>`;
+    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('XRP', 15)}
+        ${cryptoCard('XRP', 5)}
+    </div>`;
 
     // ── Section 4: Fade / Arbitrage / NEH (simple table) ─────────────────────
     const simple = allReports.filter(r => r.strategy && !isCryptoReport(r));
@@ -1965,7 +2049,7 @@ function updateBacktest(d) {
             const pnl = (r.final_bankroll||0) - (r.initial_bankroll||0);
             const ret = r.initial_bankroll ? ((pnl/r.initial_bankroll)*100).toFixed(1) : '0.0';
             const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-            const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_dump_hedge:'badge-blue'};
+            const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
             return `<tr><td><span class="badge ${stratColors[r.strategy]||'badge-blue'}">${r.strategy}</span></td><td style="font-size:0.8rem;">${r.start_date||''} → ${r.end_date||''}</td><td>${r.trades_count||0}</td><td>$${(r.initial_bankroll||0).toLocaleString()}</td><td>$${(r.final_bankroll||0).toLocaleString()}</td><td class="${pnlCls}">$${pnl.toFixed(2)}</td><td class="${pnlCls}">${ret}%</td></tr>`;
         }).join('');
         html += '</tbody></table>';
@@ -1988,7 +2072,7 @@ function updateBacktest(d) {
                 const ta = testAgg[s] || [0,0];
                 const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
                 const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_dump_hedge:'badge-blue'};
+                const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
                 html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td><span class="badge ${stratColors[s]||'badge-blue'}">${s}</span></td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
             });
         });
@@ -2040,11 +2124,9 @@ function updateSessionSummary(d) {
     const ss = document.getElementById('ss-session');
     if (!ss) return;
     const sid = d.session_id || '-';
-    const bankroll = lastStatusData?.bankroll ?? null;
     ss.textContent = sid;
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
     const setStyle = (id, k, v) => { const e = document.getElementById(id); if (e) e.style[k] = v; };
-    set('ss-bankroll', bankroll != null ? '$' + bankroll.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : '-');
     set('ss-spent', '$' + (d.total_cost ?? 0).toFixed(2));
     set('ss-open', String(d.open_positions ?? 0));
     set('ss-trades', String(d.total_entries ?? 0));
@@ -2167,23 +2249,31 @@ function updateJournal(d) {
     tEl.textContent = '$' + (d.total_pnl || 0).toFixed(2);
     tEl.style.color = (d.total_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
 
-    // Strategy breakdown
+    // Strategy breakdown — always show all active strategies
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
-    if (Object.keys(ss).length > 0) {
-        const colors = {fade:'var(--yellow)',arbitrage:'var(--cyan)',neh:'var(--magenta)',bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_dump_hedge:'#38bdf8'};
-        stratsEl.innerHTML = '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
-            Object.entries(ss).map(([s, v]) => `
-                <div style="font-size:0.78rem;padding:4px 10px;background:rgba(0,229,255,0.03);border:1px solid var(--border);border-radius:3px;">
-                    <span style="color:${colors[s]||'var(--text)'};font-weight:600;">${s.toUpperCase()}</span>
-                    <span style="color:var(--text-muted);margin-left:6px;">${_tradesLabel(v.trades||0)}</span>
-                    <span style="color:var(--text-muted);margin-left:4px;">WR ${((v.win_rate||0)*100).toFixed(0)}%</span>
-                    <span style="color:${(v.pnl||0)>=0?'var(--green)':'var(--red)'};margin-left:4px;">$${(v.pnl||0).toFixed(2)}</span>
-                </div>
-            `).join('') + '</div>';
-    } else {
-        stratsEl.innerHTML = '<span style="font-size:0.78rem;color:var(--text-muted);">No completed trades yet. Start paper trading to see strategy breakdown.</span>';
-    }
+    const ACTIVE_STRATS = ['bitcoin','sol_lag','eth_lag','hype_lag','xrp_lag','weather'];
+    const stratColors = {bitcoin:'var(--green)',sol_lag:'var(--purple)',eth_lag:'#fb923c',hype_lag:'#a78bfa',xrp_lag:'#38bdf8',weather:'#86efac'};
+    const stratLabels = {bitcoin:'BTC',sol_lag:'SOL',eth_lag:'ETH',hype_lag:'HYPE',xrp_lag:'XRP',weather:'WX'};
+    // merge api data + zeros for missing strategies
+    const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
+    // also include any extra strategies with data (e.g. old fade entries)
+    Object.entries(ss).forEach(([s,v]) => { if (!merged[s]) merged[s] = v; });
+    stratsEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+        Object.entries(merged).map(([s, v]) => {
+            const trades = v.trades || 0;
+            const pnl = v.pnl || 0;
+            const wr = ((v.win_rate||0)*100).toFixed(0);
+            const color = stratColors[s] || 'var(--text-muted)';
+            const label = stratLabels[s] || s.toUpperCase();
+            const dim = trades === 0 ? ';opacity:0.45' : '';
+            return `<div style="font-size:0.78rem;padding:4px 10px;background:rgba(0,229,255,0.03);border:1px solid var(--border);border-radius:3px${dim};">
+                <span style="color:${color};font-weight:600;">${label}</span>
+                <span style="color:var(--text-muted);margin-left:6px;">${_tradesLabel(trades)}</span>
+                <span style="color:var(--text-muted);margin-left:4px;">WR ${wr}%</span>
+                <span style="color:${pnl>=0?'var(--green)':'var(--red)'};margin-left:4px;">$${pnl.toFixed(2)}</span>
+            </div>`;
+        }).join('') + '</div>';
 
     // Load current tab data
     loadJournalTab(currentJournalTab);
@@ -2226,7 +2316,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Current</th><th>PnL</th><th>Opened</th></tr></thead><tbody>' +
                 d.positions.map(p => {
                     const pnlCls = (p.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_dump_hedge:'badge-blue'};
+                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',hype_lag:'badge-purple',xrp_lag:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[p.strategy]||'badge-blue'}">${p.strategy||'?'}</span></td>
                         <td style="color:${p.action?.includes('BUY')?'var(--green)':'var(--red)'}">${p.action||''}</td>
@@ -2248,7 +2338,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Reason</th></tr></thead><tbody>' +
                 d.trades.slice(-50).reverse().map(t => {
                     const pnlCls = (t.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',xrp_dump_hedge:'badge-blue'};
+                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_lag:'badge-purple',eth_lag:'badge-yellow',xrp_lag:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[t.strategy]||'badge-blue'}">${t.strategy||'?'}</span></td>
                         <td>${t.action||''}</td>
@@ -2351,7 +2441,7 @@ async function loadJournalSessionList() {
             const wr = ((top.win_rate ?? 0) * 100).toFixed(1);
             const ended = top.ended_at ? _fmtLocalTs(top.ended_at) : (top._source === 'archived' ? _fmtLocalTs(top.last_activity_at) : 'ongoing');
             feat.innerHTML =
-                '<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(0,229,255,0.04);cursor:pointer;" data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">' +
+                '<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.3);cursor:pointer;" data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">' +
                 '<div style="font-weight:700;color:var(--cyan);margin-bottom:4px;">Latest run' + (isSel ? ' <span style="color:var(--green);font-size:0.65rem;">(selected)</span>' : '') + '</div>' +
                 '<div style="font-size:0.74rem;line-height:1.55;color:var(--text);">' +
                 '<span style="color:var(--text-muted);">Session</span> <code style="font-size:0.72rem;">' + sid + '</code> &nbsp;|&nbsp; ' +
@@ -2385,7 +2475,7 @@ async function loadJournalSessionList() {
                 ? '<span style="background:rgba(0,230,118,0.15);color:var(--green);padding:1px 6px;border-radius:4px;font-size:0.65rem;">active</span>'
                 : '<span style="background:rgba(255,255,255,0.06);color:var(--text-muted);padding:1px 6px;border-radius:4px;font-size:0.65rem;">archived</span>';
             const endDisp = s.ended_at ? _fmtLocalTs(s.ended_at) : (active ? '\u2014' : _fmtLocalTs(s.last_activity_at));
-            const rowBg = selected ? 'background:rgba(0,85,255,0.08);' : (i === 0 ? 'background:rgba(0,229,255,0.03);' : '');
+            const rowBg = selected ? 'background:rgba(255,255,255,0.04);' : (i === 0 ? 'background:rgba(255,255,255,0.02);' : '');
             const pnlC = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
             const wrC = parseFloat(wr) >= 55 ? 'var(--green)' : parseFloat(wr) >= 48 ? '#f0c040' : 'var(--red)';
             html += '<tr data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);' + rowBg + '" title="Review this session">';
@@ -2484,7 +2574,8 @@ async function loadConfig() {
             'cfg-strategies-sol_lag-enabled': d.strategies?.sol_lag?.enabled,
             'cfg-strategies-eth_lag-enabled': d.strategies?.eth_lag?.enabled,
             'cfg-strategies-hype_lag-enabled': d.strategies?.hype_lag?.enabled,
-            'cfg-strategies-xrp_dump_hedge-enabled': d.strategies?.xrp_dump_hedge?.enabled,
+            'cfg-strategies-xrp_lag-enabled': d.strategies?.xrp_lag?.enabled,
+            'cfg-strategies-weather-enabled': d.strategies?.weather?.enabled,
             'cfg-strategies-neh-enabled': d.strategies?.neh?.enabled,
             'cfg-exposure-loss_kill_switch_enabled': d.exposure?.loss_kill_switch_enabled,
         };
@@ -2533,9 +2624,7 @@ async function loadConfig() {
             'cfg-strategies-hype_lag-entry_price_max': d.strategies?.hype_lag?.entry_price_max,
             'cfg-strategies-hype_lag-kelly_fraction': d.strategies?.hype_lag?.kelly_fraction,
             'cfg-strategies-hype_lag-ai_confidence_threshold': d.strategies?.hype_lag?.ai_confidence_threshold,
-            'cfg-strategies-xrp_dump_hedge-dump_move_frac': d.strategies?.xrp_dump_hedge?.dump_move_frac,
-            'cfg-strategies-xrp_dump_hedge-max_pair_cost': d.strategies?.xrp_dump_hedge?.max_pair_cost,
-            'cfg-strategies-xrp_dump_hedge-kelly_fraction': d.strategies?.xrp_dump_hedge?.kelly_fraction,
+            'cfg-strategies-xrp_lag-kelly_fraction': d.strategies?.xrp_lag?.kelly_fraction,
             'cfg-exposure-full_size': d.exposure?.full_size,
             'cfg-exposure-moderate_size': d.exposure?.moderate_size,
             'cfg-exposure-minimal_size': d.exposure?.minimal_size,
@@ -2816,12 +2905,12 @@ function updateLivePerf(d) {
     const ws = d.kelly_state._window_stats;
     const stratColors = {
         bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c',
-        hype_lag: '#a78bfa', xrp_dump_hedge: '#38bdf8',
+        hype_lag: '#a78bfa', xrp_lag: '#38bdf8',
         fade: '#ffe600', neh: '#b388ff', arbitrage: '#0055ff',
     };
     const stratLabel = {
         bitcoin: 'BTC', sol_lag: 'SOL', eth_lag: 'ETH',
-        hype_lag: 'HYPE', xrp_dump_hedge: 'XRP', fade: 'FADE',
+        hype_lag: 'HYPE', xrp_lag: 'XRP', fade: 'FADE',
         neh: 'NEH', arbitrage: 'ARB',
     };
     const stratKeys = Object.entries(d.kelly_state)
@@ -2938,7 +3027,7 @@ function updateReasonBuckets(d) {
     solEl.innerHTML = render('SOL', rb.sol_lag);
     ethEl.innerHTML = render('ETH', rb.eth_lag);
     hypeEl.innerHTML = render('HYPE', rb.hype_lag);
-    xrpEl.innerHTML = render('XRP-DH', rb.xrp_dump_hedge);
+    xrpEl.innerHTML = render('XRP', rb.xrp_lag);
     if (updEl) {
         const ts = d.updated_at ? String(d.updated_at).replace('T', ' ').slice(0, 19) + ' UTC' : new Date().toLocaleTimeString();
         updEl.textContent = 'updated ' + ts;
@@ -3394,7 +3483,7 @@ async function loadAllocationChart() {
 
         const colors = {
             neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
-            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_dump_hedge: '#38bdf8',
+            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_lag: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
 
@@ -3580,7 +3669,7 @@ async function loadStrategyPnLChart() {
         const spacing = totalBarSpace / labels.length;
         const colors = {
             neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
-            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_dump_hedge: '#38bdf8',
+            bitcoin: '#00e676', sol_lag: '#e040fb', eth_lag: '#fb923c', hype_lag: '#a78bfa', xrp_lag: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
 
@@ -3791,7 +3880,7 @@ async function loadSessionHistory() {
             const solPnl = ss.sol_lag?.pnl ?? null;
             const ethPnl = ss.eth_lag?.pnl ?? null;
             const hypePnl = ss.hype_lag?.pnl ?? null;
-            const xrpPnl = ss.xrp_dump_hedge?.pnl ?? null;
+            const xrpPnl = ss.xrp_lag?.pnl ?? null;
             const fadePnl = ss.fade?.pnl ?? null;
             const fmtStrat = (v) => v !== null ? `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text-muted)'};">${v>0?'+':''}$${v.toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
 
@@ -3878,7 +3967,7 @@ function _applyBTCChartVisibility() {
             const macdOn = !!s.macd;
             _btcChart.applyOptions({
                 rightPriceScale: {
-                    borderColor: '#1e2a3a',
+                    borderColor: 'rgba(255,255,255,0.08)',
                     scaleMargins: { top: 0.05, bottom: macdOn ? 0.30 : 0.06 },
                 },
             });
@@ -4168,11 +4257,11 @@ function initBTCChart() {
     _btcChart = LightweightCharts.createChart(container, {
         width: initial.w,
         height: initial.h,
-        layout: { background: { color: '#0b0e14' }, textColor: '#7a8da0' },
-        grid: { vertLines: { color: 'rgba(0,85,255,0.06)' }, horzLines: { color: 'rgba(0,85,255,0.06)' } },
+        layout: { background: { color: '#000000' }, textColor: '#7a8da0' },
+        grid: { vertLines: { color: 'rgba(255,255,255,0.06)' }, horzLines: { color: 'rgba(255,255,255,0.06)' } },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-        rightPriceScale: { borderColor: '#1e2a3a', scaleMargins: { top: 0.05, bottom: 0.30 } },
-        timeScale: { borderColor: '#1e2a3a', timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)', scaleMargins: { top: 0.05, bottom: 0.30 } },
+        timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false },
     });
 
     // ── Main pane: candles (Sabre trend-colored) ──
@@ -4189,7 +4278,7 @@ function initBTCChart() {
         priceScaleId: 'macd', color: 'rgba(0,230,118,0.7)',
         priceLineVisible: false, lastValueVisible: false,
     });
-    _btcChart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.75, bottom: 0.02 }, borderColor: '#1e2a3a' });
+    _btcChart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.75, bottom: 0.02 }, borderColor: 'rgba(255,255,255,0.08)' });
     _btcMacdLineSeries   = _btcChart.addLineSeries({ priceScaleId: 'macd', color: '#2196f3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
     _btcMacdSignalSeries = _btcChart.addLineSeries({ priceScaleId: 'macd', color: '#ff6b6b',  lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
 
@@ -4226,7 +4315,7 @@ function _formatAltWatchlistTriggers(watchlist) {
     const cfg = [
         ['sol_lag', 'SOL', 2],
         ['eth_lag', 'ETH', 2],
-        ['xrp_dump_hedge', 'XRP', 4],
+        ['xrp_lag', 'XRP', 4],
         ['hype_lag', 'HYPE', 2],
     ];
     const bits = [];
@@ -4268,7 +4357,7 @@ function _tradeMarkersFromPoints(points, strategy) {
         bitcoin: { key: 'BTC', win: '#22d3ee', loss: '#0891b2' },
         sol_lag: { key: 'SOL', win: '#a855f7', loss: '#7e22ce' },
         eth_lag: { key: 'ETH', win: '#fb923c', loss: '#c2410c' },
-        xrp_dump_hedge: { key: 'XRP', win: '#38bdf8', loss: '#0369a1' },
+        xrp_lag: { key: 'XRP', win: '#38bdf8', loss: '#0369a1' },
         hype_lag: { key: 'HYPE', win: '#a78bfa', loss: '#7c3aed' },
     };
     const m = meta[strategy] || { key: (strategy || '?').slice(0, 3).toUpperCase(), win: '#94a3b8', loss: '#64748b' };
@@ -4366,7 +4455,7 @@ async function loadBTCChart() {
             if (_btcChartDisplay.btcTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'bitcoin'));
             if (_btcChartDisplay.solTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'sol_lag'));
             if (_btcChartDisplay.ethTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'eth_lag'));
-            if (_btcChartDisplay.xrpTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'xrp_dump_hedge'));
+            if (_btcChartDisplay.xrpTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'xrp_lag'));
             if (_btcChartDisplay.hypeTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'hype_lag'));
             _btcCandleSeries.setMarkers(markers.slice(-220));
         }
@@ -4432,6 +4521,46 @@ async function loadBTCChart() {
         // Library still loading — retry in 500ms
         setTimeout(initChartWhenReady, 500);
     }
+})();
+// Init AOS — scroll-triggered entrance animations
+(function() {
+    if (typeof AOS !== 'undefined') {
+        AOS.init({ duration: 600, easing: 'ease-out-cubic', once: false, offset: 20, startEvent: 'DOMContentLoaded' });
+    }
+})();
+
+// Value flash helper — call on SSE hero value updates
+function flashValue(el, positive) {
+    if (!el) return;
+    el.classList.remove('flash-green', 'flash-red');
+    void el.offsetWidth;
+    el.classList.add(positive ? 'flash-green' : 'flash-red');
+    setTimeout(function() { el.classList.remove('flash-green', 'flash-red'); }, 500);
+}
+
+// Track hero values for flash detection
+var _lastHero = {};
+function checkHeroFlash(key, el, isPnl) {
+    if (!el) return;
+    var val = el.textContent || '';
+    if (_lastHero[key] !== val) {
+        _lastHero[key] = val;
+        flashValue(el, !isPnl || val.startsWith('+') || val.startsWith('$') && !val.startsWith('$-'));
+    }
+}
+
+(function setupSSEHeroFlash() {
+    var pairs = [
+        { id: 'hero-bankroll', key: 'bankroll', isPnl: false },
+        { id: 'hero-pnl',      key: 'pnl',      isPnl: true  },
+        { id: 'hero-positions',key: 'positions',isPnl: false },
+        { id: 'hero-trades',   key: 'fills',    isPnl: false },
+    ];
+    pairs.forEach(function(p) {
+        var el = document.getElementById(p.id);
+        if (!el) return;
+        setInterval(function() { checkHeroFlash(p.key, el, p.isPnl); }, 2100);
+    });
 })();
 </script>
 </body>

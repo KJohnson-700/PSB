@@ -14,16 +14,16 @@ To **push or patch vault files from scripts**, set in **local** `.env`: `OBSIDIA
 
 | Strategy | `settings.yaml` key | Enabled (default config) | Loop | `scan_and_analyze` | Execution in `main.py` | Exposure manager |
 |----------|---------------------|--------------------------|------|---------------------|------------------------|------------------|
-| Bitcoin up/down | `strategies.bitcoin` | yes | `_crypto_cycle` | `BitcoinStrategy` | `_execute_bitcoin_signal` → `_execute_bitcoin_signal_impl` | `btc_exposure_manager` |
-| SOL lag | `strategies.sol_lag` | yes | `_crypto_cycle` | `SOLLagStrategy` | `_execute_sol_lag_signal` | `sol_exposure_manager` |
-| ETH lag | `strategies.eth_lag` | yes | `_crypto_cycle` | `ETHLagStrategy` | `_execute_sol_lag_signal` | `eth_exposure_manager` |
-| HYPE lag | `strategies.hype_lag` | yes | `_crypto_cycle` | `HYPELagStrategy` | `_execute_sol_lag_signal` | `hype_exposure_manager` |
-| XRP dump-hedge | `strategies.xrp_dump_hedge` | yes | `_crypto_cycle` | `XRPDumpHedgeStrategy` | `_execute_xrp_dump_hedge_signal` | `xrp_exposure_manager` |
-| Arbitrage | `strategies.arbitrage` | no | `_trading_cycle` | `ArbitrageStrategy` | `_execute_arbitrage_signal` | `event_exposure_manager` (default) |
-| Fade | `strategies.fade` | no | `_trading_cycle` | `FadeStrategy` | `_execute_fade_signal` | `event_exposure_manager` |
-| NEH | `strategies.neh` | no | `_trading_cycle` | `NothingEverHappensStrategy` | `_execute_neh_signal` | `event_exposure_manager` |
+| Bitcoin up/down | `strategies.bitcoin` | yes | `_unified_cycle` | `BitcoinStrategy` | `_execute_bitcoin_signal` → `_execute_bitcoin_signal_impl` | `btc_exposure_manager` |
+| SOL lag | `strategies.sol_lag` | yes | `_unified_cycle` | `SOLLagStrategy` | `_execute_sol_lag_signal` | `sol_exposure_manager` |
+| ETH lag | `strategies.eth_lag` | yes | `_unified_cycle` | `ETHLagStrategy` | `_execute_sol_lag_signal` | `eth_exposure_manager` |
+| HYPE lag | `strategies.hype_lag` | yes | `_unified_cycle` | `HYPELagStrategy` | `_execute_sol_lag_signal` | `hype_exposure_manager` |
+| XRP dump-hedge | `strategies.xrp_dump_hedge` | yes | `_unified_cycle` | `XRPDumpHedgeStrategy` | `_execute_xrp_dump_hedge_signal` | `xrp_exposure_manager` |
+| Arbitrage | `strategies.arbitrage` | no | `_unified_cycle` | `ArbitrageStrategy` | `_execute_arbitrage_signal` | `event_exposure_manager` (default) |
+| Fade | `strategies.fade` | no | `_unified_cycle` | `FadeStrategy` | `_execute_fade_signal` | `event_exposure_manager` |
+| NEH | `strategies.neh` | no | `_unified_cycle` | `NothingEverHappensStrategy` | `_execute_neh_signal` | `event_exposure_manager` |
 
-Crypto strategies are **not** run inside `_trading_cycle`; that loop handles arbitrage / fade / NEH only (see `src/main.py` around the comment that defers BTC/SOL/ETH/HYPE/XRP to the fast loop).
+One scan per `trading.cycle_interval_sec` (default 120s): exits, optional arb/fade/neh, then crypto strategies, then resolution — `src/main.py` `PolyBot._unified_cycle` / `_unified_trading_loop`.
 
 ## Discord execution alerts
 

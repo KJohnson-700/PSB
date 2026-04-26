@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta, timezone
 import aiohttp
@@ -143,26 +144,41 @@ class MarketScanner:
     def _sync_network_phase(self) -> Tuple[
         List[Market], List[Market], List[Market], List[Market], int, int
     ]:
-        """Blocking HTTP: Gamma list + 15m/5m updown + optional HYPE alt. Runs in a thread."""
+        """Blocking HTTP: Gamma list + 15m/5m updown + optional HYPE alt. Runs in a thread.
+
+        Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
+        doesn't add to the wall-clock time of the other fetches.
+        """
         look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
-        markets = self._fetch_markets_gamma(limit=200)
-        updown: List[Market] = []
-        updown_5m: List[Market] = []
-        hype_alt: List[Market] = []
-        try:
-            updown = self.fetch_updown_markets(look_ahead=look_ahead_15m) or []
-        except Exception as e:
-            logger.error(f"Updown market fetch error: {e}")
-        try:
-            updown_5m = self.fetch_updown_5m_markets(look_ahead=look_ahead_5m) or []
-        except Exception as e:
-            logger.error(f"5m updown market fetch error: {e}")
-        if self._should_fetch_hype_alt_markets():
-            try:
-                hype_alt = self.fetch_hype_alt_updown_markets(limit=100) or []
-            except Exception as e:
-                logger.error(f"HYPE alt updown market fetch error: {e}")
-        return markets, updown, updown_5m, hype_alt, look_ahead_15m, look_ahead_5m
+        fetch_hype = self._should_fetch_hype_alt_markets()
+
+        tasks = {
+            "gamma": lambda: self._fetch_markets_gamma(limit=200),
+            "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
+            "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
+        }
+        if fetch_hype:
+            tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
+
+        results: Dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="scanner") as pool:
+            futures = {pool.submit(fn): name for name, fn in tasks.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    results[name] = future.result() or []
+                except Exception as e:
+                    logger.error(f"{name} fetch error: {e}")
+                    results[name] = []
+
+        return (
+            results.get("gamma", []),
+            results.get("updown", []),
+            results.get("updown_5m", []),
+            results.get("hype_alt", []),
+            look_ahead_15m,
+            look_ahead_5m,
+        )
 
     def _empty_scan_result(self, sync_timeout: bool = False) -> Dict[str, Any]:
         meta: Dict[str, Any] = {
@@ -193,7 +209,7 @@ class MarketScanner:
             (lookahead_15m, lookahead_5m)
         """
         strategies = self.config.get("strategies", {}) or {}
-        keys = ["bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_dump_hedge"]
+        keys = ["bitcoin", "sol_lag", "eth_lag", "hype_lag", "xrp_lag"]
 
         enabled_cfgs = []
         for key in keys:

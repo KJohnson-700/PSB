@@ -4,6 +4,14 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-04-22 — Single trading loop (`_unified_cycle`) — **verified working**
+
+- **Before:** Two asyncio tasks — `_main_loop` (300s, exits + arb/fade/neh + resolution) and `_crypto_fast_loop` (120s, crypto only + resolution), each running a full `scan_for_opportunities()` — double scanner load and confusing logs. Operator expectation (“main loop” vs “fast loop”) was easy to misread; crypto-only live scope had arb/fade/neh off, so all entries came only from the fast path while exits trailed on 300s.
+- **After:** One `_unified_trading_loop` calling `_unified_cycle`: **single** scan per tick, **TP/SL** `check_exits` on the **same** cadence as entries, optional arb/fade/neh if enabled, then **bitcoin** / **sol_lag** / **eth_lag** / **hype_lag** / **xrp_dump_hedge**, one `_run_resolution_check(label="[TRADING]")`. Cadence: **`trading.cycle_interval_sec`** (default **120**) in [`config/settings.yaml`](../../config/settings.yaml); `PolyBot.scan_interval` matches for `OPS_JSON` `scan_interval_sec`. Log prefix **`[TRADING]`** (replaces `[FAST]`) for scanner lookahead and crypto leg lines; BTC exception logging uses `exc_info=True`.
+- **Code:** [`src/main.py`](../../src/main.py) — `start()` uses `asyncio.gather(self._unified_trading_loop(), self._daily_coach_loop())` only. Removed: `_main_loop`, `_crypto_fast_loop`, `_trading_cycle`, `_crypto_cycle`.
+- **Tests:** `pytest` — 171 passed after refactor (local `uv run pytest tests/`).
+- **Operator sign-off (same day):** Bot reported **working again** end-to-end after deploy/restart; tail logs for `Starting trading cycle...`, `[TRADING] Scanner lookahead`, `[TRADING] Crypto …`, `Cycle complete`, `OPS_JSON`.
+
 ## 2026-04-22 — Scanner: non-blocking network phase (Railway + local)
 
 - **Issue:** Synchronous `requests` inside `async def scan_for_opportunities` blocked the asyncio event loop for minutes (especially **HYPE alt** slug fetches), stalling **both** the main loop and the fast crypto loop — looked like a full freeze.

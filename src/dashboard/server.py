@@ -187,7 +187,7 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             else "15m"
         )
         return f"HYPE_updown_{sz}"
-    if strategy == "xrp_dump_hedge":
+    if strategy in ("xrp_dump_hedge", "xrp_lag"):
         sz = (
             "5m"
             if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
@@ -382,7 +382,7 @@ _KELLY_STRATEGY_KEYS = (
     "sol_lag",
     "eth_lag",
     "hype_lag",
-    "xrp_dump_hedge",
+    "xrp_lag",
     "fade",
     "neh",
     "arbitrage",
@@ -430,10 +430,10 @@ def _journal_for_query(session_id: Optional[str]):
         return None
     from src.execution.trade_journal import TradeJournal, JOURNAL_DIR
 
-    archive = JOURNAL_DIR.parent / "paper_trades_archive"
-    for base in (JOURNAL_DIR, archive):
-        if (base / session_id).is_dir():
-            return TradeJournal(session_id=session_id)
+    if (JOURNAL_DIR / session_id).is_dir():
+        return TradeJournal(session_id=session_id)
+    if TradeJournal._find_archive_session_path(session_id):
+        return TradeJournal(session_id=session_id)
     return None
 
 
@@ -1219,6 +1219,7 @@ async def start_backtest(request: Request):
     periods = body.get("periods", "all")
     symbol = body.get("symbol", "")
     window = str(body.get("window", 15))
+    test_start = body.get("test_start", "").strip()
 
     with _backtest_jobs_lock:
         running_n = sum(
@@ -1240,18 +1241,12 @@ async def start_backtest(request: Request):
         cmd_args = [
             sys.executable,
             str(script),
-            "--symbol",
-            symbol,
-            "--window",
-            window,
+            "--symbol", symbol,
+            "--window", window,
         ]
-        summary = f"{symbol} {window}m crypto"
-    elif symbol == "XRP-DH":
-        script = PROJECT_ROOT / "scripts" / "run_backtest_xrp_dump_hedge.py"
-        if not script.exists():
-            return {"status": "error", "message": f"{script} not found"}
-        cmd_args = [sys.executable, str(script)]
-        summary = "XRP dump-hedge simulation (synthetic book)"
+        if test_start:
+            cmd_args += ["--test-start", test_start]
+        summary = f"{symbol} {window}m crypto" + (f" test-from={test_start}" if test_start else " [in-sample]")
     else:
         script = PROJECT_ROOT / "scripts" / "run_backtest_rigorous.py"
         if not script.exists():
@@ -1627,13 +1622,13 @@ async def get_strategy_watchlist(
         except Exception as e:
             logger.warning(f"Watchlist general markets unavailable: {e}")
 
-    # ── Crypto updown watchlist (bitcoin / sol_lag / eth_lag / xrp_dump_hedge)
+    # ── Crypto updown watchlist (bitcoin / sol_lag / eth_lag / xrp_lag)
     try:
         btc_cfg = strategies_cfg.get("bitcoin", {})
         sol_cfg = strategies_cfg.get("sol_lag", {})
         eth_cfg = strategies_cfg.get("eth_lag", {})
         hype_cfg = strategies_cfg.get("hype_lag", {})
-        xrp_cfg = strategies_cfg.get("xrp_dump_hedge", {})
+        xrp_cfg = strategies_cfg.get("xrp_lag", {})
         btc_e_min = float(btc_cfg.get("entry_price_min", 0.10))
         btc_e_max = float(btc_cfg.get("entry_price_max", 0.90))
         sol_e_min = float(sol_cfg.get("entry_price_min", 0.46))
@@ -1765,7 +1760,7 @@ async def get_strategy_watchlist(
                         "block_reason": "" if hype_e_min <= price <= hype_e_max else "outside_entry_zone",
                     }
                 )
-            elif strat == "xrp_dump_hedge":
+            elif strat in ("xrp_dump_hedge", "xrp_lag"):
                 threshold = _parse_threshold(q, asset="xrp")
                 xrp_spot = None
                 try:
@@ -1783,7 +1778,7 @@ async def get_strategy_watchlist(
                 in_band = xrp_e_min <= price <= xrp_e_max
                 watchlist.append(
                     {
-                        "strategy": "xrp_dump_hedge",
+                        "strategy": "xrp_lag",
                         "market_id": s.get("market_id"),
                         "market_question": q,
                         "action_hint": s.get("action", _parse_direction(q)),
@@ -1863,7 +1858,14 @@ async def get_strategy_metrics():
             "win_rate": None,
             "reports": 0,
         },
-        "xrp_dump_hedge": {
+        "xrp_lag": {
+            "signals": 0,
+            "trades": 0,
+            "pnl": 0,
+            "win_rate": None,
+            "reports": 0,
+        },
+        "weather": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
@@ -1936,6 +1938,22 @@ async def get_strategy_metrics():
                 metrics[strat]["open_positions"] = (
                     metrics[strat].get("open_positions", 0) + 1
                 )
+
+    # ── Weather scan diagnostics ──
+    if bot_instance and hasattr(bot_instance, "last_ai_scan_stats"):
+        wx = bot_instance.last_ai_scan_stats.get("weather") or {}
+        if wx and "weather" in metrics:
+            metrics["weather"]["scan_stats"] = {
+                "markets_scanned":      wx.get("markets_scanned", 0),
+                "city_matches":         wx.get("city_matches", 0),
+                "temp_markets":         wx.get("temp_markets", 0),
+                "precip_markets":       wx.get("precip_markets", 0),
+                "signals_generated":    wx.get("signals_generated", 0),
+                "skipped_volume":       wx.get("skipped_volume", 0),
+                "skipped_hours":        wx.get("skipped_hours", 0),
+                "skipped_ev":           wx.get("skipped_ev", 0),
+                "skipped_no_threshold": wx.get("skipped_no_threshold", 0),
+            }
 
     return metrics
 
@@ -2189,7 +2207,15 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
         },
-        "xrp_dump_hedge": {
+        "xrp_lag": {
+            "entries": 0,
+            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
+            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
+            "blockers": {},
+        },
+        "weather": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
