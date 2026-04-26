@@ -920,7 +920,9 @@ class SolMacroStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge)
+                    # Match bitcoin.py: never abs() a negative edge — that mislabels adverse trades
+                    # as having positive edge (inverted WR vs edge bucket in journals).
+                    edge = abs(edge) if edge > 0 else edge
 
                     # Confidence: 5m MACD momentum is PRIMARY for 5m markets; lag removed
                     lag_conf_5m = 0.0
@@ -1010,7 +1012,7 @@ class SolMacroStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge)
+                    edge = abs(edge) if edge > 0 else edge
 
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * 0.22 + abs(timing_bonus) * 0.5)
