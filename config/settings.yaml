@@ -99,7 +99,7 @@ strategies:
     min_edge: 0.10                # 15m: raised from 0.07 — backtest assumed 0.50 entry (unrealistic); real slippage needs more edge
     min_edge_5m: 0.08             # 5m: raised from 0.05 (2026-04-24) — NEUTRAL HTF 5m path has zero backtest coverage; 0.05 too loose
     min_4h_hist_magnitude: 50     # 2026-04-24: raised from default 20 — typical active-market histograms are 200-300; 20 filtered almost nothing
-    max_edge_updown: 0.15         # Upper cap — above this likely in-progress market (valid range: 0.07-0.15)
+    max_edge_updown: 0.12         # Safety cap: live audit showed >0.12 underperformed; investigate before raising
     ai_confidence_threshold: 0.60
     # Cap LLM calls per scan cycle (marginal / no-threshold / updown assist).
     max_ai_calls_per_scan: 12
@@ -150,7 +150,7 @@ strategies:
     # ≥15 trades/hour with WR<0.46 AND avg_pnl<-$2 on OUT-OF-SAMPLE data.
     # Run scripts/hourly_heatmap.py --suggest to re-audit; never tune from backtest alone.
     blocked_utc_hours_updown: [0, 1, 2]  # Tier A (confirmed bad, both backtest + live evidence)
-    disable_buy_yes: false       # Re-enabled: 6-trade sample too small; tension fix may improve BUY_YES
+    disable_buy_yes: true        # Safety pause: prior BTC BUY_YES sample was 33% WR; re-enable only after review
 
   # SOL Macro strategy — BTC-to-Solana correlation lag trading
   sol_macro:

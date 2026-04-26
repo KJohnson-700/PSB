@@ -12,6 +12,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-04-26 — Pre-restart BTC up/down safety caps
+
+- **What changed:** `strategies.bitcoin.max_edge_updown` tightened **0.15 → 0.12** and `strategies.bitcoin.disable_buy_yes` flipped **false → true** in `config/settings.yaml`.
+- **Why:** April 26 audit found the live code already documents `edge >0.12` as an inflated/late-entry risk, while config still allowed entries up to 0.15. BTC BUY_YES also remained enabled despite prior 6-trade evidence at 33% WR / negative PnL.
+- **Hypothesis:** Capping the high-edge bucket and pausing BUY_YES should prevent the two riskiest BTC up/down lanes from dragging the next paper session while the anti-LTF/high-edge mechanism is investigated.
+- **Expected outcome:** Fewer late high-edge BTC entries, no BTC BUY_YES exposure, and cleaner out-of-sample evidence from SELL_YES-only BTC trades below the 0.12 cap.
+- **Actual outcome:** `pending` (need ≥15 closed BTC trades after restart, plus separate review before re-enabling BUY_YES).
+- **Status:** `pending`
+
 ### 2026-04-21 — UTC blocklist scope-back to Tier A + re-audit cadence
 
 - **What changed:** `strategies.bitcoin.blocked_utc_hours_updown` narrowed from `[0, 1, 2, 3, 9, 15, 18, 22]` to **`[0, 1, 2]`** in `config/settings.yaml`. H3 / H9 / H15 / H18 / H22 removed from the block (downgraded to "watch"). This is the **first Change Log entry for this blocklist** — prior expansions predate AGENTS.md rule #4 and were not journaled here.
