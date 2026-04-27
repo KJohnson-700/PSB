@@ -45,6 +45,7 @@ from src.analysis.usage_tracker import usage_tracker
 from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
 from src.config_merge import deep_merge_config as _deep_merge
 from src.ai_status import compute_ai_status
+from src.analysis.ai_agent import run_minimax_live_probe
 
 bot_instance: Optional["PolyBot"] = None
 
@@ -866,6 +867,59 @@ async def get_status():
     """
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_active = kill_switch_file.exists()
+    strategy_names = (
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "weather",
+    )
+    strategy_attrs = {
+        "bitcoin": "bitcoin_strategy",
+        "sol_macro": "sol_macro_strategy",
+        "eth_macro": "eth_macro_strategy",
+        "hype_macro": "hype_macro_strategy",
+        "xrp_macro": "xrp_macro_strategy",
+        "weather": "weather_strategy",
+    }
+
+    def _build_strategy_state(cfg: Dict[str, Any], running: bool) -> Dict[str, Dict[str, Any]]:
+        strategies_cfg = (cfg or {}).get("strategies", {})
+        state: Dict[str, Dict[str, Any]] = {}
+        for name in strategy_names:
+            cfg_block = strategies_cfg.get(name, {})
+            configured_enabled = bool(cfg_block.get("enabled", False))
+            row: Dict[str, Any] = {
+                "configured_enabled": configured_enabled,
+                "running": running,
+                "runtime_present": False,
+                "runtime_enabled": None,
+                "last_cycle_time": None,
+                "last_signal_count": None,
+                "cumulative_signal_count": None,
+            }
+            if bot_instance:
+                attr = strategy_attrs.get(name)
+                strat_obj = getattr(bot_instance, attr, None) if attr else None
+                row["runtime_present"] = strat_obj is not None
+                if strat_obj is not None:
+                    row["runtime_enabled"] = bool(
+                        getattr(strat_obj, "enabled", configured_enabled)
+                    )
+                else:
+                    row["runtime_enabled"] = configured_enabled
+                row["last_cycle_time"] = (
+                    getattr(bot_instance, "last_cycle_times", {}) or {}
+                ).get(name)
+                row["last_signal_count"] = (
+                    getattr(bot_instance, "last_signal_counts", {}) or {}
+                ).get(name)
+                row["cumulative_signal_count"] = (
+                    getattr(bot_instance, "cumulative_signal_counts", {}) or {}
+                ).get(name)
+            state[name] = row
+        return state
 
     # ── Read positions from disk (same session as resumable journal) ──
     disk_positions: List[Dict] = _load_disk_positions_for_status()
@@ -922,6 +976,9 @@ async def get_status():
             "positions": positions,
             "session": _command_center_session(_js),
             "ai": compute_ai_status(bot_instance.config, _ai_keys),
+            "strategy_state": _build_strategy_state(
+                bot_instance.config, bool(getattr(bot_instance, "running", False))
+            ),
             "session_id": getattr(bot_instance.journal, "session_id", None),
         }
 
@@ -991,7 +1048,46 @@ async def get_status():
         "open_positions_count": summary.get("open_positions", 0),
         "session": session_cc,
         "ai": compute_ai_status(cfg_disk, None),
+        "strategy_state": _build_strategy_state(cfg_disk, False),
         "session_id": summary.get("session_id"),
+    }
+
+
+def _process_env_ai_keys() -> Dict[str, str]:
+    """Same secret names as ``main.py`` / ``PolyBot.set_api_keys`` for dashboard-only probes."""
+    names = (
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GOOGLE_API_KEY",
+        "MINIMAX_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+    )
+    return {n: v for n in names if (v := os.getenv(n))}
+
+
+@app.get("/api/ai/health")
+async def get_ai_health():
+    """Live MiniMax completion probe (strict JSON + ``estimated_probability``), not just key presence."""
+    cfg: Dict[str, Any] = {}
+    keys: Dict[str, str] = {}
+    if bot_instance:
+        cfg = bot_instance.config
+        keys = dict(getattr(bot_instance.ai_agent, "api_keys", None) or {})
+    elif CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+    if not keys:
+        keys = _process_env_ai_keys()
+    st = compute_ai_status(cfg, keys if keys else None)
+    probe = await run_minimax_live_probe(cfg, keys)
+    return {
+        "ok": bool(probe.get("ok")),
+        "status": st,
+        "probe": probe,
     }
 
 

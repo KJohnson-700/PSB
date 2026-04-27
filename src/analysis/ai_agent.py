@@ -37,6 +37,10 @@ from src.analysis.usage_tracker import UsageTracker, usage_tracker as global_usa
 logger = logging.getLogger(__name__)
 
 
+class AIResponseValidationError(ValueError):
+    """LLM returned JSON that does not satisfy the required machine-parseable schema."""
+
+
 @dataclass
 class AIAnalysis:
     """Result of AI analysis on a market"""
@@ -62,18 +66,20 @@ Your job is to analyze events and estimate the true probability of outcomes.
 Instructions:
 1. Ignore hype, social media sentiment, and personal biases
 2. Focus on factual likelihood based on evidence
-3. Consider: historical data, expert opinions, market_mechanics, timeline
-4. Be conservative - prediction markets often overestimate certain outcomes.
+3. Consider: historical data, expert opinions, market mechanics, timeline
+4. Be conservative — prediction markets often overestimate certain outcomes.
 
-Output ONLY valid JSON in this exact format:
-{
-    "reasoning": "brief explanation of your analysis (50-100 words)",
-    "confidence_score": 0.0-1.0,
-    "estimated_probability": 0.0-1.0,
-    "recommendation": "BUY_YES" or "BUY_NO" or "HOLD"
-}
+OUTPUT (machine-parseable — follow exactly):
+- Return one JSON object only. No markdown code fences, no text before or after.
+- Use EXACTLY these four keys (spellings matter): "reasoning", "confidence_score", "estimated_probability", "recommendation"
+- "reasoning": a single string, 50–100 words
+- "confidence_score": a JSON number between 0 and 1 (e.g. 0.72). Never a string like "high" or "medium-high".
+- "estimated_probability": a JSON number between 0 and 1 — your estimate of P(YES resolves true). Required.
+- "recommendation": exactly one of these three strings: "BUY_YES", "BUY_NO", "HOLD"
+  (Do not use "YES", "NO", "Buy Yes", or other variants.)
 
-Never output anything else except the JSON."""
+Valid minimal example:
+{"reasoning":"Brief evidence-based rationale here.","confidence_score":0.68,"estimated_probability":0.57,"recommendation":"BUY_YES"}"""
     
     def __init__(self, config: Dict[str, Any], usage_tracker: UsageTracker = global_usage_tracker):
         self.config = config.get('ai', {})
@@ -146,6 +152,199 @@ Never output anything else except the JSON."""
         if "BUY_NO" in rec or "NO" == rec or "SELL_YES" in rec:
             return "BUY_NO"
         return "HOLD"
+
+    @staticmethod
+    def _coerce_unit_interval(x: Any, default: float = 0.5) -> float:
+        """Parse a scalar into [0.05, 0.95]; supports 0–100 percentages."""
+        if x is None:
+            return default
+        if isinstance(x, (int, float)) and not isinstance(x, bool):
+            v = float(x)
+            if v > 1.0 and v <= 100.0:
+                v = v / 100.0
+            return max(0.05, min(0.95, v))
+        s = str(x).strip()
+        if not s:
+            return default
+        if s.endswith("%"):
+            try:
+                v = float(s[:-1].strip()) / 100.0
+                return max(0.05, min(0.95, v))
+            except ValueError:
+                return default
+        try:
+            v = float(s)
+            if v > 1.0 and v <= 100.0:
+                v = v / 100.0
+            return max(0.05, min(0.95, v))
+        except ValueError:
+            return default
+
+    @classmethod
+    def _coerce_confidence_score(cls, raw: Any) -> float:
+        """Map provider quirks (e.g. MiniMax 'medium-high') to 0–1."""
+        if raw is None:
+            return 0.55
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return cls._coerce_unit_interval(raw, 0.55)
+        s = str(raw).strip().lower()
+        if not s:
+            return 0.55
+        # Ordered checks — longer phrases first
+        bands = (
+            ("very high", 0.9),
+            ("high", 0.82),
+            ("medium-high", 0.72),
+            ("medium high", 0.72),
+            ("moderate-high", 0.68),
+            ("moderate", 0.58),
+            ("medium", 0.58),
+            ("medium-low", 0.45),
+            ("medium low", 0.45),
+            ("low", 0.35),
+            ("very low", 0.22),
+        )
+        for phrase, val in sorted(bands, key=lambda kv: -len(kv[0])):
+            if phrase in s:
+                return val
+        return cls._coerce_unit_interval(raw, 0.55)
+
+    @staticmethod
+    def _extract_reasoning(data: Dict[str, Any]) -> str:
+        for key in ("reasoning", "rationale", "analysis", "thought", "explanation"):
+            v = data.get(key)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return ""
+
+    @staticmethod
+    def _parse_probability_scalar(x: Any) -> Optional[float]:
+        """Parse P(YES) into (0.05, 0.95); None if missing or unusable."""
+        if x is None:
+            return None
+        if isinstance(x, (int, float)) and not isinstance(x, bool):
+            v = float(x)
+            if v > 1.0 and v <= 100.0:
+                v = v / 100.0
+            if 0.0 <= v <= 1.0:
+                return max(0.05, min(0.95, v))
+            return None
+        s = str(x).strip()
+        if not s:
+            return None
+        if s.endswith("%"):
+            try:
+                v = float(s[:-1].strip()) / 100.0
+                if 0.0 <= v <= 1.0:
+                    return max(0.05, min(0.95, v))
+            except ValueError:
+                return None
+            return None
+        try:
+            v = float(s)
+            if v > 1.0 and v <= 100.0:
+                v = v / 100.0
+            if 0.0 <= v <= 1.0:
+                return max(0.05, min(0.95, v))
+        except ValueError:
+            pass
+        return None
+
+    @classmethod
+    def _extract_estimated_probability_field(cls, data: Dict[str, Any]) -> Optional[float]:
+        for key in (
+            "estimated_probability",
+            "probability",
+            "p_yes",
+            "yes_probability",
+            "prob_yes",
+            "estimated_prob",
+        ):
+            if key not in data:
+                continue
+            got = cls._parse_probability_scalar(data.get(key))
+            if got is not None:
+                return got
+        return None
+
+    @classmethod
+    def _infer_estimated_probability(
+        cls,
+        recommendation: str,
+        confidence_score: float,
+        anchor_yes_price: float,
+    ) -> float:
+        """When the model omits estimated_probability, derive a conservative numeric."""
+        conf = cls._coerce_unit_interval(confidence_score, 0.55)
+        if 0.0 < anchor_yes_price < 1.0:
+            if recommendation == "BUY_YES":
+                return max(0.05, min(0.95, anchor_yes_price + 0.04 + (conf - 0.5) * 0.2))
+            if recommendation == "BUY_NO":
+                return max(0.05, min(0.95, anchor_yes_price - 0.04 - (conf - 0.5) * 0.2))
+            return anchor_yes_price
+        if recommendation == "BUY_YES":
+            return max(0.05, min(0.95, 0.52 + (conf - 0.5) * 0.56))
+        if recommendation == "BUY_NO":
+            return max(0.05, min(0.95, 0.48 - (conf - 0.5) * 0.56))
+        return 0.5
+
+    def _normalize_provider_json(
+        self,
+        data: Dict[str, Any],
+        market_id: str,
+        anchor_yes_price: float = 0.0,
+        *,
+        allow_probability_inference: bool = True,
+    ) -> Optional[AIAnalysis]:
+        """Turn heterogeneous provider JSON into AIAnalysis (MiniMax, etc.)."""
+        reasoning = self._extract_reasoning(data)
+        rec = self._normalize_recommendation(str(data.get("recommendation", "HOLD")))
+        conf = self._coerce_confidence_score(data.get("confidence_score", data.get("confidence")))
+        est = self._extract_estimated_probability_field(data)
+        used_fallback = False
+        if est is None:
+            if not allow_probability_inference:
+                return None
+            est = self._infer_estimated_probability(rec, conf, anchor_yes_price)
+            used_fallback = True
+        if used_fallback:
+            logger.debug(
+                "AI parse fallback for market %s: inferred estimated_probability=%.3f "
+                "(recommendation=%s, confidence=%.2f, anchor_yes=%.3f)",
+                market_id,
+                est,
+                rec,
+                conf,
+                anchor_yes_price,
+            )
+        return AIAnalysis(
+            reasoning=reasoning,
+            confidence_score=float(conf),
+            estimated_probability=float(est),
+            recommendation=rec,
+            market_id=market_id,
+            timestamp=datetime.now(),
+        )
+
+    def _validate_llm_json_contract(self, data: Dict[str, Any], market_id: str) -> None:
+        """Enforce SYSTEM_PROMPT four-key schema; raises AIResponseValidationError."""
+        required = (
+            "reasoning",
+            "confidence_score",
+            "estimated_probability",
+            "recommendation",
+        )
+        missing = [k for k in required if k not in data]
+        if missing:
+            raise AIResponseValidationError(
+                f"market={market_id} missing JSON keys: {missing}"
+            )
+        if not str(data.get("reasoning", "")).strip():
+            raise AIResponseValidationError(f"market={market_id} empty reasoning")
+        if self._parse_probability_scalar(data.get("estimated_probability")) is None:
+            raise AIResponseValidationError(
+                f"market={market_id} estimated_probability missing or not a usable number in [0,1]"
+            )
 
     def _cache_key(self, market_id: str, strategy_hint: str = "") -> str:
         """Cache key includes strategy so the same market gets fresh analysis per strategy."""
@@ -332,7 +531,9 @@ Never output anything else except the JSON."""
         )
 
         if self.consensus_enabled:
-            result = await self._analyze_consensus(user_prompt, market_id)
+            result = await self._analyze_consensus(
+                user_prompt, market_id, current_yes_price
+            )
             if result:
                 self._set_cache(market_id, result, current_yes_price, strategy_hint)
             return result
@@ -345,6 +546,7 @@ Never output anything else except the JSON."""
         # Rate limit before making the API call
         await self._rate_limit()
 
+        attempted_live_provider = False
         for provider_config in self.provider_chain:
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
@@ -367,8 +569,14 @@ Never output anything else except the JSON."""
                     logger.error(f"Unknown provider type '{provider_type}' in provider chain. Skipping.")
                     continue
 
+                attempted_live_provider = True
                 analysis_result = await analysis_function(
-                    user_prompt, market_id, model, api_key, provider_config
+                    user_prompt,
+                    market_id,
+                    model,
+                    api_key,
+                    provider_config,
+                    current_yes_price,
                 )
 
                 if analysis_result:
@@ -384,12 +592,18 @@ Never output anything else except the JSON."""
                 continue
 
         if self.provider_chain:
-            logger.error(f"All AI providers failed for market {market_id}. No analysis could be performed.")
+            msg = f"All AI providers failed for market {market_id}. No analysis could be performed."
+            if attempted_live_provider:
+                logger.critical(msg)
+            else:
+                logger.error(msg)
         else:
             logger.debug(f"No AI providers configured — skipping AI analysis for market {market_id}.")
         return None
 
-    async def _analyze_consensus(self, user_prompt: str, market_id: str) -> Optional[AIAnalysis]:
+    async def _analyze_consensus(
+        self, user_prompt: str, market_id: str, anchor_yes_price: float = 0.0
+    ) -> Optional[AIAnalysis]:
         """Call all providers with keys in parallel; return only if >= consensus_min_agree agree on same action."""
         providers_with_keys = []
         for pc in self.provider_chain:
@@ -402,7 +616,9 @@ Never output anything else except the JSON."""
                 "Consensus enabled but only %d provider(s) have keys (need %d). Falling back to chain.",
                 len(providers_with_keys), self.consensus_min_agree
             )
-            return await self._analyze_chain_fallback(user_prompt, market_id)
+            return await self._analyze_chain_fallback(
+                user_prompt, market_id, anchor_yes_price
+            )
 
         async def call_one(pc: Dict) -> Optional[AIAnalysis]:
             try:
@@ -418,6 +634,7 @@ Never output anything else except the JSON."""
                         model_for_call,
                         self.api_keys[pc["api_key_secret"]],
                         pc,
+                        anchor_yes_price,
                     ),
                     timeout=self.timeout,
                 )
@@ -452,7 +669,9 @@ Never output anything else except the JSON."""
         logger.info("Consensus: no recommendation reached min agreement (min=%d).", self.consensus_min_agree)
         return None
 
-    async def _analyze_chain_fallback(self, user_prompt: str, market_id: str) -> Optional[AIAnalysis]:
+    async def _analyze_chain_fallback(
+        self, user_prompt: str, market_id: str, anchor_yes_price: float = 0.0
+    ) -> Optional[AIAnalysis]:
         """Original chain fallback (first successful provider)."""
         for provider_config in self.provider_chain:
             api_key = self.api_keys.get(provider_config.get("api_key_secret"))
@@ -464,7 +683,14 @@ Never output anything else except the JSON."""
             if not fn:
                 continue
             try:
-                result = await fn(user_prompt, market_id, model, api_key, provider_config)
+                result = await fn(
+                    user_prompt,
+                    market_id,
+                    model,
+                    api_key,
+                    provider_config,
+                    anchor_yes_price,
+                )
                 if result:
                     return result
             except Exception:
@@ -495,7 +721,9 @@ CURRENT MARKET PRICE: YES = ${current_yes_price:.2f} (implies {current_yes_price
         
         prompt += """
 Based on your analysis, estimate the TRUE probability and recommend a trade.
-Remember: The market price may be wrong due to sentiment, bias, or incomplete information."""
+Remember: The market price may be wrong due to sentiment, bias, or incomplete information.
+
+Reply with only the JSON object required by the system message (four keys: reasoning, confidence_score, estimated_probability, recommendation)."""
         
         return prompt
     
@@ -506,6 +734,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
         model: str,
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
     ) -> Optional[AIAnalysis]:
         """OpenAI-compatible API (OpenAI, OpenRouter, and other base_url hosts)."""
         pc = provider_config or {}
@@ -579,13 +808,18 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
 
                 self._maybe_warn_header_quota(provider_label, hdrs)
 
-                parsed = self._parse_response(content or "", market_id)
-                if parsed is None:
-                    logger.warning(f"OpenAI-compat: invalid JSON from model {m} — trying next.")
-                    last_err = ValueError("parse_failed")
+                try:
+                    return self._parse_response(
+                        content or "", market_id, anchor_yes_price
+                    )
+                except AIResponseValidationError as e:
+                    logger.warning(
+                        "OpenAI-compat: schema/parse error model=%s: %s — trying next.",
+                        m,
+                        e,
+                    )
+                    last_err = e
                     continue
-
-                return parsed
 
             except asyncio.TimeoutError:
                 last_err = asyncio.TimeoutError()
@@ -615,6 +849,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
         model: str,
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using Google Gemini API (GOOGLE_API_KEY from AI Studio)."""
         start_time = time.time()
@@ -654,7 +889,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
             )
 
             logger.debug(f"Received analysis from Gemini: {content[:100]}...")
-            return self._parse_response(content, market_id)
+            return self._parse_response(content, market_id, anchor_yes_price)
 
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Gemini API error details: {e}")
@@ -667,6 +902,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
         model: str,
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
     ) -> Optional[AIAnalysis]:
         """Analyzes using Groq API (free tier, no credit card). Get key at console.groq.com"""
         start_time = time.time()
@@ -708,7 +944,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
             )
 
             logger.debug(f"Received analysis from Groq: {content[:100]}...")
-            return self._parse_response(content, market_id)
+            return self._parse_response(content, market_id, anchor_yes_price)
 
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Groq API error details: {e}")
@@ -721,6 +957,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
         model: str,
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
     ) -> Optional[AIAnalysis]:
         """Analyze using Anthropic API"""
         start_time = time.time()
@@ -753,7 +990,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
                     latency=latency
                 )
 
-            return self._parse_response(content, market_id)
+            return self._parse_response(content, market_id, anchor_yes_price)
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Anthropic API error details: {e}")
             raise e
@@ -765,6 +1002,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
         model: str,
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using the MiniMax Anthropic-compatible API (Coding Plan).
 
@@ -807,7 +1045,7 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
                     )
 
                 logger.debug(f"Received analysis from Minimax: {content}")
-                return self._parse_response(content, market_id)
+                return self._parse_response(content, market_id, anchor_yes_price)
 
             except asyncio.TimeoutError:
                 logger.warning(f"Minimax API timed out after {self.timeout}s for market {market_id}")
@@ -845,38 +1083,41 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
                 return block.text
         return ""
 
-    def _parse_response(self, content: str, market_id: str) -> Optional[AIAnalysis]:
-        """Parse AI response into AIAnalysis object"""
+    def _parse_response(
+        self,
+        content: str,
+        market_id: str,
+        anchor_yes_price: float = 0.0,
+    ) -> AIAnalysis:
+        """Parse AI response into AIAnalysis. Raises AIResponseValidationError if invalid."""
+        cleaned = (content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start : end + 1]
         try:
-            # Strip markdown code blocks if present
-            cleaned = content.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                # Remove first and last lines (```json and ```)
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                cleaned = "\n".join(lines).strip()
-            # Extract JSON from mixed text (find first { to last })
-            start = cleaned.find("{")
-            end = cleaned.rfind("}")
-            if start != -1 and end != -1:
-                cleaned = cleaned[start:end + 1]
             data = json.loads(cleaned)
-            
-            return AIAnalysis(
-                reasoning=data.get('reasoning', ''),
-                confidence_score=float(data.get('confidence_score', 0.0)),
-                estimated_probability=float(data.get('estimated_probability', 0.0)),
-                recommendation=data.get('recommendation', 'HOLD'),
-                market_id=market_id,
-                timestamp=datetime.now()
-            )
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse AI response: {e}")
-            logger.debug(f"Raw response: {content}")
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing AI response: {e}")
-            return None
+            logger.error("Failed to parse AI response: %s", e)
+            logger.debug("Raw response: %s", content)
+            raise AIResponseValidationError(
+                f"market={market_id} invalid JSON: {e}"
+            ) from e
+        if not isinstance(data, dict):
+            raise AIResponseValidationError(f"market={market_id} JSON is not an object")
+        self._validate_llm_json_contract(data, market_id)
+        out = self._normalize_provider_json(
+            data, market_id, anchor_yes_price, allow_probability_inference=False
+        )
+        if out is None:
+            raise AIResponseValidationError(
+                f"market={market_id} could not build AIAnalysis after validation"
+            )
+        return out
     
     async def batch_analyze(
         self,
@@ -935,3 +1176,104 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
             return False
         
         return True
+
+
+async def run_minimax_live_probe(
+    merged_config: Dict[str, Any],
+    api_keys: Dict[str, str],
+) -> Dict[str, Any]:
+    """
+    One live completion via the first ``type: minimax`` entry in ``ai.provider_chain``.
+    Used by ``GET /api/ai/health`` to verify the API returns parseable JSON with
+    ``estimated_probability`` (not just env key presence).
+    """
+    ai = merged_config.get("ai") or {}
+    chain: List[Dict[str, Any]] = list(ai.get("provider_chain") or [])
+    pc = next((p for p in chain if str(p.get("type", "")).lower() == "minimax"), None)
+    if not pc:
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "skipped": True,
+            "reason": "no minimax provider in ai.provider_chain",
+        }
+    if not ai.get("enabled", True):
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "skipped": True,
+            "reason": "ai.enabled is false",
+        }
+    if not ai.get("live_inferencing", True):
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "skipped": True,
+            "reason": "ai.live_inferencing is false — no provider calls",
+        }
+    secret = pc.get("api_key_secret")
+    key = api_keys.get(str(secret)) if secret else None
+    if not key or not str(key).strip():
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "error": f"missing API key for {secret}",
+        }
+
+    agent = AIAgent(merged_config)
+    agent.set_api_keys(api_keys)
+    model = str(pc.get("model") or "MiniMax-M2.7")
+    timeout = float(ai.get("timeout", 30))
+    prompt = (
+        "Diagnostic: hypothetical market — fair coin flip for heads. "
+        "Current YES price 0.50. Output only the JSON object required by the system message "
+        "(reasoning, confidence_score, estimated_probability, recommendation)."
+    )
+    t0 = time.time()
+    try:
+        analysis = await asyncio.wait_for(
+            agent._analyze_with_minimax(
+                prompt,
+                "__ai_health_probe__",
+                model,
+                str(key).strip(),
+                pc,
+                0.5,
+            ),
+            timeout=timeout,
+        )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        if analysis is None:
+            return {
+                "ok": False,
+                "probe": "minimax",
+                "model": model,
+                "elapsed_ms": elapsed_ms,
+                "error": "provider returned no analysis",
+            }
+        return {
+            "ok": True,
+            "probe": "minimax",
+            "model": model,
+            "elapsed_ms": elapsed_ms,
+            "recommendation": analysis.recommendation,
+            "estimated_probability": analysis.estimated_probability,
+        }
+    except AIResponseValidationError as e:
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "model": model,
+            "elapsed_ms": elapsed_ms,
+            "error": str(e),
+        }
+    except Exception as e:
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return {
+            "ok": False,
+            "probe": "minimax",
+            "model": model,
+            "elapsed_ms": elapsed_ms,
+            "error": f"{type(e).__name__}: {e}",
+        }

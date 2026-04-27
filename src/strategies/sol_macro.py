@@ -1176,7 +1176,15 @@ class SolMacroStrategy:
                             f"conf={ai_analysis.confidence_score:.2f} p={ai_analysis.estimated_probability:.3f}] "
                             f"'{market.question[:45]}' | {ai_analysis.reasoning[:120]}"
                         )
-                    if not ai_analysis or ai_analysis.recommendation == "HOLD":
+                    if not ai_analysis:
+                        logger.critical(
+                            "%s: AI returned None after provider call for market %s (%s)",
+                            _brand,
+                            market.id,
+                            self._signal_strategy_name,
+                        )
+                        continue
+                    if ai_analysis.recommendation == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
                         logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
@@ -1248,7 +1256,14 @@ class SolMacroStrategy:
                 )
                 ai_calls += 1
                 ai_used = True
-                if not ai2 or ai2.recommendation == "HOLD":
+                if not ai2:
+                    logger.critical(
+                        "%s: AI returned None after provider call for market %s (updown marginal, %s)",
+                        _brand,
+                        market.id,
+                        self._signal_strategy_name,
+                    )
+                elif ai2.recommendation == "HOLD":
                     logger.debug(f"{_brand}: AI HOLD updown marginal '{market.question[:40]}...'")
                 elif not ai_recommendation_supports_action(ai2.recommendation, action):
                     logger.debug(

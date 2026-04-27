@@ -1194,7 +1194,14 @@ class BitcoinStrategy:
                         )
                         ai_calls += 1
                         ai_used = True
-                        if not ai_analysis or ai_analysis.recommendation == "HOLD":
+                        if not ai_analysis:
+                            logger.critical(
+                                "BTC: AI returned None after provider call for market %s — "
+                                "LLM chain failed or response invalid (see prior AI logs)",
+                                market.id,
+                            )
+                            continue
+                        if ai_analysis.recommendation == "HOLD":
                             logger.debug(f"BTC: AI says HOLD on '{market.question[:40]}...'")
                             self._ai_hold_cache[market.id] = time.time()
                             continue
@@ -1251,7 +1258,14 @@ class BitcoinStrategy:
                     )
                     ai_calls += 1
                     ai_used = True
-                    if not ai_analysis or ai_analysis.recommendation == "HOLD":
+                    if not ai_analysis:
+                        logger.critical(
+                            "BTC: AI returned None after provider call for market %s — "
+                            "LLM chain failed or response invalid",
+                            market.id,
+                        )
+                        continue
+                    if ai_analysis.recommendation == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
                         continue
                     if not ai_recommendation_supports_action(ai_analysis.recommendation, action):
@@ -1325,7 +1339,14 @@ class BitcoinStrategy:
                 ai_calls += 1
                 ai_used = True
 
-                if not ai_analysis or ai_analysis.recommendation == "HOLD":
+                if not ai_analysis:
+                    logger.critical(
+                        "BTC: AI returned None after provider call for market %s — "
+                        "LLM chain failed or response invalid (marginal updown path)",
+                        market.id,
+                    )
+                    continue
+                if ai_analysis.recommendation == "HOLD":
                     ai_holds += 1
                     _bump_skip("ai_hold_marginal_updown")
                     # Cache this HOLD — blocks the 5m quant path for ai_hold_veto_ttl_sec

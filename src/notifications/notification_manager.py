@@ -131,35 +131,8 @@ class NotificationManager:
         return any(results)
 
     async def notify_trade(self, trade_info: Dict[str, Any]) -> bool:
-        """Notify about a new trade entry (crypto auto-trade strategies only)."""
-        if not self.enabled or not self.discord_webhook:
-            return False
-        st_raw = trade_info.get("strategy")
-        if not _discord_trade_allowed(st_raw):
-            return False
-
-        st = _strategy_trade_title(st_raw)
-        side = trade_info.get("side", "N/A")
-        size = float(trade_info.get("size") or 0)
-        edge = float(trade_info.get("edge") or 0)
-        price = float(trade_info.get("price") or 0)
-        q = trade_info.get("question", "N/A")
-
-        embed = {
-            "title": f"{st} — entry  [{side}]",
-            "color": 3447003,  # blue
-            "fields": [
-                {"name": "Market", "value": q[:90], "inline": False},
-                {"name": "Side", "value": side, "inline": True},
-                {"name": "Price", "value": f"${price:.3f}", "inline": True},
-                {"name": "Size", "value": f"${size:.2f}", "inline": True},
-                {"name": "Edge", "value": f"{edge:.1%}", "inline": True},
-            ],
-            "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
-            },
-        }
-        return await self.send_discord(None, embed)
+        """Entry alerts are intentionally disabled (Discord is exit-only)."""
+        return False
 
     async def notify_exit(self, exit_info: Dict[str, Any]) -> bool:
         """Notify about a closed position (crypto auto-trade strategies only)."""
@@ -180,25 +153,25 @@ class NotificationManager:
         if entry_price > 0 and size > 0:
             pnl_pct = f" ({100 * pnl / (size * entry_price):+.0f}%)"
 
-        result_text = "WIN ✅" if win else "LOSS ❌"
-        result_color = "✅ WIN" if win else "❌ LOSS"
+        result_text = "WIN" if win else "LOSS"
+        pnl_abs = f"${abs(pnl):.2f}"
+        pnl_signed = f"{'+' if pnl >= 0 else '-'}{pnl_abs}"
+        result_hero = f"{'✅' if win else '❌'} {result_text}  |  {pnl_signed}"
+        result_color = 65280 if win else 16711680
 
         embed = {
-            "title": f"{st} — closed  [{pnl:+.2f}]",
-            "color": 65280 if win else 16711680,
+            "title": f"{st} EXIT — {result_hero}",
+            "color": result_color,
+            "description": f"**{result_text}** on close with PnL **{pnl_signed}{pnl_pct}**",
             "fields": [
-                {"name": "Market", "value": q[:90], "inline": True},
+                {"name": "Market", "value": q[:90], "inline": False},
+                {"name": "Outcome", "value": result_hero, "inline": True},
+                {"name": "PnL", "value": f"{pnl_signed}{pnl_pct}", "inline": True},
                 {
                     "name": "Entry→Exit",
                     "value": f"${entry_price:.2f}  →  ${exit_info.get('price', 0):.2f}",
                     "inline": True,
                 },
-                {
-                    "name": "PnL",
-                    "value": f"${pnl:+.2f}{pnl_pct}",
-                    "inline": True,
-                },
-                {"name": "Result", "value": result_text, "inline": True},
                 {"name": "Reason", "value": str(reason)[:200], "inline": False},
                 {
                     "name": "Exited",

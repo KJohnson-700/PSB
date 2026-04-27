@@ -3,225 +3,270 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PolyBot AI - Dashboard</title>
+    <title>POLYBOT AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg: #000000; --card: rgba(0,0,0,0.92); --card-hover: rgba(0,0,0,0.96); --border: rgba(255,255,255,0.08);
-            --border-glow: rgba(255,255,255,0.08); --text: #c8d6e5; --text-muted: #7a8da0;
-            --cyan: #0055ff; --green: #00e676; --red: #ff1744; --yellow: #ffe600;
-            --magenta: #e040fb; --purple: #b388ff; --accent: #0044cc;
-            --glow-cyan: 0 0 12px rgba(255,255,255,0.12); --glow-green: 0 0 12px rgba(0,230,118,0.15);
+        :root{
+            --bg:#000;--border:rgba(255,255,255,.07);--bx:rgba(0,229,255,.22);
+            --tx:#dde0ee;--td:rgba(80,80,130,.9);--tm:#8888aa;
+            --cy:#00e5ff;--gr:#00ff88;--re:#ff4466;--ye:#ffd700;--pu:#b060ff;
+            /* legacy compat */
+            --text:var(--tx);--text-muted:var(--td);
+            --cyan:var(--cy);--green:var(--gr);--red:var(--re);--yellow:var(--ye);
+            --card:rgba(0,0,0,.62);--border-glow:var(--bx);
+            --glow-cyan:0 0 18px rgba(0,229,255,.2);--glow-green:0 0 16px rgba(0,255,136,.22);
+            --magenta:var(--pu);--purple:var(--pu);--accent:var(--cy);
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-            background: var(--bg);
-            color: var(--text); padding: 20px; font-size: 13px;
-            position: relative;
-            overflow-x: hidden;
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px}
+        body{
+            background-image:linear-gradient(rgba(0,229,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.045) 1px,transparent 1px);
+            background-size:32px 32px;
+            overflow-x:hidden;
         }
-        /* Semi-opaque grid — visible but not distracting, blue lines with white accent */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            z-index: 0;
-            pointer-events: none;
-            background-image:
-                linear-gradient(rgba(255,255,255,0.12) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px),
-                linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
-            background-size: 50px 50px, 50px 50px, 50px 50px, 50px 50px;
-        }
-        .container { max-width: calc(100vw - 40px); margin: auto; position: relative; z-index: 1; }
-        h1 { color: #ffffff; margin-bottom: 4px; font-size: 1.4rem; letter-spacing: 1px; text-shadow: 0 0 12px rgba(255,255,255,0.25); }
-        h2 { color: var(--cyan); font-size: 0.95rem; margin-bottom: 12px; letter-spacing: 0.5px; text-transform: uppercase; opacity: 0.9; }
-        h3 { color: var(--text); font-size: 0.9rem; margin: 12px 0 8px; }
-        .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 16px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-        .grid-3cols { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-        .full { grid-column: 1 / -1; }
-        .card { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.8); }
-        .card:hover { border-color: rgba(255,255,255,0.2); box-shadow: 0 4px 24px rgba(0,0,0,0.8); }
-        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; table-layout: fixed; }
-        th { text-align: left; padding: 8px; background: rgba(0,85,255,0.06); color: var(--cyan); border-bottom: 1px solid var(--border); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; }
-        td { padding: 8px; border-bottom: 1px solid rgba(30,42,58,0.5); }
-        tr:hover { background: rgba(255,255,255,0.02); }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.3px; }
-        .badge-green { background: rgba(0,230,118,0.12); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
-        .badge-red { background: rgba(255,23,68,0.12); color: var(--red); border: 1px solid rgba(255,23,68,0.2); }
-        .badge-yellow { background: rgba(255,230,0,0.12); color: var(--yellow); border: 1px solid rgba(255,230,0,0.2); }
-        .badge-blue { background: rgba(0,85,255,0.1); color: var(--cyan); border: 1px solid rgba(0,85,255,0.2); }
-        .badge-purple { background: rgba(224,64,251,0.1); color: var(--magenta); border: 1px solid rgba(224,64,251,0.2); }
-        .metric-box { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 12px; text-align: center; }
-        .metric-box:hover { border-color: rgba(255,255,255,0.2); }
-        .metric-box .value { font-size: 1.4rem; font-weight: 700; color: #fff; }
-        .metric-box .label { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .pnl-pos { color: var(--green); text-shadow: var(--glow-green); }
-        .pnl-neg { color: var(--red); }
-        .signal-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(30,42,58,0.4); font-size: 0.82rem; }
-        .signal-row:last-child { border-bottom: none; }
-        .signal-row:hover { background: rgba(255,255,255,0.02); }
-        .signal-action { font-weight: 700; min-width: 80px; }
-        .signal-market { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .signal-meta { color: var(--text-muted); font-size: 0.75rem; }
-        button { background: linear-gradient(135deg, var(--accent), var(--cyan)); color: #000000; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; font-weight: 700; font-family: inherit; letter-spacing: 0.3px; transition: all 0.2s; }
-        button:hover { opacity: 0.85; box-shadow: var(--glow-cyan); }
-        button:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none; }
-        .btn-sm { padding: 5px 12px; font-size: 0.75rem; }
-        dialog.ai-review-modal { max-width: min(720px, 94vw); width: 100%; background: rgba(0,0,0,0.97); color: var(--text); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0; box-shadow: 0 12px 48px rgba(0,0,0,0.55); }
-        dialog.ai-review-modal::backdrop { background: rgba(0,0,0,0.65); }
-        .btn-green { background: linear-gradient(135deg, #00c853, var(--green)); }
-        .btn-red { background: linear-gradient(135deg, #d50000, var(--red)); color: #fff; }
-        .btn-purple { background: linear-gradient(135deg, #9c27b0, #7b1fa2); color: #fff; }
-        .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
-        .form-row input, .form-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 3px; flex: 1; font-family: inherit; font-size: 0.82rem; }
-        .form-row input:focus, .form-row select:focus { outline: none; border-color: rgba(255,255,255,0.2); box-shadow: 0 0 6px rgba(255,255,255,0.05); }
-        #trade-status { margin-top: 8px; padding: 8px; border-radius: 4px; font-size: 0.82rem; }
-        .status-ok { background: rgba(0,230,118,0.1); color: var(--green); border: 1px solid rgba(0,230,118,0.2); }
-        .status-err { background: rgba(255,23,68,0.1); color: var(--red); border: 1px solid rgba(255,23,68,0.2); }
-        .test-item { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.78rem; }
-        .test-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-        .dot-pass { background: var(--green); box-shadow: 0 0 4px rgba(0,230,118,0.4); }
-        .dot-fail { background: var(--red); box-shadow: 0 0 4px rgba(255,23,68,0.4); }
-        .scrollbox { max-height: 350px; overflow-y: auto; }
-        .scrollbox::-webkit-scrollbar { width: 4px; }
-        .scrollbox::-webkit-scrollbar-track { background: var(--bg); }
-        .scrollbox::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-        .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
-        .tab { padding: 6px 14px; border-radius: 3px 3px 0 0; cursor: pointer; font-size: 0.78rem; background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); border-bottom: none; font-family: inherit; transition: all 0.2s; }
-        .tab.active { background: var(--card); color: var(--cyan); font-weight: 600; border-color: var(--border-glow); }
-        .tab:hover:not(.active) { color: var(--text); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--cyan); border-radius: 50%; animation: spin 0.6s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .dist-bar { display: flex; height: 20px; border-radius: 3px; overflow: hidden; margin: 8px 0; }
-        .dist-bar div { display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 600; color: #fff; min-width: 20px; }
-        /* Collapsible sections */
-        .collapsible { cursor: pointer; user-select: none; }
-        .collapsible h2::after { content: ' [+]'; font-size: 0.7rem; color: var(--text-muted); }
-        .collapsible.open h2::after { content: ' [-]'; }
-        .collapsible .collapse-body { display: none; }
-        .collapsible.open .collapse-body { display: block; }
-        /* Status hero */
-        .status-hero { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 12px 0; }
-        .hero-item { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 10px 12px; text-align: center; }
-        .hero-item:hover { border-color: rgba(255,255,255,0.2); }
-        .hero-item .hero-val { font-size: 1.2rem; font-weight: 700; color: #fff; }
-        .hero-item .hero-sub { font-size: 0.62rem; color: var(--text-muted); margin-top: 3px; line-height: 1.25; min-height: 2.4em; }
-        .hero-item .hero-lbl { font-size: 0.65rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .status-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-        /* Controls row */
-        .controls { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
-        .controls button { font-size: 0.72rem; padding: 5px 12px; }
-        /* Config panel */
-        .cfg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-        .cfg-group { background: #000000; border: 1px solid rgba(255,255,255,0.06); border-radius: 4px; padding: 12px; }
-        .cfg-group h3 { color: var(--cyan); font-size: 0.78rem; margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .cfg-field { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .cfg-field:last-child { margin-bottom: 0; }
-        .cfg-field label { font-size: 0.78rem; color: var(--text-muted); }
-        .cfg-field input { background: var(--card); border: 1px solid var(--border); color: var(--cyan); padding: 4px 8px; border-radius: 3px; width: 90px; text-align: right; font-family: inherit; font-size: 0.82rem; }
-        .cfg-field input:focus { outline: none; border-color: rgba(255,255,255,0.2); box-shadow: 0 0 6px rgba(255,255,255,0.05); }
-        .cfg-save-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
-        #cfg-status { font-size: 0.78rem; color: var(--text-muted); }
-        /* BTC Chart Panel */
-        #btc-chart-section { margin-bottom: 16px; }
-        #btc-chart-wrap {
-            position: relative;
-            border-radius: 4px;
-            overflow: hidden;
-            background: transparent;
-            width: 100%;
-            height: min(520px, max(280px, 45dvh));
-        }
-        #tradingview_btc { width: 100%; height: 100%; min-height: 0; }
-        .signal-log-item { font-size: 0.72rem; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 6px; }
-        .signal-log-item:last-child { border-bottom: none; }
-        /* Start commands reference */
-        .cmd-ref h3 { font-size: 0.85rem; color: var(--cyan); margin: 14px 0 8px; }
-        .cmd-ref h3:first-child { margin-top: 0; }
-        .cmd-ref .cmd-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-        .cmd-ref pre { flex: 1; min-width: 200px; background: var(--bg); border: 1px solid var(--border); padding: 10px 12px; border-radius: 4px; font-size: 0.76rem; line-height: 1.45; overflow-x: auto; margin: 0; white-space: pre-wrap; word-break: break-all; }
-        .cmd-ref .cmd-note { font-size: 0.72rem; color: var(--text-muted); margin: -4px 0 10px 0; line-height: 1.4; }
+        body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 4px);pointer-events:none;z-index:9000}
 
-        /* AOS overrides — premium card entrance */
-        [data-aos] {
-            opacity: 0;
-            transform: translateY(16px) scale(0.97);
-            transition-property: opacity, transform;
-        }
-        [data-aos].aos-animate {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
+        /* ── Layout ── */
+        .container{max-width:1540px;margin:0 auto;padding:12px 18px 48px;position:relative;z-index:1}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+        .grid-3cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
+        .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+        .full{grid-column:1/-1}
 
-        /* Value flash — JS toggles .flash-green / .flash-red */
-        @keyframes flashGlow {
-            0%   { text-shadow: 0 0 0px currentColor; color: inherit; }
-            40%  { text-shadow: 0 0 16px currentColor; }
-            100% { text-shadow: 0 0 0px currentColor; color: inherit; }
+        /* ── Cards ── */
+        .g,.card{
+            background:rgba(0,0,0,.62);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+            border:1px solid var(--border);border-radius:4px;
+            transition:border-color .18s;
         }
-        .flash-green {
-            animation: flashGlow 0.45s ease-out forwards;
-            color: var(--green) !important;
-        }
-        .flash-red {
-            animation: flashGlow 0.45s ease-out forwards;
-            color: var(--red) !important;
-        }
+        .g:hover,.card:hover{border-color:var(--bx)}
+        .card{padding:16px}
 
-        /* Table row slide-in */
-        @keyframes rowSlide {
-            from { opacity: 0; transform: translateX(-10px); }
-            to   { opacity: 1; transform: translateX(0); }
+        /* ── Section header ── */
+        .sh,h2{
+            font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.2em;color:var(--cy);
+            text-transform:uppercase;display:flex;align-items:center;gap:8px;padding:10px 0 7px;
+            margin:0;
         }
-        .tr-enter { animation: rowSlide 0.3s cubic-bezier(0.22,1,0.36,1) both; }
+        .sh::after,h2::after{content:'';flex:1;height:1px;background:linear-gradient(to right,rgba(0,229,255,.2),transparent)}
+        h1{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;color:var(--tx)}
+        h3{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--cy);text-transform:uppercase;margin:10px 0 6px}
+        .subtitle{color:var(--td);font-size:11px;margin-bottom:10px}
 
-        /* Button press */
-        button:active { transform: scale(0.96); transition: transform 0.1s; }
+        /* ── Status hero / KPI grid ── */
+        .status-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+        .hero-item{
+            background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
+            border-radius:4px;padding:14px 16px;transition:border-color .18s;
+        }
+        .hero-item:hover{border-color:var(--bx)}
+        .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx)}
+        .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px}
+        .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px}
+
+        /* ── Metric boxes ── */
+        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s}
+        .metric-box:hover{border-color:var(--bx)}
+        .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--tx)}
+        .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px}
+
+        /* ── Badges ── */
+        .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
+        .badge-green,.bdg.run{background:rgba(0,255,136,.1);border-color:var(--gr);color:var(--gr)}
+        .badge-red,.bdg.stop{background:rgba(255,68,102,.1);border-color:var(--re);color:var(--re)}
+        .badge-yellow,.bdg.paper{background:rgba(255,215,0,.1);border-color:var(--ye);color:var(--ye)}
+        .badge-blue,.bdg.live{background:rgba(0,229,255,.07);border-color:rgba(0,229,255,.35);color:var(--cy)}
+        .badge-purple,.bdg.ai{background:rgba(176,96,255,.1);border-color:var(--pu);color:var(--pu)}
+        .bdg.ct{background:rgba(0,255,136,.07);border-color:rgba(0,255,136,.35);color:var(--gr)}
+
+        /* ── Buttons ── */
+        button,.abtn{
+            font-family:'IBM Plex Mono',monospace;font-size:11px;padding:5px 11px;border-radius:3px;
+            border:1px solid rgba(255,255,255,.15);cursor:pointer;
+            transition:transform .12s,box-shadow .12s,filter .12s;letter-spacing:.04em;
+            user-select:none;background:rgba(255,255,255,.04);color:var(--tm);
+        }
+        button:hover,.abtn:hover{transform:scale(1.04);filter:brightness(1.2)}
+        button:active,.abtn:active{transform:scale(.96)}
+        button:disabled{opacity:.3;cursor:not-allowed;transform:none;filter:none}
+        .btn-sm{padding:4px 10px;font-size:11px}
+        .btn-green,.ag{background:rgba(0,255,136,.1)!important;border-color:var(--gr)!important;color:var(--gr)!important}
+        .btn-red,.ar{background:rgba(255,68,102,.1)!important;border-color:var(--re)!important;color:var(--re)!important}
+        .btn-purple,.ap{background:rgba(176,96,255,.1)!important;border-color:var(--pu)!important;color:var(--pu)!important}
+        .ab{background:rgba(59,130,246,.1)!important;border-color:#3b82f6!important;color:#60a5fa!important}
+        .ay{background:rgba(255,215,0,.1)!important;border-color:var(--ye)!important;color:var(--ye)!important}
+        .ak{background:rgba(255,20,20,.14)!important;border-color:#ff2020!important;color:#ff6060!important;box-shadow:0 0 6px rgba(255,20,20,.25)!important}
+        .ac{background:rgba(0,229,255,.07)!important;border-color:rgba(0,229,255,.35)!important;color:var(--cy)!important}
+        .agh{background:rgba(255,255,255,.04)!important;border-color:rgba(255,255,255,.1)!important;color:var(--tm)!important}
+
+        /* ── Controls row ── */
+        .status-bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+        .controls{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;align-items:center}
+
+        /* ── Tables ── */
+        table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+        th{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--td);text-align:left;padding:7px 12px;border-bottom:1px solid rgba(255,255,255,.06)}
+        td{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.04);color:var(--tm)}
+        tr:hover td{background:rgba(0,229,255,.025)}
+        .tr-enter{animation:rowSlide .3s cubic-bezier(.22,1,.36,1) both}
+
+        /* ── Tabs ── */
+        .tabs{display:flex;margin-bottom:0}
+        #main-view-tabs{border-bottom:1px solid rgba(255,255,255,.05)}
+        .tab{font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 15px;background:none;border:none;color:var(--td);cursor:pointer;position:relative;transition:color .15s;letter-spacing:.04em}
+        .tab:hover{color:var(--tm)}
+        .tab.active,.tab.on{color:var(--cy)}
+        .tab.active::after,.tab.on::after{content:'';position:absolute;bottom:-1px;left:0;right:0;height:2px;background:var(--cy);box-shadow:0 0 8px var(--cy)}
+        .tab-content{display:none}
+        .tab-content.active{display:block}
+
+        /* Sub-tabs (journal) */
+        #journal-tabs{margin-bottom:12px;border-bottom:1px solid rgba(255,255,255,.05)}
+
+        /* ── Dialog ── */
+        dialog.ai-review-modal{max-width:min(720px,94vw);width:100%;background:rgba(0,0,0,.97);color:var(--tx);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:0;box-shadow:0 12px 48px rgba(0,0,0,.55)}
+        dialog.ai-review-modal::backdrop{background:rgba(0,0,0,.65)}
+
+        /* ── Form elements ── */
+        .form-row{display:flex;gap:8px;margin-bottom:8px}
+        .form-row input,.form-row select{background:rgba(0,0,0,.5);border:1px solid var(--border);color:var(--tx);padding:6px 10px;border-radius:3px;flex:1;font-family:'IBM Plex Mono',monospace;font-size:11px}
+        .form-row input:focus,.form-row select:focus{outline:none;border-color:rgba(255,255,255,.2)}
+        input[type=date],select{background:rgba(0,0,0,.5);border:1px solid var(--border);color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 8px;border-radius:3px}
+        input[type=checkbox]{accent-color:var(--cy)}
+        #trade-status{margin-top:8px;padding:8px;border-radius:4px;font-size:11px}
+        .status-ok{background:rgba(0,255,136,.07);color:var(--gr);border:1px solid rgba(0,255,136,.25)}
+        .status-err{background:rgba(255,68,102,.07);color:var(--re);border:1px solid rgba(255,68,102,.25)}
+
+        /* ── Config panel ── */
+        .cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+        .cfg-group{background:rgba(0,0,0,.5);border:1px solid var(--border);border-radius:4px;padding:12px}
+        .cfg-group h3{color:var(--cy);font-size:9px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.12em}
+        .cfg-group h3::after{display:none}
+        .cfg-field{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+        .cfg-field:last-child{margin-bottom:0}
+        .cfg-field label{font-size:11px;color:var(--td)}
+        .cfg-field input{background:rgba(0,0,0,.5);border:1px solid var(--border);color:var(--cy);padding:4px 8px;border-radius:3px;width:90px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px}
+        .cfg-field input:focus{outline:none;border-color:rgba(255,255,255,.2)}
+        .cfg-field-row label{display:flex;align-items:center;gap:6px;cursor:pointer}
+        .cfg-save-row{display:flex;gap:8px;align-items:center;margin-top:12px}
+        #cfg-status{font-size:11px;color:var(--td)}
+
+        /* ── Scrollbox ── */
+        .scrollbox{max-height:350px;overflow-y:auto}
+        .scrollbox::-webkit-scrollbar{width:3px}
+        .scrollbox::-webkit-scrollbar-track{background:transparent}
+        .scrollbox::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+        /* ── Test dots ── */
+        .test-item{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px}
+        .test-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+        .dot-pass{background:var(--gr);box-shadow:0 0 4px rgba(0,255,136,.4)}
+        .dot-fail{background:var(--re);box-shadow:0 0 4px rgba(255,68,102,.4)}
+
+        /* ── Signal rows ── */
+        .signal-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px}
+        .signal-row:last-child{border-bottom:none}
+        .signal-row:hover{background:rgba(0,229,255,.025)}
+        .signal-action{font-weight:700;min-width:80px;font-family:'IBM Plex Mono',monospace}
+        .signal-market{flex:1;color:var(--td);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .signal-meta{color:var(--td);font-size:10px}
+        .signal-log-item{font-size:10px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;gap:6px}
+        .signal-log-item:last-child{border-bottom:none}
+
+        /* ── Distribution bar ── */
+        .dist-bar{display:flex;height:20px;border-radius:3px;overflow:hidden;margin:8px 0}
+        .dist-bar div{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#fff;min-width:20px}
+
+        /* ── BTC chart ── */
+        #btc-chart-section{margin-bottom:12px}
+        #btc-chart-wrap{position:relative;border-radius:4px;overflow:hidden;background:transparent;width:100%;height:min(520px,max(280px,45dvh))}
+        #tradingview_btc{width:100%;height:100%;min-height:0}
+
+        /* ── Commands ref ── */
+        .cmd-ref h3{font-size:12px;color:var(--cy);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.06em}
+        .cmd-ref h3:first-child{margin-top:0}
+        .cmd-ref h3::after{display:none}
+        .cmd-ref .cmd-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+        .cmd-ref pre{flex:1;min-width:200px;background:rgba(0,0,0,.5);border:1px solid var(--border);padding:10px 12px;border-radius:3px;font-size:11px;line-height:1.45;overflow-x:auto;margin:0;white-space:pre-wrap;word-break:break-all;font-family:'IBM Plex Mono',monospace;color:var(--cy)}
+        .cmd-ref .cmd-note{font-size:10px;color:var(--td);margin:-4px 0 10px 0;line-height:1.4}
+        .cmd-note{font-size:10px;color:var(--td);line-height:1.5}
+
+        /* ── Collapsible ── */
+        .collapsible{cursor:pointer;user-select:none}
+        .collapsible h2::after{content:' [+]';background:none;height:auto;width:auto;flex:0 0 auto;font-size:10px;color:var(--td);letter-spacing:normal;font-weight:400}
+        .collapsible.open h2::after{content:' [-]'}
+        .collapsible .collapse-body{display:none}
+        .collapsible.open .collapse-body{display:block}
+
+        /* ── PnL colors ── */
+        .pnl-pos{color:var(--gr)}
+        .pnl-neg{color:var(--re)}
+
+        /* ── Spinner ── */
+        .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--cy);border-radius:50%;animation:spin .6s linear infinite}
+
+        /* ── Animations ── */
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes glow{0%,100%{box-shadow:0 0 4px currentColor}50%{box-shadow:0 0 16px currentColor,0 0 28px currentColor}}
+        @keyframes flashGlow{0%{text-shadow:0 0 0px currentColor}40%{text-shadow:0 0 16px currentColor}100%{text-shadow:0 0 0px currentColor}}
+        @keyframes rowSlide{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+        .flash-green{animation:flashGlow .45s ease-out forwards;color:var(--gr)!important}
+        .flash-red{animation:flashGlow .45s ease-out forwards;color:var(--re)!important}
+        .tr-enter{animation:rowSlide .3s cubic-bezier(.22,1,.36,1) both}
+
+        /* AOS */
+        [data-aos]{opacity:0;transform:translateY(14px) scale(0.98);transition-property:opacity,transform}
+        [data-aos].aos-animate{opacity:1;transform:translateY(0) scale(1)}
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <!-- AOS — scroll-triggered entrance animations -->
     <link rel="stylesheet" href="https://unpkg.com/aos@2.3.4/dist/aos.css" />
     <script src="https://unpkg.com/aos@2.3.4/dist/aos.js"></script>
-    <!-- Motion One — spring animations for modal -->
-    <script src="https://unpkg.com/motion@10/dist/motion.js"></script>
     <!-- DASHBOARD_HEAD_INJECT -->
     <!-- HTMX + Alpine: Phase 4 progressive enhancement (fragment poll below; Alpine available for future UI state). -->
     <script defer src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
+    <style>
+        /* ── Sticky header ── */
+        .hdr{position:sticky;top:0;z-index:200;background:rgba(0,0,0,.88);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.05);padding:10px 18px 0}
+        .hdr-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px}
+        .brand{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;color:var(--tx)}
+        .ver{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td)}
+        .sid{background:rgba(30,80,200,.18);border:1px solid rgba(30,80,200,.45);border-radius:3px;padding:2px 8px;color:#70aaff;font-size:10px;display:inline-block;margin-left:10px;font-family:'IBM Plex Mono',monospace}
+    </style>
 </head>
 <body>
-<div class="container">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;">
-        <h1>POLYBOT AI</h1>
-        <span style="color:var(--text-muted);font-size:0.7rem;">v0.2.0</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
-        <p class="subtitle" id="last-updated" style="margin:0;">Dashboard loading...</p>
-        <span id="htmx-ui-rev" hx-get="/api/dashboard/health-snippet" hx-trigger="load, every 60s" hx-swap="innerHTML" style="font-size:0.68rem;"></span>
-    </div>
 
-    <div class="tabs" id="main-view-tabs" style="margin-bottom:12px;">
-        <div class="tab active" data-view="live" onclick="switchMainView('live')">Live</div>
-        <div class="tab" data-view="performance" onclick="switchMainView('performance')">Performance</div>
-        <div class="tab" data-view="journal" onclick="switchMainView('journal')">Journal</div>
-        <div class="tab" data-view="backtest" onclick="switchMainView('backtest')">Backtest</div>
-        <div class="tab" data-view="commands" onclick="switchMainView('commands')">Commands</div>
+<!-- STICKY HEADER -->
+<div class="hdr">
+    <div class="hdr-top">
+        <div>
+            <span class="brand">POLYBOT AI</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);margin-left:14px;" id="last-updated">Dashboard loading...</span>
+            <span class="sid" id="htmx-ui-rev" hx-get="/api/dashboard/health-snippet" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
+        </div>
+        <span class="ver">v0.2.2</span>
     </div>
+    <div class="tabs" id="main-view-tabs">
+        <div class="tab active" data-view="live" onclick="switchMainView('live')">live</div>
+        <div class="tab" data-view="performance" onclick="switchMainView('performance')">performance</div>
+        <div class="tab" data-view="journal" onclick="switchMainView('journal')">journal</div>
+        <div class="tab" data-view="backtest" onclick="switchMainView('backtest')">backtest</div>
+        <div class="tab" data-view="commands" onclick="switchMainView('commands')">commands</div>
+    </div>
+</div>
+
+<div class="container">
 
     <div id="view-live">
 
     <!-- COMMAND CENTER — top of live tab -->
-    <div class="card" data-aos="fade-up" data-aos-delay="0" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" data-aos-delay="0" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h2 style="margin-bottom:0;">Command Center</h2>
-            <div class="status-bar" id="status-badges"><span class="badge badge-yellow">Loading...</span></div>
+            <h2 style="flex:1;padding:10px 0 7px;">Command Center</h2>
+            <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
             <div class="hero-item" title="Live bankroll from the bot">
@@ -233,18 +278,19 @@
             <div class="hero-item" title="Paper session: total ENTRY events since this session started (journal).">
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills</div></div>
         </div>
-        <p id="command-center-hint" style="font-size:0.68rem;color:var(--text-muted);margin:10px 0 0 0;line-height:1.45;">Session metrics come from the trade journal. Daily (UTC) metrics come from the risk manager and reset at UTC midnight on the host.</p>
-        <div class="controls">
-            <label class="btn-sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;">
+        <p id="command-center-hint" style="font-size:10px;color:var(--td);margin:8px 0 0 0;line-height:1.5;">Session metrics come from the trade journal. Daily (UTC) metrics come from the risk manager and reset at UTC midnight on the host.</p>
+        <div class="controls" style="padding:8px 0 4px;">
+            <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
-                <span>Fresh slate</span>
+                Fresh slate
             </label>
             <button class="btn-sm btn-green" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="btn-sm btn-red" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
-            <button class="btn-sm btn-green" onclick="runScan()">Scan Markets</button>
-            <button class="btn-sm" onclick="runTests()">Run Unit Tests</button>
-            <button class="btn-sm btn-red" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
-            <button class="btn-sm" style="background:linear-gradient(135deg,#e65100,#bf360c);color:#fff;" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
+            <button class="btn-sm ay" onclick="runScan()">Scan Markets</button>
+            <button class="btn-sm ab" onclick="runTests()">Run Unit Tests</button>
+            <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
+            <button class="btn-sm ap" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New paper round</button>
+            <button class="btn-sm ac" onclick="location.reload()" title="Restart / refresh data">Restart / refresh data</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div id="trade-section" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
@@ -799,11 +845,9 @@
          ═══════════════════════════════════════════════════════ -->
     <div id="view-backtest" style="display:none;">
 
-    <p class="cmd-note" style="margin:0 0 14px 0;padding:10px 12px;background:rgba(139,92,246,0.12);border:1px solid var(--border);border-radius:6px;">
-        <strong>Hosted (Railway, Docker):</strong> use the buttons below while the bot runs — backtests start as a <em>subprocess</em> and do not replace the service.
-        Do not set the container start command to <code>main.py --backtest</code>; that mode exits after one run and never keeps paper/live trading up.
-        For one-off CLI runs locally, use the Commands tab or a second shell; on PaaS, prefer this tab or a separate Cron job.
-    </p>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:4px;margin-bottom:14px;">
+        <strong style="color:var(--tm);">Hosted (Railway, Docker):</strong> Use the buttons below while the bot runs — backtests start as a subprocess and do not replace the service. For one-off CLI runs, use the Commands tab.
+    </div>
 
     <!-- Backtest Controls -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
