@@ -586,7 +586,7 @@
         <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;" id="weather-hero">
-        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Scanned</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Total Seen</div></div>
         <div class="hero-item"><div class="hero-val" id="wx-city">-</div><div class="hero-lbl">City Match</div></div>
         <div class="hero-item"><div class="hero-val" id="wx-temp">-</div><div class="hero-lbl">Temp Mkts</div></div>
         <div class="hero-item"><div class="hero-val" id="wx-precip">-</div><div class="hero-lbl">Precip Mkts</div></div>
@@ -1139,7 +1139,51 @@ function switchMainView(which) {
             if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
         }, 80);
     }
+    if (typeof scheduleDashboardRelayout === 'function') {
+        scheduleDashboardRelayout();
+    }
 }
+
+let _dashboardRelayoutTimer = null;
+function _runDashboardRelayout() {
+    try {
+        if (typeof _syncBTCChartLayout === 'function') _syncBTCChartLayout();
+    } catch (e) {}
+    try {
+        if (typeof _scheduleCanvasChartRedraw === 'function') _scheduleCanvasChartRedraw();
+    } catch (e) {}
+    try {
+        if (window.AOS && typeof window.AOS.refreshHard === 'function') {
+            window.AOS.refreshHard();
+        } else if (window.AOS && typeof window.AOS.refresh === 'function') {
+            window.AOS.refresh();
+        }
+    } catch (e) {}
+}
+
+function scheduleDashboardRelayout() {
+    if (_dashboardRelayoutTimer) {
+        clearTimeout(_dashboardRelayoutTimer);
+    }
+    requestAnimationFrame(() => _runDashboardRelayout());
+    _dashboardRelayoutTimer = setTimeout(() => {
+        _dashboardRelayoutTimer = null;
+        _runDashboardRelayout();
+        setTimeout(() => _runDashboardRelayout(), 160);
+    }, 80);
+}
+
+window.addEventListener('resize', scheduleDashboardRelayout);
+window.addEventListener('orientationchange', scheduleDashboardRelayout);
+window.addEventListener('pageshow', scheduleDashboardRelayout);
+document.addEventListener('fullscreenchange', scheduleDashboardRelayout);
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) scheduleDashboardRelayout();
+});
+if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+    window.visualViewport.addEventListener('resize', scheduleDashboardRelayout);
+}
+
 function copyDashboardCmd(btn) {
     var text = btn.getAttribute('data-cmd');
     if (!text) return;
@@ -1659,7 +1703,7 @@ function updateWeatherDiag(metricsData) {
     // ── Live tab weather panel ──────────────────────────────────────
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
     if (wx) {
-        set('wx-scanned', wx.markets_scanned ?? '-');
+        set('wx-scanned', wx.total_markets_seen ?? '-');
         set('wx-city',    wx.city_matches ?? '-');
         set('wx-temp',    wx.temp_markets ?? '-');
         set('wx-precip',  wx.precip_markets ?? '-');
@@ -1688,6 +1732,8 @@ function updateWeatherDiag(metricsData) {
         <div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:8px 12px;margin-bottom:6px;">
             <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Weather Scan Diagnostics</div>
             <div style="flex-wrap:wrap;display:flex;gap:4px 0;">
+                ${row('total', wx.total_markets_seen, 'var(--text)')}
+                ${row('keyword', wx.weather_keyword_matches, wx.weather_keyword_matches > 0 ? '#86efac' : 'var(--text-muted)')}
                 ${row('scanned', wx.markets_scanned, 'var(--text)')}
                 ${row('city match', wx.city_matches, wx.city_matches > 0 ? 'var(--green)' : 'var(--text-muted)')}
                 ${row('temp', wx.temp_markets, '#fb923c')}
@@ -1696,6 +1742,7 @@ function updateWeatherDiag(metricsData) {
             </div>
             <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
                 <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Skipped:</span>
+                ${row('liq', wx.skipped_liquidity, wx.skipped_liquidity > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
                 ${row('volume', wx.skipped_volume, wx.skipped_volume > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
                 ${row('timing', wx.skipped_hours, wx.skipped_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
                 ${row('ev', wx.skipped_ev, wx.skipped_ev > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
@@ -2806,17 +2853,26 @@ async function resetPaperSession() {
         if (res.ok) {
             let msg = `Paper session reset.\nNew session: ${data.new_session_id}\nBankroll: $${Number(data.bankroll).toFixed(2)}`;
             if (data.archived_to) msg += `\nArchived: ${data.archived_to}`;
-            const ab = data.auto_backtest;
-            if (ab?.status === 'started' && ab.job_id) {
-                try {
-                    localStorage.setItem('psb_pending_bt_job', ab.job_id);
-                    localStorage.setItem('psb_pending_bt_label', 'SOL 5m');
-                } catch (_) {}
-                msg += `\nAuto backtest: SOL 5m started (job ${ab.job_id})`;
-            } else if (ab?.status === 'skipped') {
-                msg += `\nAuto backtest skipped: ${ab.reason || 'capacity'}`;
-            } else if (ab?.status === 'error') {
-                msg += `\nAuto backtest error: ${ab.reason || 'unknown'}`;
+            const autoBacktests = Array.isArray(data.auto_backtests)
+                ? data.auto_backtests
+                : (data.auto_backtest ? [data.auto_backtest] : []);
+            let trackedJob = false;
+            for (const ab of autoBacktests) {
+                const label = ab?.name === 'weather' ? 'weather' : 'SOL 5m';
+                if (ab?.status === 'started' && ab.job_id) {
+                    if (!trackedJob) {
+                        try {
+                            localStorage.setItem('psb_pending_bt_job', ab.job_id);
+                            localStorage.setItem('psb_pending_bt_label', label);
+                        } catch (_) {}
+                        trackedJob = true;
+                    }
+                    msg += `\nAuto backtest: ${label} started (job ${ab.job_id})`;
+                } else if (ab?.status === 'skipped') {
+                    msg += `\nAuto backtest skipped (${label}): ${ab.reason || 'capacity'}`;
+                } else if (ab?.status === 'error') {
+                    msg += `\nAuto backtest error (${label}): ${ab.reason || 'unknown'}`;
+                }
             }
             alert(msg);
             location.reload();

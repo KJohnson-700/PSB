@@ -6,9 +6,11 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+from src.analysis.kelly_sizer import KellySizer
 from src.market.scanner import Market
 from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.math_utils import PositionSizer
+from src.strategies.weather import WeatherStrategy
 
 from tests.async_helpers import run_async
 
@@ -183,3 +185,54 @@ class TestConsensusSkipsCryptoUpdown:
         alerts = strat.scan_for_consensus([m])
         assert len(alerts) == 1
         assert alerts[0].market_id == "gen-1"
+
+
+class TestWeatherStrategy:
+    def test_weather_strategy_ignores_crypto_updown_markets(self):
+        cfg = _make_config()
+        cfg["strategies"]["weather"] = {
+            "enabled": True,
+            "gap_min": 0.15,
+            "min_ev": 0.05,
+            "min_volume": 0,
+            "min_liquidity": 0,
+            "min_hours_to_resolution": 0,
+            "max_hours_to_resolution": 9999,
+            "max_yes_price": 0.50,
+            "kelly_fraction": 0.25,
+            "metar_enabled": False,
+        }
+        strat = WeatherStrategy(cfg, PositionSizer(cfg), KellySizer(cfg))
+        end = datetime.now() + timedelta(hours=12)
+        market = Market(
+            id="sol-updown-15m",
+            question="Solana Up or Down - March 9, 2:15AM-2:30AM ET",
+            description="Weather-like words should not matter here.",
+            volume=100000,
+            liquidity=50000,
+            yes_price=0.20,
+            no_price=0.80,
+            spread=0.02,
+            end_date=end,
+            token_id_yes="y",
+            token_id_no="n",
+            group_item_title="",
+            slug="sol-updown-15m-123456",
+        )
+        with patch.object(
+            strat,
+            "_fetch_precip_forecast",
+            side_effect=AssertionError("crypto updown market should be skipped before forecast fetch"),
+        ):
+            signals = run_async(strat.scan_and_analyze([market], bankroll=500.0))
+        assert signals == []
+        assert strat._scan_stats["total_markets_seen"] == 1
+        assert strat._scan_stats["weather_keyword_matches"] == 0
+
+    def test_kelly_sizer_honors_weather_strategy_config(self):
+        cfg = _make_config()
+        cfg["strategies"]["weather"] = {
+            "kelly_fraction": 0.18,
+        }
+        sizer = KellySizer(cfg)
+        assert sizer.get_kelly_fraction("weather", streak_multiplier=1.0) == 0.18

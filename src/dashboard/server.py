@@ -118,6 +118,34 @@ def set_bot_instance(bot: "PolyBot"):
     bot_instance = bot
     # Pre-warm the cache when bot starts so first dashboard load is instant
     _maybe_trigger_refresh(max_age=0)
+    auto_bts = _maybe_start_auto_backtests("startup")
+    if auto_bts:
+        session_id = getattr(getattr(bot_instance, "journal", None), "session_id", None)
+        for auto_bt in auto_bts:
+            status = auto_bt.get("status")
+            name = auto_bt.get("name", "unknown")
+            if status == "started":
+                logger.info(
+                    "Dashboard startup auto-backtest: %s started for session=%s job_id=%s pid=%s",
+                    name,
+                    session_id,
+                    auto_bt.get("job_id"),
+                    auto_bt.get("pid"),
+                )
+            elif status == "skipped":
+                logger.info(
+                    "Dashboard startup auto-backtest: %s skipped for session=%s reason=%s",
+                    name,
+                    session_id,
+                    auto_bt.get("reason"),
+                )
+            elif status == "error":
+                logger.warning(
+                    "Dashboard startup auto-backtest: %s error for session=%s reason=%s",
+                    name,
+                    session_id,
+                    auto_bt.get("reason"),
+                )
 
 
 logger = logging.getLogger(__name__)
@@ -1350,6 +1378,7 @@ class BacktestJob:
 
 
 _backtest_jobs: Dict[str, BacktestJob] = {}
+_auto_startup_backtests_started: set[tuple[str, str]] = set()
 
 
 def _prune_finished_backtest_jobs(max_keep: int = 48) -> None:
@@ -1401,6 +1430,95 @@ def _start_backtest_job(cmd_args: List[str], summary: str) -> Dict[str, Any]:
     _prune_finished_backtest_jobs()
     logger.info("Backtest job %s started (PID %s) %s", jid, proc.pid, summary)
     return {"status": "started", "job_id": jid, "pid": proc.pid, "summary": summary}
+
+
+def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[str], str]]:
+    specs: List[Tuple[str, List[str], str]] = []
+    dashboard_cfg = (bot_instance.config.get("dashboard", {}) or {}) if bot_instance else {}
+
+    if dashboard_cfg.get(f"auto_sol5_backtest_on_{phase}", True):
+        crypto_script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
+        if crypto_script.exists():
+            specs.append(
+                (
+                    "sol5",
+                    [
+                        sys.executable,
+                        str(crypto_script),
+                        "--symbol",
+                        "SOL",
+                        "--window",
+                        "5",
+                    ],
+                    f"SOL 5m crypto [auto-on-{phase}:{session_id}]",
+                )
+            )
+
+    if dashboard_cfg.get(f"auto_weather_backtest_on_{phase}", True):
+        weather_script = PROJECT_ROOT / "scripts" / "run_backtest_rigorous.py"
+        if weather_script.exists():
+            specs.append(
+                (
+                    "weather",
+                    [
+                        sys.executable,
+                        str(weather_script),
+                        "--strategies",
+                        "weather",
+                        "--no-stress",
+                        "--save-report",
+                        "--quick",
+                    ],
+                    f"weather rigorous [auto-on-{phase}:{session_id}]",
+                )
+            )
+
+    return specs
+
+
+def _maybe_start_auto_backtests(phase: str) -> List[Dict[str, Any]]:
+    """Optionally kick off the configured auto backtest batch for startup/reset."""
+    global _auto_startup_backtests_started
+    if not bot_instance:
+        return []
+    if not bot_instance.config.get("trading", {}).get("dry_run", True):
+        return []
+
+    current_session_id = getattr(getattr(bot_instance, "journal", None), "session_id", None)
+    if not current_session_id:
+        return []
+
+    specs = _auto_backtest_specs(current_session_id, phase)
+    if not specs:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    with _backtest_jobs_lock:
+        running_n = sum(1 for j in _backtest_jobs.values() if j.proc.poll() is None)
+    for key, cmd_args, summary in specs:
+        dedupe_key = (current_session_id, f"{phase}:{key}")
+        if phase == "startup" and dedupe_key in _auto_startup_backtests_started:
+            continue
+        if running_n >= MAX_CONCURRENT_BACKTESTS:
+            results.append(
+                {
+                    "name": key,
+                    "status": "skipped",
+                    "reason": "max_concurrent_backtests",
+                }
+            )
+            continue
+        try:
+            result = _start_backtest_job(cmd_args, summary)
+            result["name"] = key
+            results.append(result)
+            running_n += 1
+            if phase == "startup":
+                _auto_startup_backtests_started.add(dedupe_key)
+        except Exception as e:
+            logger.error("Auto %s backtest on %s failed: %s", key, phase, e)
+            results.append({"name": key, "status": "error", "reason": str(e)})
+    return results
 
 
 @app.get("/api/backtest/status")
@@ -2181,11 +2299,14 @@ async def get_strategy_metrics():
         wx = bot_instance.last_ai_scan_stats.get("weather") or {}
         if wx and "weather" in metrics:
             metrics["weather"]["scan_stats"] = {
+                "total_markets_seen":    wx.get("total_markets_seen", 0),
+                "weather_keyword_matches": wx.get("weather_keyword_matches", 0),
                 "markets_scanned":      wx.get("markets_scanned", 0),
                 "city_matches":         wx.get("city_matches", 0),
                 "temp_markets":         wx.get("temp_markets", 0),
                 "precip_markets":       wx.get("precip_markets", 0),
                 "signals_generated":    wx.get("signals_generated", 0),
+                "skipped_liquidity":    wx.get("skipped_liquidity", 0),
                 "skipped_volume":       wx.get("skipped_volume", 0),
                 "skipped_hours":        wx.get("skipped_hours", 0),
                 "skipped_ev":           wx.get("skipped_ev", 0),
@@ -3302,49 +3423,10 @@ async def reset_paper_session(request: Request):
         "new_session_id": new_id,
         "bankroll": new_bankroll,
     }
-    auto_sol5 = bool(
-        (bot_instance.config.get("dashboard", {}) or {}).get(
-            "auto_sol5_backtest_on_reset", True
-        )
-    )
-    if auto_sol5:
-        with _backtest_jobs_lock:
-            running_n = sum(
-                1 for j in _backtest_jobs.values() if j.proc.poll() is None
-            )
-        if running_n >= MAX_CONCURRENT_BACKTESTS:
-            out["auto_backtest"] = {
-                "status": "skipped",
-                "reason": (
-                    f"max concurrent backtests reached ({MAX_CONCURRENT_BACKTESTS})"
-                ),
-            }
-        else:
-            script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
-            if not script.exists():
-                out["auto_backtest"] = {
-                    "status": "error",
-                    "reason": f"{script} not found",
-                }
-            else:
-                cmd_args = [
-                    sys.executable,
-                    str(script),
-                    "--symbol",
-                    "SOL",
-                    "--window",
-                    "5",
-                ]
-                try:
-                    out["auto_backtest"] = _start_backtest_job(
-                        cmd_args, "SOL 5m crypto [auto-on-reset]"
-                    )
-                except Exception as e:
-                    logger.error("Auto SOL 5m backtest on reset failed: %s", e)
-                    out["auto_backtest"] = {
-                        "status": "error",
-                        "reason": str(e),
-                    }
+    auto_backtests = _maybe_start_auto_backtests("reset")
+    if auto_backtests:
+        out["auto_backtests"] = auto_backtests
+        out["auto_backtest"] = auto_backtests[0]
     if archive_rel:
         out["archived_to"] = archive_rel
     return out

@@ -81,6 +81,7 @@ strategies:
     enabled: true
     gap_min: 0.15
     min_ev: 0.05
+    min_liquidity: 1000
     min_volume: 2000
     min_hours_to_resolution: 2.0
     max_hours_to_resolution: 72.0
@@ -534,3 +535,11 @@ dashboard:
   host: "127.0.0.1"
   # Port for the dashboard server
   dashboard_port: 8081
+  # Kick off the standard SOL 5m crypto backtest whenever the dashboard/bot restarts into a fresh paper session.
+  auto_sol5_backtest_on_startup: true
+  # Kick off the standard SOL 5m crypto backtest whenever a new paper session is created from the dashboard.
+  auto_sol5_backtest_on_reset: true
+  # Kick off the standard weather rigorous backtest whenever the dashboard/bot restarts into a fresh paper session.
+  auto_weather_backtest_on_startup: true
+  # Kick off the standard weather rigorous backtest whenever a new paper session is created from the dashboard.
+  auto_weather_backtest_on_reset: true

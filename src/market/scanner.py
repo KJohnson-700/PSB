@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+_WEATHER_MARKET_HINT_RE = re.compile(
+    r"\b(rain|snow|precipitation|temperature|temp|weather|forecast|degrees?|"
+    r"fahrenheit|celsius|humid|storm|flood|drought|sunshine|sunny|cloudy|wind|hail|thunderstorm)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class Market:
@@ -124,10 +130,20 @@ class MarketScanner:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         _pm = config.get("polymarket", {}) or {}
+        _wx = (config.get("strategies", {}) or {}).get("weather", {}) or {}
         self.min_liquidity = _pm.get("min_liquidity", 10000)
+        self.weather_min_liquidity = float(
+            _wx.get("min_liquidity", _wx.get("min_volume", self.min_liquidity))
+        )
         # Wall-clock cap for bundled Gamma + updown (+ optional HYPE alt) HTTP in a worker thread.
         self._scanner_sync_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
         self.session: Optional[aiohttp.ClientSession] = None
+
+    def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
+        text = f"{question or ''} {description or ''}"
+        if _WEATHER_MARKET_HINT_RE.search(text):
+            return self.weather_min_liquidity
+        return self.min_liquidity
 
     def _should_fetch_hype_alt_markets(self) -> bool:
         """HYPE alt slug fetch is slow; default follows strategies.hype_macro.enabled.
@@ -313,7 +329,10 @@ class MarketScanner:
                 )
                 
                 # Filter by liquidity
-                if market.liquidity >= self.min_liquidity:
+                threshold = self._market_liquidity_threshold(
+                    market.question, market.description
+                )
+                if market.liquidity >= threshold or market.volume >= threshold:
                     markets.append(market)
                     
             except Exception as e:
@@ -364,7 +383,11 @@ class MarketScanner:
                     try:
                         vol = float(gm.get("volume", 0) or 0)
                         liq = float(gm.get("liquidity", 0) or 0)
-                        if vol < self.min_liquidity:
+                        threshold = self._market_liquidity_threshold(
+                            gm.get("question", ""),
+                            gm.get("description", "") or "",
+                        )
+                        if vol < threshold and liq < threshold:
                             continue
                         outcomes = json.loads(gm.get("outcomePrices", "[]"))
                         yes_price = float(outcomes[0]) if outcomes else 0.5

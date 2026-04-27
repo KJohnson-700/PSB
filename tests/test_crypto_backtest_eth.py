@@ -79,5 +79,69 @@ class TestBacktestReportStrategyKey(unittest.TestCase):
             path.unlink(missing_ok=True)
 
 
+class TestUpdownBacktestSplit(unittest.TestCase):
+    def test_split_preserves_nonzero_windows_scanned(self):
+        from src.backtest.updown_engine import UpdownBacktestResult, UpdownTrade
+
+        trades = [
+            UpdownTrade(
+                window_open=pd.Timestamp("2025-01-02T00:00:00Z"),
+                window_close=pd.Timestamp("2025-01-02T00:15:00Z"),
+                symbol="ETH",
+                window_size=15,
+                action="BUY_YES",
+                htf_bias="BULLISH",
+                ltf_confirmed=True,
+                ltf_strength=0.6,
+                entry_price=0.5,
+                fill_price=0.5,
+                size=50.0,
+                edge=0.08,
+                confidence=0.6,
+                outcome="WIN",
+                exit_price=1.0,
+                pnl=25.0,
+                slip=0.0,
+            ),
+            UpdownTrade(
+                window_open=pd.Timestamp("2025-01-05T00:00:00Z"),
+                window_close=pd.Timestamp("2025-01-05T00:15:00Z"),
+                symbol="ETH",
+                window_size=15,
+                action="BUY_NO",
+                htf_bias="BEARISH",
+                ltf_confirmed=True,
+                ltf_strength=0.6,
+                entry_price=0.5,
+                fill_price=0.5,
+                size=50.0,
+                edge=0.08,
+                confidence=0.6,
+                outcome="LOSS",
+                exit_price=0.0,
+                pnl=-25.0,
+                slip=0.0,
+            ),
+        ]
+        result = UpdownBacktestResult(
+            symbol="ETH",
+            window_size=15,
+            start_date="2025-01-01",
+            end_date="2025-01-07",
+            initial_bankroll=500.0,
+            final_bankroll=500.0,
+            trades=trades,
+            windows_scanned=672,
+            windows_entered=2,
+            wins=1,
+            losses=1,
+        )
+        train, test = result.split("2025-01-04")
+        self.assertGreater(train.windows_scanned, 0)
+        self.assertGreater(test.windows_scanned, 0)
+        self.assertEqual(train.windows_entered, 1)
+        self.assertEqual(test.windows_entered, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

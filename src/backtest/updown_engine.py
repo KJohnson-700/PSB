@@ -117,6 +117,29 @@ class UpdownBacktestResult:
     losses:           int = 0
     slippage_total:   float = 0.0
 
+    @staticmethod
+    def _count_windows_for_range(
+        start_date: str,
+        end_date: str,
+        window_size: int,
+    ) -> int:
+        """Mirror engine scan-window counting for a date range."""
+        tz = timezone.utc
+        step_s = window_size * 60
+        start_epoch = int(datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=tz).timestamp())
+        start_epoch -= start_epoch % step_s
+        current = pd.Timestamp(datetime.fromtimestamp(start_epoch, tz=tz))
+        end_ts = pd.Timestamp(
+            datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=23, minute=59, tzinfo=tz
+            )
+        )
+        windows = 0
+        while current <= end_ts:
+            windows += 1
+            current += pd.Timedelta(minutes=window_size)
+        return windows
+
     @property
     def win_rate(self) -> float:
         total = self.wins + self.losses
@@ -180,7 +203,9 @@ class UpdownBacktestResult:
                 initial_bankroll=self.initial_bankroll,
                 final_bankroll=self.initial_bankroll + pnl,
                 trades=trades,
-                windows_scanned=0,      # per-period scan count not tracked; aggregate is in parent
+                windows_scanned=self._count_windows_for_range(
+                    start, end, self.window_size
+                ),
                 windows_entered=len(trades),
                 wins=wins,
                 losses=losses,

@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 
-from src.market.scanner import Market
+from src.market.scanner import Market, is_crypto_updown_market
 from src.analysis.math_utils import PositionSizer
 from src.strategies.weather_models import WeatherSignal
 
@@ -23,14 +23,19 @@ logger = logging.getLogger(__name__)
 # Order: longest/most-specific patterns first to avoid partial matches.
 _CITY_PATTERNS: List[Tuple[re.Pattern, tuple, str]] = [
     (re.compile(r'\bnew\s+york\b|\bnyc\b', re.I),   (40.7769, -73.8740),  "KLGA"),
+    (re.compile(r'\bjfk\b|\bkennedy\b', re.I),      (40.6413, -73.7781),  "KJFK"),
+    (re.compile(r'\blaguardia\b', re.I),            (40.7769, -73.8740),  "KLGA"),
     (re.compile(r'\blos\s+angeles\b|\blax\b', re.I), (33.9425, -118.4081), "KLAX"),
-    (re.compile(r'\bchicago\b', re.I),               (41.9742, -87.9073),  "KORD"),
+    (re.compile(r"\bchicago(?:\s+o'?hare)?\b|\bo'?hare\b", re.I), (41.9742, -87.9073),  "KORD"),
     (re.compile(r'\bmiami\b', re.I),                 (25.7959, -80.2870),  "KMIA"),
     (re.compile(r'\bdallas\b', re.I),                (32.8481, -96.8512),  "KDAL"),
+    (re.compile(r'\bdenver\b', re.I),                (39.8561, -104.6737), "KDEN"),
+    (re.compile(r'\bphoenix\b', re.I),               (33.4342, -112.0116), "KPHX"),
+    (re.compile(r'\bboston\b', re.I),                (42.3656, -71.0096),  "KBOS"),
     (re.compile(r'\bseattle\b', re.I),               (47.4502, -122.3088), "KSEA"),
     (re.compile(r'\batlanta\b', re.I),               (33.6407, -84.4277),  "KATL"),
     (re.compile(r'\bhouston\b', re.I),               (29.9902, -95.3368),  "KIAH"),
-    (re.compile(r'\blondon\b', re.I),                (51.5048, 0.0495),    "EGLC"),
+    (re.compile(r'\blondon\b|\bheathrow\b', re.I),  (51.4700, -0.4543),   "EGLL"),
     (re.compile(r'\btokyo\b', re.I),                 (35.5494, 139.7798),  "RJTT"),
     (re.compile(r'\bseoul\b', re.I),                 (37.4691, 126.4510),  "RKSS"),
     (re.compile(r'\bparis\b', re.I),                 (49.0097, 2.5479),    "LFPG"),
@@ -42,12 +47,13 @@ _CITY_PATTERNS: List[Tuple[re.Pattern, tuple, str]] = [
 # Market must contain a weather keyword to be considered.
 _WEATHER_RE = re.compile(
     r'\b(rain|snow|precipitation|temperature|temp|weather|forecast|'
-    r'degrees?|fahrenheit|celsius|humid|storm|flood|drought|sunshine|sunny|cloudy|wind|high|low)\b',
+    r'degrees?|fahrenheit|celsius|humid|storm|flood|drought|sunshine|sunny|cloudy|wind|'
+    r'hail|thunderstorm|inches?|inch|mm|centimeters?|cm|°f|°c)\b',
     re.I,
 )
 
 # Temperature market detection.
-_TEMP_RE = re.compile(r'\b(temperature|temp|degrees?|fahrenheit|celsius|high|low)\b', re.I)
+_TEMP_RE = re.compile(r'\b(temperature|temp|degrees?|fahrenheit|celsius|°f|°c)\b', re.I)
 
 # Threshold parsers — handles "between 68–69°F", "above 70°F", "below 50°F"
 _TEMP_RANGE_RE = re.compile(
@@ -69,6 +75,7 @@ class WeatherStrategy:
         self.gap_min = cfg.get("gap_min", 0.15)
         self.min_ev = cfg.get("min_ev", 0.05)
         self.min_volume = cfg.get("min_volume", 2000.0)
+        self.min_liquidity = cfg.get("min_liquidity", self.min_volume)
         self.min_hours = cfg.get("min_hours_to_resolution", 2.0)
         self.max_hours = cfg.get("max_hours_to_resolution", 72.0)
         self.max_yes_price = cfg.get("max_yes_price", 0.45)
@@ -238,12 +245,15 @@ class WeatherStrategy:
             return []
 
         stats = {
+            "total_markets_seen": len(markets),
+            "weather_keyword_matches": 0,
             "markets_scanned": 0,
             "city_matches": 0,
             "temp_markets": 0,
             "precip_markets": 0,
             "signals_generated": 0,
             "skipped_volume": 0,
+            "skipped_liquidity": 0,
             "skipped_hours": 0,
             "skipped_ev": 0,
             "skipped_no_threshold": 0,
@@ -253,12 +263,15 @@ class WeatherStrategy:
         signals: List[WeatherSignal] = []
 
         for market in markets:
+            if is_crypto_updown_market(market):
+                continue
             q = market.question
             desc = market.description or ""
 
             if not self._is_weather_market(q, desc):
                 continue
 
+            stats["weather_keyword_matches"] += 1
             stats["markets_scanned"] += 1
 
             loc_result = self._parse_market_location(q, desc)
@@ -267,6 +280,10 @@ class WeatherStrategy:
 
             (lat, lon), icao = loc_result
             stats["city_matches"] += 1
+
+            if (market.liquidity or 0) < self.min_liquidity:
+                stats["skipped_liquidity"] += 1
+                continue
 
             # Volume filter
             if (market.liquidity or 0) < self.min_volume and (market.volume or 0) < self.min_volume:
@@ -375,16 +392,22 @@ class WeatherStrategy:
             )
 
         self._scan_stats = stats
-        if stats["markets_scanned"]:
-            logger.info(
-                "Weather scan: %d scanned, %d city match, %d temp, %d precip, "
-                "%d signals | skip: vol=%d hrs=%d ev=%d thresh=%d forecast=%d",
-                stats["markets_scanned"], stats["city_matches"],
-                stats["temp_markets"], stats["precip_markets"],
-                stats["signals_generated"],
-                stats["skipped_volume"], stats["skipped_hours"],
-                stats["skipped_ev"], stats["skipped_no_threshold"],
-                stats["skipped_no_forecast"],
-            )
+        logger.info(
+            "Weather scan: total=%d keyword=%d city=%d scanned=%d temp=%d precip=%d "
+            "signals=%d | skip: liq=%d vol=%d hrs=%d ev=%d thresh=%d forecast=%d",
+            stats["total_markets_seen"],
+            stats["weather_keyword_matches"],
+            stats["city_matches"],
+            stats["markets_scanned"],
+            stats["temp_markets"],
+            stats["precip_markets"],
+            stats["signals_generated"],
+            stats["skipped_liquidity"],
+            stats["skipped_volume"],
+            stats["skipped_hours"],
+            stats["skipped_ev"],
+            stats["skipped_no_threshold"],
+            stats["skipped_no_forecast"],
+        )
 
         return signals
