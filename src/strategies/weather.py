@@ -19,6 +19,44 @@ from src.strategies.weather_models import WeatherSignal
 
 logger = logging.getLogger(__name__)
 
+_CITY_LOOKUP: Dict[str, Tuple[tuple, str]] = {
+    "new-york": ((40.7769, -73.8740), "KLGA"),
+    "nyc": ((40.7769, -73.8740), "KLGA"),
+    "jfk": ((40.6413, -73.7781), "KJFK"),
+    "laguardia": ((40.7769, -73.8740), "KLGA"),
+    "los-angeles": ((33.9425, -118.4081), "KLAX"),
+    "lax": ((33.9425, -118.4081), "KLAX"),
+    "chicago": ((41.9742, -87.9073), "KORD"),
+    "ohare": ((41.9742, -87.9073), "KORD"),
+    "o-hare": ((41.9742, -87.9073), "KORD"),
+    "miami": ((25.7959, -80.2870), "KMIA"),
+    "dallas": ((32.8481, -96.8512), "KDAL"),
+    "denver": ((39.8561, -104.6737), "KDEN"),
+    "phoenix": ((33.4342, -112.0116), "KPHX"),
+    "boston": ((42.3656, -71.0096), "KBOS"),
+    "seattle": ((47.4502, -122.3088), "KSEA"),
+    "atlanta": ((33.6407, -84.4277), "KATL"),
+    "houston": ((29.9902, -95.3368), "KIAH"),
+    "london": ((51.4700, -0.4543), "EGLL"),
+    "heathrow": ((51.4700, -0.4543), "EGLL"),
+    "tokyo": ((35.5494, 139.7798), "RJTT"),
+    "seoul": ((37.4691, 126.4510), "RKSS"),
+    "paris": ((49.0097, 2.5479), "LFPG"),
+    "sydney": ((-33.9399, 151.1753), "YSSY"),
+    "singapore": ((1.3644, 103.9915), "WSSS"),
+    "dubai": ((25.2532, 55.3657), "OMDB"),
+    "manila": ((14.5086, 121.0198), "RPLL"),
+    "karachi": ((24.9065, 67.1608), "OPKC"),
+    "dhaka": ((23.8433, 90.3978), "VGHS"),
+    "mumbai": ((19.0896, 72.8656), "VABB"),
+    "delhi": ((28.5562, 77.1000), "VIDP"),
+    "bangkok": ((13.6900, 100.7501), "VTBS"),
+    "jakarta": ((-6.1256, 106.6559), "WIII"),
+    "hong-kong": ((22.3080, 113.9185), "VHHH"),
+    "shanghai": ((31.1443, 121.8083), "ZSPD"),
+    "beijing": ((40.0799, 116.6031), "ZBAA"),
+}
+
 # ICAO airport station coords — Polymarket resolves on these, NOT city centers.
 # Order: longest/most-specific patterns first to avoid partial matches.
 _CITY_PATTERNS: List[Tuple[re.Pattern, tuple, str]] = [
@@ -62,6 +100,7 @@ _TEMP_RANGE_RE = re.compile(
 _TEMP_ABOVE_RE = re.compile(r'\babove\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_BELOW_RE = re.compile(r'\bbelow\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_EXACT_RE = re.compile(r'(\d+\.?\d*)\s*[°]?[fF]\b')
+_PRECIP_RE = re.compile(r'\b(rain|snow|precipitation|storm|hail|thunderstorm)\b', re.I)
 
 
 class WeatherStrategy:
@@ -100,6 +139,11 @@ class WeatherStrategy:
         for pattern, coords, icao in _CITY_PATTERNS:
             if pattern.search(text):
                 return coords, icao
+        normalized = re.sub(r"[^a-z0-9\s\-]", " ", text.lower())
+        for city_key, coords in _CITY_LOOKUP.items():
+            city_text = city_key.replace("-", " ")
+            if city_key in normalized or city_text in normalized:
+                return coords
         return None
 
     def _parse_temp_threshold(self, question: str) -> Optional[Tuple[Optional[float], Optional[float]]]:
@@ -235,6 +279,33 @@ class WeatherStrategy:
         delta = (end_date - now).total_seconds() / 3600
         return delta
 
+    def _target_forecast_date(self, market: Market) -> tuple[Optional[str], Optional[str]]:
+        """Choose T+1/T+2/T+3 based on time-to-resolution."""
+        if self._backtest_proxy_forecast is not None:
+            return None, None
+
+        hours = self._hours_to_resolution(market.end_date)
+        if hours is not None:
+            if hours < self.min_hours:
+                return None, "skipped_below_min_hours"
+            if hours > self.max_hours:
+                return None, "skipped_above_max_hours"
+            if hours < 24:
+                horizon_days = 1
+            elif hours < 72:
+                horizon_days = 2
+            else:
+                horizon_days = 3
+        else:
+            horizon_days = 1
+
+        max_horizon_days = max(1, int(self.config.get("forecast_horizon_days", 3)))
+        if horizon_days > max_horizon_days:
+            return None, "skipped_too_far_out"
+
+        target_date = (datetime.now(timezone.utc) + timedelta(days=horizon_days)).strftime("%Y-%m-%d")
+        return target_date, None
+
     # ── Main scan ────────────────────────────────────────────────────────────
 
     async def scan_and_analyze(
@@ -252,19 +323,27 @@ class WeatherStrategy:
             "temp_markets": 0,
             "precip_markets": 0,
             "signals_generated": 0,
-            "skipped_volume": 0,
-            "skipped_liquidity": 0,
-            "skipped_hours": 0,
+            "skipped_no_location": 0,
+            "skipped_no_temp_keyword": 0,
+            "skipped_too_far_out": 0,
+            "skipped_below_min_hours": 0,
+            "skipped_above_max_hours": 0,
+            "skipped_extreme_consensus": 0,
+            "skipped_below_liquidity": 0,
+            "skipped_below_volume": 0,
             "skipped_ev": 0,
             "skipped_no_threshold": 0,
             "skipped_no_forecast": 0,
         }
 
         signals: List[WeatherSignal] = []
+        weather_markets = [market for market in markets if not is_crypto_updown_market(market)]
+        weather_markets.sort(
+            key=lambda market: float((market.volume or 0) + (market.liquidity or 0)),
+            reverse=True,
+        )
 
-        for market in markets:
-            if is_crypto_updown_market(market):
-                continue
+        for market in weather_markets:
             q = market.question
             desc = market.description or ""
 
@@ -274,38 +353,44 @@ class WeatherStrategy:
             stats["weather_keyword_matches"] += 1
             stats["markets_scanned"] += 1
 
-            loc_result = self._parse_market_location(q, desc)
+            loc_result = self._parse_market_location(
+                q,
+                f"{desc} {market.slug or ''} {market.group_item_title or ''}",
+            )
             if not loc_result:
+                stats["skipped_no_location"] += 1
                 continue
 
             (lat, lon), icao = loc_result
             stats["city_matches"] += 1
 
+            if market.yes_price <= 0.05 or market.yes_price >= 0.95:
+                stats["skipped_extreme_consensus"] += 1
+                continue
+
             if (market.liquidity or 0) < self.min_liquidity:
-                stats["skipped_liquidity"] += 1
+                stats["skipped_below_liquidity"] += 1
                 continue
 
             # Volume filter
             if (market.liquidity or 0) < self.min_volume and (market.volume or 0) < self.min_volume:
-                stats["skipped_volume"] += 1
+                stats["skipped_below_volume"] += 1
                 continue
 
-            # Hours-to-resolution filter
-            hours = self._hours_to_resolution(market.end_date)
-            if hours is not None and (hours < self.min_hours or hours > self.max_hours):
-                stats["skipped_hours"] += 1
+            target_date, skip_reason = self._target_forecast_date(market)
+            if skip_reason:
+                stats[skip_reason] += 1
                 continue
 
             is_temp = bool(_TEMP_RE.search(f"{q} {desc}"))
+            is_precip = bool(_PRECIP_RE.search(f"{q} {desc}"))
+            if not is_temp and not is_precip:
+                stats["skipped_no_temp_keyword"] += 1
+                continue
 
             if self._backtest_proxy_forecast is not None:
                 forecast_prob = self._backtest_proxy_forecast
             else:
-                target_date = (
-                    market.end_date.strftime("%Y-%m-%d")
-                    if market.end_date
-                    else datetime.utcnow().strftime("%Y-%m-%d")
-                )
                 if is_temp:
                     stats["temp_markets"] += 1
                     threshold = self._parse_temp_threshold(q)
@@ -316,7 +401,11 @@ class WeatherStrategy:
                     forecast_prob = self._fetch_temp_forecast(lat, lon, target_date, threshold)
                 else:
                     stats["precip_markets"] += 1
-                    forecast_prob = self._fetch_precip_forecast(lat, lon, target_date)
+                    forecast_prob = self._fetch_precip_forecast(
+                        lat,
+                        lon,
+                        target_date or datetime.utcnow().strftime("%Y-%m-%d"),
+                    )
 
             if forecast_prob is None:
                 stats["skipped_no_forecast"] += 1
@@ -394,7 +483,8 @@ class WeatherStrategy:
         self._scan_stats = stats
         logger.info(
             "Weather scan: total=%d keyword=%d city=%d scanned=%d temp=%d precip=%d "
-            "signals=%d | skip: liq=%d vol=%d hrs=%d ev=%d thresh=%d forecast=%d",
+            "signals=%d | skip: no_loc=%d no_temp=%d liq=%d vol=%d minh=%d maxh=%d far=%d "
+            "extreme=%d ev=%d thresh=%d forecast=%d",
             stats["total_markets_seen"],
             stats["weather_keyword_matches"],
             stats["city_matches"],
@@ -402,9 +492,14 @@ class WeatherStrategy:
             stats["temp_markets"],
             stats["precip_markets"],
             stats["signals_generated"],
-            stats["skipped_liquidity"],
-            stats["skipped_volume"],
-            stats["skipped_hours"],
+            stats["skipped_no_location"],
+            stats["skipped_no_temp_keyword"],
+            stats["skipped_below_liquidity"],
+            stats["skipped_below_volume"],
+            stats["skipped_below_min_hours"],
+            stats["skipped_above_max_hours"],
+            stats["skipped_too_far_out"],
+            stats["skipped_extreme_consensus"],
             stats["skipped_ev"],
             stats["skipped_no_threshold"],
             stats["skipped_no_forecast"],

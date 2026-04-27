@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.market.scanner import MarketScanner, Market
+from src.market.price_collector import PriceCollector
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
@@ -105,6 +106,27 @@ def _filter_short_horizon(markets, config: Dict) -> list:
     return result
 
 
+def _filter_weather_markets(markets, config: Dict) -> list:
+    """Filter to weather-appropriate markets using weather strategy config."""
+    weather_cfg = (config.get("strategies", {}) or {}).get("weather", {}) or {}
+    min_hours = float(weather_cfg.get("min_hours_to_resolution", 2.0))
+    max_hours = float(weather_cfg.get("max_hours_to_resolution", 72.0))
+    result = []
+    now = datetime.now(timezone.utc)
+    for market in markets:
+        if _is_crypto_market(market) or not market.end_date:
+            continue
+        end = (
+            market.end_date.replace(tzinfo=timezone.utc)
+            if market.end_date.tzinfo is None
+            else market.end_date.astimezone(timezone.utc)
+        )
+        hours = (end - now).total_seconds() / 3600
+        if min_hours <= hours <= max_hours:
+            result.append(market)
+    return result
+
+
 def _is_crypto_market(market) -> bool:
     """Crypto up/down markets (15m) resolve in minutes; exempt from resolution window filter."""
     if not market.end_date:
@@ -125,6 +147,7 @@ class PolyBot:
 
         # Initialize components
         self.market_scanner = MarketScanner(self.config)
+        self.price_collector = PriceCollector(self.config)
         self.ws_client = WebSocketClient(self.config)
         self.ai_agent = AIAgent(self.config)
         self.position_sizer = PositionSizer(
@@ -746,6 +769,7 @@ class PolyBot:
 
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])
+        weather_snapshot_markets = opportunities.get("weather", [])
         scanner_meta = opportunities.get("scanner_meta", {})
         if scanner_meta:
             self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
@@ -762,6 +786,11 @@ class PolyBot:
             logging.info("No high liquidity markets found")
             log_ops_pulse(self, "main")
             return
+
+        try:
+            self.price_collector.maybe_collect(weather_snapshot_markets)
+        except Exception as e:
+            logging.error(f"Weather price collection error: {e}")
 
         # Filter out markets we already have positions in (avoid duplicates)
         held_market_ids = set()
@@ -786,6 +815,7 @@ class PolyBot:
 
         available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
         short_horizon = _filter_short_horizon(available_markets, self.config)
+        weather_markets = _filter_weather_markets(available_markets, self.config)
         logging.info(
             f"Markets: {len(high_liquidity)} total, {len(held_market_ids)} held, {len(available_markets)} available, {len(short_horizon)} in resolution window"
         )
@@ -794,7 +824,7 @@ class PolyBot:
         if self.weather_strategy.enabled:
             try:
                 weather_signals = await self.weather_strategy.scan_and_analyze(
-                    markets=available_markets, bankroll=self.bankroll
+                    markets=weather_markets, bankroll=self.bankroll
                 )
                 _now_iso = datetime.now().isoformat(timespec="seconds")
                 self.last_signal_counts["weather"] = len(weather_signals)

@@ -236,3 +236,27 @@ class TestWeatherStrategy:
         }
         sizer = KellySizer(cfg)
         assert sizer.get_kelly_fraction("weather", streak_multiplier=1.0) == 0.18
+
+    def test_weather_strategy_resolves_city_from_slug_and_group_title(self):
+        cfg = _make_config()
+        cfg["strategies"]["weather"] = {
+            "enabled": True,
+            "gap_min": 0.15,
+            "min_ev": 0.05,
+            "min_volume": 0,
+            "min_liquidity": 0,
+            "min_hours_to_resolution": 0,
+            "max_hours_to_resolution": 9999,
+            "max_yes_price": 0.95,
+            "kelly_fraction": 0.25,
+            "metar_enabled": False,
+        }
+        strat = WeatherStrategy(cfg, PositionSizer(cfg), KellySizer(cfg))
+        loc = strat._parse_market_location(
+            "Highest temperature in Manila on Apr 29, 2026?",
+            "highest-temperature-in-manila-on-apr-29-2026 manila",
+        )
+        assert loc is not None
+        coords, icao = loc
+        assert icao == "RPLL"
+        assert coords[0] == pytest.approx(14.5086)

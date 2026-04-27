@@ -55,6 +55,12 @@ trading:
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
     max_hold_hours: 72           # Exit after 72 hours regardless
 
+data_collection:
+  weather:
+    enabled: true
+    interval_sec: 300
+    path: "data/market_prices/weather_prices.jsonl"
+
 # ============================================
 # STRATEGY THRESHOLDS
 # ============================================
