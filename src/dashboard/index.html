@@ -898,9 +898,6 @@
             <div id="scan-distribution"></div>
             <div class="tabs" id="scan-tabs">
                 <div class="tab active" data-strat="all" onclick="switchScanTab('all')">All</div>
-                <div class="tab" data-strat="fade" onclick="switchScanTab('fade')">Fade</div>
-                <div class="tab" data-strat="arbitrage" onclick="switchScanTab('arbitrage')">Arb</div>
-                <div class="tab" data-strat="neh" onclick="switchScanTab('neh')">NEH</div>
                 <div class="tab" data-strat="bitcoin" onclick="switchScanTab('bitcoin')">BTC</div>
                 <div class="tab" data-strat="sol_macro" onclick="switchScanTab('sol_macro')">SOL</div>
                 <div class="tab" data-strat="eth_macro" onclick="switchScanTab('eth_macro')">ETH</div>
@@ -938,8 +935,6 @@
                     </p>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-ai-enabled"> <span>ai.enabled (LLMs on)</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-ai-live_inferencing"> <span>Live LLM calls (ai.live_inferencing)</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-fade-use_ai"> <span>Fade: use_ai</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-arbitrage-use_ai"> <span>Arbitrage: use_ai</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-bitcoin-use_ai"> <span>Bitcoin: use_ai</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_macro-use_ai"> <span>SOL Macro: use_ai</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_macro-use_ai"> <span>ETH Macro: use_ai</span></label></div>
@@ -948,15 +943,12 @@
                 <div class="cfg-group">
                     <h3>Strategies on/off</h3>
                     <p class="cfg-hint" style="font-size:0.75rem;color:var(--text-muted);margin:0 0 8px 0;">Which strategies run in the main scan loop (fewer strategies = fewer optional LLM call sites).</p>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-fade-enabled"> <span>Fade enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-arbitrage-enabled"> <span>Arbitrage enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-bitcoin-enabled"> <span>Bitcoin enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-sol_macro-enabled"> <span>SOL Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_macro-enabled"> <span>ETH Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_macro-enabled"> <span>HYPE Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_macro-enabled"> <span>XRP Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-weather-enabled"> <span>Weather enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-neh-enabled"> <span>NEH enabled</span></label></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Trading</h3>
@@ -974,21 +966,6 @@
                     <div class="cfg-field"><label>Stop Loss %</label><input type="number" id="cfg-backtest-stop_loss_pct" step="0.01" value="0.15"></div>
                     <div class="cfg-field"><label>Max Hold (hrs)</label><input type="number" id="cfg-backtest-max_hold_hours" step="1" value="72"></div>
                     <div class="cfg-field"><label>Max Exposure/Trade</label><input type="number" id="cfg-trading-max_exposure_per_trade" step="0.01" value="0.05"></div>
-                </div>
-                <div class="cfg-group">
-                    <h3>Fade Strategy</h3>
-                    <div class="cfg-field"><label>Consensus Lower</label><input type="number" id="cfg-strategies-fade-consensus_threshold_lower" step="0.01" value="0.80"></div>
-                    <div class="cfg-field"><label>Consensus Upper</label><input type="number" id="cfg-strategies-fade-consensus_threshold_upper" step="0.01" value="0.95"></div>
-                    <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-fade-entry_price_min" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-fade-entry_price_max" step="0.01" value="0.45"></div>
-                </div>
-                <div class="cfg-group">
-                    <h3>Arb / NEH</h3>
-                    <div class="cfg-field"><label>Arb Min Edge</label><input type="number" id="cfg-strategies-arbitrage-min_edge" step="0.01" value="0.10"></div>
-                    <div class="cfg-field"><label>Arb Entry Min</label><input type="number" id="cfg-strategies-arbitrage-entry_price_min" step="0.01" value="0.20"></div>
-                    <div class="cfg-field"><label>Arb Entry Max</label><input type="number" id="cfg-strategies-arbitrage-entry_price_max" step="0.01" value="0.40"></div>
-                    <div class="cfg-field"><label>NEH Max YES</label><input type="number" id="cfg-strategies-neh-max_yes_price" step="0.01" value="0.15"></div>
-                    <div class="cfg-field"><label>NEH Min Days</label><input type="number" id="cfg-strategies-neh-min_days_to_resolution" step="1" value="30"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Bitcoin Strategy</h3>
@@ -1622,7 +1599,7 @@ function updateScan(d) {
         <div style="width:${dist.mid_range/total*100}%;background:var(--text-muted);" title="Mid range">${dist.mid_range||0}</div>
         <div style="width:${dist.low_no/total*100}%;background:var(--accent);" title="Low NO (arb)">${dist.low_no||0}</div>
         <div style="width:${dist.consensus_no/total*100}%;background:var(--yellow);" title="NO consensus">${dist.consensus_no||0}</div>
-    </div><div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-muted);"><span>Fade zone</span><span>Arb zone</span><span>Dead zone</span><span>Arb zone</span><span>Fade zone</span></div>`;
+    </div>`;
 
     renderScanSignals();
 }
@@ -1636,8 +1613,8 @@ function renderScanSignals() {
     if (!sigs.length) { el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">No ${currentScanFilter} signals in latest scan.</p>`; return; }
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
-        const colors = {fade:'var(--yellow)',arbitrage:'var(--accent)',neh:'var(--purple)',bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
-        const stratShort = {fade:'FAD',arbitrage:'ARB',neh:'NEH',bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
+        const colors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
+        const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
@@ -2099,21 +2076,6 @@ function updateBacktest(d) {
         ${cryptoCard('XRP', 5)}
     </div>`;
 
-    // ── Section 4: Fade / Arbitrage / NEH (simple table) ─────────────────────
-    const simple = allReports.filter(r => r.strategy && !isCryptoReport(r));
-    if (simple.length) {
-        html += `<h3 style="margin:0 0 6px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">Other Strategy Backtests</h3>`;
-        html += `<table><thead><tr><th>Strategy</th><th>Period</th><th>Trades</th><th>Initial</th><th>Final</th><th>PnL</th><th>Return</th></tr></thead><tbody>`;
-        html += simple.slice(0,10).map(r => {
-            const pnl = (r.final_bankroll||0) - (r.initial_bankroll||0);
-            const ret = r.initial_bankroll ? ((pnl/r.initial_bankroll)*100).toFixed(1) : '0.0';
-            const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-            const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
-            return `<tr><td><span class="badge ${stratColors[r.strategy]||'badge-blue'}">${r.strategy}</span></td><td style="font-size:0.8rem;">${r.start_date||''} → ${r.end_date||''}</td><td>${r.trades_count||0}</td><td>$${(r.initial_bankroll||0).toLocaleString()}</td><td>$${(r.final_bankroll||0).toLocaleString()}</td><td class="${pnlCls}">$${pnl.toFixed(2)}</td><td class="${pnlCls}">${ret}%</td></tr>`;
-        }).join('');
-        html += '</tbody></table>';
-    }
-
     // ── Section 4: Rigorous multi-strategy ───────────────────────────────────
     const rigorous = allReports.filter(r => r.per_strategy_metrics || r.test_aggregate);
     if (rigorous.length) {
@@ -2131,7 +2093,7 @@ function updateBacktest(d) {
                 const ta = testAgg[s] || [0,0];
                 const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
                 const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                const stratColors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-green',bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
+                const stratColors = {bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                 html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td><span class="badge ${stratColors[s]||'badge-blue'}">${s}</span></td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
             });
         });
@@ -2375,7 +2337,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Current</th><th>PnL</th><th>Opened</th></tr></thead><tbody>' +
                 d.positions.map(p => {
                     const pnlCls = (p.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
+                    const colors = {bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[p.strategy]||'badge-blue'}">${p.strategy||'?'}</span></td>
                         <td style="color:${p.action?.includes('BUY')?'var(--green)':'var(--red)'}">${p.action||''}</td>
@@ -2627,21 +2589,16 @@ async function loadConfig() {
         const boolMap = {
             'cfg-ai-enabled': d.ai?.enabled,
             'cfg-ai-live_inferencing': d.ai?.live_inferencing,
-            'cfg-strategies-fade-use_ai': d.strategies?.fade?.use_ai,
-            'cfg-strategies-arbitrage-use_ai': d.strategies?.arbitrage?.use_ai,
             'cfg-strategies-bitcoin-use_ai': d.strategies?.bitcoin?.use_ai,
             'cfg-strategies-sol_macro-use_ai': d.strategies?.sol_macro?.use_ai,
             'cfg-strategies-eth_macro-use_ai': d.strategies?.eth_macro?.use_ai,
             'cfg-strategies-hype_macro-use_ai': d.strategies?.hype_macro?.use_ai,
-            'cfg-strategies-fade-enabled': d.strategies?.fade?.enabled,
-            'cfg-strategies-arbitrage-enabled': d.strategies?.arbitrage?.enabled,
             'cfg-strategies-bitcoin-enabled': d.strategies?.bitcoin?.enabled,
             'cfg-strategies-sol_macro-enabled': d.strategies?.sol_macro?.enabled,
             'cfg-strategies-eth_macro-enabled': d.strategies?.eth_macro?.enabled,
             'cfg-strategies-hype_macro-enabled': d.strategies?.hype_macro?.enabled,
             'cfg-strategies-xrp_macro-enabled': d.strategies?.xrp_macro?.enabled,
             'cfg-strategies-weather-enabled': d.strategies?.weather?.enabled,
-            'cfg-strategies-neh-enabled': d.strategies?.neh?.enabled,
             'cfg-exposure-loss_kill_switch_enabled': d.exposure?.loss_kill_switch_enabled,
         };
         for (const [id, val] of Object.entries(boolMap)) {
@@ -2660,15 +2617,6 @@ async function loadConfig() {
             'cfg-backtest-take_profit_pct': d.backtest?.take_profit_pct,
             'cfg-backtest-stop_loss_pct': d.backtest?.stop_loss_pct,
             'cfg-backtest-max_hold_hours': d.backtest?.max_hold_hours,
-            'cfg-strategies-fade-consensus_threshold_lower': d.strategies?.fade?.consensus_threshold_lower,
-            'cfg-strategies-fade-consensus_threshold_upper': d.strategies?.fade?.consensus_threshold_upper,
-            'cfg-strategies-fade-entry_price_min': d.strategies?.fade?.entry_price_min,
-            'cfg-strategies-fade-entry_price_max': d.strategies?.fade?.entry_price_max,
-            'cfg-strategies-arbitrage-min_edge': d.strategies?.arbitrage?.min_edge,
-            'cfg-strategies-arbitrage-entry_price_min': d.strategies?.arbitrage?.entry_price_min,
-            'cfg-strategies-arbitrage-entry_price_max': d.strategies?.arbitrage?.entry_price_max,
-            'cfg-strategies-neh-max_yes_price': d.strategies?.neh?.max_yes_price,
-            'cfg-strategies-neh-min_days_to_resolution': d.strategies?.neh?.min_days_to_resolution,
             'cfg-strategies-bitcoin-min_edge': d.strategies?.bitcoin?.min_edge,
             'cfg-strategies-bitcoin-entry_price_min': d.strategies?.bitcoin?.entry_price_min,
             'cfg-strategies-bitcoin-entry_price_max': d.strategies?.bitcoin?.entry_price_max,
@@ -2972,12 +2920,10 @@ function updateLivePerf(d) {
     const stratColors = {
         bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c',
         hype_macro: '#a78bfa', xrp_macro: '#38bdf8',
-        fade: '#ffe600', neh: '#b388ff', arbitrage: '#0055ff',
     };
     const stratLabel = {
         bitcoin: 'BTC', sol_macro: 'SOL', eth_macro: 'ETH',
-        hype_macro: 'HYPE', xrp_macro: 'XRP', fade: 'FADE',
-        neh: 'NEH', arbitrage: 'ARB',
+        hype_macro: 'HYPE', xrp_macro: 'XRP',
     };
     const stratKeys = Object.entries(d.kelly_state)
         .filter(([k]) => k !== 'unknown' && k !== '_window_stats');
@@ -3548,7 +3494,6 @@ async function loadAllocationChart() {
         const h = canvas.height = 220;
 
         const colors = {
-            neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
             bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
@@ -3734,7 +3679,6 @@ async function loadStrategyPnLChart() {
         const totalBarSpace = chartRight - chartLeft;
         const spacing = totalBarSpace / labels.length;
         const colors = {
-            neh: '#b388ff', fade: '#ffe600', arbitrage: '#0055ff',
             bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
             consensus: '#00bcd4', unknown: '#7a8da0'
         };
@@ -3921,7 +3865,6 @@ async function loadSessionHistory() {
             <th style="padding:4px 8px;color:var(--text-muted);">ETH</th>
             <th style="padding:4px 8px;color:var(--text-muted);">HYPE</th>
             <th style="padding:4px 8px;color:var(--text-muted);">XRP</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Fade</th>
             <th style="padding:4px 8px;color:var(--text-muted);">Open</th>
         </tr></thead><tbody>`;
 
@@ -3947,7 +3890,6 @@ async function loadSessionHistory() {
             const ethPnl = ss.eth_macro?.pnl ?? null;
             const hypePnl = ss.hype_macro?.pnl ?? null;
             const xrpPnl = ss.xrp_macro?.pnl ?? null;
-            const fadePnl = ss.fade?.pnl ?? null;
             const fmtStrat = (v) => v !== null ? `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text-muted)'};">${v>0?'+':''}$${v.toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
 
             html += `<tr style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);${rowBg}"
@@ -3966,7 +3908,6 @@ async function loadSessionHistory() {
                 <td style="padding:5px 8px;">${fmtStrat(ethPnl)}</td>
                 <td style="padding:5px 8px;">${fmtStrat(hypePnl)}</td>
                 <td style="padding:5px 8px;">${fmtStrat(xrpPnl)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(fadePnl)}</td>
                 <td style="padding:5px 8px;color:var(--text-muted);">${open}</td>
             </tr>`;
         });
