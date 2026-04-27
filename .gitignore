@@ -4,6 +4,8 @@ config/secrets.env
 *.env
 !*.env.example
 test_api_keys.py
+test_network.py
+tests/test_live_testing.py
 SECRETS_TROUBLESHOOTING.md
 
 # Python
