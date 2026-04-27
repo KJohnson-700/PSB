@@ -7,6 +7,8 @@ test_api_keys.py
 test_network.py
 tests/test_live_testing.py
 track_live.py
+analyze_bot.py
+CURSOR_HANDOFF.md
 SECRETS_TROUBLESHOOTING.md
 
 # Python
