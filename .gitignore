@@ -6,6 +6,7 @@ config/secrets.env
 test_api_keys.py
 test_network.py
 tests/test_live_testing.py
+track_live.py
 SECRETS_TROUBLESHOOTING.md
 
 # Python
