@@ -660,6 +660,8 @@ class TradeJournal:
     def list_sessions() -> List[Dict]:
         """List all past paper trade sessions from both active and archive directories."""
         ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
+        current_dir = TradeJournal.newest_resumable_session_dir()
+        current_session_id = current_dir.name if current_dir else None
         search_dirs = []
         if JOURNAL_DIR.exists():
             search_dirs.append((JOURNAL_DIR, "active"))
@@ -678,13 +680,20 @@ class TradeJournal:
                     try:
                         with open(summary_file) as f:
                             data = json.load(f)
+                            is_current = src == "active" and d.name == current_session_id
                             data["_source"] = src
+                            data["_is_current"] = is_current
+                            data["_status"] = (
+                                "active" if is_current else "completed" if src == "active" else "archived"
+                            )
                             data["_path"] = str(d)
                             data.update(
                                 TradeJournal.session_time_meta_for_dir(
                                     d, d.name, src
                                 )
                             )
+                            if not is_current and not data.get("ended_at"):
+                                data["ended_at"] = data.get("last_activity_at")
                             # Apply phantom filter to realized_pnl for display
                             entries_file = d / "entries.jsonl"
                             if entries_file.exists():
@@ -722,10 +731,15 @@ class TradeJournal:
                                     pass
                             sessions.append(data)
                     except Exception:
+                        is_current = source == "active" and d.name == current_session_id
                         sessions.append(
                             {
                                 "session_id": d.name,
                                 "_source": source,
+                                "_is_current": is_current,
+                                "_status": (
+                                    "active" if is_current else "completed" if source == "active" else "archived"
+                                ),
                                 "_path": str(d),
                                 **TradeJournal.session_time_meta_for_dir(
                                     d, d.name, source
@@ -733,12 +747,20 @@ class TradeJournal:
                             }
                         )
                 else:
+                    is_current = source == "active" and d.name == current_session_id
+                    time_meta = TradeJournal.session_time_meta_for_dir(d, d.name, source)
+                    if not is_current and not time_meta.get("ended_at"):
+                        time_meta["ended_at"] = time_meta.get("last_activity_at")
                     sessions.append(
                         {
                             "session_id": d.name,
                             "_source": source,
+                            "_is_current": is_current,
+                            "_status": (
+                                "active" if is_current else "completed" if source == "active" else "archived"
+                            ),
                             "_path": str(d),
-                            **TradeJournal.session_time_meta_for_dir(d, d.name, source),
+                            **time_meta,
                         }
                     )
 

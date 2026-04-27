@@ -404,9 +404,6 @@ _KELLY_STRATEGY_KEYS = (
     "eth_macro",
     "hype_macro",
     "xrp_macro",
-    "fade",
-    "neh",
-    "arbitrage",
 )
 
 
@@ -1142,6 +1139,19 @@ async def get_live_performance():
     closed-trade detail).  No fresh PerformanceTracker() construction per call."""
     summary = _get_journal_summary()
     strategy_stats = summary.get("strategy_stats", {})
+    active_perf_strategies = (
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "weather",
+    )
+    strategy_stats_filtered: Dict[str, Any] = {}
+    if isinstance(strategy_stats, dict):
+        strategy_stats_filtered = {
+            k: v for k, v in strategy_stats.items() if k in active_perf_strategies
+        }
 
     # Build closed-trade list for equity curve etc. using the cached journal
     closed_trades: List[Dict] = []
@@ -1202,7 +1212,7 @@ async def get_live_performance():
         "total_pnl": round(realized_pnl, 2),
         "max_drawdown": round(max_drawdown, 2),
         "sharpe_ratio": 0.0,
-        "by_strategy": strategy_stats if isinstance(strategy_stats, dict) else {},
+        "by_strategy": strategy_stats_filtered,
         "equity_curve": equity_curve,
         "kelly_state": kelly,
     }

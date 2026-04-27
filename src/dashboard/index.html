@@ -7,7 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root{
-            --bg:#000;--border:rgba(255,255,255,.07);--bx:rgba(0,229,255,.22);
+            --bg:#000;--border:rgba(255,255,255,.07);--bx:rgba(255,255,255,.45);
             --tx:#dde0ee;--td:rgba(80,80,130,.9);--tm:#8888aa;
             --cy:#00e5ff;--gr:#00ff88;--re:#ff4466;--ye:#ffd700;--pu:#b060ff;
             /* legacy compat */
@@ -36,14 +36,17 @@
         .crypto-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
         .crypto-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
         .crypto-grid>.card{height:100%;display:flex;flex-direction:column}
+        .equal-card-grid{display:grid;gap:12px;margin-bottom:16px;align-items:stretch;grid-auto-rows:1fr}
+        .equal-card-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .equal-card-grid>.card{height:100%;display:flex;flex-direction:column}
 
         /* ── Cards ── */
         .g,.card{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
             border:1px solid var(--border);border-radius:4px;
-            transition:border-color .18s;
+            transition:border-color .18s,box-shadow .18s;
         }
-        .g:hover,.card:hover{border-color:var(--bx)}
+        .g:hover,.card:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
         .card{padding:16px}
 
         /* ── Section header ── */
@@ -61,16 +64,16 @@
         .status-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
         .hero-item{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
-            border-radius:4px;padding:14px 16px;transition:border-color .18s;
+            border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;
         }
-        .hero-item:hover{border-color:var(--bx)}
+        .hero-item:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
         .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx)}
         .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px}
         .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px}
 
         /* ── Metric boxes ── */
-        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s}
-        .metric-box:hover{border-color:var(--bx)}
+        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s,box-shadow .18s}
+        .metric-box:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
         .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--tx)}
         .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px}
 
@@ -228,7 +231,7 @@
             .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
         }
         @media (max-width:900px){
-            .crypto-grid.two,.crypto-grid.three{grid-template-columns:1fr}
+            .crypto-grid.two,.crypto-grid.three,.equal-card-grid.two{grid-template-columns:1fr}
         }
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
@@ -600,7 +603,7 @@
     </div>
 
     <!-- Recent Trades + AI Summary row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+    <div class="equal-card-grid two">
       <div class="card" data-aos="fade-up" data-aos-delay="560" id="recent-trades-panel">
         <h2>Recent Trades</h2>
         <div class="scrollbox" id="recent-trades-body" style="max-height:200px;font-size:0.75rem;">
@@ -1914,8 +1917,12 @@ async function loadLivePerformance() {
         else if (d.win_rate < 0.45) wrEl.style.color = 'var(--red)';
         // Strategy breakdown
         const stratDiv = document.getElementById('live-perf-strats');
-        if (d.by_strategy && Object.keys(d.by_strategy).length > 0) {
-            stratDiv.innerHTML = Object.entries(d.by_strategy).map(([s, m]) => {
+        const ACTIVE_PERF_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
+        const perfPairs = (d.by_strategy && typeof d.by_strategy === 'object')
+            ? Object.entries(d.by_strategy).filter(([s]) => ACTIVE_PERF_STRATS.includes(s))
+            : [];
+        if (perfPairs.length > 0) {
+            stratDiv.innerHTML = perfPairs.map(([s, m]) => {
                 const trades = Number(m?.trades || 0);
                 const winRate = Number(m?.win_rate || 0);
                 const pnl = Number(m?.total_pnl ?? m?.pnl ?? 0);
@@ -2922,8 +2929,12 @@ function updateLivePerf(d) {
 
     const stratDiv = $('live-perf-strats');
     if (stratDiv) {
-        if (d.by_strategy && typeof d.by_strategy === 'object' && Object.keys(d.by_strategy).length > 0) {
-            stratDiv.innerHTML = Object.entries(d.by_strategy).map(([s, m]) => {
+        const ACTIVE_PERF_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
+        const perfPairs = (d.by_strategy && typeof d.by_strategy === 'object')
+            ? Object.entries(d.by_strategy).filter(([s]) => ACTIVE_PERF_STRATS.includes(s))
+            : [];
+        if (perfPairs.length > 0) {
+            stratDiv.innerHTML = perfPairs.map(([s, m]) => {
                 const trades = Number(m?.trades || 0);
                 const wr = Number(m?.win_rate || 0);
                 const pnl = Number(m?.total_pnl ?? m?.pnl ?? 0);
@@ -3914,8 +3925,13 @@ async function loadSessionHistory() {
         if (!r?.ok) { el.innerHTML = '<p style="color:var(--text-muted);">No sessions found</p>'; return; }
         const data = await r.json();
         const sessions = data.sessions || [];
-        if (!sessions.length) { el.innerHTML = '<p style="color:var(--text-muted);">No sessions found</p>'; return; }
-        countEl.textContent = `(${sessions.length} total)`;
+        const historySessions = sessions.filter(s => !s._is_current);
+        if (!historySessions.length) {
+            countEl.textContent = '(0 past runs)';
+            el.innerHTML = '<p style="color:var(--text-muted);">No completed test runs yet.</p>';
+            return;
+        }
+        countEl.textContent = `(${historySessions.length} past runs)`;
 
         // Table layout
         let html = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.76rem;">
@@ -3935,20 +3951,19 @@ async function loadSessionHistory() {
             <th style="padding:4px 8px;color:var(--text-muted);">Open</th>
         </tr></thead><tbody>`;
 
-        sessions.forEach((s, i) => {
+        historySessions.forEach((s) => {
             const sid = s.session_id || '-';
-            const isActive = s._source === 'active';
+            const status = s._status || (s._source === 'archived' ? 'archived' : 'completed');
             const pnl = s.realized_pnl ?? 0;
             const wr = (_winRateFraction(s.win_rate ?? 0) * 100).toFixed(1);
             const trades = s.total_entries ?? s.wins + s.losses ?? 0;
             const open = s.open_positions ?? 0;
             const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
             const wrColor = parseFloat(wr) >= 55 ? 'var(--green)' : parseFloat(wr) >= 48 ? 'var(--yellow,#f0c040)' : 'var(--red)';
-            const statusBadge = isActive
-                ? '<span style="background:var(--green);color:#000;padding:1px 6px;border-radius:4px;font-size:0.68rem;">ACTIVE</span>'
-                : '<span style="background:rgba(255,255,255,0.1);color:var(--text-muted);padding:1px 6px;border-radius:4px;font-size:0.68rem;">archived</span>';
-            const rowBg = i === 0 && isActive ? 'background:rgba(0,255,170,0.04);' : '';
-            const endDisp = s.ended_at ? _fmtLocalTs(s.ended_at) : (isActive ? '\u2014' : _fmtLocalTs(s.last_activity_at));
+            const statusBadge = status === 'archived'
+                ? '<span style="background:rgba(255,255,255,0.1);color:var(--text-muted);padding:1px 6px;border-radius:4px;font-size:0.68rem;">archived</span>'
+                : '<span style="background:rgba(255,255,255,0.12);color:var(--text);padding:1px 6px;border-radius:4px;font-size:0.68rem;">completed</span>';
+            const endDisp = s.ended_at ? _fmtLocalTs(s.ended_at) : _fmtLocalTs(s.last_activity_at);
 
             // Per-strategy PnL
             const ss = s.strategy_stats || {};
@@ -3959,10 +3974,10 @@ async function loadSessionHistory() {
             const xrpPnl = ss.xrp_macro?.pnl ?? null;
             const fmtStrat = (v) => v !== null ? `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text-muted)'};">${v>0?'+':''}$${v.toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
 
-            html += `<tr style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);${rowBg}"
+            html += `<tr style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);"
                 onclick="loadSessionDetail('${sid.replace(/'/g, "\\'")}')"
                 onmouseover="this.style.background='rgba(255,255,255,0.04)'"
-                onmouseout="this.style.background='${rowBg || 'transparent'}'">
+                onmouseout="this.style.background='transparent'">
                 <td style="padding:5px 8px;white-space:nowrap;">${_fmtLocalTs(s.started_at)}</td>
                 <td style="padding:5px 8px;white-space:nowrap;">${endDisp}</td>
                 <td style="padding:5px 8px;font-family:monospace;color:var(--cyan);">${sid}</td>
