@@ -444,12 +444,15 @@ term_risk:
 # ============================================
 exposure:
   # --- Tier sizing (max trade size per tier) ---
-  # Align with ~$10–$15 target; scale_size() also applies min_trade_usd after tier multiplier.
+  # Operator target: FULL=$15, MODERATE=$10, MINIMAL=$5.
+  # scale_size() also applies min_trade_usd after tier multiplier.
   full_size: 15.0        # FULL tier cap
-  moderate_size: 13.0    # MODERATE tier cap
-  minimal_size: 10.0    # MINIMAL tier cap (floor of operator band)
-  # After raw_size * tier_multiplier, never go below this (stops $5→$1 shrink from 0.2x).
-  min_trade_usd: 10.0
+  moderate_size: 10.0    # MODERATE tier cap
+  minimal_size: 5.0      # MINIMAL tier cap
+  # After raw_size * tier_multiplier, never go below this base floor.
+  # With current multipliers (1.0 / 0.6 / 0.2) and caps above, this yields
+  # effective floors of FULL=$15, MODERATE=$10, MINIMAL=$5.
+  min_trade_usd: 25.0
 
   # --- Kill switch ---
   loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)

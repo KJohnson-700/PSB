@@ -67,6 +67,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "total_entries": summary.get("total_entries", 0),
         "realized_pnl": summary.get("realized_pnl", 0),
         "unrealized_pnl": summary.get("unrealized_pnl", 0),
+        "total_pnl": summary.get("total_pnl", 0),
         "daily_trades": getattr(rm, "daily_trades", 0) if rm else 0,
         "daily_pnl": round(float(getattr(rm, "daily_pnl", 0) or 0), 4) if rm else 0.0,
         "exposure_loss_kill_enabled": bool(

@@ -85,7 +85,8 @@ class ExposureManager:
             ExposureTier.MINIMAL: exposure_config.get('minimal_size', 10.0),
             ExposureTier.PAUSED: 0.0,
         }
-        # Floor after tier multiplier so MODERATE/MINIMAL do not shrink Kelly to $1–3 trades.
+        # Base floor in USD. Applied as tier-aware floor in scale_size():
+        # FULL=min_trade_usd, MODERATE=min_trade_usd*0.6, MINIMAL=min_trade_usd*0.2.
         self.min_trade_usd = float(exposure_config.get('min_trade_usd', 0.0) or 0.0)
 
         # --- Tier multipliers (applied to Kelly/position sizer output) ---
@@ -416,7 +417,10 @@ class ExposureManager:
         """Apply exposure multiplier to a raw position size.
 
         Call this after Kelly/position sizer gives a raw size.
-        Enforces ``min_trade_usd`` after multiply so tier multipliers do not produce $1–3 trades.
+        Enforces a tier-aware floor after multiply:
+        ``min_trade_usd * current_tier_multiplier``.
+        This preserves intended shrinkage under MINIMAL (e.g. 10 -> 2 at x0.2)
+        while still preventing pathological sub-dollar sizes in all tiers.
         """
         multiplier = self.tier_multipliers.get(self._current_tier, 1.0)
         max_size = self.tier_sizing.get(self._current_tier, raw_size)
@@ -424,7 +428,8 @@ class ExposureManager:
             return 0.0
         scaled = raw_size * multiplier
         if self.min_trade_usd > 0:
-            scaled = max(scaled, self.min_trade_usd)
+            tier_floor = self.min_trade_usd * multiplier
+            scaled = max(scaled, tier_floor)
         return min(scaled, max_size)
 
     def get_status(self) -> Dict[str, Any]:

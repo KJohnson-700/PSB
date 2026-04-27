@@ -65,6 +65,32 @@ class PortfolioSnapshot:
 class TradeJournal:
     """Persistent trade journal with append-only log and periodic snapshots."""
 
+    @staticmethod
+    def newest_resumable_session_dir(journal_dir: Optional[Path] = None) -> Optional[Path]:
+        """Newest (lexicographic) session directory that has resumable journal artifacts.
+
+        Matches ``__init__``/``resume_latest`` selection: empty stub directories
+        (e.g. crash or pre-write restart) are skipped so the bot, dashboard, and
+        any disk-only reader agree on which folder holds the current test run.
+        """
+        root = journal_dir or JOURNAL_DIR
+        if not root.exists():
+            return None
+        existing = sorted(
+            [d for d in root.iterdir() if d.is_dir()], reverse=True
+        )
+        for d in existing:
+            ent = d / "entries.jsonl"
+            pos = d / "positions.json"
+            summ = d / "summary.json"
+            try:
+                has_entries = ent.exists() and ent.stat().st_size > 0
+            except OSError:
+                has_entries = False
+            if has_entries or pos.exists() or summ.exists():
+                return d
+        return None
+
     def __init__(self, session_id: str = None, resume_latest: bool = True):
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
         if session_id:
@@ -82,21 +108,7 @@ class TradeJournal:
             # Resume the newest session directory that actually has journal data.
             # (Skip empty stub dirs left by crashes or aborted starts — avoids "empty
             # journal after restart" while older folders still hold trades/charts.)
-            existing = sorted(
-                [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
-            )
-            chosen: Optional[Path] = None
-            for d in existing:
-                ent = d / "entries.jsonl"
-                pos = d / "positions.json"
-                summ = d / "summary.json"
-                try:
-                    has_entries = ent.exists() and ent.stat().st_size > 0
-                except OSError:
-                    has_entries = False
-                if has_entries or pos.exists() or summ.exists():
-                    chosen = d
-                    break
+            chosen = TradeJournal.newest_resumable_session_dir()
             if chosen is not None:
                 self.session_id = chosen.name
                 logger.info(f"Resuming existing session: {self.session_id}")
@@ -193,7 +205,7 @@ class TradeJournal:
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
         }
-        self.total_entries += 1
+        self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self._summary_cache = None  # invalidate on new entry
         self._save_positions()
         logger.info(
@@ -326,6 +338,7 @@ class TradeJournal:
         pos["exit_reason"] = reason
         self.closed_trades.append(pos)
         del self.open_positions[trade_id]
+        self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self.total_exits += 1
         self.realized_pnl += pnl
         self._summary_cache = None  # invalidate on exit
@@ -538,16 +551,21 @@ class TradeJournal:
             sum(_notional(p) for p in self.open_positions.values()) + closed["closed_notional"],
             2,
         )
+        # Fills = one entry per open position plus one per closed round-trip
+        # (avoids inflating counts with ENTRY lines that never became a position).
+        entry_fill_count = len(self.open_positions) + closed["total_exits"]
+        realized_raw = float(closed["realized_pnl"])
+        unreal_rounded = round(unrealized, 2)
         out = {
             "session_id": self.session_id,
-            "total_entries": self.total_entries,
+            "total_entries": entry_fill_count,
             "total_exits": closed["total_exits"],
             "open_positions": len(self.open_positions),
             "total_cost": round(total_cost, 2),
             "session_staked_notional": session_staked_notional,
             "realized_pnl": closed["realized_pnl"],
-            "unrealized_pnl": round(unrealized, 2),
-            "total_pnl": round(closed["realized_pnl"] + unrealized, 2),
+            "unrealized_pnl": unreal_rounded,
+            "total_pnl": round(realized_raw + unreal_rounded, 2),
             "win_rate": round(wins / (wins + losses), 3) if (wins + losses) > 0 else 0,
             "wins": wins,
             "losses": losses,
@@ -692,11 +710,14 @@ class TradeJournal:
                                             if pnl > 0:
                                                 real_wins += 1
                                     data["realized_pnl"] = round(real_pnl, 2)
-                                    data["total_pnl"] = round(real_pnl + data.get("unrealized_pnl", 0), 2)
+                                    ur = round(float(data.get("unrealized_pnl", 0) or 0), 2)
+                                    data["unrealized_pnl"] = ur
+                                    data["total_pnl"] = round(real_pnl + ur, 2)
                                     data["wins"] = real_wins
                                     data["losses"] = real_trades - real_wins
                                     data["win_rate"] = round(real_wins / real_trades, 3) if real_trades else 0
-                                    data["total_entries"] = real_trades
+                                    open_n = int(data.get("open_positions", 0) or 0)
+                                    data["total_entries"] = open_n + real_trades
                                 except Exception:
                                     pass
                             sessions.append(data)
@@ -754,7 +775,6 @@ class TradeJournal:
 
         # Rebuild closed trades and counters from entries log
         if self._entries_file.exists():
-            entries_count = 0
             exits_count = 0
             rpnl = 0.0
             closed = []
@@ -772,9 +792,7 @@ class TradeJournal:
                         e = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if e.get("event") == "ENTRY":
-                        entries_count += 1
-                    elif e.get("event") == "EXIT":
+                    if e.get("event") == "EXIT":
                         pnl = e.get("pnl", 0) or 0
                         ep  = e.get("entry_price", 0) or 0
                         cp  = e.get("current_price", 0) or 0
@@ -815,7 +833,6 @@ class TradeJournal:
                                 "extra": e.get("extra", {}),  # preserve signal features for coach
                             }
                         )
-            self.total_entries = entries_count
             self.total_exits = exits_count
             self.realized_pnl = rpnl
             self.closed_trades = closed
@@ -832,6 +849,10 @@ class TradeJournal:
                 for tid in stale:
                     del self.open_positions[tid]
                 self._save_positions()  # Write corrected state back to disk
+
+            self.total_entries = len(self.open_positions) + len(self.closed_trades)
+        else:
+            self.total_entries = len(self.open_positions)
 
         # Always flush phantom-filtered summary to disk immediately on load
         # so the dashboard never reads a stale/phantom summary.json

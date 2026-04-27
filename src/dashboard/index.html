@@ -1124,6 +1124,13 @@ let lastStatusData = null;
 window._dashSessionId = null; // tracks active session; chart reset fires when this changes
 window._journalViewSessionId = null; // when set, journal API calls scope to this session id
 
+/** Win rate from API: 0–1 fraction or 0–100 percentage (summary.json may vary). */
+function _winRateFraction(wr) {
+    const n = Number(wr);
+    if (!Number.isFinite(n)) return 0;
+    return n > 1 ? n / 100 : n;
+}
+
 /** Headers for mutating routes. Server enforces X-API-Key only when DASHBOARD_API_KEY is set in the environment. */
 function dashAuthHeaders(extra) {
     return Object.assign({}, extra || {});
@@ -1336,9 +1343,17 @@ function applyHeroMetrics(d) {
         } else pnlSub.textContent = '';
     }
 
-    const openCount = (p && (p.total_positions != null && p.total_positions !== undefined))
+    let openCount = (p && (p.total_positions != null && p.total_positions !== undefined))
         ? Number(p.total_positions)
         : (Array.isArray(d.positions) ? d.positions.length : (s && s.open != null ? Number(s.open) : 0));
+    const posArrLen = Array.isArray(d.positions) ? d.positions.length : 0;
+    if (posArrLen > 0) openCount = posArrLen;
+    else if (
+        openCount === 0 && lastStatusData && !lastStatusData.running &&
+        Array.isArray(lastStatusData.positions) && lastStatusData.positions.length > 0
+    ) {
+        openCount = lastStatusData.positions.length;
+    }
     const posEl = document.getElementById('hero-positions');
     if (posEl) posEl.textContent = openCount;
     const posSub = document.getElementById('hero-positions-sub');
@@ -1428,6 +1443,7 @@ function applySSESnapshot(raw) {
         if (el) el.textContent = '$' + Number(raw.btc_price).toLocaleString();
     }
     const shaped = sseSnapshotToStatusShape(raw);
+    shaped.running = raw.running;
     applyHeroMetrics(shaped);
     if (raw.dry_run !== undefined && raw.running !== undefined) {
         updateStatusBadgesAndKill({
@@ -2132,8 +2148,8 @@ function updateSessionSummary(d) {
     set('ss-trades', String(d.total_entries ?? 0));
     set('ss-wins', String(d.wins ?? 0));
     set('ss-losses', String(d.losses ?? 0));
-    const wr = (d.win_rate ?? 0) * 100;
-    set('ss-wr', (wr > 0 ? wr.toFixed(1) : '-') + '%');
+    const wrPct = _winRateFraction(d.win_rate ?? 0) * 100;
+    set('ss-wr', (wrPct > 0 ? wrPct.toFixed(1) : '-') + '%');
     const rpnl = d.realized_pnl ?? 0;
     const tpnl = d.total_pnl ?? 0;
     set('ss-rpnl', '$' + rpnl.toFixed(2));
@@ -2236,10 +2252,10 @@ function updateJournal(d) {
     document.getElementById('j-open').textContent = d.open_positions || 0;
     document.getElementById('j-wins').textContent = d.wins || 0;
 
-    const wr = d.win_rate || 0;
+    const wrFrac = _winRateFraction(d.win_rate || 0);
     const wrEl = document.getElementById('j-winrate');
-    wrEl.textContent = (wr * 100).toFixed(1) + '%';
-    wrEl.style.color = wr >= 0.5 ? 'var(--green)' : wr > 0 ? 'var(--yellow)' : 'var(--text-muted)';
+    wrEl.textContent = (wrFrac * 100).toFixed(1) + '%';
+    wrEl.style.color = wrFrac >= 0.5 ? 'var(--green)' : wrFrac > 0 ? 'var(--yellow)' : 'var(--text-muted)';
 
     const rEl = document.getElementById('j-realized');
     rEl.textContent = '$' + (d.realized_pnl || 0).toFixed(2);
@@ -2433,22 +2449,28 @@ async function loadJournalSessionList() {
             return;
         }
         const cur = window._journalViewSessionId;
-        const top = sessions[0];
+        const activeSid = window._dashSessionId || null;
+        const liveSession = activeSid
+            ? sessions.find((s) => (s.session_id || '') === activeSid) || null
+            : null;
+        const featured = liveSession || sessions[0];
+
         if (feat) {
-            const sid = top.session_id || '-';
+            const sid = featured.session_id || '-';
             const isSel = cur === sid;
-            const pnl = top.realized_pnl ?? 0;
-            const wr = ((top.win_rate ?? 0) * 100).toFixed(1);
-            const ended = top.ended_at ? _fmtLocalTs(top.ended_at) : (top._source === 'archived' ? _fmtLocalTs(top.last_activity_at) : 'ongoing');
+            const pnl = featured.realized_pnl ?? 0;
+            const wr = (_winRateFraction(featured.win_rate ?? 0) * 100).toFixed(1);
+            const featTitle = liveSession && sid === activeSid ? 'Current session' : 'Featured session';
+            const ended = featured.ended_at ? _fmtLocalTs(featured.ended_at) : (featured._source === 'archived' ? _fmtLocalTs(featured.last_activity_at) : 'ongoing');
             feat.innerHTML =
                 '<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.3);cursor:pointer;" data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">' +
-                '<div style="font-weight:700;color:var(--cyan);margin-bottom:4px;">Latest run' + (isSel ? ' <span style="color:var(--green);font-size:0.65rem;">(selected)</span>' : '') + '</div>' +
+                '<div style="font-weight:700;color:var(--cyan);margin-bottom:4px;">' + featTitle + (isSel ? ' <span style="color:var(--green);font-size:0.65rem;">(selected)</span>' : '') + '</div>' +
                 '<div style="font-size:0.74rem;line-height:1.55;color:var(--text);">' +
                 '<span style="color:var(--text-muted);">Session</span> <code style="font-size:0.72rem;">' + sid + '</code> &nbsp;|&nbsp; ' +
-                '<span style="color:var(--text-muted);">Started</span> ' + _fmtLocalTs(top.started_at) + ' &nbsp;|&nbsp; ' +
+                '<span style="color:var(--text-muted);">Started</span> ' + _fmtLocalTs(featured.started_at) + ' &nbsp;|&nbsp; ' +
                 '<span style="color:var(--text-muted);">Ended</span> ' + ended +
                 '</div>' +
-                '<div style="margin-top:6px;font-size:0.74rem;">Trades ~' + (top.total_entries ?? '-') + ' &nbsp; WR ' + wr + '% &nbsp; PnL <span style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:600;">' + (pnl >= 0 ? '+' : '') + '$' + Number(pnl).toFixed(2) + '</span></div>' +
+                '<div style="margin-top:6px;font-size:0.74rem;">Trades ~' + (featured.total_entries ?? '-') + ' &nbsp; WR ' + wr + '% &nbsp; PnL <span style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';font-weight:600;">' + (pnl >= 0 ? '+' : '') + '$' + Number(pnl).toFixed(2) + '</span></div>' +
                 '<div style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;">Click to review this run in the journal below.</div>' +
                 '</div>';
             const fc = feat.querySelector('[data-journal-session]');
@@ -2469,13 +2491,13 @@ async function loadJournalSessionList() {
             const sid = s.session_id || '-';
             const selected = cur === sid;
             const pnl = s.realized_pnl ?? 0;
-            const wr = ((s.win_rate ?? 0) * 100).toFixed(1);
+            const wr = (_winRateFraction(s.win_rate ?? 0) * 100).toFixed(1);
             const active = s._source === 'active';
             const stBadge = active
                 ? '<span style="background:rgba(0,230,118,0.15);color:var(--green);padding:1px 6px;border-radius:4px;font-size:0.65rem;">active</span>'
                 : '<span style="background:rgba(255,255,255,0.06);color:var(--text-muted);padding:1px 6px;border-radius:4px;font-size:0.65rem;">archived</span>';
             const endDisp = s.ended_at ? _fmtLocalTs(s.ended_at) : (active ? '\u2014' : _fmtLocalTs(s.last_activity_at));
-            const rowBg = selected ? 'background:rgba(255,255,255,0.04);' : (i === 0 ? 'background:rgba(255,255,255,0.02);' : '');
+            const rowBg = selected ? 'background:rgba(255,255,255,0.04);' : ((featured && sid === featured.session_id) ? 'background:rgba(255,255,255,0.02);' : '');
             const pnlC = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
             const wrC = parseFloat(wr) >= 55 ? 'var(--green)' : parseFloat(wr) >= 48 ? '#f0c040' : 'var(--red)';
             html += '<tr data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);' + rowBg + '" title="Review this session">';
@@ -3864,7 +3886,7 @@ async function loadSessionHistory() {
             const sid = s.session_id || '-';
             const isActive = s._source === 'active';
             const pnl = s.realized_pnl ?? 0;
-            const wr = ((s.win_rate ?? 0) * 100).toFixed(1);
+            const wr = (_winRateFraction(s.win_rate ?? 0) * 100).toFixed(1);
             const trades = s.total_entries ?? s.wins + s.losses ?? 0;
             const open = s.open_positions ?? 0;
             const pnlColor = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';

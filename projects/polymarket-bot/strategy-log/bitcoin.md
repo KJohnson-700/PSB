@@ -42,7 +42,11 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Review sessions
 
-_(none yet)_
+### 2026-04-26 — Paper session observation: no new BTC closes
+
+- **What we observed:** No new BTC up/down closed trades in this session window.
+- **Interpretation:** Could be genuine BTC market scarcity in the scanned windows and/or current BTC gating (`disable_buy_yes`, edge/window filters) being tight for this regime.
+- **Action:** Keep current guardrails, re-check after more session data accumulates (target ≥15 BTC closes) before changing BTC entry gates again.
 
 ## Lessons learned
 

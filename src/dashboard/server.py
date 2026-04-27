@@ -244,7 +244,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-04-25-alt-spot-price-payload",
+        "dashboard_ui_rev": "2026-04-26-journal-past-default",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -283,11 +283,19 @@ def _get_journal():
     if not JOURNAL_DIR.exists():
         return None
 
-    sessions = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
-    if not sessions:
-        return None
+    # Match TradeJournal(resume_latest): use the newest dir that actually has
+    # journal data, not a newer empty stub folder (fixes blank Journal after restarts
+    # when the dashboard process has no in-memory bot_instance).
+    chosen = TradeJournal.newest_resumable_session_dir()
+    if chosen is None:
+        sessions = sorted(
+            [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
+        )
+        if not sessions:
+            return None
+        chosen = sessions[0]
 
-    entries_file = sessions[0] / "entries.jsonl"
+    entries_file = chosen / "entries.jsonl"
 
     # Determine current mtime (None if file doesn't exist yet)
     try:
@@ -308,7 +316,7 @@ def _get_journal():
         return cached_journal
 
     # Cache miss — rebuild
-    journal = TradeJournal(session_id=sessions[0].name)
+    journal = TradeJournal(session_id=chosen.name)
     _journal_cache["path"] = entries_file
     _journal_cache["mtime"] = current_mtime
     _journal_cache["journal"] = journal
@@ -323,7 +331,7 @@ def _get_journal_summary() -> Dict:
     reading ``summary.json`` only when no journal can be loaded. Adds
     ``summary_source``: ``live_journal`` | ``summary_json`` | ``none``.
     """
-    from src.execution.trade_journal import JOURNAL_DIR
+    from src.execution.trade_journal import JOURNAL_DIR, TradeJournal
 
     _empty = {
         "session_id": None,
@@ -351,11 +359,16 @@ def _get_journal_summary() -> Dict:
     if not JOURNAL_DIR.exists():
         return _empty
 
-    sessions = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
-    if not sessions:
-        return _empty
+    chosen = TradeJournal.newest_resumable_session_dir()
+    if chosen is None:
+        sessions = sorted(
+            [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
+        )
+        if not sessions:
+            return _empty
+        chosen = sessions[0]
 
-    summary_file = sessions[0] / "summary.json"
+    summary_file = chosen / "summary.json"
     if summary_file.exists():
         try:
             with open(summary_file, encoding="utf-8") as f:
@@ -623,6 +636,25 @@ async def sse_stream(request: Request):
                     if sid is not None:
                         session_id = sid
 
+                # Bot stopped: align SSE hero with /api/status (disk positions + journal).
+                if not bot_instance:
+                    try:
+                        js = _get_journal_summary()
+                    except Exception:
+                        js = {}
+                    disk_pos = _load_disk_positions_for_status()
+                    disk_n = len(disk_pos)
+                    if disk_n:
+                        open_n = disk_n
+                    session_open = int(
+                        js.get("open_positions", 0) or 0
+                    )
+                    if disk_n:
+                        session_open = max(session_open, disk_n)
+                    open_stake = round(float(js.get("total_cost", 0) or 0), 2)
+                    if session_id is None:
+                        session_id = js.get("session_id")
+
                 cfg_disk: Dict[str, Any] = {}
                 if not bot_instance and CONFIG_PATH.exists():
                     try:
@@ -643,6 +675,37 @@ async def sse_stream(request: Request):
                     can_trade = False
                     ai_payload = compute_ai_status(cfg_disk, None)
 
+                bankroll_snap = 0.0
+                if bot_instance and hasattr(bot_instance, "bankroll"):
+                    bankroll_snap = round(float(bot_instance.bankroll), 2)
+                elif not bot_instance:
+                    j_disk = _get_journal()
+                    session_dir_disk = (
+                        j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
+                    )
+                    bankroll_snap = 0.0
+                    if j_disk:
+                        try:
+                            br = j_disk.last_bankroll_from_entries_log()
+                            if br is not None:
+                                bankroll_snap = float(br)
+                        except (TypeError, ValueError):
+                            pass
+                    if bankroll_snap <= 0 and session_dir_disk:
+                        br_snap = _last_snapshot_bankroll(session_dir_disk)
+                        if br_snap is not None:
+                            bankroll_snap = round(br_snap, 2)
+                    if bankroll_snap <= 0:
+                        initial = float(
+                            (cfg_disk.get("backtest") or {}).get(
+                                "initial_bankroll", 500
+                            )
+                            or 500
+                        )
+                        tp = float(js.get("total_pnl", 0) or 0)
+                        if js.get("session_id"):
+                            bankroll_snap = round(initial + tp, 2)
+
                 snapshot = {
                     "running": bot_instance.running if bot_instance else False,
                     "kill_switch_active": kill_switch_active,
@@ -651,9 +714,7 @@ async def sse_stream(request: Request):
                     "ai": ai_payload,
                     "session_id": session_id,
                     "session_open": session_open,
-                    "bankroll": round(
-                        float(bot_instance.bankroll), 2
-                    ) if bot_instance and hasattr(bot_instance, "bankroll") else 0,
+                    "bankroll": bankroll_snap,
                     "positions": open_n,
                     "trades_today": daily_trades_n,
                     "daily_pnl": daily_pnl_v,
@@ -703,6 +764,90 @@ if os.getenv("SCALAR_ENABLED", "").strip().lower() in ("1", "true", "yes"):
         )
 
 
+# ─── DISK SESSION HELPERS (status + SSE alignment) ───────────────
+
+
+def _dashboard_journal_session_dir() -> Optional[Path]:
+    """Same session folder priority as TradeJournal disk readers (not raw lexicographic only)."""
+    from src.execution.trade_journal import TradeJournal, JOURNAL_DIR
+
+    if not JOURNAL_DIR.exists():
+        return None
+    chosen = TradeJournal.newest_resumable_session_dir()
+    if chosen is not None:
+        return chosen
+    subs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
+    return subs[0] if subs else None
+
+
+def _positions_list_from_positions_json(pos_file: Path) -> List[Dict]:
+    if not pos_file.exists():
+        return []
+    try:
+        with open(pos_file, encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        return []
+    out: List[Dict] = []
+    for pid, p in raw.items():
+        out.append(
+            {
+                "position_id": pid,
+                "market_id": p.get("market_id", ""),
+                "market_question": (p.get("market_question") or "N/A")[:80],
+                "outcome": p.get("outcome", ""),
+                "size": p.get("size", 0),
+                "entry_price": p.get("entry_price", 0),
+                "current_price": p.get("current_price", p.get("entry_price", 0)),
+                "pnl": p.get("pnl", 0.0),
+                "opened_at": p.get("opened_at", ""),
+                "strategy": p.get("strategy", "unknown"),
+            }
+        )
+    return out
+
+
+def _load_disk_positions_for_status() -> List[Dict]:
+    d = _dashboard_journal_session_dir()
+    if not d:
+        return []
+    return _positions_list_from_positions_json(d / "positions.json")
+
+
+def _last_snapshot_bankroll(session_dir: Optional[Path]) -> Optional[float]:
+    """Last ``bankroll`` in ``snapshots.jsonl`` (tail scan)."""
+    if not session_dir:
+        return None
+    snap = session_dir / "snapshots.jsonl"
+    if not snap.exists():
+        return None
+    try:
+        with open(snap, "rb") as f:
+            f.seek(0, 2)
+            sz = f.tell()
+            f.seek(max(0, sz - 65536))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    last_br: Optional[float] = None
+    for line in chunk.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        b = o.get("bankroll")
+        if b is None:
+            continue
+        try:
+            last_br = float(b)
+        except (TypeError, ValueError):
+            pass
+    return last_br
+
+
 # ─── STATUS ───────────────────────────────────────────────────────
 
 
@@ -722,39 +867,8 @@ async def get_status():
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_active = kill_switch_file.exists()
 
-    # ── Read positions from disk (positions.json in latest session) ──
-    from src.execution.trade_journal import JOURNAL_DIR
-
-    disk_positions: List[Dict] = []
-    if JOURNAL_DIR.exists():
-        sessions = sorted(
-            [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
-        )
-        if sessions:
-            pos_file = sessions[0] / "positions.json"
-            if pos_file.exists():
-                try:
-                    with open(pos_file, encoding="utf-8") as f:
-                        raw = json.load(f)
-                    for pid, p in raw.items():
-                        disk_positions.append(
-                            {
-                                "position_id": pid,
-                                "market_id": p.get("market_id", ""),
-                                "market_question": (p.get("market_question") or "N/A")[:80],
-                                "outcome": p.get("outcome", ""),
-                                "size": p.get("size", 0),
-                                "entry_price": p.get("entry_price", 0),
-                                "current_price": p.get(
-                                    "current_price", p.get("entry_price", 0)
-                                ),
-                                "pnl": p.get("pnl", 0.0),
-                                "opened_at": p.get("opened_at", ""),
-                                "strategy": p.get("strategy", "unknown"),
-                            }
-                        )
-                except Exception:
-                    pass
+    # ── Read positions from disk (same session as resumable journal) ──
+    disk_positions: List[Dict] = _load_disk_positions_for_status()
 
     # ── If bot_instance is live, prefer its in-memory positions ──
     if bot_instance:
@@ -827,6 +941,7 @@ async def get_status():
             pass
 
     j_disk = _get_journal()
+    session_dir_disk = j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
     bankroll_disk = 0.0
     if j_disk:
         try:
@@ -835,6 +950,10 @@ async def get_status():
                 bankroll_disk = float(br)
         except (TypeError, ValueError):
             pass
+    if bankroll_disk <= 0 and session_dir_disk:
+        br_snap = _last_snapshot_bankroll(session_dir_disk)
+        if br_snap is not None:
+            bankroll_disk = round(br_snap, 2)
     if bankroll_disk <= 0:
         initial = float(
             (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500) or 500

@@ -4,6 +4,24 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-04-26 — Exposure tier caps updated to 15 / 10 / 5
+
+- **Config:** `config/settings.yaml` under `exposure` now sets `full_size: 15.0`, `moderate_size: 10.0`, `minimal_size: 5.0`.
+- **Why:** Operator sizing target tightened so non-FULL conditions do not keep near-$15 tickets.
+
+## 2026-04-26 — Exposure sizing floor now respects tier multiplier
+
+- **Issue:** `ExposureManager.scale_size()` applied `exposure.min_trade_usd` as a flat post-multiplier floor. With `min_trade_usd: 10` and `MINIMAL` tier `x0.2`, trades were still floored near $10 instead of the expected ~$2.
+- **Code:** `src/execution/exposure_manager.py` now applies a tier-aware floor: `min_trade_usd * tier_multiplier` (FULL=10, MODERATE=6, MINIMAL=2 with current config). Existing tier caps (`full_size/moderate_size/minimal_size`) still apply.
+- **Tests:** Added `tests/test_exposure_manager_sizing.py` (3 regression cases covering FULL/MODERATE/MINIMAL behavior).
+
+## 2026-04-26 — Journal tab: use same “resumable session” as the bot (disk-only dashboard)
+
+- **Issue:** After a restart, a **newer empty** `data/paper_trades/<session_id>/` directory could be lexicographically first while the bot correctly resumed a **older folder with trades** (same rule as `TradeJournal(resume_latest=True)`). The dashboard process often has no in-memory `bot_instance`, so it read the empty stub and the Journal tab showed no metrics for the last test run.
+- **Code:** `TradeJournal.newest_resumable_session_dir()` in `src/execution/trade_journal.py` (shared with resume + `_get_journal` / `summary` fallback in `src/dashboard/server.py`).
+- **Tests:** `tests/test_trade_journal_resumable.py::test_newest_resumable_session_dir_skips_empty_stubs`
+- **Strategy log (same release window):** `strategy-log/bitcoin.md` and `eth_macro.md` (2026-04-26 entries); SELL/exit + RSI changes are also summarized in the changelog block below and those strategy files.
+
 ## 2026-04-26 — SELL_YES take-profit exits buy back YES token
 
 - **Issue:** `PositionExitManager` calculated `SELL_YES` PnL against the YES price but attempted to close profitable short-YES positions by buying the **NO** token. Entry execution sells the YES token for `SELL_YES`, so the exit leg must buy back YES.

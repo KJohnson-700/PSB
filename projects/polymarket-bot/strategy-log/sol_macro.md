@@ -12,6 +12,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-04-26 — Optional RSI hard gates (shared `SolMacroStrategy` implementation)
+
+- **What changed:** `src/strategies/sol_macro.py` now applies optional `rsi_buy_block_above` / `rsi_sell_block_below` via `_rsi_blocks_entry` before entries; strategies opt in per YAML. ETH enables `rsi_buy_block_above: 80.0` (see `eth_macro.md`); SOL/HYPE/XRP unchanged until configured.
+- **Why:** Single implementation path for all macro up/down classes that inherit `SolMacroStrategy`.
+- **Hypothesis:** No behavior change for strategies that omit the new keys; see `eth_macro.md` for the ETH exhaustion-entry hypothesis.
+- **Expected outcome:** Config-driven RSI ceilings/floors without forking per-asset entry loops.
+- **Actual outcome:** `pending` (ETH-specific outcomes tracked under `eth_macro.md`).
+- **Status:** `pending`
+
 ### 2026-04-21 — UTC blocklist scope-back to Tier A + re-audit cadence
 
 - **What changed:** `strategies.sol_macro.blocked_utc_hours_updown` narrowed from `[1, 6, 9, 18, 22, 23]` to **`[1, 6, 23]`** in `config/settings.yaml`. H9 / H18 / H22 removed from the block (downgraded to "watch").
