@@ -9,6 +9,11 @@ tests/test_live_testing.py
 track_live.py
 analyze_bot.py
 CURSOR_HANDOFF.md
+IMPLEMENTATION_CHECKLIST.md
+polymarket_contrarian_strategies.md
+projects/
+docs/CURSOR_INVESTIGATION_NOTES.md
+docs/TODO_STRATEGY_AND_BACKTEST_FIXES.md
 SECRETS_TROUBLESHOOTING.md
 
 # Python
