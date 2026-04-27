@@ -54,6 +54,16 @@ def _make_config():
     }
 
 
+def test_optional_rsi_buy_ceiling_blocks_extreme_long_entries():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._rsi_blocks_entry("BUY_YES", 84.8) is True
+    assert strategy._rsi_blocks_entry("BUY_YES", 79.9) is False
+    assert strategy._rsi_blocks_entry("SELL_YES", 84.8) is False
+
+
 def _make_bullish_ta():
     """Create a bullish SOL technical analysis."""
     return SOLTechnicalAnalysis(

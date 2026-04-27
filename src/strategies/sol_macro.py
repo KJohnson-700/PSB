@@ -250,6 +250,18 @@ class SolMacroStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
+    def _rsi_blocks_entry(self, action: str, rsi: float) -> bool:
+        """Optional config-scoped RSI hard gate for extreme one-sided entries."""
+        buy_ceiling = self.config.get("rsi_buy_block_above")
+        if action == "BUY_YES" and buy_ceiling is not None and rsi >= float(buy_ceiling):
+            return True
+
+        sell_floor = self.config.get("rsi_sell_block_below")
+        if action == "SELL_YES" and sell_floor is not None and rsi <= float(sell_floor):
+            return True
+
+        return False
+
     def _extract_direction(self, question: str) -> str:
         q = question.lower()
         up = sum(1 for w in UP_WORDS if w in q)
@@ -818,6 +830,13 @@ class SolMacroStrategy:
                         f"1H trend BEARISH, suppressing counter-trend long"
                     )
                     continue
+                if self._rsi_blocks_entry(action, sol.rsi_14):
+                    _bump_skip("rsi_extreme_block")
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
+                        f"RSI={sol.rsi_14:.1f} hit configured hard gate"
+                    )
+                    continue
 
                 if is_5m:
                     # ── [5m] FIVE-MINUTE UP/DOWN MARKET PATH ──
@@ -1050,6 +1069,13 @@ class SolMacroStrategy:
                     action = "BUY_YES" if direction == "UP" else "SELL_YES"
                 else:
                     action = "SELL_YES" if direction == "UP" else "BUY_YES"
+
+                if self._rsi_blocks_entry(action, sol.rsi_14):
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
+                        f"RSI={sol.rsi_14:.1f} hit configured hard gate"
+                    )
+                    continue
 
                 if not threshold:
                     continue  # Can't calculate edge without threshold on traditional markets

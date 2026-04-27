@@ -4,6 +4,12 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-04-26 — SELL_YES take-profit exits buy back YES token
+
+- **Issue:** `PositionExitManager` calculated `SELL_YES` PnL against the YES price but attempted to close profitable short-YES positions by buying the **NO** token. Entry execution sells the YES token for `SELL_YES`, so the exit leg must buy back YES.
+- **Code:** `src/execution/live_testing.py` — `pos.outcome == "NO"` exit decisions now use `exit_action="BUY"` with `token_yes`, keeping token, price, and journal PnL conventions aligned.
+- **Tests:** Added `tests/test_live_testing.py::test_sell_yes_take_profit_buys_back_yes_token`.
+
 ## 2026-04-22 — Single trading loop (`_unified_cycle`) — **verified working**
 
 - **Before:** Two asyncio tasks — `_main_loop` (300s, exits + arb/fade/neh + resolution) and `_crypto_fast_loop` (120s, crypto only + resolution), each running a full `scan_for_opportunities()` — double scanner load and confusing logs. Operator expectation (“main loop” vs “fast loop”) was easy to misread; crypto-only live scope had arb/fade/neh off, so all entries came only from the fast path while exits trailed on 300s.

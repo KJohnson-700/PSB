@@ -231,6 +231,7 @@ strategies:
     kelly_fraction: 0.15
     entry_price_min: 0.46
     entry_price_max: 0.54
+    rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
     # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
     # Previous [18, 22] was copy-pasted from SOL config — WRONG for ETH (H22=+$31.18 for ETH!)

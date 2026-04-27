@@ -202,8 +202,9 @@ class PositionExitManager:
                     exit_action = "SELL"
                     exit_token_id = token_yes
                 else:
+                    # SELL_YES entries short the YES token; close by buying back YES.
                     exit_action = "BUY"
-                    exit_token_id = token_no
+                    exit_token_id = token_yes
 
                 exits.append(
                     ExitDecision(

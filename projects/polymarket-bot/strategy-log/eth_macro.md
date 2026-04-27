@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-04-26 — Extreme RSI hard gate for ETH BUY entries
+
+- **What changed:** Added `strategies.eth_macro.rsi_buy_block_above: 80.0` in `config/settings.yaml`; `SolMacroStrategy` now honors optional `rsi_buy_block_above` / `rsi_sell_block_below` hard gates before emitting signals.
+- **Why:** Apr 26 paper session showed ETH BUY losses at RSI 84.8 and 83.4 resolving fully against the trade. The prior RSI penalty only reduced estimated probability slightly, so extreme overbought BUYs could still clear `min_edge`.
+- **Hypothesis:** Blocking ETH BUY_YES above RSI 80 removes the observed exhaustion entries without changing SOL/HYPE/XRP defaults.
+- **Expected outcome:** No ETH BUY_YES entries when RSI is ≥80; lower rate of complete directional misses in overbought ETH windows.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades after restart).
+- **Status:** `pending`
+
 ### 2026-04-21 — UTC blocklist scope-back to Tier A + re-audit cadence
 
 - **What changed:** `strategies.eth_macro.blocked_utc_hours_updown` narrowed from `[1, 15, 17, 20, 23]` to **`[1, 15, 23]`** in `config/settings.yaml`. H17 / H20 removed from the block (downgraded to "watch").
