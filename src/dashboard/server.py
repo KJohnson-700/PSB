@@ -1367,6 +1367,32 @@ def _backtest_reader(job: BacktestJob) -> None:
         pass
 
 
+def _start_backtest_job(cmd_args: List[str], summary: str) -> Dict[str, Any]:
+    """Spawn a backtest subprocess, register in-memory tracking, and return API payload."""
+    jid = uuid.uuid4().hex[:10]
+    proc = subprocess.Popen(
+        cmd_args,
+        cwd=str(PROJECT_ROOT),
+        env=_safe_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    job = BacktestJob(job_id=jid, proc=proc, output=[], summary=summary)
+    with _backtest_jobs_lock:
+        _backtest_jobs[jid] = job
+    threading.Thread(
+        target=_backtest_reader,
+        args=(job,),
+        daemon=True,
+    ).start()
+    _prune_finished_backtest_jobs()
+    logger.info("Backtest job %s started (PID %s) %s", jid, proc.pid, summary)
+    return {"status": "started", "job_id": jid, "pid": proc.pid, "summary": summary}
+
+
 @app.get("/api/backtest/status")
 async def get_backtest_status(job_id: Optional[str] = None):
     """Backtest status. Optional job_id scopes to one job; else lists all jobs."""
@@ -1479,29 +1505,8 @@ async def start_backtest(request: Request):
         cmd_args.extend(["--no-stress", "--save-report", "--quick"])
         summary = f"rigorous {' '.join(strategies_list)}"
 
-    jid = uuid.uuid4().hex[:10]
     try:
-        proc = subprocess.Popen(
-            cmd_args,
-            cwd=str(PROJECT_ROOT),
-            env=_safe_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        job = BacktestJob(job_id=jid, proc=proc, output=[], summary=summary)
-        with _backtest_jobs_lock:
-            _backtest_jobs[jid] = job
-        threading.Thread(
-            target=_backtest_reader,
-            args=(job,),
-            daemon=True,
-        ).start()
-        _prune_finished_backtest_jobs()
-        logger.info("Backtest job %s started (PID %s) %s", jid, proc.pid, summary)
-        return {"status": "started", "job_id": jid, "pid": proc.pid, "summary": summary}
+        return _start_backtest_job(cmd_args, summary)
     except Exception as e:
         logger.error(f"Failed to start backtest: {e}")
         return {"status": "error", "message": str(e)}
@@ -3287,6 +3292,49 @@ async def reset_paper_session(request: Request):
         "new_session_id": new_id,
         "bankroll": new_bankroll,
     }
+    auto_sol5 = bool(
+        (bot_instance.config.get("dashboard", {}) or {}).get(
+            "auto_sol5_backtest_on_reset", True
+        )
+    )
+    if auto_sol5:
+        with _backtest_jobs_lock:
+            running_n = sum(
+                1 for j in _backtest_jobs.values() if j.proc.poll() is None
+            )
+        if running_n >= MAX_CONCURRENT_BACKTESTS:
+            out["auto_backtest"] = {
+                "status": "skipped",
+                "reason": (
+                    f"max concurrent backtests reached ({MAX_CONCURRENT_BACKTESTS})"
+                ),
+            }
+        else:
+            script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
+            if not script.exists():
+                out["auto_backtest"] = {
+                    "status": "error",
+                    "reason": f"{script} not found",
+                }
+            else:
+                cmd_args = [
+                    sys.executable,
+                    str(script),
+                    "--symbol",
+                    "SOL",
+                    "--window",
+                    "5",
+                ]
+                try:
+                    out["auto_backtest"] = _start_backtest_job(
+                        cmd_args, "SOL 5m crypto [auto-on-reset]"
+                    )
+                except Exception as e:
+                    logger.error("Auto SOL 5m backtest on reset failed: %s", e)
+                    out["auto_backtest"] = {
+                        "status": "error",
+                        "reason": str(e),
+                    }
     if archive_rel:
         out["archived_to"] = archive_rel
     return out
