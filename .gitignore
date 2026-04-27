@@ -3,6 +3,7 @@
 config/secrets.env
 *.env
 !*.env.example
+test_api_keys.py
 SECRETS_TROUBLESHOOTING.md
 
 # Python
