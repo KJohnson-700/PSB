@@ -95,8 +95,9 @@ strategies:
     # Keep weather off the general market feed unless explicitly testing weather.
     # Dedicated weather fetch is also disabled by default under polymarket.
     scan_from_general_markets: false
+    resolution_window_enabled: false   # Operator toggle: false = keep min-hours guard but disable the 72h cap
     min_hours_to_resolution: 2.0
-    max_hours_to_resolution: 72.0
+    max_hours_to_resolution: 72.0      # Used only when resolution_window_enabled=true
     max_yes_price: 0.45
     kelly_fraction: 0.25
     max_position_size: 20
@@ -591,6 +592,8 @@ logging:
   file: true
   # One-line OPS_JSON pulses to stdout (Railway logs) + startup snapshot; disable for quieter local runs
   ops_pulse: true
+  # Also persist OPS_JSON lines to data/logs/ops_pulse.jsonl for Hermes/offline review.
+  ops_pulse_file: true
 
 # ============================================
 # DASHBOARD

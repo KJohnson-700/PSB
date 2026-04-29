@@ -35,10 +35,10 @@
         .crypto-grid{display:grid;gap:12px;margin-bottom:16px;align-items:stretch}
         .crypto-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
         .crypto-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
-        .crypto-grid>.card{height:100%;display:flex;flex-direction:column}
+        .crypto-grid>.card{height:100%;display:flex;flex-direction:column;min-width:0;overflow:hidden}
         .equal-card-grid{display:grid;gap:12px;margin-bottom:16px;align-items:stretch;grid-auto-rows:1fr}
         .equal-card-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
-        .equal-card-grid>.card{height:100%;display:flex;flex-direction:column}
+        .equal-card-grid>.card{height:100%;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 
         /* ── Cards ── */
         .g,.card{
@@ -47,7 +47,7 @@
             transition:border-color .18s,box-shadow .18s;
         }
         .g:hover,.card:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
-        .card{padding:16px}
+        .card{padding:16px;min-width:0;overflow:hidden}
 
         /* ── Section header ── */
         .sh,h2{
@@ -61,21 +61,30 @@
         .subtitle{color:var(--td);font-size:11px;margin-bottom:10px}
 
         /* ── Status hero / KPI grid ── */
-        .status-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+        .status-hero{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:8px 0;min-width:0}
         .hero-item{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
-            border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;
+            border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;
         }
         .hero-item:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
-        .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx)}
-        .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px}
-        .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px}
+        .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.6vw,22px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+        .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .crypto-hero-six{grid-template-columns:repeat(6,minmax(0,1fr))}
+        .crypto-meta-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
+        .crypto-meta-four>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .signal-gates-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
+        .signal-gates-grid>div{min-width:0;overflow:hidden}
+        .session-history-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        .session-history-table{width:100%;min-width:1180px;border-collapse:collapse;font-size:0.76rem;table-layout:auto}
+        .session-history-table th,.session-history-table td{padding:5px 8px;white-space:nowrap;vertical-align:middle}
+        .session-history-table td{overflow:hidden;text-overflow:ellipsis}
 
         /* ── Metric boxes ── */
-        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s,box-shadow .18s}
+        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden}
         .metric-box:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
-        .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--tx)}
-        .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px}
+        .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.4vw,20px);font-weight:600;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
         /* ── Badges ── */
         .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
@@ -229,9 +238,16 @@
         /* crypto panel responsiveness */
         @media (max-width:1280px){
             .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .crypto-hero-six{grid-template-columns:repeat(3,minmax(0,1fr))}
+            .crypto-meta-four{grid-template-columns:repeat(2,minmax(0,1fr))}
         }
         @media (max-width:900px){
             .crypto-grid.two,.crypto-grid.three,.equal-card-grid.two{grid-template-columns:1fr}
+            .crypto-hero-six{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .signal-gates-grid{grid-template-columns:1fr}
+        }
+        @media (max-width:640px){
+            .crypto-hero-six,.crypto-meta-four{grid-template-columns:1fr}
         }
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
@@ -288,12 +304,12 @@
                 <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
             <div class="hero-item" title="Realized PnL from exits with timestamp on today’s UTC calendar day (server). Not the same as session PnL.">
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-sub" id="hero-pnl-sub"></div><div class="hero-lbl">Daily realized (UTC)</div></div>
-            <div class="hero-item" title="Open positions in memory / journal">
+            <div class="hero-item" title="Open positions in the current bot session">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Paper session: total ENTRY events since this session started (journal).">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills</div></div>
+            <div class="hero-item" title="ENTRY events logged on today's UTC server day. Session fills stay in the subline for context.">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
-        <p id="command-center-hint" style="font-size:10px;color:var(--td);margin:8px 0 0 0;line-height:1.5;">Session metrics come from the trade journal. Daily (UTC) metrics come from the risk manager and reset at UTC midnight on the host.</p>
+        <p id="command-center-hint" style="font-size:10px;color:var(--td);margin:8px 0 0 0;line-height:1.5;">Daily (UTC) metrics reset at UTC midnight on the host.</p>
         <div class="controls" style="padding:8px 0 4px;">
             <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
@@ -304,7 +320,13 @@
             <button class="btn-sm ay" onclick="runScan()">Scan Markets</button>
             <button class="btn-sm ab" onclick="runTests()">Run Unit Tests</button>
             <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
+            <button class="btn-sm btn-purple" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
+            <button class="btn-sm btn-purple" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
             <button class="btn-sm ap" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
+        </div>
+        <div style="font-size:0.7rem;margin-top:2px;color:var(--text-muted);display:flex;gap:12px;flex-wrap:wrap;">
+            <span id="weather-cap-state">Weather 72h cap: -</span>
+            <span id="dead-zone-state">Dead zones: -</span>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div id="trade-section" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
@@ -387,6 +409,35 @@
         <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
     </div>
 
+    <!-- Weather Strategy Panel -->
+    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <h2 style="margin-bottom:0;">&#9928; Weather</h2>
+        <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
+      </div>
+      <div class="status-hero crypto-hero-six" id="weather-hero">
+        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Total Seen</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-city">-</div><div class="hero-lbl">City Match</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-temp">-</div><div class="hero-lbl">Temp Mkts</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-precip">-</div><div class="hero-lbl">Precip Mkts</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-signals" style="color:var(--green);">-</div><div class="hero-lbl">Signals</div></div>
+        <div class="hero-item"><div class="hero-val" id="wx-trades">-</div><div class="hero-lbl">Open Trades</div></div>
+      </div>
+      <div class="crypto-meta-four">
+        <div>Temp Trades: <span id="wx-temp-trades" style="color:var(--text);">-</span></div>
+        <div>Precip Trades: <span id="wx-precip-trades" style="color:var(--text);">-</span></div>
+        <div>Temp PnL: <span id="wx-temp-pnl" style="color:var(--text);">-</span></div>
+        <div>Precip PnL: <span id="wx-precip-pnl" style="color:var(--text);">-</span></div>
+      </div>
+      <div class="crypto-meta-four">
+        <div>Skip vol: <span id="wx-skip-vol" style="color:var(--text);">-</span></div>
+        <div>Skip hrs: <span id="wx-skip-hrs" style="color:var(--text);">-</span></div>
+        <div>Skip EV: <span id="wx-skip-ev" style="color:var(--text);">-</span></div>
+        <div>Skip thresh: <span id="wx-skip-thresh" style="color:var(--text);">-</span></div>
+      </div>
+      <div id="wx-last-signal" style="margin-top:8px;font-size:0.75rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;line-height:1.5;"></div>
+    </div>
+
     <!-- BTC + SOL side-by-side with integrated Signal Gates -->
     <div class="crypto-grid two">
 
@@ -396,7 +447,7 @@
           <h2 style="margin-bottom:0;">&#8383; BTC</h2>
           <div class="status-bar" id="btc-signal-badges"></div>
         </div>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
+        <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="btc-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">BTC Price</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-htf-bias">-</div><div class="hero-lbl">4H Bias</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
@@ -404,7 +455,7 @@
           <div class="hero-item"><div class="hero-val" id="btc-momentum">-</div><div class="hero-lbl">Momentum</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-sabre">-</div><div class="hero-lbl">Sabre</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div class="crypto-meta-four">
           <div>MACD 4H: <span id="btc-macd4h" style="color:var(--text);">-</span></div>
           <div>MACD 1H: <span id="btc-macd1h" style="color:var(--text);">-</span></div>
           <div>VP POC: <span id="btc-vp-poc" style="color:var(--text);">-</span></div>
@@ -412,7 +463,7 @@
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="signal-gates-grid">
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="btc-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -432,7 +483,7 @@
       <!-- RIGHT: SOL combined -->
       <div class="card" data-aos="fade-up" data-aos-delay="240" id="sol-analysis-panel">
         <h2 style="margin-bottom:8px;">&#9784; SOL</h2>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
+        <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="sol-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">SOL Price</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
@@ -440,7 +491,7 @@
           <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-sol-move">-</div><div class="hero-lbl">SOL 5m</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div class="crypto-meta-four">
           <div>MACD 15m: <span id="sol-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="sol-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="sol-corr" style="color:var(--text);">-</span></div>
@@ -448,7 +499,7 @@
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="signal-gates-grid">
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="sol-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -472,7 +523,7 @@
 
       <div class="card" data-aos="fade-up" data-aos-delay="320" id="eth-analysis-panel">
         <h2 style="margin-bottom:8px;">ETH</h2>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
+        <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="eth-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">ETH Price</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
@@ -480,7 +531,7 @@
           <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-eth-move">-</div><div class="hero-lbl">ETH 5m</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div class="crypto-meta-four">
           <div>MACD 15m: <span id="eth-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="eth-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="eth-corr" style="color:var(--text);">-</span></div>
@@ -488,7 +539,7 @@
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="signal-gates-grid">
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="eth-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -508,7 +559,7 @@
       <div class="card" data-aos="fade-up" data-aos-delay="400" id="hype-analysis-panel">
         <h2 style="margin-bottom:8px;">HYPE</h2>
         <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">BTC→Hyperliquid HYPE correlation lag. Spot vs BTC momentum context.</p>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
+        <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="hype-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">HYPE Price</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
@@ -516,7 +567,7 @@
           <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-hype-move">-</div><div class="hero-lbl">HYPE 5m</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div class="crypto-meta-four">
           <div>MACD 15m: <span id="hype-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="hype-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="hype-corr" style="color:var(--text);">-</span></div>
@@ -524,7 +575,7 @@
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="signal-gates-grid">
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="hype-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -544,7 +595,7 @@
       <div class="card" data-aos="fade-up" data-aos-delay="480" id="xrp-analysis-panel">
         <h2 style="margin-bottom:8px;">XRP</h2>
         <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">Spot vs BTC (lag view). Dump-hedge entries use book + BTC z-score — see Performance blockers.</p>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);">
+        <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="xrp-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">XRP Price</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
@@ -552,7 +603,7 @@
           <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-xrp-move">-</div><div class="hero-lbl">XRP 5m</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);">
+        <div class="crypto-meta-four">
           <div>MACD 15m: <span id="xrp-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="xrp-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="xrp-corr" style="color:var(--text);">-</span></div>
@@ -560,7 +611,7 @@
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="signal-gates-grid">
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="xrp-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -577,47 +628,6 @@
         </div>
       </div>
 
-    </div>
-
-    <!-- Weather Strategy Panel -->
-    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <h2 style="margin-bottom:0;">&#9928; Weather</h2>
-        <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px;" id="weather-hero">
-        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Total Seen</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-city">-</div><div class="hero-lbl">City Match</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-temp">-</div><div class="hero-lbl">Temp Mkts</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-precip">-</div><div class="hero-lbl">Precip Mkts</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-signals" style="color:var(--green);">-</div><div class="hero-lbl">Signals</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-trades">-</div><div class="hero-lbl">Open Trades</div></div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.75rem;color:var(--text-muted);">
-        <div>Skip vol: <span id="wx-skip-vol" style="color:var(--text);">-</span></div>
-        <div>Skip hrs: <span id="wx-skip-hrs" style="color:var(--text);">-</span></div>
-        <div>Skip EV: <span id="wx-skip-ev" style="color:var(--text);">-</span></div>
-        <div>Skip thresh: <span id="wx-skip-thresh" style="color:var(--text);">-</span></div>
-      </div>
-      <div id="wx-last-signal" style="margin-top:8px;font-size:0.75rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;line-height:1.5;"></div>
-    </div>
-
-    <!-- Recent Trades + AI Summary row -->
-    <div class="equal-card-grid two">
-      <div class="card" data-aos="fade-up" data-aos-delay="560" id="recent-trades-panel">
-        <h2>Recent Trades</h2>
-        <div class="scrollbox" id="recent-trades-body" style="max-height:200px;font-size:0.75rem;">
-          <p style="color:var(--text-muted);">No trades yet</p>
-        </div>
-      </div>
-      <div class="card" data-aos="fade-up" data-aos-delay="640" id="ai-summary-card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-          <h2 style="margin:0;">Last Session &#8212; AI Review</h2>
-          <button type="button" class="btn-sm btn-purple" onclick="openAIReviewDialog()" title="Open full review in a window">Review window</button>
-        </div>
-        <div id="ai-summary-text" style="font-size:0.82rem;line-height:1.6;color:var(--text);max-height:200px;overflow:auto;">Waiting for session data...</div>
-        <div id="ai-summary-meta" style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;"></div>
-      </div>
     </div>
 
     <dialog id="ai-review-dialog" class="ai-review-modal">
@@ -785,22 +795,6 @@
          ═══════════════════════════════════════════════════════ -->
     <div id="view-journal" style="display:none;">
 
-    <!-- Test runs: pick a session to review (summary + tabs + chart scope to that run) -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="journal-runs-card">
-        <h2 style="margin-bottom:4px;">Test runs</h2>
-        <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
-            Each row is one paper session. <strong style="color:var(--text);">Started</strong> / <strong style="color:var(--text);">Ended</strong> come from the journal log (archived runs have an end time; the live folder shows ongoing). Click a row to load that run into the journal below.
-        </p>
-        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.3);">
-            <span style="font-size:0.78rem;">Reviewing a past session (positions / closed / log / chart are scoped to it).</span>
-            <button type="button" class="btn-sm btn-green" onclick="resetJournalViewToLive()">Back to live session</button>
-        </div>
-        <div id="journal-session-featured" style="margin-bottom:10px;font-size:0.78rem;"></div>
-        <div id="journal-session-list-body" class="scrollbox" style="max-height:260px;">
-            <p style="color:var(--text-muted);">Loading sessions…</p>
-        </div>
-    </div>
-
     <!-- Paper Trade Journal -->
     <div class="card" data-aos="fade-up" id="paper-journal-card" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
@@ -840,6 +834,31 @@
         <div id="journal-chart-section" style="margin-top:12px;display:none;">
             <h3 style="color:var(--cyan);font-size:0.78rem;text-transform:uppercase;margin-bottom:6px;">Portfolio value (snapshots)</h3>
             <canvas id="pnl-chart" height="120" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></canvas>
+        </div>
+    </div>
+
+    <div class="card" data-aos="fade-up" id="ai-summary-card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <h2 style="margin:0;">Last Session &#8212; AI Review</h2>
+          <button type="button" class="btn-sm btn-purple" onclick="openAIReviewDialog()" title="Open full review in a window">Review window</button>
+        </div>
+        <div id="ai-summary-text" style="font-size:0.82rem;line-height:1.6;color:var(--text);max-height:200px;overflow:auto;">Waiting for session data...</div>
+        <div id="ai-summary-meta" style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;"></div>
+    </div>
+
+    <!-- Test runs: pick a session to review (summary + tabs + chart scope to that run) -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="journal-runs-card">
+        <h2 style="margin-bottom:4px;">Test runs</h2>
+        <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
+            Each row is one paper session. <strong style="color:var(--text);">Started</strong> / <strong style="color:var(--text);">Ended</strong> come from the journal log (archived runs have an end time; the live folder shows ongoing). Click a row to load that run into the journal below.
+        </p>
+        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.3);">
+            <span style="font-size:0.78rem;">Reviewing a past session (positions / closed / log / chart are scoped to it).</span>
+            <button type="button" class="btn-sm btn-green" onclick="resetJournalViewToLive()">Back to live session</button>
+        </div>
+        <div id="journal-session-featured" style="margin-bottom:10px;font-size:0.78rem;"></div>
+        <div id="journal-session-list-body" class="scrollbox" style="max-height:260px;">
+            <p style="color:var(--text-muted);">Loading sessions…</p>
         </div>
     </div>
 
@@ -1130,14 +1149,24 @@ function switchMainView(which) {
         var el = document.getElementById('view-' + v);
         if (el) el.style.display = (v === which) ? 'block' : 'none';
     });
+    if (which === 'live') {
+        fetchAll();
+    }
     if (which === 'journal' && typeof loadJournalSessionList === 'function') {
         loadJournalSessionList();
+        loadAISummary();
+        fetchAll();
     }
     if (which === 'performance') {
+        loadLivePerformance();
+        loadSessionHistory();
         setTimeout(function() {
             if (typeof loadAllocationChart === 'function') loadAllocationChart();
             if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
         }, 80);
+    }
+    if (which === 'backtest') {
+        loadBacktestReports();
     }
     if (typeof scheduleDashboardRelayout === 'function') {
         scheduleDashboardRelayout();
@@ -1249,28 +1278,48 @@ function _dashStamp() {
     if (el) el.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
 }
 
+function _currentMainView() {
+    const active = document.querySelector('#main-view-tabs .tab.active');
+    return active ? active.getAttribute('data-view') : 'live';
+}
+
+// Bounded fetch — aborts after `ms` so a stalled endpoint doesn't pile up
+// requests behind it on subsequent polls. Returns null on timeout/error.
+function fetchT(url, ms = 6000, init = {}) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, { ...init, signal: ctrl.signal })
+        .then((r) => { clearTimeout(timer); return r; })
+        .catch(() => { clearTimeout(timer); return null; });
+}
+
 async function fetchAll() {
+    const currentView = _currentMainView();
+    const needLive = currentView === 'live';
+    const needPerformance = currentView === 'performance';
+    const needJournal = currentView === 'journal';
+    const needBacktest = currentView === 'backtest';
     let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR;
     try {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR] = await Promise.all([
-            fetch('/api/status').catch(() => null),
-            fetch('/api/strategy/metrics').catch(() => null),
-            fetch('/api/scans/latest').catch(() => null),
-            fetch('/api/backtest/reports').catch(() => null),
-            fetch('/api/journal/summary').catch(() => null),
-            fetch('/api/journal/trades').catch(() => null),
-            fetch('/api/exposure').catch(() => null),
-            fetch('/api/bitcoin/analysis').catch(() => null),
-            fetch('/api/sol/analysis').catch(() => null),
-            fetch('/api/eth/analysis').catch(() => null),
-            fetch('/api/hype/analysis').catch(() => null),
-            fetch('/api/xrp/analysis').catch(() => null),
-            fetch('/api/live/performance').catch(() => null),
-            fetch('/api/usage/summary').catch(() => null),
-            fetch('/api/usage/records').catch(() => null),
-            fetch('/api/journal/updown_breakdown').catch(() => null),
-            fetch('/api/strategy/reason-buckets').catch(() => null),
-            fetch('/api/journal/trade_journey?limit=24').catch(() => null),
+            fetchT('/api/status'),
+            fetchT('/api/strategy/metrics'),
+            fetchT('/api/scans/latest'),
+            needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
+            needJournal ? fetchT('/api/journal/summary') : Promise.resolve(null),
+            needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
+            fetchT('/api/exposure'),
+            needLive ? fetchT('/api/bitcoin/analysis') : Promise.resolve(null),
+            needLive ? fetchT('/api/sol/analysis') : Promise.resolve(null),
+            needLive ? fetchT('/api/eth/analysis') : Promise.resolve(null),
+            needLive ? fetchT('/api/hype/analysis') : Promise.resolve(null),
+            needLive ? fetchT('/api/xrp/analysis') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/live/performance') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
         ]);
     } catch (e) {
         console.error('[dashboard] fetch batch:', e);
@@ -1308,7 +1357,7 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] backtest:', e); }
 
     try {
-        if (journalR?.ok) {
+        if (needJournal && journalR?.ok) {
             const j = await journalR.json();
             if (!window._journalViewSessionId) {
                 updateJournal(j);
@@ -1318,7 +1367,7 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] journal:', e); }
 
     try {
-        if (journalTradesR?.ok) updateRecentTrades(await journalTradesR.json());
+        if (needJournal && journalTradesR?.ok) updateRecentTrades(await journalTradesR.json());
     } catch (e) { console.error('[dashboard] journal trades:', e); }
 
     try {
@@ -1439,21 +1488,22 @@ function applyHeroMetrics(d) {
     if (posSub) {
         const oj = s.open;
         if (oj !== undefined && oj !== null && Number(oj) !== openCount)
-            posSub.textContent = 'journal open: ' + oj;
+            posSub.textContent = 'session open: ' + oj;
         else posSub.textContent = '';
     }
 
-    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? s.fills : null;
+    const dailyTrades = Number(p.daily_trades || 0);
+    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
     const tradesEl = document.getElementById('hero-trades');
-    if (tradesEl) tradesEl.textContent =
-        fills != null ? fills : (p.daily_trades || 0);
+    if (tradesEl) tradesEl.textContent = dailyTrades;
     const tradesSub = document.getElementById('hero-trades-sub');
     if (tradesSub) {
         const closed = s.closed;
         const o = s.open;
-        if (closed !== undefined && o !== undefined)
-            tradesSub.textContent = `${closed} closed · ${o} open (session)`;
-        else tradesSub.textContent = '';
+        const parts = [];
+        if (fills != null) parts.push(`${fills} fills this session`);
+        if (closed !== undefined && o !== undefined) parts.push(`${closed} closed · ${o} open`);
+        tradesSub.textContent = parts.join(' · ');
     }
 
 }
@@ -1713,13 +1763,19 @@ function updateWeatherDiag(metricsData) {
         set('wx-skip-ev',    wx.skipped_ev ?? '-');
         set('wx-skip-thresh',wx.skipped_no_threshold ?? '-');
     }
+    const wxTemp = wm.subtypes?.temp || {};
+    const wxPrecip = wm.subtypes?.precip || {};
     const wxTrades = document.getElementById('wx-trades');
-    if (wxTrades) wxTrades.textContent = wm.trades ?? '-';
+    if (wxTrades) wxTrades.textContent = (Number(wxTemp.open || 0) + Number(wxPrecip.open || 0)) || wm.trades || '-';
+    set('wx-temp-trades', `${wxTemp.trades ?? 0} closed / ${wxTemp.open ?? 0} open`);
+    set('wx-precip-trades', `${wxPrecip.trades ?? 0} closed / ${wxPrecip.open ?? 0} open`);
+    set('wx-temp-pnl', `$${Number(wxTemp.pnl || 0).toFixed(2)}`);
+    set('wx-precip-pnl', `$${Number(wxPrecip.pnl || 0).toFixed(2)}`);
     const wxLast = document.getElementById('wx-last-signal');
     if (wxLast && wm.last_cycle) {
         const ago = Math.round((Date.now() - new Date(wm.last_cycle).getTime()) / 1000);
         const agoStr = ago < 60 ? ago + 's ago' : Math.floor(ago/60) + 'm ago';
-        wxLast.textContent = `Last cycle: ${agoStr} | PnL: $${(wm.pnl||0).toFixed(2)} | ${wm.signals||0} signals this session`;
+        wxLast.textContent = `Last cycle: ${agoStr} | PnL: $${(wm.pnl||0).toFixed(2)} | temp WR ${(Number(wxTemp.win_rate || 0) * 100).toFixed(0)}% | precip WR ${(Number(wxPrecip.win_rate || 0) * 100).toFixed(0)}%`;
     }
 
     // ── Backtest-tab scan diagnostics div ──────────────────────────
@@ -1742,11 +1798,18 @@ function updateWeatherDiag(metricsData) {
             </div>
             <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
                 <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Skipped:</span>
-                ${row('liq', wx.skipped_liquidity, wx.skipped_liquidity > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('volume', wx.skipped_volume, wx.skipped_volume > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('timing', wx.skipped_hours, wx.skipped_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('no loc', wx.skipped_no_location, wx.skipped_no_location > 0 ? 'var(--red)' : 'var(--text-muted)')}
+                ${row('no temp', wx.skipped_no_temp_keyword, wx.skipped_no_temp_keyword > 0 ? 'var(--red)' : 'var(--text-muted)')}
+                ${row('liq', wx.skipped_below_liquidity, wx.skipped_below_liquidity > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('volume', wx.skipped_below_volume, wx.skipped_below_volume > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('min h', wx.skipped_below_min_hours, wx.skipped_below_min_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('max h', wx.skipped_above_max_hours, wx.skipped_above_max_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('far', wx.skipped_too_far_out, wx.skipped_too_far_out > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('extreme', wx.skipped_extreme_consensus, wx.skipped_extreme_consensus > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
                 ${row('ev', wx.skipped_ev, wx.skipped_ev > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
                 ${row('no threshold', wx.skipped_no_threshold, wx.skipped_no_threshold > 0 ? 'var(--red)' : 'var(--text-muted)')}
+                ${row('forecast', wx.skipped_no_forecast, wx.skipped_no_forecast > 0 ? 'var(--red)' : 'var(--text-muted)')}
+                ${row('metar', wx.skipped_metar_mismatch, wx.skipped_metar_mismatch > 0 ? 'var(--red)' : 'var(--text-muted)')}
             </div>
         </div>`;
 }
@@ -2070,7 +2133,11 @@ function updateBacktest(d) {
     function latestCryptoReport(sym, win) {
         return allReports
             .filter(r => isCryptoReport(r) && r.symbol === sym && r.window_minutes === win)
-            .sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''))[0] || null;
+            .sort((a, b) => {
+                const aKey = (a.run_at || a.filename || a.end_date || '');
+                const bKey = (b.run_at || b.filename || b.end_date || '');
+                return String(bKey).localeCompare(String(aKey));
+            })[0] || null;
     }
 
     function cryptoCard(sym, win) {
@@ -2477,13 +2544,22 @@ async function loadJournalTab(tab) {
     }
 }
 
-async function selectJournalSession(sessionId) {
+function _pickDefaultJournalHistorySession(sessions) {
+    const activeSid = window._dashSessionId || null;
+    return (sessions || []).find((s) => {
+        const sid = s.session_id || '';
+        if (!sid || sid === activeSid) return false;
+        return Number(s.total_entries || 0) > 0 || Number(s.total_exits || 0) > 0 || Number(s.open_positions || 0) > 0;
+    }) || null;
+}
+
+async function selectJournalSession(sessionId, opts = {}) {
     window._journalViewSessionId = sessionId || null;
     const banner = document.getElementById('journal-session-view-banner');
     if (banner) banner.style.display = sessionId ? 'flex' : 'none';
     if (!sessionId) {
         await fetchAll();
-        await loadJournalSessionList();
+        await loadJournalSessionList(opts);
         return;
     }
     try {
@@ -2504,9 +2580,10 @@ async function selectJournalSession(sessionId) {
         }
         updateJournal(j);
         updateSessionSummary(j);
-        await loadJournalSessionList();
+        await loadJournalSessionList(opts);
         loadJournalTab(currentJournalTab);
         await loadPnLChart();
+        await loadAISummary();
     } catch (e) {
         console.error(e);
         alert('Failed to load session');
@@ -2514,10 +2591,10 @@ async function selectJournalSession(sessionId) {
 }
 
 function resetJournalViewToLive() {
-    selectJournalSession(null);
+    selectJournalSession(null, { skipAutoSelect: true });
 }
 
-async function loadJournalSessionList() {
+async function loadJournalSessionList(opts = {}) {
     const body = document.getElementById('journal-session-list-body');
     const feat = document.getElementById('journal-session-featured');
     if (!body) return;
@@ -2534,19 +2611,30 @@ async function loadJournalSessionList() {
             if (feat) feat.innerHTML = '';
             return;
         }
+        if (!window._journalViewSessionId && !opts.skipAutoSelect) {
+            const defaultSession = _pickDefaultJournalHistorySession(sessions);
+            if (defaultSession?.session_id) {
+                await selectJournalSession(defaultSession.session_id, { skipAutoSelect: true });
+                return;
+            }
+        }
         const cur = window._journalViewSessionId;
         const activeSid = window._dashSessionId || null;
         const liveSession = activeSid
             ? sessions.find((s) => (s.session_id || '') === activeSid) || null
             : null;
-        const featured = liveSession || sessions[0];
+        const featured =
+            (cur ? sessions.find((s) => (s.session_id || '') === cur) || null : null)
+            || _pickDefaultJournalHistorySession(sessions)
+            || liveSession
+            || sessions[0];
 
         if (feat) {
             const sid = featured.session_id || '-';
             const isSel = cur === sid;
             const pnl = featured.realized_pnl ?? 0;
             const wr = (_winRateFraction(featured.win_rate ?? 0) * 100).toFixed(1);
-            const featTitle = liveSession && sid === activeSid ? 'Current session' : 'Featured session';
+            const featTitle = liveSession && sid === activeSid ? 'Current session' : 'Last completed session';
             const ended = featured.ended_at ? _fmtLocalTs(featured.ended_at) : (featured._source === 'archived' ? _fmtLocalTs(featured.last_activity_at) : 'ongoing');
             feat.innerHTML =
                 '<div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(0,0,0,0.3);cursor:pointer;" data-journal-session="' + sid.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '">' +
@@ -2666,6 +2754,7 @@ async function loadConfig() {
         const r = await fetch('/api/config');
         if (!r.ok) return;
         const d = await r.json();
+        updateOperatorToggleState(d);
         // Flatten nested config into input fields
         const boolMap = {
             'cfg-ai-enabled': d.ai?.enabled,
@@ -2731,6 +2820,69 @@ async function loadConfig() {
         }
         document.getElementById('cfg-status').textContent = '';
     } catch (e) { console.error('Config load error:', e); }
+}
+
+function updateOperatorToggleState(d) {
+    const weatherCapEnabled = Boolean(d?.strategies?.weather?.resolution_window_enabled);
+    const weatherState = document.getElementById('weather-cap-state');
+    const weatherBtn = document.getElementById('weather-cap-btn');
+    if (weatherState) weatherState.textContent = `Weather 72h cap: ${weatherCapEnabled ? 'ON' : 'OFF'}`;
+    if (weatherBtn) weatherBtn.textContent = weatherCapEnabled ? 'Disable Weather 72h Cap' : 'Enable Weather 72h Cap';
+
+    const deadZoneEnabled = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro']
+        .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
+    const deadZoneState = document.getElementById('dead-zone-state');
+    const deadZoneBtn = document.getElementById('dead-zone-btn');
+    if (deadZoneState) deadZoneState.textContent = `Dead zones: ${deadZoneEnabled ? 'ON' : 'OFF'}`;
+    if (deadZoneBtn) deadZoneBtn.textContent = deadZoneEnabled ? 'Disable Dead Zones' : 'Enable Dead Zones';
+}
+
+async function postConfigPatch(updates) {
+    const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: dashAuthHeaders({'Content-Type': 'application/json'}),
+        body: JSON.stringify(updates),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail || d));
+    return d;
+}
+
+async function toggleWeather72hCap() {
+    try {
+        const r = await fetch('/api/config');
+        if (!r.ok) throw new Error('config load failed');
+        const d = await r.json();
+        const nextEnabled = !Boolean(d?.strategies?.weather?.resolution_window_enabled);
+        await postConfigPatch({
+            strategies: {
+                weather: {
+                    resolution_window_enabled: nextEnabled,
+                },
+            },
+        });
+        await loadConfig();
+    } catch (e) {
+        alert('Weather cap toggle failed: ' + e);
+    }
+}
+
+async function toggleDeadZones() {
+    try {
+        const r = await fetch('/api/config');
+        if (!r.ok) throw new Error('config load failed');
+        const d = await r.json();
+        const strategyKeys = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro'];
+        const nextEnabled = !strategyKeys.every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
+        const updates = { strategies: {} };
+        strategyKeys.forEach((key) => {
+            updates.strategies[key] = { dead_zone_enabled: nextEnabled };
+        });
+        await postConfigPatch(updates);
+        await loadConfig();
+    } catch (e) {
+        alert('Dead zone toggle failed: ' + e);
+    }
 }
 
 async function saveConfig() {
@@ -3861,11 +4013,18 @@ async function refreshDashboardData() {
 
 fetchAll();
 loadConfig();
-loadPnLChart();
-loadAllocationChart();
-loadStrategyPnLChart();
-loadSessionHistory();
-loadAISummary();
+if (_currentMainView() === 'journal') {
+    loadPnLChart();
+    loadAISummary();
+    loadJournalSessionList();
+} else if (_currentMainView() === 'performance') {
+    loadAllocationChart();
+    loadStrategyPnLChart();
+    loadLivePerformance();
+    loadSessionHistory();
+} else if (_currentMainView() === 'backtest') {
+    loadBacktestReports();
+}
 
 (function resumePendingBacktestTracking() {
     let jid = '';
@@ -3895,11 +4054,17 @@ loadAISummary();
 })();
 
 setInterval(fetchAll, 14000);
-setInterval(loadPnLChart, 30000);
-setInterval(loadAllocationChart, 30000);
-setInterval(loadStrategyPnLChart, 30000);
-setInterval(loadSessionHistory, 30000);
-setInterval(loadAISummary, 30000);
+setInterval(() => {
+    const view = _currentMainView();
+    if (view === 'journal') {
+        loadPnLChart();
+        loadAISummary();
+    } else if (view === 'performance') {
+        loadAllocationChart();
+        loadStrategyPnLChart();
+        loadSessionHistory();
+    }
+}, 30000);
 
 // ── AI Session Summary (card + modal) ─────────────────────────────────
 window._lastAiSummary = '';
@@ -3921,7 +4086,11 @@ function closeAIReviewDialog() {
 
 async function loadAISummary() {
     try {
-        const r = await fetch('/api/journal/ai-summary');
+        const r = await fetch(
+            window._journalViewSessionId
+                ? ('/api/journal/ai-summary?session_id=' + encodeURIComponent(window._journalViewSessionId))
+                : '/api/journal/ai-summary'
+        );
         if (!r.ok) return;
         const d = await r.json();
         const el = document.getElementById('ai-summary-text');
@@ -3990,21 +4159,21 @@ async function loadSessionHistory() {
         countEl.textContent = `(${historySessions.length} past runs)`;
 
         // Table layout
-        let html = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:0.76rem;">
+        let html = `<div class="session-history-wrap"><table class="session-history-table">
         <thead><tr style="border-bottom:1px solid rgba(255,255,255,0.1);text-align:left;">
-            <th style="padding:4px 8px;color:var(--text-muted);">Started</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Ended</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Session</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Status</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Trades</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Win Rate</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Net PnL</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">BTC</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">SOL</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">ETH</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">HYPE</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">XRP</th>
-            <th style="padding:4px 8px;color:var(--text-muted);">Open</th>
+            <th style="color:var(--text-muted);">Started</th>
+            <th style="color:var(--text-muted);">Ended</th>
+            <th style="color:var(--text-muted);">Session</th>
+            <th style="color:var(--text-muted);">Status</th>
+            <th style="color:var(--text-muted);">Trades</th>
+            <th style="color:var(--text-muted);">Win Rate</th>
+            <th style="color:var(--text-muted);">Net PnL</th>
+            <th style="color:var(--text-muted);">BTC</th>
+            <th style="color:var(--text-muted);">SOL</th>
+            <th style="color:var(--text-muted);">ETH</th>
+            <th style="color:var(--text-muted);">HYPE</th>
+            <th style="color:var(--text-muted);">XRP</th>
+            <th style="color:var(--text-muted);">Open</th>
         </tr></thead><tbody>`;
 
         historySessions.forEach((s) => {
@@ -4034,19 +4203,19 @@ async function loadSessionHistory() {
                 onclick="loadSessionDetail('${sid.replace(/'/g, "\\'")}')"
                 onmouseover="this.style.background='rgba(255,255,255,0.04)'"
                 onmouseout="this.style.background='transparent'">
-                <td style="padding:5px 8px;white-space:nowrap;">${_fmtLocalTs(s.started_at)}</td>
-                <td style="padding:5px 8px;white-space:nowrap;">${endDisp}</td>
-                <td style="padding:5px 8px;font-family:monospace;color:var(--cyan);">${sid}</td>
-                <td style="padding:5px 8px;">${statusBadge}</td>
-                <td style="padding:5px 8px;">${trades}</td>
-                <td style="padding:5px 8px;color:${wrColor};">${wr}%</td>
-                <td style="padding:5px 8px;font-weight:600;color:${pnlColor};">${pnl>=0?'+':''}$${pnl.toFixed(2)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(btcPnl)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(solPnl)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(ethPnl)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(hypePnl)}</td>
-                <td style="padding:5px 8px;">${fmtStrat(xrpPnl)}</td>
-                <td style="padding:5px 8px;color:var(--text-muted);">${open}</td>
+                <td>${_fmtLocalTs(s.started_at)}</td>
+                <td>${endDisp}</td>
+                <td style="font-family:monospace;color:var(--cyan);">${sid}</td>
+                <td>${statusBadge}</td>
+                <td>${trades}</td>
+                <td style="color:${wrColor};">${wr}%</td>
+                <td style="font-weight:600;color:${pnlColor};">${pnl>=0?'+':''}$${pnl.toFixed(2)}</td>
+                <td>${fmtStrat(btcPnl)}</td>
+                <td>${fmtStrat(solPnl)}</td>
+                <td>${fmtStrat(ethPnl)}</td>
+                <td>${fmtStrat(hypePnl)}</td>
+                <td>${fmtStrat(xrpPnl)}</td>
+                <td style="color:var(--text-muted);">${open}</td>
             </tr>`;
         });
         html += '</tbody></table></div>';
@@ -4552,7 +4721,7 @@ async function loadBTCChart() {
     try {
         let _candles = null;
         let sabreMarkers = [];
-        const cr = await fetch(`/api/bitcoin/candles?interval=${_btcChartInterval}&limit=120`).catch(() => null);
+        const cr = await fetchT(`/api/bitcoin/candles?interval=${_btcChartInterval}&limit=120`, 8000);
         if (cr?.ok) {
             const cd = await cr.json();
             if (cd.candles && cd.candles.length) {
@@ -4584,9 +4753,9 @@ async function loadBTCChart() {
         }
 
         const [ar, tr, wr] = await Promise.all([
-            fetch('/api/bitcoin/analysis').catch(() => null),
-            fetch('/api/journal/trade-points?limit=500').catch(() => null),
-            fetch('/api/strategy/watchlist?limit=80&include_general_markets=false').catch(() => null),
+            fetchT('/api/bitcoin/analysis'),
+            fetchT('/api/journal/trade-points?limit=500'),
+            fetchT('/api/strategy/watchlist?limit=80&include_general_markets=false', 8000),
         ]);
         const d = ar?.ok ? await ar.json().catch(() => ({})) : {};
         const tradePoints = tr?.ok ? (await tr.json()).points || [] : [];
@@ -4699,7 +4868,7 @@ function checkHeroFlash(key, el, isPnl) {
         { id: 'hero-bankroll', key: 'bankroll', isPnl: false },
         { id: 'hero-pnl',      key: 'pnl',      isPnl: true  },
         { id: 'hero-positions',key: 'positions',isPnl: false },
-        { id: 'hero-trades',   key: 'fills',    isPnl: false },
+        { id: 'hero-trades',   key: 'trades',   isPnl: false },
     ];
     pairs.forEach(function(p) {
         var el = document.getElementById(p.id);

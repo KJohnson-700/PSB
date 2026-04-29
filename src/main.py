@@ -111,6 +111,9 @@ def _filter_weather_markets(markets, config: Dict) -> list:
     weather_cfg = (config.get("strategies", {}) or {}).get("weather", {}) or {}
     min_hours = float(weather_cfg.get("min_hours_to_resolution", 2.0))
     max_hours = float(weather_cfg.get("max_hours_to_resolution", 72.0))
+    resolution_window_enabled = bool(
+        weather_cfg.get("resolution_window_enabled", True)
+    )
     result = []
     now = datetime.now(timezone.utc)
     for market in markets:
@@ -122,7 +125,10 @@ def _filter_weather_markets(markets, config: Dict) -> list:
             else market.end_date.astimezone(timezone.utc)
         )
         hours = (end - now).total_seconds() / 3600
-        if min_hours <= hours <= max_hours:
+        if resolution_window_enabled:
+            if min_hours <= hours <= max_hours:
+                result.append(market)
+        elif hours >= min_hours:
             result.append(market)
     return result
 
