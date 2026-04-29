@@ -144,9 +144,11 @@ strategies:
     # yes_price outside this range means the market has already priced in the move.
     entry_price_min_updown: 0.46
     entry_price_max_updown: 0.54
-    # 15m-only entry timing window (quality filter; does not touch 5m behavior)
-    entry_window_15m_min: 12.5
-    entry_window_15m_max: 14.5
+    # Up/down entry timing window; edge/price gates still decide whether the wider window is tradable.
+    entry_window_15m_min: 8.0
+    entry_window_15m_max: 15.0
+    entry_window_5m_min: 0.75
+    entry_window_5m_max: 5.0
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 300
@@ -231,12 +233,12 @@ strategies:
 
     # ── Entry window (time remaining in candle at entry) ──
     # 15m candle: widened from 13.0-14.33 (1.3min) to 12.0-14.5 (2.5min)
-    # Scan runs every 5min — need ≥2min window to reliably hit it
-    entry_window_15m_min: 12.0    # minutes remaining — don't enter if less than this left
-    entry_window_15m_max: 14.5    # minutes remaining — don't enter if more than this left
+    # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
+    entry_window_15m_min: 8.0     # minutes remaining — widened to stop cadence misses while preserving early-candle intent
+    entry_window_15m_max: 15.0    # minutes remaining — allow freshly listed windows
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
-    entry_window_5m_min: 2.5      # minutes remaining
-    entry_window_5m_max: 4.0      # minutes remaining
+    entry_window_5m_min: 0.75     # minutes remaining
+    entry_window_5m_max: 5.0      # minutes remaining
     # Auto-align entry windows to scan cadence to reduce timing misses from loop jitter.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 300
@@ -304,10 +306,10 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 3
-    entry_window_15m_min: 12.0
-    entry_window_15m_max: 14.5
-    entry_window_5m_min: 2.5
-    entry_window_5m_max: 4.0
+    entry_window_15m_min: 8.0
+    entry_window_15m_max: 15.0
+    entry_window_5m_min: 0.75
+    entry_window_5m_max: 5.0
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 300
     entry_window_auto_align_max_expand_min: 1.5
@@ -343,10 +345,10 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 3
-    entry_window_15m_min: 12.0
-    entry_window_15m_max: 14.5
-    entry_window_5m_min: 2.5
-    entry_window_5m_max: 4.0
+    entry_window_15m_min: 8.0
+    entry_window_15m_max: 15.0
+    entry_window_5m_min: 0.75
+    entry_window_5m_max: 5.0
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 300
     entry_window_auto_align_max_expand_min: 1.0
@@ -361,7 +363,7 @@ strategies:
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     use_ai_updown: true
-    min_liquidity: 5000
+    min_liquidity: 1000
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
     min_edge_5m: 0.09            # 2026-04-24: raised from 0.08 — match SOL floor
     max_edge_updown: 0.15
@@ -382,6 +384,14 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 2
+    entry_window_15m_min: 8.0
+    entry_window_15m_max: 15.0
+    entry_window_5m_min: 0.75
+    entry_window_5m_max: 5.0
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 120
+    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_auto_align_jitter_sec: 10
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
     btc_min_4h_hist_magnitude: 20.0

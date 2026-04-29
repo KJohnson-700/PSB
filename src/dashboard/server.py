@@ -22,6 +22,7 @@ Architecture (disk-first):
 import os
 import asyncio
 import time as _time_mod
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pathlib import Path
@@ -34,7 +35,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import uvicorn
 import yaml
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -45,7 +45,6 @@ from src.analysis.usage_tracker import usage_tracker
 from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
 from src.config_merge import deep_merge_config as _deep_merge
 from src.ai_status import compute_ai_status
-from src.analysis.ai_agent import run_minimax_live_probe
 
 bot_instance: Optional["PolyBot"] = None
 
@@ -223,7 +222,7 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             else "15m"
         )
         return f"HYPE_updown_{sz}"
-    if strategy in ("xrp_dump_hedge", "xrp_macro"):
+    if strategy == "xrp_macro":
         sz = (
             "5m"
             if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
@@ -237,10 +236,19 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
 # If unset (typical Railway/local), _check_auth is a no-op — no dashboard UI collects this key.
 DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
+
+@asynccontextmanager
+async def _dashboard_lifespan(_app: FastAPI):
+    """Pre-warm lightweight caches on startup without using deprecated event hooks."""
+    _maybe_trigger_refresh(max_age=0)
+    yield
+
+
 app = FastAPI(
     title="PolyBot AI Dashboard",
     description="Live monitoring for PolyBot AI trading bot.",
     version="0.2.0",
+    lifespan=_dashboard_lifespan,
 )
 
 
@@ -273,17 +281,10 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-04-26-journal-past-default",
+        "dashboard_ui_rev": "2026-04-28-command-center-trades-today",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
-
-
-@app.on_event("startup")
-async def _startup_warm_btc_cache():
-    """Pre-warm the BTC analysis cache at server startup so the first request is fast."""
-    _maybe_trigger_refresh(max_age=0)
-
 
 # ─── JOURNAL CACHE ────────────────────────────────────────────────
 # Avoid rebuilding TradeJournal (reads all of entries.jsonl) on every API call.
@@ -1108,6 +1109,8 @@ async def get_ai_health():
     if not keys:
         keys = _process_env_ai_keys()
     st = compute_ai_status(cfg, keys if keys else None)
+    from src.analysis.ai_agent import run_minimax_live_probe
+
     probe = await run_minimax_live_probe(cfg, keys)
     return {
         "ok": bool(probe.get("ok")),
@@ -1379,6 +1382,7 @@ class BacktestJob:
 
 _backtest_jobs: Dict[str, BacktestJob] = {}
 _auto_startup_backtests_started: set[tuple[str, str]] = set()
+_auto_backtest_start_lock = threading.Lock()
 
 
 def _prune_finished_backtest_jobs(max_keep: int = 48) -> None:
@@ -1455,7 +1459,7 @@ def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[st
             )
 
     if dashboard_cfg.get(f"auto_weather_backtest_on_{phase}", True):
-        weather_script = PROJECT_ROOT / "scripts" / "run_backtest_rigorous.py"
+        weather_script = PROJECT_ROOT / "scripts" / "run_backtest_weather.py"
         if weather_script.exists():
             specs.append(
                 (
@@ -1463,13 +1467,10 @@ def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[st
                     [
                         sys.executable,
                         str(weather_script),
-                        "--strategies",
-                        "weather",
-                        "--no-stress",
-                        "--save-report",
                         "--quick",
+                        "--save-report",
                     ],
-                    f"weather rigorous [auto-on-{phase}:{session_id}]",
+                    f"weather live [auto-on-{phase}:{session_id}]",
                 )
             )
 
@@ -1493,31 +1494,41 @@ def _maybe_start_auto_backtests(phase: str) -> List[Dict[str, Any]]:
         return []
 
     results: List[Dict[str, Any]] = []
-    with _backtest_jobs_lock:
-        running_n = sum(1 for j in _backtest_jobs.values() if j.proc.poll() is None)
-    for key, cmd_args, summary in specs:
-        dedupe_key = (current_session_id, f"{phase}:{key}")
-        if phase == "startup" and dedupe_key in _auto_startup_backtests_started:
-            continue
-        if running_n >= MAX_CONCURRENT_BACKTESTS:
-            results.append(
-                {
-                    "name": key,
-                    "status": "skipped",
-                    "reason": "max_concurrent_backtests",
-                }
-            )
-            continue
-        try:
-            result = _start_backtest_job(cmd_args, summary)
-            result["name"] = key
-            results.append(result)
-            running_n += 1
+    with _auto_backtest_start_lock:
+        with _backtest_jobs_lock:
+            running_n = sum(1 for j in _backtest_jobs.values() if j.proc.poll() is None)
+        for key, cmd_args, summary in specs:
+            dedupe_key = (current_session_id, f"{phase}:{key}")
+            if phase == "startup" and dedupe_key in _auto_startup_backtests_started:
+                results.append(
+                    {
+                        "name": key,
+                        "status": "skipped",
+                        "reason": "startup_dedupe",
+                    }
+                )
+                continue
+            if running_n >= MAX_CONCURRENT_BACKTESTS:
+                results.append(
+                    {
+                        "name": key,
+                        "status": "skipped",
+                        "reason": "max_concurrent_backtests",
+                    }
+                )
+                continue
             if phase == "startup":
                 _auto_startup_backtests_started.add(dedupe_key)
-        except Exception as e:
-            logger.error("Auto %s backtest on %s failed: %s", key, phase, e)
-            results.append({"name": key, "status": "error", "reason": str(e)})
+            try:
+                result = _start_backtest_job(cmd_args, summary)
+                result["name"] = key
+                results.append(result)
+                running_n += 1
+            except Exception as e:
+                if phase == "startup":
+                    _auto_startup_backtests_started.discard(dedupe_key)
+                logger.error("Auto %s backtest on %s failed: %s", key, phase, e)
+                results.append({"name": key, "status": "error", "reason": str(e)})
     return results
 
 
@@ -1994,26 +2005,51 @@ async def get_strategy_watchlist(
         xrp_e_min = float(xrp_cfg.get("watchlist_entry_min", 0.02))
         xrp_e_max = float(xrp_cfg.get("watchlist_entry_max", 0.98))
 
-        btc_spot = None
-        if bot_instance and hasattr(bot_instance, "bitcoin_strategy"):
-            btc_spot = bot_instance.bitcoin_strategy.btc_service.get_current_price()
-        if btc_spot is None:
-            btc_spot = _get_btc_svc().get_current_price()
+        # Fetch all spot prices in parallel via threads — these are blocking
+        # network calls (Binance) and would otherwise pin the dashboard event
+        # loop, stalling every other endpoint that arrives during the wait.
+        from src.analysis.sol_btc_service import SOLBTCService
 
-        sol_spot = None
-        if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
-            sol_spot = bot_instance.sol_macro_strategy.sol_service.get_current_price("SOLUSDT")
-
-        eth_spot = None
-        if bot_instance and getattr(bot_instance, "eth_macro_strategy", None):
-            eth_spot = bot_instance.eth_macro_strategy.sol_service.get_current_price("ETHUSDT")
-        if eth_spot is None:
+        def _btc_spot_sync():
             try:
-                from src.analysis.sol_btc_service import SOLBTCService
-
-                eth_spot = SOLBTCService(alt_symbol="ETHUSDT").get_current_price("ETHUSDT")
+                if bot_instance and hasattr(bot_instance, "bitcoin_strategy"):
+                    v = bot_instance.bitcoin_strategy.btc_service.get_current_price()
+                    if v is not None:
+                        return v
+                return _get_btc_svc().get_current_price()
             except Exception:
-                eth_spot = None
+                return None
+
+        def _sol_spot_sync():
+            try:
+                if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
+                    return bot_instance.sol_macro_strategy.sol_service.get_current_price("SOLUSDT")
+            except Exception:
+                pass
+            return None
+
+        def _eth_spot_sync():
+            try:
+                if bot_instance and getattr(bot_instance, "eth_macro_strategy", None):
+                    v = bot_instance.eth_macro_strategy.sol_service.get_current_price("ETHUSDT")
+                    if v is not None:
+                        return v
+                return SOLBTCService(alt_symbol="ETHUSDT").get_current_price("ETHUSDT")
+            except Exception:
+                return None
+
+        def _xrp_spot_sync():
+            try:
+                return SOLBTCService(alt_symbol="XRPUSDT").get_current_price("XRPUSDT")
+            except Exception:
+                return None
+
+        btc_spot, sol_spot, eth_spot, xrp_spot_cached = await asyncio.gather(
+            asyncio.to_thread(_btc_spot_sync),
+            asyncio.to_thread(_sol_spot_sync),
+            asyncio.to_thread(_eth_spot_sync),
+            asyncio.to_thread(_xrp_spot_sync),
+        )
 
         scan_file_dir = DATA_ROOT / "live_scans"
         files = sorted(scan_file_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if scan_file_dir.exists() else []
@@ -2115,17 +2151,9 @@ async def get_strategy_watchlist(
                         "block_reason": "" if hype_e_min <= price <= hype_e_max else "outside_entry_zone",
                     }
                 )
-            elif strat in ("xrp_dump_hedge", "xrp_macro"):
+            elif strat == "xrp_macro":
                 threshold = _parse_threshold(q, asset="xrp")
-                xrp_spot = None
-                try:
-                    from src.analysis.sol_btc_service import SOLBTCService
-
-                    xrp_spot = SOLBTCService(alt_symbol="XRPUSDT").get_current_price(
-                        "XRPUSDT"
-                    )
-                except Exception:
-                    xrp_spot = None
+                xrp_spot = xrp_spot_cached
                 dist_pct = None
                 if threshold and xrp_spot:
                     dist_pct = abs(float(xrp_spot) - threshold) / threshold * 100.0
@@ -2226,6 +2254,10 @@ async def get_strategy_metrics():
             "pnl": 0,
             "win_rate": None,
             "reports": 0,
+            "subtypes": {
+                "temp": {"trades": 0, "wins": 0, "pnl": 0, "avg_pnl": 0, "win_rate": 0, "open": 0, "unrealized_pnl": 0},
+                "precip": {"trades": 0, "wins": 0, "pnl": 0, "avg_pnl": 0, "win_rate": 0, "open": 0, "unrealized_pnl": 0},
+            },
         },
     }
 
@@ -2238,6 +2270,22 @@ async def get_strategy_metrics():
             metrics[strat]["win_rate"] = s.get("win_rate", None)
             metrics[strat]["wins"] = s.get("wins", 0)
             metrics[strat]["avg_pnl"] = s.get("avg_pnl", 0)
+    weather_subtypes = summary.get("weather_subtype_stats", {}) or {}
+    weather_open = summary.get("weather_open_stats", {}) or {}
+    for subtype in ("temp", "precip"):
+        stats = weather_subtypes.get(subtype, {}) or {}
+        open_stats = weather_open.get(subtype, {}) or {}
+        metrics["weather"]["subtypes"][subtype].update(
+            {
+                "trades": stats.get("trades", 0),
+                "wins": stats.get("wins", 0),
+                "pnl": stats.get("pnl", 0),
+                "avg_pnl": stats.get("avg_pnl", 0),
+                "win_rate": stats.get("win_rate", 0),
+                "open": open_stats.get("open", 0),
+                "unrealized_pnl": open_stats.get("unrealized_pnl", 0),
+            }
+        )
 
     # ── Aggregate backtest report counts (lightweight metadata only) ──
     report_dir = DATA_ROOT / "backtest" / "reports"
@@ -2299,18 +2347,25 @@ async def get_strategy_metrics():
         wx = bot_instance.last_ai_scan_stats.get("weather") or {}
         if wx and "weather" in metrics:
             metrics["weather"]["scan_stats"] = {
-                "total_markets_seen":    wx.get("total_markets_seen", 0),
+                "total_markets_seen":      wx.get("total_markets_seen", 0),
                 "weather_keyword_matches": wx.get("weather_keyword_matches", 0),
-                "markets_scanned":      wx.get("markets_scanned", 0),
-                "city_matches":         wx.get("city_matches", 0),
-                "temp_markets":         wx.get("temp_markets", 0),
-                "precip_markets":       wx.get("precip_markets", 0),
-                "signals_generated":    wx.get("signals_generated", 0),
-                "skipped_liquidity":    wx.get("skipped_liquidity", 0),
-                "skipped_volume":       wx.get("skipped_volume", 0),
-                "skipped_hours":        wx.get("skipped_hours", 0),
-                "skipped_ev":           wx.get("skipped_ev", 0),
-                "skipped_no_threshold": wx.get("skipped_no_threshold", 0),
+                "markets_scanned":        wx.get("markets_scanned", 0),
+                "city_matches":           wx.get("city_matches", 0),
+                "temp_markets":           wx.get("temp_markets", 0),
+                "precip_markets":         wx.get("precip_markets", 0),
+                "signals_generated":      wx.get("signals_generated", 0),
+                "skipped_no_location":    wx.get("skipped_no_location", 0),
+                "skipped_no_temp_keyword": wx.get("skipped_no_temp_keyword", 0),
+                "skipped_below_liquidity": wx.get("skipped_below_liquidity", 0),
+                "skipped_below_volume":   wx.get("skipped_below_volume", 0),
+                "skipped_below_min_hours": wx.get("skipped_below_min_hours", 0),
+                "skipped_above_max_hours": wx.get("skipped_above_max_hours", 0),
+                "skipped_too_far_out":    wx.get("skipped_too_far_out", 0),
+                "skipped_extreme_consensus": wx.get("skipped_extreme_consensus", 0),
+                "skipped_ev":             wx.get("skipped_ev", 0),
+                "skipped_no_threshold":   wx.get("skipped_no_threshold", 0),
+                "skipped_no_forecast":    wx.get("skipped_no_forecast", 0),
+                "skipped_metar_mismatch": wx.get("skipped_metar_mismatch", 0),
             }
 
     return metrics
@@ -2736,11 +2791,11 @@ async def settle_archived_positions(request: Request):
 
 
 @app.get("/api/journal/ai-summary")
-async def get_session_ai_summary():
+async def get_session_ai_summary(session_id: Optional[str] = None):
     """Generate AI natural-language summary of the most recent session. Cached per session_id."""
     import httpx
 
-    journal = _get_journal()
+    journal = _journal_for_query(session_id) if session_id else _get_journal()
     if not journal:
         return {"summary": "No session data available yet.", "session_id": None}
 
@@ -3044,7 +3099,7 @@ async def get_bitcoin_candles(interval: str = "15m", limit: int = 60):
         else:
             svc = _get_btc_svc()
 
-        df = svc.fetch_klines(interval=interval, limit=limit)
+        df = await asyncio.to_thread(svc.fetch_klines, interval=interval, limit=limit)
         if df.empty:
             return {"candles": [], "error": "No data from Binance"}
 
@@ -3151,6 +3206,9 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
         "lag_direction": corr.opportunity_direction,
         "lag_magnitude": corr.opportunity_magnitude,
         "chainlink_btc": corr.btc_chainlink_price,
+        "chainlink_alt": sol.chainlink_price,
+        "chainlink_alt_network": sol.chainlink_network,
+        "oracle_basis_bps": sol.oracle_basis_bps,
     }
     # Legacy: dashboard/scripts that still read sol_price for the SOL leg only
     if alt_code == "sol":
@@ -3158,20 +3216,25 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
     return out
 
 
+def _run_alt_analysis_sync(alt_symbol: str, bot_attr: Optional[str]):
+    """Pure-sync helper for /api/{alt}/analysis — runs in a worker thread."""
+    from src.analysis.sol_btc_service import SOLBTCService
+
+    svc = None
+    if bot_attr and bot_instance and hasattr(bot_instance, bot_attr):
+        svc = getattr(getattr(bot_instance, bot_attr), "sol_service", None)
+    if svc is None:
+        svc = SOLBTCService(alt_symbol=alt_symbol)
+    ta = svc.get_full_analysis()
+    alt_sym = getattr(svc, "alt_symbol", alt_symbol) or alt_symbol
+    return ta, alt_sym
+
+
 @app.get("/api/sol/analysis")
 async def get_sol_analysis():
     """Return live SOL-BTC correlation analysis for the dashboard."""
     try:
-        ta = None
-        alt_sym = "SOLUSDT"
-        if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
-            svc = bot_instance.sol_macro_strategy.sol_service
-            ta = svc.get_full_analysis()
-            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
-        if ta is None:
-            from src.analysis.sol_btc_service import SOLBTCService
-
-            ta = SOLBTCService(alt_symbol="SOLUSDT").get_full_analysis()
+        ta, alt_sym = await asyncio.to_thread(_run_alt_analysis_sync, "SOLUSDT", "sol_macro_strategy")
         if ta:
             return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "SOL analysis not available"}
@@ -3184,16 +3247,7 @@ async def get_sol_analysis():
 async def get_eth_analysis():
     """Live ETH–BTC correlation (same machinery as SOL lag)."""
     try:
-        ta = None
-        alt_sym = "ETHUSDT"
-        if bot_instance and hasattr(bot_instance, "eth_macro_strategy"):
-            svc = bot_instance.eth_macro_strategy.sol_service
-            ta = svc.get_full_analysis()
-            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
-        if ta is None:
-            from src.analysis.sol_btc_service import SOLBTCService
-
-            ta = SOLBTCService(alt_symbol="ETHUSDT").get_full_analysis()
+        ta, alt_sym = await asyncio.to_thread(_run_alt_analysis_sync, "ETHUSDT", "eth_macro_strategy")
         if ta:
             return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "ETH analysis not available"}
@@ -3205,19 +3259,21 @@ async def get_eth_analysis():
 @app.get("/api/hype/analysis")
 async def get_hype_analysis():
     """Live HYPE–BTC correlation for dashboard using HyperliquidHypeService."""
-    try:
+
+    def _hype_sync():
         from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
 
-        ta = None
-        alt_sym = "HYPEUSDT"
+        svc = None
         if bot_instance and hasattr(bot_instance, "hype_macro_strategy"):
-            svc = bot_instance.hype_macro_strategy.sol_service
-            ta = svc.get_full_analysis()
-            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
-        if ta is None:
+            svc = getattr(bot_instance.hype_macro_strategy, "sol_service", None)
+        if svc is None:
             svc = HyperliquidHypeService()
-            ta = svc.get_full_analysis()
-            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
+        ta = svc.get_full_analysis()
+        alt_sym = getattr(svc, "alt_symbol", "HYPEUSDT") or "HYPEUSDT"
+        return ta, alt_sym
+
+    try:
+        ta, alt_sym = await asyncio.to_thread(_hype_sync)
         if ta:
             return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "HYPE analysis not available"}
@@ -3230,16 +3286,7 @@ async def get_hype_analysis():
 async def get_xrp_analysis():
     """Live XRP–BTC correlation for dashboard (independent of dump-hedge leg logic)."""
     try:
-        from src.analysis.sol_btc_service import SOLBTCService
-
-        ta = None
-        alt_sym = "XRPUSDT"
-        if bot_instance and hasattr(bot_instance, "xrp_macro_strategy"):
-            svc = bot_instance.xrp_macro_strategy.sol_service
-            ta = svc.get_full_analysis()
-            alt_sym = getattr(svc, "alt_symbol", alt_sym) or alt_sym
-        if ta is None:
-            ta = SOLBTCService(alt_symbol="XRPUSDT").get_full_analysis()
+        ta, alt_sym = await asyncio.to_thread(_run_alt_analysis_sync, "XRPUSDT", "xrp_macro_strategy")
         if ta:
             return _solbtc_analysis_payload(ta, alt_sym)
         return {"error": "XRP analysis not available"}

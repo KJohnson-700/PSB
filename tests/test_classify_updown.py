@@ -13,9 +13,9 @@ def test_eth_macro_fallback_buckets_5m_from_text():
     assert _classify_updown_trade(q, "eth_macro", "") == "ETH_updown_5m"
 
 
-def test_xrp_hedge_fallback_buckets():
-    assert _classify_updown_trade("", "xrp_dump_hedge", "") == "XRP_updown_15m"
-    assert _classify_updown_trade("xrp 5m", "xrp_dump_hedge", "") == "XRP_updown_5m"
+def test_xrp_macro_fallback_buckets():
+    assert _classify_updown_trade("", "xrp_macro", "") == "XRP_updown_15m"
+    assert _classify_updown_trade("xrp 5m", "xrp_macro", "") == "XRP_updown_5m"
 
 
 def test_slug_hints():

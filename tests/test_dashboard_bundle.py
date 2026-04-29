@@ -19,7 +19,7 @@ def _fetchall_promise_all_block(html: str) -> tuple[list[str], int]:
     assert m, "fetchAll() Promise.all block not found (expected `] = await Promise.all([` then `} catch`)"
     names = [x.strip() for x in m.group(1).split(",")]
     block = m.group(2)
-    fetches = len(re.findall(r"\bfetch\(", block))
+    fetches = len(re.findall(r"\b(?:fetch|fetchT)\(", block))
     return names, fetches
 
 
@@ -62,7 +62,15 @@ def test_command_center_trades_card_uses_daily_trades_not_session_fills():
     assert "Trades today (UTC)" in html
     assert "const dailyTrades = Number(p.daily_trades || 0);" in html
     assert "if (tradesEl) tradesEl.textContent = dailyTrades;" in html
+    assert "daily_trades: raw.trades_today" in html
     assert "fills this session" in html
+
+
+def test_dashboard_sse_uses_risk_manager_daily_fields():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    assert 'int(getattr(rm, "daily_trades", 0) or 0)' in server
+    assert 'round(float(getattr(rm, "daily_pnl", 0) or 0), 2)' in server
+    assert '"trades_today": daily_trades_n' in server
 
 
 def test_dashboard_contains_operator_toggle_buttons():
@@ -75,7 +83,6 @@ def test_dashboard_contains_operator_toggle_buttons():
 
 
 def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
-    pytest.importorskip("uvicorn")
     from src.dashboard import server as dashboard_server
 
     fake_bot = type(

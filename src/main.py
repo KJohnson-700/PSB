@@ -10,6 +10,7 @@ import re
 import signal
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -626,8 +627,17 @@ class PolyBot:
         await asyncio.sleep(30)
         while self.running:
             try:
+                cycle_started = time.monotonic()
                 await self._unified_cycle()
-                await asyncio.sleep(self.scan_interval)
+                elapsed = time.monotonic() - cycle_started
+                sleep_for = max(0.0, self.scan_interval - elapsed)
+                if elapsed > self.scan_interval:
+                    logging.warning(
+                        "Trading cycle overran configured interval: elapsed=%.1fs interval=%ss",
+                        elapsed,
+                        self.scan_interval,
+                    )
+                await asyncio.sleep(sleep_for)
             except Exception as e:
                 logging.error(f"Error in trading cycle: {e}", exc_info=True)
                 try:
