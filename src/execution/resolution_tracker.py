@@ -18,6 +18,8 @@ from typing import Dict, List, Optional, Any
 
 import requests
 
+from src.strategies.weather_calibration import WeatherCalibrationStore
+
 logger = logging.getLogger(__name__)
 
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -30,6 +32,7 @@ class ResolutionTracker:
         self.check_interval = check_interval_seconds
         self._last_check = 0.0
         self._resolution_cache: Dict[str, Dict[str, Any]] = {}
+        self._weather_calibration = WeatherCalibrationStore()
         # Guard: once a trade_id is settled this session, never settle it again.
         # Prevents double-settlement when positions.json is stale on restart.
         self._settled_trade_ids: set = set()
@@ -67,6 +70,9 @@ class ResolutionTracker:
 
         if not resolved_markets:
             return []
+
+        if hasattr(journal, "resolve_dead_zone_skips"):
+            journal.resolve_dead_zone_skips(resolved_markets)
 
         settled = []
         for pos in open_positions:
@@ -133,6 +139,9 @@ class ResolutionTracker:
                 f"PnL=${pnl:+.2f}"
             )
 
+            if strategy == "weather":
+                self._record_weather_calibration(pos, outcome_won)
+
             # Log exit in journal
             journal.log_exit(
                 trade_id=trade_id,
@@ -185,6 +194,34 @@ class ResolutionTracker:
             logger.info(f"Resolution tracker: Settled {len(settled)} positions")
 
         return settled
+
+    def _record_weather_calibration(self, pos: Dict[str, Any], outcome_won: str) -> None:
+        entry_signal = pos.get("entry_signal") or {}
+        city = entry_signal.get("weather_city")
+        horizon_days = entry_signal.get("weather_horizon_days")
+        raw_forecast_prob = entry_signal.get("raw_forecast_prob")
+        gap_used = entry_signal.get("signal_gap")
+        if not city or horizon_days is None or raw_forecast_prob is None or gap_used is None:
+            return
+        actual_outcome = 1.0 if outcome_won == "YES" else 0.0
+        try:
+            self._weather_calibration.record_observation(
+                city=str(city),
+                horizon_days=int(horizon_days),
+                raw_forecast_prob=float(raw_forecast_prob),
+                actual_outcome=actual_outcome,
+                gap_used=float(gap_used),
+            )
+            logger.info(
+                "Weather calibration update: city=%s horizon=%sd raw=%.3f actual=%.0f gap=%.3f",
+                city,
+                int(horizon_days),
+                float(raw_forecast_prob),
+                actual_outcome,
+                float(gap_used),
+            )
+        except (TypeError, ValueError) as e:
+            logger.debug("Weather calibration record skipped: %s", e)
 
     def _fetch_resolutions(self, market_ids: List[str]) -> Dict[str, Dict]:
         """Fetch resolution status from Polymarket Gamma API.

@@ -135,6 +135,7 @@ class BitcoinStrategy:
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "bitcoin"
+        self.dead_zone_skip_callback = None
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
 
@@ -225,6 +226,20 @@ class BitcoinStrategy:
         if aligned_max <= aligned_min:
             return win_min, win_max
         return aligned_min, aligned_max
+
+    def _resolve_ai_decision_window_bounds(self, *, is_5m: bool) -> tuple[float, float]:
+        """Return the preferred AI-decision timing window in minutes remaining."""
+        default_min = 1.5 if is_5m else 8.0
+        default_max = 2.5 if is_5m else 13.0
+        win_min = float(self.config.get("ai_entry_window_5m_min" if is_5m else "ai_entry_window_15m_min", default_min))
+        win_max = float(self.config.get("ai_entry_window_5m_max" if is_5m else "ai_entry_window_15m_max", default_max))
+        if win_min > win_max:
+            win_min, win_max = win_max, win_min
+        return win_min, win_max
+
+    def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
+        win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
+        return win_min <= mins_left <= win_max
 
     def _extract_direction(self, question: str) -> str:
         q = question.lower()
@@ -731,6 +746,8 @@ class BitcoinStrategy:
             threshold = None
             direction = "UP"  # default; overridden below
             reason_parts = [f"HTF={htf_bias}", f"side={allowed_side}"]
+            dead_zone_would_block = False
+            dead_zone_hour = None
 
             # ── UP/DOWN MARKETS (15m or 5m) ──
             # YES = "Up" (price goes up), NO = "Down" (price goes down)
@@ -743,15 +760,24 @@ class BitcoinStrategy:
                 # OVERFIT RISK: these hours were identified from the same live sessions
                 # they now gate. Only add an hour after it has ≥15 out-of-sample trades
                 # with WR<0.46 AND avg_pnl<-$2. See config comment for full criteria.
+                _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
                 _now_utc_hour = datetime.now(timezone.utc).hour
                 _blocked_hours = self.config.get("blocked_utc_hours_updown", [])
-                if _now_utc_hour in _blocked_hours:
-                    _bump_skip("blocked_utc_hour")
+                dead_zone_hour = _now_utc_hour
+                dead_zone_would_block = _now_utc_hour in _blocked_hours
+                if _dead_zone_enabled:
+                    if dead_zone_would_block:
+                        _bump_skip("blocked_utc_hour")
+                        logger.info(
+                            f"  BTC skip updown at UTC {_now_utc_hour:02d}:xx — "
+                            f"dead-zone hour ({_now_utc_hour}:00 UTC <35% WR in live data)"
+                        )
+                        continue
+                elif dead_zone_would_block:
                     logger.info(
-                        f"  BTC skip updown at UTC {_now_utc_hour:02d}:xx — "
-                        f"dead-zone hour ({_now_utc_hour}:00 UTC <35% WR in live data)"
+                        f"  BTC dead_zone DISABLED — allowing UTC {_now_utc_hour:02d}:xx "
+                        f"(blocked_hours={_blocked_hours})"
                     )
-                    continue
 
                 # ── Entry window guard ──
                 # Only enter within a tight window near the candle open so that
@@ -794,6 +820,10 @@ class BitcoinStrategy:
                         f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
                     )
                     continue
+                _ai_window_open = self._within_ai_decision_window(
+                    mins_left=_mins_left,
+                    is_5m=is_5m,
+                )
 
                 # Skip markets where price has already moved far from 50/50
                 # (means the window is mid-resolution and market has "decided")
@@ -1308,6 +1338,7 @@ class BitcoinStrategy:
                 is_updown
                 and edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                and _ai_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
@@ -1395,6 +1426,18 @@ class BitcoinStrategy:
                 confidence = max(confidence, ai_analysis.confidence_score)
                 ai_assists += 1
                 reason_parts.append("ai_updown_confirm")
+            elif (
+                is_updown
+                and edge < effective_min_edge
+                and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                and self.config.get("use_ai", True)
+                and self.config.get("use_ai_updown", True)
+                and not _ai_window_open
+            ):
+                logger.debug(
+                    f"  BTC AI window closed for marginal updown '{market.question[:40]}...' "
+                    f"({_mins_left:.1f}m left)"
+                )
 
             if edge < effective_min_edge:
                 _bump_skip("edge_below_min")
@@ -1493,6 +1536,32 @@ class BitcoinStrategy:
                 est_prob=_signal_est_prob,
                 rsi=round(ta.rsi_14, 1),
             )
+            if (
+                is_updown
+                and dead_zone_would_block
+                and not self.config.get("dead_zone_enabled", True)
+                and callable(self.dead_zone_skip_callback)
+            ):
+                self.dead_zone_skip_callback(
+                    strategy=self._signal_strategy_name,
+                    market=market,
+                    action=action,
+                    edge=float(edge),
+                    hour_utc=int(
+                        dead_zone_hour
+                        if dead_zone_hour is not None
+                        else datetime.now(timezone.utc).hour
+                    ),
+                    blocked_hours=list(self.config.get("blocked_utc_hours_updown", [])),
+                    bankroll=float(bankroll),
+                    metadata={
+                        "confidence": float(confidence),
+                        "yes_price": float(yes_price),
+                        "window_size": "5m" if is_5m else "15m",
+                        "htf_bias": htf_bias,
+                        "reason": reason,
+                    },
+                )
             signals.append(signal)
             logger.info(
                 f"BTC SIGNAL: {action} '{market.question[:50]}...' "

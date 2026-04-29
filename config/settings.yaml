@@ -19,10 +19,11 @@ polymarket:
   # Maximum spread to trade (decimal)
   max_spread: 0.05
   # Bundled Gamma + updown HTTP runs in a worker thread; max seconds before empty scan.
-  scanner_sync_timeout_sec: 180
-  # When set to true/false, overrides whether HYPE alt slug markets are fetched.
-  # When omitted, follows strategies.hype_macro.enabled (saves ~minutes of sync HTTP when HYPE off).
-  # fetch_hype_alt_markets: true
+  scanner_sync_timeout_sec: 90
+  # Bounded fallback for named HYPE/Hyperliquid event slugs not covered by the
+  # normal up/down fetch. This no longer crawls the full active event set.
+  fetch_hype_alt_markets: true
+  fetch_weather_markets: true
 
 # ============================================
 # TRADING PARAMETERS
@@ -86,9 +87,14 @@ strategies:
   weather:
     enabled: true
     gap_min: 0.15
+    borderline_high: 0.10
     min_ev: 0.05
     min_liquidity: 1000
     min_volume: 2000
+    scan_limit: 120
+    # Keep weather off the general market feed unless explicitly testing weather.
+    # Dedicated weather fetch is also disabled by default under polymarket.
+    scan_from_general_markets: false
     min_hours_to_resolution: 2.0
     max_hours_to_resolution: 72.0
     max_yes_price: 0.45
@@ -96,10 +102,17 @@ strategies:
     max_position_size: 20
     metar_enabled: true
     forecast_horizon_days: 3
+    use_weather_ai: false
+    max_weather_ai_calls_per_scan: 3
+    ensemble_disagreement_threshold: 0.12
+    ensemble_min_confidence: 0.55
+    weather_ai_timeout_sec: 25
+    weather_ai_cache_ttl_sec: 600
 
   # Bitcoin Up/Down strategy — trades BTC price prediction markets
   bitcoin:
     enabled: true
+    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     # LLM tiebreaker for marginal edge and no-threshold markets; false = skip those branches.
     use_ai: true
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$37k liquidity
@@ -117,6 +130,12 @@ strategies:
     # clear this higher edge threshold within the TTL window to override it.
     ai_hold_veto_ttl_sec: 300       # 5 minutes — one full 5m candle window
     min_edge_5m_ai_override: 0.10   # 2x normal min_edge_5m — strong conviction needed to override AI HOLD
+    # Preferred AI-decision timing after some intra-window data has formed.
+    # Values are minutes remaining until resolution.
+    ai_entry_window_15m_min: 8.0
+    ai_entry_window_15m_max: 13.0
+    ai_entry_window_5m_min: 1.5
+    ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
@@ -157,11 +176,12 @@ strategies:
     # ≥15 trades/hour with WR<0.46 AND avg_pnl<-$2 on OUT-OF-SAMPLE data.
     # Run scripts/hourly_heatmap.py --suggest to re-audit; never tune from backtest alone.
     blocked_utc_hours_updown: [0, 1, 2]  # Tier A (confirmed bad, both backtest + live evidence)
-    disable_buy_yes: true        # Safety pause: prior BTC BUY_YES sample was 33% WR; re-enable only after review
+    disable_buy_yes: false       # Re-enabled: allow BTC BUY_YES while we re-audit long-side behavior
 
   # SOL Macro strategy — BTC-to-Solana correlation lag trading
   sol_macro:
     enabled: true
+    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
@@ -172,6 +192,12 @@ strategies:
     max_ai_calls_per_scan: 12
     use_ai_updown: true          # Re-enabled: lag signal stripped, AI now safe to use on updown
     ai_updown_marginal_min_edge: 0.03
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_entry_window_15m_min: 8.0
+    ai_entry_window_15m_max: 13.0
+    ai_entry_window_5m_min: 1.5
+    ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
     entry_price_min: 0.46         # Mid-band 0.47-0.49 was loss-heavy in paper reset_20260416 — stale "100% WR" claim removed; re-verify with ≥15 trades post-change
                                   # Below 0.46 = fighting market's existing directional view without enough edge
@@ -222,23 +248,40 @@ strategies:
     # blocked entries in normal volatility. Keep enough to filter dead chop.
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
+    btc_min_4h_hist_magnitude: 20.0
 
   # ETH Macro — same architecture as sol_macro; ETHUSDT on Binance vs BTC lag/correlation.
   eth_macro:
     enabled: true
+    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
-    min_edge_5m: 0.09             # Raised from 0.12 — keep consistent
+    min_edge_5m: 0.09             # Keep prior floor; rely on stronger 5m momentum gate instead of disabling the lane
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_entry_window_15m_min: 8.0
+    ai_entry_window_15m_max: 13.0
+    ai_entry_window_5m_min: 1.5
+    ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
     entry_price_min: 0.46
     entry_price_max: 0.54
+    min_positive_m5_adj_5m: 0.04  # Require at least hist/cross-quality 5m momentum; block weak MACD>signal-only entries
     rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
+    rsi_sell_block_below: 40.0    # Block SELL_YES when ETH is already oversold and more likely to bounce
+    btc_follow_1h_hist_min: 8.0   # BTC-follow redesign: BTC 1H continuation must be meaningfully in-direction
+    btc_follow_15m_hist_min: 0.03 # BTC-follow redesign: require real BTC 15m impulse, not flat drift
+    btc_follow_5m_requires_impulse: true
+    eth_follow_5m_min_adj: 0.04   # ETH must confirm BTC with at least 5m histogram/cross-quality momentum
+    eth_follow_15m_hist_min: 0.03 # ETH 15m needs real same-direction histogram magnitude, not just above/below signal
+    eth_follow_15m_min_adj: 0.05  # Harder 15m confirm than 5m; weak above-signal states no longer qualify
+    oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
     # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
     # Previous [18, 22] was copy-pasted from SOL config — WRONG for ETH (H22=+$31.18 for ETH!)
@@ -270,10 +313,12 @@ strategies:
     entry_window_auto_align_jitter_sec: 15
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
+    btc_min_4h_hist_magnitude: 20.0
 
   # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy.
   hype_macro:
     enabled: true
+    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     min_liquidity: 100
     min_edge: 0.09
@@ -283,6 +328,12 @@ strategies:
     max_ai_calls_per_scan: 12
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_entry_window_15m_min: 8.0
+    ai_entry_window_15m_max: 13.0
+    ai_entry_window_5m_min: 1.5
+    ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
     entry_price_min: 0.46
     entry_price_max: 0.54
@@ -301,18 +352,27 @@ strategies:
     entry_window_auto_align_jitter_sec: 10
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
+    btc_min_4h_hist_magnitude: 20.0
 
   # XRP Macro — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
   xrp_macro:
     enabled: true                # Backtest 2026-01-24→04-22: 58.7% WR, +$1,408 (+281.8%), 1,212 trades
-    use_ai: false
-    use_ai_updown: false
+    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
+    use_ai: true
+    use_ai_updown: true
     min_liquidity: 5000
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
     min_edge_5m: 0.09            # 2026-04-24: raised from 0.08 — match SOL floor
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 8
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_updown_marginal_min_edge: 0.03
+    ai_entry_window_15m_min: 8.0
+    ai_entry_window_15m_max: 13.0
+    ai_entry_window_5m_min: 1.5
+    ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
     entry_price_min: 0.46
     entry_price_max: 0.54
@@ -323,6 +383,7 @@ strategies:
     max_concurrent_positions: 2
     btc_min_move_dollars_15m: 40.0
     btc_min_move_dollars_5m: 25.0
+    btc_min_4h_hist_magnitude: 20.0
 
 # ============================================
 # AI CONFIGURATION
@@ -372,7 +433,7 @@ ai:
       base_url: "http://localhost:11434/v1"
       local: true
       models:
-        - "qwen3:8b"
+        - "qwen2.5:14b"
       json_mode: true
       cooldown_on_429_seconds: 0
 
@@ -545,7 +606,7 @@ dashboard:
   auto_sol5_backtest_on_startup: true
   # Kick off the standard SOL 5m crypto backtest whenever a new paper session is created from the dashboard.
   auto_sol5_backtest_on_reset: true
-  # Kick off the standard weather rigorous backtest whenever the dashboard/bot restarts into a fresh paper session.
-  auto_weather_backtest_on_startup: true
-  # Kick off the standard weather rigorous backtest whenever a new paper session is created from the dashboard.
-  auto_weather_backtest_on_reset: true
+  # Weather backtests are manual by default; they should not consume startup/cycle
+  # resources for the crypto trading bot.
+  auto_weather_backtest_on_startup: false
+  auto_weather_backtest_on_reset: false

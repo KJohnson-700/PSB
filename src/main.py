@@ -127,6 +127,24 @@ def _filter_weather_markets(markets, config: Dict) -> list:
     return result
 
 
+def _merge_weather_market_sources(primary_markets, secondary_markets) -> list:
+    """Deduplicate weather candidates, preferring dedicated weather fetch results."""
+    merged = []
+    seen_ids = set()
+    for source in (primary_markets or [], secondary_markets or []):
+        for market in source:
+            if not market or market.id in seen_ids:
+                continue
+            seen_ids.add(market.id)
+            merged.append(market)
+    return merged
+
+
+def _weather_general_scan_enabled(config: Dict) -> bool:
+    weather_cfg = (config.get("strategies", {}) or {}).get("weather", {}) or {}
+    return bool(weather_cfg.get("scan_from_general_markets", False))
+
+
 def _is_crypto_market(market) -> bool:
     """Crypto up/down markets (15m) resolve in minutes; exempt from resolution window filter."""
     if not market.end_date:
@@ -210,7 +228,12 @@ class PolyBot:
             self.kelly_sizer,
             exposure_manager=self.xrp_exposure_manager,
         )
-        self.weather_strategy = WeatherStrategy(self.config, self.position_sizer)
+        self.weather_strategy = WeatherStrategy(
+            self.config,
+            self.position_sizer,
+            self.kelly_sizer,
+            self.ai_agent,
+        )
         self.clob_client = CLOBClient(self.config)
         self.risk_manager = RiskManager(self.config)
 
@@ -249,6 +272,35 @@ class PolyBot:
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
             self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
             logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
+
+        def _dead_zone_skip_callback(
+            *,
+            strategy: str,
+            market: Market,
+            action: str,
+            edge: float,
+            hour_utc: int,
+            blocked_hours: list,
+            bankroll: float,
+            metadata: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            self.journal.log_dead_zone_skip(
+                market_id=market.id,
+                market_question=market.question,
+                strategy=strategy,
+                action=action,
+                hour_utc=hour_utc,
+                blocked_hours=blocked_hours,
+                bankroll=bankroll,
+                edge=edge,
+                extra=metadata,
+            )
+
+        self.bitcoin_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
+        self.sol_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
+        self.eth_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
+        self.hype_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
+        self.xrp_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
 
         # Resolution tracker — fetches REAL outcomes from Polymarket API
         # Resolution check every 60s — crypto candle markets resolve in 15 minutes
@@ -814,11 +866,36 @@ class PolyBot:
             logging.error(f"Exit check error: {e}")
 
         available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
+        weather_available = [m for m in weather_snapshot_markets if m.id not in held_market_ids]
         short_horizon = _filter_short_horizon(available_markets, self.config)
-        weather_markets = _filter_weather_markets(available_markets, self.config)
-        logging.info(
-            f"Markets: {len(high_liquidity)} total, {len(held_market_ids)} held, {len(available_markets)} available, {len(short_horizon)} in resolution window"
+        weather_fallback_markets = (
+            available_markets if _weather_general_scan_enabled(self.config) else []
         )
+        weather_candidates = _merge_weather_market_sources(
+            weather_available,
+            weather_fallback_markets,
+        )
+        weather_markets = _filter_weather_markets(weather_candidates, self.config)
+        logging.info(
+            "Markets: %d total, %d held, %d available, %d in resolution window | weather: dedicated=%d available=%d filtered=%d",
+            len(high_liquidity),
+            len(held_market_ids),
+            len(available_markets),
+            len(short_horizon),
+            len(weather_snapshot_markets),
+            len(weather_available),
+            len(weather_markets),
+        )
+        if weather_snapshot_markets:
+            logging.info(
+                "[TRADING] Weather dedicated sample: %s",
+                [m.question[:100] for m in weather_snapshot_markets[:3]],
+            )
+        if weather_markets:
+            logging.info(
+                "[TRADING] Weather filtered sample: %s",
+                [m.question[:100] for m in weather_markets[:3]],
+            )
 
         # Strategy 1: Weather — forecast vs market price
         if self.weather_strategy.enabled:
@@ -891,12 +968,21 @@ class PolyBot:
             self.cumulative_signal_counts["sol_macro"] = (
                 self.cumulative_signal_counts.get("sol_macro", 0) + len(sol_signals)
             )
+            self.last_ai_scan_stats["sol_macro"] = dict(
+                getattr(self.sol_macro_strategy, "last_scan_stats", {}) or {}
+            )
             for signal in sol_signals:
                 await self._execute_sol_macro_signal(signal)
             if sol_signals:
                 logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
             else:
                 logging.info("[TRADING] Crypto SOL: No signals this cycle")
+            _sol_stats = self.last_ai_scan_stats.get("sol_macro", {})
+            if _sol_stats:
+                logging.info(
+                    "[TRADING] SOL diagnostics: top_skips=%s",
+                    _sol_stats.get("top_skip_reasons", {}),
+                )
         except Exception as e:
             logging.error(f"Crypto SOL error: {e}", exc_info=True)
 
@@ -915,12 +1001,21 @@ class PolyBot:
                 self.cumulative_signal_counts["eth_macro"] = (
                     self.cumulative_signal_counts.get("eth_macro", 0) + len(eth_signals)
                 )
+                self.last_ai_scan_stats["eth_macro"] = dict(
+                    getattr(self.eth_macro_strategy, "last_scan_stats", {}) or {}
+                )
                 for signal in eth_signals:
                     await self._execute_sol_macro_signal(signal)
                 if eth_signals:
                     logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
                 else:
                     logging.info("[TRADING] Crypto ETH: No signals this cycle")
+                _eth_stats = self.last_ai_scan_stats.get("eth_macro", {})
+                if _eth_stats:
+                    logging.info(
+                        "[TRADING] ETH diagnostics: top_skips=%s",
+                        _eth_stats.get("top_skip_reasons", {}),
+                    )
         except Exception as e:
             logging.error(f"Crypto ETH error: {e}", exc_info=True)
 
@@ -939,12 +1034,21 @@ class PolyBot:
                 self.cumulative_signal_counts["hype_macro"] = (
                     self.cumulative_signal_counts.get("hype_macro", 0) + len(hype_signals)
                 )
+                self.last_ai_scan_stats["hype_macro"] = dict(
+                    getattr(self.hype_macro_strategy, "last_scan_stats", {}) or {}
+                )
                 for signal in hype_signals:
                     await self._execute_sol_macro_signal(signal)
                 if hype_signals:
                     logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
                 else:
                     logging.info("[TRADING] Crypto HYPE: No signals this cycle")
+                _hype_stats = self.last_ai_scan_stats.get("hype_macro", {})
+                if _hype_stats:
+                    logging.info(
+                        "[TRADING] HYPE diagnostics: top_skips=%s",
+                        _hype_stats.get("top_skip_reasons", {}),
+                    )
         except Exception as e:
             logging.error(f"Crypto HYPE error: {e}", exc_info=True)
 
@@ -963,12 +1067,21 @@ class PolyBot:
                 self.cumulative_signal_counts["xrp_macro"] = (
                     self.cumulative_signal_counts.get("xrp_macro", 0) + len(xrp_signals)
                 )
+                self.last_ai_scan_stats["xrp_macro"] = dict(
+                    getattr(self.xrp_macro_strategy, "last_scan_stats", {}) or {}
+                )
                 for signal in xrp_signals:
                     await self._execute_xrp_macro_signal(signal)
                 if xrp_signals:
                     logging.info(f"[TRADING] Crypto XRP macro: {len(xrp_signals)} signals")
                 else:
                     logging.info("[TRADING] Crypto XRP macro: No signals this cycle")
+                _xrp_stats = self.last_ai_scan_stats.get("xrp_macro", {})
+                if _xrp_stats:
+                    logging.info(
+                        "[TRADING] XRP diagnostics: top_skips=%s",
+                        _xrp_stats.get("top_skip_reasons", {}),
+                    )
         except Exception as e:
             logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
 
@@ -1396,6 +1509,18 @@ class PolyBot:
                 edge=signal.gap,
                 confidence=signal.gap,
                 reason=f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
+                extra={
+                    "weather_subtype": signal.subtype,
+                    "forecast_prob": signal.forecast_prob,
+                    "market_yes_price": signal.market_price,
+                    "signal_gap": signal.gap,
+                    "raw_forecast_prob": getattr(signal, "raw_forecast_prob", signal.forecast_prob),
+                    "corrected_forecast_prob": signal.forecast_prob,
+                    "weather_city": getattr(signal, "city", None),
+                    "weather_horizon_days": getattr(signal, "horizon_days", None),
+                    "weather_calibration_bias": getattr(signal, "calibration_bias", 0.0),
+                    "weather_calibration_count": getattr(signal, "calibration_count", 0),
+                },
                 market_end_at=signal.end_date,
             )
 

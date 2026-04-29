@@ -77,7 +77,6 @@ class KellySizer:
             "hype_macro":       AssetKellyConfig(base_kelly_fraction=0.08, streak_multiplier_max=1.3, streak_threshold=4, min_kelly_fraction=0.04),
             "xrp_macro":        AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
             "weather":         AssetKellyConfig(base_kelly_fraction=0.25, streak_multiplier_max=1.2, streak_threshold=4, min_kelly_fraction=0.10),
-            "xrp_dump_hedge": AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
         }
 
         for strat, cfg in self._defaults.items():
@@ -222,6 +221,32 @@ class KellySizer:
         cap = bankroll * max_pct
         size = min(base_size, cap)
 
+        return max(1.0, round(size, 2))
+
+    def size_binary_position(
+        self,
+        strategy: str,
+        bankroll: float,
+        win_probability: float,
+        contract_price: float,
+        streak_multiplier: float = None,
+    ) -> float:
+        """Kelly size for binary contracts using true payout odds from price."""
+        p = max(0.0, min(1.0, float(win_probability)))
+        c = max(0.01, min(0.99, float(contract_price)))
+        b = (1.0 - c) / c
+        if b <= 0:
+            return 0.0
+
+        frac = self.get_kelly_fraction(strategy, streak_multiplier)
+        full_kelly = ((b * p) - (1.0 - p)) / b
+        if full_kelly <= 0:
+            return 0.0
+
+        wager_fraction = full_kelly * frac
+        base_size = bankroll * wager_fraction
+        cap = bankroll * 0.05
+        size = min(base_size, cap)
         return max(1.0, round(size, 2))
 
     def get_asset_config(self, strategy: str) -> Optional[AssetKellyConfig]:

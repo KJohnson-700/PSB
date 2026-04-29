@@ -66,6 +66,47 @@ class TradeJournal:
     """Persistent trade journal with append-only log and periodic snapshots."""
 
     @staticmethod
+    def _summary_has_activity(summary_file: Path) -> bool:
+        """True when summary.json reflects real session activity."""
+        if not summary_file.exists():
+            return False
+        try:
+            with open(summary_file, encoding="utf-8", errors="replace") as f:
+                data = json.load(f) or {}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return False
+        if int(data.get("total_entries", 0) or 0) > 0:
+            return True
+        if int(data.get("total_exits", 0) or 0) > 0:
+            return True
+        if int(data.get("open_positions", 0) or 0) > 0:
+            return True
+        if data.get("strategy_stats"):
+            return True
+        return False
+
+    @staticmethod
+    def session_dir_has_activity(session_dir: Path) -> bool:
+        """True when a session directory contains actual trade/journal activity."""
+        ent = session_dir / "entries.jsonl"
+        pos = session_dir / "positions.json"
+        summ = session_dir / "summary.json"
+        try:
+            if ent.exists() and ent.stat().st_size > 0:
+                return True
+        except OSError:
+            pass
+        if pos.exists():
+            try:
+                with open(pos, encoding="utf-8", errors="replace") as f:
+                    data = json.load(f) or {}
+                if isinstance(data, dict) and len(data) > 0:
+                    return True
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                pass
+        return TradeJournal._summary_has_activity(summ)
+
+    @staticmethod
     def newest_resumable_session_dir(journal_dir: Optional[Path] = None) -> Optional[Path]:
         """Newest (lexicographic) session directory that has resumable journal artifacts.
 
@@ -80,14 +121,7 @@ class TradeJournal:
             [d for d in root.iterdir() if d.is_dir()], reverse=True
         )
         for d in existing:
-            ent = d / "entries.jsonl"
-            pos = d / "positions.json"
-            summ = d / "summary.json"
-            try:
-                has_entries = ent.exists() and ent.stat().st_size > 0
-            except OSError:
-                has_entries = False
-            if has_entries or pos.exists() or summ.exists():
+            if TradeJournal.session_dir_has_activity(d):
                 return d
         return None
 
@@ -124,6 +158,8 @@ class TradeJournal:
         self._entries_file = self.session_dir / "entries.jsonl"
         self._snapshots_file = self.session_dir / "snapshots.jsonl"
         self._positions_file = self.session_dir / "positions.json"
+        self._dead_zone_skip_records: Dict[tuple, Dict[str, Any]] = {}
+        self._resolved_dead_zone_skip_keys: set = set()
         self._summary_file = self.session_dir / "summary.json"
 
         # In-memory state (rebuilt from disk on resume)
@@ -139,6 +175,7 @@ class TradeJournal:
 
         # Resume from existing session
         self._load_state()
+        self._load_dead_zone_skip_state()
         logger.info(
             f"TradeJournal session={self.session_id} | open={len(self.open_positions)} | closed={len(self.closed_trades)}"
         )
@@ -202,6 +239,7 @@ class TradeJournal:
             "edge": edge,
             "confidence": confidence,
             "opened_at": entry.timestamp,
+            "weather_subtype": merged_extra.get("weather_subtype"),
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
         }
@@ -376,6 +414,108 @@ class TradeJournal:
         )
         self._append_entry(entry)
 
+    def log_dead_zone_skip(
+        self,
+        market_id: str,
+        market_question: str,
+        strategy: str,
+        action: str,
+        hour_utc: int,
+        blocked_hours: List[int],
+        bankroll: float,
+        edge: float = 0.0,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record a hypothetical trade that only exists because dead zone was disabled."""
+        key = (strategy, market_id, action)
+        if key in self._dead_zone_skip_records or key in self._resolved_dead_zone_skip_keys:
+            return
+        payload = dict(extra or {})
+        payload.update(
+            {
+                "edge": float(edge),
+                "hour_utc": int(hour_utc),
+                "blocked_hours_config": list(blocked_hours or []),
+            }
+        )
+        entry = JournalEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            event="DEAD_ZONE_SKIP",
+            trade_id="",
+            market_id=market_id,
+            market_question=market_question,
+            strategy=strategy,
+            action=action,
+            side="",
+            outcome="",
+            size=0,
+            entry_price=0,
+            current_price=0,
+            pnl=0,
+            bankroll=bankroll,
+            edge=edge,
+            confidence=float(payload.get("confidence", 0.0) or 0.0),
+            reason="dead_zone_disabled_hypothetical",
+            extra=payload,
+        )
+        self._append_entry(entry)
+        self._dead_zone_skip_records[key] = {
+            "market_question": market_question,
+            "hour_utc": int(hour_utc),
+            "blocked_hours_config": list(blocked_hours or []),
+            "extra": payload,
+        }
+
+    def resolve_dead_zone_skips(self, resolved_markets: Dict[str, Dict[str, Any]]) -> None:
+        """Append resolution outcomes for pending dead-zone hypothetical signals."""
+        if not resolved_markets or not self._dead_zone_skip_records:
+            return
+        for key, info in list(self._dead_zone_skip_records.items()):
+            strategy, market_id, action = key
+            resolution = resolved_markets.get(market_id)
+            if not resolution or not resolution.get("resolved"):
+                continue
+            outcome_won = str(resolution.get("outcome_won") or "").upper()
+            if outcome_won not in {"YES", "NO"}:
+                continue
+            result = "WIN" if (
+                (action == "BUY_YES" and outcome_won == "YES")
+                or (action in {"BUY_NO", "SELL_YES"} and outcome_won == "NO")
+            ) else "LOSS"
+            payload = dict(info.get("extra") or {})
+            payload.update(
+                {
+                    "hour_utc": info.get("hour_utc"),
+                    "blocked_hours_config": info.get("blocked_hours_config", []),
+                    "outcome_won": outcome_won,
+                    "resolved_at": resolution.get("resolved_at"),
+                    "hypothetical_result": result,
+                }
+            )
+            entry = JournalEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                event="DEAD_ZONE_SKIP_RESOLVED",
+                trade_id="",
+                market_id=market_id,
+                market_question=info.get("market_question", ""),
+                strategy=strategy,
+                action=action,
+                side="",
+                outcome=outcome_won,
+                size=0,
+                entry_price=0,
+                current_price=1.0 if outcome_won == "YES" else 0.0,
+                pnl=0,
+                bankroll=0,
+                edge=float(payload.get("edge", 0.0) or 0.0),
+                confidence=float(payload.get("confidence", 0.0) or 0.0),
+                reason=f"dead_zone_skip_resolved:{result}",
+                extra=payload,
+            )
+            self._append_entry(entry)
+            self._resolved_dead_zone_skip_keys.add(key)
+            del self._dead_zone_skip_records[key]
+
     # ── SNAPSHOTS ─────────────────────────────────────────────────
 
     def take_snapshot(self, bankroll: float):
@@ -494,6 +634,10 @@ class TradeJournal:
         wins = sum(1 for ct in real_trades if ct.get("pnl", 0) > 0)
         losses = sum(1 for ct in real_trades if ct.get("pnl", 0) <= 0)
         strat_stats: Dict = {}
+        weather_subtype_stats: Dict[str, Dict[str, Any]] = {
+            "temp": {"trades": 0, "wins": 0, "pnl": 0.0, "avg_pnl": 0.0},
+            "precip": {"trades": 0, "wins": 0, "pnl": 0.0, "avg_pnl": 0.0},
+        }
         real_pnl = 0.0
         for ct in real_trades:
             s = ct["strategy"]
@@ -504,7 +648,21 @@ class TradeJournal:
             real_pnl += ct.get("pnl", 0)
             if ct.get("pnl", 0) > 0:
                 strat_stats[s]["wins"] += 1
+            if s == "weather":
+                subtype = (
+                    ct.get("weather_subtype")
+                    or (ct.get("entry_signal") or {}).get("weather_subtype")
+                )
+                if subtype in weather_subtype_stats:
+                    weather_subtype_stats[subtype]["trades"] += 1
+                    weather_subtype_stats[subtype]["pnl"] += ct.get("pnl", 0)
+                    if ct.get("pnl", 0) > 0:
+                        weather_subtype_stats[subtype]["wins"] += 1
         for s in strat_stats.values():
+            s["win_rate"] = round(s["wins"] / s["trades"], 3) if s["trades"] else 0
+            s["avg_pnl"] = round(s["pnl"] / s["trades"], 2) if s["trades"] else 0
+            s["pnl"] = round(s["pnl"], 2)
+        for s in weather_subtype_stats.values():
             s["win_rate"] = round(s["wins"] / s["trades"], 3) if s["trades"] else 0
             s["avg_pnl"] = round(s["pnl"] / s["trades"], 2) if s["trades"] else 0
             s["pnl"] = round(s["pnl"], 2)
@@ -520,6 +678,7 @@ class TradeJournal:
             "realized_pnl": round(real_pnl, 2),
             "win_rate_parts": (wins, losses),
             "strategy_stats": strat_stats,
+            "weather_subtype_stats": weather_subtype_stats,
             "closed_notional": round(sum(_notional(ct) for ct in real_trades), 2),
         }
 
@@ -551,6 +710,22 @@ class TradeJournal:
             sum(_notional(p) for p in self.open_positions.values()) + closed["closed_notional"],
             2,
         )
+        weather_open_stats: Dict[str, Dict[str, Any]] = {
+            "temp": {"open": 0, "exposure": 0.0, "unrealized_pnl": 0.0},
+            "precip": {"open": 0, "exposure": 0.0, "unrealized_pnl": 0.0},
+        }
+        for p in self.open_positions.values():
+            if p.get("strategy") != "weather":
+                continue
+            subtype = p.get("weather_subtype") or (p.get("entry_signal") or {}).get("weather_subtype")
+            if subtype not in weather_open_stats:
+                continue
+            weather_open_stats[subtype]["open"] += 1
+            weather_open_stats[subtype]["exposure"] += float(p.get("size", 0) or 0)
+            weather_open_stats[subtype]["unrealized_pnl"] += float(p.get("pnl", 0) or 0)
+        for s in weather_open_stats.values():
+            s["exposure"] = round(s["exposure"], 2)
+            s["unrealized_pnl"] = round(s["unrealized_pnl"], 2)
         # Fills = one entry per open position plus one per closed round-trip
         # (avoids inflating counts with ENTRY lines that never became a position).
         entry_fill_count = len(self.open_positions) + closed["total_exits"]
@@ -570,6 +745,8 @@ class TradeJournal:
             "wins": wins,
             "losses": losses,
             "strategy_stats": closed["strategy_stats"],
+            "weather_subtype_stats": closed["weather_subtype_stats"],
+            "weather_open_stats": weather_open_stats,
         }
         src = (
             "archived"
@@ -648,12 +825,12 @@ class TradeJournal:
         for d in sorted(base_dir.iterdir(), reverse=True):
             if not d.is_dir():
                 continue
-            if (d / "summary.json").exists() or (d / "entries.jsonl").exists():
+            if TradeJournal.session_dir_has_activity(d):
                 yield d, source
             elif source == "archived":
                 # Recurse one level into batch-archive subdirs (e.g. ui_reset_ts/)
                 for sub in sorted(d.iterdir(), reverse=True):
-                    if sub.is_dir() and ((sub / "summary.json").exists() or (sub / "entries.jsonl").exists()):
+                    if sub.is_dir() and TradeJournal.session_dir_has_activity(sub):
                         yield sub, source
 
     @staticmethod
@@ -876,6 +1053,43 @@ class TradeJournal:
         else:
             self.total_entries = len(self.open_positions)
 
-        # Always flush phantom-filtered summary to disk immediately on load
-        # so the dashboard never reads a stale/phantom summary.json
-        self._save_summary()
+        # Only flush a summary when the session has meaningful activity.
+        # This suppresses empty stub sessions from being promoted into history.
+        if self.total_entries > 0 or self.total_exits > 0 or self.open_positions:
+            self._save_summary()
+
+    def _load_dead_zone_skip_state(self) -> None:
+        """Rebuild pending and resolved dead-zone hypothetical events from the journal."""
+        self._dead_zone_skip_records = {}
+        self._resolved_dead_zone_skip_keys = set()
+        if not self._entries_file.exists():
+            return
+        with open(self._entries_file, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                event = entry.get("event")
+                key = (
+                    entry.get("strategy", ""),
+                    entry.get("market_id", ""),
+                    entry.get("action", ""),
+                )
+                if not all(key):
+                    continue
+                if event == "DEAD_ZONE_SKIP":
+                    self._dead_zone_skip_records[key] = {
+                        "market_question": entry.get("market_question", ""),
+                        "hour_utc": (entry.get("extra") or {}).get("hour_utc"),
+                        "blocked_hours_config": (entry.get("extra") or {}).get(
+                            "blocked_hours_config", []
+                        ),
+                        "extra": entry.get("extra", {}),
+                    }
+                elif event == "DEAD_ZONE_SKIP_RESOLVED":
+                    self._resolved_dead_zone_skip_keys.add(key)
+                    self._dead_zone_skip_records.pop(key, None)

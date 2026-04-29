@@ -157,6 +157,40 @@ class PositionSizer:
         size = min(size, bankroll * self.max_position_pct)
         return round(size, 2)
 
+    def calculate_binary_kelly_bet(
+        self,
+        bankroll: float,
+        win_probability: float,
+        contract_price: float,
+        kelly_fraction: float = None,
+    ) -> float:
+        """Calculate Kelly bet size for a binary contract using actual payout odds.
+
+        For a contract priced at ``c`` that pays ``1`` on success, net odds are:
+        ``b = (1 - c) / c``.
+        """
+        if kelly_fraction is None:
+            kelly_fraction = self.kelly_fraction
+
+        p = max(0.0, min(1.0, float(win_probability)))
+        c = max(0.01, min(0.99, float(contract_price)))
+        b = (1.0 - c) / c
+        if b <= 0:
+            return 0.0
+
+        kelly_frac = self.kelly_criterion(
+            win_probability=p,
+            odds=(1.0 / c),
+            fraction=kelly_fraction,
+        )
+        if kelly_frac <= 0:
+            return 0.0
+
+        size = kelly_frac * bankroll
+        size = max(self.min_position, min(size, self.max_position))
+        size = min(size, bankroll * self.max_position_pct)
+        return round(size, 2)
+
     def calculate_conservative_size(
         self, bankroll: float, confidence: float, edge: float
     ) -> float:

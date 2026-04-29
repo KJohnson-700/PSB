@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Weather strategy: compare Open-Meteo forecast vs Polymarket price.
 Uses ICAO airport station coordinates (not city centers) — Polymarket resolves on
@@ -9,15 +11,27 @@ import logging
 import math
 import re
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple, Literal
 
 import requests
 
 from src.market.scanner import Market, is_crypto_updown_market
 from src.analysis.math_utils import PositionSizer
+from src.analysis.weather_ensemble import WeatherEnsembleRunner
+from src.strategies.weather_calibration import WeatherCalibrationStore
 from src.strategies.weather_models import WeatherSignal
 
+if TYPE_CHECKING:
+    from src.analysis.ai_agent import AIAgent
+
 logger = logging.getLogger(__name__)
+
+
+def _normalize_city_text(value: str) -> str:
+    """Normalize market text for resilient city and airport matching."""
+    value = re.sub(r"[^a-z0-9]+", " ", (value or "").lower())
+    return re.sub(r"\s+", " ", value).strip()
+
 
 _CITY_LOOKUP: Dict[str, Tuple[tuple, str]] = {
     "new-york": ((40.7769, -73.8740), "KLGA"),
@@ -41,7 +55,7 @@ _CITY_LOOKUP: Dict[str, Tuple[tuple, str]] = {
     "heathrow": ((51.4700, -0.4543), "EGLL"),
     "tokyo": ((35.5494, 139.7798), "RJTT"),
     "seoul": ((37.4691, 126.4510), "RKSS"),
-    "paris": ((49.0097, 2.5479), "LFPG"),
+    "paris": ((49.0097, 2.5479), "LFPB"),
     "sydney": ((-33.9399, 151.1753), "YSSY"),
     "singapore": ((1.3644, 103.9915), "WSSS"),
     "dubai": ((25.2532, 55.3657), "OMDB"),
@@ -56,6 +70,55 @@ _CITY_LOOKUP: Dict[str, Tuple[tuple, str]] = {
     "shanghai": ((31.1443, 121.8083), "ZSPD"),
     "beijing": ((40.0799, 116.6031), "ZBAA"),
 }
+
+_CITY_ALIASES: Dict[str, str] = {
+    "nyc": "new-york",
+    "laguardia": "new-york",
+    "ohare": "chicago",
+    "o-hare": "chicago",
+    "heathrow": "london",
+}
+_ICAO_TO_CITY_KEY: Dict[str, str] = {}
+for _city_key, (_coords, _icao) in _CITY_LOOKUP.items():
+    _ICAO_TO_CITY_KEY.setdefault(_icao, _CITY_ALIASES.get(_city_key, _city_key))
+
+_CITY_VARIANTS: Dict[str, str] = {}
+for _city_key, (_coords, _icao) in _CITY_LOOKUP.items():
+    _canonical = _CITY_ALIASES.get(_city_key, _city_key)
+    for _variant in (
+        _city_key,
+        _city_key.replace("-", " "),
+        _icao,
+        _icao.lower(),
+    ):
+        _norm = _normalize_city_text(_variant)
+        if _norm:
+            _CITY_VARIANTS[_norm] = _canonical
+
+for _variant, _canonical in {
+    "new york city": "new-york",
+    "new york ny": "new-york",
+    "new york new york": "new-york",
+    "la guardia": "new-york",
+    "la guardia airport": "new-york",
+    "lga": "new-york",
+    "jfk airport": "new-york",
+    "john f kennedy": "new-york",
+    "john f kennedy airport": "new-york",
+    "boston ma": "boston",
+    "boston logan": "boston",
+    "boston logan airport": "boston",
+    "logan": "boston",
+    "logan airport": "boston",
+    "bos": "boston",
+    "chicago il": "chicago",
+    "chicago o hare": "chicago",
+    "chicago o hare airport": "chicago",
+    "o hare": "chicago",
+    "o hare airport": "chicago",
+    "ord": "chicago",
+}.items():
+    _CITY_VARIANTS[_normalize_city_text(_variant)] = _canonical
 
 # ICAO airport station coords — Polymarket resolves on these, NOT city centers.
 # Order: longest/most-specific patterns first to avoid partial matches.
@@ -76,7 +139,7 @@ _CITY_PATTERNS: List[Tuple[re.Pattern, tuple, str]] = [
     (re.compile(r'\blondon\b|\bheathrow\b', re.I),  (51.4700, -0.4543),   "EGLL"),
     (re.compile(r'\btokyo\b', re.I),                 (35.5494, 139.7798),  "RJTT"),
     (re.compile(r'\bseoul\b', re.I),                 (37.4691, 126.4510),  "RKSS"),
-    (re.compile(r'\bparis\b', re.I),                 (49.0097, 2.5479),    "LFPG"),
+    (re.compile(r'\bparis\b', re.I),                 (49.0097, 2.5479),    "LFPB"),
     (re.compile(r'\bsydney\b', re.I),                (-33.9399, 151.1753), "YSSY"),
     (re.compile(r'\bsingapore\b', re.I),             (1.3644, 103.9915),   "WSSS"),
     (re.compile(r'\bdubai\b', re.I),                 (25.2532, 55.3657),   "OMDB"),
@@ -106,11 +169,18 @@ _PRECIP_RE = re.compile(r'\b(rain|snow|precipitation|storm|hail|thunderstorm)\b'
 class WeatherStrategy:
     """Trade when Open-Meteo airport-station forecast diverges from market price."""
 
-    def __init__(self, config: Dict[str, Any], position_sizer: PositionSizer, kelly_sizer=None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        position_sizer: PositionSizer,
+        kelly_sizer=None,
+        ai_agent: Optional[AIAgent] = None,
+    ):
         cfg = config.get("strategies", {}).get("weather", {})
         self.config = cfg
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer
+        self.ai_agent = ai_agent
         self.gap_min = cfg.get("gap_min", 0.15)
         self.min_ev = cfg.get("min_ev", 0.05)
         self.min_volume = cfg.get("min_volume", 2000.0)
@@ -123,6 +193,27 @@ class WeatherStrategy:
         self.kelly_fraction = cfg.get("kelly_fraction", 0.25)
         self._signal_strategy_name = "weather"
         self._backtest_proxy_forecast: Optional[float] = None
+        self.metar_mismatch_threshold_c = float(
+            cfg.get("metar_mismatch_threshold_c", 3.0)
+        )
+        self.metar_mismatch_threshold_c_per_day = float(
+            cfg.get("metar_mismatch_threshold_c_per_day", 1.0)
+        )
+        self.ev_fee_buffer_pct = float(cfg.get("ev_fee_buffer_pct", 0.02))
+        self.min_ev_horizon_multipliers = {
+            1: float(cfg.get("min_ev_mult_t1", 1.2)),
+            2: float(cfg.get("min_ev_mult_t2", 1.0)),
+            3: float(cfg.get("min_ev_mult_t3", 0.8)),
+        }
+        self.use_weather_ai = bool(cfg.get("use_weather_ai", False))
+        self.max_weather_ai_calls_per_scan = int(
+            cfg.get("max_weather_ai_calls_per_scan", 3)
+        )
+        self.borderline_high = float(cfg.get("borderline_high", 0.10))
+        self.calibration_store = WeatherCalibrationStore(
+            min_observations=int(cfg.get("calibration_min_observations", 30))
+        )
+        self.weather_ensemble = WeatherEnsembleRunner(ai_agent, config)
         # Scan diagnostics reset each cycle
         self._scan_stats: Dict[str, int] = {}
 
@@ -135,15 +226,65 @@ class WeatherStrategy:
         self, question: str, description: str
     ) -> Optional[Tuple[tuple, str]]:
         """Return ((lat, lon), icao) or None."""
+        details = self._parse_market_location_details(question, description)
+        if details is None:
+            return None
+        _, coords, icao = details
+        return coords, icao
+
+    def _parse_market_location_details(
+        self, question: str, description: str
+    ) -> Optional[Tuple[str, tuple, str]]:
+        """Return (city_key, (lat, lon), icao) or None."""
         text = f"{question} {description}"
         for pattern, coords, icao in _CITY_PATTERNS:
             if pattern.search(text):
-                return coords, icao
-        normalized = re.sub(r"[^a-z0-9\s\-]", " ", text.lower())
-        for city_key, coords in _CITY_LOOKUP.items():
-            city_text = city_key.replace("-", " ")
-            if city_key in normalized or city_text in normalized:
-                return coords
+                return _ICAO_TO_CITY_KEY.get(icao, icao.lower()), coords, icao
+
+        for candidate in self._iter_location_candidates(question, description):
+            match = self._match_city_variant(candidate)
+            if match is None:
+                continue
+            canonical_city, coords, icao = match
+            return canonical_city, coords, icao
+        return None
+
+    @staticmethod
+    def _iter_location_candidates(question: str, description: str) -> List[str]:
+        candidates = [question, description]
+        combined = f"{question} {description}"
+
+        temp_slug_match = re.search(
+            r"highest-temperature-in-([a-z0-9-]+?)-on-",
+            combined,
+            re.IGNORECASE,
+        )
+        if temp_slug_match:
+            candidates.append(temp_slug_match.group(1).replace("-", " "))
+
+        precip_slug_match = re.search(
+            r"will-([a-z0-9-]+?)-have-.*(?:precipitation|rain|snow)",
+            combined,
+            re.IGNORECASE,
+        )
+        if precip_slug_match:
+            candidates.append(precip_slug_match.group(1).replace("-", " "))
+
+        return [candidate for candidate in candidates if candidate]
+
+    @staticmethod
+    def _match_city_variant(candidate: str) -> Optional[Tuple[str, tuple, str]]:
+        normalized = _normalize_city_text(candidate)
+        if not normalized:
+            return None
+
+        padded = f" {normalized} "
+        for variant in sorted(_CITY_VARIANTS, key=len, reverse=True):
+            if f" {variant} " not in padded:
+                continue
+            canonical_city = _CITY_VARIANTS[variant]
+            coords, icao = _CITY_LOOKUP[canonical_city]
+            return canonical_city, coords, icao
         return None
 
     def _parse_temp_threshold(self, question: str) -> Optional[Tuple[Optional[float], Optional[float]]]:
@@ -197,7 +338,7 @@ class WeatherStrategy:
         lon: float,
         target_date: str,
         threshold: Tuple[Optional[float], Optional[float]],
-    ) -> Optional[float]:
+    ) -> Optional[Any]:
         """Open-Meteo temperature forecast → probability via ensemble spread.
 
         Uses hourly temperature_2m ensemble (16 members) to estimate spread,
@@ -245,7 +386,11 @@ class WeatherStrategy:
                 # P(max_temp < high) — "below X"
                 prob = _norm_cdf(high, t_max, std)  # type: ignore[arg-type]
 
-            return min(0.99, max(0.01, prob))
+            return {
+                "prob": min(0.99, max(0.01, prob)),
+                "forecast_temp_f": float(t_max),
+                "std_f": float(std),
+            }
         except Exception as e:
             logger.debug("Open-Meteo temp fetch failed: %s", e)
         return None
@@ -281,15 +426,22 @@ class WeatherStrategy:
 
     def _target_forecast_date(self, market: Market) -> tuple[Optional[str], Optional[str]]:
         """Choose T+1/T+2/T+3 based on time-to-resolution."""
+        target_date, _, skip_reason = self._target_forecast_date_details(market)
+        return target_date, skip_reason
+
+    def _target_forecast_date_details(
+        self, market: Market
+    ) -> tuple[Optional[str], Optional[int], Optional[str]]:
+        """Choose target date and horizon_days based on time-to-resolution."""
         if self._backtest_proxy_forecast is not None:
-            return None, None
+            return None, None, None
 
         hours = self._hours_to_resolution(market.end_date)
         if hours is not None:
             if hours < self.min_hours:
-                return None, "skipped_below_min_hours"
+                return None, None, "skipped_below_min_hours"
             if hours > self.max_hours:
-                return None, "skipped_above_max_hours"
+                return None, None, "skipped_above_max_hours"
             if hours < 24:
                 horizon_days = 1
             elif hours < 72:
@@ -301,10 +453,60 @@ class WeatherStrategy:
 
         max_horizon_days = max(1, int(self.config.get("forecast_horizon_days", 3)))
         if horizon_days > max_horizon_days:
-            return None, "skipped_too_far_out"
+            return None, horizon_days, "skipped_too_far_out"
 
         target_date = (datetime.now(timezone.utc) + timedelta(days=horizon_days)).strftime("%Y-%m-%d")
-        return target_date, None
+        return target_date, horizon_days, None
+
+    @staticmethod
+    def _clamp_prob(value: float) -> float:
+        return min(0.99, max(0.01, value))
+
+    def _classify_weather_subtype(
+        self, question: str, description: str
+    ) -> Optional[Literal["temp", "precip"]]:
+        """Assign one stable subtype for metrics/journaling.
+
+        Some markets can contain overlapping weather language. Prefer temperature
+        when a temperature threshold is explicitly parseable; otherwise use
+        precipitation when precip keywords are present.
+        """
+        blob = f"{question} {description}"
+        is_temp = bool(_TEMP_RE.search(blob))
+        is_precip = bool(_PRECIP_RE.search(blob))
+        if is_temp and self._parse_temp_threshold(question) is not None:
+            return "temp"
+        if is_precip:
+            return "precip"
+        if is_temp:
+            return "temp"
+        return None
+
+    def _fee_buffer(self, contract_price: float) -> float:
+        """Use a price-scaled EV haircut instead of a flat cents buffer."""
+        price = max(0.01, min(0.99, float(contract_price)))
+        return price * self.ev_fee_buffer_pct
+
+    def _required_min_ev(self, horizon_days: Optional[int]) -> float:
+        day = max(1, min(3, int(horizon_days or 1)))
+        mult = self.min_ev_horizon_multipliers.get(day, 1.0)
+        return self.min_ev * mult
+
+    def _metar_threshold_f(self, horizon_days: Optional[int]) -> float:
+        day = max(1, int(horizon_days or 1))
+        threshold_c = self.metar_mismatch_threshold_c + max(0, day - 1) * (
+            self.metar_mismatch_threshold_c_per_day
+        )
+        return threshold_c * 9 / 5
+
+    @staticmethod
+    def _side_probability_and_price(
+        forecast_yes_prob: float,
+        market_yes_price: float,
+    ) -> tuple[str, float, float]:
+        if forecast_yes_prob > market_yes_price:
+            return "BUY_YES", forecast_yes_prob, market_yes_price
+        return "BUY_NO", 1.0 - forecast_yes_prob, 1.0 - market_yes_price
 
     # ── Main scan ────────────────────────────────────────────────────────────
 
@@ -334,9 +536,16 @@ class WeatherStrategy:
             "skipped_ev": 0,
             "skipped_no_threshold": 0,
             "skipped_no_forecast": 0,
+            "skipped_metar_mismatch": 0,
+            "weather_ai_calls": 0,
+            "weather_ai_applied": 0,
+            "weather_ai_hold": 0,
+            "sample_market_questions": [],
+            "sample_rejected_questions": [],
         }
 
         signals: List[WeatherSignal] = []
+        ai_calls = 0
         weather_markets = [market for market in markets if not is_crypto_updown_market(market)]
         weather_markets.sort(
             key=lambda market: float((market.volume or 0) + (market.liquidity or 0)),
@@ -352,16 +561,20 @@ class WeatherStrategy:
 
             stats["weather_keyword_matches"] += 1
             stats["markets_scanned"] += 1
+            if len(stats["sample_market_questions"]) < 5:
+                stats["sample_market_questions"].append(q[:120])
 
-            loc_result = self._parse_market_location(
+            loc_result = self._parse_market_location_details(
                 q,
                 f"{desc} {market.slug or ''} {market.group_item_title or ''}",
             )
             if not loc_result:
                 stats["skipped_no_location"] += 1
+                if len(stats["sample_rejected_questions"]) < 5:
+                    stats["sample_rejected_questions"].append(f"no_location: {q[:100]}")
                 continue
 
-            (lat, lon), icao = loc_result
+            city_key, (lat, lon), icao = loc_result
             stats["city_matches"] += 1
 
             if market.yes_price <= 0.05 or market.yes_price >= 0.95:
@@ -377,89 +590,191 @@ class WeatherStrategy:
                 stats["skipped_below_volume"] += 1
                 continue
 
-            target_date, skip_reason = self._target_forecast_date(market)
+            target_date, horizon_days, skip_reason = self._target_forecast_date_details(market)
             if skip_reason:
                 stats[skip_reason] += 1
                 continue
 
-            is_temp = bool(_TEMP_RE.search(f"{q} {desc}"))
-            is_precip = bool(_PRECIP_RE.search(f"{q} {desc}"))
-            if not is_temp and not is_precip:
+            subtype = self._classify_weather_subtype(q, desc)
+            if subtype is None:
                 stats["skipped_no_temp_keyword"] += 1
+                if len(stats["sample_rejected_questions"]) < 5:
+                    stats["sample_rejected_questions"].append(f"no_keyword: {q[:100]}")
                 continue
 
+            forecast_temp_f = None
+            forecast_std_f = None
             if self._backtest_proxy_forecast is not None:
-                forecast_prob = self._backtest_proxy_forecast
+                raw_forecast_prob = self._backtest_proxy_forecast
             else:
-                if is_temp:
+                if subtype == "temp":
                     stats["temp_markets"] += 1
                     threshold = self._parse_temp_threshold(q)
                     if threshold is None:
                         stats["skipped_no_threshold"] += 1
                         logger.debug("Weather: no temp threshold parsed from '%s'", q[:60])
                         continue
-                    forecast_prob = self._fetch_temp_forecast(lat, lon, target_date, threshold)
+                    temp_result = self._fetch_temp_forecast(lat, lon, target_date, threshold)
+                    if isinstance(temp_result, dict):
+                        raw_forecast_prob = temp_result.get("prob")
+                        forecast_temp_f = temp_result.get("forecast_temp_f")
+                        forecast_std_f = temp_result.get("std_f")
+                    else:
+                        raw_forecast_prob = temp_result
                 else:
                     stats["precip_markets"] += 1
-                    forecast_prob = self._fetch_precip_forecast(
+                    raw_forecast_prob = self._fetch_precip_forecast(
                         lat,
                         lon,
                         target_date or datetime.utcnow().strftime("%Y-%m-%d"),
                     )
 
-            if forecast_prob is None:
+            if raw_forecast_prob is None:
                 stats["skipped_no_forecast"] += 1
                 continue
 
-            market_price = market.yes_price
-            gap = abs(forecast_prob - market_price)
-
-            if gap < self.gap_min:
-                continue
-
-            # EV filter
-            ev = gap - 0.02  # fee buffer
-            if ev < self.min_ev:
-                stats["skipped_ev"] += 1
-                continue
-
-            # Skip expensive YES shares
-            if market_price > self.max_yes_price and forecast_prob > market_price:
-                continue
-
-            action = "BUY_YES" if forecast_prob > market_price else "BUY_NO"
-            price = market.yes_price if action == "BUY_YES" else market.no_price
-
-            size = (
-                self.kelly_sizer.size_from_edge(self._signal_strategy_name, bankroll, ev)
-                if self.kelly_sizer
-                else self.position_sizer.calculate_kelly_bet(bankroll, ev, self.kelly_fraction)
+            corrected_forecast_prob, calibration_bias, calibration_count = (
+                self.calibration_store.apply_correction(
+                    float(raw_forecast_prob),
+                    city_key,
+                    int(horizon_days or 1),
+                )
             )
-            if size <= 0:
-                continue
 
-            # METAR sanity check (non-blocking)
-            if self.metar_enabled and is_temp and not self._backtest_proxy_forecast:
+            market_price = market.yes_price
+            metar_obs_f = None
+
+            if (
+                self.metar_enabled
+                and subtype == "temp"
+                and not self._backtest_proxy_forecast
+                and forecast_temp_f is not None
+            ):
                 metar = self._fetch_metar(icao)
                 if metar:
                     obs_temp = metar.get("temp")
                     if obs_temp is not None:
-                        # Convert C to F if needed (METAR returns Celsius)
-                        obs_f = obs_temp * 9 / 5 + 32
+                        obs_f = float(obs_temp) * 9 / 5 + 32
+                        metar_obs_f = obs_f
+                        metar_gap_f = abs(obs_f - float(forecast_temp_f))
+                        threshold_f = self._metar_threshold_f(horizon_days)
+                        if metar_gap_f > threshold_f:
+                            stats["skipped_metar_mismatch"] += 1
+                            if len(stats["sample_rejected_questions"]) < 5:
+                                stats["sample_rejected_questions"].append(
+                                    f"metar_mismatch: {q[:100]}"
+                                )
+                            logger.info(
+                                "Weather METAR mismatch skip: %s obs=%.1fF forecast=%.1fF gap=%.1fF thresh=%.1fF",
+                                icao,
+                                obs_f,
+                                forecast_temp_f,
+                                metar_gap_f,
+                                threshold_f,
+                            )
+                            continue
                         logger.debug(
-                            "Weather METAR %s: observed=%.1f°F forecast_prob=%.2f",
-                            icao, obs_f, forecast_prob,
+                            "Weather METAR %s: observed=%.1fF forecast=%.1fF prob=%.2f",
+                            icao,
+                            obs_f,
+                            forecast_temp_f,
+                            corrected_forecast_prob,
                         )
 
+            effective_forecast_prob = corrected_forecast_prob
+            ensemble_payload = None
+            gap = abs(effective_forecast_prob - market_price)
+
+            if gap < self.gap_min:
+                continue
+
+            in_borderline_zone = gap <= (self.gap_min + self.borderline_high)
+            if (
+                in_borderline_zone
+                and self.use_weather_ai
+                and self.ai_agent
+                and self.ai_agent.is_available()
+                and ai_calls < self.max_weather_ai_calls_per_scan
+            ):
+                hours_to_resolution = self._hours_to_resolution(market.end_date)
+                ensemble = await self.weather_ensemble.run(
+                    market_id=market.id,
+                    question=q,
+                    description=desc,
+                    subtype=subtype,
+                    city_key=city_key,
+                    icao=icao,
+                    horizon_days=int(horizon_days or 1),
+                    horizon_hours=hours_to_resolution,
+                    forecast_prob=corrected_forecast_prob,
+                    raw_forecast_prob=float(raw_forecast_prob),
+                    market_price=market_price,
+                    calibration_bias=calibration_bias,
+                    calibration_count=calibration_count,
+                    forecast_temp_f=forecast_temp_f,
+                    metar_obs_f=metar_obs_f,
+                    ensemble_std_f=forecast_std_f,
+                )
+                ai_calls += 1
+                stats["weather_ai_calls"] += 1
+                if ensemble is not None:
+                    ensemble_payload = ensemble.to_signal_payload()
+                    if ensemble.recommendation == "HOLD":
+                        stats["weather_ai_hold"] += 1
+                        continue
+                    effective_forecast_prob = ensemble.estimated_probability
+                    stats["weather_ai_applied"] += 1
+                    gap = abs(effective_forecast_prob - market_price)
+                    if gap < self.gap_min:
+                        continue
+
+            action, win_probability, contract_price = self._side_probability_and_price(
+                effective_forecast_prob,
+                market_price,
+            )
+
+            fee_buffer = self._fee_buffer(contract_price)
+            ev = gap - fee_buffer
+            required_min_ev = self._required_min_ev(horizon_days)
+            if ev < required_min_ev:
+                stats["skipped_ev"] += 1
+                continue
+
+            # Skip expensive YES shares
+            if market_price > self.max_yes_price and corrected_forecast_prob > market_price:
+                continue
+
+            price = contract_price
+
+            size = (
+                self.kelly_sizer.size_binary_position(
+                    self._signal_strategy_name,
+                    bankroll,
+                    win_probability,
+                    contract_price,
+                )
+                if self.kelly_sizer
+                else self.position_sizer.calculate_binary_kelly_bet(
+                    bankroll,
+                    win_probability,
+                    contract_price,
+                    self.kelly_fraction,
+                )
+            )
+            if size <= 0:
+                continue
+
             logger.info(
-                "Weather signal: %s %s city=%s forecast=%.2f market=%.2f gap=%.2f ev=%.2f size=$%.0f | %s",
+                "Weather signal: %s %s city=%s forecast=%.2f market=%.2f gap=%.2f ev=%.2f fee=%.3f req_ev=%.2f size=$%.0f | %s",
                 action,
-                "temp" if is_temp else "precip",
+                subtype,
                 icao,
-                forecast_prob,
+                effective_forecast_prob,
                 market_price,
                 gap,
                 ev,
+                fee_buffer,
+                required_min_ev,
                 size,
                 q[:70],
             )
@@ -472,11 +787,18 @@ class WeatherStrategy:
                     market_question=market.question,
                     end_date=market.end_date,
                     action=action,
-                    forecast_prob=forecast_prob,
+                    subtype=subtype,
+                    forecast_prob=effective_forecast_prob,
                     market_price=market_price,
                     gap=gap,
                     size=size,
                     price=price,
+                    city=city_key,
+                    horizon_days=int(horizon_days or 1),
+                    raw_forecast_prob=self._clamp_prob(float(raw_forecast_prob)),
+                    calibration_bias=calibration_bias,
+                    calibration_count=calibration_count,
+                    ai_ensemble=ensemble_payload,
                 )
             )
 
@@ -484,7 +806,7 @@ class WeatherStrategy:
         logger.info(
             "Weather scan: total=%d keyword=%d city=%d scanned=%d temp=%d precip=%d "
             "signals=%d | skip: no_loc=%d no_temp=%d liq=%d vol=%d minh=%d maxh=%d far=%d "
-            "extreme=%d ev=%d thresh=%d forecast=%d",
+            "extreme=%d ev=%d thresh=%d forecast=%d metar=%d ai_calls=%d ai_used=%d ai_hold=%d",
             stats["total_markets_seen"],
             stats["weather_keyword_matches"],
             stats["city_matches"],
@@ -503,6 +825,14 @@ class WeatherStrategy:
             stats["skipped_ev"],
             stats["skipped_no_threshold"],
             stats["skipped_no_forecast"],
+            stats["skipped_metar_mismatch"],
+            stats["weather_ai_calls"],
+            stats["weather_ai_applied"],
+            stats["weather_ai_hold"],
         )
+        if stats["sample_market_questions"]:
+            logger.info("Weather scan sample markets: %s", stats["sample_market_questions"])
+        if stats["sample_rejected_questions"]:
+            logger.info("Weather scan sample rejects: %s", stats["sample_rejected_questions"])
 
         return signals

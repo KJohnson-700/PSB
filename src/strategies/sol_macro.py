@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field
 
 from src.market.scanner import Market
 from src.analysis.ai_agent import AIAgent
+from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
@@ -164,10 +165,12 @@ class SolMacroStrategy:
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer
         self.sol_service = SOLBTCService()
+        self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
         self._signal_strategy_name = "sol_macro"
+        self.dead_zone_skip_callback = None
 
         # Remaining config-derived attributes (scan loop)
         # Must be set on SolMacroStrategy (not only subclasses) for scan_and_analyze.
@@ -176,6 +179,7 @@ class SolMacroStrategy:
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
         self.entry_price_min = self.config.get("entry_price_min", 0.46)
         self.entry_price_max = self.config.get("entry_price_max", 0.54)
+        self.min_positive_m5_adj_5m = float(self.config.get("min_positive_m5_adj_5m", 0.0))
 
         # AI-hold soft veto: cache market IDs where AI recently said HOLD so the
         # strong-signal path cannot bypass that decision within the TTL window.
@@ -250,6 +254,20 @@ class SolMacroStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
+    def _resolve_ai_decision_window_bounds(self, *, is_5m: bool) -> tuple[float, float]:
+        """Return the preferred AI-decision timing window in minutes remaining."""
+        default_min = 1.5 if is_5m else 8.0
+        default_max = 2.5 if is_5m else 13.0
+        win_min = float(self.config.get("ai_entry_window_5m_min" if is_5m else "ai_entry_window_15m_min", default_min))
+        win_max = float(self.config.get("ai_entry_window_5m_max" if is_5m else "ai_entry_window_15m_max", default_max))
+        if win_min > win_max:
+            win_min, win_max = win_max, win_min
+        return win_min, win_max
+
+    def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
+        win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
+        return win_min <= mins_left <= win_max
+
     def _rsi_blocks_entry(self, action: str, rsi: float) -> bool:
         """Optional config-scoped RSI hard gate for extreme one-sided entries."""
         buy_ceiling = self.config.get("rsi_buy_block_above")
@@ -261,6 +279,13 @@ class SolMacroStrategy:
             return True
 
         return False
+
+    def _oracle_basis_blocks_entry(self, oracle_basis_bps: Optional[float]) -> bool:
+        """Optional hard gate when spot diverges too far from the oracle reference."""
+        max_basis_bps = self.config.get("oracle_max_basis_bps")
+        if max_basis_bps is None or oracle_basis_bps is None:
+            return False
+        return abs(float(oracle_basis_bps)) > float(max_basis_bps)
 
     def _extract_direction(self, question: str) -> str:
         q = question.lower()
@@ -328,6 +353,79 @@ class SolMacroStrategy:
         elif bear_votes >= 2:
             return "BEARISH"
         return "NEUTRAL"
+
+    def _get_btc_htf_bias(self, ta: TechnicalAnalysis) -> str:
+        """Use BTC 4H structure as the primary macro gate for alt strategies."""
+        sabre = ta.trend_sabre
+        macd_4h = ta.macd_4h
+        price = ta.current_price
+
+        bull_votes = 0
+        bear_votes = 0
+
+        if sabre.trend == 1:
+            bull_votes += 1
+        elif sabre.trend == -1:
+            bear_votes += 1
+
+        if price > sabre.ma_value:
+            bull_votes += 1
+        elif price < sabre.ma_value:
+            bear_votes += 1
+
+        early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
+        early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
+        recovery = not macd_4h.above_zero and macd_4h.histogram > 0
+        if early_bear:
+            bear_votes += 1
+        elif macd_4h.above_zero or early_bull or recovery:
+            bull_votes += 1
+        else:
+            bear_votes += 1
+
+        if bull_votes >= 2:
+            bias = "BULLISH"
+        elif bear_votes >= 2:
+            bias = "BEARISH"
+        else:
+            return "NEUTRAL"
+
+        min_hist = float(self.config.get("btc_min_4h_hist_magnitude", 20.0))
+        if abs(macd_4h.histogram) < min_hist:
+            logger.info(
+                "BTC HTF: %s by vote but 4H MACD hist=%+.1f below conviction threshold (%s) "
+                "— downgrading to NEUTRAL",
+                bias,
+                macd_4h.histogram,
+                min_hist,
+            )
+            return "NEUTRAL"
+
+        return bias
+
+    def _apply_primary_htf_bias(
+        self, est_prob_up: float, primary_htf_bias: str, weight: float
+    ) -> float:
+        """Apply the same HTF bias that determined the allowed side.
+
+        Once BTC 4H became the primary gate for alt strategies, probability estimation
+        needs to use that same resolved bias. Otherwise the action can be chosen from
+        BTC HTF while the probability model still leans the other way from alt-only HTF.
+        """
+        if primary_htf_bias == "BULLISH":
+            return est_prob_up + weight
+        if primary_htf_bias == "BEARISH":
+            return est_prob_up - weight
+        return est_prob_up
+
+    def _strong_enough_5m_signal(self, m5_adj: float) -> bool:
+        """Optional guard for weak 5m-only entries.
+
+        Some assets perform poorly when the 5m path is allowed to enter on the
+        weakest MACD state (`macd_line > signal_line`, worth only +0.02). When
+        configured, require at least the configured positive 5m adjustment.
+        """
+        return m5_adj >= self.min_positive_m5_adj_5m
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 2: 15m Trend Confirmation
@@ -577,6 +675,14 @@ class SolMacroStrategy:
             logger.warning(f"{_brand} strategy: Could not fetch {_alt_label}/BTC price data")
             return []
 
+        btc_ta = self.btc_service.get_full_analysis()
+        if btc_ta:
+            btc_htf_bias = self._get_btc_htf_bias(btc_ta)
+            logger.info(f"BTC HTF: {btc_htf_bias} | BTC ${btc_ta.current_price:,.0f}")
+        else:
+            btc_htf_bias = None
+            logger.warning("BTC HTF unavailable — falling back to alt-only analysis")
+
         sol_price = ta.sol.current_price
         sol = ta.sol
         corr = ta.correlation
@@ -596,9 +702,10 @@ class SolMacroStrategy:
         # LAYER 1: Macro trend (1H)
         # ═══════════════════════════════════════════════
         macro_trend = self._get_macro_trend(ta)
+        primary_htf_bias = btc_htf_bias or macro_trend
 
         logger.info(
-            f"{_alt_label} ${sol_price:,.2f} | MACRO: {macro_trend} | "
+            f"{_alt_label} ${sol_price:,.2f} | BTC_HTF: {primary_htf_bias} | ALT_HTF: {macro_trend} | "
             f"1H={mtt.h1_trend} 15m={mtt.m15_trend} 5m={mtt.m5_trend} | "
             f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover} | "
             f"RSI={sol.rsi_14:.0f} | "
@@ -610,11 +717,11 @@ class SolMacroStrategy:
         # Check for updown markets
         has_updown = any(self._is_updown_market(m) for m in sol_markets)
 
-        _is_neutral_macro = macro_trend == "NEUTRAL"
+        _is_neutral_macro = primary_htf_bias == "NEUTRAL"
 
         if _is_neutral_macro:
             if not has_updown:
-                logger.info(f"{_brand} strategy: Macro trend NEUTRAL — sitting out")
+                logger.info(f"{_brand} strategy: BTC+ALT HTF neutral — sitting out")
                 return []
             # NEUTRAL macro with updown markets: use LTF as primary signal.
             # Live data: lag=None trades 63% WR outperform lag=value 50% WR.
@@ -653,8 +760,8 @@ class SolMacroStrategy:
                     return []
                 logger.info(f"{_brand}: Macro NEUTRAL, no lag — using {_alt_label} 1H bias: {allowed_side}")
         else:
-            # BULLISH or BEARISH macro — set default direction from macro
-            allowed_side = "LONG" if macro_trend == "BULLISH" else "SHORT"
+            # BULLISH or BEARISH macro — BTC 4H is primary, alt HTF is secondary
+            allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
 
             # MTF alignment note: fully aligned = trend has been running.
             # Live data shows lag=None trades (63% WR) outperform lag=value (50% WR) —
@@ -725,7 +832,13 @@ class SolMacroStrategy:
             is_updown = self._is_updown_market(market)
             is_5m = self._is_5m_market(market) if is_updown else False
             ai_used = False
-            reason_parts = [f"MACRO={macro_trend}", f"side={allowed_side}"]
+            reason_parts = [
+                f"BTC_HTF={primary_htf_bias}",
+                f"ALT_HTF={macro_trend}",
+                f"side={allowed_side}",
+            ]
+            dead_zone_would_block = False
+            dead_zone_hour = None
             if _is_neutral_macro:
                 reason_parts.append("NEUTRAL_MACRO")
 
@@ -734,14 +847,23 @@ class SolMacroStrategy:
                 # ── High-volatility hour filter (UTC) ──
                 # Reads from blocked_utc_hours_updown in settings.yaml.
                 # Live data: H18=20% WR (current session), H22=17% WR, H00=33% WR
+                _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
                 _blocked_hours = self.config.get("blocked_utc_hours_updown", [0, 18, 22])
                 _now_utc_hour = datetime.now(timezone.utc).hour
-                if _now_utc_hour in _blocked_hours:
+                dead_zone_hour = _now_utc_hour
+                dead_zone_would_block = _now_utc_hour in _blocked_hours
+                if _dead_zone_enabled:
+                    if dead_zone_would_block:
+                        logger.info(
+                            f"  {_alt_label} skip updown at UTC hour {_now_utc_hour}:xx — "
+                            f"blocked dead zone (config: {_blocked_hours})"
+                        )
+                        continue
+                elif dead_zone_would_block:
                     logger.info(
-                        f"  {_alt_label} skip updown at UTC hour {_now_utc_hour}:xx — "
-                        f"blocked dead zone (config: {_blocked_hours})"
+                        f"  {_alt_label} dead_zone DISABLED — allowing UTC hour {_now_utc_hour:02d} "
+                        f"(would-be blocked_hours={_blocked_hours})"
                     )
-                    continue
 
                 # ── Entry window guard ──
                 # Only enter within a tight window of the candle. If end_date is None
@@ -772,6 +894,10 @@ class SolMacroStrategy:
                         f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
                     )
                     continue
+                _ai_window_open = self._within_ai_decision_window(
+                    mins_left=_mins_left,
+                    is_5m=is_5m,
+                )
 
                 # ── BTC minimum dollar move before entering ──
                 # Require BTC to have moved a minimum $ amount to confirm directional momentum
@@ -816,6 +942,20 @@ class SolMacroStrategy:
                 #   - 1H trend NEUTRAL  → allow both sides
                 # The mtt (MultiTimeframeTrend) object is already fetched once per cycle.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
+                if action == "SELL_YES" and primary_htf_bias == "BULLISH":
+                    _bump_skip("btc_bullish_suppress_short")
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip SELL_YES on '{market.question[:40]}' — "
+                        "BTC HTF BULLISH, suppressing short"
+                    )
+                    continue
+                if action == "BUY_YES" and primary_htf_bias == "BEARISH":
+                    _bump_skip("btc_bearish_suppress_long")
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip BUY_YES on '{market.question[:40]}' — "
+                        "BTC HTF BEARISH, suppressing long"
+                    )
+                    continue
                 if action == "SELL_YES" and _h1_trend == "BULLISH":
                     _bump_skip("sell_yes_suppressed_bullish_1h")
                     logger.info(
@@ -837,6 +977,13 @@ class SolMacroStrategy:
                         f"RSI={sol.rsi_14:.1f} hit configured hard gate"
                     )
                     continue
+                if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
+                    _bump_skip("oracle_basis_block")
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
+                        f"oracle basis {sol.oracle_basis_bps:+.1f}bps exceeds cap"
+                    )
+                    continue
 
                 if is_5m:
                     # ── [5m] FIVE-MINUTE UP/DOWN MARKET PATH ──
@@ -846,10 +993,9 @@ class SolMacroStrategy:
                     est_prob_up = 0.50
 
                     # Macro trend boost (lighter for 5m — shorter window)
-                    if macro_trend == "BULLISH":
-                        est_prob_up += 0.03
-                    elif macro_trend == "BEARISH":
-                        est_prob_up -= 0.03
+                    est_prob_up = self._apply_primary_htf_bias(
+                        est_prob_up, primary_htf_bias, 0.03
+                    )
 
                     # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
                     # Relaxed from strict "histogram_rising" to "histogram in trade direction
@@ -903,6 +1049,14 @@ class SolMacroStrategy:
                         elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
                             m5_adj = -0.04
                             m5_reasons.append(f"5m against ({macd_5m.crossover})")
+
+                    if not self._strong_enough_5m_signal(m5_adj):
+                        _bump_skip("weak_5m_signal")
+                        logger.info(
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                            f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={self.min_positive_m5_adj_5m:.2f})"
+                        )
+                        continue
 
                     if allowed_side == "LONG":
                         est_prob_up += m5_adj
@@ -975,10 +1129,9 @@ class SolMacroStrategy:
                     est_prob_up = 0.50
 
                     # Macro trend — PRIMARY driver (increased from 0.05 since it's now the gate)
-                    if macro_trend == "BULLISH":
-                        est_prob_up += 0.07
-                    elif macro_trend == "BEARISH":
-                        est_prob_up -= 0.07
+                    est_prob_up = self._apply_primary_htf_bias(
+                        est_prob_up, primary_htf_bias, 0.07
+                    )
 
                     # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
                     # SOL 15m: without gate ~51% WR; with gate ~59.3% WR.
@@ -1076,6 +1229,12 @@ class SolMacroStrategy:
                         f"RSI={sol.rsi_14:.1f} hit configured hard gate"
                     )
                     continue
+                if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
+                    logger.info(
+                        f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
+                        f"oracle basis {sol.oracle_basis_bps:+.1f}bps exceeds cap"
+                    )
+                    continue
 
                 if not threshold:
                     continue  # Can't calculate edge without threshold on traditional markets
@@ -1145,12 +1304,17 @@ class SolMacroStrategy:
                         f"{market.description}\n\n"
                         f"=== LIVE {_alt_label} DATA ===\n"
                         f"{_alt_label} Price: ${sol_price:,.2f} | Threshold: ${threshold:,.2f} ({direction})\n"
+                        f"{_alt_label} Oracle: {sol.chainlink_network or 'n/a'} "
+                        f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} | "
+                        f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
                         f"Distance: {distance_pct:.1%} | Days left: {days_to_resolution}\n\n"
+                    ) + (
                         f"=== BTC-{_alt_label} CORRELATION ===\n"
                         f"BTC: ${corr.btc_price:,.2f} | Correlation: {corr.correlation_1h:.2f}\n"
                         f"BTC spike: {corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)\n"
                         f"{_alt_label} macro leg: {corr.lag_opportunity} dir={corr.opportunity_direction} mag={corr.opportunity_magnitude:+.2f}%\n\n"
                         f"=== MACRO (1H) — {macro_trend} ===\n"
+                        f"BTC 4H bias: {primary_htf_bias}\n"
                         f"EMA: 9=${sol.ema_9:,.2f} 21=${sol.ema_21:,.2f} 50=${sol.ema_50:,.2f}\n"
                         f"RSI: {sol.rsi_14:.1f}\n\n"
                         f"=== 15m CONFIRMATION ===\n"
@@ -1229,6 +1393,7 @@ class SolMacroStrategy:
                 is_updown
                 and edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                and _ai_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
@@ -1239,7 +1404,11 @@ class SolMacroStrategy:
                     f"{market.description}\n\n"
                     f"=== {_alt_label} UPDOWN CONTEXT ({_win}) ===\n"
                     f"{_alt_label}: ${sol_price:,.2f} | YES={yes_price:.3f} | action={action} | allowed={allowed_side}\n"
-                    f"Macro={macro_trend} | Quant edge={edge:.4f} required>={effective_min_edge:.4f}\n"
+                    f"Oracle={sol.chainlink_network or 'n/a'} "
+                    f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} "
+                    f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
+                    f"BTC_HTF={primary_htf_bias} | ALT_HTF={macro_trend} | "
+                    f"Quant edge={edge:.4f} required>={effective_min_edge:.4f}\n"
                     f"BTC ${corr.btc_price:,.2f} corr1h={corr.correlation_1h:.3f} "
                     f"macro_opp={corr.lag_opportunity} mag={corr.opportunity_magnitude:+.2f}%\n"
                     f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover}\n"
@@ -1278,6 +1447,18 @@ class SolMacroStrategy:
                         edge = max(edge, ae)
                         confidence = max(confidence, ai2.confidence_score)
                         reason_parts.append("ai_updown_confirm")
+            elif (
+                is_updown
+                and edge < effective_min_edge
+                and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                and self.config.get("use_ai", True)
+                and self.config.get("use_ai_updown", True)
+                and not _ai_window_open
+            ):
+                logger.debug(
+                    f"{_brand}: AI window closed for marginal updown '{market.question[:40]}...' "
+                    f"({_mins_left:.1f}m left)"
+                )
 
             if edge < effective_min_edge:
                 _mkt_type = "5m" if is_5m else (
@@ -1356,13 +1537,40 @@ class SolMacroStrategy:
                 reason=reason_str,
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code=_spot_key,
-                htf_bias=macro_trend,
+                htf_bias=primary_htf_bias,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(estimated_prob, 4),
                 rsi=round(sol.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
             )
+            if (
+                is_updown
+                and dead_zone_would_block
+                and not self.config.get("dead_zone_enabled", True)
+                and callable(self.dead_zone_skip_callback)
+            ):
+                self.dead_zone_skip_callback(
+                    strategy=self._signal_strategy_name,
+                    market=market,
+                    action=action,
+                    edge=float(edge),
+                    hour_utc=int(
+                        dead_zone_hour
+                        if dead_zone_hour is not None
+                        else datetime.now(timezone.utc).hour
+                    ),
+                    blocked_hours=list(self.config.get("blocked_utc_hours_updown", [])),
+                    bankroll=float(bankroll),
+                    metadata={
+                        "confidence": float(confidence),
+                        "yes_price": float(yes_price),
+                        "window_size": "5m" if is_5m else "15m",
+                        "htf_bias": primary_htf_bias,
+                        "alt_htf_bias": macro_trend,
+                        "reason": reason_str,
+                    },
+                )
             signals.append(signal)
 
             logger.info(
@@ -1374,7 +1582,19 @@ class SolMacroStrategy:
         if signals:
             logger.info(f"{_brand} strategy: {len(signals)} signals generated")
         elif sol_markets:
-            logger.info(f"{_brand} strategy: 0 signals from {len(sol_markets)} markets (MACRO={macro_trend})")
+            top_reason = max(skip_reasons, key=skip_reasons.get) if skip_reasons else "no_eligible_markets"
+            logger.info(
+                f"{_brand} strategy: 0 signals from {len(sol_markets)} markets "
+                f"(BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} top_skip={top_reason})"
+            )
+        self.last_scan_stats = {
+            "enabled": True,
+            "signals": len(signals),
+            "markets_considered": len(sol_markets),
+            "btc_htf_bias": primary_htf_bias,
+            "alt_htf_bias": macro_trend,
+            "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
+        }
         return signals
 
 
