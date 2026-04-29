@@ -854,6 +854,7 @@ class SolMacroStrategy:
                 dead_zone_would_block = _now_utc_hour in _blocked_hours
                 if _dead_zone_enabled:
                     if dead_zone_would_block:
+                        _bump_skip("blocked_utc_hour")
                         logger.info(
                             f"  {_alt_label} skip updown at UTC hour {_now_utc_hour}:xx — "
                             f"blocked dead zone (config: {_blocked_hours})"
