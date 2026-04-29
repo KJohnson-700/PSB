@@ -826,6 +826,7 @@ class SolMacroStrategy:
 
         for market in sol_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
+                _bump_skip("liquidity")
                 continue
 
             yes_price = market.yes_price
@@ -870,6 +871,7 @@ class SolMacroStrategy:
                 # Only enter within a tight window of the candle. If end_date is None
                 # we skip — entering a market with unknown resolution time is too risky.
                 if not market.end_date:
+                    _bump_skip("missing_end_date")
                     logger.debug(f"  {_brand} skip '{market.question[:40]}' — no end_date, can't check window")
                     continue
                 _end_utc = (
@@ -890,6 +892,7 @@ class SolMacroStrategy:
                         default_max=14.33,
                     )
                 if _mins_left < _win_min or _mins_left > _win_max:
+                    _bump_skip("outside_entry_window")
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — "
                         f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
@@ -912,6 +915,7 @@ class SolMacroStrategy:
                     _btc_min_move = self.config.get("btc_min_move_dollars_15m", 70.0)
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
+                    _bump_skip("btc_min_move_dollars")
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — "
                         f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
@@ -920,6 +924,7 @@ class SolMacroStrategy:
 
                 # Skip windows where price has already drifted far from 50/50
                 if yes_price < 0.20 or yes_price > 0.80:
+                    _bump_skip("price_too_far_from_even")
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — price {yes_price:.2f} "
                         f"too far from 50/50, window in progress"
@@ -1007,12 +1012,14 @@ class SolMacroStrategy:
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if allowed_side == "LONG" and not _h1_bull_ok:
+                        _bump_skip("histogram_1h_blocks_long_5m")
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
                     if allowed_side == "SHORT" and not _h1_bear_ok:
+                        _bump_skip("histogram_1h_blocks_short_5m")
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
@@ -1143,12 +1150,14 @@ class SolMacroStrategy:
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if allowed_side == "LONG" and not _h1_bull_ok:
+                        _bump_skip("histogram_1h_blocks_long_15m")
                         logger.info(
                             f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                             f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
                         )
                         continue
                     if allowed_side == "SHORT" and not _h1_bear_ok:
+                        _bump_skip("histogram_1h_blocks_short_15m")
                         logger.info(
                             f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                             f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
@@ -1212,6 +1221,7 @@ class SolMacroStrategy:
 
                 # Entry price filter
                 if yes_price < self.entry_price_min or yes_price > self.entry_price_max:
+                    _bump_skip("threshold_entry_price_band")
                     continue
 
                 days_to_resolution = 30
@@ -1225,12 +1235,14 @@ class SolMacroStrategy:
                     action = "SELL_YES" if direction == "UP" else "BUY_YES"
 
                 if self._rsi_blocks_entry(action, sol.rsi_14):
+                    _bump_skip("threshold_rsi_block")
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                         f"RSI={sol.rsi_14:.1f} hit configured hard gate"
                     )
                     continue
                 if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
+                    _bump_skip("threshold_oracle_basis_block")
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                         f"oracle basis {sol.oracle_basis_bps:+.1f}bps exceeds cap"
@@ -1238,6 +1250,7 @@ class SolMacroStrategy:
                     continue
 
                 if not threshold:
+                    _bump_skip("missing_threshold")
                     continue  # Can't calculate edge without threshold on traditional markets
 
                 distance_pct = abs(sol_price - threshold) / threshold
@@ -1284,18 +1297,21 @@ class SolMacroStrategy:
                 # AI tiebreaker for marginal edge (skipped when AI offline or use_ai false)
                 if edge < self.min_edge and edge > 0.03:
                     if not self.config.get("use_ai", True):
+                        _bump_skip("ai_disabled_marginal_threshold")
                         logger.debug(
                             f"{_brand}: use_ai=false — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
                         )
                         continue
                     if not self.ai_agent.is_available():
+                        _bump_skip("ai_offline_marginal_threshold")
                         logger.debug(
                             f"{_brand}: AI offline — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
                         )
                         continue
                     if ai_calls >= self.max_ai_calls_per_scan:
+                        _bump_skip("ai_call_limit_marginal_threshold")
                         logger.debug(
                             f"{_brand}: max AI calls per scan ({self.max_ai_calls_per_scan}) — "
                             f"skipping marginal '{market.question[:40]}...'"
@@ -1342,6 +1358,7 @@ class SolMacroStrategy:
                             f"'{market.question[:45]}' | {ai_analysis.reasoning[:120]}"
                         )
                     if not ai_analysis:
+                        _bump_skip("ai_none_marginal_threshold")
                         logger.critical(
                             "%s: AI returned None after provider call for market %s (%s)",
                             _brand,
@@ -1351,17 +1368,20 @@ class SolMacroStrategy:
                         continue
                     if ai_analysis.recommendation == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
+                        _bump_skip("ai_hold_marginal_threshold")
                         logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
                     if not ai_recommendation_supports_action(
                         ai_analysis.recommendation, action
                     ):
+                        _bump_skip("ai_veto_marginal_threshold")
                         logger.debug(
                             f"{_brand}: AI {ai_analysis.recommendation} conflicts with {action} "
                             f"on '{market.question[:40]}...'"
                         )
                         continue
                     if ai_analysis.confidence_score < self.ai_confidence_threshold:
+                        _bump_skip("ai_low_confidence_marginal_threshold")
                         logger.debug(
                             f"{_brand}: AI confidence {ai_analysis.confidence_score:.2f} "
                             f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
@@ -1374,6 +1394,7 @@ class SolMacroStrategy:
                         else yes_price - ai_prob_yes
                     )
                     if ai_edge <= 0:
+                        _bump_skip("ai_nonpositive_edge_marginal_threshold")
                         logger.debug(
                             f"{_brand}: non-positive ai_edge={ai_edge:.4f} marginal "
                             f"'{market.question[:40]}...'"
@@ -1427,6 +1448,7 @@ class SolMacroStrategy:
                 ai_calls += 1
                 ai_used = True
                 if not ai2:
+                    _bump_skip("ai_none_marginal_updown")
                     logger.critical(
                         "%s: AI returned None after provider call for market %s (updown marginal, %s)",
                         _brand,
@@ -1434,12 +1456,15 @@ class SolMacroStrategy:
                         self._signal_strategy_name,
                     )
                 elif ai2.recommendation == "HOLD":
+                    _bump_skip("ai_hold_marginal_updown")
                     logger.debug(f"{_brand}: AI HOLD updown marginal '{market.question[:40]}...'")
                 elif not ai_recommendation_supports_action(ai2.recommendation, action):
+                    _bump_skip("ai_veto_marginal_updown")
                     logger.debug(
                         f"{_brand}: AI veto updown marginal {ai2.recommendation} vs {action}"
                     )
                 elif ai2.confidence_score < self.ai_confidence_threshold:
+                    _bump_skip("ai_low_confidence_marginal_updown")
                     logger.debug(f"{_brand}: AI low conf updown marginal")
                 else:
                     ap = float(ai2.estimated_probability)
@@ -1448,6 +1473,8 @@ class SolMacroStrategy:
                         edge = max(edge, ae)
                         confidence = max(confidence, ai2.confidence_score)
                         reason_parts.append("ai_updown_confirm")
+                    else:
+                        _bump_skip("ai_nonpositive_edge_marginal_updown")
             elif (
                 is_updown
                 and edge < effective_min_edge
@@ -1456,12 +1483,14 @@ class SolMacroStrategy:
                 and self.config.get("use_ai_updown", True)
                 and not _ai_window_open
             ):
+                _bump_skip("ai_window_closed_marginal_updown")
                 logger.debug(
                     f"{_brand}: AI window closed for marginal updown '{market.question[:40]}...' "
                     f"({_mins_left:.1f}m left)"
                 )
 
             if edge < effective_min_edge:
+                _bump_skip("edge_below_min")
                 _mkt_type = "5m" if is_5m else (
                     "15m_unconf" if (is_updown and ltf_strength == 0.0) else
                     ("15m" if is_updown else "threshold")
@@ -1486,6 +1515,7 @@ class SolMacroStrategy:
                 _yp_low  = 1.0 - self.entry_price_max  # 0.46 with default max=0.54
                 _yp_high = self.entry_price_max          # 0.54
                 if yes_price < _yp_low or yes_price > _yp_high:
+                    _bump_skip("entry_price_band_updown")
                     logger.info(
                         f"  {self._signal_strategy_name} skip '{market.question[:40]}...' "
                         f"yes_price={yes_price:.3f} outside [{_yp_low:.3f}, {_yp_high:.3f}] "
@@ -1499,6 +1529,7 @@ class SolMacroStrategy:
             if is_updown:
                 _max_edge_updown = self.config.get("max_edge_updown", 0.09)
                 if edge > _max_edge_updown:
+                    _bump_skip("edge_above_cap")
                     logger.info(
                         f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} "
                         f"> max={_max_edge_updown} updown cap (catch-up already priced in)"
@@ -1513,6 +1544,7 @@ class SolMacroStrategy:
             )
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
+                _bump_skip("size_too_small")
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
 

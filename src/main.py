@@ -876,6 +876,14 @@ class PolyBot:
             weather_fallback_markets,
         )
         weather_markets = _filter_weather_markets(weather_candidates, self.config)
+        self.last_ai_scan_stats.setdefault("scanner", {}).update(
+            {
+                "weather_dedicated_count": len(weather_snapshot_markets),
+                "weather_available_count": len(weather_available),
+                "weather_candidates_count": len(weather_candidates),
+                "weather_filtered_count": len(weather_markets),
+            }
+        )
         logging.info(
             "Markets: %d total, %d held, %d available, %d in resolution window | weather: dedicated=%d available=%d filtered=%d",
             len(high_liquidity),
