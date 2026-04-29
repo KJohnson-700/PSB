@@ -90,6 +90,18 @@ class KellySizer:
         self._recent_outcomes: Dict[str, list] = {s: [] for s in self._defaults}
         self._recent_outcomes_by_window: Dict[tuple, list] = {}
 
+    def reload_from_config(self, config: Dict) -> None:
+        """Refresh config-derived Kelly fractions without clearing streak state."""
+        trading_cfg = config.get("trading", {}) or {}
+        strategies_cfg = config.get("strategies", {}) or {}
+        for strat, cfg in self._defaults.items():
+            strat_cfg = strategies_cfg.get(strat, {}) or {}
+            if "kelly_fraction" in strat_cfg:
+                cfg.base_kelly_fraction = float(strat_cfg["kelly_fraction"])
+        self._global_kelly_fraction = float(
+            trading_cfg.get("kelly_fraction", self._global_kelly_fraction)
+        )
+
     def _window_key(self, strategy: str, window: str) -> tuple:
         return (strategy, window)
 
@@ -261,4 +273,6 @@ def get_kelly_sizer(config: Dict) -> KellySizer:
     global _DEFAULT_KELLY_SIZER
     if _DEFAULT_KELLY_SIZER is None:
         _DEFAULT_KELLY_SIZER = KellySizer(config)
+    else:
+        _DEFAULT_KELLY_SIZER.reload_from_config(config)
     return _DEFAULT_KELLY_SIZER

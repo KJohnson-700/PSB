@@ -803,6 +803,48 @@ class TestResolutionTracker:
         assert len(settled) == 1
         assert settled[0]["pnl"] == 3.0  # (0.60 - 0.0) * 5.0 → profit
 
+    def test_sell_yes_win_redeems_no_tokens(self):
+        """Winning SELL_YES positions hold/redeem NO CTF tokens."""
+        tracker = ResolutionTracker(check_interval_seconds=0)
+
+        journal = MagicMock()
+        journal.get_open_positions.return_value = [
+            {
+                "trade_id": "trade-sell-redeem",
+                "market_id": "market-btc-sell",
+                "strategy": "bitcoin",
+                "action": "SELL_YES",
+                "side": "SELL",
+                "outcome": "NO",
+                "size": 5.0,
+                "entry_price": 0.60,
+                "market_question": "Will BTC be above $100k?",
+            }
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "closed": True,
+            "resolution": "NO",
+            "conditionId": "0x" + "ab" * 32,
+        }
+        redeemer = MagicMock()
+
+        with patch(
+            "src.execution.resolution_tracker.requests.get", return_value=mock_resp
+        ):
+            settled = tracker.check_and_settle(
+                journal=journal,
+                risk_manager=MagicMock(),
+                bankroll=1000,
+                ctf_redeemer=redeemer,
+            )
+
+        assert len(settled) == 1
+        redeemer.redeem.assert_called_once()
+        assert redeemer.redeem.call_args.kwargs["outcome_won"] == "NO"
+
     def test_unresolved_market_not_settled(self):
         """Open market should NOT be settled."""
         tracker = ResolutionTracker(check_interval_seconds=0)
@@ -836,3 +878,50 @@ class TestResolutionTracker:
             )
 
         assert len(settled) == 0  # Not resolved yet
+
+    def test_weather_resolution_records_calibration_observation(self):
+        tracker = ResolutionTracker(check_interval_seconds=0)
+        tracker._weather_calibration = MagicMock()
+
+        journal = MagicMock()
+        journal.get_open_positions.return_value = [
+            {
+                "trade_id": "trade-weather-1",
+                "market_id": "market-weather-1",
+                "market_question": "Highest temperature in Paris on May 5, 2026?",
+                "strategy": "weather",
+                "action": "BUY_YES",
+                "side": "BUY",
+                "outcome": "YES",
+                "size": 5.0,
+                "entry_price": 0.40,
+                "entry_signal": {
+                    "weather_city": "paris",
+                    "weather_horizon_days": 1,
+                    "raw_forecast_prob": 0.72,
+                    "signal_gap": 0.22,
+                },
+            }
+        ]
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"closed": True, "resolution": "YES"}
+
+        with patch(
+            "src.execution.resolution_tracker.requests.get", return_value=mock_resp
+        ):
+            settled = tracker.check_and_settle(
+                journal=journal,
+                risk_manager=MagicMock(),
+                bankroll=1000,
+            )
+
+        assert len(settled) == 1
+        tracker._weather_calibration.record_observation.assert_called_once_with(
+            city="paris",
+            horizon_days=1,
+            raw_forecast_prob=0.72,
+            actual_outcome=1.0,
+            gap_used=0.22,
+        )

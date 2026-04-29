@@ -18,7 +18,7 @@ Architecture
     For BTC 5m, we use the last COMPLETED 5m bar direction instead.
 6.  Entry sampled from empirical fill-price distribution loaded from
     data/entry_prices/updown_fills.jsonl (recorded by TradeJournal at live fills).
-    Falls back to N(0.50, 0.02) clipped to [0.44, 0.56] when <20 recorded prices.
+    Falls back to N(0.50, 0.06) clipped to [0.30, 0.70] when <20 recorded prices.
     Previous hardcoded 0.50 inflated WR by 15-21% vs live results.
 7.  Settlement: 1m close at window end vs 1m open at window start
     -> YES won (price went UP) or NO won (price went DOWN).
@@ -116,6 +116,10 @@ class UpdownBacktestResult:
     wins:             int = 0
     losses:           int = 0
     slippage_total:   float = 0.0
+    oracle_symbol:    Optional[str] = None
+    oracle_history_loaded: bool = False
+    oracle_history_points: int = 0
+    oracle_basis_skips: int = 0
 
     @staticmethod
     def _count_windows_for_range(
@@ -210,6 +214,9 @@ class UpdownBacktestResult:
                 wins=wins,
                 losses=losses,
                 slippage_total=round(slip, 4),
+                oracle_symbol=self.oracle_symbol,
+                oracle_history_loaded=self.oracle_history_loaded,
+                oracle_history_points=self.oracle_history_points,
             )
 
         return _build(train_trades, self.start_date, test_start), \
@@ -268,16 +275,47 @@ class UpdownBacktestEngine:
         self._kelly_xrp   = xrp_cfg.get("kelly_fraction",  self._kelly_sol)
         self._kelly_hype  = hype_cfg.get("kelly_fraction", self._kelly_sol)
         self.min_4h_hist_magnitude = btc_cfg.get("min_4h_hist_magnitude", 20.0)
+        self.min_positive_m5_adj_sol_5m = float(sol_cfg.get("min_positive_m5_adj_5m", 0.0))
+        self.min_positive_m5_adj_eth_5m = float(eth_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
+        self.min_positive_m5_adj_xrp_5m = float(xrp_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
+        self.min_positive_m5_adj_hype_5m = float(hype_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
 
         trade_cfg         = config.get("trading", {})
         self.default_size  = trade_cfg.get("default_position_size", 10.0)
         self.max_size      = trade_cfg.get("max_position_size", 15.0)
+        exposure_cfg = config.get("exposure", {})
+        self.exposure_min_trade_usd = float(exposure_cfg.get("min_trade_usd", 0.0) or 0.0)
+        self.exposure_full_size = float(exposure_cfg.get("full_size", self.max_size) or self.max_size)
+        self._entry_bands = {
+            "BTC": (
+                float(btc_cfg.get("entry_price_min_updown", btc_cfg.get("entry_price_min", 0.0)) or 0.0),
+                float(btc_cfg.get("entry_price_max_updown", btc_cfg.get("entry_price_max", 1.0)) or 1.0),
+            ),
+            "SOL": (
+                float(sol_cfg.get("entry_price_min", 0.0) or 0.0),
+                float(sol_cfg.get("entry_price_max", 1.0) or 1.0),
+            ),
+            "ETH": (
+                float(eth_cfg.get("entry_price_min", 0.0) or 0.0),
+                float(eth_cfg.get("entry_price_max", 1.0) or 1.0),
+            ),
+            "XRP": (
+                float(xrp_cfg.get("entry_price_min", 0.0) or 0.0),
+                float(xrp_cfg.get("entry_price_max", 1.0) or 1.0),
+            ),
+            "HYPE": (
+                float(hype_cfg.get("entry_price_min", 0.0) or 0.0),
+                float(hype_cfg.get("entry_price_max", 1.0) or 1.0),
+            ),
+        }
+        self.entry_price_min = 0.0
+        self.entry_price_max = 1.0
 
         # Reuse live indicator methods via an instance (static methods underneath)
         self._svc = BTCPriceService()
 
         # Load empirical fill-price distribution from live sessions.
-        # Falls back to N(0.50, 0.02) when fewer than 20 recorded prices exist.
+        # Falls back to N(0.50, 0.06) when fewer than 20 recorded prices exist.
         self._fill_prices: Optional[np.ndarray] = self._load_fill_prices()
 
     # -- fill price distribution -----------------------------------------------
@@ -293,7 +331,7 @@ class UpdownBacktestEngine:
         """Load actual CLOB fill prices recorded by TradeJournal.
 
         Returns an ndarray for np.random.choice sampling, or None to fall back
-        to the synthetic N(0.50, 0.02) distribution.
+        to the synthetic N(0.50, 0.06) distribution.
         """
         if not cls._FILL_PRICE_LOG.exists():
             return None
@@ -306,7 +344,7 @@ class UpdownBacktestEngine:
                         continue
                     try:
                         p = json.loads(line).get("yes_price")
-                        if p is not None and 0.40 <= float(p) <= 0.60:
+                        if p is not None and 0.30 <= float(p) <= 0.70:
                             prices.append(float(p))
                     except (json.JSONDecodeError, ValueError):
                         continue
@@ -315,13 +353,13 @@ class UpdownBacktestEngine:
         if len(prices) < cls._MIN_EMPIRICAL_FILLS:
             logger.debug(
                 f"updown_engine: only {len(prices)} recorded fill prices "
-                f"(need {cls._MIN_EMPIRICAL_FILLS}) — using N(0.50, 0.02) fallback"
+                f"(need {cls._MIN_EMPIRICAL_FILLS}) — using N(0.50, 0.06) fallback"
             )
             return None
         arr = np.array(prices, dtype=float)
         logger.info(
             f"updown_engine: loaded {len(arr)} empirical fill prices "
-            f"mean={arr.mean():.4f} std={arr.std():.4f} — replacing N(0.50,0.02)"
+            f"mean={arr.mean():.4f} std={arr.std():.4f} — replacing N(0.50,0.06)"
         )
         return arr
 
@@ -329,8 +367,8 @@ class UpdownBacktestEngine:
         """Sample a realistic YES entry price for a backtest trade."""
         if self._fill_prices is not None:
             return float(np.random.choice(self._fill_prices))
-        raw = float(np.random.normal(0.50, 0.02))
-        return float(np.clip(raw, 0.44, 0.56))
+        raw = float(np.random.normal(0.50, 0.06))
+        return float(np.clip(raw, 0.30, 0.70))
 
     # -- slice helpers ---------------------------------------------------------
 
@@ -338,6 +376,58 @@ class UpdownBacktestEngine:
     def _before(df: pd.DataFrame, t: pd.Timestamp) -> pd.DataFrame:
         """All rows with open_time strictly BEFORE t -- no look-ahead."""
         return df[df["open_time"] < t].copy()
+
+    @staticmethod
+    def _replay_candle_momentum(
+        df_1m: pd.DataFrame,
+        window_open: pd.Timestamp,
+    ) -> CandleMomentum:
+        """Approximate live candle-momentum from the first minutes of the replay window.
+
+        This intentionally uses intra-window 1m data for the current candle, matching the
+        way the live strategy reads early-candle momentum for BTC-follow decisions.
+        """
+        result = CandleMomentum()
+        if df_1m.empty:
+            return result
+
+        m15_early = df_1m[
+            (df_1m["open_time"] >= window_open)
+            & (df_1m["open_time"] < window_open + pd.Timedelta(minutes=4))
+        ]
+        if not m15_early.empty:
+            candle_open = float(m15_early.iloc[0]["open"])
+            early_close = float(m15_early.iloc[-1]["close"])
+            move_pct = (early_close - candle_open) / candle_open * 100 if candle_open > 0 else 0.0
+            result.m15_move_pct = move_pct
+            if move_pct > 0.15:
+                result.m15_direction = "SPIKE_UP"
+            elif move_pct < -0.15:
+                result.m15_direction = "SPIKE_DOWN"
+            elif move_pct > 0.05:
+                result.m15_direction = "DRIFT_UP"
+            elif move_pct < -0.05:
+                result.m15_direction = "DRIFT_DOWN"
+
+        m5_early = df_1m[
+            (df_1m["open_time"] >= window_open)
+            & (df_1m["open_time"] < window_open + pd.Timedelta(seconds=90))
+        ]
+        if not m5_early.empty:
+            candle_open = float(m5_early.iloc[0]["open"])
+            early_close = float(m5_early.iloc[-1]["close"])
+            move_pct = (early_close - candle_open) / candle_open * 100 if candle_open > 0 else 0.0
+            result.m5_move_pct = move_pct
+            if move_pct > 0.08:
+                result.m5_direction = "SPIKE_UP"
+            elif move_pct < -0.08:
+                result.m5_direction = "SPIKE_DOWN"
+            elif move_pct > 0.03:
+                result.m5_direction = "DRIFT_UP"
+            elif move_pct < -0.03:
+                result.m5_direction = "DRIFT_DOWN"
+
+        return result
 
     # -- indicator reconstruction ----------------------------------------------
 
@@ -375,6 +465,27 @@ class UpdownBacktestEngine:
         # -- 15m MACD ----------------------------------------------------------
         macd_15m = self._svc.calc_macd(df_15m)
 
+        # -- 1h MACD -----------------------------------------------------------
+        if "1h" in data:
+            df_1h = self._before(data["1h"], t)
+        else:
+            df_1h = pd.DataFrame()
+        if df_1h.empty and not df_15m.empty:
+            df_1h = (
+                df_15m.set_index("open_time")
+                .resample("1h")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna()
+                .reset_index()
+            )
+        macd_1h = self._svc.calc_macd(df_1h) if len(df_1h) >= 30 else MACDResult()
+
         # -- Support / Resistance from last 60 HTF bars ------------------------
         sr_df = df_htf.tail(60)
         supports, resistances = BTCPriceService._find_support_resistance(sr_df)
@@ -382,8 +493,10 @@ class UpdownBacktestEngine:
         nearest_support    = max((s for s in supports    if s < current_price), default=0.0)
         nearest_resistance = min((r for r in resistances if r > current_price), default=0.0)
 
-        # Candle momentum -> NEUTRAL (avoids intra-window look-ahead bias)
-        mom = CandleMomentum()
+        # Candle momentum — reconstructed from early 1m bars of the replay window.
+        # Needed for BTC-follow ETH and for BTC 5m parity with live behavior.
+        df_1m_full = data.get("1m", pd.DataFrame())
+        mom = self._replay_candle_momentum(df_1m_full, t)
 
         # Volume profile -> empty
         vp = AnchoredVolumeProfile()
@@ -393,6 +506,7 @@ class UpdownBacktestEngine:
             ema_9=ema_9, ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
             rsi_14=rsi_14,
             macd_4h=macd_4h,
+            macd_1h=macd_1h,
             macd_15m=macd_15m,
             trend_sabre=sabre,
             candle_momentum=mom,
@@ -617,9 +731,9 @@ class UpdownBacktestEngine:
         # Sabre tension (matches live: threshold 2.0 ATR)
         if sabre.tension_abs > 2.0:
             if allowed_side == "LONG":
-                est_prob_up += 0.02
+                est_prob_up += -0.02 if sabre.tension > 0 else 0.02
             else:
-                est_prob_up -= 0.02
+                est_prob_up += 0.02 if sabre.tension > 0 else -0.02
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
@@ -755,7 +869,15 @@ class UpdownBacktestEngine:
         if symbol == "BTC":
             return self._edge_5m_btc(ta, allowed_side, df_1m, window_open, macd_htf)
         else:
-            return self._edge_5m_sol(ta, allowed_side, df_5m, macd_htf)
+            if symbol == "ETH":
+                min_positive_m5_adj = self.min_positive_m5_adj_eth_5m
+            elif symbol == "XRP":
+                min_positive_m5_adj = self.min_positive_m5_adj_xrp_5m
+            elif symbol == "HYPE":
+                min_positive_m5_adj = self.min_positive_m5_adj_hype_5m
+            else:
+                min_positive_m5_adj = self.min_positive_m5_adj_sol_5m
+            return self._edge_5m_sol(ta, allowed_side, df_5m, macd_htf, min_positive_m5_adj)
 
     def _edge_5m_btc(
         self,
@@ -811,6 +933,7 @@ class UpdownBacktestEngine:
         allowed_side: str,
         df_5m: pd.DataFrame,
         macd_1h: MACDResult,
+        min_positive_m5_adj: float = 0.0,
     ) -> Tuple[float, float]:
         """SOL 5m path -- matches sol_macro.py 5m updown.
 
@@ -856,6 +979,9 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= m5_adj
 
+        if m5_adj < min_positive_m5_adj:
+            return 0.0, 0.0
+
         # RSI extremes (matches live sol_macro 5m: >75/-0.02, <25/+0.02)
         if   ta.rsi_14 > 75: est_prob_up -= 0.02
         elif ta.rsi_14 < 25: est_prob_up += 0.02
@@ -868,6 +994,167 @@ class UpdownBacktestEngine:
         confidence = max(0.50, min(0.85, 0.50 + abs(m5_adj) * 2.5))
         return edge, confidence
 
+    @staticmethod
+    def _eth_follow_1h_ok(btc_ta: TechnicalAnalysis, allowed_side: str, min_hist: float) -> bool:
+        macd_1h = btc_ta.macd_1h
+        if allowed_side == "LONG":
+            return (
+                macd_1h.histogram > min_hist
+                or (macd_1h.histogram > 0 and macd_1h.histogram_rising)
+                or macd_1h.crossover == "BULLISH_CROSS"
+            )
+        return (
+            macd_1h.histogram < -min_hist
+            or (macd_1h.histogram < 0 and not macd_1h.histogram_rising)
+            or macd_1h.crossover == "BEARISH_CROSS"
+        )
+
+    @staticmethod
+    def _eth_follow_btc_5m_impulse(
+        btc_ta: TechnicalAnalysis, allowed_side: str
+    ) -> float:
+        direction = btc_ta.candle_momentum.m5_direction
+        score = 0.0
+        if allowed_side == "LONG":
+            if direction == "SPIKE_UP":
+                score = 0.06
+            elif direction == "DRIFT_UP":
+                score = 0.04
+            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                score = -0.05
+        else:
+            if direction == "SPIKE_DOWN":
+                score = 0.06
+            elif direction == "DRIFT_DOWN":
+                score = 0.04
+            elif direction in ("SPIKE_UP", "DRIFT_UP"):
+                score = -0.05
+        if btc_ta.candle_momentum.m5_in_prediction_window and score > 0:
+            score += 0.02
+        return score
+
+    @staticmethod
+    def _eth_follow_btc_15m_impulse_ok(
+        btc_ta: TechnicalAnalysis, allowed_side: str, min_hist: float
+    ) -> bool:
+        macd_15m = btc_ta.macd_15m
+        if allowed_side == "LONG":
+            return (
+                macd_15m.crossover == "BULLISH_CROSS"
+                or (macd_15m.histogram > min_hist and macd_15m.histogram_rising)
+                or btc_ta.candle_momentum.m15_direction in ("SPIKE_UP", "DRIFT_UP")
+            )
+        return (
+            macd_15m.crossover == "BEARISH_CROSS"
+            or (macd_15m.histogram < -min_hist and not macd_15m.histogram_rising)
+            or btc_ta.candle_momentum.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN")
+        )
+
+    def _edge_5m_eth_follow(
+        self,
+        eth_ta: TechnicalAnalysis,
+        btc_ta: TechnicalAnalysis,
+        allowed_side: str,
+        min_eth_adj: float,
+        require_btc_impulse: bool,
+    ) -> Tuple[float, float]:
+        est_prob_up = 0.50 + (0.04 if allowed_side == "LONG" else -0.04)
+        btc_impulse = self._eth_follow_btc_5m_impulse(btc_ta, allowed_side)
+        if require_btc_impulse and btc_impulse <= 0:
+            return 0.0, 0.0
+
+        macd_5m = eth_ta.macd_15m if False else None
+        # Reconstruct ETH 5m MACD from the 1h-built TA is not possible here; use candle-momentum-free
+        # replay from the 5m history handled in _edge_5m_eth_follow_from_df.
+        return 0.0, 0.0
+
+    def _edge_5m_eth_follow_from_df(
+        self,
+        eth_ta: TechnicalAnalysis,
+        btc_ta: TechnicalAnalysis,
+        allowed_side: str,
+        df_5m: pd.DataFrame,
+        min_eth_adj: float,
+        require_btc_impulse: bool,
+    ) -> Tuple[float, float]:
+        est_prob_up = 0.50 + (0.04 if allowed_side == "LONG" else -0.04)
+        btc_impulse = self._eth_follow_btc_5m_impulse(btc_ta, allowed_side)
+        if require_btc_impulse and btc_impulse <= 0:
+            return 0.0, 0.0
+
+        m5_adj = 0.0
+        if len(df_5m) >= _MIN_5M_BARS:
+            macd_5m = self._svc.calc_macd(df_5m)
+            if allowed_side == "LONG":
+                if macd_5m.crossover == "BULLISH_CROSS":
+                    m5_adj = 0.06
+                elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
+                    m5_adj = 0.04
+                elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
+                    m5_adj = -0.05
+            else:
+                if macd_5m.crossover == "BEARISH_CROSS":
+                    m5_adj = 0.06
+                elif macd_5m.histogram < 0 and not macd_5m.histogram_rising:
+                    m5_adj = 0.04
+                elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
+                    m5_adj = -0.05
+        if m5_adj < min_eth_adj:
+            return 0.0, 0.0
+
+        est_prob_up += btc_impulse if allowed_side == "LONG" else -btc_impulse
+        est_prob_up += m5_adj if allowed_side == "LONG" else -m5_adj
+        if eth_ta.rsi_14 > 75:
+            est_prob_up -= 0.02
+        elif eth_ta.rsi_14 < 25:
+            est_prob_up += 0.02
+        est_prob_up = max(0.10, min(0.90, est_prob_up))
+        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(m5_adj) * 2.0))
+        return edge, confidence
+
+    def _edge_15m_eth_follow(
+        self,
+        eth_ta: TechnicalAnalysis,
+        btc_ta: TechnicalAnalysis,
+        allowed_side: str,
+        min_eth_adj: float,
+        min_btc_hist: float,
+    ) -> Tuple[float, float]:
+        if not self._eth_follow_btc_15m_impulse_ok(btc_ta, allowed_side, min_btc_hist):
+            return 0.0, 0.0
+        macd_15m = eth_ta.macd_15m
+        if allowed_side == "LONG":
+            if macd_15m.crossover == "BULLISH_CROSS":
+                eth_adj = 0.06
+            elif macd_15m.histogram > 0 and macd_15m.histogram_rising:
+                eth_adj = 0.04
+            elif macd_15m.macd_line > macd_15m.signal_line and macd_15m.histogram > 0:
+                eth_adj = 0.02
+            else:
+                eth_adj = 0.0
+        else:
+            if macd_15m.crossover == "BEARISH_CROSS":
+                eth_adj = 0.06
+            elif macd_15m.histogram < 0 and not macd_15m.histogram_rising:
+                eth_adj = 0.04
+            elif macd_15m.macd_line < macd_15m.signal_line and macd_15m.histogram < 0:
+                eth_adj = 0.02
+            else:
+                eth_adj = 0.0
+        if eth_adj < min_eth_adj:
+            return 0.0, 0.0
+        est_prob_up = 0.50 + (0.08 if allowed_side == "LONG" else -0.08)
+        est_prob_up += eth_adj if allowed_side == "LONG" else -eth_adj
+        if eth_ta.rsi_14 > 75:
+            est_prob_up -= 0.03
+        elif eth_ta.rsi_14 < 25:
+            est_prob_up += 0.03
+        est_prob_up = max(0.10, min(0.90, est_prob_up))
+        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        confidence = max(0.55, min(0.85, 0.50 + abs(eth_adj) * 2.2))
+        return edge, confidence
+
     # -- fill simulation -------------------------------------------------------
 
     def _simulate_fill(self, mid_price: float, side: str) -> Tuple[float, float]:
@@ -877,11 +1164,12 @@ class UpdownBacktestEngine:
         SELL -> receives less (fill_price < mid).
         Returns (fill_price, slippage_$ per unit notional).
         """
-        slip = self.slippage_bps / 10_000
+        slip_pct = self.slippage_bps / 10_000
+        slip_usd = max(0.005, mid_price * slip_pct)
         if side == "BUY":
-            fill = min(0.99, mid_price * (1 + slip))
+            fill = min(0.99, mid_price + slip_usd)
         else:
-            fill = max(0.01, mid_price * (1 - slip))
+            fill = max(0.01, mid_price - slip_usd)
         return fill, abs(fill - mid_price)
 
     # -- settlement ------------------------------------------------------------
@@ -903,19 +1191,36 @@ class UpdownBacktestEngine:
             return None, 0.0, 0.0
         open_price  = float(bars.iloc[0]["open"])
         close_price = float(bars.iloc[-1]["close"])
+        if close_price == open_price:
+            return None, open_price, close_price
         yes_won     = close_price > open_price
         return yes_won, open_price, close_price
 
     # -- position sizing -------------------------------------------------------
 
     def _size_position(self, bankroll: float, edge: float) -> float:
-        """Fractional Kelly sizing, floored at default_size, capped at max_size."""
+        """Approximate live KellySizer.size_from_edge + FULL-tier ExposureManager scaling."""
         if edge <= 0:
             return 0.0
-        kelly_full = edge / max(0.01, 1.0 - edge)
-        size = bankroll * kelly_full * self.kelly_fraction
-        size = max(self.default_size, min(self.max_size, size))
+        raw_size = min(edge * self.kelly_fraction * bankroll, bankroll * 0.05)
+        raw_size = max(1.0, raw_size)
+        tier_floor = self.exposure_min_trade_usd
+        tier_cap = self.exposure_full_size if self.exposure_full_size > 0 else self.max_size
+        size = min(max(raw_size, tier_floor, self.default_size), tier_cap, self.max_size)
         return round(size, 2)
+
+    @staticmethod
+    def _oracle_price_at(
+        oracle_times_ns: Optional[np.ndarray],
+        oracle_prices: Optional[np.ndarray],
+        window_open: pd.Timestamp,
+    ) -> Optional[float]:
+        if oracle_times_ns is None or oracle_prices is None or len(oracle_times_ns) == 0:
+            return None
+        idx = int(np.searchsorted(oracle_times_ns, window_open.value, side="right") - 1)
+        if idx < 0 or idx >= len(oracle_prices):
+            return None
+        return float(oracle_prices[idx])
 
     # ==========================================================================
     # Main replay loop
@@ -928,6 +1233,8 @@ class UpdownBacktestEngine:
         end_date: str,
         window_minutes: int = 15,
         symbol: str = "BTC",
+        btc_data: Optional[Dict[str, pd.DataFrame]] = None,
+        oracle_history: Optional[pd.DataFrame] = None,
     ) -> UpdownBacktestResult:
         """Run the backtest.
 
@@ -942,6 +1249,7 @@ class UpdownBacktestEngine:
         symbol:         "BTC", "SOL", "ETH", "XRP", or "HYPE"
         """
         is_btc   = symbol == "BTC"
+        is_eth   = symbol == "ETH"
         tz       = timezone.utc
         step_td  = timedelta(minutes=window_minutes)
 
@@ -955,6 +1263,9 @@ class UpdownBacktestEngine:
             self.kelly_fraction = self._kelly_hype
         else:  # SOL
             self.kelly_fraction = self._kelly_sol
+        self.entry_price_min, self.entry_price_max = self._entry_bands.get(
+            symbol, (0.0, 1.0)
+        )
 
         # Symbol-specific min_edge thresholds
         if is_btc:
@@ -993,6 +1304,32 @@ class UpdownBacktestEngine:
         trades: List[UpdownTrade] = []
         windows_scanned = 0
         slippage_total  = 0.0
+        oracle_basis_skips = 0
+        oracle_symbol = f"{symbol.upper()}USDT"
+        oracle_history_loaded = oracle_history is not None and not oracle_history.empty
+        oracle_history_points = 0
+        oracle_times_ns: Optional[np.ndarray] = None
+        oracle_prices: Optional[np.ndarray] = None
+        strategy_cfg_map = {
+            "BTC": "bitcoin",
+            "SOL": "sol_macro",
+            "ETH": "eth_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }
+        oracle_max_basis_bps = self.config.get("strategies", {}).get(
+            strategy_cfg_map.get(symbol, "sol_macro"), {}
+        ).get("oracle_max_basis_bps")
+        if oracle_history_loaded:
+            oracle_history = oracle_history.copy()
+            if oracle_history["updated_at"].dt.tz is None:
+                oracle_history["updated_at"] = oracle_history["updated_at"].dt.tz_localize("UTC")
+            else:
+                oracle_history["updated_at"] = oracle_history["updated_at"].dt.tz_convert("UTC")
+            oracle_history = oracle_history.sort_values("updated_at").reset_index(drop=True)
+            oracle_history_points = len(oracle_history)
+            oracle_times_ns = oracle_history["updated_at"].astype("int64").to_numpy()
+            oracle_prices = oracle_history["price"].astype(float).to_numpy()
 
         while current <= end_ts:
             window_open  = current
@@ -1005,7 +1342,7 @@ class UpdownBacktestEngine:
                 current += step_td
                 continue
 
-            # Also get 15m slice (needed for SOL HTF bias and potential future use)
+            # Also get 15m slice (needed for SOL/ETH alt HTF bias and potential future use)
             df_15m = self._before(data["15m"], window_open)
 
             # ==================================================================
@@ -1013,14 +1350,31 @@ class UpdownBacktestEngine:
             # ==================================================================
             if is_btc:
                 htf_bias = self._get_htf_bias(ta, min_hist=self.min_4h_hist_magnitude)
+                btc_ta = ta
+            elif is_eth:
+                if not btc_data:
+                    current += step_td
+                    continue
+                btc_ta = self._build_ta(window_open, btc_data, "4h")
+                if btc_ta is None:
+                    current += step_td
+                    continue
+                htf_bias = self._get_htf_bias(btc_ta, min_hist=self.min_4h_hist_magnitude)
             else:
                 htf_bias = self._get_sol_htf_bias(ta, df_15m)
+                btc_ta = None
 
             if htf_bias == "NEUTRAL":
                 current += step_td
                 continue
 
             allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
+
+            if is_eth and not self._eth_follow_1h_ok(
+                btc_ta, allowed_side, float(self.config.get("strategies", {}).get("eth_macro", {}).get("btc_follow_1h_hist_min", 8.0))
+            ):
+                current += step_td
+                continue
 
             # ==================================================================
             # Layer 2: LTF confirmation (symbol-specific weights + threshold)
@@ -1030,9 +1384,11 @@ class UpdownBacktestEngine:
             else:
                 ltf_confirmed, ltf_str = self._sol_ltf_strength(ta, allowed_side)
 
-            # Anti-LTF gate -- matches live strategy-level gate for BOTH 5m & 15m.
-            # Confirmed MACD = late entry = lower win rate. Skip.
-            if ltf_confirmed:
+            # Anti-LTF gate.
+            # BTC and the legacy SOL-style paths skip confirmed MACD as a late-entry risk.
+            # ETH 15m BTC-follow is different: it explicitly wants ETH 15m follow-through,
+            # so do not apply the generic anti-LTF skip to that path.
+            if ltf_confirmed and not (is_eth and window_minutes == 15):
                 current += step_td
                 continue
 
@@ -1042,13 +1398,33 @@ class UpdownBacktestEngine:
             if window_minutes == 5:
                 df_5m = self._before(data["5m"], window_open)
                 df_1m_full = data.get("1m", pd.DataFrame())
-                edge, confidence = self._edge_5m(
-                    ta, allowed_side, df_5m, symbol,
-                    df_1m=df_1m_full, window_open=window_open,
-                )
+                if is_eth:
+                    eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
+                    edge, confidence = self._edge_5m_eth_follow_from_df(
+                        ta,
+                        btc_ta,
+                        allowed_side,
+                        df_5m,
+                        float(eth_cfg.get("eth_follow_5m_min_adj", 0.04)),
+                        bool(eth_cfg.get("btc_follow_5m_requires_impulse", True)),
+                    )
+                else:
+                    edge, confidence = self._edge_5m(
+                        ta, allowed_side, df_5m, symbol,
+                        df_1m=df_1m_full, window_open=window_open,
+                    )
             else:
                 if is_btc:
                     edge, confidence = self._edge_15m(ta, allowed_side, ltf_str, htf_bias)
+                elif is_eth:
+                    eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
+                    edge, confidence = self._edge_15m_eth_follow(
+                        ta,
+                        btc_ta,
+                        allowed_side,
+                        float(eth_cfg.get("eth_follow_15m_min_adj", 0.04)),
+                        float(eth_cfg.get("btc_follow_15m_hist_min", 0.03)),
+                    )
                 else:
                     edge, confidence = self._edge_15m_sol(ta, allowed_side, ltf_str)
 
@@ -1056,6 +1432,14 @@ class UpdownBacktestEngine:
             if edge < min_edge:
                 current += step_td
                 continue
+
+            oracle_price = self._oracle_price_at(oracle_times_ns, oracle_prices, window_open)
+            if oracle_max_basis_bps is not None and oracle_price and oracle_price > 0:
+                basis_bps = ((ta.current_price - oracle_price) / oracle_price) * 10000.0
+                if abs(basis_bps) > float(oracle_max_basis_bps):
+                    oracle_basis_skips += 1
+                    current += step_td
+                    continue
 
             # Determine action
             action    = "BUY_YES" if allowed_side == "LONG" else "SELL_YES"
@@ -1068,8 +1452,11 @@ class UpdownBacktestEngine:
                 continue
 
             # Fill at realistic mid-price: use empirical distribution from live fills
-            # when available (>=20 recorded), else N(0.50, 0.02) clipped to [0.44, 0.56].
+            # when available (>=20 recorded), else N(0.50, 0.06) clipped to [0.30, 0.70].
             mid_price = self._sample_entry_price()
+            if mid_price < self.entry_price_min or mid_price > self.entry_price_max:
+                current += step_td
+                continue
             fill_price, slip_cost = self._simulate_fill(mid_price, fill_side)
             slippage_total += slip_cost * size
 
@@ -1112,7 +1499,7 @@ class UpdownBacktestEngine:
                 htf_bias=htf_bias,
                 ltf_confirmed=ltf_confirmed,
                 ltf_strength=ltf_str,
-                entry_price=0.50,
+                entry_price=mid_price,
                 fill_price=fill_price,
                 size=size,
                 edge=edge,
@@ -1147,4 +1534,8 @@ class UpdownBacktestEngine:
             wins=wins,
             losses=losses,
             slippage_total=slippage_total,
+            oracle_symbol=oracle_symbol,
+            oracle_history_loaded=oracle_history_loaded,
+            oracle_history_points=oracle_history_points,
+            oracle_basis_skips=oracle_basis_skips,
         )

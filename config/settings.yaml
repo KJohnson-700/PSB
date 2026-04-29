@@ -459,6 +459,8 @@ ai:
   # ── Token conservation ──
   # Cache AI results per market for this many seconds (avoids re-analyzing same market every cycle)
   cache_ttl: 600  # 10 minutes
+  cache_ttl_15m: 180  # 3 minutes — short-window candle markets stale quickly
+  cache_ttl_5m: 60    # 1 minute — keep below ~20% of market lifetime
   # Minimum gap between consecutive API calls (seconds) — prevents burst rate limit hits
   min_call_gap: 2.0
 
@@ -528,15 +530,16 @@ exposure:
   full_size: 15.0        # FULL tier cap
   moderate_size: 10.0    # MODERATE tier cap
   minimal_size: 5.0      # MINIMAL tier cap
-  # After raw_size * tier_multiplier, never go below this base floor.
-  # With current multipliers (1.0 / 0.6 / 0.2) and caps above, this yields
-  # effective floors of FULL=$15, MODERATE=$10, MINIMAL=$5.
+  # After raw_size * tier_multiplier, apply this base floor, then cap by tier size.
+  # With current multipliers (1.0 / 0.6 / 0.2) and caps above, the effective
+  # results are FULL<=15, MODERATE<=10, MINIMAL<=5.
   min_trade_usd: 25.0
 
   # --- Kill switch ---
   loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)
   max_consecutive_losses: 3   # 3 losses in a row = pause (only if kill switch enabled)
   pause_cycles: 2             # Test mode: pause for 2 trading cycles then check
+  max_pause_cycles: 4         # Force-resume after this many paused cycles even if chop keeps trend_strength low
   # Live mode resume: "auto" (resume when conditions return) or "manual" (wait for restart)
   live_resume_mode: "auto"
 

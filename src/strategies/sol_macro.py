@@ -53,7 +53,9 @@ from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis
+from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
+from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -160,10 +162,14 @@ class SolMacroStrategy:
         self.min_liquidity = self.config.get("min_liquidity", 1000)
         self.min_edge = self.config.get("min_edge", 0.09)
         self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
-        self.enabled = self.config.get("enabled", True)
+        self.enabled = resolve_enabled_flag(
+            "sol_macro",
+            self.config,
+            logger=logger,
+        )
         self.ai_agent = ai_agent
         self.position_sizer = position_sizer
-        self.kelly_sizer = kelly_sizer
+        self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.sol_service = SOLBTCService()
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
@@ -948,20 +954,6 @@ class SolMacroStrategy:
                 #   - 1H trend NEUTRAL  → allow both sides
                 # The mtt (MultiTimeframeTrend) object is already fetched once per cycle.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
-                if action == "SELL_YES" and primary_htf_bias == "BULLISH":
-                    _bump_skip("btc_bullish_suppress_short")
-                    logger.info(
-                        f"  {self._signal_strategy_name} skip SELL_YES on '{market.question[:40]}' — "
-                        "BTC HTF BULLISH, suppressing short"
-                    )
-                    continue
-                if action == "BUY_YES" and primary_htf_bias == "BEARISH":
-                    _bump_skip("btc_bearish_suppress_long")
-                    logger.info(
-                        f"  {self._signal_strategy_name} skip BUY_YES on '{market.question[:40]}' — "
-                        "BTC HTF BEARISH, suppressing long"
-                    )
-                    continue
                 if action == "SELL_YES" and _h1_trend == "BULLISH":
                     _bump_skip("sell_yes_suppressed_bullish_1h")
                     logger.info(
@@ -1101,10 +1093,6 @@ class SolMacroStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    # Match bitcoin.py: never abs() a negative edge — that mislabels adverse trades
-                    # as having positive edge (inverted WR vs edge bucket in journals).
-                    edge = abs(edge) if edge > 0 else edge
-
                     # Confidence: 5m MACD momentum is PRIMARY for 5m markets; lag removed
                     lag_conf_5m = 0.0
                     confidence = max(0.50, min(0.85, 0.50 + abs(m5_adj) * 2.5 + lag_conf_5m + abs(timing_bonus) * 0.3))
@@ -1194,8 +1182,6 @@ class SolMacroStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge) if edge > 0 else edge
-
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * 0.22 + abs(timing_bonus) * 0.5)
 
@@ -1226,7 +1212,12 @@ class SolMacroStrategy:
 
                 days_to_resolution = 30
                 if market.end_date:
-                    days_to_resolution = max(1, (market.end_date - datetime.now()).days)
+                    end_date = market.end_date
+                    if end_date.tzinfo is None:
+                        end_date = end_date.replace(tzinfo=timezone.utc)
+                    days_to_resolution = max(
+                        1, (end_date - datetime.now(timezone.utc)).days
+                    )
 
                 # Enforce macro trend gate
                 if allowed_side == "LONG":
@@ -1263,8 +1254,6 @@ class SolMacroStrategy:
                     edge = estimated_prob - yes_price
                 else:
                     edge = (1.0 - estimated_prob) - (1.0 - yes_price)
-                edge = abs(edge) if edge > 0 else edge
-
                 reason_parts.extend([
                     f"{_spot_key}=${sol_price:,.2f}",
                     f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
@@ -1537,10 +1526,12 @@ class SolMacroStrategy:
                     continue
 
             # Position sizing
+            if not self.kelly_sizer:
+                _bump_skip("kelly_unavailable")
+                logger.error("%s strategy: KellySizer unavailable — skipping entry sizing", _brand)
+                continue
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
-            ) if self.kelly_sizer else self.position_sizer.calculate_kelly_bet(
-                bankroll, edge, self.kelly_fraction
             )
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:

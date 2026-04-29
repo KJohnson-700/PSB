@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "paper_trades"
 
 # Append-only log of actual CLOB fill prices for updown markets.
-# Used by updown_engine to replace N(0.50, 0.02) with empirical distribution.
+# Used by updown_engine to replace N(0.50, 0.06) with empirical distribution.
 ENTRY_PRICE_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "entry_prices" / "updown_fills.jsonl"
 _UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_macro", "xrp_macro", "eth_macro", "hype_macro"})
 
@@ -250,7 +250,7 @@ class TradeJournal:
             f"JOURNAL ENTRY: {strategy}/{action} {outcome} ${size:.0f} @ {entry_price:.3f} | {market_question[:50]}"
         )
         # Record actual fill price for updown strategies so backtest can use
-        # the empirical distribution instead of synthetic N(0.50, 0.02).
+        # the empirical distribution instead of synthetic N(0.50, 0.06).
         if strategy in _UPDOWN_STRATEGIES and 0.0 < entry_price < 1.0:
             try:
                 ENTRY_PRICE_LOG.parent.mkdir(parents=True, exist_ok=True)

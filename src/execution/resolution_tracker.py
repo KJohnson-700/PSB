@@ -167,8 +167,8 @@ class ResolutionTracker:
             if ctf_redeemer and pnl > 0:
                 condition_id = resolution.get("condition_id")
                 redeem_side = (
-                    "YES" if action in ("BUY_YES",) else
-                    "NO"  if action in ("BUY_NO",)  else
+                    "YES" if action == "BUY_YES" else
+                    "NO"  if action in ("BUY_NO", "SELL_YES") else
                     None
                 )
                 if redeem_side:
@@ -176,6 +176,13 @@ class ResolutionTracker:
                         condition_id=condition_id,
                         outcome_won=redeem_side,
                         market_question=pos.get("market_question", ""),
+                    )
+                else:
+                    logger.warning(
+                        "[CTFRedeemer] Cannot determine redeem_side for action=%r "
+                        "on '%s' — winnings unclaimed",
+                        action,
+                        pos.get("market_question", "")[:50],
                     )
 
             settled.append({

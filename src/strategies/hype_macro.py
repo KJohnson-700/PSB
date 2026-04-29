@@ -13,10 +13,15 @@ from src.analysis.math_utils import PositionSizer
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
 from src.strategies.sol_macro import SolMacroStrategy
+from src.strategies.strategy_config import resolve_enabled_flag
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 HYPE_PATTERNS = [
     re.compile(r"\bhyperliquid\b", re.IGNORECASE),
-    re.compile(r"\bhype\b", re.IGNORECASE),
+    re.compile(r"\bhype\b(?=.*\b(?:price|token|coin|usd|usdt|up\s+or\s+down)\b)", re.IGNORECASE),
 ]
 HYPE_UPDOWN_PATTERN = re.compile(
     r"(?:hyperliquid|hype)\s+up\s+or\s+down", re.IGNORECASE
@@ -36,7 +41,11 @@ class HYPEMacroStrategy(SolMacroStrategy):
     ):
         super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
         self.config = config.get("strategies", {}).get("hype_macro", {})
-        self.enabled = self.config.get("enabled", False)
+        self.enabled = resolve_enabled_flag(
+            "hype_macro",
+            self.config,
+            logger=logger,
+        )
         self.sol_service = HyperliquidHypeService(alt_symbol="HYPEUSDT")
         self.min_liquidity = self.config.get("min_liquidity", 100)
         self.min_edge = self.config.get("min_edge", 0.09)
@@ -44,14 +53,20 @@ class HYPEMacroStrategy(SolMacroStrategy):
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
-        self.entry_price_min = self.config.get("entry_price_min", 0.15)
-        self.entry_price_max = self.config.get("entry_price_max", 0.85)
+        self.entry_price_min = self.config.get("entry_price_min", 0.46)
+        self.entry_price_max = self.config.get("entry_price_max", 0.54)
+        self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
+        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
         self._signal_strategy_name = "hype_macro"
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect HYPE/Hyperliquid prediction markets."""
         text = f"{market.question} {market.description}".lower()
-        has_hype = any(p.search(text) for p in HYPE_PATTERNS)
+        slug = (market.slug or "").lower()
+        has_hype = (
+            slug.startswith(("hype-updown-", "hype-up-or-down-", "hyperliquid-up-or-down-"))
+            or any(p.search(text) for p in HYPE_PATTERNS)
+        )
         is_btc_only = "bitcoin" in text and not has_hype
         return has_hype and not is_btc_only
 

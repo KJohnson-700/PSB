@@ -39,7 +39,9 @@ from src.market.scanner import Market
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
+from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
+from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -131,7 +133,7 @@ class BitcoinStrategy:
         self.config = config.get('strategies', {}).get('bitcoin', {})
         self.ai_agent = ai_agent
         self.position_sizer = position_sizer
-        self.kelly_sizer = kelly_sizer
+        self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "bitcoin"
@@ -139,7 +141,11 @@ class BitcoinStrategy:
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
 
-        self.enabled = self.config.get('enabled', True)
+        self.enabled = resolve_enabled_flag(
+            "bitcoin",
+            self.config,
+            logger=logger,
+        )
         self.min_liquidity = self.config.get('min_liquidity', 10000)
         self.min_edge = self.config.get('min_edge', 0.08)
         self.min_edge_5m = self.config.get('min_edge_5m', self.min_edge)  # 5m-specific edge threshold
@@ -261,7 +267,7 @@ class BitcoinStrategy:
                         price *= 1_000_000
                     elif 'k' in full_match or 'k' in remaining:
                         price *= 1000
-                    if 1000 < price < 10_000_000:
+                    if 1000 < price < 1_000_000_000:
                         return price
                 except ValueError:
                     continue
@@ -464,15 +470,10 @@ class BitcoinStrategy:
         distance_pct = (btc_price - threshold) / threshold
 
         if direction == "UP":
-            if distance_pct > 0:
-                base_prob = 0.60 + min(0.30, distance_pct * 2)
-            else:
-                base_prob = max(0.10, 0.50 + distance_pct * 2)
+            base_prob = 0.50 + distance_pct * 2.0
         else:
-            if distance_pct < 0:
-                base_prob = 0.60 + min(0.30, abs(distance_pct) * 2)
-            else:
-                base_prob = max(0.10, 0.50 - distance_pct * 2)
+            base_prob = 0.50 - distance_pct * 2.0
+        base_prob = max(0.05, min(0.95, base_prob))
 
         # 2. Lower TF confirmation strength (already gated by Layer 2)
         ltf_adj = ltf_strength * 0.10  # Up to +0.10
@@ -483,8 +484,11 @@ class BitcoinStrategy:
         # 4. Tension — mean reversion risk
         tension_adj = 0.0
         if sabre.tension_abs > 2.0:
-            # Price stretched: adds risk of snap-back
-            tension_adj = -0.04  # Slight penalty for being stretched
+            # Snap-back hurts the stretched side and helps the opposite side.
+            if direction == "UP":
+                tension_adj = -0.02 if sabre.tension > 0 else 0.02
+            else:
+                tension_adj = 0.02 if sabre.tension > 0 else -0.02
 
         # 5. RSI extremes
         rsi_adj = 0.0
@@ -974,8 +978,6 @@ class BitcoinStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    edge = abs(edge) if edge > 0 else edge
-
                     # Confidence: HTF boost weight doubled (macro direction matters more for
                     # 5m timing) + m5 momentum strength.  Floor at 0.45 so weak signals
                     # don't produce unrealistically low confidence values.
@@ -1080,9 +1082,9 @@ class BitcoinStrategy:
                     # Price stretched >2 ATR from the MA is meaningful mean-reversion risk.
                     if ta.trend_sabre.tension_abs > 2.0:
                         if allowed_side == "LONG":
-                            est_prob_up += 0.02  # Price stretched above MA — confirms bullish momentum
+                            est_prob_up += -0.02 if ta.trend_sabre.tension > 0 else 0.02
                         else:
-                            est_prob_up -= 0.02  # Price stretched below MA — confirms bearish momentum
+                            est_prob_up += 0.02 if ta.trend_sabre.tension > 0 else -0.02
 
                     # NOTE: 4H histogram hard gate is applied above (continue on mismatch).
                     # If we reach here, 4H histogram is already aligned — no extra soft boost needed.
@@ -1101,8 +1103,6 @@ class BitcoinStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-
-                    edge = abs(edge) if edge > 0 else edge
 
                     confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
 
@@ -1127,7 +1127,12 @@ class BitcoinStrategy:
 
                 days_to_resolution = 30
                 if market.end_date:
-                    days_to_resolution = max(1, (market.end_date - datetime.now()).days)
+                    end_date = market.end_date
+                    if end_date.tzinfo is None:
+                        end_date = end_date.replace(tzinfo=timezone.utc)
+                    days_to_resolution = max(
+                        1, (end_date - datetime.now(timezone.utc)).days
+                    )
 
                 # Enforce HTF gate on market direction
                 if allowed_side == "LONG":
@@ -1152,8 +1157,6 @@ class BitcoinStrategy:
                         edge = estimated_prob - yes_price
                     else:
                         edge = (1.0 - estimated_prob) - (1.0 - yes_price)
-
-                    edge = abs(edge) if edge > 0 else edge
 
                     reason_parts.extend([
                         f"btc=${btc_price:,.0f}",
@@ -1485,10 +1488,12 @@ class BitcoinStrategy:
                 _bump_skip("entry_price_out_of_range")
                 continue
 
+            if not self.kelly_sizer:
+                _bump_skip("kelly_unavailable")
+                logger.error("Bitcoin strategy: KellySizer unavailable — skipping entry sizing")
+                continue
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
-            ) if self.kelly_sizer else self.position_sizer.calculate_kelly_bet(
-                bankroll, edge, self.kelly_fraction
             )
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")

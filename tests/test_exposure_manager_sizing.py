@@ -1,4 +1,4 @@
-from src.execution.exposure_manager import ExposureManager, ExposureTier
+from src.execution.exposure_manager import ExposureManager, ExposureTier, MarketConditions
 
 
 def _manager() -> ExposureManager:
@@ -33,3 +33,26 @@ def test_full_tier_floor_unchanged() -> None:
     # FULL keeps min_trade_usd floor and full-size cap behavior
     assert mgr.scale_size(5.0) == 10.0
     assert mgr.scale_size(30.0) == 15.0
+
+
+def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
+    cfg = {
+        "exposure": {
+            "loss_kill_switch_enabled": True,
+            "max_consecutive_losses": 1,
+            "pause_cycles": 1,
+            "max_pause_cycles": 2,
+            "live_resume_mode": "auto",
+            "low_volume_ratio": 0.7,
+            "low_vol_pct": 0.005,
+        }
+    }
+    mgr = ExposureManager(cfg, is_paper=True, lane_name="TEST")
+    mgr.record_trade(-1.0, strategy="bitcoin")
+    chop = MarketConditions(volatility=0.001, volume_ratio=0.1, trend_strength=0.0)
+
+    first_tier, *_ = mgr.get_exposure(chop)
+    second_tier, *_ = mgr.get_exposure(chop)
+
+    assert first_tier == ExposureTier.PAUSED
+    assert second_tier != ExposureTier.PAUSED

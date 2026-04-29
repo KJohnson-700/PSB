@@ -97,6 +97,7 @@ def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
                 },
             },
             "journal": type("Journal", (), {"session_id": "test_session"})(),
+            "risk_manager": object(),
         },
     )()
     monkeypatch.setattr(dashboard_server, "bot_instance", fake_bot)
@@ -119,3 +120,62 @@ def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
     assert second[0]["status"] == "skipped"
     assert second[0]["reason"] == "startup_dedupe"
     assert started == ["SOL 5m crypto [auto-on-startup:test_session]"]
+
+
+def test_dashboard_status_handles_bootstrap_shim(monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    shim = type(
+        "Shim",
+        (),
+        {
+            "config": {
+                "trading": {"dry_run": True},
+                "strategies": {"bitcoin": {"enabled": True}},
+            }
+        },
+    )()
+    monkeypatch.setattr(dashboard_server, "bot_instance", shim)
+
+    r = TestClient(dashboard_server.app).get("/api/status")
+    assert r.status_code == 200
+    assert r.json()["running"] is False
+
+
+def test_config_post_fails_closed_without_dashboard_key(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("trading:\n  dry_run: true\n", encoding="utf-8")
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "")
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/config",
+        json={"trading": {"dry_run": False}},
+    )
+    assert r.status_code == 503
+    assert "DASHBOARD_API_KEY required" in r.json()["detail"]
+
+
+def test_config_post_rejects_unsafe_values_with_auth(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("strategies:\n  bitcoin:\n    kelly_fraction: 0.1\n", encoding="utf-8")
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/config",
+        headers={"X-API-Key": "test-key"},
+        json={"strategies": {"bitcoin": {"kelly_fraction": -0.5}}},
+    )
+    assert r.status_code == 422
+    assert "kelly_fraction" in r.text

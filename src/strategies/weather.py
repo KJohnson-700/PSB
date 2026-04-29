@@ -10,6 +10,7 @@ Documented edge: $1K→$24K London, $65K NYC/London/Seoul.
 import logging
 import math
 import re
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple, Literal
 
@@ -17,7 +18,9 @@ import requests
 
 from src.market.scanner import Market, is_crypto_updown_market
 from src.analysis.math_utils import PositionSizer
+from src.analysis.kelly_sizer import KellySizer
 from src.analysis.weather_ensemble import WeatherEnsembleRunner
+from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.weather_calibration import WeatherCalibrationStore
 from src.strategies.weather_models import WeatherSignal
 
@@ -179,7 +182,7 @@ class WeatherStrategy:
         cfg = config.get("strategies", {}).get("weather", {})
         self.config = cfg
         self.position_sizer = position_sizer
-        self.kelly_sizer = kelly_sizer
+        self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.ai_agent = ai_agent
         self.gap_min = cfg.get("gap_min", 0.15)
         self.min_ev = cfg.get("min_ev", 0.05)
@@ -189,7 +192,11 @@ class WeatherStrategy:
         self.max_hours = cfg.get("max_hours_to_resolution", 72.0)
         self.max_yes_price = cfg.get("max_yes_price", 0.45)
         self.metar_enabled = cfg.get("metar_enabled", True)
-        self.enabled = cfg.get("enabled", False)
+        self.enabled = resolve_enabled_flag(
+            "weather",
+            cfg,
+            logger=logger,
+        )
         self.kelly_fraction = cfg.get("kelly_fraction", 0.25)
         self._signal_strategy_name = "weather"
         self._backtest_proxy_forecast: Optional[float] = None
@@ -592,7 +599,7 @@ class WeatherStrategy:
 
             target_date, horizon_days, skip_reason = self._target_forecast_date_details(market)
             if skip_reason:
-                stats[skip_reason] += 1
+                stats[skip_reason] = stats.get(skip_reason, 0) + 1
                 continue
 
             subtype = self._classify_weather_subtype(q, desc)
@@ -614,7 +621,13 @@ class WeatherStrategy:
                         stats["skipped_no_threshold"] += 1
                         logger.debug("Weather: no temp threshold parsed from '%s'", q[:60])
                         continue
-                    temp_result = self._fetch_temp_forecast(lat, lon, target_date, threshold)
+                    temp_result = await asyncio.to_thread(
+                        self._fetch_temp_forecast,
+                        lat,
+                        lon,
+                        target_date,
+                        threshold,
+                    )
                     if isinstance(temp_result, dict):
                         raw_forecast_prob = temp_result.get("prob")
                         forecast_temp_f = temp_result.get("forecast_temp_f")
@@ -623,7 +636,8 @@ class WeatherStrategy:
                         raw_forecast_prob = temp_result
                 else:
                     stats["precip_markets"] += 1
-                    raw_forecast_prob = self._fetch_precip_forecast(
+                    raw_forecast_prob = await asyncio.to_thread(
+                        self._fetch_precip_forecast,
                         lat,
                         lon,
                         target_date or datetime.utcnow().strftime("%Y-%m-%d"),
@@ -650,7 +664,7 @@ class WeatherStrategy:
                 and not self._backtest_proxy_forecast
                 and forecast_temp_f is not None
             ):
-                metar = self._fetch_metar(icao)
+                metar = await asyncio.to_thread(self._fetch_metar, icao)
                 if metar:
                     obs_temp = metar.get("temp")
                     if obs_temp is not None:
@@ -746,20 +760,14 @@ class WeatherStrategy:
 
             price = contract_price
 
-            size = (
-                self.kelly_sizer.size_binary_position(
-                    self._signal_strategy_name,
-                    bankroll,
-                    win_probability,
-                    contract_price,
-                )
-                if self.kelly_sizer
-                else self.position_sizer.calculate_binary_kelly_bet(
-                    bankroll,
-                    win_probability,
-                    contract_price,
-                    self.kelly_fraction,
-                )
+            if not self.kelly_sizer:
+                logger.error("Weather strategy: KellySizer unavailable — skipping entry sizing")
+                continue
+            size = self.kelly_sizer.size_binary_position(
+                self._signal_strategy_name,
+                bankroll,
+                win_probability,
+                contract_price,
             )
             if size <= 0:
                 continue

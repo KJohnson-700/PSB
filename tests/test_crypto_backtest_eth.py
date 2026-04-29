@@ -79,6 +79,133 @@ class TestBacktestReportStrategyKey(unittest.TestCase):
             path.unlink(missing_ok=True)
 
 
+class TestBacktestETHLoadsBTCContext(unittest.TestCase):
+    def test_eth_run_passes_btc_context_to_engine(self):
+        mod = _load_run_backtest_crypto_module()
+
+        fake_df = pd.DataFrame(
+            columns=["open_time", "close_time", "open", "high", "low", "close", "volume"]
+        )
+
+        def _bars(count, freq):
+            ts = pd.date_range("2025-01-01T00:00:00Z", periods=count, freq=freq)
+            return pd.DataFrame(
+                {
+                    "open_time": ts,
+                    "close_time": ts,
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "volume": 1.0,
+                }
+            )
+
+        def fake_load_all(self, symbol, start_date, end_date):
+            if symbol == "ETH":
+                return {"1m": fake_df, "5m": fake_df, "15m": fake_df, "1h": _bars(60, "1h")}
+            return {"1m": fake_df, "5m": fake_df, "15m": fake_df, "4h": _bars(60, "4h")}
+
+        captured = {}
+
+        class FakeEngine:
+            def __init__(self, config, initial_bankroll):
+                pass
+
+            def run(self, **kwargs):
+                captured.update(kwargs)
+                from src.backtest.updown_engine import UpdownBacktestResult
+                return UpdownBacktestResult(
+                    symbol="ETH",
+                    window_size=5,
+                    start_date="2025-01-01",
+                    end_date="2025-01-02",
+                    initial_bankroll=500.0,
+                    final_bankroll=500.0,
+                    trades=[],
+                    windows_scanned=1,
+                    windows_entered=0,
+                    wins=0,
+                    losses=0,
+                )
+
+        with patch.object(OHLCVLoader, "load_all", new=fake_load_all), \
+             patch.object(mod, "UpdownBacktestEngine", new=FakeEngine), \
+             patch.object(mod, "save_report", return_value=Path("dummy.json")):
+            with patch("sys.argv", ["run_backtest_crypto.py", "--symbol", "ETH", "--window", "5", "--start", "2025-01-01", "--end", "2025-01-02"]):
+                rc = mod.main()
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured.get("symbol"), "ETH")
+        self.assertIsNotNone(captured.get("btc_data"))
+
+    def test_eth_run_passes_oracle_history_to_engine(self):
+        mod = _load_run_backtest_crypto_module()
+
+        fake_df = pd.DataFrame(
+            columns=["open_time", "close_time", "open", "high", "low", "close", "volume"]
+        )
+        oracle_df = pd.DataFrame(
+            {
+                "updated_at": pd.to_datetime(["2025-01-01T00:00:00Z"], utc=True),
+                "price": [2000.0],
+                "round_id": [1],
+                "network": ["polygon"],
+                "address": ["0xfeed"],
+            }
+        )
+
+        def _bars(count, freq):
+            ts = pd.date_range("2025-01-01T00:00:00Z", periods=count, freq=freq)
+            return pd.DataFrame(
+                {
+                    "open_time": ts,
+                    "close_time": ts,
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "volume": 1.0,
+                }
+            )
+
+        def fake_load_all(self, symbol, start_date, end_date):
+            if symbol == "ETH":
+                return {"1m": fake_df, "5m": fake_df, "15m": fake_df, "1h": _bars(60, "1h")}
+            return {"1m": fake_df, "5m": fake_df, "15m": fake_df, "4h": _bars(60, "4h")}
+
+        captured = {}
+
+        class FakeEngine:
+            def __init__(self, config, initial_bankroll):
+                pass
+
+            def run(self, **kwargs):
+                captured.update(kwargs)
+                from src.backtest.updown_engine import UpdownBacktestResult
+                return UpdownBacktestResult(
+                    symbol="ETH",
+                    window_size=5,
+                    start_date="2025-01-01",
+                    end_date="2025-01-02",
+                    initial_bankroll=500.0,
+                    final_bankroll=500.0,
+                    trades=[],
+                    windows_scanned=1,
+                    windows_entered=0,
+                    wins=0,
+                    losses=0,
+                )
+
+        with patch.object(OHLCVLoader, "load_all", new=fake_load_all), \
+             patch.object(mod, "UpdownBacktestEngine", new=FakeEngine), \
+             patch.object(mod, "save_report", return_value=Path("dummy.json")), \
+             patch.object(mod.OracleHistoryLoader, "load_history", return_value=oracle_df):
+            with patch("sys.argv", ["run_backtest_crypto.py", "--symbol", "ETH", "--window", "5", "--start", "2025-01-01", "--end", "2025-01-02"]):
+                rc = mod.main()
+        self.assertEqual(rc, 0)
+        self.assertIsNotNone(captured.get("oracle_history"))
+
+
 class TestUpdownBacktestSplit(unittest.TestCase):
     def test_split_preserves_nonzero_windows_scanned(self):
         from src.backtest.updown_engine import UpdownBacktestResult, UpdownTrade

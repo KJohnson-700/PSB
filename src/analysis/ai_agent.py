@@ -18,6 +18,7 @@ For detailed instructions on how to add or configure AI providers, please see:
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -190,23 +191,26 @@ Valid minimal example:
         s = str(raw).strip().lower()
         if not s:
             return 0.55
-        # Ordered checks — longer phrases first
-        bands = (
-            ("very high", 0.9),
-            ("high", 0.82),
-            ("medium-high", 0.72),
-            ("medium high", 0.72),
-            ("moderate-high", 0.68),
-            ("moderate", 0.58),
-            ("medium", 0.58),
-            ("medium-low", 0.45),
-            ("medium low", 0.45),
-            ("low", 0.35),
-            ("very low", 0.22),
+        bands = {
+            "very high": 0.9,
+            "high": 0.82,
+            "medium-high": 0.72,
+            "medium high": 0.72,
+            "moderate-high": 0.68,
+            "moderate": 0.58,
+            "medium": 0.58,
+            "medium-low": 0.45,
+            "medium low": 0.45,
+            "low": 0.35,
+            "very low": 0.22,
+        }
+        pattern = re.compile(
+            r"\b(very high|very low|medium-high|medium low|medium-low|"
+            r"medium high|moderate-high|high|moderate|medium|low)\b"
         )
-        for phrase, val in sorted(bands, key=lambda kv: -len(kv[0])):
-            if phrase in s:
-                return val
+        match = pattern.search(s)
+        if match:
+            return bands[match.group(1)]
         return cls._coerce_unit_interval(raw, 0.55)
 
     @staticmethod
@@ -350,7 +354,22 @@ Valid minimal example:
         """Cache key includes strategy so the same market gets fresh analysis per strategy."""
         return f"{market_id}:{strategy_hint}" if strategy_hint else market_id
 
-    def _get_cached(self, market_id: str, current_price: float = 0.0, strategy_hint: str = "") -> Optional[AIAnalysis]:
+    def _cache_ttl_for_market(self, market_question: str, strategy_hint: str = "") -> int:
+        """Use shorter TTLs for short-window candle markets where stale AI is costly."""
+        text = f"{market_question} {strategy_hint}".lower()
+        if re.search(r"\b5\s*m\b", text) or re.search(r"\b5\s*(?:min|minute)", text):
+            return int(self.config.get("cache_ttl_5m", 60))
+        if re.search(r"\b15\s*m\b", text) or re.search(r"\b15\s*(?:min|minute)", text):
+            return int(self.config.get("cache_ttl_15m", 180))
+        return int(self._cache_ttl)
+
+    def _get_cached(
+        self,
+        market_id: str,
+        current_price: float = 0.0,
+        strategy_hint: str = "",
+        ttl: Optional[int] = None,
+    ) -> Optional[AIAnalysis]:
         """Return cached analysis if still fresh and price hasn't moved significantly.
 
         Invalidates cache if yes_price moved >0.05 (5 cents) since caching —
@@ -358,10 +377,11 @@ Valid minimal example:
         analysis is no longer valid.
         """
         key = self._cache_key(market_id, strategy_hint)
+        ttl = int(ttl or self._cache_ttl)
         if key in self._cache:
             cached_time, cached_result, cached_price = self._cache[key]
             age = time.time() - cached_time
-            if age < self._cache_ttl:
+            if age < ttl:
                 # Price-based invalidation: skip if price moved materially
                 if current_price > 0 and cached_price > 0 and abs(current_price - cached_price) > 0.05:
                     logger.debug(
@@ -372,18 +392,26 @@ Valid minimal example:
                     return None
                 logger.debug(
                     f"AI cache HIT {market_id} (age={age:.0f}s, "
-                    f"price={current_price:.3f}, ttl={self._cache_ttl}s)"
+                    f"price={current_price:.3f}, ttl={ttl}s)"
                 )
                 return cached_result
             else:
                 del self._cache[key]
         return None
 
-    def _set_cache(self, market_id: str, result: AIAnalysis, price: float = 0.0, strategy_hint: str = ""):
+    def _set_cache(
+        self,
+        market_id: str,
+        result: AIAnalysis,
+        price: float = 0.0,
+        strategy_hint: str = "",
+        ttl: Optional[int] = None,
+    ):
         """Store analysis result in cache with the yes_price at time of caching."""
         key = self._cache_key(market_id, strategy_hint)
         self._cache[key] = (time.time(), result, price)
-        logger.debug(f"AI CACHE SET: {market_id} price={price:.3f} (size={len(self._cache)}, ttl={self._cache_ttl}s)")
+        ttl = int(ttl or self._cache_ttl)
+        logger.debug(f"AI CACHE SET: {market_id} price={price:.3f} (size={len(self._cache)}, ttl={ttl}s)")
         # Prune old entries if cache gets large
         if len(self._cache) > 200:
             cutoff = time.time() - self._cache_ttl
@@ -519,7 +547,8 @@ Valid minimal example:
             return None
 
         # Check cache first — avoid burning tokens on repeat analysis
-        cached = self._get_cached(market_id, current_yes_price, strategy_hint)
+        cache_ttl = self._cache_ttl_for_market(market_question, strategy_hint)
+        cached = self._get_cached(market_id, current_yes_price, strategy_hint, ttl=cache_ttl)
         if cached is not None:
             return cached
 
@@ -535,7 +564,7 @@ Valid minimal example:
                 user_prompt, market_id, current_yes_price
             )
             if result:
-                self._set_cache(market_id, result, current_yes_price, strategy_hint)
+                self._set_cache(market_id, result, current_yes_price, strategy_hint, ttl=cache_ttl)
             return result
 
         # Skip entirely if no providers configured
@@ -547,6 +576,7 @@ Valid minimal example:
         await self._rate_limit()
 
         attempted_live_provider = False
+        provider_errors: List[str] = []
         for provider_config in self.provider_chain:
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
@@ -558,6 +588,8 @@ Valid minimal example:
                 if provider_config.get("local", False):
                     api_key = "local"
                 else:
+                    err = f"{provider_name}=MissingAPIKey:{api_key_name}"
+                    provider_errors.append(err)
                     logger.warning(f"API key '{api_key_name}' not found for provider '{provider_name}'. Skipping.")
                     continue
 
@@ -566,6 +598,8 @@ Valid minimal example:
             try:
                 analysis_function = getattr(self, f"_analyze_with_{provider_type}", None)
                 if not analysis_function:
+                    err = f"{provider_name}=UnknownProviderType:{provider_type}"
+                    provider_errors.append(err)
                     logger.error(f"Unknown provider type '{provider_type}' in provider chain. Skipping.")
                     continue
 
@@ -584,15 +618,20 @@ Valid minimal example:
                         f"AI analysis OK: {provider_name} -> {market_id} "
                         f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f}"
                     )
-                    self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint)
+                    self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint, ttl=cache_ttl)
                     return analysis_result
 
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
+                provider_errors.append(f"{provider_name}={type(e).__name__}: {e}")
                 logger.warning(f"Provider '{provider_name}' failed: {e}. Falling back to next provider.")
                 continue
 
         if self.provider_chain:
-            msg = f"All AI providers failed for market {market_id}. No analysis could be performed."
+            details = "; ".join(provider_errors) if provider_errors else "no provider attempts completed"
+            msg = (
+                f"All AI providers failed for market {market_id}. "
+                f"No analysis could be performed. Provider errors: {details}"
+            )
             if attempted_live_provider:
                 logger.critical(msg)
             else:
@@ -625,7 +664,11 @@ Valid minimal example:
                 fn = getattr(self, f"_analyze_with_{pc['type']}", None)
                 if not fn:
                     return None
-                model_candidates = self._models_for_provider(pc, str(pc.get("model", "")))
+                if not pc.get("local", False):
+                    await self._rate_limit()
+                model_candidates = self._models_for_provider(
+                    pc, str(pc.get("model", ""))
+                )
                 model_for_call = model_candidates[0] if model_candidates else ""
                 return await asyncio.wait_for(
                     fn(
@@ -835,7 +878,12 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 msg = str(e).lower()
                 if "429" in msg or "rate" in msg:
                     self._set_cooldown(ck, cooldown_429)
-                logger.debug(f"OpenAI-compat error model={m}: {e} — trying next.")
+                logger.warning(
+                    "OpenAI-compat error model=%s: %s: %s — trying next.",
+                    m,
+                    type(e).__name__,
+                    e,
+                )
                 continue
 
         if last_err:
@@ -1070,17 +1118,23 @@ Reply with only the JSON object required by the system message (four keys: reaso
     
     def _extract_text_from_content(self, content_blocks) -> str:
         """Extract text from Anthropic-style content blocks (handles ThinkingBlock + TextBlock)."""
+        parts = []
         for block in content_blocks:
             # Skip ThinkingBlocks (MiniMax M2.5 returns these)
             block_type = getattr(block, "type", "")
             if block_type == "thinking":
                 continue
             if hasattr(block, "text") and block.text:
-                return block.text
+                parts.append(block.text)
+        if parts:
+            return "\n".join(parts)
         # Fallback: return any block that has text
+        fallback_parts = []
         for block in content_blocks:
             if hasattr(block, "text") and block.text:
-                return block.text
+                fallback_parts.append(block.text)
+        if fallback_parts:
+            return "\n".join(fallback_parts)
         return ""
 
     def _parse_response(

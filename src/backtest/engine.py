@@ -221,11 +221,13 @@ class BacktestEngine:
             size_scale = math.sqrt(size / 50.0)
             slippage_pct *= min(size_scale, 2.0)  # cap at 2x
 
+        slip_usd = max(0.005, slippage_pct * price)
+
         if side == "buy":
-            fill_price = min(0.99, price + slippage_pct * price)
+            fill_price = min(0.99, price + slip_usd)
             slippage_cost = (fill_price - price) * size
         else:
-            fill_price = max(0.01, price - slippage_pct * price)
+            fill_price = max(0.01, price - slip_usd)
             slippage_cost = (price - fill_price) * size
 
         fee_cost = (self.fee_bps / 10_000) * fill_price * size

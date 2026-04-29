@@ -225,8 +225,8 @@ class CLOBClient:
             return True
 
         if not self.client:
-            logger.warning(f"[can_sell_token] CLOB client not initialized — assuming True")
-            return True
+            logger.error("[can_sell_token] CLOB client not initialized — refusing live trade")
+            return False
 
         try:
             loop = asyncio.get_event_loop()
@@ -316,7 +316,6 @@ class RiskManager:
             "eth_macro",
             "hype_macro",
             "xrp_macro",
-            "xrp_dump_hedge",
         }
         CRYPTO_MAX = 12  # reserved slots for crypto strategies
 
@@ -376,7 +375,6 @@ class RiskManager:
             "eth_macro",
             "hype_macro",
             "xrp_macro",
-            "xrp_dump_hedge",
         }
         is_crypto = strategy in CRYPTO_STRATEGIES
 
@@ -394,7 +392,6 @@ class RiskManager:
             )
 
         # 2. Check if we have budget left for this category
-        # Use dollar cost (size * entry_price) for budget tracking
         current_exposure_dict = {t: 0.0 for t in caps_map.keys()}
         for pos in self.active_positions.values():
             pos_strategy = getattr(pos, "strategy", "")
@@ -402,7 +399,12 @@ class RiskManager:
             if is_crypto != pos_is_crypto:
                 continue  # skip positions from the other pool
             pos_term, _ = self._get_market_term(pos.end_date)
-            cost = pos.size * getattr(pos, "entry_price", 0)
+            outcome = str(getattr(pos, "outcome", "") or "").upper()
+            side = str(getattr(pos, "side", "") or "").upper()
+            entry_price = float(getattr(pos, "entry_price", 0) or 0)
+            # BUY_YES positions store size as USD outlay; SELL_YES positions store
+            # synthetic NO shares and need shares * price to recover USD outlay.
+            cost = pos.size * entry_price if side == "SELL" or outcome == "NO" else pos.size
             current_exposure_dict[pos_term] += cost
 
         category_spent = current_exposure_dict.get(term, 0.0)

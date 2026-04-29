@@ -52,7 +52,7 @@ class PerformanceMetrics:
     win_rate: float = 0.0
     avg_win: float = 0.0
     avg_loss: float = 0.0
-    profit_factor: float = 0.0
+    profit_factor: Optional[float] = 0.0
     total_pnl: float = 0.0
     max_drawdown: float = 0.0
     sharpe_ratio: float = 0.0
@@ -78,14 +78,15 @@ class DriftReport:
     trade_freq_drift: float = 0.0
     is_diverging: bool = False
     verdict: str = ""
+    live_sample_size: int = 0
 
 
 class PositionExitManager:
     """Checks active positions for exit conditions (TP/SL/time).
 
     Config under `trading.exit_rules` in settings.yaml:
-        take_profit_pct: 0.20   # exit at +20% unrealized
-        stop_loss_pct: 0.15     # exit at -15% unrealized
+        take_profit_pct: 0.15   # exit at +15% unrealized
+        stop_loss_pct: 0.30     # exit at -30% unrealized
         max_hold_hours: 72      # exit after 72 hours
     """
 
@@ -100,16 +101,22 @@ class PositionExitManager:
             "eth_macro",
             "hype_macro",
             "xrp_macro",
-            "xrp_dump_hedge",
         }
     )
 
     def __init__(self, config: Dict[str, Any]):
-        exit_cfg = config.get("trading", {}).get("exit_rules", {})
-        self.take_profit_pct = exit_cfg.get("take_profit_pct", 0.20)
-        self.stop_loss_pct = exit_cfg.get("stop_loss_pct", 0.15)
+        exit_cfg = config.get("trading", {}).get("exit_rules", {}) or {}
+        self.enabled = bool(exit_cfg.get("enabled", False))
+        required = {"take_profit_pct", "stop_loss_pct", "max_hold_hours"}
+        missing = required - set(exit_cfg)
+        if self.enabled and missing:
+            logger.warning(
+                "PositionExitManager exit_rules missing %s; using settings.yaml fallbacks",
+                sorted(missing),
+            )
+        self.take_profit_pct = exit_cfg.get("take_profit_pct", 0.15)
+        self.stop_loss_pct = exit_cfg.get("stop_loss_pct", 0.30)
         self.max_hold_hours = exit_cfg.get("max_hold_hours", 72)
-        self.enabled = exit_cfg.get("enabled", False)
 
     def check_exits(
         self,
@@ -240,12 +247,11 @@ class PerformanceTracker:
         if journal_path:
             self.journal_path = Path(journal_path)
         else:
-            from src.execution.trade_journal import JOURNAL_DIR
+            from src.execution.trade_journal import TradeJournal
             self.journal_path = None
-            if JOURNAL_DIR.exists():
-                sessions = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
-                if sessions:
-                    self.journal_path = sessions[0] / "entries.jsonl"
+            chosen = TradeJournal.newest_resumable_session_dir()
+            if chosen:
+                self.journal_path = chosen / "entries.jsonl"
 
     def _load_trades(self) -> List[Dict]:
         """Load EXIT entries from journal (actual closed trades with pnl)."""
@@ -311,7 +317,7 @@ class PerformanceTracker:
         metrics.avg_win = total_win_pnl / len(wins) if wins else 0
         metrics.avg_loss = total_loss_pnl / len(losses) if losses else 0
         metrics.profit_factor = (
-            total_win_pnl / total_loss_pnl if total_loss_pnl > 0 else float("inf")
+            round(total_win_pnl / total_loss_pnl, 2) if total_loss_pnl > 0 else None
         )
         metrics.total_pnl = sum(t.get("pnl", 0) for t in trades)
 
@@ -414,10 +420,16 @@ class PerformanceTracker:
                 t.get("timestamp", "") for t in strat_trades if t.get("timestamp")
             ]
             if len(timestamps) >= 2:
-                first = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
-                last = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
-                days = max(1, (last - first).total_seconds() / 86400)
-                live_trades_per_day = len(strat_trades) / days
+                parsed_ts = sorted(
+                    datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    for ts in timestamps
+                )
+                elapsed_secs = (parsed_ts[-1] - parsed_ts[0]).total_seconds()
+                live_trades_per_day = (
+                    len(strat_trades) * 86400 / elapsed_secs
+                    if elapsed_secs > 0
+                    else 0
+                )
             else:
                 live_trades_per_day = 0
 
@@ -436,24 +448,32 @@ class PerformanceTracker:
                 bt_trades_per_day=bt_trades_per_day,
                 live_trades_per_day=live_trades_per_day,
                 trade_freq_drift=live_trades_per_day - bt_trades_per_day,
+                live_sample_size=len(strat_trades),
             )
 
-            # Flag if win rate dropped >15% or edge dropped >50%
-            win_rate_bad = report.win_rate_drift < -0.15
-            edge_bad = bt_avg_edge > 0 and report.edge_drift < -bt_avg_edge * 0.5
-            report.is_diverging = win_rate_bad or edge_bad
-
-            if report.is_diverging:
-                reasons = []
-                if win_rate_bad:
-                    reasons.append(
-                        f"win rate {live_win_rate:.0%} vs BT {bt_win_rate:.0%}"
-                    )
-                if edge_bad:
-                    reasons.append(f"edge {live_avg_edge:.4f} vs BT {bt_avg_edge:.4f}")
-                report.verdict = f"DIVERGING: {', '.join(reasons)}"
+            min_drift_sample = 15
+            if len(strat_trades) < min_drift_sample:
+                report.is_diverging = False
+                report.verdict = (
+                    f"INSUFFICIENT_DATA ({len(strat_trades)}/{min_drift_sample})"
+                )
             else:
-                report.verdict = "OK"
+                # Flag if win rate dropped >15% or edge dropped >50%
+                win_rate_bad = report.win_rate_drift < -0.15
+                edge_bad = bt_avg_edge > 0 and report.edge_drift < -bt_avg_edge * 0.5
+                report.is_diverging = win_rate_bad or edge_bad
+
+                if report.is_diverging:
+                    reasons = []
+                    if win_rate_bad:
+                        reasons.append(
+                            f"win rate {live_win_rate:.0%} vs BT {bt_win_rate:.0%}"
+                        )
+                    if edge_bad:
+                        reasons.append(f"edge {live_avg_edge:.4f} vs BT {bt_avg_edge:.4f}")
+                    report.verdict = f"DIVERGING: {', '.join(reasons)}"
+                else:
+                    report.verdict = "OK"
 
             reports.append(report)
 
@@ -471,7 +491,8 @@ def print_performance_report(metrics: PerformanceMetrics):
     )
     print(f"  Avg Win:       ${metrics.avg_win:+.2f}")
     print(f"  Avg Loss:      ${metrics.avg_loss:.2f}")
-    print(f"  Profit Factor: {metrics.profit_factor:.2f}")
+    pf = f"{metrics.profit_factor:.2f}" if metrics.profit_factor is not None else "-"
+    print(f"  Profit Factor: {pf}")
     print(f"  Total PnL:     ${metrics.total_pnl:+.2f}")
     print(f"  Max Drawdown:  ${metrics.max_drawdown:.2f}")
     print(f"  Sharpe Ratio:  {metrics.sharpe_ratio:.2f}")

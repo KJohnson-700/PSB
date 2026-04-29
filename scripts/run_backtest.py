@@ -283,6 +283,10 @@ def main():
         report_path = report_dir / f"backtest_{result.strategy}_{ts}.json"
         report = {
             "strategy": result.strategy,
+            "ai_mode": "BACKTEST_PROXY",
+            "ai_proxy_disclaimer": (
+                "BACKTEST PROXY: deterministic rule-based AI; metrics do not validate live LLM behavior."
+            ),
             "start_date": result.start_date,
             "end_date": result.end_date,
             "initial_bankroll": result.initial_bankroll,

@@ -55,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import yaml
 
 from src.backtest.ohlcv_loader  import OHLCVLoader
+from src.backtest.oracle_loader import OracleHistoryLoader
 from src.backtest.updown_engine import UpdownBacktestEngine, UpdownBacktestResult
 
 logging.basicConfig(
@@ -104,6 +105,11 @@ def _print_plain(result: UpdownBacktestResult, data_size: dict,
     print(sep)
     if result.windows_scanned:
         print(f"  Windows scanned  : {result.windows_scanned:,}")
+    if result.oracle_history_loaded:
+        print(
+            f"  Oracle replay    : {result.oracle_symbol} "
+            f"({result.oracle_history_points:,} points, {result.oracle_basis_skips} basis skips)"
+        )
     print(f"  Trades entered   : {result.windows_entered:,}")
     print(f"  Wins / Losses    : {result.wins} / {result.losses}")
     print(f"  Win rate         : {result.win_rate:.1%}")
@@ -154,6 +160,12 @@ def _print_rich(result: UpdownBacktestResult, data_size: dict,
     row("Net PnL",            f"[{colour}]${result.net_pnl:+,.2f}  ({result.total_return_pct:+.1f}%)[/]")
     if result.windows_scanned:
         row("Windows scanned", f"{result.windows_scanned:,}")
+    if result.oracle_history_loaded:
+        row(
+            "Oracle replay",
+            f"{result.oracle_symbol} ({result.oracle_history_points:,} pts, "
+            f"{result.oracle_basis_skips} basis skips)",
+        )
     row("Trades entered",     f"{result.windows_entered:,}")
     row("Win / Loss",         f"{result.wins} / {result.losses}")
     row("Win rate",           f"{result.win_rate:.1%}")
@@ -217,6 +229,10 @@ def _result_to_dict(result: UpdownBacktestResult) -> dict:
         "avg_edge":         round(result.avg_edge, 4),
         "expectancy":       round(result.expectancy, 4),
         "slippage_total":   round(result.slippage_total, 4),
+        "oracle_symbol":    result.oracle_symbol,
+        "oracle_history_loaded": result.oracle_history_loaded,
+        "oracle_history_points": result.oracle_history_points,
+        "oracle_basis_skips": result.oracle_basis_skips,
         "trades": [
             {
                 "window_open":   str(t.window_open)[:19],
@@ -262,9 +278,16 @@ def save_report(
         "strategy":         f"{_strategy_key}_{result.window_size}m",
         "trades_count":     result.wins + result.losses,
         "report_type":      "crypto_updown",
+        "run_at":           datetime.now().isoformat(timespec="seconds"),
         "symbol":           result.symbol,
         "window_minutes":   result.window_size,
         "data_bars":        data_size,
+        "oracle_replay": {
+            "enabled": result.oracle_history_loaded,
+            "symbol": result.oracle_symbol,
+            "history_points": result.oracle_history_points,
+            "basis_skips_full_run": result.oracle_basis_skips,
+        },
     }
 
     if test_result is not None:
@@ -324,6 +347,9 @@ def _get_train(full: UpdownBacktestResult,
         wins=wins,
         losses=losses,
         slippage_total=round(slip, 4),
+        oracle_symbol=full.oracle_symbol,
+        oracle_history_loaded=full.oracle_history_loaded,
+        oracle_history_points=full.oracle_history_points,
     )
 
 
@@ -379,7 +405,15 @@ def main() -> int:
     print(f"\nLoading {args.symbol} OHLCV data ({args.start} -> {args.end}) ...")
     loader    = OHLCVLoader(no_cache=args.no_cache)
     data      = loader.load_all(args.symbol, args.start, args.end)
+    btc_data  = None
+    oracle_history = None
+    if args.symbol == "ETH":
+        btc_data = loader.load_all("BTC", args.start, args.end)
+    if args.symbol in {"ETH", "SOL", "XRP", "HYPE"}:
+        oracle_history = OracleHistoryLoader().load_history(args.symbol, args.start, args.end)
     data_size = {iv: len(df) for iv, df in data.items()}
+    if oracle_history is not None and not oracle_history.empty:
+        data_size["oracle"] = len(oracle_history)
 
     # Sanity check
     primary_iv = "4h" if args.symbol == "BTC" else "1h"
@@ -404,6 +438,8 @@ def main() -> int:
         end_date=args.end,
         window_minutes=args.window,
         symbol=args.symbol,
+        btc_data=btc_data,
+        oracle_history=oracle_history,
     )
 
     # -- 3. Split and print results ----------------------------------------

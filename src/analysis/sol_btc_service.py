@@ -36,8 +36,12 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Chainlink BTC/USD on Polygon Mainnet
-CHAINLINK_BTC_USD = "0xc907E116054Ad103354f2D350FD2514433D57F6f"
+# Chainlink reference feeds
+CHAINLINK_BTC_USD = "0xc907E116054Ad103354f2D350FD2514433D57F6f"  # Polygon
+CHAINLINK_ETH_USD = "0xF9680D99D6C9589e2a93a78A04A279e509205945"  # Polygon
+CHAINLINK_SOL_USD = "0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"  # Polygon
+CHAINLINK_XRP_USD = "0x785ba89291f676b5386652eB12b30cF361020694"  # Polygon
+CHAINLINK_HYPE_USD = "0xf9ce4fE2F0EcE0362cb416844AE179a49591D567"  # Arbitrum
 CHAINLINK_ABI = [
     {
         "inputs": [],
@@ -60,6 +64,14 @@ CHAINLINK_ABI = [
         "type": "function",
     },
 ]
+
+ORACLE_FEEDS = {
+    "BTCUSDT": ("polygon", CHAINLINK_BTC_USD),
+    "ETHUSDT": ("polygon", CHAINLINK_ETH_USD),
+    "SOLUSDT": ("polygon", CHAINLINK_SOL_USD),
+    "XRPUSDT": ("polygon", CHAINLINK_XRP_USD),
+    "HYPEUSDT": ("arbitrum", CHAINLINK_HYPE_USD),
+}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -96,6 +108,11 @@ class SOLAnalysis:
     macd_5m: MACDResult = field(default_factory=MACDResult)
     # ATR for volatility
     atr_14: float = 0.0
+    # Chainlink / oracle verification for the alt leg
+    chainlink_price: Optional[float] = None
+    chainlink_updated_at: Optional[datetime] = None
+    chainlink_network: Optional[str] = None
+    oracle_basis_bps: Optional[float] = None
     # Trend
     trend_direction: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
     trend_strength: float = 0.0       # 0.0 - 1.0
@@ -184,14 +201,19 @@ class SOLBTCService:
         "https://rpc.ankr.com/polygon",
         "https://polygon.llamarpc.com",
     ]
+    ARBITRUM_RPCS = [
+        "https://arbitrum-one-rpc.publicnode.com",
+        "https://arb1.arbitrum.io/rpc",
+        "https://rpc.ankr.com/arbitrum",
+        "https://arbitrum.llamarpc.com",
+    ]
 
     def __init__(self, polygon_rpc: str = None, alt_symbol: str = "SOLUSDT"):
         self.polygon_rpc = polygon_rpc
         self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
         self.alt_symbol = alt_symbol
         self.spike_z_threshold = 1.5  # Z-score threshold for adaptive BTC spike detection
-        self._w3 = None
-        self._chainlink_contract = None
+        self._oracle_clients: Dict[Tuple[str, str], Tuple[object, object]] = {}
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
 
@@ -256,30 +278,46 @@ class SOLBTCService:
         return None
 
     # ──────────────────────────────────────────────────────────────────
-    # Chainlink Oracle (Polygon) — BTC/USD verification
+    # Chainlink Oracle Reference Feeds
     # ──────────────────────────────────────────────────────────────────
 
-    def get_chainlink_btc_price(self) -> Tuple[Optional[float], Optional[datetime]]:
-        """Read BTC/USD price from Chainlink oracle on Polygon."""
+    def _chainlink_rpcs_for_network(self, network: str) -> List[str]:
+        if network == "polygon":
+            return list(self.polygon_rpcs)
+        if network == "arbitrum":
+            return list(self.ARBITRUM_RPCS)
+        return []
+
+    def get_chainlink_price_for_symbol(
+        self,
+        symbol: str,
+    ) -> Tuple[Optional[float], Optional[datetime], Optional[str]]:
+        """Read asset/USD price from the configured Chainlink reference feed."""
         from web3 import Web3
 
-        if self._w3 is not None and self._chainlink_contract is not None:
+        feed = ORACLE_FEEDS.get((symbol or "").upper())
+        if not feed:
+            return None, None, None
+        network, address = feed
+        cache_key = (network, address)
+        cached = self._oracle_clients.get(cache_key)
+        if cached is not None:
             try:
-                round_data = self._chainlink_contract.functions.latestRoundData().call()
+                _w3, contract = cached
+                round_data = contract.functions.latestRoundData().call()
                 _, answer, _, updated_at, _ = round_data
-                decimals = self._chainlink_contract.functions.decimals().call()
+                decimals = contract.functions.decimals().call()
                 price = answer / (10 ** decimals)
                 updated = datetime.utcfromtimestamp(updated_at)
-                return price, updated
+                return price, updated, network
             except Exception:
-                self._w3 = None
-                self._chainlink_contract = None
+                self._oracle_clients.pop(cache_key, None)
 
-        for rpc_url in self.polygon_rpcs:
+        for rpc_url in self._chainlink_rpcs_for_network(network):
             try:
                 w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 8}))
                 contract = w3.eth.contract(
-                    address=w3.to_checksum_address(CHAINLINK_BTC_USD),
+                    address=w3.to_checksum_address(address),
                     abi=CHAINLINK_ABI,
                 )
                 round_data = contract.functions.latestRoundData().call()
@@ -287,16 +325,22 @@ class SOLBTCService:
                 decimals = contract.functions.decimals().call()
                 price = answer / (10 ** decimals)
                 updated = datetime.utcfromtimestamp(updated_at)
-                self._w3 = w3
-                self._chainlink_contract = contract
-                logger.info(f"Chainlink BTC/USD: ${price:,.2f} via {rpc_url}")
-                return price, updated
+                self._oracle_clients[cache_key] = (w3, contract)
+                logger.info(
+                    f"Chainlink {symbol.replace('USDT', '')}/USD: ${price:,.2f} via {network}:{rpc_url}"
+                )
+                return price, updated, network
             except Exception as e:
-                logger.debug(f"Chainlink RPC {rpc_url} failed: {e}")
+                logger.debug(f"Chainlink RPC {network}:{rpc_url} failed for {symbol}: {e}")
                 continue
 
-        logger.warning("Chainlink: all Polygon RPCs failed")
-        return None, None
+        logger.warning(f"Chainlink: all {network} RPCs failed for {symbol}")
+        return None, None, network
+
+    def get_chainlink_btc_price(self) -> Tuple[Optional[float], Optional[datetime]]:
+        """Read BTC/USD price from Chainlink reference feed."""
+        price, updated, _network = self.get_chainlink_price_for_symbol("BTCUSDT")
+        return price, updated
 
     # ──────────────────────────────────────────────────────────────────
     # Basic Indicators
@@ -420,6 +464,10 @@ class SOLBTCService:
         trend_dir, trend_str = self._determine_sol_trend(
             current_price, ema_9, ema_21, ema_50, rsi_14
         )
+        cl_price, cl_updated, cl_network = self.get_chainlink_price_for_symbol(self.alt_symbol)
+        basis_bps = None
+        if cl_price and cl_price > 0:
+            basis_bps = ((current_price - cl_price) / cl_price) * 10000.0
 
         return SOLAnalysis(
             current_price=current_price,
@@ -431,6 +479,10 @@ class SOLBTCService:
             macd_15m=macd_15m,
             macd_5m=macd_5m,
             atr_14=atr_14,
+            chainlink_price=cl_price,
+            chainlink_updated_at=cl_updated,
+            chainlink_network=cl_network,
+            oracle_basis_bps=basis_bps,
             trend_direction=trend_dir,
             trend_strength=trend_str,
         )
@@ -840,6 +892,7 @@ class SOLBTCService:
                 f"BTC ${correlation.btc_price:,.0f} corr={correlation.correlation_1h:.2f} "
                 f"BTC5m={correlation.btc_move_5m_pct:+.2f}% {_alt_label}5m={correlation.sol_move_5m_pct:+.2f}% | "
                 f"D={multi_tf.daily_trend} MTF={multi_tf.overall_direction} aligned={multi_tf.aligned}"
+                f"{f' | oracle={sol.chainlink_network}:${sol.chainlink_price:,.2f} basis={sol.oracle_basis_bps:+.1f}bps' if sol.chainlink_price else ''}"
                 f"{lag_info}"
             )
 

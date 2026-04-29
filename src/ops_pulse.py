@@ -14,9 +14,13 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 OPS_PREFIX = "OPS_JSON"
+OPS_PULSE_FILE = (
+    Path(__file__).resolve().parent.parent / "data" / "logs" / "ops_pulse.jsonl"
+)
 
 
 def public_dashboard_url() -> Optional[str]:
@@ -99,6 +103,7 @@ def log_ops_pulse(bot: Any, loop: str) -> None:
         payload = build_ops_snapshot(bot, loop)
         line = json.dumps(payload, separators=(",", ":"), default=str)
         logging.info("%s %s", OPS_PREFIX, line)
+        _append_ops_file(bot, line)
     except Exception as e:
         logging.warning("ops_pulse failed: %s", e)
 
@@ -125,5 +130,20 @@ def log_ops_startup(bot: Any) -> None:
         }
         line = json.dumps(payload, separators=(",", ":"), default=str)
         logging.info("%s %s", OPS_PREFIX, line)
+        _append_ops_file(bot, line)
     except Exception as e:
         logging.warning("ops_start failed: %s", e)
+
+
+def _append_ops_file(bot: Any, line: str) -> None:
+    """Persist OPS_JSON lines to a dedicated JSONL file for offline inspection."""
+    if not getattr(bot, "config", None):
+        return
+    if not bot.config.get("logging", {}).get("ops_pulse_file", True):
+        return
+    try:
+        OPS_PULSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with OPS_PULSE_FILE.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        logging.warning("ops_pulse file write failed: %s", e)

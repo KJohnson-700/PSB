@@ -121,6 +121,7 @@ def discover_markets_for_strategy(
     max_candidates: int = 80,
     max_bars: Optional[int] = 200,
     max_extreme_bars: Optional[int] = None,
+    config: Optional[dict] = None,
 ) -> List[Tuple[str, pd.DataFrame]]:
     """
     Discover markets suitable for a given strategy.
@@ -135,7 +136,12 @@ def discover_markets_for_strategy(
     candidates = _fetch_candidate_slugs(start_date, end_date, max_candidates)
     results: List[Tuple[str, pd.DataFrame]] = []
     fade_threshold = 0.95
-    arb_min_std = 0.03
+    arb_min_std = (
+        (config or {})
+        .get("backtest", {})
+        .get("arbitrage", {})
+        .get("min_std", 0.03)
+    )
 
     for slug in candidates:
         if len(results) >= target_count:

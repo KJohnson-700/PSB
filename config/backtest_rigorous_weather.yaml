@@ -1,0 +1,59 @@
+# Weather-specific rigorous backtest configuration.
+# Use with:
+#   python scripts/run_backtest_rigorous.py --plan config/backtest_rigorous_weather.yaml --strategies weather
+#
+# Why a separate plan exists:
+# - The shared rigorous plan is tuned for older general-strategy coverage and hardcodes 2024 periods.
+# - Weather markets are seasonal and sparse, so they need their own date windows and looser market-count assumptions.
+
+# Seasonal, more recent windows for weather-market evaluation.
+periods:
+  - start: "2025-01-01"
+    end: "2025-03-31"
+    label: "2025 Winter"
+  - start: "2025-06-01"
+    end: "2025-08-31"
+    label: "2025 Summer"
+  - start: "2025-09-01"
+    end: "2025-11-30"
+    label: "2025 Hurricane"
+  - start: "2025-12-01"
+    end: "2026-03-31"
+    label: "2025-26 Winter"
+
+train_test:
+  enabled: true
+  train_period_labels: ["2025 Winter", "2025 Summer"]
+  test_period_labels: ["2025 Hurricane", "2025-26 Winter"]
+
+walk_forward:
+  enabled: false
+  train_lookback_periods: 1
+
+market_list_path: "config/backtest_markets.yaml"
+# Weather is sparse; don't inherit the higher generic threshold.
+min_markets_per_category: 10
+max_slugs_per_strategy_per_period: 80
+
+stress_scenarios:
+  baseline:
+    slippage_mult: 1.0
+    fee_bps: null
+  high_slippage:
+    slippage_mult: 1.5
+    fee_bps: null
+  with_fees:
+    slippage_mult: 1.0
+    fee_bps: 10
+
+backtest:
+  bankroll: 2000
+  min_bars: 50
+  max_bars: 200
+  max_trades_per_market: 25
+  target_markets_per_strategy: 40
+
+output:
+  report_dir: "data/backtest/reports"
+  save_per_period: true
+  save_aggregate: true

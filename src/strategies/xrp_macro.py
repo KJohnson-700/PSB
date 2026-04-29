@@ -13,6 +13,11 @@ from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
 from src.strategies.sol_macro import SolMacroStrategy
+from src.strategies.strategy_config import resolve_enabled_flag
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 XRP_PATTERNS = [
     re.compile(r"\bxrp\b", re.IGNORECASE),
@@ -36,7 +41,11 @@ class XRPMacroStrategy(SolMacroStrategy):
     ):
         super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
         self.config = config.get("strategies", {}).get("xrp_macro", {})
-        self.enabled = self.config.get("enabled", False)
+        self.enabled = resolve_enabled_flag(
+            "xrp_macro",
+            self.config,
+            logger=logger,
+        )
         self.sol_service = SOLBTCService(alt_symbol="XRPUSDT")
         self.min_liquidity = self.config.get("min_liquidity", 5000)
         self.min_edge = self.config.get("min_edge", 0.08)
@@ -44,8 +53,10 @@ class XRPMacroStrategy(SolMacroStrategy):
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
-        self.entry_price_min = self.config.get("entry_price_min", 0.15)
-        self.entry_price_max = self.config.get("entry_price_max", 0.85)
+        self.entry_price_min = self.config.get("entry_price_min", 0.46)
+        self.entry_price_max = self.config.get("entry_price_max", 0.54)
+        self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
+        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
         self._signal_strategy_name = "xrp_macro"
 
     def _is_solana_market(self, market: Market) -> bool:

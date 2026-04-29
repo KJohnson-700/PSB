@@ -17,7 +17,11 @@ Usage (wired in main.py):
     # Passed into resolution_tracker.check_and_settle(ctf_redeemer=redeemer)
 """
 
+import json
 import logging
+import threading
+import time
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,8 @@ _INDEX_SETS = {"YES": [1], "NO": [2]}
 # Gas limit for redeemPositions — typically ~80k, 200k is safe ceiling
 _GAS_LIMIT = 200_000
 
+REDEEMED_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "ctf_redeemed.jsonl"
+
 
 class CTFRedeemer:
     """Redeems resolved Polymarket CTF positions.
@@ -80,8 +86,11 @@ class CTFRedeemer:
         self._rpc_url = rpc_url or "https://polygon-rpc.com"
         self._private_key = private_key  # held only until _init_web3 consumes it
 
-        # Prevent double-redemption within a session
-        self._redeemed: set = set()  # {(condition_id, outcome)}
+        self._nonce_lock = threading.Lock()
+        self._next_nonce: Optional[int] = None
+
+        # Prevent double-redemption across restarts.
+        self._redeemed: set = self._load_redeemed()  # {(condition_id, outcome)}
 
         # Web3 objects — None until needed (lazy init)
         self._w3 = None
@@ -132,6 +141,69 @@ class CTFRedeemer:
         except Exception as exc:
             logger.error("[CTFRedeemer] Web3 init failed: %s", exc)
             self._w3 = None
+
+    def _load_redeemed(self) -> set:
+        redeemed = set()
+        if not REDEEMED_LOG.exists():
+            return redeemed
+        try:
+            with REDEEMED_LOG.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        redeemed.add((rec["condition_id"].lower(), rec["outcome"].upper()))
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        continue
+        except OSError as e:
+            logger.warning("[CTFRedeemer] Could not load %s: %s", REDEEMED_LOG, e)
+        return redeemed
+
+    def _persist_redemption(self, condition_id: str, outcome: str, tx_hash: str) -> None:
+        rec = {
+            "condition_id": condition_id,
+            "outcome": outcome.upper(),
+            "tx_hash": tx_hash,
+            "ts": int(time.time()),
+        }
+        try:
+            REDEEMED_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with REDEEMED_LOG.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, sort_keys=True) + "\n")
+        except OSError as e:
+            logger.warning("[CTFRedeemer] Could not persist redemption %s: %s", condition_id[:14], e)
+
+    def _get_next_nonce(self) -> int:
+        with self._nonce_lock:
+            if self._next_nonce is None:
+                self._next_nonce = self._w3.eth.get_transaction_count(
+                    self._account.address, "pending"
+                )
+            nonce = self._next_nonce
+            self._next_nonce += 1
+            return nonce
+
+    def _fee_fields(self) -> dict:
+        try:
+            fee_history = self._w3.eth.fee_history(1, "latest")
+            base_fees = fee_history.get("baseFeePerGas") or []
+            base_fee = int(base_fees[-1]) if base_fees else int(self._w3.eth.gas_price)
+            priority_fee = int(self._w3.to_wei(30, "gwei"))
+            return {
+                "type": 2,
+                "maxFeePerGas": base_fee * 2 + priority_fee,
+                "maxPriorityFeePerGas": priority_fee,
+            }
+        except Exception:
+            return {"gasPrice": self._w3.eth.gas_price}
+
+    @staticmethod
+    def _receipt_value(receipt, key: str):
+        if isinstance(receipt, dict):
+            return receipt.get(key)
+        return getattr(receipt, key, None)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -215,26 +287,46 @@ class CTFRedeemer:
             tx = fn.build_transaction(
                 {
                     "from": self._account.address,
-                    "nonce": self._w3.eth.get_transaction_count(self._account.address),
                     "gas": _GAS_LIMIT,
-                    "gasPrice": self._w3.eth.gas_price,
+                    "nonce": self._get_next_nonce(),
+                    **self._fee_fields(),
                 }
             )
 
             signed = self._account.sign_transaction(tx)
             tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            tx_hash_hex = tx_hash.hex()
 
             logger.info(
-                "[CTFRedeemer] Redeemed %s | '%s' | conditionId=%s... | tx=%s...",
+                "[CTFRedeemer] Submitted %s redemption | '%s' | conditionId=%s... | tx=%s... — waiting for confirmation",
                 outcome_won,
                 market_question[:60],
                 condition_id[:14],
-                tx_hash.hex()[:18],
+                tx_hash_hex[:18],
+            )
+            receipt = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            if self._receipt_value(receipt, "status") != 1:
+                logger.error(
+                    "[CTFRedeemer] Tx reverted | conditionId=%s... | tx=%s... | block=%s",
+                    condition_id[:14],
+                    tx_hash_hex[:18],
+                    self._receipt_value(receipt, "blockNumber"),
+                )
+                return False
+
+            logger.info(
+                "[CTFRedeemer] Confirmed %s redemption | gas=%s | block=%s | tx=%s...",
+                outcome_won,
+                self._receipt_value(receipt, "gasUsed"),
+                self._receipt_value(receipt, "blockNumber"),
+                tx_hash_hex[:18],
             )
             self._redeemed.add(cache_key)
+            self._persist_redemption(condition_id, outcome_won, tx_hash_hex)
             return True
 
         except Exception as exc:
+            self._next_nonce = None
             logger.error(
                 "[CTFRedeemer] Redemption failed for conditionId=%s: %s",
                 condition_id[:14],

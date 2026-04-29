@@ -17,7 +17,6 @@ DISCORD_TRADE_STRATEGIES: FrozenSet[str] = frozenset(
         "eth_macro",
         "hype_macro",
         "xrp_macro",
-        "xrp_dump_hedge",
     }
 )
 
@@ -28,7 +27,6 @@ STRATEGY_ALERT_TITLE = {
     "eth_macro": "ETH macro",
     "hype_macro": "HYPE macro",
     "xrp_macro": "XRP macro",
-    "xrp_dump_hedge": "XRP dump-hedge",
 }
 
 

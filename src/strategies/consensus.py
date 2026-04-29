@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..market.scanner import Market, is_crypto_updown_market
+from .strategy_config import resolve_enabled_flag
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,11 @@ class ConsensusStrategy:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config.get('strategies', {}).get('consensus', {})
-        self.enabled = bool(self.config.get('enabled', False))
+        self.enabled = resolve_enabled_flag(
+            "consensus",
+            self.config,
+            logger=logger,
+        )
 
         # Configuration
         self.threshold = self.config.get('threshold', 0.85)

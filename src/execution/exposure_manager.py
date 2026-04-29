@@ -101,6 +101,9 @@ class ExposureManager:
         self.loss_kill_switch_enabled = exposure_config.get('loss_kill_switch_enabled', True)
         self.max_consecutive_losses = exposure_config.get('max_consecutive_losses', 3)
         self.pause_cycles = exposure_config.get('pause_cycles', 2)  # Test mode: pause N cycles
+        self.max_pause_cycles = int(
+            exposure_config.get("max_pause_cycles", max(self.pause_cycles * 2, self.pause_cycles + 1))
+        )
         self.resume_mode = PauseResumeMode(
             exposure_config.get('live_resume_mode', 'auto')
         )
@@ -144,6 +147,9 @@ class ExposureManager:
         )
         self.max_consecutive_losses = exposure_config.get("max_consecutive_losses", 3)
         self.pause_cycles = exposure_config.get("pause_cycles", 2)
+        self.max_pause_cycles = int(
+            exposure_config.get("max_pause_cycles", max(self.pause_cycles * 2, self.pause_cycles + 1))
+        )
         self.resume_mode = PauseResumeMode(
             exposure_config.get("live_resume_mode", "auto")
         )
@@ -174,14 +180,33 @@ class ExposureManager:
                 # Auto-resume: check if conditions improved
                 self._cycles_since_pause += 1
                 if self._cycles_since_pause >= self.pause_cycles:
+                    if self._cycles_since_pause >= self.max_pause_cycles:
+                        logger.warning(
+                            "OPS_JSON exposure_auto_resume lane=%s reason=%r cycles=%s max_pause_cycles=%s",
+                            self.lane_name,
+                            self._pause_reason,
+                            self._cycles_since_pause,
+                            self.max_pause_cycles,
+                        )
+                        self._unpause("Max pause cycles reached")
                     # Check if conditions have improved
-                    if self._should_resume(conditions):
+                    elif self._should_resume(conditions):
                         self._unpause("Conditions improved after pause")
                     else:
+                        waiting_for = self._resume_waiting_for(conditions)
+                        logger.info(
+                            "OPS_JSON exposure_paused lane=%s reason=%r cycles=%s pause_cycles=%s max_pause_cycles=%s waiting_for=%s",
+                            self.lane_name,
+                            self._pause_reason,
+                            self._cycles_since_pause,
+                            self.pause_cycles,
+                            self.max_pause_cycles,
+                            waiting_for,
+                        )
                         return (
                             ExposureTier.PAUSED, 0.0, 0.0,
                             f"Paused ({self._pause_reason}) — waiting for conditions "
-                            f"[cycle {self._cycles_since_pause}/{self.pause_cycles}+]"
+                            f"[cycle {self._cycles_since_pause}/{self.max_pause_cycles}; waiting_for={waiting_for}]"
                         )
                 else:
                     return (
@@ -272,6 +297,16 @@ class ExposureManager:
             and conditions.trend_strength >= 0.3
             and conditions.volatility >= self.low_vol_threshold
         )
+
+    def _resume_waiting_for(self, conditions: MarketConditions) -> str:
+        missing = []
+        if conditions.volume_ratio < self.low_volume_ratio:
+            missing.append("volume")
+        if conditions.trend_strength < 0.3:
+            missing.append("trend_strength")
+        if conditions.volatility < self.low_vol_threshold:
+            missing.append("volatility")
+        return ",".join(missing) if missing else "none"
 
     def _build_reason(self, tier: ExposureTier, c: MarketConditions) -> str:
         parts = []

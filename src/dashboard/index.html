@@ -987,8 +987,8 @@
                 <div class="cfg-group">
                     <h3>Trading</h3>
                     <div class="cfg-field"><label>Bankroll</label><input type="number" id="cfg-backtest-initial_bankroll" step="100" value="10000"></div>
-                    <div class="cfg-field"><label>Position Size (min $)</label><input type="number" id="cfg-trading-default_position_size" step="1" min="1" value="3"></div>
-                    <div class="cfg-field"><label>Max Position ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="5"></div>
+                    <div class="cfg-field"><label>Fallback Min Size ($)</label><input type="number" id="cfg-trading-default_position_size" step="1" min="1" value="3"></div>
+                    <div class="cfg-field"><label>Fallback Max Size ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="5"></div>
                     <div class="cfg-field"><label>Max Days to Resolution</label><input type="number" id="cfg-trading-max_days_to_resolution" step="1" min="1" max="90" value="14" title="Skip markets resolving > N days out (7-14 recommended)"></div>
                     <div class="cfg-field"><label>Min Hours to Resolution</label><input type="number" id="cfg-trading-min_hours_to_resolution" step="1" min="0" value="24" title="Skip markets resolving in < N hours"></div>
                     <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-trading-kelly_fraction" step="0.05" value="0.25"></div>
@@ -1450,17 +1450,28 @@ function applyHeroMetrics(d) {
     if (!d || typeof d !== 'object') return;
     const p = d.portfolio || {};
     const s = d.session || {};
-    const bankroll = d.bankroll || 0;
+    const bankroll = (d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null;
     const bankEl = document.getElementById('hero-bankroll');
-    if (bankEl) bankEl.textContent = '$' + bankroll.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    if (bankEl) {
+        bankEl.textContent = Number.isFinite(bankroll)
+            ? '$' + bankroll.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})
+            : '-';
+    }
     const brSub = document.getElementById('hero-bankroll-sub');
     if (brSub) brSub.textContent = d.session_id ? ('id ' + String(d.session_id).slice(-14)) : '';
 
-    const dailyPnl = Number(p.daily_pnl || 0);
+    const dailyPnl = (p.daily_pnl !== null && p.daily_pnl !== undefined)
+        ? Number(p.daily_pnl)
+        : null;
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
-        pnlEl.textContent = (dailyPnl >= 0 ? '+' : '-') + '$' + Math.abs(dailyPnl).toFixed(2);
-        pnlEl.style.color = dailyPnl >= 0 ? 'var(--green)' : 'var(--red)';
+        if (Number.isFinite(dailyPnl)) {
+            pnlEl.textContent = (dailyPnl >= 0 ? '+' : '-') + '$' + Math.abs(dailyPnl).toFixed(2);
+            pnlEl.style.color = dailyPnl > 0 ? 'var(--green)' : dailyPnl < 0 ? 'var(--red)' : 'var(--text)';
+        } else {
+            pnlEl.textContent = '-';
+            pnlEl.style.color = 'var(--text-muted)';
+        }
     }
     const pnlSub = document.getElementById('hero-pnl-sub');
     if (pnlSub) {
@@ -1566,7 +1577,19 @@ function sseSnapshotToStatusShape(raw) {
  * Command Center feels live every ~2s; fetchAll (slower) still drives positions table and heavy panels.
  */
 function applySSESnapshot(raw) {
-    if (!raw || !raw.ts) return;
+    if (!raw) return;
+    if (raw.sse_error) {
+        console.warn('[dashboard] SSE server error frame:', raw.sse_error);
+        return;
+    }
+    if (!raw.ts) {
+        if (window._dashSseTsWarned !== true) {
+            console.warn('[dashboard] SSE frame missing ts:', Object.keys(raw || {}));
+            window._dashSseTsWarned = true;
+        }
+        return;
+    }
+    window._dashSseTsWarned = false;
     if (raw.btc_price !== undefined && raw.btc_price > 0) {
         const el = document.getElementById('btc-price');
         if (el) el.textContent = '$' + Number(raw.btc_price).toLocaleString();
@@ -2711,7 +2734,13 @@ async function loadPnLChart() {
         ctx.clearRect(0, 0, w, h);
 
         const snaps = d.snapshots;
-        const values = snaps.map(s => s.bankroll + (s.unrealized_pnl || 0));
+        const values = snaps
+            .map(s => Number(s.bankroll) + Number(s.unrealized_pnl || 0))
+            .filter(v => Number.isFinite(v));
+        if (values.length < 2) {
+            if (section) section.style.display = 'none';
+            return;
+        }
         const min = Math.min(...values) * 0.995;
         const max = Math.max(...values) * 1.005;
         const range = max - min || 1;
@@ -2885,27 +2914,48 @@ async function toggleDeadZones() {
     }
 }
 
+function readConfigNumber(el) {
+    const raw = String(el.value || '').trim();
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)) {
+        throw new Error(`Invalid numeric value in ${el.id}: ${raw || '(empty)'}`);
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) throw new Error(`Invalid numeric value in ${el.id}: ${raw}`);
+    if (el.min !== '' && n < Number(el.min)) throw new Error(`${el.id} must be >= ${el.min}`);
+    if (el.max !== '' && n > Number(el.max)) throw new Error(`${el.id} must be <= ${el.max}`);
+    const unitRangeFields = [
+        'kelly_fraction',
+        'min_edge',
+        'entry_price_min',
+        'entry_price_max',
+        'ai_confidence_threshold',
+        'take_profit_pct',
+        'stop_loss_pct',
+        'daily_loss_limit',
+        'max_exposure_per_trade',
+    ];
+    if (unitRangeFields.some((suffix) => el.id.endsWith(suffix)) && (n < 0 || n > 1)) {
+        throw new Error(`${el.id} must be between 0 and 1`);
+    }
+    return n;
+}
+
 async function saveConfig() {
     const statusEl = document.getElementById('cfg-status');
     statusEl.innerHTML = '<span class="spinner"></span> Saving...';
     const updates = {};
-    document.querySelectorAll('#config-panel input').forEach(el => {
-        const id = el.id.replace('cfg-', '');
-        const parts = id.split('-');
-        let obj = updates;
-        for (let i = 0; i < parts.length - 1; i++) {
-            if (!obj[parts[i]]) obj[parts[i]] = {};
-            obj = obj[parts[i]];
-        }
-        const key = parts[parts.length - 1];
-        if (el.type === 'checkbox') {
-            obj[key] = el.checked;
-        } else {
-            const n = parseFloat(el.value);
-            obj[key] = Number.isFinite(n) ? n : el.value;
-        }
-    });
     try {
+        document.querySelectorAll('#config-panel input').forEach(el => {
+            const id = el.id.replace('cfg-', '');
+            const parts = id.split('-');
+            let obj = updates;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!obj[parts[i]]) obj[parts[i]] = {};
+                obj = obj[parts[i]];
+            }
+            const key = parts[parts.length - 1];
+            obj[key] = el.type === 'checkbox' ? el.checked : readConfigNumber(el);
+        });
         const r = await fetch('/api/config', {method: 'POST', headers: dashAuthHeaders({'Content-Type': 'application/json'}), body: JSON.stringify(updates)});
         const d = await r.json();
         statusEl.textContent = r.ok ? 'Saved!' : `Error: ${d.detail}`;
@@ -4053,8 +4103,18 @@ if (_currentMainView() === 'journal') {
     });
 })();
 
-setInterval(fetchAll, 14000);
-setInterval(() => {
+window._dashIntervals = window._dashIntervals || [];
+function _registerInterval(fn, ms) {
+    const id = setInterval(fn, ms);
+    window._dashIntervals.push(id);
+    return id;
+}
+window.addEventListener('beforeunload', () => {
+    (window._dashIntervals || []).forEach(clearInterval);
+});
+
+_registerInterval(fetchAll, 14000);
+_registerInterval(() => {
     const view = _currentMainView();
     if (view === 'journal') {
         loadPnLChart();
@@ -4114,22 +4174,38 @@ async function loadAISummary() {
 
 // ── SSE — real-time snapshot every ~2s (heroes + badges + BTC); fetchAll is slower for heavy panels.
 let _sseActive = false;
+let _sseRetryDelay = 1000;
+const _SSE_MAX_RETRY_DELAY = 60000;
 function _setupSSE() {
     try {
         const es = new EventSource('/api/events');
-        es.onopen = () => { _sseActive = true; };
+        es.onopen = () => {
+            _sseActive = true;
+            _sseRetryDelay = 1000;
+        };
         es.onmessage = (e) => {
             try {
                 const d = JSON.parse(e.data);
                 applySSESnapshot(d);
-            } catch(err) {}
+            } catch(err) {
+                console.error(
+                    '[dashboard] SSE parse error:',
+                    err?.message || err,
+                    'payload:',
+                    String(e.data || '').slice(0, 200)
+                );
+            }
         };
         es.onerror = () => {
             _sseActive = false;
             es.close();
-            setTimeout(_setupSSE, 5000);
+            const jitter = Math.random() * 0.3 * _sseRetryDelay;
+            setTimeout(_setupSSE, _sseRetryDelay + jitter);
+            _sseRetryDelay = Math.min(_sseRetryDelay * 2, _SSE_MAX_RETRY_DELAY);
         };
-    } catch(e) {}
+    } catch(e) {
+        console.error('[dashboard] SSE setup error:', e);
+    }
 }
 _setupSSE();
 
@@ -4830,7 +4906,7 @@ async function loadBTCChart() {
 (function initChartWhenReady() {
     if (typeof LightweightCharts !== 'undefined') {
         initBTCChart();
-        setInterval(loadBTCChart, 20000);
+        _registerInterval(loadBTCChart, 20000);
     } else {
         // Library still loading — retry in 500ms
         setTimeout(initChartWhenReady, 500);
@@ -4873,7 +4949,7 @@ function checkHeroFlash(key, el, isPnl) {
     pairs.forEach(function(p) {
         var el = document.getElementById(p.id);
         if (!el) return;
-        setInterval(function() { checkHeroFlash(p.key, el, p.isPnl); }, 2100);
+        _registerInterval(function() { checkHeroFlash(p.key, el, p.isPnl); }, 2100);
     });
 })();
 </script>

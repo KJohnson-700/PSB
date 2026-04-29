@@ -32,7 +32,6 @@ def test_discord_trade_allowlist():
             "eth_macro",
             "hype_macro",
             "xrp_macro",
-            "xrp_dump_hedge",
         }
     )
     assert _discord_trade_allowed("bitcoin")

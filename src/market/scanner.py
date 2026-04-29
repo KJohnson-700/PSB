@@ -7,7 +7,9 @@ import json
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from threading import Lock
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -27,8 +29,24 @@ _WEATHER_TEMP_SLUG_RE = re.compile(
     r"^highest-temperature-in-([a-z0-9-]+)-on-([a-z]{3})-(\d{1,2})-(\d{4})$",
     re.IGNORECASE,
 )
+_WEATHER_TEMP_TEXT_RE = re.compile(
+    r"\bhighest\s+temperature\s+in\s+[a-z0-9 .'-]+\s+on\s+"
+    r"(?:[a-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}|[a-z]{3}\.?\s+\d{1,2}(?:,)?\s+\d{4})\b",
+    re.IGNORECASE,
+)
 _WEATHER_PRECIP_SLUG_RE = re.compile(
-    r"(?:rain|snow|precipitation|storm|hail|thunderstorm)",
+    r"(?:\bprecipitation\b|\b(?:rain|snow)\b.*\b(?:mm|cm|inch|inches)\b|"
+    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation)\b)",
+    re.IGNORECASE,
+)
+_WEATHER_PRECIP_TEXT_RE = re.compile(
+    r"\b(?:rain|snow|precipitation)\b.*\b(?:mm|cm|inch|inches)\b|"
+    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation)\b",
+    re.IGNORECASE,
+)
+_WEATHER_TITLE_HINT_RE = re.compile(
+    r"\b(highest\s+temperature|precipitation|rain|snow)\b|"
+    r"\b(?:mm|inch|inches|cm|°f|°c)\b",
     re.IGNORECASE,
 )
 
@@ -94,6 +112,13 @@ _CRYPTO_UPDOWN_SLUG_RE = re.compile(
 _HYPE_ALT_UPDOWN_SLUG_RE = re.compile(
     r"(?:hyperliquid-up-or-down|hype-up-or-down)-", re.IGNORECASE
 )
+_UPDOWN_SLUG_DATE_RE = re.compile(
+    r"up-or-down-([a-z]+)-(\d{1,2})-(\d{4})-", re.IGNORECASE
+)
+_UPDOWN_TIME_RANGE_RE = re.compile(
+    r"(\d{1,2}):(\d{2})\s*(AM|PM)?\s*[–-]\s*(\d{1,2}):(\d{2})\s*(AM|PM)",
+    re.IGNORECASE,
+)
 
 
 def is_crypto_updown_market(market: Market) -> bool:
@@ -130,6 +155,69 @@ def is_crypto_updown_market(market: Market) -> bool:
     )
 
 
+def _parse_updown_market_end_from_text(
+    *, slug: str, question: str, group_item_title: str
+) -> Optional[datetime]:
+    """Parse the individual up/down candle end time from Gamma text.
+
+    Gamma event markets can expose an event-level ``endDate``. For hourly grouped
+    up/down events that is too late for 5m/15m entries, so prefer the market's
+    own time range when present.
+    """
+    slug_match = _UPDOWN_SLUG_DATE_RE.search(slug or "")
+    if not slug_match:
+        return None
+    month_name, day_s, year_s = slug_match.groups()
+    try:
+        month = datetime.strptime(month_name[:3], "%b").month
+        day = int(day_s)
+        year = int(year_s)
+    except (TypeError, ValueError):
+        return None
+
+    text = f"{question or ''} {group_item_title or ''}"
+    time_match = _UPDOWN_TIME_RANGE_RE.search(text)
+    if not time_match:
+        return None
+    h1, m1, p1, h2, m2, p2 = time_match.groups()
+    start_period = (p1 or p2 or "").upper()
+    end_period = (p2 or p1 or "").upper()
+    try:
+        start_hour = int(h1)
+        start_minute = int(m1)
+        end_hour = int(h2)
+        end_minute = int(m2)
+    except (TypeError, ValueError):
+        return None
+
+    def _to_24h(hour: int, period: str) -> int:
+        if period == "PM" and hour != 12:
+            return hour + 12
+        if period == "AM" and hour == 12:
+            return 0
+        return hour
+
+    start_et = datetime(
+        year,
+        month,
+        day,
+        _to_24h(start_hour, start_period),
+        start_minute,
+        tzinfo=_ET,
+    )
+    end_et = datetime(
+        year,
+        month,
+        day,
+        _to_24h(end_hour, end_period),
+        end_minute,
+        tzinfo=_ET,
+    )
+    if end_et <= start_et:
+        end_et += timedelta(days=1)
+    return end_et.astimezone(timezone.utc)
+
+
 class MarketScanner:
     """Scans Polymarket for trading opportunities.
 
@@ -139,21 +227,64 @@ class MarketScanner:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        _pm = config.get("polymarket", {}) or {}
-        _wx = (config.get("strategies", {}) or {}).get("weather", {}) or {}
+        self._reload_config_fields()
+        self.session: Optional[aiohttp.ClientSession] = None
+        self._background_fetch_pool = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="scanner-bg"
+        )
+        self._slow_fetch_lock = Lock()
+        self._weather_refresh_future: Optional[Future[List[Market]]] = None
+        self._weather_cache: List[Market] = []
+        self._weather_cache_updated_at: Optional[datetime] = None
+
+    def _reload_config_fields(self) -> None:
+        """Refresh derived thresholds from the shared config dict."""
+        _pm = self.config.get("polymarket", {}) or {}
+        _tr = self.config.get("trading", {}) or {}
+        _wx = (self.config.get("strategies", {}) or {}).get("weather", {}) or {}
         self.min_liquidity = _pm.get("min_liquidity", 10000)
         self.weather_min_liquidity = float(
             _wx.get("min_liquidity", _wx.get("min_volume", self.min_liquidity))
         )
-        # Wall-clock cap for bundled Gamma + updown (+ optional HYPE alt) HTTP in a worker thread.
-        self._scanner_sync_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.weather_scan_limit = max(20, int(_wx.get("scan_limit", 120)))
+        self._cycle_interval_sec = float(_tr.get("cycle_interval_sec", 120))
+        configured_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
+        # Never let a sync timeout outrun the trading cadence. Leave a small gap so
+        # one slow cycle does not overlap the next and blind the bot indefinitely.
+        hard_cap_timeout = max(20.0, self._cycle_interval_sec - 15.0)
+        self._scanner_sync_timeout = min(configured_timeout, hard_cap_timeout)
+        if configured_timeout > self._scanner_sync_timeout:
+            logger.warning(
+                "Scanner timeout capped from %.1fs to %.1fs to stay below cycle interval %.1fs",
+                configured_timeout,
+                self._scanner_sync_timeout,
+                self._cycle_interval_sec,
+            )
+
+    def reload_from_config(self, config: Dict[str, Any]) -> None:
+        """Apply updated config to the live scanner without replacing caches/pool."""
+        self.config = config
+        self._reload_config_fields()
 
     def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
         text = f"{question or ''} {description or ''}"
         if _WEATHER_MARKET_HINT_RE.search(text):
             return self.weather_min_liquidity
         return self.min_liquidity
+
+    @staticmethod
+    def _is_dedicated_weather_candidate(market: Market) -> bool:
+        slug = (market.slug or "").lower()
+        title_text = f"{market.question} {market.group_item_title}".lower()
+        if _WEATHER_TEMP_SLUG_RE.match(slug):
+            return True
+        if _WEATHER_TEMP_TEXT_RE.search(title_text):
+            return True
+        if _WEATHER_PRECIP_SLUG_RE.search(slug):
+            return True
+        if _WEATHER_PRECIP_TEXT_RE.search(title_text):
+            return True
+        return bool(_WEATHER_TITLE_HINT_RE.search(f"{slug} {title_text}"))
 
     def _should_fetch_hype_alt_markets(self) -> bool:
         """HYPE alt slug fetch is slow; default follows strategies.hype_macro.enabled.
@@ -168,6 +299,9 @@ class MarketScanner:
         )
 
     def _should_fetch_weather_markets(self) -> bool:
+        pm = self.config.get("polymarket") or {}
+        if "fetch_weather_markets" in pm:
+            return bool(pm.get("fetch_weather_markets"))
         return bool(
             (self.config.get("strategies") or {}).get("weather", {}).get("enabled", False)
         )
@@ -183,6 +317,7 @@ class MarketScanner:
         look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
         fetch_hype = self._should_fetch_hype_alt_markets()
         fetch_weather = self._should_fetch_weather_markets()
+        weather_snapshot = self._get_weather_market_snapshot() if fetch_weather else []
 
         tasks = {
             "gamma": lambda: self._fetch_markets_gamma(limit=200),
@@ -191,29 +326,86 @@ class MarketScanner:
         }
         if fetch_hype:
             tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
-        if fetch_weather:
-            tasks["weather"] = lambda: self.fetch_weather_markets(limit=600)
 
         results: Dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="scanner") as pool:
-            futures = {pool.submit(fn): name for name, fn in tasks.items()}
-            for future in as_completed(futures):
+        pool = ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="scanner")
+        futures = {pool.submit(fn): name for name, fn in tasks.items()}
+        try:
+            for future in as_completed(futures, timeout=self._scanner_sync_timeout):
                 name = futures[future]
                 try:
                     results[name] = future.result() or []
                 except Exception as e:
                     logger.error(f"{name} fetch error: {e}")
                     results[name] = []
+        except FuturesTimeoutError:
+            unfinished = [name for future, name in futures.items() if not future.done()]
+            logger.warning(
+                "Scanner: partial sync timeout after %.1fs; returning completed sources only. unfinished=%s",
+                self._scanner_sync_timeout,
+                unfinished,
+            )
+        finally:
+            for future, name in futures.items():
+                if future.done():
+                    continue
+                future.cancel()
+                results.setdefault(name, [])
+            pool.shutdown(wait=False, cancel_futures=True)
 
         return (
             results.get("gamma", []),
             results.get("updown", []),
             results.get("updown_5m", []),
             results.get("hype_alt", []),
-            results.get("weather", []),
+            weather_snapshot,
             look_ahead_15m,
             look_ahead_5m,
         )
+
+    def _get_weather_market_snapshot(self) -> List[Market]:
+        """Return the last completed weather snapshot and keep refresh running in background.
+
+        Weather discovery can outrun the scanner sync deadline. We therefore avoid putting it
+        on the critical path each cycle and instead refresh it opportunistically.
+        """
+        self._harvest_weather_refresh_result()
+
+        with self._slow_fetch_lock:
+            future = self._weather_refresh_future
+            if future is None:
+                self._weather_refresh_future = self._background_fetch_pool.submit(
+                    self._run_weather_refresh
+                )
+            cached = list(self._weather_cache)
+
+        return cached
+
+    def _run_weather_refresh(self) -> List[Market]:
+        markets = self.fetch_weather_markets(limit=self.weather_scan_limit) or []
+        logger.info(
+            "Scanner: weather background refresh fetched %d dedicated markets",
+            len(markets),
+        )
+        return markets
+
+    def _harvest_weather_refresh_result(self) -> None:
+        with self._slow_fetch_lock:
+            future = self._weather_refresh_future
+
+        if future is None or not future.done():
+            return
+
+        try:
+            markets = future.result() or []
+        except Exception as e:
+            logger.error("weather background refresh error: %s", e)
+            markets = []
+
+        with self._slow_fetch_lock:
+            self._weather_cache = list(markets)
+            self._weather_cache_updated_at = datetime.now(timezone.utc)
+            self._weather_refresh_future = None
 
     def _empty_scan_result(self, sync_timeout: bool = False) -> Dict[str, Any]:
         meta: Dict[str, Any] = {
@@ -382,7 +574,9 @@ class MarketScanner:
             
             market.yes_price = yes_price
             market.no_price = no_price
-            market.spread = abs(yes_price - (1 - no_price))
+            if market.spread <= 0:
+                # Mid prices only reveal convergence, not true order-book spread.
+                market.spread = max(0.0, 1.0 - (yes_price + no_price))
         
         return markets
     
@@ -420,7 +614,7 @@ class MarketScanner:
                         end_date = None
                         if end_str:
                             try:
-                                end_date = datetime.fromisoformat(end_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                                end_date = datetime.fromisoformat(end_str.replace("Z", "+00:00")).astimezone(timezone.utc)
                             except (ValueError, TypeError):
                                 pass
                         spread_val = float(gm.get("spread", 0.02) or 0.02)
@@ -450,13 +644,14 @@ class MarketScanner:
     # ──────────────────────────────────────────────────────────────
     GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
-    _HUMAN_UPDOWN_PREFIXES = {
-        "bitcoin": "bitcoin",
-        "solana": "solana",
-        "ethereum": "ethereum",
-        "xrp": "xrp",
-        "hyperliquid": "hyperliquid",
-    }
+    _HUMAN_UPDOWN_PREFIXES = (
+        "bitcoin",
+        "solana",
+        "ethereum",
+        "xrp",
+        "hyperliquid",
+        "hype",
+    )
 
     @staticmethod
     def _build_human_updown_event_slug(asset_prefix: str, when_utc: datetime) -> str:
@@ -476,19 +671,33 @@ class MarketScanner:
         return f"{asset_prefix}-up-or-down-{month}-{day}-{year}-{hour_12}{ampm}-et"
 
     @classmethod
-    def _iter_updown_event_slugs(cls, *, step_minutes: int, look_ahead: int) -> List[str]:
+    def _iter_named_event_slugs(
+        cls,
+        *,
+        prefixes: Tuple[str, ...],
+        step_minutes: int,
+        look_ahead: int,
+    ) -> List[str]:
         now = datetime.now(timezone.utc)
         slugs: List[str] = []
         seen: set[str] = set()
         for offset in range(0, look_ahead + 1):
             window_time = now + timedelta(minutes=offset * step_minutes)
-            for asset_prefix in cls._HUMAN_UPDOWN_PREFIXES.values():
+            for asset_prefix in prefixes:
                 slug = cls._build_human_updown_event_slug(asset_prefix, window_time)
                 if slug in seen:
                     continue
                 seen.add(slug)
                 slugs.append(slug)
         return slugs
+
+    @classmethod
+    def _iter_updown_event_slugs(cls, *, step_minutes: int, look_ahead: int) -> List[str]:
+        return cls._iter_named_event_slugs(
+            prefixes=cls._HUMAN_UPDOWN_PREFIXES,
+            step_minutes=step_minutes,
+            look_ahead=look_ahead,
+        )
 
     @staticmethod
     def _parse_gamma_event_market(gm: Dict[str, Any], slug: str) -> Optional[Market]:
@@ -502,19 +711,25 @@ class MarketScanner:
             tokens = json.loads(gm.get("clobTokenIds", "[]"))
             vol = float(gm.get("volume", 0) or 0)
             liq = float(gm.get("liquidity", 0) or 0)
+            question = gm.get("question", "")
+            group_item_title = gm.get("groupItemTitle", "")
             end_str = gm.get("endDate") or gm.get("end_date_iso")
-            end_date = None
+            end_date = _parse_updown_market_end_from_text(
+                slug=slug,
+                question=question,
+                group_item_title=group_item_title,
+            )
             if end_str:
                 try:
-                    end_date = datetime.fromisoformat(
+                    end_date = end_date or datetime.fromisoformat(
                         end_str.replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
+                    ).astimezone(timezone.utc)
                 except (ValueError, TypeError):
                     pass
 
             return Market(
                 id=gm.get("id", ""),
-                question=gm.get("question", ""),
+                question=question,
                 description=(gm.get("description", "") or "")[:300],
                 volume=vol,
                 liquidity=liq,
@@ -524,11 +739,48 @@ class MarketScanner:
                 end_date=end_date,
                 token_id_yes=tokens[0] if tokens else "",
                 token_id_no=tokens[1] if len(tokens) > 1 else "",
-                group_item_title=gm.get("groupItemTitle", ""),
+                group_item_title=group_item_title,
                 slug=slug,
             )
         except Exception:
             return None
+
+    def _fetch_event_slug_markets(
+        self,
+        slugs: List[str],
+        *,
+        timeout_sec: float,
+        limit: Optional[int] = None,
+    ) -> List[Market]:
+        markets: List[Market] = []
+        seen_ids: set[str] = set()
+        for slug in slugs:
+            if limit is not None and len(markets) >= limit:
+                break
+            try:
+                resp = requests.get(
+                    f"{self.GAMMA_API_BASE}/events",
+                    params={"slug": slug},
+                    timeout=timeout_sec,
+                )
+                if resp.status_code != 200:
+                    continue
+                events = resp.json()
+                if not events:
+                    continue
+                event = events[0]
+                for gm in event.get("markets", []):
+                    parsed = self._parse_gamma_event_market(gm, slug)
+                    if parsed is None or parsed.id in seen_ids:
+                        continue
+                    seen_ids.add(parsed.id)
+                    markets.append(parsed)
+                    if limit is not None and len(markets) >= limit:
+                        break
+            except Exception as e:
+                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
+                continue
+        return markets
 
     def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:
         """Fetch current + upcoming 15-minute crypto Up/Down markets.
@@ -539,27 +791,10 @@ class MarketScanner:
         Returns:
             List of Market objects for tradeable updown windows.
         """
-        markets: List[Market] = []
-        for slug in self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead):
-            try:
-                resp = requests.get(
-                    f"{self.GAMMA_API_BASE}/events",
-                    params={"slug": slug},
-                    timeout=8,
-                )
-                if resp.status_code != 200:
-                    continue
-                events = resp.json()
-                if not events:
-                    continue
-                event = events[0]
-                for gm in event.get("markets", []):
-                    parsed = self._parse_gamma_event_market(gm, slug)
-                    if parsed is not None:
-                        markets.append(parsed)
-            except Exception as e:
-                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
-                continue
+        markets = self._fetch_event_slug_markets(
+            self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
+            timeout_sec=8,
+        )
 
         if markets:
             def _is_eth_mkt(m: Market) -> bool:
@@ -589,27 +824,10 @@ class MarketScanner:
         Returns:
             List of Market objects for tradeable 5m updown windows.
         """
-        markets: List[Market] = []
-        for slug in self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead):
-            try:
-                resp = requests.get(
-                    f"{self.GAMMA_API_BASE}/events",
-                    params={"slug": slug},
-                    timeout=8,
-                )
-                if resp.status_code != 200:
-                    continue
-                events = resp.json()
-                if not events:
-                    continue
-                event = events[0]
-                for gm in event.get("markets", []):
-                    parsed = self._parse_gamma_event_market(gm, slug)
-                    if parsed is not None:
-                        markets.append(parsed)
-            except Exception as e:
-                logger.debug(f"Failed to fetch 5m updown slug {slug}: {e}")
-                continue
+        markets = self._fetch_event_slug_markets(
+            self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead),
+            timeout_sec=8,
+        )
 
         if markets:
             def _is_eth_mkt_5(m: Market) -> bool:
@@ -631,84 +849,24 @@ class MarketScanner:
         return markets
 
     def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
-        """Fetch Hyperliquid/HYPE up-or-down markets from non timestamp slugs.
+        """Fetch HYPE alias slugs directly without crawling the full event set.
 
-        Handles event slugs like:
-          - hyperliquid-up-or-down-...
-          - hype-up-or-down-...
+        This is a bounded fallback path for named `hyperliquid` / `hype` event slugs.
         """
-        markets: List[Market] = []
-        offset = 0
-        while len(markets) < limit:
-            try:
-                params = {
-                    "limit": min(100, limit - len(markets)),
-                    "offset": offset,
-                    "active": "true",
-                    "closed": "false",
-                }
-                resp = requests.get(f"{self.GAMMA_API_BASE}/events", params=params, timeout=10)
-                if resp.status_code != 200:
-                    break
-                events = resp.json() or []
-                if not events:
-                    break
-                for event in events:
-                    slug = str(event.get("slug") or "")
-                    if not _HYPE_ALT_UPDOWN_SLUG_RE.search(slug):
-                        continue
-                    for gm in event.get("markets", []):
-                        try:
-                            mid = gm.get("id", "")
-                            question = gm.get("question", "")
-                            if "up or down" not in question.lower():
-                                continue
-                            desc = (gm.get("description", "") or "")[:300]
-                            vol = float(gm.get("volume", 0) or 0)
-                            liq = float(gm.get("liquidity", 0) or 0)
-                            outcomes = json.loads(gm.get("outcomePrices", "[]"))
-                            yes_price = float(outcomes[0]) if outcomes else 0.5
-                            no_price = float(outcomes[1]) if len(outcomes) > 1 else 1.0 - yes_price
-                            tokens = json.loads(gm.get("clobTokenIds", "[]"))
-                            token_yes = tokens[0] if tokens else ""
-                            token_no = tokens[1] if len(tokens) > 1 else ""
-                            end_str = gm.get("endDate") or gm.get("end_date_iso")
-                            end_date = None
-                            if end_str:
-                                try:
-                                    end_date = datetime.fromisoformat(
-                                        end_str.replace("Z", "+00:00")
-                                    ).replace(tzinfo=None)
-                                except (ValueError, TypeError):
-                                    pass
-                            if yes_price <= 0.01 or yes_price >= 0.99:
-                                continue
-                            markets.append(
-                                Market(
-                                    id=mid,
-                                    question=question,
-                                    description=desc,
-                                    volume=vol,
-                                    liquidity=liq,
-                                    yes_price=yes_price,
-                                    no_price=no_price,
-                                    spread=abs(yes_price - no_price),
-                                    end_date=end_date,
-                                    token_id_yes=token_yes,
-                                    token_id_no=token_no,
-                                    group_item_title=gm.get("groupItemTitle", ""),
-                                    slug=slug,
-                                )
-                            )
-                        except Exception:
-                            continue
-                offset += len(events)
-                if len(events) < params["limit"]:
-                    break
-            except Exception as e:
-                logger.debug(f"Failed to fetch alternate HYPE up/down events: {e}")
-                break
-
+        look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
+        slugs = self._iter_named_event_slugs(
+            prefixes=("hyperliquid", "hype"),
+            step_minutes=15,
+            look_ahead=max(1, min(look_ahead_15m, 4)),
+        )
+        slugs.extend(
+            self._iter_named_event_slugs(
+                prefixes=("hyperliquid", "hype"),
+                step_minutes=5,
+                look_ahead=max(1, min(look_ahead_5m, 8)),
+            )
+        )
+        markets = self._fetch_event_slug_markets(slugs, timeout_sec=4, limit=limit)
         if markets:
             logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
         return markets
@@ -723,6 +881,7 @@ class MarketScanner:
         markets: List[Market] = []
         seen_market_ids: set[str] = set()
         offset = 0
+        raw_candidates = 0
         try:
             while len(markets) < limit:
                 params = {
@@ -734,7 +893,7 @@ class MarketScanner:
                 resp = requests.get(
                     f"{self.GAMMA_API_BASE}/markets",
                     params=params,
-                    timeout=15,
+                    timeout=8,
                 )
                 resp.raise_for_status()
                 batch = resp.json()
@@ -742,12 +901,10 @@ class MarketScanner:
                     break
                 parsed_batch = self._parse_markets(batch)
                 for market in parsed_batch:
-                    text = f"{market.slug} {market.question} {market.description} {market.group_item_title}".lower()
-                    is_weather = bool(_WEATHER_MARKET_HINT_RE.search(text))
-                    is_temp_slug = bool(_WEATHER_TEMP_SLUG_RE.match((market.slug or "").lower()))
-                    is_precip_slug = bool(_WEATHER_PRECIP_SLUG_RE.search((market.slug or "").lower()))
-                    if not (is_weather or is_temp_slug or is_precip_slug):
+                    if not self._is_dedicated_weather_candidate(market):
                         continue
+                    raw_candidates += 1
+                    text = f"{market.slug} {market.question} {market.description} {market.group_item_title}".lower()
                     if city_filter and not any(city in text for city in city_filter):
                         continue
                     if market.id in seen_market_ids:
@@ -758,7 +915,15 @@ class MarketScanner:
                 if len(batch) < params["limit"]:
                     break
             if markets:
-                logger.info(f"Fetched {len(markets)} dedicated weather markets from Gamma")
+                sample = [m.question[:100] for m in markets[:3]]
+                logger.info(
+                    "Fetched %d dedicated weather markets from Gamma (raw_candidates=%d, sample=%s)",
+                    len(markets),
+                    raw_candidates,
+                    sample,
+                )
+            else:
+                logger.info("Fetched 0 dedicated weather markets from Gamma")
             return markets
         except Exception as e:
             logger.error(f"Weather market fetch error: {e}")
@@ -783,7 +948,7 @@ class MarketScanner:
                 look_ahead_5m,
             ) = await asyncio.wait_for(
                 asyncio.to_thread(self._sync_network_phase),
-                timeout=self._scanner_sync_timeout,
+                timeout=self._scanner_sync_timeout + 2.0,
             )
         except asyncio.TimeoutError:
             elapsed_ms = int((time.perf_counter() - t_scan_start) * 1000)
@@ -836,6 +1001,14 @@ class MarketScanner:
             opportunities["updown_5m"] = []
 
         if hype_alt:
+            known_updown_ids = {
+                m.id for m in opportunities.get("updown", [])
+            } | {
+                m.id for m in opportunities.get("updown_5m", [])
+            }
+            hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
+
+        if hype_alt:
             opportunities["high_liquidity"].extend(hype_alt)
             opportunities["updown_hype_alt"] = hype_alt
         else:
@@ -857,10 +1030,14 @@ class MarketScanner:
         }
 
         logger.info(
-            f"Found {len(opportunities['consensus_yes'])} consensus YES opportunities"
+            "Scanner: bulk Gamma feed has %d generic consensus YES markets "
+            "(not crypto up/down strategy buckets)",
+            len(opportunities["consensus_yes"]),
         )
         logger.info(
-            f"Found {len(opportunities['consensus_no'])} consensus NO opportunities"
+            "Scanner: bulk Gamma feed has %d generic consensus NO markets "
+            "(not crypto up/down strategy buckets)",
+            len(opportunities["consensus_no"]),
         )
 
         total_ms = int((time.perf_counter() - t_scan_start) * 1000)
@@ -875,3 +1052,4 @@ class MarketScanner:
         """Close HTTP session"""
         if self.session and not self.session.closed:
             await self.session.close()
+        self._background_fetch_pool.shutdown(wait=False, cancel_futures=True)

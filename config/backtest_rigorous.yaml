@@ -69,3 +69,8 @@ output:
   report_dir: "data/backtest/reports"
   save_per_period: true
   save_aggregate: true
+
+weather:
+  - start: "2026-04-25"
+    end: "2026-04-29"
+    label: "2026 Apr 25-29 Live"

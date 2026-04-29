@@ -35,6 +35,9 @@ class BacktestAIAgent:
 
     def __init__(self, config: dict):
         self.config = config
+        self.proxy_disclaimer = (
+            "BACKTEST PROXY: deterministic rule-based AI; metrics do not validate live LLM behavior."
+        )
 
     def is_available(self) -> bool:
         return True
@@ -80,7 +83,7 @@ class BacktestAIAgent:
         confidence = 0.72
 
         return AIAnalysis(
-            reasoning="[Backtest] Rule-based mean reversion / fade proxy",
+            reasoning="[BACKTEST PROXY] Rule-based mean reversion / fade proxy",
             confidence_score=confidence,
             estimated_probability=estimated_prob,
             recommendation=recommendation,

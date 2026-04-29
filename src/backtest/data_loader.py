@@ -7,6 +7,7 @@ Supports: Polymarket CLOB API (free), PolymarketData API (paid), local CSV/Parqu
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -19,6 +20,15 @@ logger = logging.getLogger(__name__)
 POLYMARKETDATA_BASE = "https://api.polymarketdata.co/v1"
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE = "https://clob.polymarket.com"
+
+
+def estimate_spread(volume_24h: float = 0.0, liquidity: float = 0.0) -> float:
+    """Fallback spread estimate when historical L2/spread data is unavailable."""
+    if volume_24h > 1_000_000 and liquidity > 100_000:
+        return 0.02
+    if volume_24h > 100_000 or liquidity > 25_000:
+        return 0.04
+    return 0.08
 
 
 class PolymarketLoader:
@@ -187,7 +197,7 @@ class PolymarketLoader:
         ts = df["t"]
         unit = "ms" if ts.max() > 1e12 else "s"
         df["t"] = pd.to_datetime(df["t"], unit=unit, utc=True)
-        df["spread"] = 0.02
+        df["spread"] = estimate_spread()
         return df.set_index("t").sort_index()
 
     def load_market_data(
@@ -231,9 +241,20 @@ class PolymarketDataLoader:
         if self.api_key:
             self.session.headers["X-API-Key"] = self.api_key
 
-    def _get(self, url: str, params: Dict = None, timeout: int = 60) -> Optional[Dict]:
+    def _get(self, url: str, params: Dict = None, timeout: int = 60, retry_count: int = 0) -> Optional[Dict]:
+        # Respect rate limit cooldown
+        if hasattr(self, "_rate_limit_until") and time.time() < self._rate_limit_until:
+            wait = self._rate_limit_until - time.time()
+            logger.info(f"Rate limit cooldown: waiting {wait:.0f}s")
+            time.sleep(wait)
         try:
             r = self.session.get(url, params=params, timeout=timeout)
+            if r.status_code == 429:
+                retry_after = int(r.headers.get("Retry-After", 60))
+                self._rate_limit_until = time.time() + retry_after + 1
+                logger.warning(f"429 rate limited, retrying after {retry_after}s")
+                time.sleep(retry_after + 1)
+                return self._get(url, params, timeout, retry_count + 1)
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
@@ -268,9 +289,25 @@ class PolymarketDataLoader:
         )
         if not data or "data" not in data:
             return pd.DataFrame()
-        df = pd.DataFrame(data["data"])
-        if not df.empty:
-            df["t"] = pd.to_datetime(df["t"], utc=True)
+        raw = data["data"]
+
+        # PolymarketData v2 returns nested format: {"No": [{"t","p"},...], "Yes": [{"t","p"},...]}
+        # We want YES prices — extract the YES series
+        if isinstance(raw, dict) and "Yes" in raw and "No" in raw:
+            yes_data = raw.get("Yes", [])
+            if yes_data:
+                rows = [{"t": d["t"], "price": d["p"]} for d in yes_data]
+                return pd.DataFrame(rows)
+            return pd.DataFrame()
+
+        # Legacy flat format
+        df = pd.DataFrame(raw) if isinstance(raw, list) else pd.DataFrame([raw])
+        if df.empty:
+            return df
+        if "t" not in df.columns:
+            # Empty or malformed
+            return pd.DataFrame()
+        df["t"] = pd.to_datetime(df["t"], utc=True)
         return df
 
     def fetch_metrics(
@@ -291,9 +328,37 @@ class PolymarketDataLoader:
         )
         if not data or "data" not in data:
             return pd.DataFrame()
-        df = pd.DataFrame(data["data"])
-        if not df.empty:
-            df["t"] = pd.to_datetime(df["t"], utc=True)
+        raw = data["data"]
+
+        # PolymarketData v2 returns nested format — try to flatten
+        if isinstance(raw, dict):
+            # Check if it's nested {"No": [...], "Yes": [...]} or flat
+            if "spread" in raw or "liquidity" in raw:
+                # Flat single-row dict
+                return pd.DataFrame([raw])
+            elif "Yes" in raw or "No" in raw:
+                # Nested — merge both into one series using 't' and flatten metrics
+                all_rows = []
+                for side, series in raw.items():
+                    if isinstance(series, list):
+                        for d in series:
+                            if isinstance(d, dict) and "t" in d:
+                                row = dict(d)
+                                row["side"] = side
+                                all_rows.append(row)
+                if all_rows:
+                    df = pd.DataFrame(all_rows)
+                    df["t"] = pd.to_datetime(df["t"], utc=True)
+                    return df
+                return pd.DataFrame()
+
+        # Legacy flat format
+        df = pd.DataFrame(raw) if isinstance(raw, list) else pd.DataFrame([raw])
+        if df.empty:
+            return df
+        if "t" not in df.columns:
+            return pd.DataFrame()
+        df["t"] = pd.to_datetime(df["t"], utc=True)
         return df
 
     def fetch_books(
@@ -339,7 +404,7 @@ class PolymarketDataLoader:
         if metrics_df.empty:
             logger.warning(f"No metrics for {slug}, using prices only")
             prices_df = prices_df.rename(columns={"p": "price"})
-            prices_df["spread"] = 0.02  # default
+            prices_df["spread"] = estimate_spread()
             return prices_df.set_index("t").sort_index()
 
         prices_df = prices_df.rename(columns={"p": "price"})
@@ -352,6 +417,12 @@ class PolymarketDataLoader:
             logger.warning(
                 f"Join dropped >5% rows for {slug}: {len(merged)} vs {len(prices_df)}"
             )
+        if "spread" not in merged.columns:
+            volume = merged.get("volume")
+            liquidity = merged.get("liquidity")
+            volume_24h = float(volume.max()) if volume is not None and len(volume) else 0.0
+            liq = float(liquidity.max()) if liquidity is not None and len(liquidity) else 0.0
+            merged["spread"] = estimate_spread(volume_24h, liq)
         return merged
 
 
@@ -377,7 +448,7 @@ class LocalDataLoader:
         if "p" in df.columns and "price" not in df.columns:
             df["price"] = df["p"]
         if "spread" not in df.columns:
-            df["spread"] = 0.02
+            df["spread"] = estimate_spread()
         df["t"] = pd.to_datetime(df["t"], utc=True)
         return df.set_index("t").sort_index()
 
@@ -394,6 +465,6 @@ class LocalDataLoader:
         if "p" in df.columns and "price" not in df.columns:
             df["price"] = df["p"]
         if "spread" not in df.columns:
-            df["spread"] = 0.02
+            df["spread"] = estimate_spread()
         df["t"] = pd.to_datetime(df["t"], utc=True)
         return df.set_index("t").sort_index()

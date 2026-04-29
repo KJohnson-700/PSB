@@ -440,6 +440,11 @@ def main() -> int:
         "--save-report", action="store_true", help="Write JSON report to report_dir"
     )
     parser.add_argument(
+        "--live-markets",
+        action="store_true",
+        help="For weather, use live Gamma-discovered markets instead of static YAML market lists",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable extra logging (loader/strategy); default is progress bar only",
@@ -464,7 +469,12 @@ def main() -> int:
     market_list_path = repo / plan.get(
         "market_list_path", "config/backtest_markets.yaml"
     )
-    if not market_list_path.is_file():
+    need_market_list = not (
+        args.live_markets
+        and len(args.strategies) == 1
+        and args.strategies[0] == "weather"
+    )
+    if need_market_list and not market_list_path.is_file():
         logger.error("Market list not found: %s", market_list_path)
         return 1
 
@@ -516,7 +526,10 @@ def main() -> int:
     print("RIGOROUS BACKTEST — Multi-period, train/test, stress")
     print("=" * 70)
     print(f"Plan: {plan_path}")
-    print(f"Market list: {market_list_path} (min_markets_per_category={min_per_cat})")
+    if need_market_list:
+        print(f"Market list: {market_list_path} (min_markets_per_category={min_per_cat})")
+    else:
+        print("Market list: bypassed (weather live Gamma discovery)")
     if args.categories:
         print(f"Categories filter: {args.categories}")
     print(
@@ -525,6 +538,37 @@ def main() -> int:
     if args.quick:
         print("Quick mode: max 25 slugs per strategy")
     print()
+
+    if args.live_markets and len(args.strategies) == 1 and args.strategies[0] == "weather":
+        try:
+            from scripts.run_backtest_weather import (
+                fetch_weather_rows,
+                run_backtest as run_weather_backtest,
+                save_report as save_weather_report,
+            )
+        except BaseException as exc:
+            logger.error("Unable to load live weather backtest helpers: %s", exc)
+            return 1
+        print("Running weather against live Gamma-discovered markets")
+        rows = fetch_weather_rows(include_closed=False)
+        if not rows:
+            logger.error("No live weather markets found via Gamma discovery")
+            return 1
+        results = run_weather_backtest(
+            rows,
+            config=config,
+            bankroll=float(plan.get("backtest", {}).get("bankroll", 2000)),
+            quick=bool(args.quick),
+        )
+        if args.save_report:
+            report_path = save_weather_report(results)
+            print(f"Weather report saved: {report_path}")
+        print(
+            f"Weather live run: scanned={results.get('markets_scanned', 0)} "
+            f"signals={results.get('signals_generated', 0)} "
+            f"total_pnl=${results.get('total_pnl', 0):.2f}"
+        )
+        return 0
 
     # Optional: validate only (check slug data for first period)
     if args.validate is not None:

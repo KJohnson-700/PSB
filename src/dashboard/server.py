@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 import json
 import logging
 import re
@@ -62,6 +62,20 @@ def register_dashboard_uvicorn_server(server: "uvicorn.Server") -> None:
     global _dashboard_uvicorn_server
     _dashboard_uvicorn_server = server
 
+
+def _is_full_bot(bot: Any) -> bool:
+    """True only after PolyBot has finished init; bootstrap shims are partial."""
+    return (
+        bot is not None
+        and hasattr(bot, "config")
+        and hasattr(bot, "risk_manager")
+        and hasattr(bot, "journal")
+    )
+
+
+def _full_bot_instance() -> Optional["PolyBot"]:
+    return bot_instance if _is_full_bot(bot_instance) else None
+
 # ── AI summary cache (keyed by session_id) ────────────────────────────────────
 _ai_summary_cache: Dict[str, str] = {}
 
@@ -89,8 +103,9 @@ def _refresh_btc_cache():
     _btc_analysis_refreshing = True
     try:
         # Prefer the bot's own service (already has warm Binance cache)
-        if bot_instance and hasattr(bot_instance, "bitcoin_strategy"):
-            svc = bot_instance.bitcoin_strategy.btc_service
+        bot = _full_bot_instance()
+        if bot and hasattr(bot, "bitcoin_strategy"):
+            svc = bot.bitcoin_strategy.btc_service
         else:
             svc = _get_btc_svc()
         ta = svc.get_full_analysis()
@@ -115,11 +130,13 @@ def _maybe_trigger_refresh(max_age: float = 55.0):
 def set_bot_instance(bot: "PolyBot"):
     global bot_instance
     bot_instance = bot
+    if not _is_full_bot(bot):
+        return
     # Pre-warm the cache when bot starts so first dashboard load is instant
     _maybe_trigger_refresh(max_age=0)
     auto_bts = _maybe_start_auto_backtests("startup")
     if auto_bts:
-        session_id = getattr(getattr(bot_instance, "journal", None), "session_id", None)
+        session_id = getattr(getattr(bot, "journal", None), "session_id", None)
         for auto_bt in auto_bts:
             status = auto_bt.get("status")
             name = auto_bt.get("name", "unknown")
@@ -232,8 +249,8 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
 
     return strategy
 
-# Optional: if DASHBOARD_API_KEY is set in the environment, mutating routes require X-API-Key.
-# If unset (typical Railway/local), _check_auth is a no-op — no dashboard UI collects this key.
+# Mutating routes require X-API-Key on non-loopback clients. Local development can
+# omit DASHBOARD_API_KEY, but public deployments must fail closed.
 DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
 
@@ -487,10 +504,23 @@ def _journal_for_query(session_id: Optional[str]):
 # ─── HELPERS ──────────────────────────────────────────────────────
 
 
+def _is_loopback_client(request: Request) -> bool:
+    client_host = (request.client.host if request.client else "") or ""
+    return client_host in {"127.0.0.1", "::1", "localhost"}
+
+
 def _check_auth(request: Request):
-    """Require X-API-Key header for mutating endpoints when DASHBOARD_API_KEY is set."""
+    """Require X-API-Key header for mutating endpoints outside local dev."""
     if not DASHBOARD_API_KEY:
-        return  # No key configured = no auth (localhost dev mode)
+        if _is_loopback_client(request):
+            return
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "DASHBOARD_API_KEY required for non-loopback access. "
+                "Set this env var before deploying the dashboard publicly."
+            ),
+        )
     api_key = request.headers.get("X-API-Key", "")
     if api_key != DASHBOARD_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
@@ -539,7 +569,7 @@ def _parse_threshold(question: str, asset: str = "btc") -> Optional[float]:
                 return price
             if asset == "xrp" and 0.05 < price < 500:
                 return price
-            if asset == "btc" and 1000 < price < 10_000_000:
+            if asset == "btc" and 1000 < price < 1_000_000_000:
                 return price
         except Exception:
             continue
@@ -627,7 +657,16 @@ async def get_ops_summary():
 async def sse_stream(request: Request):
     """Server-Sent Events stream — pushes live status snapshot every 2s."""
     async def event_generator():
+        sse_interval = 2.0
+        if CONFIG_PATH.exists():
+            try:
+                with open(CONFIG_PATH, encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f) or {}
+                sse_interval = float((cfg.get("dashboard") or {}).get("sse_interval_sec", 2.0))
+            except Exception:
+                sse_interval = 2.0
         while True:
+            bot = _full_bot_instance()
             if await request.is_disconnected():
                 break
             try:
@@ -635,7 +674,7 @@ async def sse_stream(request: Request):
                 # journal.get_summary() has no "total_trades"; PolyBot has no .positions — both
                 # defaulted to 0 every 2s and overwrote Command Center trades/positions.
                 rm = (
-                    getattr(bot_instance, "risk_manager", None) if bot_instance else None
+                    getattr(bot, "risk_manager", None) if bot else None
                 )
                 open_n = (
                     len(rm.active_positions)
@@ -649,22 +688,22 @@ async def sse_stream(request: Request):
                     round(float(getattr(rm, "daily_pnl", 0) or 0), 2) if rm else 0.0
                 )
                 js: Dict[str, Any] = {}
-                if bot_instance and getattr(bot_instance, "journal", None):
+                if bot and getattr(bot, "journal", None):
                     try:
-                        js = bot_instance.journal.get_summary()
+                        js = bot.journal.get_summary()
                     except Exception:
                         js = {}
                 open_stake = round(float(js.get("total_cost", 0) or 0), 2)
                 kill_switch_active = (DATA_ROOT / "KILL_SWITCH").exists()
                 session_open = int(js.get("open_positions", 0) or 0)
                 session_id = js.get("session_id")
-                if bot_instance and getattr(bot_instance, "journal", None):
-                    sid = getattr(bot_instance.journal, "session_id", None)
+                if bot and getattr(bot, "journal", None):
+                    sid = getattr(bot.journal, "session_id", None)
                     if sid is not None:
                         session_id = sid
 
                 # Bot stopped: align SSE hero with /api/status (disk positions + journal).
-                if not bot_instance:
+                if not bot:
                     try:
                         js = _get_journal_summary()
                     except Exception:
@@ -683,29 +722,29 @@ async def sse_stream(request: Request):
                         session_id = js.get("session_id")
 
                 cfg_disk: Dict[str, Any] = {}
-                if not bot_instance and CONFIG_PATH.exists():
+                if not bot and CONFIG_PATH.exists():
                     try:
                         with open(CONFIG_PATH, encoding="utf-8") as f:
                             cfg_disk = yaml.safe_load(f) or {}
                     except Exception:
                         cfg_disk = {}
 
-                if bot_instance:
-                    dry_run = bot_instance.config.get("trading", {}).get("dry_run", True)
-                    can_trade, _reason = bot_instance.risk_manager.can_trade()
+                if bot:
+                    dry_run = bot.config.get("trading", {}).get("dry_run", True)
+                    can_trade, _reason = bot.risk_manager.can_trade()
                     if kill_switch_active:
                         can_trade = False
-                    _ai_keys = getattr(bot_instance.ai_agent, "api_keys", None) or {}
-                    ai_payload = compute_ai_status(bot_instance.config, _ai_keys)
+                    _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
+                    ai_payload = compute_ai_status(bot.config, _ai_keys)
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
                     can_trade = False
                     ai_payload = compute_ai_status(cfg_disk, None)
 
                 bankroll_snap = 0.0
-                if bot_instance and hasattr(bot_instance, "bankroll"):
-                    bankroll_snap = round(float(bot_instance.bankroll), 2)
-                elif not bot_instance:
+                if bot and hasattr(bot, "bankroll"):
+                    bankroll_snap = round(float(bot.bankroll), 2)
+                elif not bot:
                     j_disk = _get_journal()
                     session_dir_disk = (
                         j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
@@ -734,7 +773,7 @@ async def sse_stream(request: Request):
                             bankroll_snap = round(initial + tp, 2)
 
                 snapshot = {
-                    "running": bot_instance.running if bot_instance else False,
+                    "running": bot.running if bot else False,
                     "kill_switch_active": kill_switch_active,
                     "dry_run": dry_run,
                     "can_trade": can_trade,
@@ -760,9 +799,10 @@ async def sse_stream(request: Request):
                     "ts": int(_time_mod.time()),
                 }
                 yield f"data: {json.dumps(snapshot)}\n\n"
-            except Exception:
-                yield "data: {}\n\n"
-            await asyncio.sleep(2)
+            except Exception as e:
+                logger.warning("SSE snapshot failed: %s", e, exc_info=True)
+                yield f"data: {json.dumps({'ts': int(_time_mod.time()), 'sse_error': str(e)})}\n\n"
+            await asyncio.sleep(max(0.5, sse_interval))
 
     return StreamingResponse(
         event_generator(),
@@ -893,6 +933,7 @@ async def get_status():
     """
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_active = kill_switch_file.exists()
+    bot = _full_bot_instance()
     strategy_names = (
         "bitcoin",
         "sol_macro",
@@ -925,9 +966,9 @@ async def get_status():
                 "last_signal_count": None,
                 "cumulative_signal_count": None,
             }
-            if bot_instance:
+            if bot:
                 attr = strategy_attrs.get(name)
-                strat_obj = getattr(bot_instance, attr, None) if attr else None
+                strat_obj = getattr(bot, attr, None) if attr else None
                 row["runtime_present"] = strat_obj is not None
                 if strat_obj is not None:
                     row["runtime_enabled"] = bool(
@@ -936,13 +977,13 @@ async def get_status():
                 else:
                     row["runtime_enabled"] = configured_enabled
                 row["last_cycle_time"] = (
-                    getattr(bot_instance, "last_cycle_times", {}) or {}
+                    getattr(bot, "last_cycle_times", {}) or {}
                 ).get(name)
                 row["last_signal_count"] = (
-                    getattr(bot_instance, "last_signal_counts", {}) or {}
+                    getattr(bot, "last_signal_counts", {}) or {}
                 ).get(name)
                 row["cumulative_signal_count"] = (
-                    getattr(bot_instance, "cumulative_signal_counts", {}) or {}
+                    getattr(bot, "cumulative_signal_counts", {}) or {}
                 ).get(name)
             state[name] = row
         return state
@@ -950,17 +991,17 @@ async def get_status():
     # ── Read positions from disk (same session as resumable journal) ──
     disk_positions: List[Dict] = _load_disk_positions_for_status()
 
-    # ── If bot_instance is live, prefer its in-memory positions ──
-    if bot_instance:
-        dry_run = bot_instance.config.get("trading", {}).get("dry_run", True)
-        can_trade, can_trade_reason = bot_instance.risk_manager.can_trade()
+    # ── If full bot is live, prefer its in-memory positions ──
+    if bot:
+        dry_run = bot.config.get("trading", {}).get("dry_run", True)
+        can_trade, can_trade_reason = bot.risk_manager.can_trade()
         if kill_switch_active:
             can_trade = False
             can_trade_reason = "Kill switch active (data/KILL_SWITCH)"
 
-        bankroll = getattr(bot_instance, "bankroll", 0.0)
+        bankroll = getattr(bot, "bankroll", 0.0)
         portfolio = (
-            bot_instance.risk_manager.get_portfolio_summary(bankroll) if bankroll else None
+            bot.risk_manager.get_portfolio_summary(bankroll) if bankroll else None
         )
 
         def serialize_position(p):
@@ -983,15 +1024,15 @@ async def get_status():
 
         positions = [
             serialize_position(p)
-            for p in bot_instance.risk_manager.active_positions.values()
+            for p in bot.risk_manager.active_positions.values()
         ]
-        _ai_keys = getattr(bot_instance.ai_agent, "api_keys", None) or {}
+        _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
         try:
-            _js = bot_instance.journal.get_summary()
+            _js = bot.journal.get_summary()
         except Exception:
             _js = {}
         return {
-            "running": getattr(bot_instance, "running", False),
+            "running": getattr(bot, "running", False),
             "mode": "paper" if dry_run else "live",
             "dry_run": dry_run,
             "kill_switch_active": kill_switch_active,
@@ -1001,11 +1042,11 @@ async def get_status():
             "portfolio": portfolio,
             "positions": positions,
             "session": _command_center_session(_js),
-            "ai": compute_ai_status(bot_instance.config, _ai_keys),
+            "ai": compute_ai_status(bot.config, _ai_keys),
             "strategy_state": _build_strategy_state(
-                bot_instance.config, bool(getattr(bot_instance, "running", False))
+                bot.config, bool(getattr(bot, "running", False))
             ),
-            "session_id": getattr(bot_instance.journal, "session_id", None),
+            "session_id": getattr(bot.journal, "session_id", None),
         }
 
     # ── No bot_instance: read everything from disk ──
@@ -1097,9 +1138,10 @@ async def get_ai_health():
     """Live MiniMax completion probe (strict JSON + ``estimated_probability``), not just key presence."""
     cfg: Dict[str, Any] = {}
     keys: Dict[str, str] = {}
-    if bot_instance:
-        cfg = bot_instance.config
-        keys = dict(getattr(bot_instance.ai_agent, "api_keys", None) or {})
+    bot = _full_bot_instance()
+    if bot is not None:
+        cfg = bot.config
+        keys = dict(getattr(bot.ai_agent, "api_keys", None) or {})
     elif CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -1294,6 +1336,10 @@ async def get_live_drift():
                 "bt_avg_edge": round(r.bt_avg_edge, 4),
                 "live_avg_edge": round(r.live_avg_edge, 4),
                 "edge_drift": round(r.edge_drift, 4),
+                "bt_trades_per_day": round(r.bt_trades_per_day, 4),
+                "live_trades_per_day": round(r.live_trades_per_day, 4),
+                "trade_freq_drift": round(r.trade_freq_drift, 4),
+                "live_sample_size": r.live_sample_size,
                 "is_diverging": r.is_diverging,
                 "verdict": r.verdict,
             }
@@ -1438,7 +1484,8 @@ def _start_backtest_job(cmd_args: List[str], summary: str) -> Dict[str, Any]:
 
 def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[str], str]]:
     specs: List[Tuple[str, List[str], str]] = []
-    dashboard_cfg = (bot_instance.config.get("dashboard", {}) or {}) if bot_instance else {}
+    bot = _full_bot_instance()
+    dashboard_cfg = (bot.config.get("dashboard", {}) or {}) if bot else {}
 
     if dashboard_cfg.get(f"auto_sol5_backtest_on_{phase}", True):
         crypto_script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
@@ -1480,12 +1527,13 @@ def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[st
 def _maybe_start_auto_backtests(phase: str) -> List[Dict[str, Any]]:
     """Optionally kick off the configured auto backtest batch for startup/reset."""
     global _auto_startup_backtests_started
-    if not bot_instance:
+    bot = _full_bot_instance()
+    if not bot:
         return []
-    if not bot_instance.config.get("trading", {}).get("dry_run", True):
+    if not bot.config.get("trading", {}).get("dry_run", True):
         return []
 
-    current_session_id = getattr(getattr(bot_instance, "journal", None), "session_id", None)
+    current_session_id = getattr(getattr(bot, "journal", None), "session_id", None)
     if not current_session_id:
         return []
 
@@ -2318,24 +2366,25 @@ async def get_strategy_metrics():
                 pass
 
     # ── Supplement with real-time bot data when available ──
-    if bot_instance and hasattr(bot_instance, "last_signal_counts"):
-        for strat, count in bot_instance.last_signal_counts.items():
+    bot = _full_bot_instance()
+    if bot and hasattr(bot, "last_signal_counts"):
+        for strat, count in bot.last_signal_counts.items():
             if strat in metrics:
                 metrics[strat]["signals"] = count
         # Cycle timestamps — when did each strategy last complete a scan?
-        if hasattr(bot_instance, "last_cycle_times"):
-            for strat, t in bot_instance.last_cycle_times.items():
+        if hasattr(bot, "last_cycle_times"):
+            for strat, t in bot.last_cycle_times.items():
                 if strat in metrics:
                     metrics[strat]["last_cycle"] = t
         # Cumulative signal counts (never reset — shows lifetime activity)
-        if hasattr(bot_instance, "cumulative_signal_counts"):
-            for strat, total in bot_instance.cumulative_signal_counts.items():
+        if hasattr(bot, "cumulative_signal_counts"):
+            for strat, total in bot.cumulative_signal_counts.items():
                 if strat in metrics:
                     metrics[strat]["total_signals"] = total
 
     # ── Open position count from bot in-memory state (real-time) ──
-    if bot_instance:
-        for p in bot_instance.risk_manager.active_positions.values():
+    if bot:
+        for p in bot.risk_manager.active_positions.values():
             strat = getattr(p, "strategy", "unknown")
             if strat in metrics:
                 metrics[strat]["open_positions"] = (
@@ -2343,8 +2392,8 @@ async def get_strategy_metrics():
                 )
 
     # ── Weather scan diagnostics ──
-    if bot_instance and hasattr(bot_instance, "last_ai_scan_stats"):
-        wx = bot_instance.last_ai_scan_stats.get("weather") or {}
+    if bot and hasattr(bot, "last_ai_scan_stats"):
+        wx = bot.last_ai_scan_stats.get("weather") or {}
         if wx and "weather" in metrics:
             metrics["weather"]["scan_stats"] = {
                 "total_markets_seen":      wx.get("total_markets_seen", 0),
@@ -2868,7 +2917,8 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
 
 def _all_exposure_managers():
     """Return all active exposure managers."""
-    if not bot_instance:
+    bot = _full_bot_instance()
+    if not bot:
         return []
     managers = []
     for attr in (
@@ -2878,7 +2928,7 @@ def _all_exposure_managers():
         "xrp_exposure_manager",
         "event_exposure_manager",
     ):
-        mgr = getattr(bot_instance, attr, None)
+        mgr = getattr(bot, attr, None)
         if mgr:
             managers.append(mgr)
     return managers
@@ -2895,20 +2945,22 @@ EXPOSURE_LANE_TO_ATTR = {
 
 def _exposure_manager_for_lane(lane: str):
     """Resolve a dashboard lane key (btc, sol, …) to an ExposureManager or None."""
-    if not bot_instance or not lane:
+    bot = _full_bot_instance()
+    if not bot or not lane:
         return None
     key = lane.lower().strip()
     attr = EXPOSURE_LANE_TO_ATTR.get(key)
     if not attr:
         return None
-    return getattr(bot_instance, attr, None)
+    return getattr(bot, attr, None)
 
 
 @app.get("/api/exposure")
 async def get_exposure_status():
     """Per-strategy exposure tiers. Uses stable keys (btc, sol, …) so the UI
  always labels ETH/XRP correctly; also emits manager_0..N for compatibility."""
-    if not bot_instance:
+    bot = _full_bot_instance()
+    if not bot:
         return {"error": "No bot instance"}
     key_attrs = (
         ("btc", "btc_exposure_manager"),
@@ -2920,7 +2972,7 @@ async def get_exposure_status():
     out: Dict[str, Any] = {}
     idx = 0
     for key, attr in key_attrs:
-        mgr = getattr(bot_instance, attr, None)
+        mgr = getattr(bot, attr, None)
         if mgr is None:
             continue
         st = mgr.get_status()
@@ -3310,23 +3362,183 @@ async def get_config():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ConfigUpdates(BaseModel):
+    """Validated partial settings.yaml patch for dashboard operator controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ai: Optional[Dict[str, Any]] = None
+    strategies: Optional[Dict[str, Any]] = None
+    trading: Optional[Dict[str, Any]] = None
+    exposure: Optional[Dict[str, Any]] = None
+    backtest: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_config_patch(self) -> "ConfigUpdates":
+        if self.ai is not None:
+            _validate_section_keys(self.ai, "ai", {"enabled", "live_inferencing"})
+            _validate_bool_fields(self.ai, "ai", {"enabled", "live_inferencing"})
+
+        if self.trading is not None:
+            _validate_section_keys(
+                self.trading,
+                "trading",
+                {
+                    "default_position_size",
+                    "max_position_size",
+                    "max_days_to_resolution",
+                    "min_hours_to_resolution",
+                    "kelly_fraction",
+                    "daily_loss_limit",
+                    "max_exposure_per_trade",
+                    "dry_run",
+                },
+            )
+            if self.trading.get("dry_run") is False:
+                raise ValueError("trading.dry_run cannot be disabled via dashboard config")
+            _validate_numeric_range(self.trading, "trading", "default_position_size", gt=0)
+            _validate_numeric_range(self.trading, "trading", "max_position_size", gt=0)
+            _validate_numeric_range(self.trading, "trading", "max_days_to_resolution", gt=0, le=365)
+            _validate_numeric_range(self.trading, "trading", "min_hours_to_resolution", ge=0, le=8760)
+            _validate_numeric_range(self.trading, "trading", "kelly_fraction", ge=0, le=1)
+            _validate_numeric_range(self.trading, "trading", "daily_loss_limit", ge=0, le=1)
+            _validate_numeric_range(self.trading, "trading", "max_exposure_per_trade", ge=0, le=1)
+
+        if self.backtest is not None:
+            _validate_section_keys(
+                self.backtest,
+                "backtest",
+                {"initial_bankroll", "take_profit_pct", "stop_loss_pct", "max_hold_hours"},
+            )
+            _validate_numeric_range(self.backtest, "backtest", "initial_bankroll", gt=0)
+            _validate_numeric_range(self.backtest, "backtest", "take_profit_pct", ge=0, le=1)
+            _validate_numeric_range(self.backtest, "backtest", "stop_loss_pct", ge=0, le=1)
+            _validate_numeric_range(self.backtest, "backtest", "max_hold_hours", gt=0)
+
+        if self.exposure is not None:
+            _validate_section_keys(
+                self.exposure,
+                "exposure",
+                {
+                    "full_size",
+                    "moderate_size",
+                    "minimal_size",
+                    "max_consecutive_losses",
+                    "pause_cycles",
+                    "loss_kill_switch_enabled",
+                },
+            )
+            _validate_numeric_range(self.exposure, "exposure", "full_size", ge=0)
+            _validate_numeric_range(self.exposure, "exposure", "moderate_size", ge=0)
+            _validate_numeric_range(self.exposure, "exposure", "minimal_size", ge=0)
+            _validate_numeric_range(self.exposure, "exposure", "max_consecutive_losses", ge=1)
+            _validate_numeric_range(self.exposure, "exposure", "pause_cycles", ge=0)
+            _validate_bool_fields(self.exposure, "exposure", {"loss_kill_switch_enabled"})
+
+        if self.strategies is not None:
+            allowed_strategies = {
+                "bitcoin",
+                "sol_macro",
+                "eth_macro",
+                "hype_macro",
+                "xrp_macro",
+                "weather",
+            }
+            _validate_section_keys(self.strategies, "strategies", allowed_strategies)
+            allowed_strategy_fields = {
+                "enabled",
+                "use_ai",
+                "dead_zone_enabled",
+                "resolution_window_enabled",
+                "min_edge",
+                "entry_price_min",
+                "entry_price_max",
+                "kelly_fraction",
+                "ai_confidence_threshold",
+            }
+            bool_fields = {"enabled", "use_ai", "dead_zone_enabled", "resolution_window_enabled"}
+            unit_fields = {
+                "min_edge",
+                "entry_price_min",
+                "entry_price_max",
+                "kelly_fraction",
+                "ai_confidence_threshold",
+            }
+            for name, patch in self.strategies.items():
+                if not isinstance(patch, dict):
+                    raise ValueError(f"strategies.{name} must be an object")
+                section = f"strategies.{name}"
+                _validate_section_keys(patch, section, allowed_strategy_fields)
+                _validate_bool_fields(patch, section, bool_fields)
+                for field_name in unit_fields:
+                    _validate_numeric_range(patch, section, field_name, ge=0, le=1)
+                min_price = patch.get("entry_price_min")
+                max_price = patch.get("entry_price_max")
+                if min_price is not None and max_price is not None and min_price > max_price:
+                    raise ValueError(f"{section}.entry_price_min must be <= entry_price_max")
+
+        return self
+
+
+def _validate_section_keys(section: Dict[str, Any], section_name: str, allowed: set[str]) -> None:
+    if not isinstance(section, dict):
+        raise ValueError(f"{section_name} must be an object")
+    unknown = set(section) - allowed
+    if unknown:
+        raise ValueError(f"Unknown config key(s) in {section_name}: {sorted(unknown)}")
+
+
+def _validate_bool_fields(section: Dict[str, Any], section_name: str, fields: set[str]) -> None:
+    for key in fields:
+        if key in section and not isinstance(section[key], bool):
+            raise ValueError(f"{section_name}.{key} must be a boolean")
+
+
+def _validate_numeric_range(
+    section: Dict[str, Any],
+    section_name: str,
+    key: str,
+    *,
+    ge: Optional[float] = None,
+    gt: Optional[float] = None,
+    le: Optional[float] = None,
+) -> None:
+    if key not in section or section[key] is None:
+        return
+    value = section[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{section_name}.{key} must be numeric")
+    if gt is not None and not value > gt:
+        raise ValueError(f"{section_name}.{key} must be > {gt}")
+    if ge is not None and not value >= ge:
+        raise ValueError(f"{section_name}.{key} must be >= {ge}")
+    if le is not None and not value <= le:
+        raise ValueError(f"{section_name}.{key} must be <= {le}")
+
+
 @app.post("/api/config")
-async def update_config(updates: dict, request: Request):
+async def update_config(request: Request):
     """Merge partial updates into settings.yaml and save."""
     _check_auth(request)
+    try:
+        updates = ConfigUpdates.model_validate(await request.json())
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=json.loads(e.json()))
+    updates_dict = updates.model_dump(exclude_none=True)
     if not CONFIG_PATH.exists():
         raise HTTPException(status_code=404, detail="settings.yaml not found")
     try:
         with open(CONFIG_PATH) as f:
             config = yaml.safe_load(f)
-        _deep_merge(config, updates)
+        _deep_merge(config, updates_dict)
         with open(CONFIG_PATH, "w") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
         live_apply_ok = True
         live_apply_error = None
-        if bot_instance is not None:
+        bot = _full_bot_instance()
+        if bot is not None:
             try:
-                bot_instance.apply_config_updates(updates)
+                bot.apply_config_updates(updates_dict)
             except Exception as e:
                 logger.error("Live config apply failed: %s", e, exc_info=True)
                 live_apply_ok = False
@@ -3359,12 +3571,13 @@ class TradeRequest(BaseModel):
 
 @app.post("/api/trade")
 async def execute_trade(trade: TradeRequest, request: Request):
-    if not bot_instance or not bot_instance.clob_client:
-        raise HTTPException(status_code=503, detail="Trading client is not available.")
     _check_auth(request)
+    bot = _full_bot_instance()
+    if not bot or not bot.clob_client:
+        raise HTTPException(status_code=503, detail="Trading client is not available.")
     try:
         # Fetch markets and find the one matching market_id
-        markets = await bot_instance.market_scanner.fetch_markets(limit=200)
+        markets = await bot.market_scanner.fetch_markets(limit=200)
         market = next((m for m in markets if m.id == trade.market_id), None)
         if not market:
             raise HTTPException(
@@ -3375,14 +3588,14 @@ async def execute_trade(trade: TradeRequest, request: Request):
             token_id = market.token_id_yes
         else:
             token_id = market.token_id_no
-        order = await bot_instance.clob_client.place_order(
+        order = await bot.clob_client.place_order(
             token_id=token_id,
             side=trade.side.upper(),
             price=trade.price,
             size=trade.size,
             market_id=trade.market_id,
             post_only=True,
-            dry_run=bot_instance.config.get("trading", {}).get("dry_run", True),
+            dry_run=bot.config.get("trading", {}).get("dry_run", True),
         )
         if order and hasattr(order, "order_id"):
             return {"message": "Trade submitted!", "order_id": order.order_id}
@@ -3405,9 +3618,10 @@ async def reset_paper_session(request: Request):
     global _journal_cache, _ai_summary_cache
 
     _check_auth(request)
-    if not bot_instance:
+    bot = _full_bot_instance()
+    if not bot:
         raise HTTPException(status_code=503, detail="Bot instance not available.")
-    if not bot_instance.config.get("trading", {}).get("dry_run", True):
+    if not bot.config.get("trading", {}).get("dry_run", True):
         raise HTTPException(
             status_code=400,
             detail="Paper reset is only allowed in dry_run (paper) mode.",
@@ -3417,18 +3631,18 @@ async def reset_paper_session(request: Request):
 
     new_id = datetime.now().strftime("reset_%Y%m%d_%H%M%S")
     new_bankroll = float(
-        bot_instance.config.get("backtest", {}).get("initial_bankroll", 500.0)
+        bot.config.get("backtest", {}).get("initial_bankroll", 500.0)
     )
     archive_rel: Optional[str] = None
 
-    async with bot_instance._execution_lock:
+    async with bot._execution_lock:
         # New session dir first; then archive older folders (never move the active dir).
-        bot_instance.journal = TradeJournal(session_id=new_id, resume_latest=False)
-        bot_instance.bankroll = new_bankroll
-        bot_instance.risk_manager.bankroll = new_bankroll
-        bot_instance.risk_manager.active_positions.clear()
-        bot_instance.risk_manager.daily_pnl = 0.0
-        bot_instance.risk_manager.daily_trades = 0
+        bot.journal = TradeJournal(session_id=new_id, resume_latest=False)
+        bot.bankroll = new_bankroll
+        bot.risk_manager.bankroll = new_bankroll
+        bot.risk_manager.active_positions.clear()
+        bot.risk_manager.daily_pnl = 0.0
+        bot.risk_manager.daily_trades = 0
         for mgr in _all_exposure_managers():
             mgr.reset_for_new_paper_session()
 
@@ -3453,7 +3667,7 @@ async def reset_paper_session(request: Request):
 
         # Seed chart + summary for an empty session
         try:
-            bot_instance.journal.take_snapshot(new_bankroll)
+            bot.journal.take_snapshot(new_bankroll)
         except Exception as e:
             logger.warning("Paper reset: initial snapshot failed: %s", e)
 

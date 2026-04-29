@@ -24,6 +24,7 @@ from src.analysis.sol_btc_service import (
     BTCSOLCorrelation,
     MultiTimeframeTrend,
     MACDResult,
+    ORACLE_FEEDS,
 )
 from src.execution.exposure_manager import ExposureManager, ExposureTier
 
@@ -62,6 +63,48 @@ def test_optional_rsi_buy_ceiling_blocks_extreme_long_entries():
     assert strategy._rsi_blocks_entry("BUY_YES", 84.8) is True
     assert strategy._rsi_blocks_entry("BUY_YES", 79.9) is False
     assert strategy._rsi_blocks_entry("SELL_YES", 84.8) is False
+
+
+def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["min_positive_m5_adj_5m"] = 0.04
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._strong_enough_5m_signal(0.06) is True
+    assert strategy._strong_enough_5m_signal(0.04) is True
+    assert strategy._strong_enough_5m_signal(0.02) is False
+
+
+def test_ai_decision_window_uses_configured_remaining_minutes():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_min"] = 8.0
+    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_max"] = 13.0
+    cfg["strategies"]["sol_macro"]["ai_entry_window_5m_min"] = 1.5
+    cfg["strategies"]["sol_macro"]["ai_entry_window_5m_max"] = 2.5
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._within_ai_decision_window(mins_left=10.0, is_5m=False) is True
+    assert strategy._within_ai_decision_window(mins_left=14.0, is_5m=False) is False
+    assert strategy._within_ai_decision_window(mins_left=2.0, is_5m=True) is True
+    assert strategy._within_ai_decision_window(mins_left=3.2, is_5m=True) is False
+
+
+def test_macro_oracle_feed_map_covers_all_crypto_lanes():
+    assert ORACLE_FEEDS["SOLUSDT"][0] == "polygon"
+    assert ORACLE_FEEDS["ETHUSDT"][0] == "polygon"
+    assert ORACLE_FEEDS["XRPUSDT"][0] == "polygon"
+    assert ORACLE_FEEDS["HYPEUSDT"][0] == "arbitrum"
+
+
+def test_optional_oracle_basis_gate_blocks_large_divergence():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 10.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._oracle_basis_blocks_entry(12.5) is True
+    assert strategy._oracle_basis_blocks_entry(-12.5) is True
+    assert strategy._oracle_basis_blocks_entry(8.0) is False
+    assert strategy._oracle_basis_blocks_entry(None) is False
 
 
 def _make_bullish_ta():
@@ -305,6 +348,12 @@ class TestSOLMacroTrend(unittest.TestCase):
         # EMAs are flat, RSI is 50 → only 1 bull vote
         trend = self.strategy._get_macro_trend(ta)
         self.assertIn(trend, ["NEUTRAL", "BULLISH"])  # depends on EMA alignment
+
+    def test_primary_btc_htf_bias_helper_uses_same_gate_as_allowed_side(self):
+        strategy = self.strategy
+        self.assertAlmostEqual(strategy._apply_primary_htf_bias(0.50, "BULLISH", 0.07), 0.57)
+        self.assertAlmostEqual(strategy._apply_primary_htf_bias(0.50, "BEARISH", 0.07), 0.43)
+        self.assertAlmostEqual(strategy._apply_primary_htf_bias(0.50, "NEUTRAL", 0.07), 0.50)
 
 
 class TestSOL15mConfirmation(unittest.TestCase):

@@ -19,7 +19,6 @@ To **push or patch vault files from scripts**, set in **local** `.env`: `OBSIDIA
 | ETH macro | `strategies.eth_macro` | yes | `_unified_cycle` | `ETHMacroStrategy` | `_execute_sol_macro_signal` | `eth_exposure_manager` |
 | HYPE macro | `strategies.hype_macro` | yes | `_unified_cycle` | `HYPEMacroStrategy` | `_execute_sol_macro_signal` | `hype_exposure_manager` |
 | XRP macro | `strategies.xrp_macro` | yes | `_unified_cycle` | `XRPMacroStrategy` | `_execute_xrp_macro_signal` | `xrp_exposure_manager` |
-| XRP dump-hedge | `strategies.xrp_dump_hedge` | yes | `_unified_cycle` | `XRPDumpHedgeStrategy` | `_execute_xrp_dump_hedge_signal` | `xrp_exposure_manager` |
 | Arbitrage | `strategies.arbitrage` | no | `_unified_cycle` | `ArbitrageStrategy` | `_execute_arbitrage_signal` | `event_exposure_manager` (default) |
 | Fade | `strategies.fade` | no | `_unified_cycle` | `FadeStrategy` | `_execute_fade_signal` | `event_exposure_manager` |
 | NEH | `strategies.neh` | no | `_unified_cycle` | `NothingEverHappensStrategy` | `_execute_neh_signal` | `event_exposure_manager` |
@@ -28,7 +27,7 @@ One scan per `trading.cycle_interval_sec` (default 120s): exits, optional arb/fa
 
 ## Discord execution alerts
 
-Only these strategies may emit trade/exit Discord notifications (`src/notifications/notification_manager.py`): `bitcoin`, `sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`, `xrp_dump_hedge`.
+Only these strategies may emit trade/exit Discord notifications (`src/notifications/notification_manager.py`): `bitcoin`, `sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`.
 
 ## AI integration matrix
 
@@ -41,7 +40,6 @@ Only these strategies may emit trade/exit Discord notifications (`src/notificati
 | `src/strategies/fade.py` | `analyze_market` when `use_ai` and AI available. |
 | `src/strategies/arbitrage.py` | `use_ai` flag; optional `analyze_market` on paths gated in code. |
 | `src/strategies/neh.py` | Holds `AIAgent`; NEH signal path is quant/filter-based (no `analyze_market` in the main scan loop). |
-| `src/strategies/xrp_dump_hedge.py` | Quant-only (no LLM). |
 | `src/backtest/backtest_ai.py` | `BacktestAIAgent` for backtests — not live providers. |
 
 ## Execution triggers

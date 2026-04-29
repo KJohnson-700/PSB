@@ -199,48 +199,8 @@ class PolyBot:
         # Keep a reference for resolution tracker settlements
         self.exposure_manager = self.btc_exposure_manager
 
-        self.bitcoin_strategy = BitcoinStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            self.kelly_sizer,
-            exposure_manager=self.btc_exposure_manager,
-        )
-
-        self.sol_macro_strategy = SolMacroStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            self.kelly_sizer,
-            exposure_manager=self.sol_exposure_manager,
-        )
-        self.eth_macro_strategy = ETHMacroStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            self.kelly_sizer,
-            exposure_manager=self.eth_exposure_manager,
-        )
-        self.hype_macro_strategy = HYPEMacroStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            self.kelly_sizer,
-            exposure_manager=self.hype_exposure_manager,
-        )
-        self.xrp_macro_strategy = XRPMacroStrategy(
-            self.config,
-            self.ai_agent,
-            self.position_sizer,
-            self.kelly_sizer,
-            exposure_manager=self.xrp_exposure_manager,
-        )
-        self.weather_strategy = WeatherStrategy(
-            self.config,
-            self.position_sizer,
-            self.kelly_sizer,
-            self.ai_agent,
-        )
+        self._dead_zone_skip_callback = None
+        self._rebuild_runtime_config_dependents()
         self.clob_client = CLOBClient(self.config)
         self.risk_manager = RiskManager(self.config)
 
@@ -303,11 +263,8 @@ class PolyBot:
                 extra=metadata,
             )
 
-        self.bitcoin_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
-        self.sol_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
-        self.eth_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
-        self.hype_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
-        self.xrp_macro_strategy.dead_zone_skip_callback = _dead_zone_skip_callback
+        self._dead_zone_skip_callback = _dead_zone_skip_callback
+        self._wire_strategy_callbacks()
 
         # Resolution tracker — fetches REAL outcomes from Polymarket API
         # Resolution check every 60s — crypto candle markets resolve in 15 minutes
@@ -421,6 +378,7 @@ class PolyBot:
         from src.config_merge import deep_merge_config
 
         deep_merge_config(self.config, updates)
+        self._rebuild_runtime_config_dependents()
         self.ai_agent.refresh_from_config(self.config.get("ai", {}))
         if updates.get("exposure"):
             exp = self.config.get("exposure") or {}
@@ -435,6 +393,72 @@ class PolyBot:
                 mgr = getattr(self, attr, None)
                 if mgr is not None:
                     mgr.reload_from_config(exp)
+
+    def _rebuild_runtime_config_dependents(self) -> None:
+        """Refresh live objects that cache config-derived fields at init time."""
+        trading_cfg = self.config.get("trading", {}) or {}
+        self.position_sizer = PositionSizer(
+            kelly_fraction=trading_cfg.get("kelly_fraction", 0.25),
+            max_position_pct=trading_cfg.get("max_exposure_per_trade", 0.05),
+            min_position=trading_cfg.get("default_position_size", 10),
+            max_position=trading_cfg.get("max_position_size", 15),
+        )
+        if hasattr(self, "kelly_sizer") and self.kelly_sizer is not None:
+            self.kelly_sizer.reload_from_config(self.config)
+        else:
+            self.kelly_sizer = KellySizer(self.config)
+        if hasattr(self, "market_scanner") and self.market_scanner is not None:
+            self.market_scanner.reload_from_config(self.config)
+        self.bitcoin_strategy = BitcoinStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.btc_exposure_manager,
+        )
+        self.sol_macro_strategy = SolMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.sol_exposure_manager,
+        )
+        self.eth_macro_strategy = ETHMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.eth_exposure_manager,
+        )
+        self.hype_macro_strategy = HYPEMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.hype_exposure_manager,
+        )
+        self.xrp_macro_strategy = XRPMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.xrp_exposure_manager,
+        )
+        self.weather_strategy = WeatherStrategy(
+            self.config,
+            self.position_sizer,
+            self.kelly_sizer,
+            self.ai_agent,
+        )
+        self._wire_strategy_callbacks()
+
+    def _wire_strategy_callbacks(self) -> None:
+        cb = getattr(self, "_dead_zone_skip_callback", None)
+        self.bitcoin_strategy.dead_zone_skip_callback = cb
+        self.sol_macro_strategy.dead_zone_skip_callback = cb
+        self.eth_macro_strategy.dead_zone_skip_callback = cb
+        self.hype_macro_strategy.dead_zone_skip_callback = cb
+        self.xrp_macro_strategy.dead_zone_skip_callback = cb
 
     def _default_config(self) -> Dict[str, Any]:
         """Default configuration"""
@@ -690,11 +714,12 @@ class PolyBot:
             return self.xrp_exposure_manager
         return self.event_exposure_manager
 
-    def _run_resolution_check(self, label: str = ""):
+    async def _run_resolution_check(self, label: str = ""):
         """Shared resolution check — routes settlements to the correct exposure manager."""
         # We pass exposure_manager=None so the tracker doesn't call record_trade.
         # We'll route it ourselves afterward.
-        settled = self.resolution_tracker.check_and_settle(
+        settled = await asyncio.to_thread(
+            self.resolution_tracker.check_and_settle,
             journal=self.journal,
             risk_manager=self.risk_manager,
             exposure_manager=None,  # we route manually below
@@ -741,7 +766,8 @@ class PolyBot:
                 )
 
         # Update live prices on open positions
-        updated = self.resolution_tracker.check_price_updates(
+        updated = await asyncio.to_thread(
+            self.resolution_tracker.check_price_updates,
             self.journal, self.bankroll
         )
         if updated:
@@ -1111,7 +1137,7 @@ class PolyBot:
 
         try:
             async with self._execution_lock:
-                self._run_resolution_check(label="[TRADING]")
+                await self._run_resolution_check(label="[TRADING]")
         except Exception as e:
             logging.error(f"Resolution tracking error: {e}")
 
@@ -1604,6 +1630,12 @@ def start_dashboard(bot: Optional["PolyBot"]):
         host = dashboard_config.get("host", "127.0.0.1")
         port = int(dashboard_config.get("dashboard_port", 8080))
 
+    if host not in ("127.0.0.1", "::1", "localhost") and not os.environ.get("DASHBOARD_API_KEY"):
+        raise SystemExit(
+            "FATAL: dashboard bound to non-loopback without DASHBOARD_API_KEY. "
+            "Set DASHBOARD_API_KEY or bind the dashboard to 127.0.0.1."
+        )
+
     # Local socket checks / browser must target a real address, not 0.0.0.0.
     connect_host = "127.0.0.1" if host == "0.0.0.0" else host
 
@@ -1756,6 +1788,26 @@ def start_dashboard(bot: Optional["PolyBot"]):
     else:
         threading.Thread(target=open_when_ready, daemon=True).start()
 
+
+def _wait_for_dashboard_server_handle(
+    holder: Optional[Any],
+    take_server,
+    *,
+    timeout_sec: float = 5.0,
+):
+    """Return the dashboard Uvicorn server after the startup thread registers it."""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        srv = take_server()
+        if srv:
+            return srv
+        srv = getattr(holder, "_dashboard_server", None)
+        if srv:
+            return srv
+        time.sleep(0.05)
+    return take_server() or getattr(holder, "_dashboard_server", None)
+
+
 def _parse_run_args():
     """Parse --paper, --live, --confirm-live, --emergency-stop, --resume-trading. Returns (dry_run, run_bot)."""
     argv = sys.argv[1:]
@@ -1895,7 +1947,10 @@ async def main():
 
     set_bot_instance(bot)
     if bot.config.get("dashboard", {}).get("enabled", False):
-        srv = take_dashboard_uvicorn_server()
+        srv = _wait_for_dashboard_server_handle(
+            _dash_holder,
+            take_dashboard_uvicorn_server,
+        )
         if srv:
             bot._dashboard_server = srv
         else:
