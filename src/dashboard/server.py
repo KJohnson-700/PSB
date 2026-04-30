@@ -1188,10 +1188,24 @@ async def get_backtest_reports():
         reverse=True,
     )
     reports = []
-    for f in files[:30]:
+    seen_crypto_keys = set()
+    for idx, f in enumerate(files):
         try:
             with open(f) as fp:
                 data = json.load(fp)
+            crypto_key = None
+            if data.get("report_type") == "crypto_updown" or (
+                data.get("symbol") and data.get("window_minutes") and not data.get("per_strategy_metrics")
+            ):
+                crypto_key = (str(data.get("symbol", "")).upper(), int(data.get("window_minutes", 0) or 0))
+            include_report = idx < 30
+            if crypto_key and crypto_key not in seen_crypto_keys:
+                # Keep the latest report for every symbol/window even when older than
+                # the recent-file window, so Backtest cards do not regress to "Not yet run".
+                seen_crypto_keys.add(crypto_key)
+                include_report = True
+            if not include_report:
+                continue
             data["filename"] = f.name
             # Strip heavy fields to keep payload small
             data.pop("trades", None)

@@ -9,8 +9,14 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from py_clob_client.client import ClobClient as PyClobClient, ApiCreds
-from py_clob_client.clob_types import OrderArgs, OrderType
+try:
+    from py_clob_client.client import ClobClient as PyClobClient, ApiCreds
+    from py_clob_client.clob_types import OrderArgs, OrderType
+except ImportError:
+    PyClobClient = None
+    ApiCreds = None
+    OrderArgs = None
+    OrderType = None
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +94,11 @@ class CLOBClient:
         api_secret: str = None,
         api_passphrase: str = None,
     ):
+        if PyClobClient is None or ApiCreds is None:
+            raise RuntimeError(
+                "py-clob-client is required for live CLOB execution. "
+                "Install project requirements before running with dry_run=false."
+            )
         creds = ApiCreds(api_key, api_secret, api_passphrase)
         self.client = PyClobClient(
             host=self.api_endpoint,
@@ -129,6 +140,9 @@ class CLOBClient:
 
         if not self.client:
             logger.error("CLOB client not initialized. Call set_credentials first.")
+            return None
+        if OrderArgs is None or OrderType is None:
+            logger.error("py-clob-client order types unavailable — cannot place live order")
             return None
 
         order_args = OrderArgs(

@@ -68,6 +68,10 @@ class Market:
     group_item_title: str
     # Event slug when fetched via Gamma (e.g. eth-updown-15m-1712345678); empty for bulk feeds.
     slug: str = ""
+    # Parsed candle duration for crypto Up/Down event markets. Current Gamma
+    # hourly markets use the same question shape as old short-window markets, so
+    # strategy buckets must not infer 5m/15m from asset name alone.
+    window_minutes: Optional[int] = None
     
     @property
     def is_binary(self) -> bool:
@@ -119,6 +123,37 @@ _UPDOWN_TIME_RANGE_RE = re.compile(
     r"(\d{1,2}):(\d{2})\s*(AM|PM)?\s*[–-]\s*(\d{1,2}):(\d{2})\s*(AM|PM)",
     re.IGNORECASE,
 )
+
+
+def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
+    """Return the explicit Up/Down candle length from a market title/range."""
+    time_match = _UPDOWN_TIME_RANGE_RE.search(text or "")
+    if not time_match:
+        return None
+    h1, m1, p1, h2, m2, p2 = time_match.groups()
+    start_period = (p1 or p2 or "").upper()
+    end_period = (p2 or p1 or "").upper()
+    try:
+        start_hour = int(h1)
+        start_minute = int(m1)
+        end_hour = int(h2)
+        end_minute = int(m2)
+    except (TypeError, ValueError):
+        return None
+
+    def _to_24h(hour: int, period: str) -> int:
+        if period == "PM" and hour != 12:
+            return hour + 12
+        if period == "AM" and hour == 12:
+            return 0
+        return hour
+
+    start_total = _to_24h(start_hour, start_period) * 60 + start_minute
+    end_total = _to_24h(end_hour, end_period) * 60 + end_minute
+    diff = end_total - start_total
+    if diff <= 0:
+        diff += 24 * 60
+    return diff
 
 
 def is_crypto_updown_market(market: Market) -> bool:
@@ -216,6 +251,30 @@ def _parse_updown_market_end_from_text(
     if end_et <= start_et:
         end_et += timedelta(days=1)
     return end_et.astimezone(timezone.utc)
+
+
+def _infer_updown_window_minutes(
+    *, slug: str, question: str, group_item_title: str, end_date: Optional[datetime]
+) -> Optional[int]:
+    """Infer event-market duration without mistaking hourly markets for 5m/15m."""
+    text = f"{question or ''} {group_item_title or ''}"
+    explicit = _parse_updown_window_minutes_from_text(text)
+    if explicit is not None:
+        return explicit
+
+    slug_l = (slug or "").lower()
+    if "updown-5m" in slug_l:
+        return 5
+    if "updown-15m" in slug_l:
+        return 15
+
+    # Current Gamma human slugs are hourly, e.g.
+    # bitcoin-up-or-down-april-29-2026-9pm-et, with one market ending at 10PM ET.
+    # The date pattern in the slug is sufficient to identify these as 60-min markets;
+    # we don't need end_date to be successfully parsed from the question text.
+    if _UPDOWN_SLUG_DATE_RE.search(slug_l):
+        return 60
+    return None
 
 
 class MarketScanner:
@@ -330,6 +389,7 @@ class MarketScanner:
         results: Dict[str, Any] = {}
         pool = ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="scanner")
         futures = {pool.submit(fn): name for name, fn in tasks.items()}
+        timed_out = False
         try:
             for future in as_completed(futures, timeout=self._scanner_sync_timeout):
                 name = futures[future]
@@ -339,6 +399,7 @@ class MarketScanner:
                     logger.error(f"{name} fetch error: {e}")
                     results[name] = []
         except FuturesTimeoutError:
+            timed_out = True
             unfinished = [name for future, name in futures.items() if not future.done()]
             logger.warning(
                 "Scanner: partial sync timeout after %.1fs; returning completed sources only. unfinished=%s",
@@ -351,7 +412,7 @@ class MarketScanner:
                     continue
                 future.cancel()
                 results.setdefault(name, [])
-            pool.shutdown(wait=False, cancel_futures=True)
+            pool.shutdown(wait=not timed_out, cancel_futures=True)
 
         return (
             results.get("gamma", []),
@@ -524,10 +585,19 @@ class MarketScanner:
                         end_date = datetime.fromisoformat(m['endDate'].replace('Z', '+00:00'))
                     except:
                         pass
+                question = m.get('question', '')
+                group_item_title = m.get('groupItemTitle', '')
+                slug = str(m.get("slug") or "")
+                window_minutes = _infer_updown_window_minutes(
+                    slug=slug,
+                    question=question,
+                    group_item_title=group_item_title,
+                    end_date=end_date,
+                ) if _CRYPTO_ASSET_UPDOWN_PATTERN.search(question or "") else None
                 
                 market = Market(
                     id=m['id'],
-                    question=m.get('question', ''),
+                    question=question,
                     description=m.get('description', ''),
                     volume=float(m.get('volume', 0)),
                     liquidity=float(m.get('liquidity', 0)),
@@ -537,8 +607,9 @@ class MarketScanner:
                     end_date=end_date,
                     token_id_yes=token_id_yes,
                     token_id_no=token_id_no,
-                    group_item_title=m.get('groupItemTitle', ''),
-                    slug=str(m.get("slug") or ""),
+                    group_item_title=group_item_title,
+                    slug=slug,
+                    window_minutes=window_minutes,
                 )
                 
                 # Filter by liquidity
@@ -618,14 +689,24 @@ class MarketScanner:
                             except (ValueError, TypeError):
                                 pass
                         spread_val = float(gm.get("spread", 0.02) or 0.02)
+                        question = gm.get("question", "")
+                        group_item_title = gm.get("groupItemTitle", "")
+                        slug = str(gm.get("slug") or "")
+                        window_minutes = _infer_updown_window_minutes(
+                            slug=slug,
+                            question=question,
+                            group_item_title=group_item_title,
+                            end_date=end_date,
+                        ) if _CRYPTO_ASSET_UPDOWN_PATTERN.search(question or "") else None
                         m = Market(
-                            id=gm.get("id", ""), question=gm.get("question", ""),
+                            id=gm.get("id", ""), question=question,
                             description=(gm.get("description", "") or "")[:200],
                             volume=vol, liquidity=liq,
                             yes_price=yes_price, no_price=no_price, spread=spread_val,
                             end_date=end_date, token_id_yes=token_yes, token_id_no=token_no,
-                            group_item_title=gm.get("groupItemTitle", ""),
-                            slug=str(gm.get("slug") or ""),
+                            group_item_title=group_item_title,
+                            slug=slug,
+                            window_minutes=window_minutes,
                         )
                         if 0.01 < m.yes_price < 0.99:
                             markets.append(m)
@@ -726,6 +807,12 @@ class MarketScanner:
                     ).astimezone(timezone.utc)
                 except (ValueError, TypeError):
                     pass
+            window_minutes = _infer_updown_window_minutes(
+                slug=slug,
+                question=question,
+                group_item_title=group_item_title,
+                end_date=end_date,
+            )
 
             return Market(
                 id=gm.get("id", ""),
@@ -741,6 +828,7 @@ class MarketScanner:
                 token_id_no=tokens[1] if len(tokens) > 1 else "",
                 group_item_title=group_item_title,
                 slug=slug,
+                window_minutes=window_minutes,
             )
         except Exception:
             return None
@@ -795,6 +883,14 @@ class MarketScanner:
             self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
             timeout_sec=8,
         )
+        rejected = [m for m in markets if m.window_minutes and not (10 <= m.window_minutes <= 20)]
+        markets = [m for m in markets if m.window_minutes and 10 <= m.window_minutes <= 20]
+        if rejected:
+            logger.info(
+                "Skipped %d non-15m updown markets from 15m bucket (durations=%s)",
+                len(rejected),
+                sorted({m.window_minutes for m in rejected}),
+            )
 
         if markets:
             def _is_eth_mkt(m: Market) -> bool:
@@ -828,6 +924,14 @@ class MarketScanner:
             self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead),
             timeout_sec=8,
         )
+        rejected = [m for m in markets if m.window_minutes and m.window_minutes > 6]
+        markets = [m for m in markets if m.window_minutes and m.window_minutes <= 6]
+        if rejected:
+            logger.info(
+                "Skipped %d non-5m updown markets from 5m bucket (durations=%s)",
+                len(rejected),
+                sorted({m.window_minutes for m in rejected}),
+            )
 
         if markets:
             def _is_eth_mkt_5(m: Market) -> bool:

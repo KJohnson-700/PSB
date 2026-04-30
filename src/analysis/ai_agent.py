@@ -24,14 +24,22 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Dict, List, Optional, Any
 
-import anthropic
-import openai
 try:
-    from openai import RateLimitError as OpenAIRateLimitError
+    import openai
+except ImportError:
+    openai = None
+try:
+    if openai is None:
+        raise ImportError
+    OpenAIRateLimitError = openai.RateLimitError
 except Exception:
     class OpenAIRateLimitError(Exception):
         """Fallback when SDK does not expose RateLimitError."""
         pass
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 from src.analysis.usage_tracker import UsageTracker, usage_tracker as global_usage_tracker
 
@@ -799,6 +807,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         if not models:
             logger.warning("OpenAI-compatible provider has no model configured — skipping.")
             return None
+        if openai is None:
+            raise ImportError("openai package is not installed")
 
         client_kw: Dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -1010,6 +1020,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         """Analyze using Anthropic API"""
         start_time = time.time()
         try:
+            if anthropic is None:
+                raise ImportError("anthropic package is not installed")
             client = anthropic.AsyncAnthropic(api_key=api_key)
 
             response = await asyncio.wait_for(
@@ -1061,6 +1073,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         for attempt in range(max_attempts):
             start_time = time.time()
             try:
+                if anthropic is None:
+                    raise ImportError("anthropic package is not installed")
                 # MiniMax Coding Plan uses Anthropic-compatible endpoint with sk-cp- keys.
                 client = anthropic.AsyncAnthropic(
                     api_key=api_key,

@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 import yaml
-import uvicorn
 
 # Add src and project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -153,9 +152,12 @@ def _weather_general_scan_enabled(config: Dict) -> bool:
 
 
 def _is_crypto_market(market) -> bool:
-    """Crypto up/down markets (15m) resolve in minutes; exempt from resolution window filter."""
+    """Crypto short-window up/down markets; exempt from resolution window filter."""
     if not market.end_date:
         return False
+    window_minutes = getattr(market, "window_minutes", None)
+    if window_minutes is not None:
+        return window_minutes <= 20
     now = datetime.now(timezone.utc)
     end = market.end_date.replace(tzinfo=timezone.utc) if market.end_date.tzinfo is None else market.end_date
     td = end - now
@@ -1742,6 +1744,13 @@ def start_dashboard(bot: Optional["PolyBot"]):
 
     def run_server():
         logging.info(f"Starting dashboard server (bind {host}:{port}) — open: {display_url}")
+        try:
+            import uvicorn
+        except ImportError as exc:
+            raise RuntimeError(
+                "Dashboard server requires uvicorn. Install project requirements "
+                "or disable dashboard.enabled in config/settings.yaml."
+            ) from exc
         from src.dashboard.server import app, set_bot_instance, register_dashboard_uvicorn_server
 
         set_bot_instance(bot)

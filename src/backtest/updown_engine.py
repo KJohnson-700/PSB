@@ -935,9 +935,10 @@ class UpdownBacktestEngine:
         macd_1h: MACDResult,
         min_positive_m5_adj: float = 0.0,
     ) -> Tuple[float, float]:
-        """SOL 5m path -- matches sol_macro.py 5m updown.
+        """SOL-style 5m path -- matches sol_macro.py 5m updown.
 
-        Omits: mtt.m5_trend bonus, lag/spike, correlation dampen.
+        Omits live-only lag/spike and correlation dampening, but keeps the
+        signal math that decides whether the 5m quant path can clear min_edge.
         """
         est_prob_up = 0.50
 
@@ -947,14 +948,30 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= 0.03
 
-        # 1H histogram hard gate (matches live sol_macro)
-        if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
+        # 1H histogram gate (matches live sol_macro relaxed gate).
+        # Live allows trend-direction histogram even when momentum is decelerating;
+        # only block when the histogram is actively against the trade direction.
+        h1_bull_ok = macd_1h.histogram_rising or macd_1h.histogram > 0
+        h1_bear_ok = (not macd_1h.histogram_rising) or macd_1h.histogram < 0
+        if allowed_side == "LONG" and not h1_bull_ok:
+            return 0.0, 0.0
+        if allowed_side == "SHORT" and not h1_bear_ok:
+            return 0.0, 0.0
 
         # 5m MACD -- primary signal for SOL 5m (matches live weights exactly)
         m5_adj = 0.0
+        m5_trend = "NEUTRAL"
         if len(df_5m) >= _MIN_5M_BARS:
             macd_5m = self._svc.calc_macd(df_5m)
+            if macd_5m.crossover == "BULLISH_CROSS":
+                m5_trend = "BULLISH"
+            elif macd_5m.crossover == "BEARISH_CROSS":
+                m5_trend = "BEARISH"
+            elif macd_5m.above_zero and macd_5m.histogram_rising:
+                m5_trend = "BULLISH"
+            elif not macd_5m.above_zero and not macd_5m.histogram_rising:
+                m5_trend = "BEARISH"
+
             if allowed_side == "LONG":
                 if macd_5m.crossover == "BULLISH_CROSS":
                     m5_adj = 0.06
@@ -981,6 +998,14 @@ class UpdownBacktestEngine:
 
         if m5_adj < min_positive_m5_adj:
             return 0.0, 0.0
+
+        # Live adds a small extra 5m multi-timeframe trend bonus after m5_adj.
+        # This matters for SOL 5m because min_edge=0.10 and macro(+0.03)+
+        # strongest 5m MACD(+0.06) otherwise tops out at 0.09 before RSI.
+        if m5_trend == "BULLISH" and allowed_side == "LONG":
+            est_prob_up += 0.02
+        elif m5_trend == "BEARISH" and allowed_side == "SHORT":
+            est_prob_up -= 0.02
 
         # RSI extremes (matches live sol_macro 5m: >75/-0.02, <25/+0.02)
         if   ta.rsi_14 > 75: est_prob_up -= 0.02

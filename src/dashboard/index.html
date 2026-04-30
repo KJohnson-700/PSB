@@ -322,7 +322,7 @@
             <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
             <button class="btn-sm btn-purple" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
             <button class="btn-sm btn-purple" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
-            <button class="btn-sm ap" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
+            <button class="btn-sm btn-green" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div style="font-size:0.7rem;margin-top:2px;color:var(--text-muted);display:flex;gap:12px;flex-wrap:wrap;">
             <span id="weather-cap-state">Weather 72h cap: -</span>
@@ -805,7 +805,7 @@
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <span id="journal-session" style="font-size:0.7rem;color:var(--text-muted);"></span>
             <button class="btn-sm" id="settle-archived-btn" onclick="settleArchivedPositions()" title="Settle resolved markets in archived sessions (~70 pending)">Settle Archived</button>
-            <button class="btn-sm" style="background:linear-gradient(135deg,#e65100,#bf360c);color:#fff;" onclick="resetPaperSession()" title="Same as Live tab — new session at initial bankroll">New paper round</button>
+            <button class="btn-sm btn-green" onclick="resetPaperSession()" title="Same as Live tab — new session at initial bankroll">New paper round</button>
             </div>
         </div>
         <div class="status-hero" style="grid-template-columns:repeat(7,1fr);margin:12px 0;" id="journal-hero">
@@ -2179,11 +2179,14 @@ function updateBacktest(d) {
                 </div>
             </div>`;
         }
-        const pnl = r.net_pnl || 0;
+        const entered = Number(r.windows_entered || 0);
+        const scanned = Number(r.windows_scanned || 0);
+        const pnl = Number(r.net_pnl || 0);
         const pnlCls = pnl >= 0 ? 'var(--green)' : 'var(--red)';
         const winPct = ((r.win_rate||0)*100).toFixed(1);
         const winColor = (r.win_rate||0) >= 0.52 ? 'var(--green)' : (r.win_rate||0) >= 0.48 ? 'var(--text)' : 'var(--red)';
-        const entryRate = r.windows_scanned ? ((r.windows_entered/r.windows_scanned)*100).toFixed(1) : '0';
+        const entryRate = scanned > 0 ? ((entered/scanned)*100).toFixed(1) : null;
+        const entriesText = scanned > 0 ? `${entered} / ${scanned} (${entryRate}%)` : `${entered}`;
         const period = `${(r.start_date||'').slice(0,10)} – ${(r.end_date||'').slice(0,10)}`;
         function row(label, val, color) {
             return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);">
@@ -2191,13 +2194,19 @@ function updateBacktest(d) {
                 <span style="font-weight:600;font-size:0.82rem;color:${color||'var(--text)'};">${val}</span>
             </div>`;
         }
+        const noEntryNote = entered === 0
+            ? `<div style="margin:6px 0 8px;color:var(--yellow);font-size:0.76rem;line-height:1.35;">
+                No qualifying entries${scanned > 0 ? ` across ${scanned} scanned windows` : ''}.
+            </div>`
+            : '';
         return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
             ${header}
             <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:8px;">${period}</div>
+            ${noEntryNote}
             ${row('Win Rate', winPct+'%', winColor)}
             ${row('Avg Edge', ((r.avg_edge||0)*100).toFixed(2)+'%')}
             ${row('Expectancy', (r.expectancy||0).toFixed(4), pnlCls)}
-            ${row('Entries', `${r.windows_entered||0} / ${r.windows_scanned||0} (${entryRate}%)`)}
+            ${row('Entries', entriesText)}
             ${row('W / L', `${r.wins||0}W  ${r.losses||0}L`)}
             ${row('Net PnL', `$${pnl.toFixed(2)}`, pnlCls)}
             ${row('Return', `${(r.total_return_pct||0).toFixed(1)}%`, pnlCls)}
