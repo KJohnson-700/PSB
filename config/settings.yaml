@@ -133,8 +133,8 @@ strategies:
     min_edge_5m_ai_override: 0.10   # 2x normal min_edge_5m — strong conviction needed to override AI HOLD
     # Preferred AI-decision timing after some intra-window data has formed.
     # Values are minutes remaining until resolution.
-    ai_entry_window_15m_min: 8.0
-    ai_entry_window_15m_max: 13.0
+    ai_entry_window_15m_min: 4.0   # was 8.0; match quant entry window so 120s scan + latency does not skip the AI band
+    ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
@@ -145,13 +145,13 @@ strategies:
     entry_price_min_updown: 0.46
     entry_price_max_updown: 0.54
     # Up/down entry timing window; edge/price gates still decide whether the wider window is tradable.
-    entry_window_15m_min: 8.0
+    entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.75
     entry_window_5m_max: 5.0
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 300
+    entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
     # Price zones where AI is skipped (edge is obvious)
@@ -197,8 +197,8 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 8.0
-    ai_entry_window_15m_max: 13.0
+    ai_entry_window_15m_min: 4.0   # was 8.0; match quant entry window so 120s scan + latency does not skip the AI band
+    ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
@@ -234,14 +234,14 @@ strategies:
     # ── Entry window (time remaining in candle at entry) ──
     # 15m candle: widened from 13.0-14.33 (1.3min) to 12.0-14.5 (2.5min)
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
-    entry_window_15m_min: 8.0     # minutes remaining — widened to stop cadence misses while preserving early-candle intent
+    entry_window_15m_min: 4.0     # minutes remaining — widened to stop cadence misses while preserving early-candle intent
     entry_window_15m_max: 15.0    # minutes remaining — allow freshly listed windows
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
     entry_window_5m_min: 0.75     # minutes remaining
     entry_window_5m_max: 5.0      # minutes remaining
     # Auto-align entry windows to scan cadence to reduce timing misses from loop jitter.
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 300
+    entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
 
@@ -268,8 +268,8 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 8.0
-    ai_entry_window_15m_max: 13.0
+    ai_entry_window_15m_min: 4.0   # was 8.0; match quant entry window so 120s scan + latency does not skip the AI band
+    ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
@@ -306,12 +306,12 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 3
-    entry_window_15m_min: 8.0
+    entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.75
     entry_window_5m_max: 5.0
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 300
+    entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.5
     entry_window_auto_align_jitter_sec: 15
     btc_min_move_dollars_15m: 40.0
@@ -333,8 +333,8 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 8.0
-    ai_entry_window_15m_max: 13.0
+    ai_entry_window_15m_min: 4.0   # was 8.0; match quant entry window so 120s scan + latency does not skip the AI band
+    ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
@@ -351,12 +351,12 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 3
-    entry_window_15m_min: 8.0
+    entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.75
     entry_window_5m_max: 5.0
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 300
+    entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
     btc_min_move_dollars_15m: 40.0
@@ -378,8 +378,8 @@ strategies:
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_updown_marginal_min_edge: 0.03
-    ai_entry_window_15m_min: 8.0
-    ai_entry_window_15m_max: 13.0
+    ai_entry_window_15m_min: 4.0   # was 8.0; match quant entry window so 120s scan + latency does not skip the AI band
+    ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
@@ -395,7 +395,7 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 2
-    entry_window_15m_min: 8.0
+    entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.75
     entry_window_5m_max: 5.0

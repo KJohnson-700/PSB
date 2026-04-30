@@ -255,9 +255,29 @@ class ETHMacroStrategy(SolMacroStrategy):
         signals: List[SolMacroSignal] = []
         ai_calls = 0
         skip_reasons: Dict[str, int] = {}
+        gate_samples: Dict[str, list] = {}
 
         def _bump_skip(reason: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+        def _sample(metric: str, value) -> None:
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                return
+            if not (v == v):  # NaN check
+                return
+            gate_samples.setdefault(metric, []).append(v)
+
+        def _summarize(values: list) -> dict:
+            if not values:
+                return {}
+            vs = sorted(values)
+            n = len(vs)
+            def pct(p):
+                idx = max(0, min(n - 1, int(round((n - 1) * p))))
+                return round(vs[idx], 4)
+            return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
 
         for market in eth_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -287,9 +307,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _win_min, _win_max = self._resolve_entry_window_bounds(
                     is_5m=False, default_min=12.0, default_max=14.5
                 )
+            _sample("mins_left", _mins_left)
             if _mins_left < _win_min or _mins_left > _win_max:
                 _bump_skip("outside_window")
                 continue
+            _sample("entry_price", yes_price)
             _ai_window_open = self._within_ai_decision_window(
                 mins_left=_mins_left,
                 is_5m=is_5m,
@@ -431,6 +453,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             ):
                 _bump_skip("ai_window_closed")
 
+            _sample("est_prob_up", est_prob_up)
+            _sample("edge", edge)
             if edge < effective_min_edge:
                 _bump_skip("edge_below_min")
                 continue
@@ -499,11 +523,15 @@ class ETHMacroStrategy(SolMacroStrategy):
         else:
             top_reason = max(skip_reasons, key=skip_reasons.get) if skip_reasons else "no_eligible_markets"
             logger.info(f"ETH Macro strategy: 0 signals (BTC_HTF={btc_htf_bias}, top_skip={top_reason})")
+        gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
+        if gate_samples:
+            logger.info(f"  [gate-dist] {gate_distributions}")
         self.last_scan_stats = {
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(eth_markets),
             "btc_htf_bias": btc_htf_bias,
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
+            "gate_distributions": gate_distributions,
         }
         return signals

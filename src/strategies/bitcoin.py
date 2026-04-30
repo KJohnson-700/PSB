@@ -588,6 +588,7 @@ class BitcoinStrategy:
                 "ai_vetos": 0,
                 "ai_holds": 0,
                 "top_skip_reasons": {"disabled": 1},
+                "gate_distributions": {},
             }
             return []
 
@@ -605,6 +606,7 @@ class BitcoinStrategy:
                 "ai_vetos": 0,
                 "ai_holds": 0,
                 "top_skip_reasons": {"no_updown_markets": 1},
+                "gate_distributions": {},
             }
             logger.info(f"Bitcoin strategy: 0 BTC updown markets found out of {len(markets)} total")
             return []
@@ -622,6 +624,7 @@ class BitcoinStrategy:
                 "ai_vetos": 0,
                 "ai_holds": 0,
                 "top_skip_reasons": {"no_ta": 1},
+                "gate_distributions": {},
             }
             logger.warning("Bitcoin strategy: Could not fetch BTC price data")
             return []
@@ -647,6 +650,7 @@ class BitcoinStrategy:
                 "ai_vetos": 0,
                 "ai_holds": 0,
                 "top_skip_reasons": {"exposure_paused": 1},
+                "gate_distributions": {},
             }
             logger.info(f"Bitcoin strategy: PAUSED — {exp_reason}")
             return []
@@ -710,6 +714,7 @@ class BitcoinStrategy:
                 "allowed_side": allowed_side,
                 "ltf_strength": round(float(ltf_strength), 4),
                 "top_skip_reasons": {"ltf_confirmed_late_entry": 1},
+                "gate_distributions": {},
             }
             logger.info(
                 f"Bitcoin strategy: LTF confirmed = late-entry risk (MACD already crossed), "
@@ -735,9 +740,29 @@ class BitcoinStrategy:
         ai_vetos = 0
         ai_holds = 0
         skip_reasons: Dict[str, int] = {}
+        gate_samples: Dict[str, list] = {}
 
         def _bump_skip(reason: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+        def _sample(metric: str, value) -> None:
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                return
+            if not (v == v):  # NaN check
+                return
+            gate_samples.setdefault(metric, []).append(v)
+
+        def _summarize(values: list) -> dict:
+            if not values:
+                return {}
+            vs = sorted(values)
+            n = len(vs)
+            def pct(p):
+                idx = max(0, min(n - 1, int(round((n - 1) * p))))
+                return round(vs[idx], 4)
+            return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
 
         for market in btc_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -817,6 +842,7 @@ class BitcoinStrategy:
                         default_min=12.5,
                         default_max=14.5,
                     )
+                _sample("mins_left", _mins_left)
                 if _mins_left < _win_min or _mins_left > _win_max:
                     _bump_skip("outside_entry_window")
                     logger.debug(
@@ -831,6 +857,7 @@ class BitcoinStrategy:
 
                 # Skip markets where price has already moved far from 50/50
                 # (means the window is mid-resolution and market has "decided")
+                _sample("entry_price", yes_price)
                 if yes_price < 0.20 or yes_price > 0.80:
                     _bump_skip("price_too_far_from_50_50")
                     logger.debug(
@@ -1442,6 +1469,11 @@ class BitcoinStrategy:
                     f"({_mins_left:.1f}m left)"
                 )
 
+            try:
+                _sample("est_prob_up", est_prob_up)
+            except NameError:
+                pass
+            _sample("edge", edge)
             if edge < effective_min_edge:
                 _bump_skip("edge_below_min")
                 _mkt_type = "updown_5m" if is_5m else (
@@ -1582,6 +1614,9 @@ class BitcoinStrategy:
             )
 
         top_skip_pairs = sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6]
+        gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
+        if gate_samples:
+            logger.info(f"  [gate-dist] {gate_distributions}")
         self.last_scan_stats = {
             "enabled": True,
             "signals": len(signals),
@@ -1594,6 +1629,7 @@ class BitcoinStrategy:
             "ai_vetos": ai_vetos,
             "ai_holds": ai_holds,
             "top_skip_reasons": {k: v for k, v in top_skip_pairs},
+            "gate_distributions": gate_distributions,
         }
 
         return signals

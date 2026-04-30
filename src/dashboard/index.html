@@ -302,14 +302,13 @@
         <div class="status-hero" id="status-hero">
             <div class="hero-item" title="Live bankroll from the bot">
                 <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
-            <div class="hero-item" title="Realized PnL from exits with timestamp on today’s UTC calendar day (server). Not the same as session PnL.">
-                <div class="hero-val" id="hero-pnl">-</div><div class="hero-sub" id="hero-pnl-sub"></div><div class="hero-lbl">Daily realized (UTC)</div></div>
+            <div class="hero-item" title="Realized PnL from closed trades this session.">
+                <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Realized P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
-                <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="ENTRY events logged on today's UTC server day. Session fills stay in the subline for context.">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
+                <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
+            <div class="hero-item" title="Fills logged this session.">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Fills</div></div>
         </div>
-        <p id="command-center-hint" style="font-size:10px;color:var(--td);margin:8px 0 0 0;line-height:1.5;">Daily (UTC) metrics reset at UTC midnight on the host.</p>
         <div class="controls" style="padding:8px 0 4px;">
             <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
@@ -1460,26 +1459,18 @@ function applyHeroMetrics(d) {
     const brSub = document.getElementById('hero-bankroll-sub');
     if (brSub) brSub.textContent = d.session_id ? ('id ' + String(d.session_id).slice(-14)) : '';
 
-    const dailyPnl = (p.daily_pnl !== null && p.daily_pnl !== undefined)
-        ? Number(p.daily_pnl)
-        : null;
+    const sessionPnlRaw = (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '')
+        ? Number(s.realized_pnl)
+        : ((p.daily_pnl !== null && p.daily_pnl !== undefined) ? Number(p.daily_pnl) : null);
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
-        if (Number.isFinite(dailyPnl)) {
-            pnlEl.textContent = (dailyPnl >= 0 ? '+' : '-') + '$' + Math.abs(dailyPnl).toFixed(2);
-            pnlEl.style.color = dailyPnl > 0 ? 'var(--green)' : dailyPnl < 0 ? 'var(--red)' : 'var(--text)';
+        if (Number.isFinite(sessionPnlRaw)) {
+            pnlEl.textContent = (sessionPnlRaw >= 0 ? '+' : '-') + '$' + Math.abs(sessionPnlRaw).toFixed(2);
+            pnlEl.style.color = sessionPnlRaw > 0 ? 'var(--green)' : sessionPnlRaw < 0 ? 'var(--red)' : 'var(--text)';
         } else {
             pnlEl.textContent = '-';
             pnlEl.style.color = 'var(--text-muted)';
         }
-    }
-    const pnlSub = document.getElementById('hero-pnl-sub');
-    if (pnlSub) {
-        const sr = s.realized_pnl;
-        if (sr !== undefined && sr !== null && String(sr) !== '') {
-            const v = Number(sr);
-            pnlSub.textContent = 'Session realized: ' + (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toFixed(2);
-        } else pnlSub.textContent = '';
     }
 
     let openCount = (p && (p.total_positions != null && p.total_positions !== undefined))
@@ -1495,27 +1486,10 @@ function applyHeroMetrics(d) {
     }
     const posEl = document.getElementById('hero-positions');
     if (posEl) posEl.textContent = openCount;
-    const posSub = document.getElementById('hero-positions-sub');
-    if (posSub) {
-        const oj = s.open;
-        if (oj !== undefined && oj !== null && Number(oj) !== openCount)
-            posSub.textContent = 'session open: ' + oj;
-        else posSub.textContent = '';
-    }
 
-    const dailyTrades = Number(p.daily_trades || 0);
     const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
     const tradesEl = document.getElementById('hero-trades');
-    if (tradesEl) tradesEl.textContent = dailyTrades;
-    const tradesSub = document.getElementById('hero-trades-sub');
-    if (tradesSub) {
-        const closed = s.closed;
-        const o = s.open;
-        const parts = [];
-        if (fills != null) parts.push(`${fills} fills this session`);
-        if (closed !== undefined && o !== undefined) parts.push(`${closed} closed · ${o} open`);
-        tradesSub.textContent = parts.join(' · ');
-    }
+    if (tradesEl) tradesEl.textContent = (fills != null) ? fills : Number(p.daily_trades || 0);
 
 }
 
