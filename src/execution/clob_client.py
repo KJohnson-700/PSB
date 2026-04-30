@@ -323,7 +323,7 @@ class RiskManager:
             return False, "Daily trade limit reached"
 
         # Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own reserved slots
-        # so NEH/fade/arb can't crowd them out
+        # so inactive or low-priority strategies cannot crowd them out.
         CRYPTO_STRATEGIES = {
             "bitcoin",
             "sol_macro",

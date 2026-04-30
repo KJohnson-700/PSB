@@ -92,6 +92,10 @@ class TestSimulateFill:
         # Large size should have proportionally more slippage
         assert slip_large > slip_small
 
+    def test_generic_backtest_engine_has_no_backtest_ai_field(self, base_config):
+        engine = BacktestEngine(base_config, strategy_name="weather")
+        assert not hasattr(engine, "backtest_ai")
+
 
 class TestSettlement:
     """Test settlement logic with fees."""

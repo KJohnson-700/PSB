@@ -2,11 +2,14 @@
 Strategy unit tests — verify signal logic produces correct outputs for known inputs.
 No random data. Each test represents a real market scenario.
 """
+import inspect
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+from src.analysis.ai_agent import AIAgent
 from src.analysis.kelly_sizer import KellySizer
+from src.analysis.null_ai_agent import NullAIAgent
 from src.market.scanner import Market
 from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.math_utils import PositionSizer
@@ -84,8 +87,42 @@ class TestBacktestAI:
         assert result is None
 
     def test_ai_no_signal_in_dead_zone(self):
-        """YES at 0.45 -> between thresholds, no signal."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.45, "m5"))
+        """YES near fair value -> no proxy signal."""
+        result = run_async(self.ai.analyze_market("Q", "", 0.48, "m5"))
+        assert result is None
+
+    def test_backtest_ai_accepts_live_ai_kwargs(self):
+        live_params = list(inspect.signature(AIAgent.analyze_market).parameters)
+        backtest_params = list(inspect.signature(BacktestAIAgent.analyze_market).parameters)
+        for required in live_params:
+            assert required in backtest_params
+        result = run_async(
+            self.ai.analyze_market(
+                "Q",
+                "",
+                0.90,
+                "m6",
+                news_context="",
+                strategy_hint="bitcoin",
+            )
+        )
+        assert result is not None
+
+
+class TestNullAIAgent:
+    def test_null_ai_matches_live_call_shape_and_returns_none(self):
+        ai = NullAIAgent()
+        assert ai.is_available() is False
+        result = run_async(
+            ai.analyze_market(
+                "Q",
+                "desc",
+                0.51,
+                "m7",
+                news_context="news",
+                strategy_hint="sol_macro",
+            )
+        )
         assert result is None
 
 

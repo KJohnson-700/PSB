@@ -23,12 +23,20 @@ class PolyBotStrategyAdapter(Strategy):
         self.strategy_name = strategy_name
         self.instrument_id = instrument_id
 
-        if self.strategy_name == "fade":
-            self.strategy = self.poly_bot.fade_strategy
-        elif self.strategy_name == "arbitrage":
-            self.strategy = self.poly_bot.arbitrage_strategy
-        else:
-            raise ValueError(f"Unknown strategy: {self.strategy_name}")
+        strategy_attr = {
+            "bitcoin": "bitcoin_strategy",
+            "sol_macro": "sol_macro_strategy",
+            "eth_macro": "eth_macro_strategy",
+            "hype_macro": "hype_macro_strategy",
+            "xrp_macro": "xrp_macro_strategy",
+            "weather": "weather_strategy",
+        }.get(self.strategy_name)
+        if not strategy_attr or not hasattr(self.poly_bot, strategy_attr):
+            raise ValueError(
+                f"Unknown or unavailable strategy: {self.strategy_name}. "
+                "Supported: bitcoin, sol_macro, eth_macro, hype_macro, xrp_macro, weather."
+            )
+        self.strategy = getattr(self.poly_bot, strategy_attr)
 
     def on_start(self):
         """Register the instruments and bars to be used."""

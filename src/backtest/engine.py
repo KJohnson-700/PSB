@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Any, Callable
 import pandas as pd
 
 from src.market.scanner import Market
-from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.math_utils import PositionSizer
 from src.strategies.weather_models import WeatherSignal
 
@@ -114,8 +113,6 @@ class BacktestEngine:
         self.blocked_count = 0
         self.blocked_by_reason: Dict[str, int] = {}
 
-        # Use backtest AI (no real LLM calls)
-        self.backtest_ai = BacktestAIAgent(config)
         self.position_sizer = PositionSizer(
             kelly_fraction=config.get("trading", {}).get("kelly_fraction", 0.25),
             max_position_pct=config.get("trading", {}).get(

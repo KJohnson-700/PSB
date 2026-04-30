@@ -73,6 +73,15 @@ def test_dashboard_sse_uses_risk_manager_daily_fields():
     assert '"trades_today": daily_trades_n' in server
 
 
+def test_ai_summary_text_extractor_handles_provider_shapes():
+    from src.dashboard.server import _extract_ai_summary_text
+
+    assert _extract_ai_summary_text({"content": [{"type": "text", "text": " good "}]}) == "good"
+    assert _extract_ai_summary_text({"content": [{"type": "text", "content": " nested "}]}) == "nested"
+    assert _extract_ai_summary_text({"choices": [{"message": {"content": " choice "}}]}) == "choice"
+    assert _extract_ai_summary_text({"content": [{"type": "tool_use", "name": "noop"}]}) == ""
+
+
 def test_dashboard_contains_operator_toggle_buttons():
     html = INDEX.read_text(encoding="utf-8")
     assert "toggleWeather72hCap()" in html

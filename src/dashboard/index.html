@@ -2003,32 +2003,9 @@ async function startCryptoBacktest() {
 async function startBacktest() {
     const btn = document.getElementById('backtest-start-btn');
     const status = document.getElementById('process-status-bt');
-    btn.disabled = true;
-    status.textContent = 'Running rigorous backtest...';
+    btn.disabled = false;
+    status.textContent = 'Legacy rigorous backtests were removed. Use the crypto backtest controls on this tab.';
     status.style.color = 'var(--yellow)';
-    try {
-        const r = await fetch('/api/backtest/start', {
-            method: 'POST',
-            headers: dashAuthHeaders({'Content-Type': 'application/json'}),
-            body: JSON.stringify({strategies: 'fade,arbitrage', periods: 'all'})
-        });
-        const d = await r.json();
-        if (d.status === 'started' && d.job_id) {
-            status.textContent = `Rigorous backtest running (job ${d.job_id}, PID ${d.pid}) — can run alongside live bot`;
-            status.style.color = 'var(--green)';
-            pollBacktestJobUntilDone(d.job_id, 'Rigorous BT', status, () => {
-                btn.disabled = false;
-                status.textContent = 'Rigorous backtest complete — refreshing reports...';
-                status.style.color = 'var(--green)';
-                loadBacktestReports();
-                loadLivePerformance();
-            });
-        } else {
-            status.textContent = 'Error: ' + (d.message || d.status);
-            status.style.color = 'var(--red)';
-            btn.disabled = false;
-        }
-    } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; btn.disabled=false; }
 }
 
 async function loadLivePerformance() {
@@ -2458,7 +2435,7 @@ function updateJournal(d) {
     const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',weather:'WX'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
-    // also include any extra strategies with data (e.g. old fade entries)
+    // also include any extra historical strategies still present in old journals
     Object.entries(ss).forEach(([s,v]) => { if (!merged[s]) merged[s] = v; });
     stratsEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
         Object.entries(merged).map(([s, v]) => {
@@ -2539,7 +2516,7 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Reason</th></tr></thead><tbody>' +
                 d.trades.slice(-50).reverse().map(t => {
                     const pnlCls = (t.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {fade:'badge-yellow',arbitrage:'badge-blue',neh:'badge-purple',bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',xrp_macro:'badge-blue',weather:'badge-green'};
+                    const colors = {bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
                         <td><span class="badge ${colors[t.strategy]||'badge-blue'}">${t.strategy||'?'}</span></td>
                         <td>${t.action||''}</td>

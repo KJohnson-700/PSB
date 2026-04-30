@@ -1,22 +1,9 @@
 """
 Deterministic AI proxy for backtesting.
-Avoids real LLM calls; uses rule-based estimates (mean reversion, fade logic).
 
-DIFFERENCES FROM LIVE AIAgent:
-- Live AIAgent calls real LLMs (OpenAI, Anthropic, Gemini, Groq, MiniMax) with
-  market context, news, and technical indicators. It returns variable confidence
-  scores and nuanced probability estimates.
-- BacktestAIAgent uses fixed rules:
-  * Fade zone [consensus_threshold_lower, consensus_threshold_upper]:
-    YES consensus -> estimated_prob = 1.0 - yes_price (fade the crowd)
-    NO consensus  -> estimated_prob = yes_price + (1-yes_price)*0.5
-  * Arbitrage zone (yes_price > 0.60 or < 0.40):
-    Mean reversion toward 0.5: estimated_prob = 0.5 + (0.5 - yes_price) * 0.3
-  * Fixed confidence: 0.72 for all signals
-  * Returns None for prices in [0.40, 0.60] (no edge)
-
-This proxy tests the RULE-BASED entry/exit logic only, not AI judgment.
-To test AI quality, run live paper trading and compare against backtest results.
+This proxy is intentionally generic. It avoids real LLM calls and applies a
+small mean-reversion nudge around 0.50 so backtests can exercise AI-gated code
+paths without depending on removed fade/arbitrage strategy config.
 """
 
 from dataclasses import dataclass
@@ -29,8 +16,8 @@ from src.analysis.ai_agent import AIAnalysis
 class BacktestAIAgent:
     """
     Rule-based AI proxy for backtesting.
-    - Fade: assumes extreme consensus tends to mean-revert (AI prob = 1 - consensus)
-    - Arbitrage: assumes mean reversion toward 0.5
+    - Small mean-reversion bias away from extreme YES prices
+    - No dependency on legacy fade / arbitrage config
     """
 
     def __init__(self, config: dict):
@@ -48,33 +35,25 @@ class BacktestAIAgent:
         market_description: str,
         current_yes_price: float,
         market_id: str,
-        end_date: Optional[datetime] = None,
         news_context: str = "",
+        strategy_hint: str = "",
+        end_date: Optional[datetime] = None,
+        **kwargs,
     ) -> Optional[AIAnalysis]:
         """
         Return deterministic analysis for backtest.
-        Fade logic: when yes_price > 0.95, assume true prob = 1 - yes_price (fade)
-        Arbitrage: when |yes_price - 0.5| > 0.15, assume mean reversion
+        This is a lightweight proxy only. It does not attempt to emulate live AI.
         """
-        # Fade zone: consensus in [0.80, 0.95] — aligned with FadeStrategy thresholds
-        fade_cfg = self.config.get("strategies", {}).get("fade", {})
-        fade_lower = fade_cfg.get("consensus_threshold_lower", 0.80)
-        fade_upper = fade_cfg.get("consensus_threshold_upper", 0.95)
+        _ = (market_question, market_description, market_id, news_context, strategy_hint, end_date, kwargs)
+        proxy_cfg = self.config.get("backtest", {}).get("ai_proxy", {})
+        center_band = float(proxy_cfg.get("center_band", 0.04))
+        reversion_strength = float(proxy_cfg.get("reversion_strength", 0.35))
 
-        if fade_lower <= current_yes_price <= fade_upper:
-            # YES side has consensus — fade it: true prob is much lower
-            estimated_prob = 1.0 - current_yes_price
+        if current_yes_price >= 0.5 + center_band:
+            estimated_prob = 0.5 + (0.5 - current_yes_price) * reversion_strength
             recommendation = "BUY_NO"
-        elif fade_lower <= (1.0 - current_yes_price) <= fade_upper:
-            # NO side has consensus — fade it: YES is undervalued
-            estimated_prob = current_yes_price + (1.0 - current_yes_price) * 0.5
-            recommendation = "BUY_YES"
-        # Arbitrage zone: moderate mispricing (mean-reversion)
-        elif current_yes_price > 0.60:
-            estimated_prob = 0.5 + (0.5 - current_yes_price) * 0.3
-            recommendation = "BUY_NO"
-        elif current_yes_price < 0.40:
-            estimated_prob = 0.5 + (0.5 - current_yes_price) * 0.3
+        elif current_yes_price <= 0.5 - center_band:
+            estimated_prob = 0.5 + (0.5 - current_yes_price) * reversion_strength
             recommendation = "BUY_YES"
         else:
             return None
@@ -83,7 +62,7 @@ class BacktestAIAgent:
         confidence = 0.72
 
         return AIAnalysis(
-            reasoning="[BACKTEST PROXY] Rule-based mean reversion / fade proxy",
+            reasoning="[BACKTEST PROXY] Rule-based mean reversion proxy",
             confidence_score=confidence,
             estimated_probability=estimated_prob,
             recommendation=recommendation,

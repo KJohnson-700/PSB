@@ -41,6 +41,14 @@ ETH_UPDOWN_PATTERN = re.compile(
 class ETHMacroStrategy(SolMacroStrategy):
     """ETH strategy using BTC-follow regime logic instead of SOL lag logic."""
 
+    def _build_alt_service(self) -> SOLBTCService:
+        return SOLBTCService(
+            alt_symbol="ETHUSDT",
+            dynamic_beta_min=self.dynamic_beta_min,
+            dynamic_beta_max=self.dynamic_beta_max,
+            dynamic_beta_extreme_max=self.dynamic_beta_extreme_max,
+        )
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -56,16 +64,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             self.config,
             logger=logger,
         )
-        self.sol_service = SOLBTCService(alt_symbol="ETHUSDT")
+        self._apply_strategy_config(rebuild_service=True)
         self.btc_service = BTCPriceService()
-        self.min_liquidity = self.config.get("min_liquidity", 1000)
-        self.min_edge = self.config.get("min_edge", 0.09)
-        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
-        self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
-        self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
-        self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
-        self.entry_price_min = self.config.get("entry_price_min", 0.46)
-        self.entry_price_max = self.config.get("entry_price_max", 0.54)
         self._signal_strategy_name = "eth_macro"
 
         self.btc_follow_1h_hist_min = float(self.config.get("btc_follow_1h_hist_min", 8.0))

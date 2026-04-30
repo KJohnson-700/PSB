@@ -14,7 +14,12 @@ from src.main import PolyBot
 def main():
     """Main entry point for the backtest runner."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--strategy", type=str, required=True, help="The name of the strategy to backtest (e.g., 'fade').")
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        required=True,
+        help="The strategy to backtest (bitcoin, sol_macro, eth_macro, hype_macro, xrp_macro, weather).",
+    )
     parser.add_argument("--market-slug", type=str, required=True, help="The Polymarket market slug (e.g., 'will-the-fed-cut-rates-in-june-2024').")
     parser.add_argument("--start-time", type=str, required=True, help="The backtest start time (YYYY-MM-DD HH:MM:SS)." )
     parser.add_argument("--end-time", type=str, required=True, help="The backtest end time (YYYY-MM-DD HH:MM:SS)." )

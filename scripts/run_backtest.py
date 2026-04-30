@@ -3,9 +3,9 @@
 Run Polymarket strategy backtest with live progress display.
 
 Usage:
-  python scripts/run_backtest.py --strategy fade --slug will-trump-win-2024 --start 2024-01-01 --end 2024-06-30
+  python scripts/run_backtest.py --strategy weather --slug will-trump-win-2024 --start 2024-01-01 --end 2024-06-30
   python scripts/run_backtest.py --plan config/backtest_plan.yaml
-  python scripts/run_backtest.py --strategy fade --csv data/backtest/sample.csv --no-ui
+  python scripts/run_backtest.py --strategy weather --csv data/backtest/sample.csv --no-ui
 
 Requires POLYMARKETDATA_API_KEY in `.env` or config/secrets.env for API data.
 """
@@ -82,7 +82,7 @@ def _generate_synthetic(start: str, end: str) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(description="Run Polymarket backtest")
-    parser.add_argument("--strategy", choices=["fade", "arbitrage", "neh"], default="fade")
+    parser.add_argument("--strategy", choices=["weather"], default="weather")
     parser.add_argument("--slug", help="Market slug (for PolymarketData API)")
     parser.add_argument("--start", default="2024-01-01", help="Start date YYYY-MM-DD")
     parser.add_argument("--end", default="2024-06-30", help="End date YYYY-MM-DD")

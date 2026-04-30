@@ -79,6 +79,55 @@ def _full_bot_instance() -> Optional["PolyBot"]:
 # ── AI summary cache (keyed by session_id) ────────────────────────────────────
 _ai_summary_cache: Dict[str, str] = {}
 
+
+def _extract_ai_summary_text(payload: Any) -> str:
+    """Extract assistant text from common MiniMax/Anthropic/OpenAI response shapes."""
+    if isinstance(payload, str):
+        return payload.strip()
+
+    if isinstance(payload, list):
+        parts = [_extract_ai_summary_text(item) for item in payload]
+        return "\n".join(part for part in parts if part).strip()
+
+    if not isinstance(payload, dict):
+        return ""
+
+    for key in ("text", "output_text", "response"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        extracted = _extract_ai_summary_text(content)
+        if extracted:
+            return extracted
+
+    message = payload.get("message")
+    if isinstance(message, str):
+        return message.strip()
+    if isinstance(message, dict):
+        extracted = _extract_ai_summary_text(message)
+        if extracted:
+            return extracted
+
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        extracted = _extract_ai_summary_text(choices)
+        if extracted:
+            return extracted
+
+    delta = payload.get("delta")
+    if isinstance(delta, dict):
+        extracted = _extract_ai_summary_text(delta)
+        if extracted:
+            return extracted
+
+    return ""
+
+
 # ── Background BTC analysis cache ─────────────────────────────────────────────
 # get_full_analysis() takes ~9s (4 Binance fetches). Run it in a background
 # thread every 60s and serve the cached result instantly so HTTP never blocks.
@@ -168,6 +217,16 @@ logger = logging.getLogger(__name__)
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "settings.yaml"
+
+ACTIVE_STRATEGY_NAMES = (
+    "bitcoin",
+    "sol_macro",
+    "eth_macro",
+    "hype_macro",
+    "xrp_macro",
+    "weather",
+)
+CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP"}
 
 
 def _classify_updown_trade(question: str, strategy: str, market_id: str = "") -> str:
@@ -1654,7 +1713,7 @@ async def start_backtest(request: Request):
         body = await request.json()
     except Exception:
         pass
-    strategies_raw = body.get("strategies", "fade arbitrage")
+    strategies_raw = body.get("strategies", "")
     if isinstance(strategies_raw, str):
         strategies_list = [
             x.strip()
@@ -1663,8 +1722,6 @@ async def start_backtest(request: Request):
         ]
     else:
         strategies_list = [str(x).strip() for x in strategies_raw if str(x).strip()]
-    if not strategies_list:
-        strategies_list = ["fade", "arbitrage"]
     periods = body.get("periods", "all")
     symbol = body.get("symbol", "")
     window = str(body.get("window", 15))
@@ -1683,7 +1740,7 @@ async def start_backtest(request: Request):
                 ),
             }
 
-    if symbol in ("BTC", "SOL", "ETH", "HYPE", "XRP"):
+    if symbol in CRYPTO_BACKTEST_SYMBOLS:
         script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
         if not script.exists():
             return {"status": "error", "message": f"{script} not found"}
@@ -1697,14 +1754,13 @@ async def start_backtest(request: Request):
             cmd_args += ["--test-start", test_start]
         summary = f"{symbol} {window}m crypto" + (f" test-from={test_start}" if test_start else " [in-sample]")
     else:
-        script = PROJECT_ROOT / "scripts" / "run_backtest_rigorous.py"
-        if not script.exists():
-            return {"status": "error", "message": f"{script} not found"}
-        cmd_args = [sys.executable, str(script), "--strategies", *strategies_list]
-        if periods == "all":
-            cmd_args.append("--no-train-test")
-        cmd_args.extend(["--no-stress", "--save-report", "--quick"])
-        summary = f"rigorous {' '.join(strategies_list)}"
+        return {
+            "status": "error",
+            "message": (
+                "Legacy fade/arbitrage/neh backtests were removed. "
+                "Use the crypto backtest controls for BTC, SOL, ETH, HYPE, or XRP."
+            ),
+        }
 
     try:
         return _start_backtest_job(cmd_args, summary)
@@ -1823,100 +1879,27 @@ async def get_test_results():
 
 @app.get("/api/scans/latest")
 async def get_latest_scan():
-    """Return the most recent live scan results."""
-    scan_dir = DATA_ROOT / "live_scans"
-    if not scan_dir.exists():
-        return {"scan": None, "available": 0}
-    files = sorted(
-        scan_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
-    if not files:
-        return {"scan": None, "available": 0}
-    try:
-        with open(files[0]) as fp:
-            data = json.load(fp)
-        data["filename"] = files[0].name
-        return {"scan": data, "available": len(files)}
-    except Exception as e:
-        return {"scan": None, "available": len(files), "error": str(e)}
+    """Legacy general-market live scan retired; crypto dashboards use live bot state instead."""
+    return {"scan": None, "available": 0}
 
 
 @app.get("/api/scans/history")
 async def get_scan_history():
-    """Return all scan summaries for trend tracking."""
-    scan_dir = DATA_ROOT / "live_scans"
-    if not scan_dir.exists():
-        return {"scans": []}
-    files = sorted(
-        scan_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
-    scans = []
-    for f in files[:50]:
-        try:
-            with open(f) as fp:
-                data = json.load(fp)
-            scans.append(
-                {
-                    "filename": f.name,
-                    "timestamp": data.get("timestamp", ""),
-                    "markets_scanned": data.get("markets_scanned", 0),
-                    "total_signals": len(data.get("signals", [])),
-                    "fade": sum(
-                        1
-                        for s in data.get("signals", [])
-                        if s.get("strategy") == "fade"
-                    ),
-                    "arbitrage": sum(
-                        1
-                        for s in data.get("signals", [])
-                        if s.get("strategy") == "arbitrage"
-                    ),
-                    "neh": sum(
-                        1 for s in data.get("signals", []) if s.get("strategy") == "neh"
-                    ),
-                    "distribution": data.get("distribution", {}),
-                }
-            )
-        except Exception:
-            pass
-    return {"scans": scans}
+    """Legacy general-market live scan retired."""
+    return {"scans": []}
 
 
 @app.post("/api/scans/run")
 async def run_live_scan(request: Request):
     """Trigger a live scan from the dashboard."""
     _check_auth(request)
-    script = PROJECT_ROOT / "scripts" / "live_strategy_scan.py"
-    if not script.exists():
-        raise HTTPException(status_code=404, detail="live_strategy_scan.py not found")
-    try:
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(script),
-                "--strategy",
-                "all",
-                "--limit",
-                "200",
-                "--min-volume",
-                "10000",
-                "--save",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=180,
-            cwd=str(PROJECT_ROOT),
-            env=_safe_env(),
-        )
-        return {
-            "status": "completed",
-            "output": result.stdout[-2000:],
-            "errors": result.stderr[-500:] if result.stderr else "",
-        }
-    except subprocess.TimeoutExpired:
-        return {"status": "timeout", "output": "Scan timed out after 180s"}
-    except Exception as e:
-        return {"status": "error", "output": str(e)}
+    return {
+        "status": "error",
+        "output": (
+            "Legacy general-market live scan was removed with fade/arbitrage/neh. "
+            "Use the crypto strategy dashboard panels and watchlist instead."
+        ),
+    }
 
 
 @app.get("/api/strategy/watchlist")
@@ -1926,15 +1909,11 @@ async def get_strategy_watchlist(
 ):
     """Approximate 'next trigger' levels for dashboard visualization.
 
-    This is display-oriented guidance: it shows how far a market's current
-    probability is from strategy entry zones (and for updown markets, how far
-    spot price is from the parsed threshold).
-
-    When include_general_markets is False, skips the Gamma scan (arb/fade/neh)
-    and only returns crypto updown rows from the latest live scan — fast path
-    for the BTC chart + reason-buckets panel (~ms instead of tens of seconds).
+    Crypto-only display guidance showing how far active BTC/SOL/ETH/HYPE/XRP
+    strategy candidates are from their entry zones and thresholds.
     """
     limit = max(10, min(limit, 200))
+    _ = include_general_markets
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
@@ -1943,112 +1922,6 @@ async def get_strategy_watchlist(
 
     strategies_cfg = cfg.get("strategies", {})
     watchlist: List[Dict[str, Any]] = []
-
-    # ── General market watchlist (fade/arb/neh) ─────────────────────────────
-    if include_general_markets:
-        try:
-            from src.market.scanner import MarketScanner
-
-            scanner = MarketScanner(cfg)
-            markets = await scanner.fetch_markets(limit=250)
-            markets = await scanner.update_market_prices(markets)
-
-            arb_cfg = strategies_cfg.get("arbitrage", {})
-            fade_cfg = strategies_cfg.get("fade", {})
-            neh_cfg = strategies_cfg.get("neh", {})
-
-            arb_min = float(arb_cfg.get("entry_price_min", 0.20))
-            arb_max = float(arb_cfg.get("entry_price_max", 0.40))
-            fade_low = float(fade_cfg.get("consensus_threshold_lower", 0.80))
-            fade_high = float(fade_cfg.get("consensus_threshold_upper", 0.95))
-            fade_e_min = float(fade_cfg.get("entry_price_min", 0.05))
-            fade_e_max = float(fade_cfg.get("entry_price_max", 0.45))
-            neh_max_yes = float(neh_cfg.get("max_yes_price", 0.02))
-            neh_min_days = float(neh_cfg.get("min_days_to_resolution", 60))
-
-            for m in markets:
-                yes = float(m.yes_price)
-                no = float(m.no_price)
-                cheap_side = min(yes, no)
-                cheap_action = "BUY_YES" if yes <= no else "BUY_NO"
-
-                # Arbitrage: cheap-side entry zone
-                if cheap_side < arb_min:
-                    arb_trigger = arb_min
-                    arb_ready = False
-                elif cheap_side > arb_max:
-                    arb_trigger = arb_max
-                    arb_ready = False
-                else:
-                    arb_trigger = cheap_side
-                    arb_ready = True
-                watchlist.append(
-                    {
-                        "strategy": "arbitrage",
-                        "market_id": m.id,
-                        "market_question": m.question,
-                        "action_hint": cheap_action,
-                        "current_price": cheap_side,
-                        "trigger_price": arb_trigger,
-                        "distance": abs(cheap_side - arb_trigger),
-                        "ready": arb_ready,
-                        "block_reason": "" if arb_ready else "outside_entry_zone",
-                    }
-                )
-
-                # Fade: consensus + opposite side entry band
-                consensus_side = max(yes, no)
-                opposite = min(yes, no)
-                if consensus_side < fade_low:
-                    fade_trigger = fade_low
-                    fade_reason = "consensus_not_extreme"
-                elif consensus_side > fade_high:
-                    fade_trigger = fade_high
-                    fade_reason = "lottery_zone"
-                elif opposite < fade_e_min:
-                    fade_trigger = fade_e_min
-                    fade_reason = "opposite_too_cheap"
-                elif opposite > fade_e_max:
-                    fade_trigger = fade_e_max
-                    fade_reason = "opposite_too_expensive"
-                else:
-                    fade_trigger = opposite
-                    fade_reason = ""
-                fade_ready = fade_reason == ""
-                watchlist.append(
-                    {
-                        "strategy": "fade",
-                        "market_id": m.id,
-                        "market_question": m.question,
-                        "action_hint": "BUY_NO" if yes >= no else "BUY_YES",
-                        "current_price": opposite,
-                        "trigger_price": fade_trigger,
-                        "distance": abs(opposite - fade_trigger),
-                        "ready": fade_ready,
-                        "block_reason": fade_reason,
-                    }
-                )
-
-                # NEH: ultra-low YES + long duration
-                days_to_res = (m.hours_to_expiration / 24.0) if m.hours_to_expiration is not None else 0.0
-                neh_ready = yes <= neh_max_yes and days_to_res >= neh_min_days
-                watchlist.append(
-                    {
-                        "strategy": "neh",
-                        "market_id": m.id,
-                        "market_question": m.question,
-                        "action_hint": "SELL_YES",
-                        "current_price": yes,
-                        "trigger_price": neh_max_yes,
-                        "distance": abs(yes - neh_max_yes),
-                        "ready": neh_ready,
-                        "block_reason": "" if neh_ready else ("too_expensive" if yes > neh_max_yes else "too_short_term"),
-                    }
-                )
-
-            await scanner.close()
-        except Exception as e:
-            logger.warning(f"Watchlist general markets unavailable: {e}")
 
     # ── Crypto updown watchlist (bitcoin / sol_macro / eth_macro / xrp_macro)
     try:
@@ -2266,15 +2139,6 @@ async def get_strategy_metrics():
     if it happens to be running.
     """
     metrics = {
-        "fade": {"signals": 0, "trades": 0, "pnl": 0, "win_rate": None, "reports": 0},
-        "arbitrage": {
-            "signals": 0,
-            "trades": 0,
-            "pnl": 0,
-            "win_rate": None,
-            "reports": 0,
-        },
-        "neh": {"signals": 0, "trades": 0, "pnl": 0, "win_rate": None, "reports": 0},
         "bitcoin": {
             "signals": 0,
             "trades": 0,
@@ -2911,7 +2775,13 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
                     },
                 )
                 if resp.status_code == 200:
-                    summary = resp.json()["content"][0]["text"].strip()
+                    payload = resp.json()
+                    summary = _extract_ai_summary_text(payload)
+                    if not summary:
+                        keys = list(payload.keys())[:8] if isinstance(payload, dict) else type(payload).__name__
+                        logger.warning(f"AI summary minimax returned no text: {keys}")
+                else:
+                    logger.warning(f"AI summary minimax HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             logger.warning(f"AI summary minimax failed: {e}")
 
