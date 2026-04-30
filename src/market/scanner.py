@@ -622,7 +622,6 @@ class MarketScanner:
             except Exception as e:
                 logger.warning(f"Error parsing market: {e}")
                 continue
-        
         return markets
     
     async def update_market_prices(self, markets: List[Market]) -> List[Market]:
@@ -725,12 +724,11 @@ class MarketScanner:
     # ──────────────────────────────────────────────────────────────
     GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
-    _HUMAN_UPDOWN_PREFIXES = (
-        "bitcoin",
-        "solana",
-        "ethereum",
+    _TIMESTAMP_UPDOWN_PREFIXES = (
+        "btc",
+        "sol",
+        "eth",
         "xrp",
-        "hyperliquid",
         "hype",
     )
 
@@ -774,11 +772,16 @@ class MarketScanner:
 
     @classmethod
     def _iter_updown_event_slugs(cls, *, step_minutes: int, look_ahead: int) -> List[str]:
-        return cls._iter_named_event_slugs(
-            prefixes=cls._HUMAN_UPDOWN_PREFIXES,
-            step_minutes=step_minutes,
-            look_ahead=look_ahead,
-        )
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        step_seconds = step_minutes * 60
+        floor_ts = (now_ts // step_seconds) * step_seconds
+        label = f"{step_minutes}m"
+        slugs: List[str] = []
+        for offset in range(0, look_ahead + 1):
+            window_ts = floor_ts + offset * step_seconds
+            for asset_prefix in cls._TIMESTAMP_UPDOWN_PREFIXES:
+                slugs.append(f"{asset_prefix}-updown-{label}-{window_ts}")
+        return slugs
 
     @staticmethod
     def _parse_gamma_event_market(gm: Dict[str, Any], slug: str) -> Optional[Market]:
@@ -840,34 +843,57 @@ class MarketScanner:
         timeout_sec: float,
         limit: Optional[int] = None,
     ) -> List[Market]:
-        markets: List[Market] = []
-        seen_ids: set[str] = set()
-        for slug in slugs:
-            if limit is not None and len(markets) >= limit:
-                break
+        def _fetch_one(slug: str) -> List[Market]:
+            parsed_markets: List[Market] = []
             try:
+                market_resp = requests.get(
+                    f"{self.GAMMA_API_BASE}/markets",
+                    params={"slug": slug},
+                    timeout=timeout_sec,
+                )
+                if market_resp.status_code == 200:
+                    for gm in market_resp.json() or []:
+                        parsed = self._parse_gamma_event_market(gm, slug)
+                        if parsed is not None:
+                            parsed_markets.append(parsed)
+                    if parsed_markets or "-updown-" in slug:
+                        return parsed_markets
+
                 resp = requests.get(
                     f"{self.GAMMA_API_BASE}/events",
                     params={"slug": slug},
                     timeout=timeout_sec,
                 )
                 if resp.status_code != 200:
-                    continue
+                    return parsed_markets
                 events = resp.json()
                 if not events:
-                    continue
+                    return parsed_markets
                 event = events[0]
                 for gm in event.get("markets", []):
                     parsed = self._parse_gamma_event_market(gm, slug)
+                    if parsed is not None:
+                        parsed_markets.append(parsed)
+            except Exception as e:
+                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
+            return parsed_markets
+
+        markets: List[Market] = []
+        seen_ids: set[str] = set()
+        max_workers = max(1, min(20, len(slugs)))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="updown-slug") as pool:
+            future_to_slug = {pool.submit(_fetch_one, slug): slug for slug in slugs}
+            for future in as_completed(future_to_slug):
+                for parsed in future.result():
                     if parsed is None or parsed.id in seen_ids:
                         continue
                     seen_ids.add(parsed.id)
                     markets.append(parsed)
                     if limit is not None and len(markets) >= limit:
                         break
-            except Exception as e:
-                logger.debug(f"Failed to fetch updown slug {slug}: {e}")
-                continue
+                if limit is not None and len(markets) >= limit:
+                    break
+        markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
         return markets
 
     def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:

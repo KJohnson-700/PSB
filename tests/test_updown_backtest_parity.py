@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from src.backtest.updown_engine import UpdownBacktestEngine
+from src.analysis.btc_price_service import MACDResult, TechnicalAnalysis
 
 
 def _config() -> dict:
@@ -57,3 +58,23 @@ def test_updown_sizing_approximates_live_full_tier_floor_and_cap():
     engine.kelly_fraction = 0.15
 
     assert engine._size_position(bankroll=500.0, edge=0.10) == 15.0
+
+
+def test_sol_ltf_confirmation_threshold_matches_live_anti_signal_gate():
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        macd_15m=MACDResult(
+            macd_line=0.2,
+            signal_line=0.1,
+            histogram=0.03,
+            prev_histogram=0.01,
+            crossover="NONE",
+            histogram_rising=True,
+            above_zero=True,
+        )
+    )
+
+    confirmed, strength = UpdownBacktestEngine._sol_ltf_strength(ta, "LONG")
+
+    assert strength == pytest.approx(0.25)
+    assert confirmed is False

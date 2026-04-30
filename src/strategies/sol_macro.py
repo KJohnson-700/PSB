@@ -52,7 +52,7 @@ from src.market.scanner import Market
 from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
-from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis
+from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BTCSOLCorrelation
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -157,11 +157,6 @@ class SolMacroStrategy:
                  kelly_sizer=None, exposure_manager: ExposureManager = None):
         self.full_config = config
         self.config = config.get('strategies', {}).get('sol_macro', {})
-        # Thresholds from config first — before any other init work — so
-        # scan_and_analyze always sees instance values from YAML, not class fallbacks.
-        self.min_liquidity = self.config.get("min_liquidity", 1000)
-        self.min_edge = self.config.get("min_edge", 0.09)
-        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
         self.enabled = resolve_enabled_flag(
             "sol_macro",
             self.config,
@@ -170,22 +165,13 @@ class SolMacroStrategy:
         self.ai_agent = ai_agent
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer or KellySizer(config)
-        self.sol_service = SOLBTCService()
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
         self._signal_strategy_name = "sol_macro"
         self.dead_zone_skip_callback = None
-
-        # Remaining config-derived attributes (scan loop)
-        # Must be set on SolMacroStrategy (not only subclasses) for scan_and_analyze.
-        self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
-        self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
-        self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
-        self.entry_price_min = self.config.get("entry_price_min", 0.46)
-        self.entry_price_max = self.config.get("entry_price_max", 0.54)
-        self.min_positive_m5_adj_5m = float(self.config.get("min_positive_m5_adj_5m", 0.0))
+        self._apply_strategy_config(rebuild_service=True)
 
         # AI-hold soft veto: cache market IDs where AI recently said HOLD so the
         # strong-signal path cannot bypass that decision within the TTL window.
@@ -196,6 +182,40 @@ class SolMacroStrategy:
     # ──────────────────────────────────────────────────────────────
     # Helpers
     # ──────────────────────────────────────────────────────────────
+
+    def _build_alt_service(self) -> SOLBTCService:
+        return SOLBTCService(
+            dynamic_beta_min=self.dynamic_beta_min,
+            dynamic_beta_max=self.dynamic_beta_max,
+            dynamic_beta_extreme_max=self.dynamic_beta_extreme_max,
+        )
+
+    def _apply_strategy_config(self, *, rebuild_service: bool = False) -> None:
+        # Thresholds from config first — before any other init work — so
+        # scan_and_analyze always sees instance values from YAML, not class fallbacks.
+        self.min_liquidity = self.config.get("min_liquidity", 1000)
+        self.min_edge = self.config.get("min_edge", 0.09)
+        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
+        self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
+        self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
+        self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
+        self.entry_price_min = self.config.get("entry_price_min", 0.46)
+        self.entry_price_max = self.config.get("entry_price_max", 0.54)
+        self.min_positive_m5_adj_5m = float(self.config.get("min_positive_m5_adj_5m", 0.0))
+        self.dynamic_beta_min = float(self.config.get("dynamic_beta_min", 0.8))
+        self.dynamic_beta_max = float(self.config.get("dynamic_beta_max", 3.0))
+        self.dynamic_beta_extreme_max = float(
+            self.config.get("dynamic_beta_extreme_max", 5.0)
+        )
+        self.low_corr_threshold_1h = float(
+            self.config.get("low_corr_threshold_1h", 0.50)
+        )
+        self.low_corr_damping = float(self.config.get("low_corr_damping", 0.70))
+        self.low_corr_suppresses_entries = bool(
+            self.config.get("low_corr_suppresses_entries", False)
+        )
+        if rebuild_service or not hasattr(self, "sol_service"):
+            self.sol_service = self._build_alt_service()
 
     def _alt_asset_code(self) -> str:
         """Lowercase spot code for reason strings and journal keys (sol/eth/hype/xrp)."""
@@ -433,6 +453,13 @@ class SolMacroStrategy:
         """
         return m5_adj >= self.min_positive_m5_adj_5m
 
+    def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
+        """Optional hard gate for assets whose BTC-lag thesis breaks when decoupled."""
+        return (
+            self.low_corr_suppresses_entries
+            and corr.correlation_1h < self.low_corr_threshold_1h
+        )
+
     # ──────────────────────────────────────────────────────────────
     # LAYER 2: 15m Trend Confirmation
     # ──────────────────────────────────────────────────────────────
@@ -475,7 +502,9 @@ class SolMacroStrategy:
                 strength += 0.10
                 reasons.append("15m MACD below signal")
 
-        confirmed = strength >= 0.50  # raised from 0.35: 60s scan caught late entries; require composite
+        # Keep at 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35
+        # on WR and net PnL, and this gate treats confirmed LTF as late-entry risk.
+        confirmed = strength >= 0.50
         return confirmed, strength, reasons
 
     # ──────────────────────────────────────────────────────────────
@@ -1083,8 +1112,16 @@ class SolMacroStrategy:
                     # Unified: both use 0.50 cutoff, 0.7 damping (30% reduction, not 50%).
                     if corr.correlation_1h > 0.85:
                         reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
-                    elif corr.correlation_1h < 0.50:
-                        est_prob_up = 0.50 + (est_prob_up - 0.50) * 0.7
+                    elif self._low_corr_blocks_entry(corr):
+                        _bump_skip("low_corr_suppressed")
+                        logger.info(
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                            f"1H corr {corr.correlation_1h:.2f} below hard floor "
+                            f"{self.low_corr_threshold_1h:.2f}"
+                        )
+                        continue
+                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                        est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr_5m({corr.correlation_1h:.2f})")
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -1172,8 +1209,16 @@ class SolMacroStrategy:
                     # Light damping: primary edge is macro+LTF, not correlation.
                     if corr.correlation_1h > 0.85:
                         reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
-                    elif corr.correlation_1h < 0.50:
-                        est_prob_up = 0.50 + (est_prob_up - 0.50) * 0.7
+                    elif self._low_corr_blocks_entry(corr):
+                        _bump_skip("low_corr_suppressed")
+                        logger.info(
+                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                            f"1H corr {corr.correlation_1h:.2f} below hard floor "
+                            f"{self.low_corr_threshold_1h:.2f}"
+                        )
+                        continue
+                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                        est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr({corr.correlation_1h:.2f})")
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -1490,8 +1535,8 @@ class SolMacroStrategy:
                 continue
 
             # ── Entry price filter for updown markets ──
-            # Only trade when yes_price is within [1-entry_price_max, entry_price_max].
-            # This symmetric band prevents entering when the market has already moved:
+            # Only trade when yes_price is within [entry_price_min, entry_price_max].
+            # This band prevents entering when the market has already moved:
             #   - BUY_YES at yes_price > max: market too bullish, lag already priced in
             #   - BUY_YES at yes_price < min: market too bearish, going long against consensus
             #   - SELL_YES at yes_price < min: market too bearish, lag already priced in
@@ -1501,8 +1546,8 @@ class SolMacroStrategy:
             #   market YES in [0.46, 0.54] → 72% WR  (sweet spot)
             #   market YES < 0.46 or > 0.54 → ~30% WR (market consensus fighting signal)
             if is_updown:
-                _yp_low  = 1.0 - self.entry_price_max  # 0.46 with default max=0.54
-                _yp_high = self.entry_price_max          # 0.54
+                _yp_low = self.entry_price_min
+                _yp_high = self.entry_price_max
                 if yes_price < _yp_low or yes_price > _yp_high:
                     _bump_skip("entry_price_band_updown")
                     logger.info(

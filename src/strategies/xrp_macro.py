@@ -31,6 +31,14 @@ XRP_UPDOWN_PATTERN = re.compile(
 class XRPMacroStrategy(SolMacroStrategy):
     """XRP Macro strategy — same structure as SOL macro, XRPUSDT as the alt leg."""
 
+    def _build_alt_service(self) -> SOLBTCService:
+        return SOLBTCService(
+            alt_symbol="XRPUSDT",
+            dynamic_beta_min=self.dynamic_beta_min,
+            dynamic_beta_max=self.dynamic_beta_max,
+            dynamic_beta_extreme_max=self.dynamic_beta_extreme_max,
+        )
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -46,17 +54,7 @@ class XRPMacroStrategy(SolMacroStrategy):
             self.config,
             logger=logger,
         )
-        self.sol_service = SOLBTCService(alt_symbol="XRPUSDT")
-        self.min_liquidity = self.config.get("min_liquidity", 5000)
-        self.min_edge = self.config.get("min_edge", 0.08)
-        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
-        self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
-        self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
-        self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
-        self.entry_price_min = self.config.get("entry_price_min", 0.46)
-        self.entry_price_max = self.config.get("entry_price_max", 0.54)
-        self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
-        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self._apply_strategy_config(rebuild_service=True)
         self._signal_strategy_name = "xrp_macro"
 
     def _is_solana_market(self, market: Market) -> bool:

@@ -96,6 +96,55 @@ def test_macro_oracle_feed_map_covers_all_crypto_lanes():
     assert ORACLE_FEEDS["HYPEUSDT"][0] == "arbitrum"
 
 
+def test_lag_opportunity_ages_from_persistent_service_state():
+    svc = SOLBTCService()
+    first = BTCSOLCorrelation(
+        lag_opportunity=True,
+        opportunity_direction="LONG",
+        opportunity_magnitude=0.35,
+    )
+    with patch("src.analysis.sol_btc_service.time.time", return_value=1000.0):
+        svc._apply_lag_staleness(first, spike_window="5m", btc_move_pct=0.45)
+
+    assert first.lag_opportunity is True
+    assert first.lag_detected_at == 1000.0
+
+    stale = BTCSOLCorrelation(
+        lag_opportunity=True,
+        opportunity_direction="LONG",
+        opportunity_magnitude=0.35,
+    )
+    with patch("src.analysis.sol_btc_service.time.time", return_value=1301.0):
+        svc._apply_lag_staleness(stale, spike_window="5m", btc_move_pct=0.46)
+
+    assert stale.lag_opportunity is False
+    assert stale.opportunity_direction == "NONE"
+    assert stale.opportunity_magnitude == 0.0
+    assert stale.lag_detected_at == 1000.0
+
+
+def test_lag_opportunity_refreshes_on_material_new_btc_impulse():
+    svc = SOLBTCService()
+    first = BTCSOLCorrelation(
+        lag_opportunity=True,
+        opportunity_direction="SHORT",
+        opportunity_magnitude=0.35,
+    )
+    with patch("src.analysis.sol_btc_service.time.time", return_value=1000.0):
+        svc._apply_lag_staleness(first, spike_window="15m", btc_move_pct=-0.90)
+
+    refreshed = BTCSOLCorrelation(
+        lag_opportunity=True,
+        opportunity_direction="SHORT",
+        opportunity_magnitude=0.35,
+    )
+    with patch("src.analysis.sol_btc_service.time.time", return_value=1301.0):
+        svc._apply_lag_staleness(refreshed, spike_window="15m", btc_move_pct=-1.05)
+
+    assert refreshed.lag_opportunity is True
+    assert refreshed.lag_detected_at == 1301.0
+
+
 def test_optional_oracle_basis_gate_blocks_large_divergence():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 10.0

@@ -33,8 +33,22 @@ class HyperliquidHypeService(SOLBTCService):
         "1d": ("1d", 86_400_000),
     }
 
-    def __init__(self, polygon_rpc: str = None, alt_symbol: str = "HYPEUSDT"):
-        super().__init__(polygon_rpc=polygon_rpc, alt_symbol=alt_symbol)
+    def __init__(
+        self,
+        polygon_rpc: str = None,
+        alt_symbol: str = "HYPEUSDT",
+        *,
+        dynamic_beta_min: float = 0.8,
+        dynamic_beta_max: float = 3.0,
+        dynamic_beta_extreme_max: float = 5.0,
+    ):
+        super().__init__(
+            polygon_rpc=polygon_rpc,
+            alt_symbol=alt_symbol,
+            dynamic_beta_min=dynamic_beta_min,
+            dynamic_beta_max=dynamic_beta_max,
+            dynamic_beta_extreme_max=dynamic_beta_extreme_max,
+        )
         self._hype_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
         self._hype_cache_ttl = 30  # seconds
 

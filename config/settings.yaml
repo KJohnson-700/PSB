@@ -341,6 +341,12 @@ strategies:
     entry_price_min: 0.46
     entry_price_max: 0.54
     min_lag_magnitude_pct: 0.30
+    dynamic_beta_min: 0.50         # HYPE is structurally higher-beta and more regime-volatile than SOL
+    dynamic_beta_max: 4.00         # Wider normal-regime clamp than SOL/ETH/XRP
+    dynamic_beta_extreme_max: 6.00 # Preserve large BTC-led catch-up expectations during genuine spikes
+    low_corr_threshold_1h: 0.40    # HYPE decouples more often; avoid constant low-corr damping
+    low_corr_damping: 0.75         # Still damp marginal edges, but less aggressively than a hard SOL-style penalty
+    low_corr_suppresses_entries: true  # HYPE-specific decoupling guard: suppress BTC-lag entries below threshold
     blocked_utc_hours_updown: []
     look_ahead_15m: 4
     look_ahead_5m: 8
@@ -380,6 +386,11 @@ strategies:
     entry_price_min: 0.46
     entry_price_max: 0.54
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
+    dynamic_beta_min: 0.60       # XRP generally reacts less explosively than HYPE/SOL
+    dynamic_beta_max: 2.50       # Tighter normal-regime beta cap than SOL
+    dynamic_beta_extreme_max: 3.50
+    low_corr_threshold_1h: 0.35  # XRP often sits below SOL/ETH correlation levels; avoid permanent damping
+    low_corr_damping: 0.80       # Mildly shrink edges instead of treating most XRP windows as near-untradable
     blocked_utc_hours_updown: []
     look_ahead_15m: 4
     look_ahead_5m: 8

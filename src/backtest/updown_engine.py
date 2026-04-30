@@ -639,12 +639,12 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _sol_ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
-        """15m MACD confirmation -- SOL weights (lower), threshold 0.25.
+        """15m MACD confirmation -- SOL-family live weights, threshold 0.50.
 
         Differences from BTC:
           - hist rising (not flip): +0.15 (BTC uses +0.20)
           - MACD > signal:          +0.10 (BTC uses +0.15)
-          - confirmed threshold:     0.25 (BTC uses  0.35)
+          - confirmed threshold:     0.50 (live anti-LTF gate)
         """
         m = ta.macd_15m
         s = 0.0
@@ -664,7 +664,7 @@ class UpdownBacktestEngine:
                 elif m.histogram < m.prev_histogram:
                     s += 0.15        # just falling
             if m.macd_line < m.signal_line:                 s += 0.10
-        confirmed = s >= 0.25
+        confirmed = s >= 0.50
         return confirmed, min(1.0, s)
 
     # ==========================================================================

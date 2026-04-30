@@ -166,7 +166,7 @@ class MultiTimeframeTrend:
     m5_trend: str = "NEUTRAL"
     m5_basis: str = ""                # e.g. "MACD bullish cross"
     # Overall
-    aligned: bool = False             # True if all timeframes agree
+    aligned: bool = False             # True if at least 3 non-neutral timeframes agree
     overall_direction: str = "NEUTRAL"
 
 
@@ -208,14 +208,27 @@ class SOLBTCService:
         "https://arbitrum.llamarpc.com",
     ]
 
-    def __init__(self, polygon_rpc: str = None, alt_symbol: str = "SOLUSDT"):
+    def __init__(
+        self,
+        polygon_rpc: str = None,
+        alt_symbol: str = "SOLUSDT",
+        *,
+        dynamic_beta_min: float = 0.8,
+        dynamic_beta_max: float = 3.0,
+        dynamic_beta_extreme_max: float = 5.0,
+    ):
         self.polygon_rpc = polygon_rpc
         self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
         self.alt_symbol = alt_symbol
+        self.dynamic_beta_min = float(dynamic_beta_min)
+        self.dynamic_beta_max = float(dynamic_beta_max)
+        self.dynamic_beta_extreme_max = float(dynamic_beta_extreme_max)
         self.spike_z_threshold = 1.5  # Z-score threshold for adaptive BTC spike detection
         self._oracle_clients: Dict[Tuple[str, str], Tuple[object, object]] = {}
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
+        # (direction, spike_window) -> (first_detected_at, btc_move_abs_pct)
+        self._lag_opportunity_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
 
     # ──────────────────────────────────────────────────────────────────
     # Binance API
@@ -527,6 +540,40 @@ class SOLBTCService:
     # BTC-SOL Correlation & Lag Detection
     # ──────────────────────────────────────────────────────────────────
 
+    def _apply_lag_staleness(
+        self,
+        result: BTCSOLCorrelation,
+        *,
+        spike_window: str,
+        btc_move_pct: float,
+    ) -> None:
+        """Expire lag opportunities unless the BTC impulse materially refreshes."""
+        if not result.lag_opportunity:
+            self._lag_opportunity_state.clear()
+            return
+
+        now = time.time()
+        key = (result.opportunity_direction, spike_window)
+        btc_move_abs = abs(btc_move_pct)
+        previous = self._lag_opportunity_state.get(key)
+
+        if previous is None or btc_move_abs > previous[1] + 0.10:
+            self._lag_opportunity_state[key] = (now, btc_move_abs)
+            previous = self._lag_opportunity_state[key]
+
+        result.lag_detected_at = previous[0]
+        lag_age_sec = now - previous[0]
+        if lag_age_sec <= 300:
+            return
+
+        logger.debug(
+            f"Lag opportunity expired: age={lag_age_sec:.0f}s > 300s, "
+            f"dir={result.opportunity_direction} mag={result.opportunity_magnitude:.2f}%"
+        )
+        result.lag_opportunity = False
+        result.opportunity_direction = "NONE"
+        result.opportunity_magnitude = 0.0
+
     def calc_correlation(self) -> BTCSOLCorrelation:
         """Calculate BTC-SOL correlation and detect lag opportunities.
 
@@ -652,15 +699,17 @@ class SOLBTCService:
                     # underestimates expected SOL move -> false lag opportunities.
                     btc_spike_pct = max(abs(result.btc_move_5m_pct), abs(result.btc_move_15m_pct))
                     if btc_spike_pct > 1.5:
-                        dynamic_beta = max(0.8, min(5.0, dynamic_beta))
+                        dynamic_beta = max(self.dynamic_beta_min, min(self.dynamic_beta_extreme_max, dynamic_beta))
                     else:
-                        dynamic_beta = max(0.8, min(3.0, dynamic_beta))
+                        dynamic_beta = max(self.dynamic_beta_min, min(self.dynamic_beta_max, dynamic_beta))
                 else:
                     dynamic_beta = 1.5
             else:
                 dynamic_beta = 1.5
 
-            expected_sol_move = result.btc_move_5m_pct * dynamic_beta if spike_5m else result.btc_move_15m_pct * dynamic_beta
+            spike_window = "5m" if spike_5m else "15m"
+            btc_move_for_lag = result.btc_move_5m_pct if spike_5m else result.btc_move_15m_pct
+            expected_sol_move = btc_move_for_lag * dynamic_beta
             actual_sol_move = result.sol_move_5m_pct if spike_5m else result.sol_move_15m_pct
 
             # Lag = how much SOL should have moved but hasn't
@@ -672,7 +721,6 @@ class SOLBTCService:
                     result.lag_opportunity = True
                     result.opportunity_direction = "LONG"
                     result.opportunity_magnitude = lag
-                    result.lag_detected_at = time.time()
             elif result.btc_spike_direction == "DOWN":
                 lag = actual_sol_move - expected_sol_move  # expected is negative, actual should be too
                 result.sol_lag_pct = lag
@@ -681,23 +729,14 @@ class SOLBTCService:
                     result.lag_opportunity = True
                     result.opportunity_direction = "SHORT"
                     result.opportunity_magnitude = lag
-                    result.lag_detected_at = time.time()
 
-        # --- Lag staleness check ---
-        # A lag opportunity based on a BTC spike from several minutes ago may be stale.
-        # The spike data is recalculated fresh from 1m klines each cycle, but if BTC
-        # moved sideways after the spike the lag_opportunity flag can persist on stale
-        # momentum. Expire after 5 minutes (300s).
-        if result.lag_opportunity and result.lag_detected_at is not None:
-            lag_age_sec = time.time() - result.lag_detected_at
-            if lag_age_sec > 300:
-                logger.debug(
-                    f"Lag opportunity expired: age={lag_age_sec:.0f}s > 300s, "
-                    f"dir={result.opportunity_direction} mag={result.opportunity_magnitude:.2f}%"
-                )
-                result.lag_opportunity = False
-                result.opportunity_direction = "NONE"
-                result.opportunity_magnitude = 0.0
+            self._apply_lag_staleness(
+                result,
+                spike_window=spike_window,
+                btc_move_pct=btc_move_for_lag,
+            )
+        else:
+            self._apply_lag_staleness(result, spike_window="none", btc_move_pct=0.0)
 
         # --- Chainlink BTC verification ---
         cl_price, cl_updated = self.get_chainlink_btc_price()

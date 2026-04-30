@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from src.backtest.backtest_ai import BacktestAIAgent
@@ -50,6 +51,20 @@ def _config() -> dict:
                 "entry_window_align_scan_interval_sec": 300,
                 "entry_window_auto_align_max_expand_min": 1.0,
                 "entry_window_auto_align_jitter_sec": 10,
+                "dynamic_beta_min": 0.50,
+                "dynamic_beta_max": 4.00,
+                "dynamic_beta_extreme_max": 6.00,
+                "low_corr_threshold_1h": 0.40,
+                "low_corr_damping": 0.75,
+                "low_corr_suppresses_entries": True,
+            },
+            "xrp_macro": {
+                "enabled": True,
+                "dynamic_beta_min": 0.60,
+                "dynamic_beta_max": 2.50,
+                "dynamic_beta_extreme_max": 3.50,
+                "low_corr_threshold_1h": 0.35,
+                "low_corr_damping": 0.80,
             },
         }
     }
@@ -76,7 +91,6 @@ def test_hype_and_xrp_default_to_updown_entry_band():
     from src.strategies.xrp_macro import XRPMacroStrategy
 
     cfg = _config()
-    cfg["strategies"]["xrp_macro"] = {"enabled": True}
     ai = BacktestAIAgent(cfg)
     sizer = PositionSizer()
 
@@ -87,10 +101,37 @@ def test_hype_and_xrp_default_to_updown_entry_band():
     assert (xrp.entry_price_min, xrp.entry_price_max) == (0.46, 0.54)
 
 
-def test_updown_slug_iterator_includes_hype_alias_family():
+def test_hype_and_xrp_apply_asset_specific_beta_and_corr_settings():
+    from src.strategies.xrp_macro import XRPMacroStrategy
+
+    cfg = _config()
+    ai = BacktestAIAgent(cfg)
+    sizer = PositionSizer()
+
+    hype = HYPEMacroStrategy(cfg, ai, sizer)
+    xrp = XRPMacroStrategy(cfg, ai, sizer)
+
+    assert hype.sol_service.dynamic_beta_min == 0.50
+    assert hype.sol_service.dynamic_beta_max == 4.00
+    assert hype.sol_service.dynamic_beta_extreme_max == 6.00
+    assert hype.low_corr_threshold_1h == 0.40
+    assert hype.low_corr_damping == 0.75
+
+    assert xrp.sol_service.dynamic_beta_min == 0.60
+    assert xrp.sol_service.dynamic_beta_max == 2.50
+    assert xrp.sol_service.dynamic_beta_extreme_max == 3.50
+    assert xrp.low_corr_threshold_1h == 0.35
+    assert xrp.low_corr_damping == 0.80
+
+
+def test_updown_slug_iterator_uses_timestamp_market_slugs():
     slugs = MarketScanner._iter_updown_event_slugs(step_minutes=15, look_ahead=0)
-    assert any(slug.startswith("hyperliquid-up-or-down-") for slug in slugs)
-    assert any(slug.startswith("hype-up-or-down-") for slug in slugs)
+    assert any(slug.startswith("btc-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("sol-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("eth-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("xrp-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("hype-updown-15m-") for slug in slugs)
+    assert not any("up-or-down" in slug for slug in slugs)
 
 
 def test_build_human_updown_event_slug_uses_named_btc_format():
@@ -215,6 +256,14 @@ def test_scanner_timeout_is_capped_below_cycle_interval():
     assert scanner._scanner_sync_timeout == 105.0
 
 
+def test_hype_low_correlation_hard_gate_is_configured():
+    cfg = _config()
+    strategy = HYPEMacroStrategy(cfg, BacktestAIAgent(cfg), PositionSizer())
+
+    assert strategy.low_corr_suppresses_entries is True
+    assert strategy.low_corr_threshold_1h == 0.40
+
+
 def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(monkeypatch):
     import time
 
@@ -247,6 +296,41 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
     assert weather == []
     assert look_15m >= 1
     assert look_5m >= 1
+
+
+def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypatch):
+    cfg = _config()
+    cfg["polymarket"]["fetch_hype_alt_markets"] = False
+    cfg["polymarket"]["fetch_weather_markets"] = False
+    scanner = MarketScanner(cfg)
+
+    btc_15m = _market("Bitcoin Up or Down - April 30, 1:00PM ET", slug="bitcoin-up-or-down-april-30-2026-1pm-et")
+    btc_15m.id = "snapshot-btc-15m"
+    btc_15m.window_minutes = 15
+    sol_5m = _market("Solana Up or Down - April 30, 1:00PM ET", slug="solana-up-or-down-april-30-2026-1pm-et")
+    sol_5m.id = "snapshot-sol-5m"
+    sol_5m.window_minutes = 5
+
+    monkeypatch.setattr(
+        scanner,
+        "_sync_network_phase",
+        lambda: ([], [btc_15m], [sol_5m], [], [], 8, 8),
+    )
+
+    async def _identity(markets):
+        return markets
+
+    monkeypatch.setattr(scanner, "update_market_prices", _identity)
+
+    try:
+        opportunities = asyncio.run(scanner.scan_for_opportunities())
+    finally:
+        asyncio.run(scanner.close())
+
+    high_liquidity_ids = {m.id for m in opportunities["high_liquidity"]}
+    assert {"snapshot-btc-15m", "snapshot-sol-5m"} <= high_liquidity_ids
+    assert opportunities["scanner_meta"]["updown_15m_count"] == 1
+    assert opportunities["scanner_meta"]["updown_5m_count"] == 1
 
 
 def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypatch):
