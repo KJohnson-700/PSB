@@ -963,7 +963,11 @@ class SolMacroStrategy:
                 )
 
                 # ── BTC minimum dollar move before entering ──
-                # Require BTC to have moved a minimum $ amount to confirm directional momentum
+                # Require BTC to have moved a minimum $ amount to confirm directional momentum.
+                # Bypass for low-correlation assets — if BTC is not driving this asset,
+                # requiring BTC movement incorrectly suppresses valid alt-independent signals.
+                _btc_corr = corr.correlation_1h
+                _low_corr_btc_bypass = float(self.config.get("btc_min_move_low_corr_threshold", 0.30))
                 _btc_price = corr.btc_price or 0.0
                 _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
                 _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
@@ -974,12 +978,18 @@ class SolMacroStrategy:
                     _btc_min_move = self.config.get("btc_min_move_dollars_15m", 70.0)
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
-                    _bump_skip("btc_min_move_dollars")
-                    logger.debug(
-                        f"  {_brand} skip '{market.question[:40]}' — "
-                        f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
-                    )
-                    continue
+                    if _btc_corr < _low_corr_btc_bypass:
+                        logger.debug(
+                            f"  {_brand} btc_min_move bypassed (corr={_btc_corr:.2f} < {_low_corr_btc_bypass}) "
+                            f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
+                        )
+                    else:
+                        _bump_skip("btc_min_move_dollars")
+                        logger.debug(
+                            f"  {_brand} skip '{market.question[:40]}' — "
+                            f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
+                        )
+                        continue
 
                 # Skip windows where price has already drifted far from 50/50
                 _sample("entry_price", yes_price)

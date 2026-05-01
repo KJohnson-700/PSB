@@ -189,7 +189,7 @@ strategies:
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
     min_edge: 0.10                # 2026-04-24: raised from 0.09 — tighten after 0% WR on 3 live trades; demand clearer signal
-    min_edge_5m: 0.10             # 2026-04-24: raised from 0.09 — aligned with 15m floor; monitor 5m volume
+    min_edge_5m: 0.09             # 2026-04-30: 0.10 made 5m path unreachable (m5_adj=0.04 → edge=0.09, 1bp below floor); restoring 0.09 to re-enable hist+falling signals
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -592,7 +592,7 @@ backtest:
   min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
   min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
   min_edge_sol_15m:  0.10   # matches strategies.sol_macro.min_edge (raised 2026-04-24)
-  min_edge_sol_5m:   0.10   # matches strategies.sol_macro.min_edge_5m (raised 2026-04-24)
+  min_edge_sol_5m:   0.09   # matches strategies.sol_macro.min_edge_5m (restored 2026-04-30)
   min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
   min_edge_eth_5m:   0.09   # matches strategies.eth_macro.min_edge_5m
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)

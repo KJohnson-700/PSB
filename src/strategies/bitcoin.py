@@ -679,12 +679,20 @@ class BitcoinStrategy:
             if not has_updown:
                 logger.info("Bitcoin strategy: HTF bias NEUTRAL — sitting out this cycle")
                 return []
-            # NEUTRAL + updown markets: lean on Sabre direction (most responsive to price action).
-            # Full BULLISH/BEARISH bias not established — tighter edge (0.09) enforced per-market.
-            allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
+            # NEUTRAL + updown markets: lean on 4H MACD histogram direction (more current
+            # than Sabre, avoids Sabre-vs-histogram deadlock where SHORT is chosen but
+            # hist_gate blocks it because histogram is actually rising).
+            # Fall back to Sabre only when histogram direction is ambiguous.
+            if macd_4h.histogram_rising and macd_4h.histogram > 0:
+                allowed_side = "LONG"
+            elif not macd_4h.histogram_rising and macd_4h.histogram < 0:
+                allowed_side = "SHORT"
+            else:
+                allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
             logger.info(
                 f"Bitcoin: HTF NEUTRAL + updown markets → lean={allowed_side} "
-                f"(Sabre={'BULL' if sabre.trend==1 else 'BEAR'}) — tighter edge required"
+                f"(4H hist={macd_4h.histogram:+.1f} rising={macd_4h.histogram_rising}, "
+                f"Sabre={'BULL' if sabre.trend==1 else 'BEAR'}) — tighter edge required"
             )
         else:
             # Determine allowed trading side based on HTF bias
