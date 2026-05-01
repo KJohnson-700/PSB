@@ -199,7 +199,8 @@ strategies:
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
     min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
     min_edge_5m: 0.07             # flat tape: m5_adj often 0.04; require_btc_catalyst_5m guards 5m quality when enabled
-    min_edge_15m_when_ltf_unconfirmed: 0.09   # replaces hardcoded 0.10 bump when 15m LTF strength is 0
+    min_edge_15m_when_ltf_unconfirmed: 0.11   # macro-only entries (no LTF) need tighter price; was 0.09 = no extra filter
+    require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip; stops pure macro-guess 15m entries
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -279,6 +280,9 @@ strategies:
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
     min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
+    min_edge_15m_when_ltf_unconfirmed: 0.11   # explicit; was defaulting to 0.10 in code; raised to match SOL
+    neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
+    require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12

@@ -1255,9 +1255,29 @@ class SolMacroStrategy:
                         )
                         continue
 
+                    # When no LTF confirmation, require a BTC catalyst to avoid pure macro-guess entries
+                    if ltf_strength == 0.0:
+                        _require_cat_15m = bool(self.config.get("require_btc_catalyst_15m_when_unconfirmed", False))
+                        if _require_cat_15m and not corr.lag_opportunity and not corr.btc_spike_detected:
+                            _bump_skip("no_btc_catalyst_15m_unconfirmed")
+                            logger.info(
+                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                                f"no LTF + no catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
+                            )
+                            continue
+
                     # LTF confirmation — PRIMARY probability driver (increased from 0.18)
                     ltf_adj = ltf_strength * 0.22
                     est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
+
+                    # BTC catalyst boosts — lag/spike signal quality priced into est_prob
+                    if corr.lag_opportunity and corr.opportunity_direction == allowed_side:
+                        _lag_boost = min(0.04, max(0.02, abs(corr.opportunity_magnitude) * 0.015))
+                        est_prob_up += _lag_boost if allowed_side == "LONG" else -_lag_boost
+                        reason_parts.append(f"lag_boost={_lag_boost:+.3f}")
+                    elif corr.btc_spike_detected:
+                        est_prob_up += 0.03 if allowed_side == "LONG" else -0.03
+                        reason_parts.append("btc_spike_boost")
 
                     # Timing / 5m momentum
                     if allowed_side == "LONG":
