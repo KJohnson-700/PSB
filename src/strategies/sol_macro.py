@@ -188,6 +188,9 @@ class SolMacroStrategy:
             dynamic_beta_min=self.dynamic_beta_min,
             dynamic_beta_max=self.dynamic_beta_max,
             dynamic_beta_extreme_max=self.dynamic_beta_extreme_max,
+            btc_spike_floor_pct_5m=self.btc_spike_floor_pct_5m,
+            btc_spike_floor_pct_15m=self.btc_spike_floor_pct_15m,
+            lag_signal_min_pct=self.lag_signal_min_pct,
         )
 
     def _apply_strategy_config(self, *, rebuild_service: bool = False) -> None:
@@ -206,6 +209,12 @@ class SolMacroStrategy:
         self.dynamic_beta_max = float(self.config.get("dynamic_beta_max", 3.0))
         self.dynamic_beta_extreme_max = float(
             self.config.get("dynamic_beta_extreme_max", 5.0)
+        )
+        self.btc_spike_floor_pct_5m = float(self.config.get("btc_spike_floor_pct_5m", 0.3))
+        self.btc_spike_floor_pct_15m = float(self.config.get("btc_spike_floor_pct_15m", 0.8))
+        self.lag_signal_min_pct = float(self.config.get("lag_signal_min_pct", 0.2))
+        self.neutral_macro_require_spike_or_lag = bool(
+            self.config.get("neutral_macro_require_spike_or_lag", False)
         )
         self.low_corr_threshold_1h = float(
             self.config.get("low_corr_threshold_1h", 0.50)
@@ -788,6 +797,13 @@ class SolMacroStrategy:
                         f"{_brand}: Macro NEUTRAL, weak lag — using {_alt_label} 1H bias: {allowed_side}"
                     )
             else:
+                # No lag, no spike — alt-only direction is weak in chop; optional hard skip.
+                if self.neutral_macro_require_spike_or_lag:
+                    logger.info(
+                        f"{_brand}: Macro NEUTRAL, no BTC spike/lag — sitting out "
+                        f"(neutral_macro_require_spike_or_lag)"
+                    )
+                    return []
                 # No lag, no spike — use alt's own 1H trend as direction
                 allowed_side = "LONG" if corr.sol_trend == "BULLISH" else "SHORT" if corr.sol_trend == "BEARISH" else None
                 if allowed_side is None:
@@ -1079,6 +1095,16 @@ class SolMacroStrategy:
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                        )
+                        continue
+
+                    # BTC catalyst gate: require spike or lag in 5m markets to avoid flat-market guesses
+                    _require_catalyst_5m = bool(self.config.get("require_btc_catalyst_5m", False))
+                    if _require_catalyst_5m and not corr.lag_opportunity and not corr.btc_spike_detected:
+                        _bump_skip("no_btc_catalyst_5m")
+                        logger.info(
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                            f"no BTC catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
                         )
                         continue
 

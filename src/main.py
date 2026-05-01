@@ -1262,6 +1262,8 @@ class PolyBot:
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
+                    "btc_htf": signal.htf_bias,   # alias expected by journal analysis
+                    "macro_leg": None,             # bitcoin path has no alt-lag leg
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
                     "yes_price": signal.price,

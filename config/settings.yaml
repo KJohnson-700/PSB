@@ -180,6 +180,9 @@ strategies:
     # Run scripts/hourly_heatmap.py --suggest to re-audit; never tune from backtest alone.
     blocked_utc_hours_updown: [0, 1, 2]  # Tier A (confirmed bad, both backtest + live evidence)
     disable_buy_yes: false       # Re-enabled: allow BTC BUY_YES while we re-audit long-side behavior
+    # When HTF vote is NEUTRAL and 4H MACD is neither clearly rising>0 nor falling<0, skip updown
+    # instead of inferring side from Sabre alone (reduces momentum-only guesses in flat tape).
+    neutral_updown_skip_ambiguous_4h: true
 
   # SOL Macro strategy — BTC-to-Solana correlation lag trading
   sol_macro:
@@ -189,7 +192,7 @@ strategies:
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
     min_edge: 0.10                # 2026-04-24: raised from 0.09 — tighten after 0% WR on 3 live trades; demand clearer signal
-    min_edge_5m: 0.09             # 2026-04-30: 0.10 made 5m path unreachable (m5_adj=0.04 → edge=0.09, 1bp below floor); restoring 0.09 to re-enable hist+falling signals
+    min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09; require_btc_catalyst_5m now guards quality
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -208,6 +211,14 @@ strategies:
     # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
     min_lag_magnitude_pct: 0.40   # Keep until larger live sample confirms raising it helps
                                   # Higher threshold filters weak/stale lag signals
+    # sol_btc_service: BTC spike floors (were hardcoded 0.3% / 0.8%) + min SOL catch-up gap for lag_opportunity
+    btc_spike_floor_pct_5m: 0.15
+    btc_spike_floor_pct_15m: 0.40
+    lag_signal_min_pct: 0.12
+    # Macro NEUTRAL + no BTC spike and no lag: skip alt 1H fallback (chop / no-edge entries)
+    neutral_macro_require_spike_or_lag: true
+    # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
+    require_btc_catalyst_5m: true
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -249,8 +260,8 @@ strategies:
     # BTC must have moved at least this many dollars in the relevant window.
     # Lowered from 72/55: at BTC ~72k, 0.05% move = $36 — previous thresholds
     # blocked entries in normal volatility. Keep enough to filter dead chop.
-    btc_min_move_dollars_15m: 40.0
-    btc_min_move_dollars_5m: 25.0
+    btc_min_move_dollars_15m: 28.0   # was 40 — flat overnight tape rarely hit $40
+    btc_min_move_dollars_5m: 15.0    # was 25
     btc_min_4h_hist_magnitude: 20.0
 
   # ETH Macro — same architecture as sol_macro; ETHUSDT on Binance vs BTC lag/correlation.
@@ -260,7 +271,7 @@ strategies:
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
-    min_edge_5m: 0.09             # Keep prior floor; rely on stronger 5m momentum gate instead of disabling the lane
+    min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -314,8 +325,12 @@ strategies:
     entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.5
     entry_window_auto_align_jitter_sec: 15
-    btc_min_move_dollars_15m: 40.0
-    btc_min_move_dollars_5m: 25.0
+    btc_spike_floor_pct_5m: 0.15
+    btc_spike_floor_pct_15m: 0.40
+    lag_signal_min_pct: 0.12
+    require_btc_catalyst_5m: true
+    btc_min_move_dollars_15m: 28.0
+    btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
 
   # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy.
@@ -359,8 +374,13 @@ strategies:
     entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
-    btc_min_move_dollars_15m: 40.0
-    btc_min_move_dollars_5m: 25.0
+    btc_spike_floor_pct_5m: 0.18
+    btc_spike_floor_pct_15m: 0.55
+    lag_signal_min_pct: 0.12
+    neutral_macro_require_spike_or_lag: false   # HYPE tracks BTC closely; keep neutral alt-bias path
+    require_btc_catalyst_5m: false              # HYPE is low-corr; 5m entries not gated on BTC catalyst
+    btc_min_move_dollars_15m: 28.0
+    btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
 
   # XRP Macro — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
@@ -371,7 +391,7 @@ strategies:
     use_ai_updown: true
     min_liquidity: 1000
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
-    min_edge_5m: 0.09            # 2026-04-24: raised from 0.08 — match SOL floor
+    min_edge_5m: 0.07            # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 8
@@ -386,6 +406,11 @@ strategies:
     entry_price_min: 0.46
     entry_price_max: 0.54
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
+    btc_spike_floor_pct_5m: 0.15
+    btc_spike_floor_pct_15m: 0.40
+    lag_signal_min_pct: 0.12
+    neutral_macro_require_spike_or_lag: true
+    require_btc_catalyst_5m: true
     dynamic_beta_min: 0.60       # XRP generally reacts less explosively than HYPE/SOL
     dynamic_beta_max: 2.50       # Tighter normal-regime beta cap than SOL
     dynamic_beta_extreme_max: 3.50
@@ -403,8 +428,8 @@ strategies:
     entry_window_align_scan_interval_sec: 120
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
-    btc_min_move_dollars_15m: 40.0
-    btc_min_move_dollars_5m: 25.0
+    btc_min_move_dollars_15m: 28.0
+    btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
 
 # ============================================
@@ -592,11 +617,11 @@ backtest:
   min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
   min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
   min_edge_sol_15m:  0.10   # matches strategies.sol_macro.min_edge (raised 2026-04-24)
-  min_edge_sol_5m:   0.09   # matches strategies.sol_macro.min_edge_5m (restored 2026-04-30)
+  min_edge_sol_5m:   0.07   # matches strategies.sol_macro.min_edge_5m (lowered 2026-04-30)
   min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
-  min_edge_eth_5m:   0.09   # matches strategies.eth_macro.min_edge_5m
+  min_edge_eth_5m:   0.07   # matches strategies.eth_macro.min_edge_5m (lowered 2026-04-30)
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
-  min_edge_xrp_5m:   0.09   # matches strategies.xrp_macro.min_edge_5m (raised 2026-04-24)
+  min_edge_xrp_5m:   0.07   # matches strategies.xrp_macro.min_edge_5m (lowered 2026-04-30)
   min_edge_hype_15m: 0.09   # matches strategies.hype_macro.min_edge
   min_edge_hype_5m:  0.09   # matches strategies.hype_macro.min_edge_5m
 
