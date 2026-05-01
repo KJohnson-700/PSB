@@ -1271,7 +1271,11 @@ class BitcoinStrategy:
                                 f"{action} on '{market.question[:40]}...'"
                             )
                             continue
-                        ai_edge = abs(ai_analysis.estimated_probability - yes_price)
+                        ai_edge = (
+                            ai_analysis.estimated_probability - yes_price
+                            if action == "BUY_YES"
+                            else yes_price - ai_analysis.estimated_probability
+                        )
                         edge = max(edge, ai_edge)
                         confidence = ai_analysis.confidence_score
                         reason_parts.append("ai_confirm")

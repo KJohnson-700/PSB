@@ -459,7 +459,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("edge_below_min")
                 continue
 
-            if yes_price < (1.0 - self.entry_price_max) or yes_price > self.entry_price_max:
+            if yes_price < self.entry_price_min or yes_price > self.entry_price_max:
                 _bump_skip("entry_price_band")
                 continue
 
