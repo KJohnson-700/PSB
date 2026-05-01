@@ -21,12 +21,19 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
 _WEATHER_MARKET_HINT_RE = re.compile(
-    r"\b(rain|snow|precipitation|temperature|temp|weather|forecast|degrees?|"
-    r"fahrenheit|celsius|humid|storm|flood|drought|sunshine|sunny|cloudy|wind|hail|thunderstorm)\b",
+    r"\b("
+    r"highest\s+temperature|high\s+temperature|low\s+temperature|"
+    r"temperature\s+in|degrees?\s+in|"
+    r"precipitation|rainfall|snowfall|"
+    r"inches?\s+of\s+(?:rain|snow)|mm\s+of\s+(?:rain|snow)|cm\s+of\s+snow|"
+    r"will\s+it\s+rain|will\s+it\s+snow"
+    r")\b",
     re.IGNORECASE,
 )
 _WEATHER_TEMP_SLUG_RE = re.compile(
-    r"^highest-temperature-in-([a-z0-9-]+)-on-([a-z]{3})-(\d{1,2})-(\d{4})$",
+    r"(?:^|-)("
+    r"highest-temperature|high-temperature|low-temperature|temperature"
+    r")(?:-|$)",
     re.IGNORECASE,
 )
 _WEATHER_TEMP_TEXT_RE = re.compile(
@@ -35,18 +42,30 @@ _WEATHER_TEMP_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _WEATHER_PRECIP_SLUG_RE = re.compile(
-    r"(?:\bprecipitation\b|\b(?:rain|snow)\b.*\b(?:mm|cm|inch|inches)\b|"
+    r"(?:\bprecipitation\b|\brainfall\b|\bsnowfall\b|"
+    r"\b(?:rain|snow)\b.*\b(?:mm|cm|inch|inches)\b|"
     r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation)\b)",
     re.IGNORECASE,
 )
 _WEATHER_PRECIP_TEXT_RE = re.compile(
-    r"\b(?:rain|snow|precipitation)\b.*\b(?:mm|cm|inch|inches)\b|"
-    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation)\b",
+    r"\b(?:rain|snow|precipitation|rainfall|snowfall)\b.*\b(?:mm|cm|inch|inches)\b|"
+    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation|rainfall|snowfall)\b",
     re.IGNORECASE,
 )
 _WEATHER_TITLE_HINT_RE = re.compile(
-    r"\b(highest\s+temperature|precipitation|rain|snow)\b|"
+    r"\b(highest\s+temperature|high\s+temperature|low\s+temperature|"
+    r"precipitation|rainfall|snowfall|"
+    r"inches?\s+of\s+(?:rain|snow)|mm\s+of\s+(?:rain|snow)|cm\s+of\s+snow)\b|"
     r"\b(?:mm|inch|inches|cm|°f|°c)\b",
+    re.IGNORECASE,
+)
+_WEATHER_EVENT_TAG_SLUGS = ("weather", "climate-and-weather")
+_WEATHER_EVENT_HINT_RE = re.compile(
+    r"\b("
+    r"highest\s+temperature|low(?:est)?\s+temperature|high(?:est)?\s+temperature|"
+    r"precipitation|rainfall|snowfall|"
+    r"will\s+it\s+rain|will\s+it\s+snow"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -1006,44 +1025,108 @@ class MarketScanner:
         cities: Optional[List[str]] = None,
         limit: int = 600,
     ) -> List[Market]:
-        """Fetch open weather markets from Gamma only, no paid API dependency."""
+        """Fetch open weather markets from Gamma.
+
+        Fast path: query `/events` by weather tag slug and parse embedded markets.
+        Fallback path: broad `/markets` crawl with dedicated-weather filters.
+        """
         city_filter = {city.lower() for city in (cities or [])}
         markets: List[Market] = []
         seen_market_ids: set[str] = set()
-        offset = 0
         raw_candidates = 0
+
+        def _city_allowed(market: Market) -> bool:
+            if not city_filter:
+                return True
+            text = (
+                f"{market.slug} {market.question} {market.description} {market.group_item_title}"
+            ).lower()
+            return any(city in text for city in city_filter)
+
+        # Fast path: tagged weather events.
         try:
-            while len(markets) < limit:
-                params = {
-                    "limit": min(100, limit - len(markets)),
-                    "offset": offset,
-                    "active": "true",
-                    "closed": "false",
-                }
-                resp = requests.get(
-                    f"{self.GAMMA_API_BASE}/markets",
-                    params=params,
-                    timeout=8,
-                )
-                resp.raise_for_status()
-                batch = resp.json()
-                if not batch:
-                    break
-                parsed_batch = self._parse_markets(batch)
-                for market in parsed_batch:
-                    if not self._is_dedicated_weather_candidate(market):
-                        continue
-                    raw_candidates += 1
-                    text = f"{market.slug} {market.question} {market.description} {market.group_item_title}".lower()
-                    if city_filter and not any(city in text for city in city_filter):
-                        continue
-                    if market.id in seen_market_ids:
-                        continue
-                    seen_market_ids.add(market.id)
-                    markets.append(market)
-                offset += len(batch)
-                if len(batch) < params["limit"]:
-                    break
+            for tag_slug in _WEATHER_EVENT_TAG_SLUGS:
+                offset = 0
+                # Keep this bounded; background refresh runs every cycle.
+                for _ in range(0, 20):
+                    if len(markets) >= limit:
+                        break
+                    params = {
+                        "limit": 100,
+                        "offset": offset,
+                        "active": "true",
+                        "closed": "false",
+                        "tag_slug": tag_slug,
+                    }
+                    resp = requests.get(
+                        f"{self.GAMMA_API_BASE}/events",
+                        params=params,
+                        timeout=8,
+                    )
+                    resp.raise_for_status()
+                    events = resp.json() or []
+                    if not events:
+                        break
+                    for event in events:
+                        event_text = (
+                            f"{event.get('slug','')} {event.get('title','')} "
+                            f"{event.get('description','')}"
+                        )
+                        # Ignore broad climate/disaster events that are not temp/precip style.
+                        if not _WEATHER_EVENT_HINT_RE.search(event_text):
+                            continue
+                        parsed_batch = self._parse_markets(event.get("markets", []) or [])
+                        for market in parsed_batch:
+                            if not self._is_dedicated_weather_candidate(market):
+                                continue
+                            raw_candidates += 1
+                            if not _city_allowed(market):
+                                continue
+                            if market.id in seen_market_ids:
+                                continue
+                            seen_market_ids.add(market.id)
+                            markets.append(market)
+                            if len(markets) >= limit:
+                                break
+                        if len(markets) >= limit:
+                            break
+                    if len(events) < params["limit"]:
+                        break
+                    offset += len(events)
+
+            # Fallback: broad market crawl only if tag path found nothing.
+            if not markets:
+                offset = 0
+                while len(markets) < limit:
+                    params = {
+                        "limit": min(100, limit - len(markets)),
+                        "offset": offset,
+                        "active": "true",
+                        "closed": "false",
+                    }
+                    resp = requests.get(
+                        f"{self.GAMMA_API_BASE}/markets",
+                        params=params,
+                        timeout=8,
+                    )
+                    resp.raise_for_status()
+                    batch = resp.json()
+                    if not batch:
+                        break
+                    parsed_batch = self._parse_markets(batch)
+                    for market in parsed_batch:
+                        if not self._is_dedicated_weather_candidate(market):
+                            continue
+                        raw_candidates += 1
+                        if not _city_allowed(market):
+                            continue
+                        if market.id in seen_market_ids:
+                            continue
+                        seen_market_ids.add(market.id)
+                        markets.append(market)
+                    offset += len(batch)
+                    if len(batch) < params["limit"]:
+                        break
             if markets:
                 sample = [m.question[:100] for m in markets[:3]]
                 logger.info(

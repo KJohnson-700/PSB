@@ -153,3 +153,15 @@ This proxy tests **rule-based entry/exit logic only**. To test AI quality, run l
 - [x] Exit strategy implemented (`time_and_target` with TP/SL/time)
 - [x] Fees applied on both entry and exit (including settlement)
 - [x] Real end_date from Gamma API (for NEH strategy)
+
+### Crypto updown IQL / sell-gate A/B
+
+Quick baseline-vs-`settings.yaml` check: **`scripts/ab_iql_crypto_backtest.py`** (`--skip-oracle` for speed; `--symbols SOL` for one asset). Numbers change every config edit—**trust fresh script output**, not pasted tables.
+
+- **Baseline** (only inside the harness): IQL off; XRP/HYPE `sell_5m_min_corr` relaxed so the baseline isolates those gates.
+
+- **urllib3 LibreSSL warning (macOS `/usr/bin/python3`):** On first import of the **`src`** package we filter urllib3’s **`NotOpenSSLWarning`** (TLS still works; urllib3 is picky about OpenSSL vs LibreSSL). Set **`PSB_VERBOSE_SSL=1`** if you need that line in logs. Prefer **Homebrew or python.org 3.11+** in a venv (OpenSSL-linked) per README—then you often get no warning even without the filter. Containers (Debian slim) use OpenSSL, not LibreSSL.
+
+- **`oracle_loader … No module named 'web3'`** = local backtest env skipped `requirements.txt`; production image installs `web3`. Fix locally with the same venv/`pip install -r requirements.txt` you use for backtests.
+
+- **XRP 15m IQL:** MACD histogram is in price units, so a shared absolute `iql_15m_hist_floor` can wipe the lane; **`xrp_macro.iql_15m_enabled`** is **`false`** in `config/settings.yaml` until there is an asset-normalized floor. Strategy log entries: **`AGENTS.md`** (vault).

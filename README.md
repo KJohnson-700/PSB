@@ -44,6 +44,8 @@ polymarket-bot/
 
 **Python:** `py-clob-client` needs **Python ≥ 3.9.10** (macOS/Linux: **3.11+** recommended). On Windows, use Python 3.11+ from [python.org](https://www.python.org/downloads/) or `py -3.11`. Apple’s Xcode Python 3.9.6 is too old for the CLOB client — use `brew install python@3.11` or a venv with 3.11.
 
+On macOS, stock Python may use **LibreSSL**; **urllib3 v2** can print a noisy `NotOpenSSLWarning` even though TLS works. Importing the **`src`** package filters that warning locally. Set **`PSB_VERBOSE_SSL=1`** to show it again, or use Homebrew Python so the warning often never appears.
+
 1. **Virtual environment (recommended)**
    ```bash
    python3.11 -m venv .venv

@@ -150,9 +150,13 @@ _CITY_PATTERNS: List[Tuple[re.Pattern, tuple, str]] = [
 
 # Market must contain a weather keyword to be considered.
 _WEATHER_RE = re.compile(
-    r'\b(rain|snow|precipitation|temperature|temp|weather|forecast|'
-    r'degrees?|fahrenheit|celsius|humid|storm|flood|drought|sunshine|sunny|cloudy|wind|'
-    r'hail|thunderstorm|inches?|inch|mm|centimeters?|cm|°f|°c)\b',
+    r"\b("
+    r"highest\s+temperature|high\s+temperature|low\s+temperature|"
+    r"temperature\s+in|degrees?\s+in|fahrenheit|celsius|°f|°c|"
+    r"precipitation|rainfall|snowfall|"
+    r"inches?\s+of\s+(?:rain|snow)|mm\s+of\s+(?:rain|snow)|cm\s+of\s+snow|"
+    r"will\s+it\s+rain|will\s+it\s+snow"
+    r")\b",
     re.I,
 )
 
@@ -166,7 +170,7 @@ _TEMP_RANGE_RE = re.compile(
 _TEMP_ABOVE_RE = re.compile(r'\babove\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_BELOW_RE = re.compile(r'\bbelow\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_EXACT_RE = re.compile(r'(\d+\.?\d*)\s*[°]?[fF]\b')
-_PRECIP_RE = re.compile(r'\b(rain|snow|precipitation|storm|hail|thunderstorm)\b', re.I)
+_PRECIP_RE = re.compile(r"\b(rain|snow|precipitation|rainfall|snowfall)\b", re.I)
 _MONTH_NAME_RE = re.compile(
     r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
     re.I,
@@ -479,6 +483,8 @@ class WeatherStrategy:
 
         hours = self._hours_to_resolution(market.end_date)
         if hours is not None:
+            if hours < 0:
+                return None, None, "skipped_past_resolution"
             if hours < self.min_hours:
                 return None, None, "skipped_below_min_hours"
             if hours > self.max_hours:
@@ -569,6 +575,7 @@ class WeatherStrategy:
             "skipped_no_location": 0,
             "skipped_no_temp_keyword": 0,
             "skipped_too_far_out": 0,
+            "skipped_past_resolution": 0,
             "skipped_below_min_hours": 0,
             "skipped_above_max_hours": 0,
             "skipped_extreme_consensus": 0,
@@ -886,7 +893,7 @@ class WeatherStrategy:
         self._scan_stats = stats
         logger.info(
             "Weather scan: total=%d keyword=%d city=%d scanned=%d temp=%d precip=%d "
-            "signals=%d | skip: no_loc=%d no_temp=%d ext_precip_uncal=%d liq=%d vol=%d minh=%d maxh=%d far=%d "
+            "signals=%d | skip: no_loc=%d no_temp=%d ext_precip_uncal=%d liq=%d vol=%d past=%d minh=%d maxh=%d far=%d "
             "extreme=%d ev=%d thresh=%d forecast=%d metar=%d ai_calls=%d ai_used=%d ai_hold=%d",
             stats["total_markets_seen"],
             stats["weather_keyword_matches"],
@@ -900,6 +907,7 @@ class WeatherStrategy:
             stats["skipped_extended_precip_uncalibrated"],
             stats["skipped_below_liquidity"],
             stats["skipped_below_volume"],
+            stats["skipped_past_resolution"],
             stats["skipped_below_min_hours"],
             stats["skipped_above_max_hours"],
             stats["skipped_too_far_out"],

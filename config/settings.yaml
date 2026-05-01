@@ -282,6 +282,8 @@ strategies:
     require_btc_volatility_gate: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
+    iql_15m_enabled: true
+    iql_15m_hist_floor: 0.03
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -401,6 +403,8 @@ strategies:
     require_btc_volatility_gate: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
+    iql_15m_enabled: true
+    iql_15m_hist_floor: 0.03
     btc_min_move_dollars_15m: 28.0
     btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
@@ -457,6 +461,10 @@ strategies:
     require_btc_volatility_gate: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
+    iql_15m_enabled: true
+    iql_15m_hist_floor: 0.03
+    min_positive_m5_adj_5m_sell: 0.04
+    sell_5m_min_corr: 0.50
     btc_min_move_dollars_15m: 28.0
     btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
@@ -496,6 +504,11 @@ strategies:
     require_btc_volatility_gate: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
+    # IQL hist floor is absolute MACD (price units); XRP ~$2 vs SOL hundreds → same floor zeros 15m (A/B: 0 trades vs ~2.8k baseline). Re-enable with a symbol-scaled floor or % of ATR.
+    iql_15m_enabled: false
+    iql_15m_hist_floor: 0.03
+    min_positive_m5_adj_5m_sell: 0.04
+    sell_5m_min_corr: 0.50
     dynamic_beta_min: 0.60       # XRP generally reacts less explosively than HYPE/SOL
     dynamic_beta_max: 2.50       # Tighter normal-regime beta cap than SOL
     dynamic_beta_extreme_max: 3.50
