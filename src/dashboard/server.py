@@ -1246,33 +1246,52 @@ async def get_backtest_reports():
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    reports = []
-    seen_crypto_keys = set()
-    for idx, f in enumerate(files):
+    reports: List[Dict[str, Any]] = []
+    seen_crypto_keys: set[Tuple[str, int]] = set()
+    non_crypto_kept = 0
+    max_non_crypto = 30
+    for f in files:
         try:
             with open(f) as fp:
                 data = json.load(fp)
-            crypto_key = None
-            if data.get("report_type") == "crypto_updown" or (
-                data.get("symbol") and data.get("window_minutes") and not data.get("per_strategy_metrics")
-            ):
-                crypto_key = (str(data.get("symbol", "")).upper(), int(data.get("window_minutes", 0) or 0))
-            include_report = idx < 30
-            if crypto_key and crypto_key not in seen_crypto_keys:
-                # Keep the latest report for every symbol/window even when older than
-                # the recent-file window, so Backtest cards do not regress to "Not yet run".
-                seen_crypto_keys.add(crypto_key)
-                include_report = True
-            if not include_report:
-                continue
-            data["filename"] = f.name
-            # Strip heavy fields to keep payload small
-            data.pop("trades", None)
-            data.pop("results", None)
-            data.pop("stress_scenarios", None)
-            reports.append(data)
         except Exception:
-            pass
+            continue
+
+        sym_raw = data.get("symbol")
+        sym = str(sym_raw).strip() if sym_raw is not None else ""
+        wm_raw = data.get("window_minutes")
+        crypto_key: Optional[Tuple[str, int]] = None
+        if data.get("report_type") == "crypto_updown" or (
+            sym
+            and wm_raw is not None
+            and str(wm_raw).strip() != ""
+            and not data.get("per_strategy_metrics")
+        ):
+            try:
+                wm_int = int(float(wm_raw))
+            except (TypeError, ValueError):
+                wm_int = 0
+            if sym and wm_int > 0:
+                crypto_key = (sym.upper(), wm_int)
+
+        if crypto_key:
+            # Newest file per (symbol, window) only — duplicates broke some clients and
+            # could surface stale rows ahead of the card picker.
+            if crypto_key in seen_crypto_keys:
+                continue
+            seen_crypto_keys.add(crypto_key)
+            data["symbol"] = crypto_key[0]
+            data["window_minutes"] = crypto_key[1]
+        else:
+            if non_crypto_kept >= max_non_crypto:
+                continue
+            non_crypto_kept += 1
+
+        data["filename"] = f.name
+        data.pop("trades", None)
+        data.pop("results", None)
+        data.pop("stress_scenarios", None)
+        reports.append(data)
     return {"reports": reports, "latest": reports[0] if reports else None}
 
 

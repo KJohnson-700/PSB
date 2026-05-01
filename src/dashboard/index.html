@@ -2105,8 +2105,12 @@ function updateBacktest(d) {
         return r.report_type === 'crypto_updown' || (r.symbol && r.window_minutes && !r.per_strategy_metrics);
     }
     function latestCryptoReport(sym, win) {
+        const w = Number(win);
+        const s = String(sym || '').toUpperCase();
         return allReports
-            .filter(r => isCryptoReport(r) && r.symbol === sym && r.window_minutes === win)
+            .filter(r => isCryptoReport(r)
+                && String(r.symbol || '').toUpperCase() === s
+                && Number(r.window_minutes) === w)
             .sort((a, b) => {
                 const aKey = (a.run_at || a.filename || a.end_date || '');
                 const bKey = (b.run_at || b.filename || b.end_date || '');
