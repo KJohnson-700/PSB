@@ -109,6 +109,12 @@ strategies:
     ensemble_min_confidence: 0.55
     weather_ai_timeout_sec: 25
     weather_ai_cache_ttl_sec: 600
+    # Bias correction uses city+horizon buckets; need this many resolved obs before apply_correction adjusts forecasts.
+    calibration_min_observations: 30
+    # Cap implied edge used for Kelly when calibration_count is below min (avoids huge size on bad model/market mismatch).
+    uncalibrated_kelly_edge_cap: 0.12
+    # Skip monthly / extended precipitation markets until a bucket has enough calibration history (Seattle April-style).
+    skip_extended_precip_without_calibration: true
 
   # Bitcoin Up/Down strategy — trades BTC price prediction markets
   bitcoin:
@@ -191,8 +197,9 @@ strategies:
     # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
-    min_edge: 0.10                # 2026-04-24: raised from 0.09 — tighten after 0% WR on 3 live trades; demand clearer signal
-    min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09; require_btc_catalyst_5m now guards quality
+    min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
+    min_edge_5m: 0.07             # flat tape: m5_adj often 0.04; require_btc_catalyst_5m guards 5m quality when enabled
+    min_edge_15m_when_ltf_unconfirmed: 0.09   # replaces hardcoded 0.10 bump when 15m LTF strength is 0
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -286,15 +293,15 @@ strategies:
     kelly_fraction: 0.15
     entry_price_min: 0.46
     entry_price_max: 0.54
-    min_positive_m5_adj_5m: 0.04  # Require at least hist/cross-quality 5m momentum; block weak MACD>signal-only entries
+    min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
     rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
     rsi_sell_block_below: 40.0    # Block SELL_YES when ETH is already oversold and more likely to bounce
-    btc_follow_1h_hist_min: 8.0   # BTC-follow redesign: BTC 1H continuation must be meaningfully in-direction
+    btc_follow_1h_hist_min: 6.0   # was 8.0 — fewer false skips when BTC 1H is valid but hist magnitude modest
     btc_follow_15m_hist_min: 0.03 # BTC-follow redesign: require real BTC 15m impulse, not flat drift
     btc_follow_5m_requires_impulse: true
     eth_follow_5m_min_adj: 0.04   # ETH must confirm BTC with at least 5m histogram/cross-quality momentum
     eth_follow_15m_hist_min: 0.03 # ETH 15m needs real same-direction histogram magnitude, not just above/below signal
-    eth_follow_15m_min_adj: 0.05  # Harder 15m confirm than 5m; weak above-signal states no longer qualify
+    eth_follow_15m_min_adj: 0.04  # was 0.05 — slight relax to recover 15m lane without dropping hist_min
     oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
     # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
@@ -392,6 +399,7 @@ strategies:
     min_liquidity: 1000
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
     min_edge_5m: 0.07            # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
+    min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 8
@@ -616,8 +624,8 @@ backtest:
   # Engine reads these from backtest.min_edge_* (not from strategies directly)
   min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
   min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
-  min_edge_sol_15m:  0.10   # matches strategies.sol_macro.min_edge (raised 2026-04-24)
-  min_edge_sol_5m:   0.07   # matches strategies.sol_macro.min_edge_5m (lowered 2026-04-30)
+  min_edge_sol_15m:  0.09   # matches strategies.sol_macro.min_edge
+  min_edge_sol_5m:   0.07   # matches strategies.sol_macro.min_edge_5m
   min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
   min_edge_eth_5m:   0.07   # matches strategies.eth_macro.min_edge_5m (lowered 2026-04-30)
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
