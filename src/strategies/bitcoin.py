@@ -687,6 +687,12 @@ class BitcoinStrategy:
                 allowed_side = "LONG"
             elif not macd_4h.histogram_rising and macd_4h.histogram < 0:
                 allowed_side = "SHORT"
+            elif self.config.get("neutral_updown_skip_ambiguous_4h", False):
+                logger.info(
+                    "Bitcoin: HTF NEUTRAL + updown but 4H MACD ambiguous — sitting out "
+                    "(neutral_updown_skip_ambiguous_4h)"
+                )
+                return []
             else:
                 allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
             logger.info(

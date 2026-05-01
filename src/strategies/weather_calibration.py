@@ -26,6 +26,8 @@ class WeatherCalibrationStore:
         self.path = path or CALIBRATION_PATH
         self.min_observations = max(1, int(min_observations))
         self._data = self._load()
+        if not self.path.exists():
+            self._save()
 
     @staticmethod
     def _bucket_key(city: str, horizon_days: int) -> str:

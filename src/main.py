@@ -20,7 +20,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.market.scanner import MarketScanner, Market
+from src.market.scanner import MarketScanner, Market, is_crypto_updown_market
 from src.market.price_collector import PriceCollector
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
@@ -152,16 +152,19 @@ def _weather_general_scan_enabled(config: Dict) -> bool:
 
 
 def _is_crypto_market(market) -> bool:
-    """Crypto short-window up/down markets; exempt from resolution window filter."""
-    if not market.end_date:
-        return False
+    """Crypto up/down and short-candle markets; exempt from resolution window filter.
+
+    Uses the same slug/question/group rules as the scanner so Solana/BTC/etc. cannot
+    leak into weather-only paths when ``window_minutes`` is missing. The old
+    ``end - now < 86400`` fallback misclassified many non-crypto markets (timezone
+    skew, monthly events) as crypto.
+    """
+    if is_crypto_updown_market(market):
+        return True
     window_minutes = getattr(market, "window_minutes", None)
     if window_minutes is not None:
         return window_minutes <= 20
-    now = datetime.now(timezone.utc)
-    end = market.end_date.replace(tzinfo=timezone.utc) if market.end_date.tzinfo is None else market.end_date
-    td = end - now
-    return td.total_seconds() < 86400  # Resolves within 24h = likely 15m candle market
+    return False
 
 
 class PolyBot:
@@ -1464,7 +1467,7 @@ class PolyBot:
                 signal.market_id,
                 signal.market_question,
                 strat,
-                reason,
+                f"{reason} | {signal.reason}" if signal.reason else reason,
                 self.bankroll,
             )
             return
@@ -1481,7 +1484,7 @@ class PolyBot:
                 signal.market_id,
                 signal.market_question,
                 strat,
-                f"term_risk: {reason}",
+                f"term_risk: {reason}" + (f" | {signal.reason}" if signal.reason else ""),
                 self.bankroll,
             )
             return
@@ -1509,7 +1512,7 @@ class PolyBot:
                 signal.market_id,
                 signal.market_question,
                 strat,
-                "unsellable_token",
+                "unsellable_token" + (f" | {signal.reason}" if signal.reason else ""),
                 self.bankroll,
             )
             return
@@ -1562,7 +1565,8 @@ class PolyBot:
                 bankroll=self.bankroll,
                 edge=signal.gap,
                 confidence=signal.gap,
-                reason=f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
+                reason=signal.reason
+                or f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
                 extra={
                     "weather_subtype": signal.subtype,
                     "forecast_prob": signal.forecast_prob,

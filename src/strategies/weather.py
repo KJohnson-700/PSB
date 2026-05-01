@@ -167,6 +167,24 @@ _TEMP_ABOVE_RE = re.compile(r'\babove\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_BELOW_RE = re.compile(r'\bbelow\s+(\d+\.?\d*)\s*[°]?[fF]?\b', re.I)
 _TEMP_EXACT_RE = re.compile(r'(\d+\.?\d*)\s*[°]?[fF]\b')
 _PRECIP_RE = re.compile(r'\b(rain|snow|precipitation|storm|hail|thunderstorm)\b', re.I)
+_MONTH_NAME_RE = re.compile(
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.I,
+)
+_MONTH_YEAR_RE = re.compile(
+    r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}\b",
+    re.I,
+)
+_EXTENDED_PRECIP_QUAL_RE = re.compile(
+    r"\b(total|monthly|cumulative|annual)\b",
+    re.I,
+)
+# "in April" / "during March" style bucket (not "on May 15" daily phrasing).
+_IN_MONTH_BUCKET_RE = re.compile(
+    r"\b(?:in|during|for)\s+"
+    r"(january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.I,
+)
 
 
 class WeatherStrategy:
@@ -228,6 +246,22 @@ class WeatherStrategy:
 
     def _is_weather_market(self, question: str, description: str) -> bool:
         return bool(_WEATHER_RE.search(f"{question} {description}"))
+
+    @staticmethod
+    def _is_extended_period_precip(question: str, description: str) -> bool:
+        """Monthly / cumulative precip (Open-Meteo daily max is a weak proxy); gate until calibrated."""
+        blob = f"{question} {description}"
+        if not _PRECIP_RE.search(blob) and not re.search(
+            r"\b(inches?|mm|centimeters?|cm)\b", blob, re.I
+        ):
+            return False
+        if _EXTENDED_PRECIP_QUAL_RE.search(blob):
+            return True
+        if _MONTH_YEAR_RE.search(blob):
+            return True
+        if _IN_MONTH_BUCKET_RE.search(blob):
+            return True
+        return False
 
     def _parse_market_location(
         self, question: str, description: str
@@ -547,6 +581,7 @@ class WeatherStrategy:
             "weather_ai_calls": 0,
             "weather_ai_applied": 0,
             "weather_ai_hold": 0,
+            "skipped_extended_precip_uncalibrated": 0,
             "sample_market_questions": [],
             "sample_rejected_questions": [],
         }
@@ -608,6 +643,22 @@ class WeatherStrategy:
                 if len(stats["sample_rejected_questions"]) < 5:
                     stats["sample_rejected_questions"].append(f"no_keyword: {q[:100]}")
                 continue
+
+            if (
+                bool(self.config.get("skip_extended_precip_without_calibration", True))
+                and subtype == "precip"
+                and self._is_extended_period_precip(q, desc)
+            ):
+                _bias, _cnt = self.calibration_store.get_bias(
+                    city_key, int(horizon_days or 1)
+                )
+                if _cnt < self.calibration_store.min_observations:
+                    stats["skipped_extended_precip_uncalibrated"] += 1
+                    if len(stats["sample_rejected_questions"]) < 5:
+                        stats["sample_rejected_questions"].append(
+                            f"ext_precip_uncal: {q[:100]}"
+                        )
+                    continue
 
             forecast_temp_f = None
             forecast_std_f = None
@@ -763,10 +814,19 @@ class WeatherStrategy:
             if not self.kelly_sizer:
                 logger.error("Weather strategy: KellySizer unavailable — skipping entry sizing")
                 continue
+            kelly_wp = float(win_probability)
+            if calibration_count < self.calibration_store.min_observations:
+                cap = float(self.config.get("uncalibrated_kelly_edge_cap", 0.12))
+                edge_side = abs(kelly_wp - contract_price)
+                if edge_side > cap:
+                    if kelly_wp > contract_price:
+                        kelly_wp = min(0.99, contract_price + cap)
+                    else:
+                        kelly_wp = max(0.01, contract_price - cap)
             size = self.kelly_sizer.size_binary_position(
                 self._signal_strategy_name,
                 bankroll,
-                win_probability,
+                kelly_wp,
                 contract_price,
             )
             if size <= 0:
@@ -787,6 +847,18 @@ class WeatherStrategy:
                 q[:70],
             )
             stats["signals_generated"] += 1
+            signal_reason = " | ".join(
+                [
+                    f"{action} {subtype}",
+                    f"fcst={effective_forecast_prob:.2f}",
+                    f"raw={float(raw_forecast_prob):.2f}",
+                    f"mkt={market_price:.2f}",
+                    f"gap={gap:.2f}",
+                    f"ev={ev:.2f}",
+                    f"cal_n={calibration_count}",
+                    f"city={city_key}",
+                ]
+            )
             signals.append(
                 WeatherSignal(
                     market_id=market.id,
@@ -799,6 +871,7 @@ class WeatherStrategy:
                     forecast_prob=effective_forecast_prob,
                     market_price=market_price,
                     gap=gap,
+                    reason=signal_reason,
                     size=size,
                     price=price,
                     city=city_key,
@@ -813,7 +886,7 @@ class WeatherStrategy:
         self._scan_stats = stats
         logger.info(
             "Weather scan: total=%d keyword=%d city=%d scanned=%d temp=%d precip=%d "
-            "signals=%d | skip: no_loc=%d no_temp=%d liq=%d vol=%d minh=%d maxh=%d far=%d "
+            "signals=%d | skip: no_loc=%d no_temp=%d ext_precip_uncal=%d liq=%d vol=%d minh=%d maxh=%d far=%d "
             "extreme=%d ev=%d thresh=%d forecast=%d metar=%d ai_calls=%d ai_used=%d ai_hold=%d",
             stats["total_markets_seen"],
             stats["weather_keyword_matches"],
@@ -824,6 +897,7 @@ class WeatherStrategy:
             stats["signals_generated"],
             stats["skipped_no_location"],
             stats["skipped_no_temp_keyword"],
+            stats["skipped_extended_precip_uncalibrated"],
             stats["skipped_below_liquidity"],
             stats["skipped_below_volume"],
             stats["skipped_below_min_hours"],

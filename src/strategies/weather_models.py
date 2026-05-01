@@ -17,6 +17,10 @@ class WeatherSignal(BaseModel):
     forecast_prob: float = Field(..., ge=0, le=1, description="Forecast probability for YES.")
     market_price: float = Field(..., ge=0, le=1, description="Current market YES price.")
     gap: float = Field(..., ge=0, description="|forecast_prob - market_price|.")
+    reason: str = Field(
+        "",
+        description="Human-readable signal context for journals and skip logs.",
+    )
     size: float = Field(..., gt=0, description="Trade size in USDC.")
     price: float = Field(..., gt=0, lt=1, description="Limit order price.")
     city: Optional[str] = Field(None, description="Canonical city key for calibration.")

@@ -199,6 +199,10 @@ class SolMacroStrategy:
         self.min_liquidity = self.config.get("min_liquidity", 1000)
         self.min_edge = self.config.get("min_edge", 0.09)
         self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
+        # 15m updown when anti-LTF gate passed (ltf_strength==0): extra edge bar (was hardcoded 0.10)
+        self.min_edge_15m_when_ltf_unconfirmed = float(
+            self.config.get("min_edge_15m_when_ltf_unconfirmed", 0.10)
+        )
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
@@ -1504,7 +1508,9 @@ class SolMacroStrategy:
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and not is_5m:
-                effective_min_edge = max(effective_min_edge, 0.10)
+                effective_min_edge = max(
+                    effective_min_edge, self.min_edge_15m_when_ltf_unconfirmed
+                )
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (

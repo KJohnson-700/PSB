@@ -47,6 +47,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             dynamic_beta_min=self.dynamic_beta_min,
             dynamic_beta_max=self.dynamic_beta_max,
             dynamic_beta_extreme_max=self.dynamic_beta_extreme_max,
+            btc_spike_floor_pct_5m=self.btc_spike_floor_pct_5m,
+            btc_spike_floor_pct_15m=self.btc_spike_floor_pct_15m,
+            lag_signal_min_pct=self.lag_signal_min_pct,
         )
 
     def __init__(

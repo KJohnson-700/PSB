@@ -15,7 +15,7 @@ Technical Indicators (SOL):
 
 BTC-SOL Correlation:
 - Rolling 1h correlation coefficient
-- BTC spike detector (>0.3% in 5min, >0.8% in 15min)
+- BTC spike detector (defaults: >0.3% in 5min, >0.8% in 15min; configurable per strategy)
 - SOL lag measurement since BTC spike
 - Lag opportunity flag when SOL hasn't caught up
 
@@ -216,6 +216,9 @@ class SOLBTCService:
         dynamic_beta_min: float = 0.8,
         dynamic_beta_max: float = 3.0,
         dynamic_beta_extreme_max: float = 5.0,
+        btc_spike_floor_pct_5m: float = 0.3,
+        btc_spike_floor_pct_15m: float = 0.8,
+        lag_signal_min_pct: float = 0.2,
     ):
         self.polygon_rpc = polygon_rpc
         self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
@@ -223,6 +226,9 @@ class SOLBTCService:
         self.dynamic_beta_min = float(dynamic_beta_min)
         self.dynamic_beta_max = float(dynamic_beta_max)
         self.dynamic_beta_extreme_max = float(dynamic_beta_extreme_max)
+        self.btc_spike_floor_pct_5m = float(btc_spike_floor_pct_5m)
+        self.btc_spike_floor_pct_15m = float(btc_spike_floor_pct_15m)
+        self.lag_signal_min_pct = float(lag_signal_min_pct)
         self.spike_z_threshold = 1.5  # Z-score threshold for adaptive BTC spike detection
         self._oracle_clients: Dict[Tuple[str, str], Tuple[object, object]] = {}
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
@@ -578,7 +584,7 @@ class SOLBTCService:
         """Calculate BTC-SOL correlation and detect lag opportunities.
 
         1. Rolling 1h correlation of returns
-        2. BTC spike detection (>0.3% in 5min, >0.8% in 15min)
+        2. BTC spike detection (percent floors + z-score on rolling 1m-derived moves)
         3. SOL lag measurement — how much SOL has moved since BTC spike
         4. Lag opportunity — if BTC spiked but SOL hasn't caught up
         """
@@ -642,16 +648,18 @@ class SOLBTCService:
 
         spike_5m = False
         spike_15m = False
+        _floor5 = self.btc_spike_floor_pct_5m
+        _floor15 = self.btc_spike_floor_pct_15m
         if len(_window_5m) >= 5:
             _mean_5m = float(np.mean(_window_5m))
             _std_5m = float(np.std(_window_5m))
             _current_5m = abs(result.btc_move_5m_pct)
             spike_5m = (
                 (_current_5m - _mean_5m) / _std_5m > _z_threshold if _std_5m > 0.01
-                else (_current_5m > 0.3)
+                else (_current_5m > _floor5)
             )
         else:
-            spike_5m = abs(result.btc_move_5m_pct) > 0.3
+            spike_5m = abs(result.btc_move_5m_pct) > _floor5
 
         if len(_window_15m) >= 5:
             _mean_15m = float(np.mean(_window_15m))
@@ -660,10 +668,10 @@ class SOLBTCService:
             spike_15m = (
                 (_current_15m - _mean_15m) / _std_15m > _z_threshold
                 if _std_15m > 0.01
-                else (_current_15m > 0.8)
+                else (_current_15m > _floor15)
             )
         else:
-            spike_15m = abs(result.btc_move_15m_pct) > 0.8
+            spike_15m = abs(result.btc_move_15m_pct) > _floor15
 
         if spike_5m or spike_15m:
             result.btc_spike_detected = True
@@ -716,8 +724,8 @@ class SOLBTCService:
             if result.btc_spike_direction == "UP":
                 lag = expected_sol_move - actual_sol_move
                 result.sol_lag_pct = lag
-                # Opportunity if SOL is lagging by >0.2%
-                if lag > 0.2:
+                # Opportunity if SOL is lagging by more than lag_signal_min_pct
+                if lag > self.lag_signal_min_pct:
                     result.lag_opportunity = True
                     result.opportunity_direction = "LONG"
                     result.opportunity_magnitude = lag
@@ -725,7 +733,7 @@ class SOLBTCService:
                 lag = actual_sol_move - expected_sol_move  # expected is negative, actual should be too
                 result.sol_lag_pct = lag
                 # Opportunity if SOL hasn't dropped as much as expected
-                if lag > 0.2:
+                if lag > self.lag_signal_min_pct:
                     result.lag_opportunity = True
                     result.opportunity_direction = "SHORT"
                     result.opportunity_magnitude = lag

@@ -41,6 +41,9 @@ class HyperliquidHypeService(SOLBTCService):
         dynamic_beta_min: float = 0.8,
         dynamic_beta_max: float = 3.0,
         dynamic_beta_extreme_max: float = 5.0,
+        btc_spike_floor_pct_5m: float = 0.3,
+        btc_spike_floor_pct_15m: float = 0.8,
+        lag_signal_min_pct: float = 0.2,
     ):
         super().__init__(
             polygon_rpc=polygon_rpc,
@@ -48,6 +51,9 @@ class HyperliquidHypeService(SOLBTCService):
             dynamic_beta_min=dynamic_beta_min,
             dynamic_beta_max=dynamic_beta_max,
             dynamic_beta_extreme_max=dynamic_beta_extreme_max,
+            btc_spike_floor_pct_5m=btc_spike_floor_pct_5m,
+            btc_spike_floor_pct_15m=btc_spike_floor_pct_15m,
+            lag_signal_min_pct=lag_signal_min_pct,
         )
         self._hype_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
         self._hype_cache_ttl = 30  # seconds
