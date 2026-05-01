@@ -119,7 +119,7 @@ strategies:
   # Bitcoin Up/Down strategy — trades BTC price prediction markets
   bitcoin:
     enabled: true
-    dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
+    dead_zone_enabled: true
     # LLM tiebreaker for marginal edge and no-threshold markets; false = skip those branches.
     use_ai: true
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$37k liquidity
@@ -184,8 +184,57 @@ strategies:
     # look bad may be statistical noise at n≈22/hour. Only graduate to Tier A after
     # ≥15 trades/hour with WR<0.46 AND avg_pnl<-$2 on OUT-OF-SAMPLE data.
     # Run scripts/hourly_heatmap.py --suggest to re-audit; never tune from backtest alone.
-    blocked_utc_hours_updown: [0, 1, 2]  # Tier A (confirmed bad, both backtest + live evidence)
-    disable_buy_yes: false       # Re-enabled: allow BTC BUY_YES while we re-audit long-side behavior
+    blocked_utc_hours_updown: [0, 1, 2, 7, 11]
+    disable_buy_yes: true
+    macro_event_guard_enabled: true
+    macro_event_guard_before_min: 30
+    macro_event_guard_after_min: 30
+    # Scheduled high-impact macro events in UTC. Strategy skips entries inside each event window.
+    # Source schedules: BLS CPI, BLS Employment Situation (NFP), Fed FOMC calendars.
+    # Format: [{name, datetime_utc, before_min?, after_min?}] where datetime_utc is ISO8601 UTC.
+    macro_event_calendar_utc:
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-05-08T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-05-12T12:30:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-06-05T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-06-10T12:30:00Z"
+      - name: "FOMC Rate Decision"
+        datetime_utc: "2026-06-17T18:00:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-07-02T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-07-14T12:30:00Z"
+      - name: "FOMC Rate Decision"
+        datetime_utc: "2026-07-29T18:00:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-08-07T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-08-12T12:30:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-09-04T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-09-11T12:30:00Z"
+      - name: "FOMC Rate Decision"
+        datetime_utc: "2026-09-16T18:00:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-10-02T12:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-10-14T12:30:00Z"
+      - name: "FOMC Rate Decision"
+        datetime_utc: "2026-10-28T18:00:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-11-06T13:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-11-10T13:30:00Z"
+      - name: "NFP (Employment Situation)"
+        datetime_utc: "2026-12-04T13:30:00Z"
+      - name: "CPI"
+        datetime_utc: "2026-12-10T13:30:00Z"
+      - name: "FOMC Rate Decision"
+        datetime_utc: "2026-12-09T19:00:00Z"
     # When HTF vote is NEUTRAL and 4H MACD is neither clearly rising>0 nor falling<0, skip updown
     # instead of inferring side from Sabre alone (reduces momentum-only guesses in flat tape).
     neutral_updown_skip_ambiguous_4h: true
@@ -227,6 +276,12 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: true
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: true
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -340,6 +395,12 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     require_btc_catalyst_5m: true
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: true
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
     btc_min_move_dollars_15m: 28.0
     btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
@@ -390,6 +451,12 @@ strategies:
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: false   # HYPE tracks BTC closely; keep neutral alt-bias path
     require_btc_catalyst_5m: false              # HYPE is low-corr; 5m entries not gated on BTC catalyst
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: false
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
     btc_min_move_dollars_15m: 28.0
     btc_min_move_dollars_5m: 15.0
     btc_min_4h_hist_magnitude: 20.0
@@ -423,6 +490,12 @@ strategies:
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: true
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: true
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
     dynamic_beta_min: 0.60       # XRP generally reacts less explosively than HYPE/SOL
     dynamic_beta_max: 2.50       # Tighter normal-regime beta cap than SOL
     dynamic_beta_extreme_max: 3.50

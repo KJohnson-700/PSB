@@ -26,6 +26,12 @@ HYPE_PATTERNS = [
 HYPE_UPDOWN_PATTERN = re.compile(
     r"(?:hyperliquid|hype)\s+up\s+or\s+down", re.IGNORECASE
 )
+HYPE_UPDOWN_SLUG_PREFIXES = (
+    "hype-updown-",
+    "hype-up-or-down-",
+    "hyperliquid-up-or-down-",
+)
+NON_HYPE_ASSET_TERMS = ("bitcoin", "btc", "solana", "ethereum", "ether", "xrp", "ripple")
 
 
 class HYPEMacroStrategy(SolMacroStrategy):
@@ -62,15 +68,27 @@ class HYPEMacroStrategy(SolMacroStrategy):
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect HYPE/Hyperliquid prediction markets."""
-        text = f"{market.question} {market.description}".lower()
+        text = (
+            f"{market.question} {market.description} "
+            f"{market.group_item_title} {market.slug}"
+        ).lower()
         slug = (market.slug or "").lower()
         has_hype = (
-            slug.startswith(("hype-updown-", "hype-up-or-down-", "hyperliquid-up-or-down-"))
+            slug.startswith(HYPE_UPDOWN_SLUG_PREFIXES)
             or any(p.search(text) for p in HYPE_PATTERNS)
         )
-        is_btc_only = "bitcoin" in text and not has_hype
-        return has_hype and not is_btc_only
+        if not has_hype:
+            return False
+        if any(term in text for term in NON_HYPE_ASSET_TERMS):
+            primary = f"{market.question} {market.group_item_title} {market.slug}".lower()
+            if not any(p.search(primary) for p in HYPE_PATTERNS) and not slug.startswith(HYPE_UPDOWN_SLUG_PREFIXES):
+                return False
+        return True
 
     def _is_updown_market(self, market: Market) -> bool:
         """Detect HYPE Up or Down markets (15m / 5m windows)."""
-        return bool(HYPE_UPDOWN_PATTERN.search(market.question))
+        slug = (market.slug or "").lower()
+        if slug.startswith(HYPE_UPDOWN_SLUG_PREFIXES):
+            return True
+        text = f"{market.question} {market.group_item_title}"
+        return bool(HYPE_UPDOWN_PATTERN.search(text))

@@ -26,6 +26,8 @@ XRP_PATTERNS = [
 XRP_UPDOWN_PATTERN = re.compile(
     r"(?:xrp|ripple)\s+up\s+or\s+down", re.IGNORECASE
 )
+XRP_UPDOWN_SLUG_PREFIXES = ("xrp-updown-", "xrp-up-or-down-", "ripple-up-or-down-")
+NON_XRP_ASSET_TERMS = ("bitcoin", "btc", "solana", "ethereum", "ether", "hyperliquid", "hype")
 
 
 class XRPMacroStrategy(SolMacroStrategy):
@@ -62,11 +64,23 @@ class XRPMacroStrategy(SolMacroStrategy):
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect XRP (not BTC-only) prediction markets."""
-        text = f"{market.question} {market.description}".lower()
-        has_xrp = any(p.search(text) for p in XRP_PATTERNS)
-        is_btc_only = "bitcoin" in text and not has_xrp
-        return has_xrp and not is_btc_only
+        text = (
+            f"{market.question} {market.description} "
+            f"{market.group_item_title} {market.slug}"
+        ).lower()
+        has_xrp = any(p.search(text) for p in XRP_PATTERNS) or (market.slug or "").lower().startswith(XRP_UPDOWN_SLUG_PREFIXES)
+        if not has_xrp:
+            return False
+        if any(term in text for term in NON_XRP_ASSET_TERMS):
+            primary = f"{market.question} {market.group_item_title} {market.slug}".lower()
+            if not any(p.search(primary) for p in XRP_PATTERNS):
+                return False
+        return True
 
     def _is_updown_market(self, market: Market) -> bool:
         """Detect XRP Up or Down markets (15m / 5m)."""
-        return bool(XRP_UPDOWN_PATTERN.search(market.question))
+        slug = (market.slug or "").lower()
+        if slug.startswith(XRP_UPDOWN_SLUG_PREFIXES):
+            return True
+        text = f"{market.question} {market.group_item_title}"
+        return bool(XRP_UPDOWN_PATTERN.search(text))

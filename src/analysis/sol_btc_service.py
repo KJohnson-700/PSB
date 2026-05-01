@@ -148,6 +148,9 @@ class BTCSOLCorrelation:
     btc_price: float = 0.0
     btc_chainlink_price: Optional[float] = None
     btc_chainlink_updated_at: Optional[datetime] = None
+    # Data quality / confidence
+    degraded: bool = False
+    degraded_reasons: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -590,11 +593,17 @@ class SOLBTCService:
         """
         result = BTCSOLCorrelation()
 
+        def _mark_degraded(reason: str) -> None:
+            result.degraded = True
+            if reason not in result.degraded_reasons:
+                result.degraded_reasons.append(reason)
+
         # Fetch 1-minute data for both (last 60 = 1 hour for correlation)
         df_sol_1m = self.fetch_klines(self.alt_symbol, "1m", 60)
         df_btc_1m = self.fetch_klines("BTCUSDT", "1m", 60)
 
         if df_sol_1m.empty or df_btc_1m.empty:
+            _mark_degraded("missing_1m_klines")
             logger.warning("Could not fetch 1m klines for correlation")
             return result
 
@@ -616,6 +625,10 @@ class SOLBTCService:
             if np.std(sol_ret) > 0 and np.std(btc_ret) > 0:
                 correlation = float(np.corrcoef(sol_ret, btc_ret)[0, 1])
                 result.correlation_1h = correlation
+            else:
+                _mark_degraded("zero_volatility_returns")
+        else:
+            _mark_degraded("insufficient_aligned_points")
 
         # --- BTC move detection ---
         # 5-minute move: compare current close to close 5 bars ago

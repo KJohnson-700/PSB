@@ -79,9 +79,20 @@ class BitcoinSignal(BaseModel):
 BTC_PATTERNS = [
     re.compile(r'\bbitcoin\b', re.IGNORECASE),
     re.compile(r'\bbtc\b', re.IGNORECASE),
+    re.compile(r'\bxbt\b', re.IGNORECASE),
 ]
 # Detect 15-minute or 5-minute "Up or Down" markets (pattern matches both)
-UPDOWN_PATTERN = re.compile(r'(?:bitcoin|btc)\s+up\s+or\s+down', re.IGNORECASE)
+UPDOWN_PATTERN = re.compile(r'(?:bitcoin|btc|xbt)\s+up\s+or\s+down', re.IGNORECASE)
+BTC_UPDOWN_SLUG_PREFIXES = ("btc-updown-", "btc-up-or-down-", "bitcoin-up-or-down-", "xbt-up-or-down-")
+NON_BTC_ASSET_TERMS = (
+    "solana",
+    "ethereum",
+    "ether",
+    "xrp",
+    "ripple",
+    "hyperliquid",
+    "hype",
+)
 
 
 def _market_window_minutes(market: Market) -> int:
@@ -164,6 +175,10 @@ class BitcoinStrategy:
         self._ai_hold_cache: Dict[str, float] = {}  # market_id → timestamp of HOLD
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)     # 5m default
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.macro_event_guard_enabled = bool(self.config.get("macro_event_guard_enabled", False))
+        self.macro_event_guard_before_min = int(self.config.get("macro_event_guard_before_min", 30))
+        self.macro_event_guard_after_min = int(self.config.get("macro_event_guard_after_min", 30))
+        self.macro_event_calendar = self.config.get("macro_event_calendar_utc", [])
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
@@ -197,12 +212,27 @@ class BitcoinStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _is_bitcoin_market(self, market: Market) -> bool:
-        text = f"{market.question} {market.description}".lower()
-        return any(p.search(text) for p in BTC_PATTERNS)
+        text = (
+            f"{market.question} {market.description} "
+            f"{market.group_item_title} {market.slug}"
+        ).lower()
+        has_btc = any(p.search(text) for p in BTC_PATTERNS)
+        if not has_btc:
+            return False
+        # Prevent cross-asset leakage when market text mentions multiple coins.
+        if any(term in text for term in NON_BTC_ASSET_TERMS):
+            q = (market.question or "").lower()
+            if not any(p.search(q) for p in BTC_PATTERNS):
+                return False
+        return True
 
     def _is_updown_market(self, market: Market) -> bool:
         """Check if this is a Bitcoin Up or Down market (matches both 15m and 5m)."""
-        return bool(UPDOWN_PATTERN.search(market.question))
+        slug = (market.slug or "").lower()
+        if slug.startswith(BTC_UPDOWN_SLUG_PREFIXES):
+            return True
+        text = f"{market.question} {market.group_item_title}"
+        return bool(UPDOWN_PATTERN.search(text))
 
     def _is_5m_market(self, market: Market) -> bool:
         """Check if this is a 5-minute candle Up or Down market (≤6 min window)."""
@@ -246,6 +276,36 @@ class BitcoinStrategy:
     def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
         win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
         return win_min <= mins_left <= win_max
+
+    def _active_macro_event_name(self, now_utc: datetime) -> Optional[str]:
+        """Return matching macro event name when inside a configured event window."""
+        if not self.macro_event_guard_enabled:
+            return None
+        if not isinstance(self.macro_event_calendar, list):
+            return None
+
+        for item in self.macro_event_calendar:
+            if not isinstance(item, dict):
+                continue
+            dt_raw = item.get("datetime_utc")
+            if not dt_raw:
+                continue
+            try:
+                dt = datetime.fromisoformat(str(dt_raw).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+
+            before_min = int(item.get("before_min", self.macro_event_guard_before_min))
+            after_min = int(item.get("after_min", self.macro_event_guard_after_min))
+            start = dt - timedelta(minutes=max(0, before_min))
+            end = dt + timedelta(minutes=max(0, after_min))
+            if start <= now_utc <= end:
+                return str(item.get("name") or "macro_event")
+        return None
 
     def _extract_direction(self, question: str) -> str:
         q = question.lower()
@@ -712,8 +772,8 @@ class BitcoinStrategy:
         ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side)
 
         # ANTI-LTF GATE: Backtest (90 days, 1904 → 1119 trades) shows:
-        #   LTF confirmed   (strength >= 0.35) → 49.5% WR  ← BAD, MACD fires after the move peaks
-        #   LTF unconfirmed (strength < 0.35)  → 54.9% WR  ← GOOD, early momentum phase
+        #   LTF confirmed   (strength >= 0.50) → 49.5% WR  ← BAD, MACD fires after the move peaks
+        #   LTF unconfirmed (strength < 0.50)  → 54.9% WR  ← GOOD, early momentum phase
         # Trading the early-momentum window (before 15m MACD catches up) captures the
         # trend continuation phase. Once confirmed, the window is at exhaustion risk.
         if ltf_confirmed:
@@ -821,6 +881,14 @@ class BitcoinStrategy:
                         f"  BTC dead_zone DISABLED — allowing UTC {_now_utc_hour:02d}:xx "
                         f"(blocked_hours={_blocked_hours})"
                     )
+
+                _event_name = self._active_macro_event_name(datetime.now(timezone.utc))
+                if _event_name:
+                    _bump_skip("macro_event_window")
+                    logger.info(
+                        f"  BTC skip updown '{market.question[:40]}' — within macro event window ({_event_name})"
+                    )
+                    continue
 
                 # ── Entry window guard ──
                 # Only enter within a tight window near the candle open so that

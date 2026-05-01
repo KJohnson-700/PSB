@@ -36,6 +36,8 @@ ETH_PATTERNS = [
 ETH_UPDOWN_PATTERN = re.compile(
     r"(?:ethereum|eth|ether)\s+up\s+or\s+down", re.IGNORECASE
 )
+ETH_UPDOWN_SLUG_PREFIXES = ("eth-updown-", "eth-up-or-down-", "ethereum-up-or-down-", "ether-up-or-down-")
+NON_ETH_ASSET_TERMS = ("bitcoin", "btc", "solana", "xrp", "ripple", "hyperliquid", "hype")
 
 
 class ETHMacroStrategy(SolMacroStrategy):
@@ -83,13 +85,25 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
 
     def _is_solana_market(self, market: Market) -> bool:
-        text = f"{market.question} {market.description}".lower()
-        has_eth = any(p.search(text) for p in ETH_PATTERNS)
-        is_btc_only = "bitcoin" in text and not has_eth
-        return has_eth and not is_btc_only
+        text = (
+            f"{market.question} {market.description} "
+            f"{market.group_item_title} {market.slug}"
+        ).lower()
+        has_eth = any(p.search(text) for p in ETH_PATTERNS) or (market.slug or "").lower().startswith(ETH_UPDOWN_SLUG_PREFIXES)
+        if not has_eth:
+            return False
+        if any(term in text for term in NON_ETH_ASSET_TERMS):
+            primary = f"{market.question} {market.group_item_title} {market.slug}".lower()
+            if not any(p.search(primary) for p in ETH_PATTERNS):
+                return False
+        return True
 
     def _is_updown_market(self, market: Market) -> bool:
-        return bool(ETH_UPDOWN_PATTERN.search(market.question))
+        slug = (market.slug or "").lower()
+        if slug.startswith(ETH_UPDOWN_SLUG_PREFIXES):
+            return True
+        text = f"{market.question} {market.group_item_title}"
+        return bool(ETH_UPDOWN_PATTERN.search(text))
 
     def _btc_follow_1h_ok(self, btc_ta: TechnicalAnalysis, allowed_side: str) -> bool:
         macd_1h = btc_ta.macd_1h

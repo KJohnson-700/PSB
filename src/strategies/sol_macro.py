@@ -109,6 +109,17 @@ SOL_PATTERNS = [
 ]
 # Detect 15-minute or 5-minute "Up or Down" markets (pattern matches both)
 UPDOWN_PATTERN = re.compile(r'(?:solana|sol)\s+up\s+or\s+down', re.IGNORECASE)
+SOL_UPDOWN_SLUG_PREFIXES = ("sol-updown-", "sol-up-or-down-", "solana-up-or-down-")
+NON_SOL_ASSET_TERMS = (
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "ether",
+    "xrp",
+    "ripple",
+    "hyperliquid",
+    "hype",
+)
 
 
 def _market_window_minutes(market: Market) -> int:
@@ -227,6 +238,27 @@ class SolMacroStrategy:
         self.low_corr_suppresses_entries = bool(
             self.config.get("low_corr_suppresses_entries", False)
         )
+        self.skip_on_degraded_correlation = bool(
+            self.config.get("skip_on_degraded_correlation", True)
+        )
+        self.degraded_correlation_size_multiplier = float(
+            self.config.get("degraded_correlation_size_multiplier", 0.50)
+        )
+        self.degraded_bearish_est_up = float(
+            self.config.get("degraded_bearish_est_up", 0.45)
+        )
+        self.require_btc_volatility_gate = bool(
+            self.config.get("require_btc_volatility_gate", False)
+        )
+        self.min_btc_move_pct_5m_for_lag_entries = float(
+            self.config.get("min_btc_move_pct_5m_for_lag_entries", 0.15)
+        )
+        self.min_btc_move_pct_15m_for_lag_entries = float(
+            self.config.get(
+                "min_btc_move_pct_15m_for_lag_entries",
+                self.min_btc_move_pct_5m_for_lag_entries,
+            )
+        )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
 
@@ -255,16 +287,27 @@ class SolMacroStrategy:
         return None
 
     def _is_solana_market(self, market: Market) -> bool:
-        text = f"{market.question} {market.description}".lower()
-        # Make sure it's SOL and NOT just "resolve" or other words containing "sol"
-        has_sol = any(p.search(text) for p in SOL_PATTERNS)
-        # Exclude BTC-only markets
-        is_btc_only = 'bitcoin' in text and 'solana' not in text
-        return has_sol and not is_btc_only
+        text = (
+            f"{market.question} {market.description} "
+            f"{market.group_item_title} {market.slug}"
+        ).lower()
+        has_sol = any(p.search(text) for p in SOL_PATTERNS) or (market.slug or "").lower().startswith(SOL_UPDOWN_SLUG_PREFIXES)
+        if not has_sol:
+            return False
+        # If other assets are present, require explicit SOL in the question/title/slug.
+        if any(term in text for term in NON_SOL_ASSET_TERMS):
+            primary = f"{market.question} {market.group_item_title} {market.slug}".lower()
+            if not any(p.search(primary) for p in SOL_PATTERNS):
+                return False
+        return True
 
     def _is_updown_market(self, market: Market) -> bool:
         """Check if this is a Solana Up or Down market (matches both 15m and 5m)."""
-        return bool(UPDOWN_PATTERN.search(market.question))
+        slug = (market.slug or "").lower()
+        if slug.startswith(SOL_UPDOWN_SLUG_PREFIXES):
+            return True
+        text = f"{market.question} {market.group_item_title}"
+        return bool(UPDOWN_PATTERN.search(text))
 
     def _is_5m_market(self, market: Market) -> bool:
         """Check if this is a 5-minute candle Up or Down market (≤6 min window)."""
@@ -455,6 +498,16 @@ class SolMacroStrategy:
             return est_prob_up + weight
         if primary_htf_bias == "BEARISH":
             return est_prob_up - weight
+        return est_prob_up
+
+    def _apply_degraded_corr_bias(
+        self, est_prob_up: float, primary_htf_bias: str, corr: BTCSOLCorrelation
+    ) -> float:
+        """When correlation is degraded, avoid defaulting bearish setups to near-coinflip."""
+        if not getattr(corr, "degraded", False):
+            return est_prob_up
+        if primary_htf_bias == "BEARISH":
+            return min(est_prob_up, self.degraded_bearish_est_up)
         return est_prob_up
 
     def _strong_enough_5m_signal(self, m5_adj: float) -> bool:
@@ -761,6 +814,11 @@ class SolMacroStrategy:
             f"lag_dir={corr.opportunity_direction} lag_mag={corr.opportunity_magnitude:+.2f}% | "
             f"BTC spike={corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)"
         )
+        if getattr(corr, "degraded", False):
+            logger.warning(
+                f"{_brand}: correlation degraded "
+                f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
+            )
 
         # Check for updown markets
         has_updown = any(self._is_updown_market(m) for m in sol_markets)
@@ -1029,6 +1087,41 @@ class SolMacroStrategy:
                     action = "SELL_YES"
                     direction = "DOWN"
 
+                if getattr(corr, "degraded", False):
+                    if self.skip_on_degraded_correlation:
+                        _bump_skip("degraded_correlation")
+                        logger.info(
+                            f"  {_brand} skip '{market.question[:40]}' — correlation degraded "
+                            f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
+                        )
+                        continue
+                    reason_parts.append("corr_degraded")
+
+                if self.require_btc_volatility_gate:
+                    _abs_btc_move_5m = abs(float(corr.btc_move_5m_pct))
+                    _abs_btc_move_15m = abs(float(corr.btc_move_15m_pct))
+                    _btc_min_move_pct = (
+                        self.min_btc_move_pct_5m_for_lag_entries
+                        if is_5m
+                        else self.min_btc_move_pct_15m_for_lag_entries
+                    )
+                    _btc_move_for_gate = (
+                        _abs_btc_move_5m
+                        if is_5m
+                        else max(_abs_btc_move_5m, _abs_btc_move_15m)
+                    )
+                    if (
+                        _btc_move_for_gate < _btc_min_move_pct
+                        and not corr.btc_spike_detected
+                        and not corr.lag_opportunity
+                    ):
+                        _bump_skip("flat_btc_no_lag")
+                        logger.info(
+                            f"  {_brand} skip '{market.question[:40]}' — BTC move {_btc_move_for_gate:.3f}% "
+                            f"< {_btc_min_move_pct:.3f}% and no spike/lag"
+                        )
+                        continue
+
                 # ── Adaptive direction gate ──
                 # Instead of manual disable_sell_yes / disable_buy_yes, use the asset's
                 # own 1H trend to suppress counter-trend trades. This replaces the static
@@ -1077,6 +1170,9 @@ class SolMacroStrategy:
                     # Macro trend boost (lighter for 5m — shorter window)
                     est_prob_up = self._apply_primary_htf_bias(
                         est_prob_up, primary_htf_bias, 0.03
+                    )
+                    est_prob_up = self._apply_degraded_corr_bias(
+                        est_prob_up, primary_htf_bias, corr
                     )
 
                     # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
@@ -1230,6 +1326,9 @@ class SolMacroStrategy:
                     # Macro trend — PRIMARY driver (increased from 0.05 since it's now the gate)
                     est_prob_up = self._apply_primary_htf_bias(
                         est_prob_up, primary_htf_bias, 0.07
+                    )
+                    est_prob_up = self._apply_degraded_corr_bias(
+                        est_prob_up, primary_htf_bias, corr
                     )
 
                     # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
@@ -1671,6 +1770,8 @@ class SolMacroStrategy:
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
             )
+            if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
+                raw_size *= self.degraded_correlation_size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
