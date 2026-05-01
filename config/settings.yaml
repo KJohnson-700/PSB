@@ -23,7 +23,7 @@ polymarket:
   # Bounded fallback for named HYPE/Hyperliquid event slugs not covered by the
   # normal up/down fetch. This no longer crawls the full active event set.
   fetch_hype_alt_markets: true
-  fetch_weather_markets: true
+  fetch_weather_markets: false
 
 # ============================================
 # TRADING PARAMETERS
@@ -58,7 +58,7 @@ trading:
 
 data_collection:
   weather:
-    enabled: true
+    enabled: false
     interval_sec: 300
     path: "data/market_prices/weather_prices.jsonl"
 
@@ -85,7 +85,7 @@ strategies:
 
   # Weather (NOAA/Open-Meteo vs market; gap >15¢ = enter) — backup/alternative
   weather:
-    enabled: true
+    enabled: false
     gap_min: 0.15
     borderline_high: 0.10
     min_ev: 0.05
@@ -119,7 +119,7 @@ strategies:
   # Bitcoin Up/Down strategy — trades BTC price prediction markets
   bitcoin:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false   # off: no UTC hour blocking for BTC up/down (parity with macro strategies)
     # LLM tiebreaker for marginal edge and no-threshold markets; false = skip those branches.
     use_ai: true
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$37k liquidity
@@ -385,6 +385,7 @@ strategies:
     look_ahead_15m: 4
     look_ahead_5m: 8
     max_concurrent_positions: 3
+    # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
     entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.75

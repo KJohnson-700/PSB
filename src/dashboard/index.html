@@ -316,7 +316,7 @@
             </label>
             <button class="btn-sm btn-green" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="btn-sm btn-red" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
-            <button class="btn-sm ay" onclick="runScan()">Scan Markets</button>
+            <button class="btn-sm ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh dashboard</button>
             <button class="btn-sm ab" onclick="runTests()">Run Unit Tests</button>
             <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
             <button class="btn-sm btn-purple" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
@@ -923,10 +923,10 @@
             <div class="scrollbox" id="test-list" style="margin-top:8px;"></div>
         </div>
         <div class="card" data-aos="fade-up">
-            <h2>Live Market Scan</h2>
+            <h2>Scan diagnostics</h2>
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-                <button id="run-scan-btn" class="btn-sm btn-green" onclick="runScan()">Run Live Scan</button>
-                <span id="scan-summary" style="font-size:0.85rem; color:var(--text-muted);">Loading latest scan...</span>
+                <button id="run-scan-btn" class="btn-sm btn-green" onclick="refreshDashboardData()" title="Same as header refresh — legacy /api/scans endpoints are retired">Refresh data</button>
+                <span id="scan-summary" style="font-size:0.85rem; color:var(--text-muted);">Strategy metrics load on each poll…</span>
             </div>
             <div id="scan-distribution"></div>
             <div class="tabs" id="scan-tabs">
@@ -1240,7 +1240,43 @@ function _winRateFraction(wr) {
 
 /** Headers for mutating routes. Server enforces X-API-Key only when DASHBOARD_API_KEY is set in the environment. */
 function dashAuthHeaders(extra) {
-    return Object.assign({}, extra || {});
+    const headers = Object.assign({}, extra || {});
+    try {
+        const key = localStorage.getItem('psb_dashboard_api_key') || '';
+        if (key) headers['X-API-Key'] = key;
+    } catch (_) {}
+    return headers;
+}
+
+function _saveDashboardApiKey(key) {
+    try {
+        if (key) localStorage.setItem('psb_dashboard_api_key', String(key).trim());
+    } catch (_) {}
+}
+
+async function _readErrorDetail(resp) {
+    try {
+        const payload = await resp.json();
+        if (typeof payload?.detail === 'string') return payload.detail;
+        return JSON.stringify(payload || {});
+    } catch (_) {
+        return `HTTP ${resp.status}`;
+    }
+}
+
+async function _mutatingFetch(url, init = {}, retryOnAuth = true) {
+    const merged = Object.assign({}, init);
+    merged.headers = dashAuthHeaders(init.headers || {});
+    let resp = await fetch(url, merged);
+    if (retryOnAuth && resp && resp.status === 403) {
+        const entered = prompt('Dashboard API key required for this action. Enter key to retry:');
+        if (entered && entered.trim()) {
+            _saveDashboardApiKey(entered.trim());
+            merged.headers = dashAuthHeaders(init.headers || {});
+            resp = await fetch(url, merged);
+        }
+    }
+    return resp;
 }
 
 function _fmtLocalTs(iso) {
@@ -1292,6 +1328,26 @@ function fetchT(url, ms = 6000, init = {}) {
         .catch(() => { clearTimeout(timer); return null; });
 }
 
+// Keep last-good live TA values so brief endpoint hiccups don't blank cards.
+function _safeUpdateLiveAsset(key, payload, updateFn, missLimit = 3) {
+    const state = (window._liveAssetState ||= {});
+    const slot = state[key] || { misses: 0, last: null };
+    if (payload && !payload.error) {
+        slot.misses = 0;
+        slot.last = payload;
+        state[key] = slot;
+        updateFn(payload);
+        return;
+    }
+    slot.misses += 1;
+    state[key] = slot;
+    if (slot.last && slot.misses < missLimit) {
+        updateFn(slot.last);
+        return;
+    }
+    updateFn({ error: true });
+}
+
 async function fetchAll() {
     const currentView = _currentMainView();
     const needLive = currentView === 'live';
@@ -1303,16 +1359,16 @@ async function fetchAll() {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
-            fetchT('/api/scans/latest'),
+            Promise.resolve(null),
             needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
             fetchT('/api/exposure'),
-            needLive ? fetchT('/api/bitcoin/analysis') : Promise.resolve(null),
-            needLive ? fetchT('/api/sol/analysis') : Promise.resolve(null),
-            needLive ? fetchT('/api/eth/analysis') : Promise.resolve(null),
-            needLive ? fetchT('/api/hype/analysis') : Promise.resolve(null),
-            needLive ? fetchT('/api/xrp/analysis') : Promise.resolve(null),
+            needLive ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
+            needLive ? fetchT('/api/sol/analysis', 14000) : Promise.resolve(null),
+            needLive ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
+            needLive ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
+            needLive ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
             needPerformance ? fetchT('/api/live/performance') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
@@ -1333,6 +1389,9 @@ async function fetchAll() {
             const newSid = lastStatusData?.session_id;
             if (newSid && newSid !== window._dashSessionId) {
                 window._dashSessionId = newSid;
+                // Server resumed a different session — drop journal archive pin so the tab
+                // repolls summary/trades instead of freezing on a pre-restart session_id.
+                window._journalViewSessionId = null;
                 const pnlSection = document.getElementById('journal-chart-section');
                 if (pnlSection) pnlSection.style.display = 'none';
                 const pnlCanvas = document.getElementById('pnl-chart');
@@ -1345,10 +1404,12 @@ async function fetchAll() {
 
     try {
         if (metricsR?.ok) updateMetrics(await metricsR.json());
+        else updateMetrics(null);
     } catch (e) { console.error('[dashboard] metrics:', e); }
 
     try {
         if (scanR?.ok) updateScan(await scanR.json());
+        else updateScan(null);
     } catch (e) { console.error('[dashboard] scan:', e); }
 
     try {
@@ -1370,8 +1431,17 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] journal trades:', e); }
 
     try {
-        if (exposureR?.ok) updateExposure(await exposureR.json());
-    } catch (e) { console.error('[dashboard] exposure:', e); }
+        if (exposureR?.ok) {
+            updateExposure(await exposureR.json());
+        } else if (exposureR) {
+            updateExposure({ error: await _readErrorDetail(exposureR) });
+        } else {
+            updateExposure({ error: 'Exposure status unavailable (request failed)' });
+        }
+    } catch (e) {
+        console.error('[dashboard] exposure:', e);
+        updateExposure({ error: 'Exposure status unavailable (' + e + ')' });
+    }
 
     let btcData = null, solData = null, ethData = null, hypeData = null, xrpData = null, updownData = null, reasonData = null;
     try {
@@ -1385,11 +1455,13 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] analysis JSON:', e); }
 
     try {
-        if (btcData) updateBTCAnalysis(btcData);
-        if (solData) updateSOLAnalysis(solData);
-        if (ethData) updateETHAnalysis(ethData);
-        if (hypeData) updateHYPEAnalysis(hypeData);
-        if (xrpData) updateXRPAnalysis(xrpData);
+        if (needLive) {
+            _safeUpdateLiveAsset('btc', btcData, updateBTCAnalysis, 2);
+            _safeUpdateLiveAsset('sol', solData, updateSOLAnalysis, 3);
+            _safeUpdateLiveAsset('eth', ethData, updateETHAnalysis, 3);
+            _safeUpdateLiveAsset('hype', hypeData, updateHYPEAnalysis, 3);
+            _safeUpdateLiveAsset('xrp', xrpData, updateXRPAnalysis, 3);
+        }
     } catch (e) { console.error('[dashboard] crypto panels:', e); }
 
     try {
@@ -1631,8 +1703,8 @@ async function toggleKillSwitch() {
 }
 
 function updateMetrics(d) {
+    updateWeatherDiag(d && typeof d === 'object' ? d : null);
     if (!d || typeof d !== 'object') return;
-    updateWeatherDiag(d);
     const boxes = document.getElementById('strategy-boxes');
     const tbody = document.querySelector('#strategy-table tbody');
     if (!boxes || !tbody) return;
@@ -1649,21 +1721,25 @@ function updateMetrics(d) {
     function sigBox(strat, color, label) {
         const m = d[strat] || {};
         const sigs = m.signals ?? 0;
-        const trades = m.trades || 0;
+        const closedTrades = m.trades || 0;
+        const opens = Number(m.open_positions ?? 0);
         const total = m.total_signals || 0;
         const age = m.last_cycle ? _cycleAge(m.last_cycle) : '';
         let status = '';
-        if (trades > 0) {
-            status = `<div style="font-size:0.65rem;color:var(--green);margin-top:2px;">${trades} active</div>`;
+        if (opens > 0) {
+            status = `<div style="font-size:0.65rem;color:var(--green);margin-top:2px;">${opens} open</div>`;
         } else if (age) {
             status = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;" title="${m.last_cycle}">${age}</div>`;
         } else {
             status = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">waiting…</div>`;
         }
-        const totalLine = total > 0
-            ? `<div style="font-size:0.6rem;color:var(--text-muted);margin-top:1px;">${total} total</div>`
+        const closedHint = closedTrades > 0
+            ? `<div style="font-size:0.6rem;color:var(--text-muted);margin-top:1px;">${closedTrades} closed (journal)</div>`
             : '';
-        return `<div class="metric-box"><div class="value" style="color:${color}">${sigs}</div><div class="label">${label}</div>${status}${totalLine}</div>`;
+        const totalLine = total > 0
+            ? `<div style="font-size:0.6rem;color:var(--text-muted);margin-top:1px;">${total} signals Σ</div>`
+            : '';
+        return `<div class="metric-box"><div class="value" style="color:${color}">${sigs}</div><div class="label">${label}</div>${status}${closedHint}${totalLine}</div>`;
     }
 
     boxes.innerHTML =
@@ -1689,7 +1765,17 @@ function updateMetrics(d) {
 function updateScan(d) {
     const sumEl = document.getElementById('scan-summary');
     if (!sumEl) return;
-    if (!d || !d.scan) { sumEl.textContent = 'No scans yet. Click Run Live Scan.'; return; }
+    if (!d || !d.scan) {
+        currentScanData = null;
+        sumEl.textContent = 'Legacy live scan feed retired — use strategy/weather diagnostics.';
+        const distEl = document.getElementById('scan-distribution');
+        if (distEl) distEl.innerHTML = '';
+        const el = document.getElementById('scan-signals');
+        if (el) {
+            el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">Scan cards are no longer powered by <code>/api/scans/latest</code>. Weather visibility is in the Weather diagnostics panel (from <code>/api/strategy/metrics</code>).</p>`;
+        }
+        return;
+    }
     currentScanData = d.scan;
     const ts = d.scan.timestamp ? new Date(d.scan.timestamp).toLocaleString() : 'unknown';
     sumEl.innerHTML = `${d.scan.signals?.length||0} signals from ${d.scan.markets_scanned||0} markets <span style="color:var(--text-muted);font-size:0.78rem;">(${ts})</span>`;
@@ -1744,26 +1830,60 @@ function switchScanTab(filter) {
 }
 
 function updateWeatherDiag(metricsData) {
-    const wx = metricsData?.weather?.scan_stats;
-    const wm = metricsData?.weather || {};
+    const weatherBlock = metricsData?.weather;
+    const wx = weatherBlock?.scan_stats;
+    const wm = weatherBlock || {};
 
     // ── Live tab weather panel ──────────────────────────────────────
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    if (wx) {
+    const SCAN_IDS = [
+        'wx-scanned', 'wx-city', 'wx-temp', 'wx-precip', 'wx-signals',
+        'wx-skip-vol', 'wx-skip-hrs', 'wx-skip-ev', 'wx-skip-thresh',
+    ];
+
+    if (!metricsData || !weatherBlock) {
+        SCAN_IDS.forEach((id) => set(id, '-'));
+        set('wx-trades', '-');
+        set('wx-temp-trades', '-');
+        set('wx-precip-trades', '-');
+        set('wx-temp-pnl', '-');
+        set('wx-precip-pnl', '-');
+        const wl = document.getElementById('wx-last-signal');
+        if (wl) wl.textContent = 'No weather metrics payload — reload the dashboard.';
+        const deadDiag = document.getElementById('weather-scan-diag');
+        if (deadDiag) {
+            deadDiag.innerHTML =
+                '<p style="color:var(--text-muted);font-size:0.8rem;padding:4px 0;">Weather section missing from strategy metrics.</p>';
+        }
+        return;
+    }
+
+    if (!wx) {
+        SCAN_IDS.forEach((id) => set(id, '-'));
+        const sigEl = document.getElementById('wx-signals');
+        if (sigEl) sigEl.style.color = 'var(--green)';
+        if (!wm.last_cycle) {
+            const pending = document.getElementById('wx-last-signal');
+            if (pending) pending.textContent = 'Scan stats reset — counters fill after the next weather bot cycle.';
+        }
+    } else {
         set('wx-scanned', wx.total_markets_seen ?? '-');
-        set('wx-city',    wx.city_matches ?? '-');
-        set('wx-temp',    wx.temp_markets ?? '-');
-        set('wx-precip',  wx.precip_markets ?? '-');
+        set('wx-city', wx.city_matches ?? '-');
+        set('wx-temp', wx.temp_markets ?? '-');
+        set('wx-precip', wx.precip_markets ?? '-');
         set('wx-signals', wx.signals_generated ?? '-');
-        set('wx-skip-vol',   wx.skipped_volume ?? '-');
-        set('wx-skip-hrs',   wx.skipped_hours ?? '-');
-        set('wx-skip-ev',    wx.skipped_ev ?? '-');
-        set('wx-skip-thresh',wx.skipped_no_threshold ?? '-');
+        set('wx-skip-vol', wx.skipped_below_volume ?? '-');
+        set('wx-skip-hrs', wx.skipped_below_min_hours ?? '-');
+        set('wx-skip-ev', wx.skipped_ev ?? '-');
+        set('wx-skip-thresh', wx.skipped_no_threshold ?? '-');
     }
     const wxTemp = wm.subtypes?.temp || {};
     const wxPrecip = wm.subtypes?.precip || {};
     const wxTrades = document.getElementById('wx-trades');
-    if (wxTrades) wxTrades.textContent = (Number(wxTemp.open || 0) + Number(wxPrecip.open || 0)) || wm.trades || '-';
+    if (wxTrades) {
+        const wxOpenTotal = Number(wxTemp.open || 0) + Number(wxPrecip.open || 0);
+        wxTrades.textContent = Number.isFinite(wxOpenTotal) ? String(wxOpenTotal) : '-';
+    }
     set('wx-temp-trades', `${wxTemp.trades ?? 0} closed / ${wxTemp.open ?? 0} open`);
     set('wx-precip-trades', `${wxPrecip.trades ?? 0} closed / ${wxPrecip.open ?? 0} open`);
     set('wx-temp-pnl', `$${Number(wxTemp.pnl || 0).toFixed(2)}`);
@@ -1807,6 +1927,14 @@ function updateWeatherDiag(metricsData) {
                 ${row('no threshold', wx.skipped_no_threshold, wx.skipped_no_threshold > 0 ? 'var(--red)' : 'var(--text-muted)')}
                 ${row('forecast', wx.skipped_no_forecast, wx.skipped_no_forecast > 0 ? 'var(--red)' : 'var(--text-muted)')}
                 ${row('metar', wx.skipped_metar_mismatch, wx.skipped_metar_mismatch > 0 ? 'var(--red)' : 'var(--text-muted)')}
+                ${row('past res', wx.skipped_past_resolution, wx.skipped_past_resolution > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+                ${row('uncalib ext', wx.skipped_extended_precip_uncalibrated, wx.skipped_extended_precip_uncalibrated > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
+            </div>
+            <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
+                <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Weather AI:</span>
+                ${row('calls', wx.weather_ai_calls ?? 0, 'var(--text)')}
+                ${row('applied', wx.weather_ai_applied ?? 0, (wx.weather_ai_applied ?? 0) > 0 ? '#86efac' : 'var(--text-muted)')}
+                ${row('hold', wx.weather_ai_hold ?? 0, (wx.weather_ai_hold ?? 0) > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
             </div>
         </div>`;
 }
@@ -1834,21 +1962,6 @@ async function runTests() {
             return `<div class="test-item"><div class="test-dot ${dotCls}"></div><span>${name}</span></div>`;
         }).join('');
     } catch (e) { sum.textContent = 'Error: ' + e; sum.style.color = 'var(--red)'; }
-    btn.disabled = false;
-}
-
-async function runScan() {
-    const btn = document.getElementById('run-scan-btn');
-    const sum = document.getElementById('scan-summary');
-    btn.disabled = true;
-    sum.innerHTML = '<span class="spinner"></span> Scanning live markets...';
-    try {
-        const r = await fetch('/api/scans/run', {method:'POST', headers: dashAuthHeaders()});
-        const d = await r.json();
-        sum.textContent = d.status === 'completed' ? 'Scan complete! Refreshing...' : `Scan ${d.status}: ${d.output?.slice(0,100)}`;
-        const scanR = await fetch('/api/scans/latest');
-        if (scanR.ok) updateScan(await scanR.json());
-    } catch(e) { sum.textContent = 'Error: ' + e; sum.style.color = 'var(--red)'; }
     btn.disabled = false;
 }
 
@@ -2991,24 +3104,50 @@ async function pauseExposureLane(lane) {
     const label = EXPOSURE_LABELS[lane] || lane.toUpperCase();
     if (!confirm(`Pause ${label} exposure only? Other strategies keep running.`)) return;
     try {
-        await fetch('/api/exposure/pause/' + encodeURIComponent(lane), { method: 'POST', headers: dashAuthHeaders() });
+        const r = await _mutatingFetch('/api/exposure/pause/' + encodeURIComponent(lane), { method: 'POST' });
+        if (!r?.ok) {
+            const detail = r ? await _readErrorDetail(r) : 'request failed';
+            alert(`Pause ${label} failed: ${detail}`);
+            return;
+        }
         fetchAll();
     } catch (e) { console.error(e); }
 }
 
 async function resumeExposureLane(lane) {
     try {
-        await fetch('/api/exposure/resume/' + encodeURIComponent(lane), { method: 'POST', headers: dashAuthHeaders() });
+        const r = await _mutatingFetch('/api/exposure/resume/' + encodeURIComponent(lane), { method: 'POST' });
+        if (!r?.ok) {
+            const detail = r ? await _readErrorDetail(r) : 'request failed';
+            alert(`Resume ${EXPOSURE_LABELS[lane] || lane.toUpperCase()} failed: ${detail}`);
+            return;
+        }
         fetchAll();
     } catch (e) { console.error(e); }
 }
 
 async function pauseExposure() {
-    if (!confirm('Pause all strategies (BTC, SOL, ETH, XRP, Event)?')) return;
-    try { await fetch('/api/exposure/pause', {method:'POST', headers: dashAuthHeaders()}); fetchAll(); } catch(e) { console.error(e); }
+    if (!confirm('Pause all strategies (BTC, SOL, ETH, HYPE, XRP, Event)?')) return;
+    try {
+        const r = await _mutatingFetch('/api/exposure/pause', {method:'POST'});
+        if (!r?.ok) {
+            const detail = r ? await _readErrorDetail(r) : 'request failed';
+            alert('Pause all failed: ' + detail);
+            return;
+        }
+        fetchAll();
+    } catch(e) { console.error(e); }
 }
 async function resumeExposure() {
-    try { await fetch('/api/exposure/resume', {method:'POST', headers: dashAuthHeaders()}); fetchAll(); } catch(e) { console.error(e); }
+    try {
+        const r = await _mutatingFetch('/api/exposure/resume', {method:'POST'});
+        if (!r?.ok) {
+            const detail = r ? await _readErrorDetail(r) : 'request failed';
+            alert('Resume all failed: ' + detail);
+            return;
+        }
+        fetchAll();
+    } catch(e) { console.error(e); }
 }
 
 async function resetPaperSession() {
@@ -3053,8 +3192,18 @@ async function resetPaperSession() {
 
 // ─── BTC LIVE ANALYSIS ──────────────────────────────────────
 function updateBTCAnalysis(d) {
-    if (d.error) {
-        document.getElementById('btc-price').textContent = '-';
+    if (!d || d.error) {
+        ['btc-price', 'btc-htf-bias', 'btc-rsi', 'btc-momentum', 'btc-vp-poc', 'btc-vp-vah', 'btc-vp-val'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = '-';
+                el.style.color = '';
+            }
+        });
+        ['btc-macd15m', 'btc-macd4h', 'btc-macd1h', 'btc-sabre'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = '-';
+        });
         return;
     }
     const p = d.price || 0;
@@ -3079,12 +3228,37 @@ function updateBTCAnalysis(d) {
 }
 
 // ─── SOL / ETH / XRP LIVE ANALYSIS (alt vs BTC, same API shape) ──
+function clearAltLagHero(prefix) {
+    const dup = `${prefix}-${prefix}-move`;
+    [
+        `${prefix}-price`,
+        `${prefix}-macro-trend`,
+        `${prefix}-rsi`,
+        `${prefix}-macro`,
+        `${prefix}-btc-move`,
+        dup,
+        `${prefix}-atr`,
+    ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = '-';
+            el.style.color = '';
+        }
+    });
+    [`${prefix}-macd15m`, `${prefix}-macd5m`].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '-';
+    });
+    const corrEl = document.getElementById(prefix + '-corr');
+    if (corrEl) corrEl.innerHTML = '-';
+}
+
 function updateAltLagAnalysis(d, prefix) {
-    const priceEl = document.getElementById(prefix + '-price');
-    if (d.error) {
-        if (priceEl) priceEl.textContent = '-';
+    if (!d || d.error) {
+        clearAltLagHero(prefix);
         return;
     }
+    const priceEl = document.getElementById(prefix + '-price');
     const spotKey = prefix + '_price';
     const sp = d.spot_price ?? d[spotKey] ?? d.sol_price ?? 0;
     const dec = prefix === 'xrp' ? 4 : 2;
@@ -3116,9 +3290,26 @@ function updateAltLagAnalysis(d, prefix) {
         ? `<span style="color:var(--green);font-weight:700;">${d.lag_direction} +${(d.lag_magnitude||0).toFixed(2)}%</span>`
         : '<span style="color:var(--text-muted);">None</span>';
     const btcMv = document.getElementById(prefix + '-btc-move');
-    if (btcMv) btcMv.textContent = (d.btc_move_5m||0).toFixed(2) + '%';
+    if (btcMv) btcMv.textContent = (d.btc_move_5m || 0).toFixed(2) + '%';
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
-    if (altMv) altMv.textContent = (d.sol_move_5m||0).toFixed(2) + '%';
+    if (altMv) {
+        const code = String(d.alt_asset_code || prefix || 'sol').toLowerCase();
+        const altPct = Number(d[`${code}_move_5m`] ?? d.sol_move_5m ?? 0);
+        altMv.textContent = (Number.isFinite(altPct) ? altPct : 0).toFixed(2) + '%';
+    }
+    const lagMacroHero = document.getElementById(prefix + '-macro');
+    if (lagMacroHero) {
+        const opp = !!d.lag_opportunity;
+        const dir = d.lag_direction != null && d.lag_direction !== '' ? String(d.lag_direction) : '';
+        const mag = Number(d.lag_magnitude ?? 0);
+        if (opp && dir) {
+            lagMacroHero.textContent = `${dir} ${mag >= 0 ? '+' : ''}${mag.toFixed(2)}%`;
+        } else if (dir) {
+            lagMacroHero.textContent = `${dir} — no opp`;
+        } else {
+            lagMacroHero.textContent = opp ? `Opp ~${mag.toFixed(2)}%` : 'No lag opp';
+        }
+    }
 }
 
 function updateSOLAnalysis(d) { updateAltLagAnalysis(d, 'sol'); }
@@ -3360,7 +3551,7 @@ async function fetchTradeJourney() {
 function syncCryptoGateSummaryBar() {
     const el = document.getElementById('btc-signal-badges');
     if (!el) return;
-    const rows = [['btc', 'BTC'], ['sol', 'SOL'], ['eth', 'ETH'], ['xrp', 'XRP']];
+    const rows = [['btc', 'BTC'], ['sol', 'SOL'], ['eth', 'ETH'], ['hype', 'HYPE'], ['xrp', 'XRP']];
     const parts = [];
     for (const [pfx, sym] of rows) {
         const a = document.getElementById(pfx + '-15m-status-badge');
@@ -3508,6 +3699,16 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         setDetail('btc-5m-status-detail', btc5Detail);
         const btc5wr = getWR(updownData, 'BTC_updown_5m');
         document.getElementById('btc-5m-wr').innerHTML = wrLabel(btc5wr) || 'No trades yet';
+    } else {
+        const hint = btcData && btcData.error && typeof btcData.error === 'string' ? btcData.error : '';
+        setBadge('btc-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('btc-15m-status-detail', [hint ? (`BTC TA: ${hint}`) : 'BTC analysis unavailable.']);
+        setBadge('btc-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('btc-5m-status-detail', []);
+        const bwr15 = document.getElementById('btc-15m-wr');
+        const bwr5 = document.getElementById('btc-5m-wr');
+        if (bwr15) bwr15.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_15m')) || 'No trades yet';
+        if (bwr5) bwr5.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_5m')) || 'No trades yet';
     }
 
     // ── SOL ──────────────────────────────────────────────────────
@@ -3576,8 +3777,8 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
             } else {
                 const macdAligned = (sideS === 'LONG'  && cross5 === 'BULLISH_CROSS') ||
                                     (sideS === 'SHORT' && cross5 === 'BEARISH_CROSS');
-                const histAligned = (sideS === 'LONG'  && hist5s && altData.macd_5m_hist > 0) ||
-                                    (sideS === 'SHORT' && !hist5s && altData.macd_5m_hist < 0);
+                const histAligned = (sideS === 'LONG'  && hist5s && solData.macd_5m_hist > 0) ||
+                                    (sideS === 'SHORT' && !hist5s && solData.macd_5m_hist < 0);
                 if (macdAligned) {
                     s5Badge = '⚡ MACD CROSS'; s5Colour = 'green';
                 } else if (histAligned) {
@@ -3596,6 +3797,15 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         setDetail('sol-5m-status-detail', s5Detail);
         const sol5wr = getWR(updownData, 'SOL_updown_5m');
         document.getElementById('sol-5m-wr').innerHTML = wrLabel(sol5wr) || 'No trades yet';
+    } else {
+        setBadge('sol-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('sol-15m-status-detail', ['SOL analysis unavailable.']);
+        setBadge('sol-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('sol-5m-status-detail', []);
+        const swr15 = document.getElementById('sol-15m-wr');
+        const swr5 = document.getElementById('sol-5m-wr');
+        if (swr15) swr15.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_15m')) || 'No trades yet';
+        if (swr5) swr5.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_5m')) || 'No trades yet';
     }
 
     function applyAltLagGates(altData, prefix, wrKey15, wrKey5) {
@@ -3684,43 +3894,41 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
     applyAltLagGates(hypeData, 'hype', 'HYPE_updown_15m', 'HYPE_updown_5m');
     applyAltLagGates(xrpData, 'xrp', 'XRP_updown_15m', 'XRP_updown_5m');
 
-    if (updownData) {
-        if (!ethData || ethData.error) {
-            setBadge('eth-15m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('eth-15m-status-detail', ['ETH analysis feed unavailable (WR below is from closed trades).']);
-            setBadge('eth-5m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('eth-5m-status-detail', ['ETH analysis feed unavailable.']);
-            const ew15 = getWR(updownData, 'ETH_updown_15m');
-            const ew5 = getWR(updownData, 'ETH_updown_5m');
-            const e15 = document.getElementById('eth-15m-wr');
-            const e5 = document.getElementById('eth-5m-wr');
-            if (e15) e15.innerHTML = wrLabel(ew15) || 'No trades yet';
-            if (e5) e5.innerHTML = wrLabel(ew5) || 'No trades yet';
-        }
-        if (!hypeData || hypeData.error) {
-            setBadge('hype-15m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('hype-15m-status-detail', ['HYPE analysis feed unavailable (WR below is from closed trades).']);
-            setBadge('hype-5m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('hype-5m-status-detail', ['HYPE analysis feed unavailable.']);
-            const hw15 = getWR(updownData, 'HYPE_updown_15m');
-            const hw5 = getWR(updownData, 'HYPE_updown_5m');
-            const h15 = document.getElementById('hype-15m-wr');
-            const h5 = document.getElementById('hype-5m-wr');
-            if (h15) h15.innerHTML = wrLabel(hw15) || 'No trades yet';
-            if (h5) h5.innerHTML = wrLabel(hw5) || 'No trades yet';
-        }
-        if (!xrpData || xrpData.error) {
-            setBadge('xrp-15m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('xrp-15m-status-detail', ['XRP analysis feed unavailable (WR below is from closed trades).']);
-            setBadge('xrp-5m-status-badge', '\u2014 no TA', 'grey');
-            setDetail('xrp-5m-status-detail', ['XRP analysis feed unavailable.']);
-            const xw15 = getWR(updownData, 'XRP_updown_15m');
-            const xw5 = getWR(updownData, 'XRP_updown_5m');
-            const x15 = document.getElementById('xrp-15m-wr');
-            const x5 = document.getElementById('xrp-5m-wr');
-            if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
-            if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
-        }
+    if (!ethData || ethData.error) {
+        setBadge('eth-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('eth-15m-status-detail', ['ETH analysis feed unavailable (WR below is from closed trades if journaled).']);
+        setBadge('eth-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('eth-5m-status-detail', ['ETH analysis feed unavailable.']);
+        const ew15 = getWR(updownData, 'ETH_updown_15m');
+        const ew5 = getWR(updownData, 'ETH_updown_5m');
+        const e15 = document.getElementById('eth-15m-wr');
+        const e5 = document.getElementById('eth-5m-wr');
+        if (e15) e15.innerHTML = wrLabel(ew15) || 'No trades yet';
+        if (e5) e5.innerHTML = wrLabel(ew5) || 'No trades yet';
+    }
+    if (!hypeData || hypeData.error) {
+        setBadge('hype-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('hype-15m-status-detail', ['HYPE analysis feed unavailable (WR below is from closed trades if journaled).']);
+        setBadge('hype-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('hype-5m-status-detail', ['HYPE analysis feed unavailable.']);
+        const hw15 = getWR(updownData, 'HYPE_updown_15m');
+        const hw5 = getWR(updownData, 'HYPE_updown_5m');
+        const h15 = document.getElementById('hype-15m-wr');
+        const h5 = document.getElementById('hype-5m-wr');
+        if (h15) h15.innerHTML = wrLabel(hw15) || 'No trades yet';
+        if (h5) h5.innerHTML = wrLabel(hw5) || 'No trades yet';
+    }
+    if (!xrpData || xrpData.error) {
+        setBadge('xrp-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('xrp-15m-status-detail', ['XRP analysis feed unavailable (WR below is from closed trades if journaled).']);
+        setBadge('xrp-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('xrp-5m-status-detail', ['XRP analysis feed unavailable.']);
+        const xw15 = getWR(updownData, 'XRP_updown_15m');
+        const xw5 = getWR(updownData, 'XRP_updown_5m');
+        const x15 = document.getElementById('xrp-15m-wr');
+        const x5 = document.getElementById('xrp-5m-wr');
+        if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
+        if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
     syncCryptoGateSummaryBar();
 }

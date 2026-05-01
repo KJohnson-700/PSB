@@ -177,10 +177,13 @@ def _maybe_trigger_refresh(max_age: float = 55.0):
 
 
 def set_bot_instance(bot: "PolyBot"):
-    global bot_instance
+    global bot_instance, _journal_cache
     bot_instance = bot
     if not _is_full_bot(bot):
         return
+    # Live bot owns journal in memory — drop any disk-rebuilt TradeJournal cached while
+    # the shim was listening (prevents mismatched summaries vs /api/status after reconnect).
+    _journal_cache = {"path": None, "mtime": None, "journal": None}
     # Pre-warm the cache when bot starts so first dashboard load is instant
     _maybe_trigger_refresh(max_age=0)
     auto_bts = _maybe_start_auto_backtests("startup")
@@ -357,7 +360,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-04-28-command-center-trades-today",
+        "dashboard_ui_rev": "2026-05-02-dash-exposure-display-fix",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -2312,6 +2315,13 @@ async def get_strategy_metrics():
                 "skipped_no_threshold":   wx.get("skipped_no_threshold", 0),
                 "skipped_no_forecast":    wx.get("skipped_no_forecast", 0),
                 "skipped_metar_mismatch": wx.get("skipped_metar_mismatch", 0),
+                "skipped_past_resolution": wx.get("skipped_past_resolution", 0),
+                "skipped_extended_precip_uncalibrated": wx.get(
+                    "skipped_extended_precip_uncalibrated", 0
+                ),
+                "weather_ai_calls": wx.get("weather_ai_calls", 0),
+                "weather_ai_applied": wx.get("weather_ai_applied", 0),
+                "weather_ai_hold": wx.get("weather_ai_hold", 0),
             }
 
     return metrics
@@ -2828,6 +2838,7 @@ def _all_exposure_managers():
         "btc_exposure_manager",
         "sol_exposure_manager",
         "eth_exposure_manager",
+        "hype_exposure_manager",
         "xrp_exposure_manager",
         "event_exposure_manager",
     ):
@@ -2841,6 +2852,7 @@ EXPOSURE_LANE_TO_ATTR = {
     "btc": "btc_exposure_manager",
     "sol": "sol_exposure_manager",
     "eth": "eth_exposure_manager",
+    "hype": "hype_exposure_manager",
     "xrp": "xrp_exposure_manager",
     "event": "event_exposure_manager",
 }
@@ -2869,6 +2881,7 @@ async def get_exposure_status():
         ("btc", "btc_exposure_manager"),
         ("sol", "sol_exposure_manager"),
         ("eth", "eth_exposure_manager"),
+        ("hype", "hype_exposure_manager"),
         ("xrp", "xrp_exposure_manager"),
         ("event", "event_exposure_manager"),
     )
@@ -2916,7 +2929,7 @@ async def pause_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, xrp, or event.",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or event.",
         )
     mgr.manual_pause()
     return {"status": "paused", "lane": lane.lower().strip()}
@@ -2930,7 +2943,7 @@ async def resume_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, xrp, or event.",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or event.",
         )
     mgr.manual_resume()
     return {"status": "resumed", "lane": lane.lower().strip()}
@@ -3153,8 +3166,11 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
         "correlation_1h": corr.correlation_1h,
         "btc_move_5m": corr.btc_move_5m_pct,
         "btc_move_15m": corr.btc_move_15m_pct,
+        # Alt-leg % moves — sol_move_* kept for backwards compatibility (same numeric series for any alt)
         "sol_move_5m": corr.sol_move_5m_pct,
         "sol_move_15m": corr.sol_move_15m_pct,
+        f"{alt_code}_move_5m": corr.sol_move_5m_pct,
+        f"{alt_code}_move_15m": corr.sol_move_15m_pct,
         "btc_spike": corr.btc_spike_detected,
         "btc_spike_dir": corr.btc_spike_direction,
         "lag_opportunity": corr.lag_opportunity,
