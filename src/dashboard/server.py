@@ -178,6 +178,12 @@ def _maybe_trigger_refresh(max_age: float = 55.0):
 
 def set_bot_instance(bot: "PolyBot"):
     global bot_instance, _journal_cache
+    # Don't let a startup shim overwrite an already-registered full bot.
+    # Race: the dashboard thread may call set_bot_instance(_dash_holder) after
+    # main() has already registered the real PolyBot — without this guard the
+    # shim silently wins and every _full_bot_instance() call returns None.
+    if bot is not None and not _is_full_bot(bot) and _is_full_bot(bot_instance):
+        return
     bot_instance = bot
     if not _is_full_bot(bot):
         return
@@ -360,7 +366,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-02-dash-exposure-display-fix",
+        "dashboard_ui_rev": "2026-05-02-dash-performance-tab-fix",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }

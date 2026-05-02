@@ -297,6 +297,7 @@ class RiskManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config  # Pass the full config
         risk_config = self.config.get("risk", {})
+        trading_config = self.config.get("trading", {})
         self.term_risk_config = self.config.get("term_risk", {})
         self.max_concurrent_positions = risk_config.get("max_concurrent_positions", 10)
         self.max_trades_per_day = risk_config.get("max_trades_per_day", 50)
@@ -375,6 +376,7 @@ class RiskManager:
         current_edge: float,
         bankroll: float,
         strategy: str = None,
+        requested_size: float = 0.0,
     ) -> tuple:
         """
         Final check before placing order.
@@ -395,7 +397,6 @@ class RiskManager:
         term, _ = self._get_market_term(end_date)
         min_edge_map = self.term_risk_config.get("min_edge", {})
         caps_map = self.term_risk_config.get("caps", {})
-        sizing_map = self.term_risk_config.get("sizing", {})
 
         # 1. Check if edge is worth the lockup time
         if current_edge < min_edge_map.get(term, 0.05):
@@ -435,11 +436,12 @@ class RiskManager:
             logger.warning(f"RISK ALERT: {pool_label} budget full. Saving liquidity.")
             return False, 0.0, f"{pool_label} budget full"
 
-        # 3. Size the position
-        standard_size = bankroll * sizing_map.get(term, 0.05)
-        final_size = min(standard_size, available_budget)
+        # 3. Return Kelly-computed size, capped only by remaining budget.
+        final_size = min(requested_size, available_budget) if requested_size > 0 else available_budget
+        if final_size <= 0:
+            return False, 0.0, "Entry size resolved to zero"
 
-        return True, final_size, "OK"
+        return True, round(final_size, 2), "OK"
 
     def check_strategy_risk(
         self, strategy_name: str, trade_size: float, bankroll: float

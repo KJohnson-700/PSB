@@ -14,7 +14,7 @@
 - **Strong minor mispricings:** Allow entries when edge is sufficient; no target window or floor should block low prices when edge is there.
 - **Position size:** Governed only by Kelly Criterion and existing risk limits (no extra price-based sizing rules).
 
----
+**Short-window crypto up/down** (`bitcoin`, `sol_macro`, `eth_macro`, `xrp_macro`, `hype_macro`) deliberately use tighter controls (`entry_price_min`/`max`, mid-window “far from even” skips). See scope note in `docs/STRATEGY_ENTRY_SPEC.md`.
 
 ## 2. Live implementation — where to enforce
 

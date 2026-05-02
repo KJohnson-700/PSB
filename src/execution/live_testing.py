@@ -19,7 +19,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -117,6 +117,10 @@ class PositionExitManager:
         self.take_profit_pct = exit_cfg.get("take_profit_pct", 0.15)
         self.stop_loss_pct = exit_cfg.get("stop_loss_pct", 0.30)
         self.max_hold_hours = exit_cfg.get("max_hold_hours", 72)
+        # Updown-specific exits: price-based stop near expiry
+        self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03))
+        self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0))
+        self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0))
 
     def check_exits(
         self,
@@ -187,14 +191,48 @@ class PositionExitManager:
                 getattr(pos, "strategy", "") in self._CRYPTO_UPDOWN_STRATEGIES
                 and "up or down" in getattr(pos, "market_question", "").lower()
             )
-            if pnl_pct >= self.take_profit_pct:
-                reason = "take_profit"
-            elif pnl_pct <= -self.stop_loss_pct and not is_updown:
-                # Skip stop-loss for crypto updown — markets self-resolve in
-                # minutes; stop losses only convert possible wins to sure losses.
-                reason = "stop_loss"
-            elif hours_held >= self.max_hold_hours:
-                reason = "time_limit"
+
+            if is_updown:
+                # TP: exit early when price spikes strongly in our favour rather than
+                # waiting for binary resolution (captures most of the gain).
+                if pnl_pct >= self.take_profit_pct:
+                    reason = "take_profit"
+                else:
+                    # Time-based stop: when near expiry and price has moved against us,
+                    # exit at the current partial-loss price rather than holding to a
+                    # binary zero resolution.
+                    mins_remaining = None
+                    if pos.end_date is not None:
+                        _end = pos.end_date
+                        if _end.tzinfo is None:
+                            _end = _end.replace(tzinfo=timezone.utc)
+                        mins_remaining = (
+                            _end - datetime.now(timezone.utc)
+                        ).total_seconds() / 60.0
+
+                    if mins_remaining is not None and mins_remaining < 0:
+                        # Market already past expiry but still open — exit immediately.
+                        reason = "updown_expired"
+                    elif mins_remaining is not None and mins_remaining <= self.updown_exit_window_mins:
+                        # Within the stop window: exit if price has moved against entry
+                        # by more than updown_stop_cents.
+                        if is_short:
+                            adverse = current_yes_price >= pos.entry_price + self.updown_stop_cents
+                        else:
+                            adverse = current_yes_price <= pos.entry_price - self.updown_stop_cents
+                        if adverse:
+                            reason = "updown_time_stop"
+                    elif mins_remaining is None and hours_held >= self.updown_max_hold_mins / 60.0:
+                        # Safety valve for journal-reloaded positions that have no
+                        # end_date: if still open after updown_max_hold_mins, exit.
+                        reason = "updown_time_limit"
+            else:
+                if pnl_pct >= self.take_profit_pct:
+                    reason = "take_profit"
+                elif pnl_pct <= -self.stop_loss_pct:
+                    reason = "stop_loss"
+                elif hours_held >= self.max_hold_hours:
+                    reason = "time_limit"
 
             if reason:
                 # Get token IDs from market data

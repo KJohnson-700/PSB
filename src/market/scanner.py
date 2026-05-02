@@ -325,6 +325,9 @@ class MarketScanner:
             _wx.get("min_liquidity", _wx.get("min_volume", self.min_liquidity))
         )
         self.weather_scan_limit = max(20, int(_wx.get("scan_limit", 120)))
+        self._weather_warmup_wait_sec = max(
+            0.0, float(_pm.get("weather_warmup_wait_sec", 3.0))
+        )
         self._cycle_interval_sec = float(_tr.get("cycle_interval_sec", 120))
         configured_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
         # Never let a sync timeout outrun the trading cadence. Leave a small gap so
@@ -457,7 +460,37 @@ class MarketScanner:
                 self._weather_refresh_future = self._background_fetch_pool.submit(
                     self._run_weather_refresh
                 )
+                future = self._weather_refresh_future
             cached = list(self._weather_cache)
+
+        # First cycle after process start often sees empty cache because refresh
+        # runs asynchronously. Wait briefly once so weather does not report 0
+        # purely due to warm-up race.
+        if not cached and future is not None:
+            wait_sec = min(
+                self._weather_warmup_wait_sec,
+                max(0.0, self._scanner_sync_timeout * 0.5),
+            )
+            if wait_sec > 0:
+                try:
+                    markets = future.result(timeout=wait_sec) or []
+                    with self._slow_fetch_lock:
+                        self._weather_cache = list(markets)
+                        self._weather_cache_updated_at = datetime.now(timezone.utc)
+                        self._weather_refresh_future = None
+                        cached = list(self._weather_cache)
+                    logger.info(
+                        "Scanner: weather warm-up fetched %d dedicated markets (wait=%.1fs)",
+                        len(cached),
+                        wait_sec,
+                    )
+                except FuturesTimeoutError:
+                    logger.info(
+                        "Scanner: weather warm-up timed out after %.1fs; using background refresh",
+                        wait_sec,
+                    )
+                except Exception as e:
+                    logger.warning("Scanner: weather warm-up error: %s", e)
 
         return cached
 
@@ -1202,12 +1235,14 @@ class MarketScanner:
                 opportunities["near_expiration"].append(market)
 
         if updown:
+            updown = await self.update_market_prices(updown)
             opportunities["high_liquidity"].extend(updown)
             opportunities["updown"] = updown
         else:
             opportunities["updown"] = []
 
         if updown_5m:
+            updown_5m = await self.update_market_prices(updown_5m)
             opportunities["high_liquidity"].extend(updown_5m)
             opportunities["updown_5m"] = updown_5m
         else:
@@ -1222,6 +1257,7 @@ class MarketScanner:
             hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
 
         if hype_alt:
+            hype_alt = await self.update_market_prices(hype_alt)
             opportunities["high_liquidity"].extend(hype_alt)
             opportunities["updown_hype_alt"] = hype_alt
         else:

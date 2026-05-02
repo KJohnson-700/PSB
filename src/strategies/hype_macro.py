@@ -5,14 +5,14 @@ Uses SolMacroStrategy architecture and gates, but swaps in Hyperliquid HYPE
 candle data via HyperliquidHypeService.
 """
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from src.analysis.ai_agent import AIAgent
 from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
 from src.analysis.math_utils import PositionSizer
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
-from src.strategies.sol_macro import SolMacroStrategy
+from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy
 from src.strategies.strategy_config import resolve_enabled_flag
 
 import logging
@@ -92,3 +92,37 @@ class HYPEMacroStrategy(SolMacroStrategy):
             return True
         text = f"{market.question} {market.group_item_title}"
         return bool(HYPE_UPDOWN_PATTERN.search(text))
+
+    async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
+        """Run base scan, then enforce a hard floor for HYPE edge.
+
+        Fix 2: never allow low/zero-edge HYPE entries through execution path,
+        regardless of whether AI branch was used.
+        """
+        signals = await super().scan_and_analyze(markets, bankroll)
+        hard_min_edge = max(0.05, float(self.config.get("hard_min_edge", 0.05)))
+        filtered: List[SolMacroSignal] = []
+        rejected = 0
+
+        for signal in signals:
+            if float(signal.edge or 0.0) < hard_min_edge:
+                rejected += 1
+                logger.info(
+                    "HYPE hard-edge skip '%s...' edge=%.4f < %.4f (ai_used=%s)",
+                    signal.market_question[:45],
+                    float(signal.edge or 0.0),
+                    hard_min_edge,
+                    signal.ai_used,
+                )
+                continue
+            filtered.append(signal)
+
+        if rejected:
+            stats = dict(getattr(self, "last_scan_stats", {}) or {})
+            top = dict(stats.get("top_skip_reasons", {}) or {})
+            top["hard_min_edge"] = int(top.get("hard_min_edge", 0)) + rejected
+            stats["top_skip_reasons"] = top
+            stats["signals"] = len(filtered)
+            self.last_scan_stats = stats
+
+        return filtered

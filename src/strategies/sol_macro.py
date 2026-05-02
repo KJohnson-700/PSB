@@ -210,6 +210,8 @@ class SolMacroStrategy:
         self.min_liquidity = self.config.get("min_liquidity", 1000)
         self.min_edge = self.config.get("min_edge", 0.09)
         self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
+        # Non-bypassable absolute edge floor for this strategy lane.
+        self.hard_min_edge = float(self.config.get("hard_min_edge", 0.0))
         # 15m updown when anti-LTF gate passed (ltf_strength==0): extra edge bar (was hardcoded 0.10)
         self.min_edge_15m_when_ltf_unconfirmed = float(
             self.config.get("min_edge_15m_when_ltf_unconfirmed", 0.10)
@@ -220,6 +222,16 @@ class SolMacroStrategy:
         self.entry_price_min = self.config.get("entry_price_min", 0.46)
         self.entry_price_max = self.config.get("entry_price_max", 0.54)
         self.min_positive_m5_adj_5m = float(self.config.get("min_positive_m5_adj_5m", 0.0))
+        self.min_positive_m5_adj_5m_sell = float(
+            self.config.get("min_positive_m5_adj_5m_sell", self.min_positive_m5_adj_5m)
+        )
+        self.sell_5m_min_corr = float(self.config.get("sell_5m_min_corr", -1.0))
+        self.iql_15m_enabled = bool(self.config.get("iql_15m_enabled", False))
+        self.iql_15m_hist_floor = float(self.config.get("iql_15m_hist_floor", 0.03))
+        # LTF policy switches.
+        # Default behavior keeps the historical anti-LTF gate (skip confirmed entries).
+        self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
+        self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
         self.dynamic_beta_min = float(self.config.get("dynamic_beta_min", 0.8))
         self.dynamic_beta_max = float(self.config.get("dynamic_beta_max", 3.0))
         self.dynamic_beta_extreme_max = float(
@@ -246,6 +258,16 @@ class SolMacroStrategy:
         )
         self.degraded_bearish_est_up = float(
             self.config.get("degraded_bearish_est_up", 0.45)
+        )
+        # Optional centered-price hardening for markets parked at ~0.50.
+        # When enabled, entries near exact 50/50 must clear a stricter edge bar
+        # and can optionally require a BTC catalyst (lag/spike).
+        self.center_price_band = float(self.config.get("center_price_band", 0.0))
+        self.min_edge_when_centered = float(
+            self.config.get("min_edge_when_centered", self.min_edge)
+        )
+        self.center_price_requires_catalyst = bool(
+            self.config.get("center_price_requires_catalyst", False)
         )
         self.require_btc_volatility_gate = bool(
             self.config.get("require_btc_volatility_gate", False)
@@ -510,14 +532,34 @@ class SolMacroStrategy:
             return min(est_prob_up, self.degraded_bearish_est_up)
         return est_prob_up
 
-    def _strong_enough_5m_signal(self, m5_adj: float) -> bool:
+    def _strong_enough_5m_signal(self, m5_adj: float, action: str) -> bool:
         """Optional guard for weak 5m-only entries.
 
         Some assets perform poorly when the 5m path is allowed to enter on the
         weakest MACD state (`macd_line > signal_line`, worth only +0.02). When
         configured, require at least the configured positive 5m adjustment.
         """
-        return m5_adj >= self.min_positive_m5_adj_5m
+        threshold = (
+            self.min_positive_m5_adj_5m_sell
+            if action == "SELL_YES"
+            else self.min_positive_m5_adj_5m
+        )
+        return m5_adj >= threshold
+
+    def _passes_15m_iql(self, sol, allowed_side: str) -> bool:
+        """Indicator Quality Layer (IQL) for 15m entries."""
+        if not self.iql_15m_enabled:
+            return True
+        hist = float(sol.macd_15m.histogram)
+        if allowed_side == "LONG":
+            return (
+                sol.macd_15m.crossover == "BULLISH_CROSS"
+                or (hist >= self.iql_15m_hist_floor and sol.macd_15m.histogram_rising)
+            )
+        return (
+            sol.macd_15m.crossover == "BEARISH_CROSS"
+            or (hist <= -self.iql_15m_hist_floor and not sol.macd_15m.histogram_rising)
+        )
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
         """Optional hard gate for assets whose BTC-lag thesis breaks when decoupled."""
@@ -905,20 +947,33 @@ class SolMacroStrategy:
         # ═══════════════════════════════════════════════
         ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
 
-        # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
-        #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
-        #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
-        # NOTE: Previous live session (session_20260320_to_25) showed unconfirmed = 47% WR.
-        # That was WITHOUT the 4H histogram_rising gate. With the gate active, unconfirmed
-        # selects for early-momentum windows within established 1H trends = 65% WR.
-        if ltf_confirmed:
+        # LTF gate policy.
+        # Default keeps anti-LTF behavior (skip confirmed entries), but strategy-specific
+        # configs can opt into requiring confirmation when an asset performs poorly in
+        # weak/unconfirmed windows.
+        if self.require_ltf_confirmation:
+            if not ltf_confirmed:
+                logger.info(
+                    f"{_brand}: LTF confirmation required, but unconfirmed "
+                    f"(strength={ltf_strength:.2f}) — skipping"
+                )
+                return []
             logger.info(
-                f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
-                f"skipping. strength={ltf_strength:.2f}"
+                f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
             )
-            return []
-
-        logger.info(f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}")
+        else:
+            # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
+            #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
+            #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
+            if self.anti_ltf_gate_enabled and ltf_confirmed:
+                logger.info(
+                    f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
+                    f"skipping. strength={ltf_strength:.2f}"
+                )
+                return []
+            logger.info(
+                f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
+            )
 
         # ═══════════════════════════════════════════════
         # LAYER 3: 5m entry timing + lag detection
@@ -1241,11 +1296,24 @@ class SolMacroStrategy:
                             m5_reasons.append(f"5m against ({macd_5m.crossover})")
 
                     _sample("m5_adj", m5_adj)
-                    if not self._strong_enough_5m_signal(m5_adj):
+                    if action == "SELL_YES" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
+                        _bump_skip("sell_5m_low_corr")
+                        logger.info(
+                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                            f"SELL_YES corr {corr.correlation_1h:.2f} < floor {self.sell_5m_min_corr:.2f}"
+                        )
+                        continue
+
+                    if not self._strong_enough_5m_signal(m5_adj, action):
+                        _min_req = (
+                            self.min_positive_m5_adj_5m_sell
+                            if action == "SELL_YES"
+                            else self.min_positive_m5_adj_5m
+                        )
                         _bump_skip("weak_5m_signal")
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={self.min_positive_m5_adj_5m:.2f})"
+                            f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={_min_req:.2f})"
                         )
                         continue
 
@@ -1322,6 +1390,15 @@ class SolMacroStrategy:
                     # PRIMARY signal: macro trend + LTF confirmation (live data evidence)
                     # SECONDARY signal: lag / spike (small probability booster only)
                     est_prob_up = 0.50
+
+                    if not self._passes_15m_iql(sol, allowed_side):
+                        _bump_skip("iql_15m_reject")
+                        logger.info(
+                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                            f"IQL reject (hist={sol.macd_15m.histogram:+.3f} "
+                            f"cross={sol.macd_15m.crossover}, floor={self.iql_15m_hist_floor:.3f})"
+                        )
+                        continue
 
                     # Macro trend — PRIMARY driver (increased from 0.05 since it's now the gate)
                     est_prob_up = self._apply_primary_htf_bias(
@@ -1625,6 +1702,7 @@ class SolMacroStrategy:
 
             # ── Final filters (both paths) ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
+            effective_min_edge = max(effective_min_edge, self.hard_min_edge)
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and not is_5m:
                 effective_min_edge = max(
@@ -1725,6 +1803,29 @@ class SolMacroStrategy:
                     f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} < min={effective_min_edge} ({_mkt_type})"
                 )
                 continue
+
+            if is_updown and self.center_price_band > 0:
+                _is_centered = abs(yes_price - 0.50) <= self.center_price_band
+                if _is_centered:
+                    if (
+                        self.center_price_requires_catalyst
+                        and not corr.lag_opportunity
+                        and not corr.btc_spike_detected
+                    ):
+                        _bump_skip("centered_price_no_catalyst")
+                        logger.info(
+                            f"  {_brand} skip '{market.question[:40]}...' centered YES={yes_price:.3f} "
+                            f"without catalyst (spike={corr.btc_spike_detected}, lag={corr.lag_opportunity})"
+                        )
+                        continue
+                    _center_min_edge = max(effective_min_edge, self.min_edge_when_centered)
+                    if edge < _center_min_edge:
+                        _bump_skip("centered_price_edge_below_min")
+                        logger.info(
+                            f"  {_brand} skip '{market.question[:40]}...' centered YES={yes_price:.3f} "
+                            f"edge={edge:.4f} < centered_min={_center_min_edge:.4f}"
+                        )
+                        continue
 
             # ── Entry price filter for updown markets ──
             # Only trade when yes_price is within [entry_price_min, entry_price_max].

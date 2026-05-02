@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.analysis.ai_agent import AIAgent
-from src.analysis.btc_price_service import BTCPriceService, CandleMomentum, MACDResult, TechnicalAnalysis
+from src.analysis.btc_price_service import CandleMomentum, MACDResult, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager, ExposureTier
@@ -70,7 +70,6 @@ class ETHMacroStrategy(SolMacroStrategy):
             logger=logger,
         )
         self._apply_strategy_config(rebuild_service=True)
-        self.btc_service = BTCPriceService()
         self._signal_strategy_name = "eth_macro"
 
         self.btc_follow_1h_hist_min = float(self.config.get("btc_follow_1h_hist_min", 8.0))
@@ -269,6 +268,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
         )
 
+        corr = eth_ta.correlation
+
         signals: List[SolMacroSignal] = []
         ai_calls = 0
         skip_reasons: Dict[str, int] = {}
@@ -303,9 +304,25 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             is_5m = self._is_5m_market(market)
             yes_price = market.yes_price
-            if yes_price < 0.20 or yes_price > 0.80:
-                _bump_skip("price_too_far")
-                continue
+
+            # UTC dead-zone — same config keys as sol_macro / bitcoin updown.
+            _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
+            _blocked_hours = self.config.get("blocked_utc_hours_updown", [0, 18, 22])
+            _now_utc_hour = datetime.now(timezone.utc).hour
+            dead_zone_would_block = _now_utc_hour in _blocked_hours
+            if _dead_zone_enabled:
+                if dead_zone_would_block:
+                    _bump_skip("blocked_utc_hour")
+                    logger.info(
+                        f"  ETH skip updown at UTC hour {_now_utc_hour}:xx — "
+                        f"blocked dead zone (config: {_blocked_hours})"
+                    )
+                    continue
+            elif dead_zone_would_block:
+                logger.info(
+                    f"  ETH dead_zone DISABLED — allowing UTC hour {_now_utc_hour:02d} "
+                    f"(would-be blocked_hours={_blocked_hours})"
+                )
 
             if not market.end_date:
                 _bump_skip("no_end_date")
@@ -318,21 +335,50 @@ class ETHMacroStrategy(SolMacroStrategy):
             _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
             if is_5m:
                 _win_min, _win_max = self._resolve_entry_window_bounds(
-                    is_5m=True, default_min=2.5, default_max=4.0
+                    is_5m=True, default_min=2.75, default_max=3.75
                 )
             else:
                 _win_min, _win_max = self._resolve_entry_window_bounds(
-                    is_5m=False, default_min=12.0, default_max=14.5
+                    is_5m=False, default_min=13.0, default_max=14.33
                 )
             _sample("mins_left", _mins_left)
             if _mins_left < _win_min or _mins_left > _win_max:
                 _bump_skip("outside_window")
                 continue
-            _sample("entry_price", yes_price)
             _ai_window_open = self._within_ai_decision_window(
                 mins_left=_mins_left,
                 is_5m=is_5m,
             )
+
+            _btc_corr = corr.correlation_1h
+            _low_corr_btc_bypass = float(self.config.get("btc_min_move_low_corr_threshold", 0.30))
+            _btc_price = corr.btc_price or 0.0
+            _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
+            _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
+            if is_5m:
+                _btc_min_move = float(self.config.get("btc_min_move_dollars_5m", 37.0))
+                _btc_move = _btc_move_5m_dollars
+            else:
+                _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
+                _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
+            if _btc_price > 0 and _btc_move < _btc_min_move:
+                if _btc_corr < _low_corr_btc_bypass:
+                    logger.debug(
+                        f"  ETH btc_min_move bypassed (corr={_btc_corr:.2f} < {_low_corr_btc_bypass}) "
+                        f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
+                    )
+                else:
+                    _bump_skip("btc_min_move_dollars")
+                    logger.debug(
+                        f"  ETH skip '{market.question[:40]}' — "
+                        f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
+                    )
+                    continue
+
+            _sample("entry_price", yes_price)
+            if yes_price < 0.20 or yes_price > 0.80:
+                _bump_skip("price_too_far")
+                continue
 
             action = "BUY_YES" if allowed_side == "LONG" else "SELL_YES"
             direction = "UP" if allowed_side == "LONG" else "DOWN"

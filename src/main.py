@@ -1173,11 +1173,12 @@ class PolyBot:
             return
 
         # Term-based risk check (crypto-isolated budget)
-        can_trade, term_size, reason = self.risk_manager.evaluate_entry(
+        can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
             bankroll=self.bankroll,
             strategy="bitcoin",
+            requested_size=signal.size,
         )
         if not can_trade:
             logging.warning(f"Bitcoin trade term risk check failed: {reason}")
@@ -1189,8 +1190,6 @@ class PolyBot:
                 self.bankroll,
             )
             return
-
-        final_size = min(signal.size, term_size)
 
         token_id = signal.token_id_yes
         side = "BUY" if signal.action == "BUY_YES" else "SELL"
@@ -1316,11 +1315,12 @@ class PolyBot:
             return
 
         # Term-based risk check (crypto-isolated budget)
-        can_trade, term_size, reason = self.risk_manager.evaluate_entry(
+        can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
             bankroll=self.bankroll,
             strategy=strat,
+            requested_size=signal.size,
         )
         if not can_trade:
             logging.warning(f"{strat} trade term risk check failed: {reason}")
@@ -1332,8 +1332,6 @@ class PolyBot:
                 self.bankroll,
             )
             return
-
-        final_size = min(signal.size, term_size)
 
         # Side / token_id MUST be set before any read of `side` (e.g. order_size).
         # A later `side =` makes `side` a local for the whole function; placing
@@ -1472,11 +1470,12 @@ class PolyBot:
             )
             return
 
-        can_trade, term_size, reason = self.risk_manager.evaluate_entry(
+        can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.gap,
             bankroll=self.bankroll,
             strategy=strat,
+            requested_size=signal.size,
         )
         if not can_trade:
             logging.warning(f"{strat} term risk check failed: {reason}")
@@ -1488,8 +1487,6 @@ class PolyBot:
                 self.bankroll,
             )
             return
-
-        final_size = min(signal.size, term_size)
 
         if signal.action == "BUY_YES":
             token_id = signal.token_id_yes

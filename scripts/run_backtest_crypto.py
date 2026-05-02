@@ -387,6 +387,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config()
+    strat_key_for_corr = {"SOL": "sol_macro", "XRP": "xrp_macro", "HYPE": "hype_macro"}
 
     # -- 0. Warn loudly when no test split is requested --------------------
     if args.test_start is None:
@@ -403,12 +404,17 @@ def main() -> int:
 
     # -- 1. Download / load OHLCV ------------------------------------------
     print(f"\nLoading {args.symbol} OHLCV data ({args.start} -> {args.end}) ...")
-    loader    = OHLCVLoader(no_cache=args.no_cache)
-    data      = loader.load_all(args.symbol, args.start, args.end)
-    btc_data  = None
+    loader = OHLCVLoader(no_cache=args.no_cache)
+    data = loader.load_all(args.symbol, args.start, args.end)
+    btc_data = None
     oracle_history = None
     if args.symbol == "ETH":
         btc_data = loader.load_all("BTC", args.start, args.end)
+    elif args.symbol in strat_key_for_corr:
+        sk = strat_key_for_corr[args.symbol]
+        sc_block = config.get("strategies", {}).get(sk, {})
+        if float(sc_block.get("sell_5m_min_corr", -1.0)) >= 0:
+            btc_data = loader.load_all("BTC", args.start, args.end)
     if args.symbol in {"ETH", "SOL", "XRP", "HYPE"}:
         oracle_history = OracleHistoryLoader().load_history(args.symbol, args.start, args.end)
     data_size = {iv: len(df) for iv, df in data.items()}

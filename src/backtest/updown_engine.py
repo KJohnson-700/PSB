@@ -31,6 +31,8 @@ BTC: mirrors bitcoin.py exactly (HTF 3-vote with early_bull/early_bear/
 SOL: mirrors sol_macro.py (1H EMA trend + 15m EMA alignment + 15m RSI for
      HTF, SOL-specific LTF weights, 5m MACD with live weights).
      Lag/correlation signals are omitted (require live BTC feed).
+     15m IQL + optional stricter 5m SELL gates (min m5_adj + min BTC-alt 1h
+     correlation via aligned 1m bars) mirror live config when enabled.
 
 Checklist (from docs/BACKTEST.md)
 ──────────────────────────────────
@@ -279,6 +281,22 @@ class UpdownBacktestEngine:
         self.min_positive_m5_adj_eth_5m = float(eth_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
         self.min_positive_m5_adj_xrp_5m = float(xrp_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
         self.min_positive_m5_adj_hype_5m = float(hype_cfg.get("min_positive_m5_adj_5m", self.min_positive_m5_adj_sol_5m))
+        self.min_positive_m5_adj_sol_5m_sell = float(
+            sol_cfg.get("min_positive_m5_adj_5m_sell", self.min_positive_m5_adj_sol_5m)
+        )
+        self.min_positive_m5_adj_eth_5m_sell = float(
+            eth_cfg.get("min_positive_m5_adj_5m_sell", self.min_positive_m5_adj_eth_5m)
+        )
+        self.min_positive_m5_adj_xrp_5m_sell = float(
+            xrp_cfg.get("min_positive_m5_adj_5m_sell", self.min_positive_m5_adj_xrp_5m)
+        )
+        self.min_positive_m5_adj_hype_5m_sell = float(
+            hype_cfg.get("min_positive_m5_adj_5m_sell", self.min_positive_m5_adj_hype_5m)
+        )
+        self.sell_5m_min_corr_sol = float(sol_cfg.get("sell_5m_min_corr", -1.0))
+        self.sell_5m_min_corr_eth = float(eth_cfg.get("sell_5m_min_corr", -1.0))
+        self.sell_5m_min_corr_xrp = float(xrp_cfg.get("sell_5m_min_corr", -1.0))
+        self.sell_5m_min_corr_hype = float(hype_cfg.get("sell_5m_min_corr", -1.0))
 
         trade_cfg         = config.get("trading", {})
         self.default_size  = trade_cfg.get("default_position_size", 10.0)
@@ -667,6 +685,48 @@ class UpdownBacktestEngine:
         confirmed = s >= 0.50
         return confirmed, min(1.0, s)
 
+    @staticmethod
+    def _passes_15m_iql_macd(m: MACDResult, allowed_side: str, hist_floor: float) -> bool:
+        """15m Indicator Quality Layer — matches live sol_macro._passes_15m_iql."""
+        hist = float(m.histogram)
+        if allowed_side == "LONG":
+            return m.crossover == "BULLISH_CROSS" or (
+                hist >= hist_floor and m.histogram_rising
+            )
+        return m.crossover == "BEARISH_CROSS" or (
+            hist <= -hist_floor and not m.histogram_rising
+        )
+
+    @staticmethod
+    def _btc_alt_corr_1h_approx(
+        window_open: pd.Timestamp,
+        btc_1m: pd.DataFrame,
+        alt_1m: pd.DataFrame,
+    ) -> Optional[float]:
+        """Pearson corr of 1m returns over last ≤60 overlapping bars (< window_open).
+
+        Mirrors live SOLBTCService.calc_correlation correlation_1h windowing.
+        """
+        if btc_1m.empty or alt_1m.empty:
+            return None
+        btc_sub = btc_1m.loc[btc_1m["open_time"] < window_open, ["open_time", "close"]].rename(
+            columns={"close": "btc_c"}
+        )
+        alt_sub = alt_1m.loc[alt_1m["open_time"] < window_open, ["open_time", "close"]].rename(
+            columns={"close": "alt_c"}
+        )
+        if btc_sub.empty or alt_sub.empty:
+            return None
+        merged = btc_sub.merge(alt_sub, on="open_time", how="inner").tail(60)
+        ret = merged[["btc_c", "alt_c"]].pct_change().dropna()
+        if len(ret) < 10:
+            return None
+        btc_r = ret["btc_c"].to_numpy()
+        alt_r = ret["alt_c"].to_numpy()
+        if float(np.std(btc_r)) <= 1e-12 or float(np.std(alt_r)) <= 1e-12:
+            return 0.0
+        return float(np.corrcoef(btc_r, alt_r)[0, 1])
+
     # ==========================================================================
     # BTC 15m edge (matches bitcoin.py 15m updown path exactly)
     # ==========================================================================
@@ -747,12 +807,23 @@ class UpdownBacktestEngine:
     # ==========================================================================
 
     def _edge_15m_sol(
-        self, ta: TechnicalAnalysis, allowed_side: str, ltf_strength: float,
+        self,
+        ta: TechnicalAnalysis,
+        allowed_side: str,
+        ltf_strength: float,
+        *,
+        iql_enabled: bool = False,
+        iql_hist_floor: float = 0.03,
     ) -> Tuple[float, float]:
         """SOL 15m edge -- macro boost +/-0.07, LTF*0.22, 1H histogram gate.
 
         Omits: lag/spike (requires live BTC feed), correlation dampen.
         """
+        if iql_enabled and not UpdownBacktestEngine._passes_15m_iql_macd(
+            ta.macd_15m, allowed_side, iql_hist_floor
+        ):
+            return 0.0, 0.0
+
         macd_1h = ta.macd_4h   # For SOL, macd_4h is computed from 1H data
 
         est_prob_up = 0.50
@@ -858,6 +929,7 @@ class UpdownBacktestEngine:
         symbol: str = "BTC",
         df_1m: pd.DataFrame = None,
         window_open: pd.Timestamp = None,
+        corr_1h: Optional[float] = None,
     ) -> Tuple[float, float]:
         """Estimate edge for a 5m updown window.
 
@@ -868,16 +940,62 @@ class UpdownBacktestEngine:
 
         if symbol == "BTC":
             return self._edge_5m_btc(ta, allowed_side, df_1m, window_open, macd_htf)
+        elif symbol == "ETH":
+            min_buy = self.min_positive_m5_adj_eth_5m
+            min_sell = self.min_positive_m5_adj_eth_5m_sell
+            corr_min = self.sell_5m_min_corr_eth
+            return self._edge_5m_sol(
+                ta,
+                allowed_side,
+                df_5m,
+                macd_htf,
+                min_buy=min_buy,
+                min_sell=min_sell,
+                sell_5m_min_corr=corr_min,
+                corr_1h=corr_1h,
+            )
+        elif symbol == "XRP":
+            min_buy = self.min_positive_m5_adj_xrp_5m
+            min_sell = self.min_positive_m5_adj_xrp_5m_sell
+            corr_min = self.sell_5m_min_corr_xrp
+            return self._edge_5m_sol(
+                ta,
+                allowed_side,
+                df_5m,
+                macd_htf,
+                min_buy=min_buy,
+                min_sell=min_sell,
+                sell_5m_min_corr=corr_min,
+                corr_1h=corr_1h,
+            )
+        elif symbol == "HYPE":
+            min_buy = self.min_positive_m5_adj_hype_5m
+            min_sell = self.min_positive_m5_adj_hype_5m_sell
+            corr_min = self.sell_5m_min_corr_hype
+            return self._edge_5m_sol(
+                ta,
+                allowed_side,
+                df_5m,
+                macd_htf,
+                min_buy=min_buy,
+                min_sell=min_sell,
+                sell_5m_min_corr=corr_min,
+                corr_1h=corr_1h,
+            )
         else:
-            if symbol == "ETH":
-                min_positive_m5_adj = self.min_positive_m5_adj_eth_5m
-            elif symbol == "XRP":
-                min_positive_m5_adj = self.min_positive_m5_adj_xrp_5m
-            elif symbol == "HYPE":
-                min_positive_m5_adj = self.min_positive_m5_adj_hype_5m
-            else:
-                min_positive_m5_adj = self.min_positive_m5_adj_sol_5m
-            return self._edge_5m_sol(ta, allowed_side, df_5m, macd_htf, min_positive_m5_adj)
+            min_buy = self.min_positive_m5_adj_sol_5m
+            min_sell = self.min_positive_m5_adj_sol_5m_sell
+            corr_min = self.sell_5m_min_corr_sol
+            return self._edge_5m_sol(
+                ta,
+                allowed_side,
+                df_5m,
+                macd_htf,
+                min_buy=min_buy,
+                min_sell=min_sell,
+                sell_5m_min_corr=corr_min,
+                corr_1h=corr_1h,
+            )
 
     def _edge_5m_btc(
         self,
@@ -933,13 +1051,19 @@ class UpdownBacktestEngine:
         allowed_side: str,
         df_5m: pd.DataFrame,
         macd_1h: MACDResult,
-        min_positive_m5_adj: float = 0.0,
+        min_buy: float = 0.0,
+        *,
+        min_sell: Optional[float] = None,
+        sell_5m_min_corr: float = -1.0,
+        corr_1h: Optional[float] = None,
     ) -> Tuple[float, float]:
         """SOL-style 5m path -- matches sol_macro.py 5m updown.
 
         Omits live-only lag/spike and correlation dampening, but keeps the
         signal math that decides whether the 5m quant path can clear min_edge.
         """
+        ms = float(min_buy) if min_sell is None else float(min_sell)
+
         est_prob_up = 0.50
 
         # Macro boost (matches live sol_macro 5m: +/-0.03)
@@ -991,13 +1115,18 @@ class UpdownBacktestEngine:
                 elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
                     m5_adj = -0.04
 
+        if allowed_side == "SHORT" and sell_5m_min_corr >= 0:
+            if corr_1h is None or corr_1h < sell_5m_min_corr:
+                return 0.0, 0.0
+
+        m5_floor = min_buy if allowed_side == "LONG" else ms
+        if m5_adj < m5_floor:
+            return 0.0, 0.0
+
         if allowed_side == "LONG":
             est_prob_up += m5_adj
         else:
             est_prob_up -= m5_adj
-
-        if m5_adj < min_positive_m5_adj:
-            return 0.0, 0.0
 
         # Live adds a small extra 5m multi-timeframe trend bonus after m5_adj.
         # This matters for SOL 5m because min_edge=0.10 and macro(+0.03)+
@@ -1145,7 +1274,14 @@ class UpdownBacktestEngine:
         allowed_side: str,
         min_eth_adj: float,
         min_btc_hist: float,
+        *,
+        iql_enabled: bool = False,
+        iql_hist_floor: float = 0.03,
     ) -> Tuple[float, float]:
+        if iql_enabled and not UpdownBacktestEngine._passes_15m_iql_macd(
+            eth_ta.macd_15m, allowed_side, iql_hist_floor
+        ):
+            return 0.0, 0.0
         if not self._eth_follow_btc_15m_impulse_ok(btc_ta, allowed_side, min_btc_hist):
             return 0.0, 0.0
         macd_15m = eth_ta.macd_15m
@@ -1288,9 +1424,18 @@ class UpdownBacktestEngine:
             self.kelly_fraction = self._kelly_hype
         else:  # SOL
             self.kelly_fraction = self._kelly_sol
+        strategy_cfg_map = {
+            "BTC": "bitcoin",
+            "SOL": "sol_macro",
+            "ETH": "eth_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }
         self.entry_price_min, self.entry_price_max = self._entry_bands.get(
             symbol, (0.0, 1.0)
         )
+        strategy_cfg_key = strategy_cfg_map.get(symbol, "sol_macro")
+        strategy_cfg = self.config.get("strategies", {}).get(strategy_cfg_key, {})
 
         # Symbol-specific min_edge thresholds
         if is_btc:
@@ -1335,13 +1480,6 @@ class UpdownBacktestEngine:
         oracle_history_points = 0
         oracle_times_ns: Optional[np.ndarray] = None
         oracle_prices: Optional[np.ndarray] = None
-        strategy_cfg_map = {
-            "BTC": "bitcoin",
-            "SOL": "sol_macro",
-            "ETH": "eth_macro",
-            "XRP": "xrp_macro",
-            "HYPE": "hype_macro",
-        }
         oracle_max_basis_bps = self.config.get("strategies", {}).get(
             strategy_cfg_map.get(symbol, "sol_macro"), {}
         ).get("oracle_max_basis_bps")
@@ -1409,13 +1547,22 @@ class UpdownBacktestEngine:
             else:
                 ltf_confirmed, ltf_str = self._sol_ltf_strength(ta, allowed_side)
 
-            # Anti-LTF gate.
-            # BTC and the legacy SOL-style paths skip confirmed MACD as a late-entry risk.
-            # ETH 15m BTC-follow is different: it explicitly wants ETH 15m follow-through,
-            # so do not apply the generic anti-LTF skip to that path.
-            if ltf_confirmed and not (is_eth and window_minutes == 15):
-                current += step_td
-                continue
+            # LTF gate policy parity with live strategy config.
+            # Default remains anti-LTF (skip confirmed entries), but strategy-level
+            # settings can flip to requiring confirmation for noisier assets.
+            require_ltf_confirmation = bool(strategy_cfg.get("require_ltf_confirmation", False))
+            anti_ltf_gate_enabled = bool(strategy_cfg.get("anti_ltf_gate_enabled", True))
+            if require_ltf_confirmation:
+                if not ltf_confirmed:
+                    current += step_td
+                    continue
+            else:
+                # ETH 15m BTC-follow intentionally allows confirmed follow-through
+                # unless the strategy config explicitly enables anti-LTF.
+                skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes == 15)
+                if ltf_confirmed and skip_confirmed:
+                    current += step_td
+                    continue
 
             # ==================================================================
             # Layer 3: Edge estimation (symbol + timeframe specific)
@@ -1434,9 +1581,26 @@ class UpdownBacktestEngine:
                         bool(eth_cfg.get("btc_follow_5m_requires_impulse", True)),
                     )
                 else:
+                    corr_1h = None
+                    strat_macro = strategy_cfg_map.get(symbol, "sol_macro")
+                    sc_macro = self.config.get("strategies", {}).get(strat_macro, {})
+                    need_corr = (
+                        float(sc_macro.get("sell_5m_min_corr", -1.0)) >= 0
+                        and btc_data is not None
+                        and btc_data.get("1m") is not None
+                        and not btc_data["1m"].empty
+                        and df_1m_full is not None
+                        and not df_1m_full.empty
+                    )
+                    if need_corr:
+                        corr_1h = self._btc_alt_corr_1h_approx(
+                            window_open, btc_data["1m"], df_1m_full
+                        )
                     edge, confidence = self._edge_5m(
                         ta, allowed_side, df_5m, symbol,
-                        df_1m=df_1m_full, window_open=window_open,
+                        df_1m=df_1m_full,
+                        window_open=window_open,
+                        corr_1h=corr_1h,
                     )
             else:
                 if is_btc:
@@ -1449,9 +1613,19 @@ class UpdownBacktestEngine:
                         allowed_side,
                         float(eth_cfg.get("eth_follow_15m_min_adj", 0.04)),
                         float(eth_cfg.get("btc_follow_15m_hist_min", 0.03)),
+                        iql_enabled=bool(eth_cfg.get("iql_15m_enabled", False)),
+                        iql_hist_floor=float(eth_cfg.get("iql_15m_hist_floor", 0.03)),
                     )
                 else:
-                    edge, confidence = self._edge_15m_sol(ta, allowed_side, ltf_str)
+                    strat_macro = strategy_cfg_map.get(symbol, "sol_macro")
+                    sc_macro = self.config.get("strategies", {}).get(strat_macro, {})
+                    edge, confidence = self._edge_15m_sol(
+                        ta,
+                        allowed_side,
+                        ltf_str,
+                        iql_enabled=bool(sc_macro.get("iql_15m_enabled", False)),
+                        iql_hist_floor=float(sc_macro.get("iql_15m_hist_floor", 0.03)),
+                    )
 
             # Min edge filter
             if edge < min_edge:
@@ -1482,6 +1656,15 @@ class UpdownBacktestEngine:
             if mid_price < self.entry_price_min or mid_price > self.entry_price_max:
                 current += step_td
                 continue
+            center_price_band = float(strategy_cfg.get("center_price_band", 0.0) or 0.0)
+            min_edge_when_centered = float(
+                strategy_cfg.get("min_edge_when_centered", min_edge)
+            )
+            if center_price_band > 0 and abs(mid_price - 0.50) <= center_price_band:
+                centered_min = max(min_edge, min_edge_when_centered)
+                if edge < centered_min:
+                    current += step_td
+                    continue
             fill_price, slip_cost = self._simulate_fill(mid_price, fill_side)
             slippage_total += slip_cost * size
 

@@ -52,9 +52,13 @@ trading:
   # Position exit rules (live trading)
   exit_rules:
     enabled: true                # Enabled: live data shows positions move 40-50% against without stops
-    take_profit_pct: 0.15        # +15% gain → exit
+    take_profit_pct: 0.15        # +15% gain → exit (non-updown markets)
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
-    max_hold_hours: 72           # Exit after 72 hours regardless
+    max_hold_hours: 72           # Exit after 72 hours regardless (non-updown markets)
+    # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m and 15m candle markets)
+    updown_stop_cents: 0.03      # Exit if price moves ≥3¢ against entry within the exit window
+    updown_exit_window_mins: 2.0 # Begin stop-check this many minutes before market expiry
+    updown_max_hold_mins: 20.0   # Safety valve: exit updown positions held >20 min (no end_date)
 
 data_collection:
   weather:
@@ -241,15 +245,21 @@ strategies:
 
   # SOL Macro strategy — BTC-to-Solana correlation lag trading
   sol_macro:
-    enabled: true
+    enabled: true               # Retuned and re-enabled
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
     min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
     min_edge_5m: 0.07             # flat tape: m5_adj often 0.04; require_btc_catalyst_5m guards 5m quality when enabled
+    hard_min_edge: 0.10           # non-bypass floor, regardless of AI/marginal branch
     min_edge_15m_when_ltf_unconfirmed: 0.11   # macro-only entries (no LTF) need tighter price; was 0.09 = no extra filter
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip; stops pure macro-guess 15m entries
+    anti_ltf_gate_enabled: false
+    require_ltf_confirmation: true
+    center_price_band: 0.01
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -416,8 +426,9 @@ strategies:
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     min_liquidity: 100
-    min_edge: 0.09
-    min_edge_5m: 0.09
+    min_edge: 0.10
+    min_edge_5m: 0.10
+    hard_min_edge: 0.05         # FIX 2: absolute floor enforced regardless of AI usage path
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -454,8 +465,14 @@ strategies:
     btc_spike_floor_pct_5m: 0.18
     btc_spike_floor_pct_15m: 0.55
     lag_signal_min_pct: 0.12
-    neutral_macro_require_spike_or_lag: false   # HYPE tracks BTC closely; keep neutral alt-bias path
-    require_btc_catalyst_5m: false              # HYPE is low-corr; 5m entries not gated on BTC catalyst
+    neutral_macro_require_spike_or_lag: true
+    require_btc_catalyst_5m: true
+    require_btc_catalyst_15m_when_unconfirmed: true
+    anti_ltf_gate_enabled: false
+    require_ltf_confirmation: true
+    center_price_band: 0.005
+    min_edge_when_centered: 0.13
+    center_price_requires_catalyst: true
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
