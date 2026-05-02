@@ -200,7 +200,14 @@ class PolyBot:
         self.eth_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='ETH')
         self.hype_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='HYPE')
         self.xrp_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='XRP')
-        self.event_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='EVENT')
+        self.weather_exposure_manager = ExposureManager(
+            self.config,
+            is_paper=is_paper,
+            notifications=self.notifier,
+            lane_name="WEATHER",
+        )
+        # Backward-compatible alias for older code paths/tools still referencing "event".
+        self.event_exposure_manager = self.weather_exposure_manager
         # Keep a reference for resolution tracker settlements
         self.exposure_manager = self.btc_exposure_manager
 
@@ -333,7 +340,7 @@ class PolyBot:
         em0 = self.btc_exposure_manager
         logging.warning(
             "EXPOSURE per-lane: loss_kill_switch_enabled=%s max_consecutive_losses=%s pause_cycles=%s "
-            "(btc/sol/eth/xrp/event each have separate streaks). "
+            "(btc/sol/eth/xrp/weather each have separate streaks). "
             "If Railway runs an old image, set Variables EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true and restart.",
             em0.loss_kill_switch_enabled,
             em0.max_consecutive_losses,
@@ -393,7 +400,7 @@ class PolyBot:
                 "eth_exposure_manager",
                 "hype_exposure_manager",
                 "xrp_exposure_manager",
-                "event_exposure_manager",
+                "weather_exposure_manager",
             ):
                 mgr = getattr(self, attr, None)
                 if mgr is not None:
@@ -717,7 +724,7 @@ class PolyBot:
             return self.hype_exposure_manager
         elif strategy == "xrp_macro":
             return self.xrp_exposure_manager
-        return self.event_exposure_manager
+        return getattr(self, "weather_exposure_manager", self.event_exposure_manager)
 
     async def _run_resolution_check(self, label: str = ""):
         """Shared resolution check — routes settlements to the correct exposure manager."""

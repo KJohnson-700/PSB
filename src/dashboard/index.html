@@ -2096,114 +2096,13 @@ async function startBacktest() {
 }
 
 async function loadLivePerformance() {
-    const status = document.getElementById('process-status');
-    try {
-        // Live performance
-        const r = await fetch('/api/live/performance');
-        const d = await r.json();
-        document.getElementById('lp-trades').textContent = d.total_trades || 0;
-        document.getElementById('lp-winrate').textContent = d.win_rate ? (d.win_rate * 100).toFixed(0) + '%' : '-';
-        document.getElementById('lp-pnl').textContent = d.total_pnl ? '$' + d.total_pnl.toFixed(2) : '$0';
-        document.getElementById('lp-sharpe').textContent = d.sharpe_ratio ? d.sharpe_ratio.toFixed(2) : '-';
-        document.getElementById('lp-dd').textContent = d.max_drawdown ? '-$' + d.max_drawdown.toFixed(2) : '-';
-        const pnlEl = document.getElementById('lp-pnl');
-        if (d.total_pnl > 0) pnlEl.style.color = 'var(--green)';
-        else if (d.total_pnl < 0) pnlEl.style.color = 'var(--red)';
-        const wrEl = document.getElementById('lp-winrate');
-        if (d.win_rate > 0.55) wrEl.style.color = 'var(--green)';
-        else if (d.win_rate < 0.45) wrEl.style.color = 'var(--red)';
-        // Strategy breakdown
-        const stratDiv = document.getElementById('live-perf-strats');
-        const ACTIVE_PERF_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
-        const perfPairs = (d.by_strategy && typeof d.by_strategy === 'object')
-            ? Object.entries(d.by_strategy).filter(([s]) => ACTIVE_PERF_STRATS.includes(s))
-            : [];
-        if (perfPairs.length > 0) {
-            stratDiv.innerHTML = perfPairs.map(([s, m]) => {
-                const trades = Number(m?.trades || 0);
-                const winRate = Number(m?.win_rate || 0);
-                const pnl = Number(m?.total_pnl ?? m?.pnl ?? 0);
-                return `<span style="margin-right:12px;">${s}: ${_tradesLabel(trades)}, ${(winRate * 100).toFixed(0)}% win, $${pnl.toFixed(2)}</span>`;
-            }).join('');
-        } else {
-            stratDiv.textContent = 'No live trades yet — start the bot to generate results';
-        }
-        // Equity curve
-        const equityDiv = document.getElementById('live-equity');
-        if (d.equity_curve && d.equity_curve.length > 0) {
-            const ec = d.equity_curve;
-            const rows = ec.slice(-50).map((p, i) => {
-                if (typeof p === 'number') {
-                    return `step ${ec.length - ec.slice(-50).length + i + 1}: $${p.toFixed(2)}`;
-                }
-                const ts = p.timestamp ? p.timestamp.split('T')[0] : '?';
-                const cum = p.cumulative_pnl != null ? p.cumulative_pnl : p;
-                return `${ts}: $${Number(cum).toFixed(2)}`;
-            });
-            equityDiv.innerHTML = rows.map(r => `<div style="font-size:0.72rem;">${r}</div>`).join('');
-        } else {
-            equityDiv.innerHTML = '<div style="color:var(--text-muted);font-size:0.78rem;">No equity data yet</div>';
-        }
-        // Drift detection
-        const driftR = await fetch('/api/live/drift');
-        const driftD = await driftR.json();
-        const driftDiv = document.getElementById('live-drift');
-        const driftEl = document.getElementById('lp-drift');
-        if (driftD.reports && driftD.reports.length > 0) {
-            const worst = driftD.reports.reduce((a,b) => Math.abs(a.win_rate_drift) > Math.abs(b.win_rate_drift) ? a : b, {strategy:'-', win_rate_drift:0, verdict:'OK'});
-            driftEl.textContent = (worst.win_rate_drift * 100).toFixed(0) + '%';
-            driftEl.style.color = worst.win_rate_drift < -0.1 ? 'var(--red)' : 'var(--green)';
-            driftDiv.innerHTML = driftD.reports.map(r =>
-                `<span style="margin-right:10px;color:${r.is_diverging?'var(--red)':'var(--green)'};">${r.strategy}: ${r.verdict || 'OK'}</span>`
-            ).join('');
-        } else {
-            driftEl.textContent = '-';
-            driftDiv.textContent = 'Run backtests first to set drift expectations';
-        }
-    } catch(e) {
-        document.getElementById('live-perf-strats').textContent = 'Connect live bot to see results';
-    }
-
-    // Updown breakdown
-    try {
-        const ub = await fetch('/api/journal/updown_breakdown');
-        const ud = await ub.json();
-
-        const labelEl = document.getElementById('updown-code-label');
-        if (ud.new_code_start) {
-            labelEl.textContent = '🟢 New code active since ' + ud.new_code_start.slice(11,16);
-            labelEl.style.color = 'var(--green)';
-        } else {
-            labelEl.textContent = '🟡 Old code — restart bot to activate';
-            labelEl.style.color = 'var(--yellow, #f5a623)';
-        }
-
-const TARGET = ['BTC_updown_15m','BTC_updown_5m','SOL_updown_15m','SOL_updown_5m','ETH_updown_15m','ETH_updown_5m','HYPE_updown_15m','HYPE_updown_5m','XRP_updown_15m','XRP_updown_5m'];
-        function renderBucket(data, elId) {
-            const el = document.getElementById(elId);
-            if (!data || Object.keys(data).length === 0) {
-                el.innerHTML = '<span style="color:var(--text-muted)">No trades yet</span>';
-                return;
-            }
-            el.innerHTML = TARGET.map(cat => {
-                const v = data[cat];
-                if (!v || v.trades === 0) return `<div style="color:var(--text-muted)">${cat}: —</div>`;
-                const wr = (v.win_rate * 100).toFixed(1);
-                const color = v.win_rate >= 0.60 ? 'var(--green)' : v.win_rate >= 0.50 ? 'var(--text)' : 'var(--red)';
-                const flag = v.win_rate >= 0.60 ? '✅' : v.win_rate >= 0.50 ? '⚠️' : '🔴';
-                const pnlColor = v.pnl >= 0 ? 'var(--green)' : 'var(--red)';
-                return `<div style="margin-bottom:4px;">
-                    <span style="color:var(--text-muted);min-width:140px;display:inline-block;">${cat}</span>
-                    <span style="color:${color};font-weight:600;">${flag} ${wr}%</span>
-                    <span style="color:var(--text-muted);margin-left:6px;">${v.wins}W/${v.losses}L</span>
-                    <span style="color:${pnlColor};margin-left:6px;">$${v.pnl >= 0 ? '+' : ''}${v.pnl.toFixed(2)}</span>
-                </div>`;
-            }).join('');
-        }
-        renderBucket(ud.new_code, 'updown-new');
-        renderBucket(ud.old_code, 'updown-old');
-    } catch(e) {
-        document.getElementById('updown-new').textContent = 'Error loading breakdown';
+    // Single source of truth: fetchAll already updates all Performance cards/widgets
+    // with per-endpoint guards. Reuse it instead of maintaining a second render path.
+    await fetchAll();
+    if (_currentMainView() === 'performance') {
+        loadSessionHistory();
+        if (typeof loadAllocationChart === 'function') loadAllocationChart();
+        if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
     }
 }
 
@@ -3042,8 +2941,8 @@ async function saveConfig() {
 }
 
 // ─── EXPOSURE MANAGER ────────────────────────────────────────
-const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'event'];
-const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', event: 'Event' };
+const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'weather'];
+const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', weather: 'Weather', event: 'Weather' };
 const tierColors = {FULL:'var(--green)',MODERATE:'var(--yellow)',MINIMAL:'var(--red)',PAUSED:'var(--red)',UNKNOWN:'var(--text-muted)'};
 
 function updateExposure(d) {
@@ -3127,7 +3026,7 @@ async function resumeExposureLane(lane) {
 }
 
 async function pauseExposure() {
-    if (!confirm('Pause all strategies (BTC, SOL, ETH, HYPE, XRP, Event)?')) return;
+    if (!confirm('Pause all strategies (BTC, SOL, ETH, HYPE, XRP, Weather)?')) return;
     try {
         const r = await _mutatingFetch('/api/exposure/pause', {method:'POST'});
         if (!r?.ok) {

@@ -951,29 +951,34 @@ class SolMacroStrategy:
         # Default keeps anti-LTF behavior (skip confirmed entries), but strategy-specific
         # configs can opt into requiring confirmation when an asset performs poorly in
         # weak/unconfirmed windows.
+        skip_15m_reason = None
         if self.require_ltf_confirmation:
             if not ltf_confirmed:
+                # 5m path has its own lag/timing signal stack and should not be blocked
+                # by the 15m confirmation requirement.
+                skip_15m_reason = "ltf_required_unconfirmed_15m"
                 logger.info(
                     f"{_brand}: LTF confirmation required, but unconfirmed "
-                    f"(strength={ltf_strength:.2f}) — skipping"
+                    f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
                 )
-                return []
-            logger.info(
-                f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
-            )
+            else:
+                logger.info(
+                    f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
+                )
         else:
             # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
             #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
             #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
             if self.anti_ltf_gate_enabled and ltf_confirmed:
+                skip_15m_reason = "anti_ltf_confirmed_15m"
                 logger.info(
                     f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
-                    f"skipping. strength={ltf_strength:.2f}"
+                    f"15m entries will be skipped. strength={ltf_strength:.2f}"
                 )
-                return []
-            logger.info(
-                f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
-            )
+            else:
+                logger.info(
+                    f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
+                )
 
         # ═══════════════════════════════════════════════
         # LAYER 3: 5m entry timing + lag detection
@@ -1023,6 +1028,12 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             is_updown = self._is_updown_market(market)
             is_5m = self._is_5m_market(market) if is_updown else False
+            if is_updown and not is_5m and skip_15m_reason:
+                _bump_skip(skip_15m_reason)
+                logger.debug(
+                    f"  {_brand} skip '{market.question[:40]}' — {skip_15m_reason}"
+                )
+                continue
             ai_used = False
             reason_parts = [
                 f"BTC_HTF={primary_htf_bias}",

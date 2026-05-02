@@ -2840,16 +2840,19 @@ def _all_exposure_managers():
     if not bot:
         return []
     managers = []
+    seen = set()
     for attr in (
         "btc_exposure_manager",
         "sol_exposure_manager",
         "eth_exposure_manager",
         "hype_exposure_manager",
         "xrp_exposure_manager",
+        "weather_exposure_manager",
         "event_exposure_manager",
     ):
         mgr = getattr(bot, attr, None)
-        if mgr:
+        if mgr and id(mgr) not in seen:
+            seen.add(id(mgr))
             managers.append(mgr)
     return managers
 
@@ -2860,7 +2863,8 @@ EXPOSURE_LANE_TO_ATTR = {
     "eth": "eth_exposure_manager",
     "hype": "hype_exposure_manager",
     "xrp": "xrp_exposure_manager",
-    "event": "event_exposure_manager",
+    "weather": "weather_exposure_manager",
+    "event": "weather_exposure_manager",  # backward-compatible alias
 }
 
 
@@ -2889,7 +2893,7 @@ async def get_exposure_status():
         ("eth", "eth_exposure_manager"),
         ("hype", "hype_exposure_manager"),
         ("xrp", "xrp_exposure_manager"),
-        ("event", "event_exposure_manager"),
+        ("weather", "weather_exposure_manager"),
     )
     out: Dict[str, Any] = {}
     idx = 0
@@ -2935,7 +2939,7 @@ async def pause_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or event.",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or weather (event also accepted).",
         )
     mgr.manual_pause()
     return {"status": "paused", "lane": lane.lower().strip()}
@@ -2949,7 +2953,7 @@ async def resume_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or event.",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or weather (event also accepted).",
         )
     mgr.manual_resume()
     return {"status": "resumed", "lane": lane.lower().strip()}
