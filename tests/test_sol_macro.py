@@ -70,9 +70,18 @@ def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
     cfg["strategies"]["sol_macro"]["min_positive_m5_adj_5m"] = 0.04
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._strong_enough_5m_signal(0.06) is True
-    assert strategy._strong_enough_5m_signal(0.04) is True
-    assert strategy._strong_enough_5m_signal(0.02) is False
+    assert strategy._strong_enough_5m_signal(0.06, "BUY_YES") is True
+    assert strategy._strong_enough_5m_signal(0.04, "BUY_YES") is True
+    assert strategy._strong_enough_5m_signal(0.02, "BUY_YES") is False
+
+
+def test_min_positive_m5_adj_zero_allows_counter_momentum():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["min_positive_m5_adj_5m"] = 0.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._strong_enough_5m_signal(-0.04, "BUY_YES") is True
+    assert strategy._strong_enough_5m_signal(0.02, "BUY_YES") is True
 
 
 def test_ai_decision_window_uses_configured_remaining_minutes():

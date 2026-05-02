@@ -516,19 +516,20 @@ class ExposureManager:
 
 
 def _get_weekend_penalty() -> float:
-    """Return weekend penalty multiplier (1.0=normal, 0.0=full penalty).
+    """Return weekend penalty multiplier (1.0=normal, lower=tighter max size).
 
     Reduces position size during weekend / low-liquidity periods when
     HYPE-style manipulation (a4385 CEX pump) is most likely to occur.
+    Fri 20:00+ UTC and Sat/Sun use partial penalties (0.85 / 0.65), not full halving.
     """
     now_utc = datetime.now(timezone.utc)
     weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour
 
     if weekday >= 5:
-        return 0.50
+        return 0.65
 
     if weekday == 4 and utc_hour >= 20:
-        return 0.70
+        return 0.85
 
     return 1.0

@@ -234,6 +234,7 @@ class SOLBTCService:
         self.lag_signal_min_pct = float(lag_signal_min_pct)
         self.spike_z_threshold = 1.5  # Z-score threshold for adaptive BTC spike detection
         self._oracle_clients: Dict[Tuple[str, str], Tuple[object, object]] = {}
+        self._warned_missing_web3 = False
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
         # (direction, spike_window) -> (first_detected_at, btc_move_abs_pct)
@@ -315,7 +316,17 @@ class SOLBTCService:
         symbol: str,
     ) -> Tuple[Optional[float], Optional[datetime], Optional[str]]:
         """Read asset/USD price from the configured Chainlink reference feed."""
-        from web3 import Web3
+        try:
+            from web3 import Web3
+        except Exception as exc:
+            if not self._warned_missing_web3:
+                logger.warning(
+                    "Chainlink disabled for %s: web3 unavailable (%s)",
+                    symbol,
+                    exc,
+                )
+                self._warned_missing_web3 = True
+            return None, None, None
 
         feed = ORACLE_FEEDS.get((symbol or "").upper())
         if not feed:

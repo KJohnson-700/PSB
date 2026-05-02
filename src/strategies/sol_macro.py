@@ -544,6 +544,8 @@ class SolMacroStrategy:
             if action == "SELL_YES"
             else self.min_positive_m5_adj_5m
         )
+        if threshold <= 0:
+            return True
         return m5_adj >= threshold
 
     def _passes_15m_iql(self, sol, allowed_side: str) -> bool:
@@ -1978,21 +1980,22 @@ class SolMacroStrategy:
 
 
 def _get_weekend_penalty() -> float:
-    """Return weekend penalty multiplier (1.0=normal, 0.0=full penalty).
+    """Return weekend penalty multiplier (1.0=normal, lower=tighter max size).
 
     Reduces position size during weekend / low-liquidity periods when
     HYPE-style manipulation (a4385 CEX pump) is most likely to occur.
+    Kept in sync with ``exposure_manager._get_weekend_penalty``.
     """
     now_utc = datetime.now(timezone.utc)
     weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour
 
-    # Weekend (Sat/Sun full UTC days)
+    # Weekend (Sat/Sun full UTC days) — softer than 0.50 so MINIMAL tier keeps workable size
     if weekday >= 5:  # Saturday = 5, Sunday = 6
-        return 0.50
+        return 0.65
 
-    # Friday 20:00 UTC through Saturday 08:00 UTC — elevated manipulation risk
+    # Friday evening UTC — lighter touch than full weekend (still below 1.0)
     if weekday == 4 and utc_hour >= 20:
-        return 0.70
+        return 0.85
 
     return 1.0

@@ -82,6 +82,29 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.eth_follow_15m_min_adj = float(self.config.get("eth_follow_15m_min_adj", 0.04))
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.btc_follow_1h_required = bool(self.config.get("btc_follow_1h_required", True))
+        self.btc_follow_1h_allow_rising_recovery = bool(
+            self.config.get("btc_follow_1h_allow_rising_recovery", True)
+        )
+        self.btc_follow_1h_recovery_hist_floor = float(
+            self.config.get("btc_follow_1h_recovery_hist_floor", 80.0)
+        )
+        self.btc_follow_1h_allow_floor_without_rising = bool(
+            self.config.get("btc_follow_1h_allow_floor_without_rising", True)
+        )
+
+    def _record_eth_abort(self, reason: str, extra: Optional[Dict[str, Any]] = None) -> None:
+        payload: Dict[str, Any] = {
+            "enabled": self.enabled,
+            "signals": 0,
+            "abort_reason": reason,
+            "markets_considered": 0,
+            "top_skip_reasons": {},
+            "gate_distributions": {},
+        }
+        if extra:
+            payload.update(extra)
+        self.last_scan_stats = payload
 
     def _is_solana_market(self, market: Market) -> bool:
         text = (
@@ -107,17 +130,40 @@ class ETHMacroStrategy(SolMacroStrategy):
     def _btc_follow_1h_ok(self, btc_ta: TechnicalAnalysis, allowed_side: str) -> bool:
         macd_1h = btc_ta.macd_1h
         min_hist = self.btc_follow_1h_hist_min
+        rec_mag = abs(float(self.btc_follow_1h_recovery_hist_floor))
         if allowed_side == "LONG":
-            return (
+            base_ok = (
                 macd_1h.histogram > min_hist
                 or (macd_1h.histogram > 0 and macd_1h.histogram_rising)
                 or macd_1h.crossover == "BULLISH_CROSS"
             )
-        return (
+            if base_ok:
+                return True
+            if self.btc_follow_1h_allow_rising_recovery:
+                # Negative histogram repairing upward (still below strict bullish thresholds).
+                if macd_1h.histogram_rising and macd_1h.histogram > -rec_mag:
+                    return True
+            if self.btc_follow_1h_allow_floor_without_rising:
+                # Shallow bearish 1H histogram while HTF still bullish (tape often lagging MACD slope).
+                if macd_1h.histogram > -rec_mag:
+                    return True
+            return False
+        base_ok = (
             macd_1h.histogram < -min_hist
             or (macd_1h.histogram < 0 and not macd_1h.histogram_rising)
             or macd_1h.crossover == "BEARISH_CROSS"
         )
+        if base_ok:
+            return True
+        if self.btc_follow_1h_allow_rising_recovery:
+            # Positive histogram rolling over / repairing downward for SHORT continuation.
+            if (not macd_1h.histogram_rising) and macd_1h.histogram < rec_mag:
+                return True
+        if self.btc_follow_1h_allow_floor_without_rising:
+            # Shallow bullish histogram failing stronger bear rules — still below ceiling.
+            if macd_1h.histogram >= 0 and macd_1h.histogram < rec_mag:
+                return True
+        return False
 
     def _btc_follow_15m_impulse_ok(self, btc_ta: TechnicalAnalysis, allowed_side: str) -> bool:
         macd_15m = btc_ta.macd_15m
@@ -224,35 +270,57 @@ class ETHMacroStrategy(SolMacroStrategy):
 
     async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
         if not self.enabled:
+            self._record_eth_abort("strategy_disabled")
             return []
 
         eth_markets = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
         if not eth_markets:
             logger.info("ETH Macro strategy: 0 ETH updown markets found")
+            self._record_eth_abort("no_eth_markets")
             return []
 
         eth_ta = self.sol_service.get_full_analysis()
         btc_ta = self.btc_service.get_full_analysis()
         if not eth_ta or not btc_ta:
             logger.warning("ETH Macro strategy: BTC or ETH analysis unavailable")
+            self._record_eth_abort(
+                "analysis_unavailable",
+                {"markets_considered": len(eth_markets)},
+            )
             return []
 
         conditions = self.conditions_from_ta(eth_ta)
         exp_tier, exp_multiplier, _exp_max_size, exp_reason = self.exposure_manager.get_exposure(conditions)
         if exp_tier == ExposureTier.PAUSED:
             logger.info(f"ETH Macro strategy: PAUSED — {exp_reason}")
+            self._record_eth_abort(
+                "exposure_paused",
+                {"markets_considered": len(eth_markets), "detail": exp_reason},
+            )
             return []
 
         btc_htf_bias = self._get_btc_htf_bias(btc_ta)
         if btc_htf_bias == "NEUTRAL":
             logger.info("ETH Macro strategy: BTC HTF neutral — sitting out")
+            self._record_eth_abort(
+                "btc_htf_neutral",
+                {"markets_considered": len(eth_markets)},
+            )
             return []
 
         allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
-        if not self._btc_follow_1h_ok(btc_ta, allowed_side):
+        if self.btc_follow_1h_required and not self._btc_follow_1h_ok(btc_ta, allowed_side):
             logger.info(
                 "ETH Macro strategy: BTC 1H continuation not strong enough "
                 f"(bias={btc_htf_bias}, hist={btc_ta.macd_1h.histogram:+.2f})"
+            )
+            self._record_eth_abort(
+                "btc_follow_1h_blocked",
+                {
+                    "markets_considered": len(eth_markets),
+                    "btc_htf_bias": btc_htf_bias,
+                    "btc_1h_histogram": btc_ta.macd_1h.histogram,
+                },
             )
             return []
 

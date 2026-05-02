@@ -195,6 +195,7 @@ class BTCPriceService:
         self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
         self._w3 = None
         self._chainlink_contract = None
+        self._warned_missing_web3 = False
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
 
@@ -264,7 +265,13 @@ class BTCPriceService:
 
     def get_chainlink_price(self) -> Tuple[Optional[float], Optional[datetime]]:
         """Read BTC/USD price from Chainlink oracle on Polygon."""
-        from web3 import Web3
+        try:
+            from web3 import Web3
+        except Exception as exc:
+            if not self._warned_missing_web3:
+                logger.warning("Chainlink BTC disabled: web3 unavailable (%s)", exc)
+                self._warned_missing_web3 = True
+            return None, None
 
         if self._w3 is not None and self._chainlink_contract is not None:
             try:
