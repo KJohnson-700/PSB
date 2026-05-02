@@ -15,6 +15,8 @@ def _config():
                 "entry_price_min": 0.46,
                 "entry_price_max": 0.54,
                 "btc_follow_1h_hist_min": 8.0,
+                "btc_follow_1h_allow_rising_recovery": False,
+                "btc_follow_1h_allow_floor_without_rising": False,
                 "btc_follow_15m_hist_min": 0.03,
                 "btc_follow_5m_requires_impulse": True,
                 "eth_follow_5m_min_adj": 0.04,

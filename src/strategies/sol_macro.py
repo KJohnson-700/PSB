@@ -243,6 +243,12 @@ class SolMacroStrategy:
         self.neutral_macro_require_spike_or_lag = bool(
             self.config.get("neutral_macro_require_spike_or_lag", False)
         )
+        # When True (default), block trades when alt 1H trend/histogram disagrees with
+        # the chosen side (BTC-led LONG still vetoed if alt 1H is bearish). Set False
+        # for BTC-lag/catch-up thesis: direction comes from BTC HTF + edges, not alt 1H sync.
+        self.enforce_alt_1h_alignment = bool(
+            self.config.get("enforce_alt_1h_alignment", True)
+        )
         self.low_corr_threshold_1h = float(
             self.config.get("low_corr_threshold_1h", 0.50)
         )
@@ -349,9 +355,13 @@ class SolMacroStrategy:
         default_expand = 1.0 if is_5m else 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
         jitter_sec = float(self.config.get("entry_window_auto_align_jitter_sec", 15))
-        expansion_min = min(scan_interval_sec / 120.0, max_expand_min) + max(0.0, jitter_sec) / 60.0
+        # At least half the scan interval (minutes), but do not cap expansion *below*
+        # entry_window_auto_align_max_expand_min — min() previously made max_expand > cadence useless.
+        cadence_half_min = scan_interval_sec / 120.0
+        expansion_min = max(cadence_half_min, max_expand_min) + max(0.0, jitter_sec) / 60.0
 
-        market_window_min = 5.0 if is_5m else 15.0
+        # Cap by full candle width: 5m markets use ≤6 min resolution; 15m uses 15.
+        market_window_min = 6.0 if is_5m else 15.0
         aligned_min = max(0.0, win_min - expansion_min)
         aligned_max = min(market_window_min, win_max + expansion_min)
         if aligned_max <= aligned_min:
@@ -1199,20 +1209,21 @@ class SolMacroStrategy:
                 #   - 1H trend NEUTRAL  → allow both sides
                 # The mtt (MultiTimeframeTrend) object is already fetched once per cycle.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
-                if action == "SELL_YES" and _h1_trend == "BULLISH":
-                    _bump_skip("sell_yes_suppressed_bullish_1h")
-                    logger.info(
-                        f"  {self._signal_strategy_name} skip SELL_YES on '{market.question[:40]}' — "
-                        f"1H trend BULLISH, suppressing counter-trend short"
-                    )
-                    continue
-                if action == "BUY_YES" and _h1_trend == "BEARISH":
-                    _bump_skip("buy_yes_suppressed_bearish_1h")
-                    logger.info(
-                        f"  {self._signal_strategy_name} skip BUY_YES on '{market.question[:40]}' — "
-                        f"1H trend BEARISH, suppressing counter-trend long"
-                    )
-                    continue
+                if self.enforce_alt_1h_alignment:
+                    if action == "SELL_YES" and _h1_trend == "BULLISH":
+                        _bump_skip("sell_yes_suppressed_bullish_1h")
+                        logger.info(
+                            f"  {self._signal_strategy_name} skip SELL_YES on '{market.question[:40]}' — "
+                            f"1H trend BULLISH, suppressing counter-trend short"
+                        )
+                        continue
+                    if action == "BUY_YES" and _h1_trend == "BEARISH":
+                        _bump_skip("buy_yes_suppressed_bearish_1h")
+                        logger.info(
+                            f"  {self._signal_strategy_name} skip BUY_YES on '{market.question[:40]}' — "
+                            f"1H trend BEARISH, suppressing counter-trend long"
+                        )
+                        continue
                 if self._rsi_blocks_entry(action, sol.rsi_14):
                     _bump_skip("rsi_extreme_block")
                     logger.info(
@@ -1251,20 +1262,21 @@ class SolMacroStrategy:
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
-                    if allowed_side == "LONG" and not _h1_bull_ok:
-                        _bump_skip("histogram_1h_blocks_long_5m")
-                        logger.info(
-                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
-                        )
-                        continue
-                    if allowed_side == "SHORT" and not _h1_bear_ok:
-                        _bump_skip("histogram_1h_blocks_short_5m")
-                        logger.info(
-                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
-                        )
-                        continue
+                    if self.enforce_alt_1h_alignment:
+                        if allowed_side == "LONG" and not _h1_bull_ok:
+                            _bump_skip("histogram_1h_blocks_long_5m")
+                            logger.info(
+                                f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
+                            )
+                            continue
+                        if allowed_side == "SHORT" and not _h1_bear_ok:
+                            _bump_skip("histogram_1h_blocks_short_5m")
+                            logger.info(
+                                f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                            )
+                            continue
 
                     # BTC catalyst gate: require spike or lag in 5m markets to avoid flat-market guesses
                     _require_catalyst_5m = bool(self.config.get("require_btc_catalyst_5m", False))
@@ -1429,20 +1441,21 @@ class SolMacroStrategy:
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
-                    if allowed_side == "LONG" and not _h1_bull_ok:
-                        _bump_skip("histogram_1h_blocks_long_15m")
-                        logger.info(
-                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                            f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
-                        )
-                        continue
-                    if allowed_side == "SHORT" and not _h1_bear_ok:
-                        _bump_skip("histogram_1h_blocks_short_15m")
-                        logger.info(
-                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                            f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
-                        )
-                        continue
+                    if self.enforce_alt_1h_alignment:
+                        if allowed_side == "LONG" and not _h1_bull_ok:
+                            _bump_skip("histogram_1h_blocks_long_15m")
+                            logger.info(
+                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
+                            )
+                            continue
+                        if allowed_side == "SHORT" and not _h1_bear_ok:
+                            _bump_skip("histogram_1h_blocks_short_15m")
+                            logger.info(
+                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                            )
+                            continue
 
                     # When no LTF confirmation, require a BTC catalyst to avoid pure macro-guess entries
                     if ltf_strength == 0.0:
@@ -1956,23 +1969,26 @@ class SolMacroStrategy:
                 f"size=${final_size:.2f} conf={confidence:.2f}"
             )
 
-        if signals:
-            logger.info(f"{_brand} strategy: {len(signals)} signals generated")
-        elif sol_markets:
-            top_reason = max(skip_reasons, key=skip_reasons.get) if skip_reasons else "no_eligible_markets"
-            logger.info(
-                f"{_brand} strategy: 0 signals from {len(sol_markets)} markets "
-                f"(BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} top_skip={top_reason})"
-            )
         gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
         if gate_samples:
             logger.info(f"  [gate-dist] {gate_distributions}")
+        _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
+        logger.info(
+            f"{_brand} SCAN_DIAG side={allowed_side} BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
+            f"alt_1H_trend={mtt.h1_trend} enforce_alt_1h={self.enforce_alt_1h_alignment} "
+            f"skip_15m={skip_15m_reason!s} markets={len(sol_markets)} signals={len(signals)} "
+            f"skips_top6={_skip_top}"
+        )
         self.last_scan_stats = {
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(sol_markets),
             "btc_htf_bias": primary_htf_bias,
             "alt_htf_bias": macro_trend,
+            "allowed_side": allowed_side,
+            "alt_1h_trend": mtt.h1_trend,
+            "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
+            "skip_15m_gate": skip_15m_reason,
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }

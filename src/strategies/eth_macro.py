@@ -451,12 +451,13 @@ class ETHMacroStrategy(SolMacroStrategy):
             action = "BUY_YES" if allowed_side == "LONG" else "SELL_YES"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
 
-            if action == "SELL_YES" and mtt.h1_trend == "BULLISH":
-                _bump_skip("eth_1h_bullish")
-                continue
-            if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
-                _bump_skip("eth_1h_bearish")
-                continue
+            if self.enforce_alt_1h_alignment:
+                if action == "SELL_YES" and mtt.h1_trend == "BULLISH":
+                    _bump_skip("eth_1h_bullish")
+                    continue
+                if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
+                    _bump_skip("eth_1h_bearish")
+                    continue
             if self._rsi_blocks_entry(action, eth.rsi_14):
                 _bump_skip("rsi_block")
                 continue
@@ -649,19 +650,23 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             signals.append(signal)
 
-        if signals:
-            logger.info(f"ETH Macro strategy: {len(signals)} signals generated")
-        else:
-            top_reason = max(skip_reasons, key=skip_reasons.get) if skip_reasons else "no_eligible_markets"
-            logger.info(f"ETH Macro strategy: 0 signals (BTC_HTF={btc_htf_bias}, top_skip={top_reason})")
         gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
         if gate_samples:
             logger.info(f"  [gate-dist] {gate_distributions}")
+        _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
+        logger.info(
+            f"ETH Macro SCAN_DIAG side={allowed_side} BTC_HTF={btc_htf_bias} eth_1H_trend={mtt.h1_trend} "
+            f"enforce_alt_1h={self.enforce_alt_1h_alignment} markets={len(eth_markets)} signals={len(signals)} "
+            f"skips_top6={_skip_top}"
+        )
         self.last_scan_stats = {
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(eth_markets),
             "btc_htf_bias": btc_htf_bias,
+            "allowed_side": allowed_side,
+            "alt_1h_trend": mtt.h1_trend,
+            "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }

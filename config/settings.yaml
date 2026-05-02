@@ -30,7 +30,7 @@ polymarket:
 # ============================================
 trading:
   # Single trading loop: scan, exits, crypto strategies, resolution (seconds). Was 300s main + 120s crypto; now one cadence.
-  cycle_interval_sec: 120
+  cycle_interval_sec: 60
   # Dry run mode (no real trades)
   dry_run: true
   # Position sizing (USD per trade). Polymarket: BUY=$, SELL=shares; strategies always compute $.
@@ -161,7 +161,7 @@ strategies:
     entry_window_5m_max: 5.0
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 120
+    entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 1.0
     entry_window_auto_align_jitter_sec: 10
     # Price zones where AI is skipped (edge is obvious)
@@ -272,9 +272,8 @@ strategies:
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
-    entry_price_min: 0.46         # Mid-band 0.47-0.49 was loss-heavy in paper reset_20260416 — stale "100% WR" claim removed; re-verify with ≥15 trades post-change
-                                  # Below 0.46 = fighting market's existing directional view without enough edge
-    entry_price_max: 0.54         # Leave unchanged for now to avoid over-constraining 15m sample
+    entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
+    entry_price_max: 0.58
     # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
     min_lag_magnitude_pct: 0.40   # Keep until larger live sample confirms raising it helps
                                   # Higher threshold filters weak/stale lag signals
@@ -282,8 +281,10 @@ strategies:
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
-    # Macro NEUTRAL + no BTC spike and no lag: skip alt 1H fallback (chop / no-edge entries)
-    neutral_macro_require_spike_or_lag: true
+    # Macro NEUTRAL + no BTC spike and no lag: allow alt 1H fallback when false (sideways / starvation fix)
+    neutral_macro_require_spike_or_lag: false
+    # False = BTC HTF sets side even when alt 1H trend/MACD still disagrees (lag / catch-up thesis)
+    enforce_alt_1h_alignment: false
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
@@ -326,19 +327,18 @@ strategies:
     entry_window_15m_max: 15.0    # minutes remaining — allow freshly listed windows
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
     entry_window_5m_min: 0.0      # minutes remaining (avoid missing late-cycle 5m windows)
-    entry_window_5m_max: 5.0      # minutes remaining
-    # Auto-align entry windows to scan cadence to reduce timing misses from loop jitter.
+    entry_window_5m_max: 4.5      # earlier-in-candle entries; auto-align assumes 60s cadence below
+    # Auto-align: expansion uses max(cadence, max_expand) in code; raise max_expand to reduce outside_entry_window.
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 120
-    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 2.0
     entry_window_auto_align_jitter_sec: 10
 
     # ── BTC minimum dollar move required before entering ──
     # BTC must have moved at least this many dollars in the relevant window.
-    # Lowered from 72/55: at BTC ~72k, 0.05% move = $36 — previous thresholds
-    # blocked entries in normal volatility. Keep enough to filter dead chop.
-    btc_min_move_dollars_15m: 15.0   # relaxed to avoid dead tape starvation
-    btc_min_move_dollars_5m: 5.0     # relaxed to allow low-vol 5m participation
+    # Flat tape (~±$30 on spot): lower bars; still filters complete stillness.
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
 
   # ETH Macro — same architecture as sol_macro; ETHUSDT on Binance vs BTC lag/correlation.
@@ -351,6 +351,7 @@ strategies:
     min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
     min_edge_15m_when_ltf_unconfirmed: 0.11   # explicit; was defaulting to 0.10 in code; raised to match SOL
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
+    enforce_alt_1h_alignment: false
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
@@ -364,8 +365,8 @@ strategies:
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
-    entry_price_min: 0.46
-    entry_price_max: 0.54
+    entry_price_min: 0.42
+    entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
     rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
     rsi_sell_block_below: 40.0    # Block SELL_YES when ETH is already oversold and more likely to bounce
@@ -405,10 +406,10 @@ strategies:
     entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
     entry_window_5m_min: 0.0      # align with sol_macro — avoid missing late-cycle 5m windows
-    entry_window_5m_max: 5.0
+    entry_window_5m_max: 4.5
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 120
-    entry_window_auto_align_max_expand_min: 1.5
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 2.0
     entry_window_auto_align_jitter_sec: 15
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
@@ -424,8 +425,8 @@ strategies:
     # ETH MACD histogram scales ~20–30x vs SOL (price ~$2k+ vs ~$80); floor must not share SOL’s 0.03.
     iql_15m_enabled: true
     iql_15m_hist_floor: 4.0
-    btc_min_move_dollars_15m: 15.0   # align with sol_macro — reduce dead-tape starvation
-    btc_min_move_dollars_5m: 5.0
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
 
   # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy.
@@ -449,8 +450,8 @@ strategies:
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
-    entry_price_min: 0.46
-    entry_price_max: 0.54
+    entry_price_min: 0.42
+    entry_price_max: 0.58
     min_lag_magnitude_pct: 0.30
     dynamic_beta_min: 0.50         # HYPE is structurally higher-beta and more regime-volatile than SOL
     dynamic_beta_max: 4.00         # Wider normal-regime clamp than SOL/ETH/XRP
@@ -464,20 +465,21 @@ strategies:
     max_concurrent_positions: 3
     entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
-    entry_window_5m_min: 0.75
-    entry_window_5m_max: 5.0
+    entry_window_5m_min: 0.0
+    entry_window_5m_max: 4.5
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 120
-    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 2.0
     entry_window_auto_align_jitter_sec: 10
     btc_spike_floor_pct_5m: 0.18
     btc_spike_floor_pct_15m: 0.55
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
+    enforce_alt_1h_alignment: false
     require_btc_catalyst_5m: true
     require_btc_catalyst_15m_when_unconfirmed: true
     anti_ltf_gate_enabled: false
-    require_ltf_confirmation: true
+    require_ltf_confirmation: false
     center_price_band: 0.005
     min_edge_when_centered: 0.13
     center_price_requires_catalyst: true
@@ -492,8 +494,8 @@ strategies:
     iql_15m_hist_floor: 0.06
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.50
-    btc_min_move_dollars_15m: 28.0
-    btc_min_move_dollars_5m: 15.0
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
 
   # XRP Macro — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
@@ -517,14 +519,15 @@ strategies:
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.15
-    entry_price_min: 0.46
-    entry_price_max: 0.54
+    entry_price_min: 0.42
+    entry_price_max: 0.58
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
-    require_btc_catalyst_5m: true
+    require_btc_catalyst_5m: false
+    enforce_alt_1h_alignment: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
@@ -547,14 +550,14 @@ strategies:
     max_concurrent_positions: 2
     entry_window_15m_min: 4.0
     entry_window_15m_max: 15.0
-    entry_window_5m_min: 0.75
-    entry_window_5m_max: 5.0
+    entry_window_5m_min: 0.0
+    entry_window_5m_max: 4.5
     entry_window_auto_align: true
-    entry_window_align_scan_interval_sec: 120
-    entry_window_auto_align_max_expand_min: 1.0
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 2.0
     entry_window_auto_align_jitter_sec: 10
-    btc_min_move_dollars_15m: 28.0
-    btc_min_move_dollars_5m: 15.0
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
 
 # ============================================

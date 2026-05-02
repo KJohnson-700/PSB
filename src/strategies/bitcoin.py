@@ -254,9 +254,10 @@ class BitcoinStrategy:
         default_expand = 1.0 if is_5m else 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
         jitter_sec = float(self.config.get("entry_window_auto_align_jitter_sec", 15))
-        expansion_min = min(scan_interval_sec / 120.0, max_expand_min) + max(0.0, jitter_sec) / 60.0
+        cadence_half_min = scan_interval_sec / 120.0
+        expansion_min = max(cadence_half_min, max_expand_min) + max(0.0, jitter_sec) / 60.0
 
-        market_window_min = 5.0 if is_5m else 15.0
+        market_window_min = 6.0 if is_5m else 15.0
         aligned_min = max(0.0, win_min - expansion_min)
         aligned_max = min(market_window_min, win_max + expansion_min)
         if aligned_max <= aligned_min:
