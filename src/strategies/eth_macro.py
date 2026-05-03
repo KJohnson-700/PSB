@@ -20,6 +20,7 @@ from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market
 from src.strategies.strategy_config import resolve_enabled_flag
+from src.analysis.btc_1h_regime import regime_price
 from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -99,6 +100,33 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.signal_15m_short_threshold = float(self.config.get("signal_15m_short_threshold", 0.45))
         self.signal_4h_long_threshold = float(self.config.get("signal_4h_long_threshold", 0.70))
         self.signal_4h_short_threshold = float(self.config.get("signal_4h_short_threshold", 0.30))
+        # When BTC HTF is bullish but 5m/15m lack SPIKE/DRIFT candle labels, entries starve.
+        # If BTC 1H continuation already passes, allow bypassing strict STF impulse requirements.
+        _stf_bypass = self.config.get("btc_follow_stf_bypass_if_1h_ok")
+        if _stf_bypass is None:
+            _stf_bypass = self.config.get("btc_follow_5m_bypass_if_1h_ok", False)
+        self.btc_follow_stf_bypass_if_1h_ok = bool(_stf_bypass)
+        # 15m path otherwise requires MACD + candle momentum aligned (SPIKE_UP/DRIFT_UP for LONG).
+        # When True, LONG also passes if 15m MACD histogram is rising above min (grind / no sharp impulse).
+        self.btc_follow_15m_allow_macd_grind = bool(
+            self.config.get("btc_follow_15m_allow_macd_grind", False)
+        )
+        # When BTC 4H HTF already matches trade side, bypass strict 5m/15m BTC impulse gates (ETH leg still gates).
+        self.btc_follow_stf_bypass_when_macro_agrees = bool(
+            self.config.get("btc_follow_stf_bypass_when_macro_agrees", False)
+        )
+
+    def _eth_stf_bypass_when_macro_agrees(
+        self, btc_htf_bias: str, market_allowed_side: str
+    ) -> bool:
+        """True when BULLISH+LONG or BEARISH+SHORT — STF BTC follow can still fail in grindy tape."""
+        if not self.btc_follow_stf_bypass_when_macro_agrees:
+            return False
+        if btc_htf_bias == "BULLISH" and market_allowed_side == "LONG":
+            return True
+        if btc_htf_bias == "BEARISH" and market_allowed_side == "SHORT":
+            return True
+        return False
 
     def _record_eth_abort(self, reason: str, extra: Optional[Dict[str, Any]] = None) -> None:
         payload: Dict[str, Any] = {
@@ -177,7 +205,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         min_hist = self.btc_follow_15m_hist_min
         direction = btc_ta.candle_momentum.m15_direction
         if allowed_side == "LONG":
-            return (
+            strict = (
                 macd_15m.crossover == "BULLISH_CROSS"
                 or (
                     macd_15m.histogram > min_hist
@@ -185,7 +213,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     and direction in ("SPIKE_UP", "DRIFT_UP")
                 )
             )
-        return (
+            if strict:
+                return True
+            if self.btc_follow_15m_allow_macd_grind:
+                return macd_15m.histogram > min_hist and macd_15m.histogram_rising
+            return False
+        strict_short = (
             macd_15m.crossover == "BEARISH_CROSS"
             or (
                 macd_15m.histogram < -min_hist
@@ -193,6 +226,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and direction in ("SPIKE_DOWN", "DRIFT_DOWN")
             )
         )
+        if strict_short:
+            return True
+        if self.btc_follow_15m_allow_macd_grind:
+            return macd_15m.histogram < -min_hist and not macd_15m.histogram_rising
+        return False
 
     def _btc_follow_5m_impulse_score(self, momentum: CandleMomentum, allowed_side: str) -> tuple[float, List[str]]:
         direction = momentum.m5_direction
@@ -346,6 +384,30 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         corr = eth_ta.correlation
         btc_htf_bias = self._get_btc_htf_bias(btc_ta)
+        _ovr = (self.config.get("btc_htf_bias_dry_run_override") or "").strip().upper()
+        if _ovr in {"BULLISH", "BEARISH", "NEUTRAL"}:
+            if self.full_config.get("trading", {}).get("dry_run", True):
+                logger.warning(
+                    "ETH Macro: btc_htf_bias_dry_run_override=%s (paper / dry_run only)",
+                    _ovr,
+                )
+                btc_htf_bias = _ovr
+            else:
+                logger.warning(
+                    "ETH Macro: ignoring btc_htf_bias_dry_run_override=%s — trading.dry_run is false",
+                    _ovr,
+                )
+        btc_1h_regime = "BULL"
+        if self._btc_1h_regime_gates.get("enabled", False):
+            btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
+            logger.info(
+                "ETH Macro BTC 1H regime: %s | min_edge×%.2f size×%.2f | spot=%.0f SMA20=%.0f",
+                btc_1h_regime,
+                self._regime_min_edge_mult(btc_1h_regime),
+                self._regime_size_mult(btc_1h_regime),
+                regime_price(btc_ta),
+                float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
+            )
 
         # Align with SolMacroStrategy: BTC 4H NEUTRAL must not idle ETH while up/down markets refresh.
         skip_btc_follow_1h = False
@@ -606,7 +668,21 @@ class ETHMacroStrategy(SolMacroStrategy):
                 btc_impulse, btc_reasons = self._btc_follow_5m_impulse_score(
                     btc_mom, market_allowed_side
                 )
-                if self.btc_follow_5m_requires_impulse and btc_impulse <= 0:
+                _impulse_gate_ok = btc_impulse > 0
+                if (
+                    self.btc_follow_stf_bypass_if_1h_ok
+                    and not _impulse_gate_ok
+                    and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
+                ):
+                    _impulse_gate_ok = True
+                    btc_reasons.append("bypass_5m_impulse_btc_1h_ok")
+                if (
+                    self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side)
+                    and not _impulse_gate_ok
+                ):
+                    _impulse_gate_ok = True
+                    btc_reasons.append("bypass_5m_stf_macro_agrees")
+                if self.btc_follow_5m_requires_impulse and not _impulse_gate_ok:
                     _bump_skip("btc_5m_no_impulse")
                     continue
                 eth_5m_adj, eth_reasons = self._eth_5m_macd_score(
@@ -626,8 +702,16 @@ class ETHMacroStrategy(SolMacroStrategy):
                 reason_parts.extend(["UPDOWN_5m", *btc_reasons, *eth_reasons])
             else:
                 if not self._btc_follow_15m_impulse_ok(btc_ta, market_allowed_side):
-                    _bump_skip("btc_15m_not_following")
-                    continue
+                    if self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side):
+                        pass
+                    elif (
+                        self.btc_follow_stf_bypass_if_1h_ok
+                        and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
+                    ):
+                        pass
+                    else:
+                        _bump_skip("btc_15m_not_following")
+                        continue
                 eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
                     eth.macd_15m, market_allowed_side
                 )
@@ -650,9 +734,14 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
 
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
+            if self._btc_1h_regime_gates.get("enabled", False):
+                effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
-            if _hold_age < self.ai_hold_veto_ttl_sec and edge < self.min_edge_5m_ai_override:
+            _ai_override_bar = float(self.min_edge_5m_ai_override)
+            if self._btc_1h_regime_gates.get("enabled", False):
+                _ai_override_bar *= self._regime_min_edge_mult(btc_1h_regime)
+            if _hold_age < self.ai_hold_veto_ttl_sec and edge < _ai_override_bar:
                 _bump_skip("ai_hold_veto")
                 continue
 
@@ -745,6 +834,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
             )
+            if self._btc_1h_regime_gates.get("enabled", False):
+                raw_size *= self._regime_size_mult(btc_1h_regime)
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -780,6 +871,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code="eth",
                 htf_bias=btc_htf_bias,
+                btc_1h_regime=btc_1h_regime,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(est_prob_up, 4),
@@ -802,6 +894,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(eth_markets),
+            "btc_1h_regime": btc_1h_regime,
+            "btc_1h_regime_gates_enabled": bool(
+                self._btc_1h_regime_gates.get("enabled", False)
+            ),
             "btc_htf_bias": btc_htf_bias,
             "allowed_side": allowed_side,
             "direction_source": self.direction_source,

@@ -100,11 +100,14 @@ class HYPEMacroStrategy(SolMacroStrategy):
         regardless of whether AI branch was used.
         """
         signals = await super().scan_and_analyze(markets, bankroll)
-        hard_min_edge = max(0.05, float(self.config.get("hard_min_edge", 0.05)))
+        base_hard = max(0.05, float(self.config.get("hard_min_edge", 0.05)))
         filtered: List[SolMacroSignal] = []
         rejected = 0
 
         for signal in signals:
+            hard_min_edge = base_hard
+            if self._btc_1h_regime_gates.get("enabled", False) and signal.btc_1h_regime:
+                hard_min_edge *= self._regime_min_edge_mult(signal.btc_1h_regime)
             if float(signal.edge or 0.0) < hard_min_edge:
                 rejected += 1
                 logger.info(

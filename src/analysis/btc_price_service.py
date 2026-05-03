@@ -158,6 +158,9 @@ class TechnicalAnalysis:
     daily_trend: str = "NEUTRAL"
     h4_trend: str = "NEUTRAL"
     h1_trend: str = "NEUTRAL"
+    # 1H close vs SMA(20) — regime buckets for alt macro gates (see btc_1h_regime.py)
+    sma_1h_20: float = 0.0
+    btc_1h_close: float = 0.0  # last 1H candle close; mirrors current_price when TA is built from 1H
     # Anchored Volume Profile
     volume_profile: AnchoredVolumeProfile = field(default_factory=AnchoredVolumeProfile)
     # Chainlink
@@ -917,6 +920,10 @@ class BTCPriceService:
             return None
 
         current_price = float(df_1h["close"].iloc[-1])
+        close_1h = df_1h["close"]
+        sma_1h_20 = (
+            float(self._calc_sma(close_1h, 20).iloc[-1]) if len(close_1h) >= 20 else current_price
+        )
 
         # --- EMAs from 4h ---
         close_4h = df_4h["close"]
@@ -1005,6 +1012,8 @@ class BTCPriceService:
 
         analysis = TechnicalAnalysis(
             current_price=current_price,
+            sma_1h_20=sma_1h_20,
+            btc_1h_close=current_price,
             ema_9=ema_9,
             ema_21=ema_21,
             ema_50=ema_50,

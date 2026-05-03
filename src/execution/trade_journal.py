@@ -238,6 +238,7 @@ class TradeJournal:
             "pnl": 0.0,
             "edge": edge,
             "confidence": confidence,
+            "entry_reason": reason,
             "opened_at": entry.timestamp,
             "weather_subtype": merged_extra.get("weather_subtype"),
             # Preserve full signal context so exits can reference entry conditions
@@ -274,8 +275,12 @@ class TradeJournal:
         pos["current_price"] = current_price
         pos["pnl"] = round(pnl, 4)
 
+        # Carry entry diagnostics forward — raw defaults (0 / "") made PRICE_UPDATE rows look like "empty" trades.
+        _edge = float(pos.get("edge", 0.0) or 0.0)
+        _conf = float(pos.get("confidence", 0.0) or 0.0)
+        _why = pos.get("entry_reason") or ""
         entry = JournalEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event="PRICE_UPDATE",
             trade_id=trade_id,
             market_id=pos["market_id"],
@@ -289,6 +294,9 @@ class TradeJournal:
             current_price=current_price,
             pnl=pnl,
             bankroll=bankroll,
+            edge=_edge,
+            confidence=_conf,
+            reason=f"mark_to_market|{_why}" if _why else "mark_to_market",
         )
         self._append_entry(entry)
         self._save_positions()

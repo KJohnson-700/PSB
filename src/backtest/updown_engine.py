@@ -503,6 +503,12 @@ class UpdownBacktestEngine:
                 .reset_index()
             )
         macd_1h = self._svc.calc_macd(df_1h) if len(df_1h) >= 30 else MACDResult()
+        sma_1h_20 = (
+            float(BTCPriceService._calc_sma(df_1h["close"], 20).iloc[-1])
+            if len(df_1h) >= 20
+            else 0.0
+        )
+        btc_1h_close = float(df_1h["close"].iloc[-1]) if len(df_1h) else 0.0
 
         # -- Support / Resistance from last 60 HTF bars ------------------------
         sr_df = df_htf.tail(60)
@@ -521,6 +527,8 @@ class UpdownBacktestEngine:
 
         return TechnicalAnalysis(
             current_price=current_price,
+            sma_1h_20=sma_1h_20,
+            btc_1h_close=btc_1h_close,
             ema_9=ema_9, ema_21=ema_21, ema_50=ema_50, ema_200=ema_200,
             rsi_14=rsi_14,
             macd_4h=macd_4h,

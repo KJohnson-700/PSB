@@ -61,8 +61,10 @@ trading:
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
     max_hold_hours: 72           # Exit after 72 hours regardless (non-updown markets)
     # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m and 15m candle markets)
-    updown_stop_cents: 0.03      # Exit if price moves ≥3¢ against entry within the exit window
-    updown_exit_window_mins: 2.0 # Begin stop-check this many minutes before market expiry
+    # SOL paper (May 2026): many exits were updown_time_stop in the final minutes — tighten the
+    # window slightly and require a larger adverse move vs entry to reduce chop exits (winners need room).
+    updown_stop_cents: 0.04      # Exit if price moves ≥4¢ against entry within the exit window
+    updown_exit_window_mins: 1.5 # Only the last ~1.5m before expiry uses the adverse-move check
     updown_max_hold_mins: 20.0   # Safety valve: exit updown positions held >20 min (no end_date)
 
 data_collection:
@@ -169,7 +171,7 @@ strategies:
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 2.0
+    entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 10
     # Shave seconds off mins_left before band check (sync + strategy evaluation latency).
     entry_window_latency_buffer_sec: 12
@@ -291,8 +293,8 @@ strategies:
     lag_signal_min_pct: 0.12
     # Macro NEUTRAL + no BTC spike and no lag: allow alt 1H fallback when false (sideways / starvation fix)
     neutral_macro_require_spike_or_lag: false
-    # False = BTC HTF sets side even when alt 1H trend/MACD still disagrees (lag / catch-up thesis)
-    enforce_alt_1h_alignment: false
+    # True = do not LONG into alt 1H bearish / SHORT into alt 1H bullish (reduces fading SOL headwind).
+    enforce_alt_1h_alignment: true
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
@@ -339,7 +341,8 @@ strategies:
     # Auto-align: expansion uses max(cadence, max_expand) in code; raise max_expand to reduce outside_entry_window.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 2.0
+    # Widen band vs cadence latency to cut outside_entry_window skips (May 2026 ops review).
+    entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
 
@@ -349,6 +352,18 @@ strategies:
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
+    # BTC 1H close vs SMA(20): BULL / RANGE / BEAR — scale min_edge (tighter) + Kelly size in chop / bear tape.
+    btc_1h_regime_gates:
+      enabled: true
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
 
   # ETH Macro — same architecture as sol_macro; ETHUSDT on Binance vs BTC lag/correlation.
   eth_macro:
@@ -365,6 +380,8 @@ strategies:
     # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
     # - signal_first: market 15m signal can set side directly (test mode)
     direction_source: hybrid
+    # Paper only (requires trading.dry_run): set BEARISH to exercise ETH SHORT / SELL_YES path without waiting for BTC.
+    btc_htf_bias_dry_run_override: null
     signal_15m_long_threshold: 0.55
     signal_15m_short_threshold: 0.45
     signal_4h_long_threshold: 0.70
@@ -394,6 +411,12 @@ strategies:
     btc_follow_1h_recovery_hist_floor: 80.0    # magnitude: LONG hist > -80 when rising; SHORT hist < +80 when falling
     btc_follow_1h_allow_floor_without_rising: true   # LONG: hist > -floor even if histogram falling; SHORT: 0<=hist<floor
     btc_follow_15m_hist_min: 0.03 # BTC-follow redesign: require real BTC 15m impulse, not flat drift
+    # When BTC 1H continuation already passes, do not require sharp 5m/15m SPIKE/DRIFT (reduces starvation in grindy uptrends).
+    btc_follow_stf_bypass_if_1h_ok: true
+    # If strict 15m still fails, allow rising MACD histogram above min (no candle-direction requirement).
+    btc_follow_15m_allow_macd_grind: true
+    # BULLISH+LONG or BEARISH+SHORT: allow past strict BTC 5m/15m follow if 4H HTF already agrees (reduces starvation).
+    btc_follow_stf_bypass_when_macro_agrees: true
     btc_follow_5m_requires_impulse: true
     eth_follow_5m_min_adj: 0.04   # ETH must confirm BTC with at least 5m histogram/cross-quality momentum
     eth_follow_15m_hist_min: 0.03 # ETH 15m needs real same-direction histogram magnitude, not just above/below signal
@@ -427,7 +450,7 @@ strategies:
     entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 2.0
+    entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 15
     entry_window_latency_buffer_sec: 12
     btc_spike_floor_pct_5m: 0.15
@@ -447,6 +470,17 @@ strategies:
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
+    btc_1h_regime_gates:
+      enabled: true
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
 
   # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy (SolMacroStrategy + Hyperliquid HYPE leg).
   # Align prediction/stack with sol_macro: same edge floors, BTC spike floors, catalyst rules, center band off,
@@ -497,7 +531,7 @@ strategies:
     entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 2.0
+    entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
     btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
@@ -520,6 +554,17 @@ strategies:
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
+    btc_1h_regime_gates:
+      enabled: true
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
 
   # XRP Macro — BTC-to-XRP correlation lag strategy (replaces dump-hedge; keep off until backtest confirms edge).
   xrp_macro:
@@ -577,12 +622,23 @@ strategies:
     entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 2.0
+    entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
+    btc_1h_regime_gates:
+      enabled: true
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
 
 # ============================================
 # AI CONFIGURATION

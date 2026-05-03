@@ -60,6 +60,12 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
+from src.analysis.btc_1h_regime import (
+    classify_btc_1h_sma_regime,
+    regime_price,
+    DEFAULT_MIN_EDGE_MULT,
+    DEFAULT_SIZE_MULT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +92,9 @@ class SolMacroSignal(BaseModel):
     ai_used: bool = Field(default=False, description="Whether AI was consulted")
     # Coach features — logged to journal extra dict for pattern analysis
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
+    btc_1h_regime: Optional[str] = Field(
+        None, description="BTC 1H vs SMA(20) bucket: BULL/RANGE/BEAR when regime gates enabled"
+    )
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
@@ -278,6 +287,10 @@ class SolMacroStrategy:
         self.require_btc_volatility_gate = bool(
             self.config.get("require_btc_volatility_gate", False)
         )
+        # BTC 1H close vs SMA(20): scales min_edge bars and size for RANGE/BEAR chop / downtrends.
+        self._btc_1h_regime_gates: Dict[str, Any] = dict(
+            self.config.get("btc_1h_regime_gates") or {}
+        )
         self.min_btc_move_pct_5m_for_lag_entries = float(
             self.config.get("min_btc_move_pct_5m_for_lag_entries", 0.15)
         )
@@ -304,6 +317,26 @@ class SolMacroStrategy:
 
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
+
+    def _classify_btc_1h_regime(self, btc_ta: TechnicalAnalysis) -> str:
+        """BULL / RANGE / BEAR from 1H close vs SMA(20)."""
+        cfg = self._btc_1h_regime_gates
+        if not cfg.get("enabled", False):
+            return "BULL"
+        band = float(cfg.get("range_band_pct", 0.0012))
+        price = regime_price(btc_ta)
+        sma = float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0)
+        return classify_btc_1h_sma_regime(price, sma, band)
+
+    def _regime_min_edge_mult(self, regime: str) -> float:
+        cfg = self._btc_1h_regime_gates.get("min_edge_mult") or {}
+        base = DEFAULT_MIN_EDGE_MULT.get(regime, 1.0)
+        return float(cfg.get(regime, base))
+
+    def _regime_size_mult(self, regime: str) -> float:
+        cfg = self._btc_1h_regime_gates.get("size_mult") or {}
+        base = DEFAULT_SIZE_MULT.get(regime, 1.0)
+        return float(cfg.get(regime, base))
 
     @staticmethod
     def _signal_lag_magnitude(corr) -> Optional[float]:
@@ -831,9 +864,20 @@ class SolMacroStrategy:
             return []
 
         btc_ta = self.btc_service.get_full_analysis()
+        btc_1h_regime = "BULL"
         if btc_ta:
             btc_htf_bias = self._get_btc_htf_bias(btc_ta)
             logger.info(f"BTC HTF: {btc_htf_bias} | BTC ${btc_ta.current_price:,.0f}")
+            if self._btc_1h_regime_gates.get("enabled", False):
+                btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
+                logger.info(
+                    "BTC 1H regime: %s | min_edge×%.2f size×%.2f | 1H=%.0f SMA20=%.0f",
+                    btc_1h_regime,
+                    self._regime_min_edge_mult(btc_1h_regime),
+                    self._regime_size_mult(btc_1h_regime),
+                    regime_price(btc_ta),
+                    float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
+                )
         else:
             btc_htf_bias = None
             logger.warning("BTC HTF unavailable — falling back to alt-only analysis")
@@ -1032,6 +1076,9 @@ class SolMacroStrategy:
         # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
         _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
+        _regime_ai_override = float(self.min_edge_5m_ai_override)
+        if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+            _regime_ai_override *= self._regime_min_edge_mult(btc_1h_regime)
 
         for market in sol_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -1610,10 +1657,10 @@ class SolMacroStrategy:
                 _hold_ts = self._ai_hold_cache.get(market.id, 0)
                 _hold_age = time.time() - _hold_ts
                 if _hold_age < self.ai_hold_veto_ttl_sec:
-                    if edge < self.min_edge_5m_ai_override:
+                    if edge < _regime_ai_override:
                         logger.info(
                             f"  {self._signal_strategy_name} ai-hold veto '{market.question[:45]}' — "
-                            f"edge={edge:.4f} < override={self.min_edge_5m_ai_override:.4f} "
+                            f"edge={edge:.4f} < override={_regime_ai_override:.4f} "
                             f"(AI said HOLD {_hold_age:.0f}s ago)"
                         )
                         continue
@@ -1736,6 +1783,8 @@ class SolMacroStrategy:
                 effective_min_edge = max(
                     effective_min_edge, self.min_edge_15m_when_ltf_unconfirmed
                 )
+            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+                effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (
@@ -1899,6 +1948,8 @@ class SolMacroStrategy:
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
             )
+            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+                raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
@@ -1930,6 +1981,7 @@ class SolMacroStrategy:
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code=_spot_key,
                 htf_bias=primary_htf_bias,
+                btc_1h_regime=btc_1h_regime if btc_ta else None,
                 window_size="5m" if is_5m else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(estimated_prob, 4),
@@ -1985,6 +2037,10 @@ class SolMacroStrategy:
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(sol_markets),
+            "btc_1h_regime": btc_1h_regime,
+            "btc_1h_regime_gates_enabled": bool(
+                self._btc_1h_regime_gates.get("enabled", False)
+            ),
             "btc_htf_bias": primary_htf_bias,
             "alt_htf_bias": macro_trend,
             "allowed_side": allowed_side,

@@ -1,4 +1,8 @@
-"""Quick journal check script."""
+"""Quick journal check script.
+
+When analyzing signal quality, filter entries.jsonl to event=="ENTRY" — PRICE_UPDATE
+rows repeat open-position marks and (before a journal fix) showed edge=0 by design.
+"""
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
