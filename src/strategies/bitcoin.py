@@ -257,9 +257,12 @@ class BitcoinStrategy:
         cadence_half_min = scan_interval_sec / 120.0
         expansion_min = max(cadence_half_min, max_expand_min) + max(0.0, jitter_sec) / 60.0
 
-        market_window_min = 6.0 if is_5m else 15.0
         aligned_min = max(0.0, win_min - expansion_min)
-        aligned_max = min(market_window_min, win_max + expansion_min)
+        expanded_upper = win_max + expansion_min
+        # Do not cap expanded_upper by a fixed 15m/6m candle — configs above 15 were
+        # silently ignored (early-listed Polymarket contracts often report mins_left > 15).
+        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+        aligned_max = min(expanded_upper, hard_cap) if hard_cap > 0 else expanded_upper
         if aligned_max <= aligned_min:
             return win_min, win_max
         return aligned_min, aligned_max
@@ -839,6 +842,9 @@ class BitcoinStrategy:
                 return round(vs[idx], 4)
             return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
 
+        _sample("ltf_strength", ltf_strength)
+        _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
+
         for market in btc_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
                 continue
@@ -911,6 +917,7 @@ class BitcoinStrategy:
                     if market.end_date.tzinfo is None else market.end_date
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+                _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
                 if is_5m:
                     # 5m candles: enter near candle open. Optionally auto-align to scan cadence.
                     _win_min, _win_max = self._resolve_entry_window_bounds(
@@ -926,15 +933,15 @@ class BitcoinStrategy:
                         default_max=14.5,
                     )
                 _sample("mins_left", _mins_left)
-                if _mins_left < _win_min or _mins_left > _win_max:
+                if _eval_left < _win_min or _eval_left > _win_max:
                     _bump_skip("outside_entry_window")
                     logger.debug(
                         f"  BTC skip '{market.question[:40]}' — "
-                        f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
+                        f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
                     )
                     continue
                 _ai_window_open = self._within_ai_decision_window(
-                    mins_left=_mins_left,
+                    mins_left=_eval_left,
                     is_5m=is_5m,
                 )
 

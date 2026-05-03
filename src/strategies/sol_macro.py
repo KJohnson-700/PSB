@@ -360,10 +360,10 @@ class SolMacroStrategy:
         cadence_half_min = scan_interval_sec / 120.0
         expansion_min = max(cadence_half_min, max_expand_min) + max(0.0, jitter_sec) / 60.0
 
-        # Cap by full candle width: 5m markets use ≤6 min resolution; 15m uses 15.
-        market_window_min = 6.0 if is_5m else 15.0
         aligned_min = max(0.0, win_min - expansion_min)
-        aligned_max = min(market_window_min, win_max + expansion_min)
+        expanded_upper = win_max + expansion_min
+        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+        aligned_max = min(expanded_upper, hard_cap) if hard_cap > 0 else expanded_upper
         if aligned_max <= aligned_min:
             return win_min, win_max
         return aligned_min, aligned_max
@@ -1031,6 +1031,7 @@ class SolMacroStrategy:
 
         # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
         _sample("ltf_strength", ltf_strength)
+        _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
         for market in sol_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -1093,6 +1094,7 @@ class SolMacroStrategy:
                     if market.end_date.tzinfo is None else market.end_date
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+                _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
                 if is_5m:
                     _win_min, _win_max = self._resolve_entry_window_bounds(
                         is_5m=True,
@@ -1106,15 +1108,15 @@ class SolMacroStrategy:
                         default_max=14.33,
                     )
                 _sample("mins_left", _mins_left)
-                if _mins_left < _win_min or _mins_left > _win_max:
+                if _eval_left < _win_min or _eval_left > _win_max:
                     _bump_skip("outside_entry_window")
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — "
-                        f"{_mins_left:.1f}m left, need {_win_min}–{_win_max}m window"
+                        f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
                     )
                     continue
                 _ai_window_open = self._within_ai_decision_window(
-                    mins_left=_mins_left,
+                    mins_left=_eval_left,
                     is_5m=is_5m,
                 )
 
