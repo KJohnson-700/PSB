@@ -376,8 +376,8 @@ class SolMacroStrategy:
         return bool(UPDOWN_PATTERN.search(text))
 
     def _is_5m_market(self, market: Market) -> bool:
-        """Check if this is a 5-minute candle Up or Down market (≤6 min window)."""
-        return _market_window_minutes(market) <= 6
+        """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
+        return _market_window_minutes(market) <= 5
 
     def _resolve_entry_window_bounds(self, *, is_5m: bool, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
@@ -1439,9 +1439,15 @@ class SolMacroStrategy:
                         edge = est_prob_up - yes_price
                     else:
                         edge = (1.0 - est_prob_up) - (1.0 - yes_price)
-                    # Confidence: 5m MACD momentum is PRIMARY for 5m markets; lag removed
-                    lag_conf_5m = 0.0
-                    confidence = max(0.50, min(0.85, 0.50 + abs(m5_adj) * 2.5 + lag_conf_5m + abs(timing_bonus) * 0.3))
+                    # Confidence: 5m MACD momentum + RSI alignment + correlation strength
+                    _rsi_conf_5m = 0.03 if (
+                        (action == "BUY_YES" and sol.rsi_14 < 40) or
+                        (action == "SELL_YES" and sol.rsi_14 > 60)
+                    ) else 0.0
+                    _corr_conf_5m = max(0.0, (corr.correlation_1h - 0.50) * 0.10)
+                    confidence = max(0.50, min(0.85,
+                        0.50 + abs(m5_adj) * 2.0 + _rsi_conf_5m + _corr_conf_5m + abs(timing_bonus) * 0.3
+                    ))
 
                     reason_parts.extend([
                         "[5m]",

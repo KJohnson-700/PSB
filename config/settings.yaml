@@ -166,7 +166,7 @@ strategies:
     # Up/down entry timing window (minutes until resolution); edge/price gates still apply.
     # Note: listings often appear with mins_left > 15 before the quoted candle — entry_window_15m_max must reflect that.
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 45.0
+    entry_window_15m_max: 16.0
     entry_window_5m_min: 0.5      # tight 5m windows; fire earlier in candle
     entry_window_5m_max: 5.0
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
@@ -268,7 +268,7 @@ strategies:
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip; stops pure macro-guess 15m entries
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
-    center_price_band: 0.0
+    center_price_band: 0.02
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
@@ -293,7 +293,7 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     # Macro NEUTRAL + no BTC spike and no lag: allow alt 1H fallback when false (sideways / starvation fix)
-    neutral_macro_require_spike_or_lag: false
+    neutral_macro_require_spike_or_lag: true
     # True = do not LONG into alt 1H bearish / SHORT into alt 1H bullish (reduces fading SOL headwind).
     enforce_alt_1h_alignment: true
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
@@ -336,17 +336,17 @@ strategies:
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
     # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
     entry_window_15m_min: 2.0     # minutes remaining — balance early-candle edge vs cadence misses
-    entry_window_15m_max: 20.0
+    entry_window_15m_max: 16.0
     # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
-    updown_min_edge_mins_left_ramp_start_min: 12.0
-    updown_min_edge_mins_left_ramp_max_add: 0.045
+    updown_min_edge_mins_left_ramp_start_min: 15.0
+    updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
     # Block updown when journaled macro_leg (lag %) disagrees with side (e.g. LONG with negative leg).
     block_counter_macro_leg_updown: true
     updown_macro_leg_min_for_long: 0.0
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
     entry_window_5m_min: 0.0      # minutes remaining (avoid missing late-cycle 5m windows)
-    entry_window_5m_max: 4.5      # earlier-in-candle entries; auto-align assumes 60s cadence below
+    entry_window_5m_max: 3.0      # tightened from 4.5 — removes expired-market entries
     # Auto-align: expansion uses max(cadence, max_expand) in code; raise max_expand to reduce outside_entry_window.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
@@ -384,11 +384,12 @@ strategies:
     min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
     min_edge_15m_when_ltf_unconfirmed: 0.11   # explicit; was defaulting to 0.10 in code; raised to match SOL
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
+    block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
     # ETH side resolution:
     # - btc: legacy BTC HTF decides side
     # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
     # - signal_first: market 15m signal can set side directly (test mode)
-    direction_source: hybrid
+    direction_source: signal_first
     # Paper only (requires trading.dry_run): set BEARISH to exercise ETH SHORT / SELL_YES path without waiting for BTC.
     btc_htf_bias_dry_run_override: null
     signal_15m_long_threshold: 0.55
@@ -396,6 +397,9 @@ strategies:
     signal_4h_long_threshold: 0.70
     signal_4h_short_threshold: 0.30
     enforce_alt_1h_alignment: false
+    center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
@@ -423,13 +427,13 @@ strategies:
     # When BTC 1H continuation already passes, do not require sharp 5m/15m SPIKE/DRIFT (reduces starvation in grindy uptrends).
     btc_follow_stf_bypass_if_1h_ok: true
     # 5m only: when false, do not apply bypass_5m_impulse_btc_1h_ok (15m still uses btc_follow_stf_bypass_if_1h_ok above).
-    btc_follow_5m_allow_1h_impulse_bypass: false
+    btc_follow_5m_allow_1h_impulse_bypass: true
     # If strict 15m still fails, allow rising MACD histogram above min (no candle-direction requirement).
     btc_follow_15m_allow_macd_grind: true
     # BULLISH+LONG or BEARISH+SHORT: allow past strict BTC 5m/15m follow if 4H HTF already agrees (reduces starvation).
     btc_follow_stf_bypass_when_macro_agrees: true
     btc_follow_5m_requires_impulse: true
-    eth_follow_5m_min_adj: 0.04   # ETH must confirm BTC with at least 5m histogram/cross-quality momentum
+    eth_follow_5m_min_adj: 0.02   # lowered from 0.04 — easier 5m entry in grindy tape
     eth_follow_15m_hist_min: 0.03 # ETH 15m needs real same-direction histogram magnitude, not just above/below signal
     eth_follow_15m_min_adj: 0.04  # was 0.05 — slight relax to recover 15m lane without dropping hist_min
     oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
@@ -456,14 +460,17 @@ strategies:
     max_concurrent_positions: 3
     # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 45.0
-    entry_window_5m_min: 0.0      # align with sol_macro — avoid missing late-cycle 5m windows
-    entry_window_5m_max: 4.5
+    entry_window_15m_max: 16.0
+    entry_window_5m_min: 0.5      # raised from 0.0 — removes zero-minute entries
+    entry_window_5m_max: 3.0      # tightened from 4.5 — removes expired-market entries
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 15
     entry_window_latency_buffer_sec: 12
+    updown_min_edge_mins_left_ramp_start_min: 15.0
+    updown_min_edge_mins_left_ramp_max_add: 0.03
+    updown_min_edge_mins_left_ramp_span_min: 24.0
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
@@ -508,7 +515,8 @@ strategies:
     require_btc_catalyst_15m_when_unconfirmed: true
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
-    center_price_band: 0.0        # sol_macro parity — avoid stacked centered-market edge bumps
+    block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     max_edge_updown: 0.15
@@ -537,7 +545,7 @@ strategies:
     look_ahead_5m: 3
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 45.0
+    entry_window_15m_max: 16.0
     entry_window_5m_min: 0.0
     entry_window_5m_max: 4.5
     entry_window_auto_align: true
@@ -548,7 +556,7 @@ strategies:
     btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
-    neutral_macro_require_spike_or_lag: false
+    neutral_macro_require_spike_or_lag: true
     enforce_alt_1h_alignment: false
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
@@ -604,6 +612,10 @@ strategies:
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
+    block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: false
@@ -628,7 +640,7 @@ strategies:
     look_ahead_5m: 3
     max_concurrent_positions: 2
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 45.0
+    entry_window_15m_max: 16.0
     entry_window_5m_min: 0.0
     entry_window_5m_max: 4.5
     entry_window_auto_align: true

@@ -39,6 +39,7 @@ from src.market.scanner import Market
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
+from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -179,6 +180,9 @@ class BitcoinStrategy:
         self.macro_event_guard_before_min = int(self.config.get("macro_event_guard_before_min", 30))
         self.macro_event_guard_after_min = int(self.config.get("macro_event_guard_after_min", 30))
         self.macro_event_calendar = self.config.get("macro_event_calendar_utc", [])
+        self._btc_1h_regime_gates: Dict[str, Any] = dict(
+            self.config.get("btc_1h_regime_gates") or {}
+        )
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
@@ -235,8 +239,8 @@ class BitcoinStrategy:
         return bool(UPDOWN_PATTERN.search(text))
 
     def _is_5m_market(self, market: Market) -> bool:
-        """Check if this is a 5-minute candle Up or Down market (≤6 min window)."""
-        return _market_window_minutes(market) <= 6
+        """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
+        return _market_window_minutes(market) <= 5
 
     def _resolve_entry_window_bounds(self, *, is_5m: bool, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
@@ -517,6 +521,13 @@ class BitcoinStrategy:
     # LAYER 4: Edge Calculation
     # ──────────────────────────────────────────────────────────────
 
+    def _classify_btc_1h_regime(self, ta: TechnicalAnalysis) -> str:
+        cfg = self._btc_1h_regime_gates
+        price = ta.btc_1h_close or ta.current_price
+        sma = ta.sma_1h_20
+        band = float(cfg.get("range_band_pct", 0.0012))
+        return classify_btc_1h_sma_regime(price, sma, band)
+
     def _estimate_probability(
         self,
         btc_price: float,
@@ -526,6 +537,7 @@ class BitcoinStrategy:
         days_to_resolution: int,
         ltf_strength: float,
         timing_bonus: float,
+        regime: str = "BULL",
     ) -> float:
         """Estimate true probability incorporating all layers."""
         sabre = ta.trend_sabre
@@ -635,6 +647,13 @@ class BitcoinStrategy:
             base_prob = base_prob * (1 - time_factor * 0.3) + 0.50 * (time_factor * 0.3)
 
         final = base_prob + ltf_adj + timing_bonus + tension_adj + rsi_adj + sr_adj + vp_adj
+
+        # Regime dampening: compress conviction toward 0.50 in choppy/bear regimes
+        if regime == "RANGE":
+            final = 0.50 + (final - 0.50) * 0.80
+        elif regime == "BEAR":
+            final = 0.50 + (final - 0.50) * 0.70
+
         return max(0.05, min(0.95, final))
 
     # ──────────────────────────────────────────────────────────────
@@ -679,6 +698,9 @@ class BitcoinStrategy:
 
         # ── Fetch full technical analysis ONCE per cycle ──
         ta = self.btc_service.get_full_analysis()
+        btc_1h_regime = "BULL"
+        if ta and self._btc_1h_regime_gates.get("enabled", False):
+            btc_1h_regime = self._classify_btc_1h_regime(ta)
         if not ta:
             self.last_scan_stats = {
                 "enabled": True,
@@ -1283,6 +1305,7 @@ class BitcoinStrategy:
                     estimated_prob = self._estimate_probability(
                         btc_price, threshold, direction, ta,
                         days_to_resolution, ltf_strength, timing_bonus,
+                        regime=btc_1h_regime,
                     )
 
                     if action == "BUY_YES":
