@@ -42,6 +42,14 @@ Record the pillar you will tackle first (one at a time for core changes):
 
 **Exit criteria for Railway promote:** pytest green, relevant `scripts/run_backtest_*.py` if strategies/backtest touched, paper session check, `/health` + journal endpoints spot-check.
 
+## Out of scope for repo-only / Cursor-first work
+
+These need a **running bot** and **operator time**, not just merged code:
+
+- **Timed live assessments** (e.g. 45–60 minute baselines for `outside_entry_window`, per-strategy skip counts, session PnL): compare logs, `OPS_JSON` / `/api/ops/summary`, and journal after **restart or deploy** so YAML is loaded.
+- **Proving hosted cadence** (`trading.cycle_interval_sec` vs an old 120s behavior): requires **current deploy** checks (`/health`, `git_sha`), not only `config/settings.yaml` on disk.
+- **Parity of optional knobs across strategies** unless you explicitly want one policy: per-strategy blocks in `config/settings.yaml` can differ on purpose (example: `bitcoin` vs macro `entry_window_5m_min`); unifying them is a product choice, not automatic cleanup.
+
 ## Dashboard track already shipped (low coupling to trading)
 
 - SSE-driven Command Center heroes; slower `fetchAll`; extended `sse_stream` parity in `src/dashboard/server.py`.

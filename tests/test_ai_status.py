@@ -29,6 +29,36 @@ def test_compute_ai_ready_with_keys():
     assert st["chain_count"] == 1
 
 
+def test_compute_ai_ready_primary_key_only_fallback_missing():
+    """MiniMax (or any first provider) suffices; later chain entries need not have keys."""
+    cfg = {
+        "ai": {
+            "enabled": True,
+            "provider_chain": [
+                {"name": "minimax", "type": "minimax", "api_key_secret": "MINIMAX_API_KEY"},
+                {"name": "or_", "type": "openai", "api_key_secret": "OPENROUTER_API_KEY"},
+            ],
+        }
+    }
+    keys = {"MINIMAX_API_KEY": "sk-cp-xx", "OPENROUTER_API_KEY": ""}
+    st = compute_ai_status(cfg, keys)
+    assert st["ready"] is True
+    assert "OPENROUTER_API_KEY" in st["missing_keys"]
+
+
+def test_compute_ai_ready_local_provider_without_keys():
+    cfg = {
+        "ai": {
+            "enabled": True,
+            "provider_chain": [
+                {"name": "ollama_local", "type": "openai", "local": True},
+            ],
+        }
+    }
+    st = compute_ai_status(cfg, {})
+    assert st["ready"] is True
+
+
 def test_format_ai_log_line():
     st = {"ready": True, "reason": "ok", "chain_count": 1, "missing_keys": []}
     line = format_ai_log_line(st)

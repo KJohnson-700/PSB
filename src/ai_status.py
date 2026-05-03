@@ -21,6 +21,7 @@ def compute_ai_status(
     live_inferencing = bool(ai.get("live_inferencing", True))
     chain: List[Dict[str, Any]] = list(ai.get("provider_chain") or [])
     missing: List[str] = []
+    usable = 0
 
     def _has_secret(name: str) -> bool:
         if not name:
@@ -30,12 +31,21 @@ def compute_ai_status(
             return v is not None and str(v).strip() != ""
         return bool(os.getenv(name))
 
+    # Provider chain is fallthrough: need at least one callable provider (key or local).
     for p in chain:
+        if p.get("local"):
+            usable += 1
+            continue
         sec = p.get("api_key_secret")
-        if sec and not _has_secret(str(sec)):
-            missing.append(str(sec))
+        if not sec:
+            continue
+        name = str(sec)
+        if _has_secret(name):
+            usable += 1
+        else:
+            missing.append(name)
 
-    ready = enabled and len(chain) > 0 and len(missing) == 0
+    ready = enabled and len(chain) > 0 and usable >= 1
 
     if not enabled:
         reason = "LLM off (ai.enabled: false) — quant mode only"
@@ -46,8 +56,13 @@ def compute_ai_status(
         )
     elif not chain:
         reason = "LLM off — provider_chain is empty"
+    elif usable == 0:
+        reason = f"LLM off — no usable provider (missing env key(s): {', '.join(missing)})"
     elif missing:
-        reason = f"LLM off — missing env key(s): {', '.join(missing)}"
+        reason = (
+            f"LLM on — {usable} usable provider(s) in chain; "
+            f"optional fallbacks missing: {', '.join(missing)}"
+        )
     else:
         reason = f"LLM on — {len(chain)} provider(s), keys OK"
 
@@ -64,9 +79,13 @@ def compute_ai_status(
 def format_ai_log_line(status: Dict[str, Any]) -> str:
     """One-line startup message."""
     if status.get("ready") and status.get("live_inferencing", True):
+        extra = ""
+        miss = status.get("missing_keys") or []
+        if miss:
+            extra = f"; optional fallback key(s) missing: {', '.join(miss)}"
         return (
             f"AI STATUS: ON — {status['chain_count']} provider(s) in chain, "
-            "API keys present for configured secrets."
+            f"≥1 callable provider{extra}."
         )
     if status.get("ready") and not status.get("live_inferencing", True):
         return (

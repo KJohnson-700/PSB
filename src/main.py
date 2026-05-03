@@ -1931,7 +1931,11 @@ async def main():
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
         "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"),
-        "MINIMAX_API_KEY": os.getenv("MINIMAX_API_KEY"),
+        "MINIMAX_API_KEY": (
+            os.getenv("MINIMAX_API_KEY")
+            or os.getenv("MINIMAX_KEY")
+            or os.getenv("MINMAX_API_KEY")
+        ),
         "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
         "GROQ_API_KEY": os.getenv("GROQ_API_KEY"),
         "GOOGLE_PROJECT_ID": os.getenv("GOOGLE_PROJECT_ID"),
