@@ -1180,6 +1180,8 @@ class MarketScanner:
 
         Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
         timeout so the asyncio event loop is not blocked for minutes on slow APIs.
+        Price hydration for gamma, weather, 15m updown, and 5m updown batches runs in
+        parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
         """
         t_scan_start = time.perf_counter()
         logger.info("Scanner: sync network phase (thread) starting")
@@ -1208,10 +1210,15 @@ class MarketScanner:
         sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
         logger.info("Scanner: sync network phase finished in %dms", sync_ms)
 
-        if markets:
-            markets = await self.update_market_prices(markets)
-        if weather:
-            weather = await self.update_market_prices(weather)
+        async def _hydrate(ms: List[Market]) -> List[Market]:
+            return await self.update_market_prices(ms) if ms else []
+
+        markets, weather, updown, updown_5m = await asyncio.gather(
+            _hydrate(markets),
+            _hydrate(weather),
+            _hydrate(updown),
+            _hydrate(updown_5m),
+        )
 
         opportunities: Dict[str, Any] = {
             "high_liquidity": [],
@@ -1235,14 +1242,12 @@ class MarketScanner:
                 opportunities["near_expiration"].append(market)
 
         if updown:
-            updown = await self.update_market_prices(updown)
             opportunities["high_liquidity"].extend(updown)
             opportunities["updown"] = updown
         else:
             opportunities["updown"] = []
 
         if updown_5m:
-            updown_5m = await self.update_market_prices(updown_5m)
             opportunities["high_liquidity"].extend(updown_5m)
             opportunities["updown_5m"] = updown_5m
         else:

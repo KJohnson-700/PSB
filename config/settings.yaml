@@ -243,9 +243,7 @@ strategies:
         datetime_utc: "2026-12-10T13:30:00Z"
       - name: "FOMC Rate Decision"
         datetime_utc: "2026-12-09T19:00:00Z"
-    # When HTF vote is NEUTRAL and 4H MACD is neither clearly rising>0 nor falling<0, skip updown
-    # instead of inferring side from Sabre alone (reduces momentum-only guesses in flat tape).
-    neutral_updown_skip_ambiguous_4h: true
+    # NEUTRAL + ambiguous 4H MACD for BTC up/down: bitcoin.py uses 15m impulse then Sabre (no hard sit-out).
 
   # SOL Macro strategy — BTC-to-Solana correlation lag trading
   sol_macro:

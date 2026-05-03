@@ -751,14 +751,29 @@ class BitcoinStrategy:
                 allowed_side = "LONG"
             elif not macd_4h.histogram_rising and macd_4h.histogram < 0:
                 allowed_side = "SHORT"
-            elif self.config.get("neutral_updown_skip_ambiguous_4h", False):
-                logger.info(
-                    "Bitcoin: HTF NEUTRAL + updown but 4H MACD ambiguous — sitting out "
-                    "(neutral_updown_skip_ambiguous_4h)"
-                )
-                return []
             else:
-                allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
+                # Ambiguous 4H MACD (flat / transitioning). Hard sit-out via
+                # neutral_updown_skip_ambiguous_4h starved BTC up/down overnight while
+                # Sol-style lanes still traded — prefer active tape then Sabre lean.
+                if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
+                    allowed_side = "LONG"
+                    logger.info(
+                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — 15m momentum lean LONG (%s)",
+                        mom.m15_direction,
+                    )
+                elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                    allowed_side = "SHORT"
+                    logger.info(
+                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — 15m momentum lean SHORT (%s)",
+                        mom.m15_direction,
+                    )
+                else:
+                    allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
+                    logger.info(
+                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — Sabre lean=%s "
+                        "(no strong 15m impulse)",
+                        allowed_side,
+                    )
             logger.info(
                 f"Bitcoin: HTF NEUTRAL + updown markets → lean={allowed_side} "
                 f"(4H hist={macd_4h.histogram:+.1f} rising={macd_4h.histogram_rising}, "

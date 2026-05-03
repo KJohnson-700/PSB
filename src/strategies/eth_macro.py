@@ -299,17 +299,93 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             return []
 
+        corr = eth_ta.correlation
         btc_htf_bias = self._get_btc_htf_bias(btc_ta)
-        if btc_htf_bias == "NEUTRAL":
-            logger.info("ETH Macro strategy: BTC HTF neutral — sitting out")
-            self._record_eth_abort(
-                "btc_htf_neutral",
-                {"markets_considered": len(eth_markets)},
-            )
-            return []
 
-        allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
-        if self.btc_follow_1h_required and not self._btc_follow_1h_ok(btc_ta, allowed_side):
+        # Align with SolMacroStrategy: BTC 4H NEUTRAL must not idle ETH while up/down markets refresh.
+        skip_btc_follow_1h = False
+        if btc_htf_bias == "NEUTRAL":
+            if corr.btc_spike_detected:
+                allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
+                skip_btc_follow_1h = True
+                logger.info(
+                    "ETH Macro: BTC HTF NEUTRAL, BTC spike (%+.2f%%) — catch-up side %s",
+                    corr.btc_move_5m_pct,
+                    allowed_side,
+                )
+            elif corr.lag_opportunity:
+                _min_lag_mag = float(self.config.get("min_lag_magnitude_pct", 0.30))
+                _lag_mag = abs(corr.opportunity_magnitude)
+                if _lag_mag >= _min_lag_mag:
+                    allowed_side = corr.opportunity_direction
+                    skip_btc_follow_1h = True
+                    logger.info(
+                        "ETH Macro: BTC HTF NEUTRAL, lag opp mag=%.2f%% — side %s",
+                        _lag_mag,
+                        allowed_side,
+                    )
+                else:
+                    allowed_side = (
+                        "LONG"
+                        if corr.sol_trend == "BULLISH"
+                        else "SHORT"
+                        if corr.sol_trend == "BEARISH"
+                        else None
+                    )
+                    if allowed_side is None:
+                        logger.info(
+                            "ETH Macro: BTC HTF NEUTRAL, weak lag, no ETH 1H bias — sitting out"
+                        )
+                        self._record_eth_abort(
+                            "neutral_weak_lag_no_alt_bias",
+                            {"markets_considered": len(eth_markets)},
+                        )
+                        return []
+                    skip_btc_follow_1h = True
+                    logger.info(
+                        "ETH Macro: BTC HTF NEUTRAL, weak lag — ETH 1H bias side %s",
+                        allowed_side,
+                    )
+            else:
+                if self.neutral_macro_require_spike_or_lag:
+                    logger.info(
+                        "ETH Macro: BTC HTF NEUTRAL, no BTC spike/lag "
+                        "(neutral_macro_require_spike_or_lag) — sitting out"
+                    )
+                    self._record_eth_abort(
+                        "neutral_macro_no_catalyst",
+                        {"markets_considered": len(eth_markets)},
+                    )
+                    return []
+                allowed_side = (
+                    "LONG"
+                    if corr.sol_trend == "BULLISH"
+                    else "SHORT"
+                    if corr.sol_trend == "BEARISH"
+                    else None
+                )
+                if allowed_side is None:
+                    logger.info(
+                        "ETH Macro: BTC HTF NEUTRAL, no catalyst, no ETH 1H bias — sitting out"
+                    )
+                    self._record_eth_abort(
+                        "neutral_no_alt_bias",
+                        {"markets_considered": len(eth_markets)},
+                    )
+                    return []
+                skip_btc_follow_1h = True
+                logger.info(
+                    "ETH Macro: BTC HTF NEUTRAL — ETH 1H bias side %s",
+                    allowed_side,
+                )
+        else:
+            allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
+
+        if (
+            self.btc_follow_1h_required
+            and not skip_btc_follow_1h
+            and not self._btc_follow_1h_ok(btc_ta, allowed_side)
+        ):
             logger.info(
                 "ETH Macro strategy: BTC 1H continuation not strong enough "
                 f"(bias={btc_htf_bias}, hist={btc_ta.macd_1h.histogram:+.2f})"
@@ -335,8 +411,6 @@ class ETHMacroStrategy(SolMacroStrategy):
             f"| ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
             f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
         )
-
-        corr = eth_ta.correlation
 
         signals: List[SolMacroSignal] = []
         ai_calls = 0
@@ -364,6 +438,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 idx = max(0, min(n - 1, int(round((n - 1) * p))))
                 return round(vs[idx], 4)
             return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
+
+        _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
         for market in eth_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -401,6 +477,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 if market.end_date.tzinfo is None else market.end_date
             )
             _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+            _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
             if is_5m:
                 _win_min, _win_max = self._resolve_entry_window_bounds(
                     is_5m=True, default_min=2.75, default_max=3.75
@@ -410,11 +487,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                     is_5m=False, default_min=13.0, default_max=14.33
                 )
             _sample("mins_left", _mins_left)
-            if _mins_left < _win_min or _mins_left > _win_max:
-                _bump_skip("outside_window")
+            if _eval_left < _win_min or _eval_left > _win_max:
+                _bump_skip("outside_entry_window")
                 continue
             _ai_window_open = self._within_ai_decision_window(
-                mins_left=_mins_left,
+                mins_left=_eval_left,
                 is_5m=is_5m,
             )
 
