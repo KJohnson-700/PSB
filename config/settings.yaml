@@ -129,7 +129,8 @@ strategies:
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$37k liquidity
     min_edge: 0.10                # 15m: raised from 0.07 — backtest assumed 0.50 entry (unrealistic); real slippage needs more edge
     min_edge_5m: 0.08             # 5m: raised from 0.05 (2026-04-24) — NEUTRAL HTF 5m path has zero backtest coverage; 0.05 too loose
-    min_4h_hist_magnitude: 50     # 2026-04-24: raised from default 20 — typical active-market histograms are 200-300; 20 filtered almost nothing
+    # Ops compromise between legacy 50 (strict NEUTRAL churn vs macros at 20) and full parity at 20.
+    min_4h_hist_magnitude: 35
     max_edge_updown: 0.12         # Safety cap: live audit showed >0.12 underperformed; investigate before raising
     ai_confidence_threshold: 0.60
     # Cap LLM calls per scan cycle (marginal / no-threshold / updown assist).
@@ -433,15 +434,24 @@ strategies:
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
 
-  # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy.
+  # HYPE Macro — BTC-to-Hyperliquid correlation lag strategy (SolMacroStrategy + Hyperliquid HYPE leg).
+  # Align prediction/stack with sol_macro: same edge floors, BTC spike floors, catalyst rules, center band off,
+  # no hard low-corr suppression (damping only). Keep dynamic_beta_* — structural HYPE volatility vs SOL.
   hype_macro:
     enabled: true
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
-    min_liquidity: 100
-    min_edge: 0.10
-    min_edge_5m: 0.10
-    hard_min_edge: 0.05         # FIX 2: absolute floor enforced regardless of AI usage path
+    min_liquidity: 1000           # match sol_macro — evaluate liquid books only
+    min_edge: 0.09                # sol_macro parity
+    min_edge_5m: 0.07             # sol_macro parity (flat tape MACD tiers need reachable floor)
+    hard_min_edge: 0.07           # hype_macro.py post-scan floor; align with sol_macro hard_min_edge
+    min_edge_15m_when_ltf_unconfirmed: 0.11   # sol_macro parity
+    require_btc_catalyst_15m_when_unconfirmed: true
+    anti_ltf_gate_enabled: false
+    require_ltf_confirmation: false
+    center_price_band: 0.0        # sol_macro parity — avoid stacked centered-market edge bumps
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
@@ -456,13 +466,13 @@ strategies:
     kelly_fraction: 0.15
     entry_price_min: 0.42
     entry_price_max: 0.58
-    min_lag_magnitude_pct: 0.30
+    min_lag_magnitude_pct: 0.40   # sol_macro parity — lag signals need magnitude before sizing entry
     dynamic_beta_min: 0.50         # HYPE is structurally higher-beta and more regime-volatile than SOL
     dynamic_beta_max: 4.00         # Wider normal-regime clamp than SOL/ETH/XRP
     dynamic_beta_extreme_max: 6.00 # Preserve large BTC-led catch-up expectations during genuine spikes
-    low_corr_threshold_1h: 0.40    # HYPE decouples more often; avoid constant low-corr damping
-    low_corr_damping: 0.75         # Still damp marginal edges, but less aggressively than a hard SOL-style penalty
-    low_corr_suppresses_entries: true  # HYPE-specific decoupling guard: suppress BTC-lag entries below threshold
+    low_corr_threshold_1h: 0.40
+    low_corr_damping: 0.75        # soften edges when linkage weak — no extra hard skip stack
+    low_corr_suppresses_entries: false
     blocked_utc_hours_updown: []
     look_ahead_15m: 4
     look_ahead_5m: 8
@@ -476,27 +486,21 @@ strategies:
     entry_window_auto_align_max_expand_min: 2.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
-    btc_spike_floor_pct_5m: 0.18
-    btc_spike_floor_pct_15m: 0.55
+    btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
+    btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
-    neutral_macro_require_spike_or_lag: true
+    neutral_macro_require_spike_or_lag: false
     enforce_alt_1h_alignment: false
-    require_btc_catalyst_5m: true
-    require_btc_catalyst_15m_when_unconfirmed: true
-    anti_ltf_gate_enabled: false
-    require_ltf_confirmation: false
-    center_price_band: 0.005
-    min_edge_when_centered: 0.13
-    center_price_requires_catalyst: true
+    require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
-    # HYPE spot ~$20–50: scale floor between SOL (0.15) and raw 0.03 mis-fits.
-    iql_15m_enabled: true
-    iql_15m_hist_floor: 0.06
+    # Same macro BTC HTF conviction as sol_macro family (not bitcoin.up/down middle band — lag lane consistency).
+    iql_15m_enabled: false         # evaluate without SOL-style IQL histogram gate stack on HYPE bars
+    iql_15m_hist_floor: 0.06      # ignored when disabled; kept for schema parity
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.50
     btc_min_move_dollars_15m: 10.0

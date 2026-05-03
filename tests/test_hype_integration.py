@@ -56,7 +56,7 @@ def _config() -> dict:
                 "dynamic_beta_extreme_max": 6.00,
                 "low_corr_threshold_1h": 0.40,
                 "low_corr_damping": 0.75,
-                "low_corr_suppresses_entries": True,
+                "low_corr_suppresses_entries": False,
             },
             "xrp_macro": {
                 "enabled": True,
@@ -256,11 +256,11 @@ def test_scanner_timeout_is_capped_below_cycle_interval():
     assert scanner._scanner_sync_timeout == 105.0
 
 
-def test_hype_low_correlation_hard_gate_is_configured():
+def test_hype_low_correlation_settings_follow_yaml():
     cfg = _config()
     strategy = HYPEMacroStrategy(cfg, BacktestAIAgent(cfg), PositionSizer())
 
-    assert strategy.low_corr_suppresses_entries is True
+    assert strategy.low_corr_suppresses_entries is False
     assert strategy.low_corr_threshold_1h == 0.40
 
 
