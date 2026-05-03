@@ -306,9 +306,10 @@
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Realized P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Fills logged this session.">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Fills</div></div>
+            <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
+        <div id="ops-skip-digest" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;font-family:'IBM Plex Mono',monospace;" title="scan_skip_digest from bot — top reasons markets did not become signals"></div>
         <div class="controls" style="padding:8px 0 4px;">
             <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
@@ -1359,7 +1360,7 @@ async function fetchAll() {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
-            Promise.resolve(null),
+            fetchT('/api/scans/latest'),
             needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
@@ -1559,9 +1560,12 @@ function applyHeroMetrics(d) {
     const posEl = document.getElementById('hero-positions');
     if (posEl) posEl.textContent = openCount;
 
-    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
+    const dailyTrades = Number(p.daily_trades || 0);
     const tradesEl = document.getElementById('hero-trades');
-    if (tradesEl) tradesEl.textContent = (fills != null) ? fills : Number(p.daily_trades || 0);
+    if (tradesEl) tradesEl.textContent = dailyTrades;
+    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
+    const tradesSub = document.getElementById('hero-trades-sub');
+    if (tradesSub) tradesSub.textContent = (fills != null) ? ('fills this session: ' + fills) : '';
 
 }
 
@@ -1662,6 +1666,22 @@ function updateStatus(d) {
 
     updateStatusBadgesAndKill(d);
     applyHeroMetrics(d);
+
+    try {
+        const skEl = document.getElementById('ops-skip-digest');
+        const agg = d.scan_skip_digest && d.scan_skip_digest.aggregate_top;
+        if (skEl && agg && typeof agg === 'object') {
+            const entries = Object.entries(agg);
+            if (entries.length) {
+                entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+                skEl.textContent = 'Top scan skips: ' + entries.slice(0, 8).map(([k, v]) => k + ':' + v).join(' · ');
+            } else {
+                skEl.textContent = '';
+            }
+        } else if (skEl) {
+            skEl.textContent = '';
+        }
+    } catch (e) { console.error('[dashboard] skip digest:', e); }
 
     // Positions table — always show real data (logs stay visible when viewing history)
     const posSection = document.getElementById('positions-section');

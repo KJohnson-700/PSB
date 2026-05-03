@@ -22,6 +22,62 @@ OPS_PULSE_FILE = (
     Path(__file__).resolve().parent.parent / "data" / "logs" / "ops_pulse.jsonl"
 )
 
+# Canonical clock for ops snapshots (ISO UTC). Logs may mix formats — see docs/PSB_TIMEZONE_POLICY.md.
+CANONICAL_OPS_TIMEZONE = "UTC"
+
+
+def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-lane top_skip_reasons for dashboard / OPS_JSON (no log grep)."""
+    lanes = (
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "weather",
+    )
+    per_lane: Dict[str, Any] = {}
+    for lane in lanes:
+        block = ai_scan_stats.get(lane) or {}
+        skips = block.get("top_skip_reasons") or {}
+        if skips:
+            ordered = sorted(skips.items(), key=lambda kv: kv[1], reverse=True)[:10]
+            per_lane[lane] = {k: v for k, v in ordered}
+    totals: Dict[str, int] = {}
+    for skips in per_lane.values():
+        for k, v in skips.items():
+            totals[k] = totals.get(k, 0) + int(v)
+    top_totals = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    return {
+        "per_strategy": per_lane,
+        "aggregate_top": {k: v for k, v in top_totals},
+    }
+
+
+def _regime_hint(trading_cfg: Dict[str, Any], btc_spot: Optional[float]) -> Optional[Dict[str, Any]]:
+    rcfg = (trading_cfg or {}).get("regime") or {}
+    if not rcfg.get("enabled"):
+        return None
+    hi = rcfg.get("btc_break_above_usd")
+    lo = rcfg.get("btc_break_below_usd")
+    out: Dict[str, Any] = {
+        "enabled": True,
+        "btc_break_above_usd": hi,
+        "btc_break_below_usd": lo,
+        "btc_spot_usd": btc_spot,
+    }
+    if btc_spot is not None and hi is not None:
+        try:
+            out["spot_gte_break_high"] = btc_spot >= float(hi)
+        except (TypeError, ValueError):
+            pass
+    if btc_spot is not None and lo is not None:
+        try:
+            out["spot_lte_break_low"] = btc_spot <= float(lo)
+        except (TypeError, ValueError):
+            pass
+    return out
+
 
 def public_dashboard_url() -> Optional[str]:
     """HTTPS base URL for the dashboard when the platform sets a public domain (e.g. Railway)."""
@@ -55,6 +111,12 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
     cum = dict(getattr(bot, "cumulative_signal_counts", {}) or {})
     last_cycles = dict(getattr(bot, "last_cycle_times", {}) or {})
     ai_scan_stats = dict(getattr(bot, "last_ai_scan_stats", {}) or {})
+    btc_block = ai_scan_stats.get("bitcoin") or {}
+    btc_spot = btc_block.get("btc_spot_usd")
+    try:
+        btc_spot_f = float(btc_spot) if btc_spot is not None else None
+    except (TypeError, ValueError):
+        btc_spot_f = None
 
     return {
         "event": "ops_pulse",
@@ -88,6 +150,13 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "cumulative_signal_counts": cum,
         "last_cycle_times": last_cycles,
         "ai_scan_stats": ai_scan_stats,
+        "scan_skip_digest": _scan_skip_digest(ai_scan_stats),
+        "timestamps_policy": {
+            "canonical": CANONICAL_OPS_TIMEZONE,
+            "ops_ts": "ISO 8601 with Z/offset; this field is UTC",
+            "note": "Journal/log lines may use mixed TZ — compare using ops_ts or convert explicitly",
+        },
+        "regime": _regime_hint(trading, btc_spot_f),
         "scan_interval_sec": getattr(bot, "scan_interval", None),
         "dashboard_url": public_dashboard_url(),
     }

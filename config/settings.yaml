@@ -49,6 +49,11 @@ trading:
   daily_loss_limit: 0.15
   # Kelly criterion fraction (0.0 - 1.0)
   kelly_fraction: 0.25
+  # Optional BTC spot regime hints for ops (/api/ops/summary, OPS_JSON). Does not gate trades alone.
+  regime:
+    enabled: false
+    btc_break_above_usd: 80000
+    btc_break_below_usd: 75000
   # Position exit rules (live trading)
   exit_rules:
     enabled: true                # Enabled: live data shows positions move 40-50% against without stops

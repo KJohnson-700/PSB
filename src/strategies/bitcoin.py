@@ -1730,6 +1730,7 @@ class BitcoinStrategy:
             "enabled": True,
             "signals": len(signals),
             "btc_markets_considered": len(btc_markets),
+            "btc_spot_usd": round(float(btc_price), 2),
             "htf_bias": htf_bias,
             "allowed_side": allowed_side,
             "ltf_strength": round(float(ltf_strength), 4),

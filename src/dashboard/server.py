@@ -44,7 +44,11 @@ import uuid
 from src.analysis.usage_tracker import usage_tracker
 from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
 from src.config_merge import deep_merge_config as _deep_merge
+from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
+
+# Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
+load_project_dotenv(project_root_from_here(), quiet=True)
 
 bot_instance: Optional["PolyBot"] = None
 
@@ -366,7 +370,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-02-dash-performance-tab-fix",
+        "dashboard_ui_rev": "2026-05-03-dash-hero-skips-fetchall",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1099,6 +1103,12 @@ async def get_status():
             _js = bot.journal.get_summary()
         except Exception:
             _js = {}
+        try:
+            from src.ops_pulse import build_ops_snapshot
+
+            _ops = build_ops_snapshot(bot, "status")
+        except Exception:
+            _ops = {}
         return {
             "running": getattr(bot, "running", False),
             "mode": "paper" if dry_run else "live",
@@ -1115,6 +1125,9 @@ async def get_status():
                 bot.config, bool(getattr(bot, "running", False))
             ),
             "session_id": getattr(bot.journal, "session_id", None),
+            "scan_skip_digest": _ops.get("scan_skip_digest"),
+            "timestamps_policy": _ops.get("timestamps_policy"),
+            "regime": _ops.get("regime"),
         }
 
     # ── No bot_instance: read everything from disk ──
@@ -1198,7 +1211,16 @@ def _process_env_ai_keys() -> Dict[str, str]:
         "ANTHROPIC_API_KEY",
         "GROQ_API_KEY",
     )
-    return {n: v for n in names if (v := os.getenv(n))}
+    out = {n: v for n in names if (v := os.getenv(n))}
+    if "MINIMAX_API_KEY" not in out:
+        m = (
+            os.getenv("MINIMAX_API_KEY")
+            or os.getenv("MINIMAX_KEY")
+            or os.getenv("MINMAX_API_KEY")
+        )
+        if m:
+            out["MINIMAX_API_KEY"] = m
+    return out
 
 
 @app.get("/api/ai/health")
