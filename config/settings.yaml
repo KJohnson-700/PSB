@@ -355,6 +355,15 @@ strategies:
     min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
     min_edge_15m_when_ltf_unconfirmed: 0.11   # explicit; was defaulting to 0.10 in code; raised to match SOL
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
+    # ETH side resolution:
+    # - btc: legacy BTC HTF decides side
+    # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
+    # - signal_first: market 15m signal can set side directly (test mode)
+    direction_source: hybrid
+    signal_15m_long_threshold: 0.55
+    signal_15m_short_threshold: 0.45
+    signal_4h_long_threshold: 0.70
+    signal_4h_short_threshold: 0.30
     enforce_alt_1h_alignment: false
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip
     max_edge_updown: 0.15

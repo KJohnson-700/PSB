@@ -110,3 +110,29 @@ def test_eth_btc_follow_15m_requires_macd_and_candle_agreement():
     assert strat._btc_follow_15m_impulse_ok(btc_ta, "LONG") is False
     btc_ta.macd_15m = MACDResult(histogram=0.04, histogram_rising=True, crossover="NONE")
     assert strat._btc_follow_15m_impulse_ok(btc_ta, "LONG") is True
+
+
+def test_eth_side_resolution_hybrid_strong_short_override():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["direction_source"] = "hybrid"
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    side, source = strat._resolve_market_side(
+        base_side="LONG",
+        btc_htf_bias="BEARISH",
+        market_yes_price=0.42,
+    )
+    assert side == "SHORT"
+    assert source == "hybrid_strong_short"
+
+
+def test_eth_side_resolution_signal_first_toggle():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["direction_source"] = "signal_first"
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    side, source = strat._resolve_market_side(
+        base_side="LONG",
+        btc_htf_bias="BULLISH",
+        market_yes_price=0.43,
+    )
+    assert side == "SHORT"
+    assert source == "signal_first_short"
