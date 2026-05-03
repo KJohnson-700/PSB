@@ -561,11 +561,12 @@ class MarketScanner:
 
         cfg_pool = enabled_cfgs if enabled_cfgs else [strategies.get(k, {}) or {} for k in keys]
 
-        look_15m = 8
-        look_5m = 8
+        # Seed low so max() across strategy configs reflects requested lookahead (not a floor of 8).
+        look_15m = 1
+        look_5m = 1
         for cfg in cfg_pool:
             look_15m = max(look_15m, int(cfg.get("look_ahead_15m", 8)))
-            look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 8)))
+            look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 3)))
 
         look_15m = max(1, min(96, look_15m))
         look_5m = max(1, min(288, look_5m))
@@ -952,7 +953,7 @@ class MarketScanner:
         """Fetch current + upcoming 15-minute crypto Up/Down markets.
 
         Args:
-            look_ahead: number of future 15-min windows to fetch (default 4 = 1 hour)
+            look_ahead: number of future 15-min windows to fetch (default 8 ≈ 2 hours ahead)
 
         Returns:
             List of Market objects for tradeable updown windows.
@@ -989,11 +990,12 @@ class MarketScanner:
             )
         return markets
 
-    def fetch_updown_5m_markets(self, look_ahead: int = 8) -> List[Market]:
+    def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
         """Fetch current + upcoming 5-minute crypto Up/Down markets.
 
         Args:
-            look_ahead: number of future 5-min windows to fetch (default 8 = 40 minutes)
+            look_ahead: number of future 5-min windows to fetch (default 3 ≈ 15 minutes ahead;
+                keep small vs window length so momentum features target this cycle, not the next)
 
         Returns:
             List of Market objects for tradeable 5m updown windows.
@@ -1039,13 +1041,13 @@ class MarketScanner:
         slugs = self._iter_named_event_slugs(
             prefixes=("hyperliquid", "hype"),
             step_minutes=15,
-            look_ahead=max(1, min(look_ahead_15m, 4)),
+            look_ahead=max(1, min(look_ahead_15m, 8)),
         )
         slugs.extend(
             self._iter_named_event_slugs(
                 prefixes=("hyperliquid", "hype"),
                 step_minutes=5,
-                look_ahead=max(1, min(look_ahead_5m, 8)),
+                look_ahead=max(1, min(look_ahead_5m, 24)),
             )
         )
         markets = self._fetch_event_slug_markets(slugs, timeout_sec=4, limit=limit)

@@ -99,7 +99,7 @@ class SolMacroSignal(BaseModel):
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
     rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
-    corr_1h: Optional[float] = Field(None, description="BTC-SOL 1H correlation at entry")
+    corr_1h: Optional[float] = Field(None, description="BTC–alt 1h correlation at entry (SOL/ETH/HYPE/XRP)")
     reason: str = Field(default="", description="Why this signal was generated")
     strategy_name: str = Field(default="sol_macro", description="Journal/risk strategy key")
     alt_asset_code: str = Field(
@@ -299,6 +299,11 @@ class SolMacroStrategy:
                 "min_btc_move_pct_15m_for_lag_entries",
                 self.min_btc_move_pct_5m_for_lag_entries,
             )
+        )
+        # Updown only: block LONG when journaled lag % is below floor / SHORT when above cap
+        # (negative macro_leg on LONG = SOL not lagging a BTC impulse — catch-up thesis fails).
+        self.block_counter_macro_leg_updown = bool(
+            self.config.get("block_counter_macro_leg_updown", False)
         )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
@@ -1177,10 +1182,10 @@ class SolMacroStrategy:
                 _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
                 _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
                 if is_5m:
-                    _btc_min_move = self.config.get("btc_min_move_dollars_5m", 37.0)
+                    _btc_min_move = float(self.config.get("btc_min_move_dollars_5m", 37.0))
                     _btc_move = _btc_move_5m_dollars
                 else:
-                    _btc_min_move = self.config.get("btc_min_move_dollars_15m", 70.0)
+                    _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
                     if _btc_corr < _low_corr_btc_bypass:
@@ -1786,6 +1791,39 @@ class SolMacroStrategy:
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
+            # Far from expiry → more time-stop risk; require extra min_edge (SOL paper May 2026).
+            if is_updown:
+                _rstart = float(
+                    self.config.get("updown_min_edge_mins_left_ramp_start_min", 0.0) or 0.0
+                )
+                _rmax = float(
+                    self.config.get("updown_min_edge_mins_left_ramp_max_add", 0.0) or 0.0
+                )
+                _rspan = float(
+                    self.config.get("updown_min_edge_mins_left_ramp_span_min", 18.0) or 18.0
+                )
+                if _rstart > 0 and _rmax > 0 and _rspan > 0 and _eval_left > _rstart:
+                    _edge_addon = _rmax * min(
+                        1.0, (_eval_left - _rstart) / _rspan
+                    )
+                    effective_min_edge += _edge_addon
+
+                if self.block_counter_macro_leg_updown:
+                    _lm = self._signal_lag_magnitude(corr)
+                    if _lm is not None:
+                        _long_floor = float(
+                            self.config.get("updown_macro_leg_min_for_long", 0.0)
+                        )
+                        # LONG + negative journaled leg = SOL not lagging a BTC impulse (catch-up thesis off).
+                        # SHORT path omitted: positive lag on BTC-down is often the valid SHORT setup.
+                        if allowed_side == "LONG" and _lm < _long_floor:
+                            _bump_skip("macro_leg_blocks_long")
+                            logger.info(
+                                f"  {_brand} skip '{market.question[:40]}' — "
+                                f"macro_leg={_lm:+.4f}% < long_floor={_long_floor:+.4f} (updown)"
+                            )
+                            continue
+
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (
                 is_updown
@@ -1864,6 +1902,7 @@ class SolMacroStrategy:
                     f"{_brand}: AI window closed for marginal updown '{market.question[:40]}...' "
                     f"({_mins_left:.1f}m left)"
                 )
+                continue
 
             try:
                 _sample("est_prob_up", est_prob_up)

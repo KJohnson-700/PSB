@@ -61,11 +61,12 @@ trading:
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
     max_hold_hours: 72           # Exit after 72 hours regardless (non-updown markets)
     # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m and 15m candle markets)
-    # SOL paper (May 2026): many exits were updown_time_stop in the final minutes — tighten the
-    # window slightly and require a larger adverse move vs entry to reduce chop exits (winners need room).
-    updown_stop_cents: 0.04      # Exit if price moves ≥4¢ against entry within the exit window
-    updown_exit_window_mins: 1.5 # Only the last ~1.5m before expiry uses the adverse-move check
-    updown_max_hold_mins: 20.0   # Safety valve: exit updown positions held >20 min (no end_date)
+    # SOL paper (May 2026): time-stop $ losses (-$3 avg) dominated thin TP wins (+$2.25); outsized
+    # stops when price was already adverse before the final minute. Tighter ¢ threshold + slightly
+    # earlier window → exit on smaller late drift instead of letting loss widen into the last 90s.
+    updown_stop_cents: 0.03      # Exit if YES moves ≥3¢ against entry (entry = YES) within the window
+    updown_exit_window_mins: 2.25 # Apply adverse check in the last ~2.25m (not only final 1.5m)
+    updown_max_hold_mins: 18.0  # Safety valve for missing end_date; trim from 20m
 
 data_collection:
   weather:
@@ -179,8 +180,8 @@ strategies:
     clear_edge_low: 0.20
     clear_edge_high: 0.80
     # 5m scanner look-ahead: how many future 5m windows to fetch
-    look_ahead_15m: 4
-    look_ahead_5m: 8
+    look_ahead_15m: 8
+    look_ahead_5m: 3
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep hours with strong backtest evidence
     # at meaningful negative expectancy, drop the borderline ones until live data
@@ -325,16 +326,24 @@ strategies:
     # scripts/hourly_heatmap.py --suggest once live trades accumulate (≥15/hour).
     blocked_utc_hours_updown: [1, 6, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
     # 5m scanner look-ahead: how many future 5m windows to fetch
-    look_ahead_15m: 4
-    look_ahead_5m: 8
+    look_ahead_15m: 8
+    look_ahead_5m: 3
     # Max concurrent SOL positions — prevents stacking 4-5 correlated bets on one macro call
     max_concurrent_positions: 3
 
     # ── Entry window (time remaining in candle at entry) ──
     # 15m candle: widened from 13.0-14.33 (1.3min) to 12.0-14.5 (2.5min)
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
+    # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
     entry_window_15m_min: 2.0     # minutes remaining — balance early-candle edge vs cadence misses
-    entry_window_15m_max: 45.0    # listings often show mins_left > 15 before the quoted candle (auto_align no longer caps at 15)
+    entry_window_15m_max: 20.0
+    # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
+    updown_min_edge_mins_left_ramp_start_min: 12.0
+    updown_min_edge_mins_left_ramp_max_add: 0.045
+    updown_min_edge_mins_left_ramp_span_min: 24.0
+    # Block updown when journaled macro_leg (lag %) disagrees with side (e.g. LONG with negative leg).
+    block_counter_macro_leg_updown: true
+    updown_macro_leg_min_for_long: 0.0
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for Railway latency)
     entry_window_5m_min: 0.0      # minutes remaining (avoid missing late-cycle 5m windows)
     entry_window_5m_max: 4.5      # earlier-in-candle entries; auto-align assumes 60s cadence below
@@ -413,6 +422,8 @@ strategies:
     btc_follow_15m_hist_min: 0.03 # BTC-follow redesign: require real BTC 15m impulse, not flat drift
     # When BTC 1H continuation already passes, do not require sharp 5m/15m SPIKE/DRIFT (reduces starvation in grindy uptrends).
     btc_follow_stf_bypass_if_1h_ok: true
+    # 5m only: when false, do not apply bypass_5m_impulse_btc_1h_ok (15m still uses btc_follow_stf_bypass_if_1h_ok above).
+    btc_follow_5m_allow_1h_impulse_bypass: false
     # If strict 15m still fails, allow rising MACD histogram above min (no candle-direction requirement).
     btc_follow_15m_allow_macd_grind: true
     # BULLISH+LONG or BEARISH+SHORT: allow past strict BTC 5m/15m follow if 4H HTF already agrees (reduces starvation).
@@ -440,8 +451,8 @@ strategies:
     blocked_utc_hours_updown: [1, 15, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
     # Direction gate is now ADAPTIVE via 1H trend in sol_macro.py — no manual flag needed.
     # When 1H trend is BULLISH, SELL_YES is auto-suppressed; when BEARISH, BUY_YES is.
-    look_ahead_15m: 4
-    look_ahead_5m: 8
+    look_ahead_15m: 8
+    look_ahead_5m: 3
     max_concurrent_positions: 3
     # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
     entry_window_15m_min: 2.0
@@ -522,8 +533,8 @@ strategies:
     low_corr_damping: 0.75        # soften edges when linkage weak — no extra hard skip stack
     low_corr_suppresses_entries: false
     blocked_utc_hours_updown: []
-    look_ahead_15m: 4
-    look_ahead_5m: 8
+    look_ahead_15m: 8
+    look_ahead_5m: 3
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
     entry_window_15m_max: 45.0
@@ -613,8 +624,8 @@ strategies:
     low_corr_threshold_1h: 0.35  # XRP often sits below SOL/ETH correlation levels; avoid permanent damping
     low_corr_damping: 0.80       # Mildly shrink edges instead of treating most XRP windows as near-untradable
     blocked_utc_hours_updown: []
-    look_ahead_15m: 4
-    look_ahead_5m: 8
+    look_ahead_15m: 8
+    look_ahead_5m: 3
     max_concurrent_positions: 2
     entry_window_15m_min: 2.0
     entry_window_15m_max: 45.0

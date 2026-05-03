@@ -115,6 +115,10 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.btc_follow_stf_bypass_when_macro_agrees = bool(
             self.config.get("btc_follow_stf_bypass_when_macro_agrees", False)
         )
+        # When False, 5m never uses bypass_5m_impulse_btc_1h_ok; 15m still uses btc_follow_stf_bypass_if_1h_ok where coded.
+        self.btc_follow_5m_allow_1h_impulse_bypass = bool(
+            self.config.get("btc_follow_5m_allow_1h_impulse_bypass", True)
+        )
 
     def _eth_stf_bypass_when_macro_agrees(
         self, btc_htf_bias: str, market_allowed_side: str
@@ -412,6 +416,8 @@ class ETHMacroStrategy(SolMacroStrategy):
         # Align with SolMacroStrategy: BTC 4H NEUTRAL must not idle ETH while up/down markets refresh.
         skip_btc_follow_1h = False
         if btc_htf_bias == "NEUTRAL":
+            # SOLBTCCorrelation.sol_trend is multi_tf.h1_trend on the alt leg — for ETH this is ETH 1H bias.
+            alt_1h_trend = corr.sol_trend
             if corr.btc_spike_detected:
                 allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
                 skip_btc_follow_1h = True
@@ -434,9 +440,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 else:
                     allowed_side = (
                         "LONG"
-                        if corr.sol_trend == "BULLISH"
+                        if alt_1h_trend == "BULLISH"
                         else "SHORT"
-                        if corr.sol_trend == "BEARISH"
+                        if alt_1h_trend == "BEARISH"
                         else None
                     )
                     if allowed_side is None:
@@ -466,9 +472,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                     return []
                 allowed_side = (
                     "LONG"
-                    if corr.sol_trend == "BULLISH"
+                    if alt_1h_trend == "BULLISH"
                     else "SHORT"
-                    if corr.sol_trend == "BEARISH"
+                    if alt_1h_trend == "BEARISH"
                     else None
                 )
                 if allowed_side is None:
@@ -671,6 +677,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _impulse_gate_ok = btc_impulse > 0
                 if (
                     self.btc_follow_stf_bypass_if_1h_ok
+                    and self.btc_follow_5m_allow_1h_impulse_bypass
                     and not _impulse_gate_ok
                     and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
                 ):
@@ -725,7 +732,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 elif eth.rsi_14 < 25:
                     est_prob_up += 0.03
                 confidence = max(0.55, min(0.85, 0.50 + abs(eth_15m_adj) * 2.2))
-                reason_parts.extend(["UPDOWN_15m", *eth_reasons])
+                reason_parts.extend(
+                    [
+                        "UPDOWN_15m",
+                        *eth_reasons,
+                        f"slug={market.slug or '?'}",
+                        f"mins_left={_mins_left:.2f}",
+                        f"end={_end_utc.isoformat()}",
+                    ]
+                )
 
             est_prob_up = max(0.10, min(0.90, est_prob_up))
             edge = est_prob_up - yes_price if action == "BUY_YES" else yes_price - est_prob_up
@@ -811,6 +826,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and not _ai_window_open
             ):
                 _bump_skip("ai_window_closed")
+                continue
 
             _sample("est_prob_up", est_prob_up)
             _sample("edge", edge)
@@ -876,7 +892,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(est_prob_up, 4),
                 rsi=round(eth.rsi_14, 1),
-                corr_1h=None,
+                corr_1h=round(corr.correlation_1h, 4),
             )
             signals.append(signal)
 
