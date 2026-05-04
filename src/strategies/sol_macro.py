@@ -245,6 +245,8 @@ class SolMacroStrategy:
         self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
         # Non-bypassable absolute edge floor for this strategy lane.
         self.hard_min_edge = float(self.config.get("hard_min_edge", 0.0))
+        # Extra floor applied only to BUY_NO entries (counter-trend / short bias).
+        self.min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
         # 15m updown when anti-LTF gate passed (ltf_strength==0): extra edge bar (was hardcoded 0.10)
         self.min_edge_15m_when_ltf_unconfirmed = float(
             self.config.get("min_edge_15m_when_ltf_unconfirmed", 0.10)
@@ -1773,7 +1775,7 @@ class SolMacroStrategy:
                         )
                     if not ai_analysis:
                         _bump_skip("ai_none_marginal_threshold")
-                        logger.critical(
+                        logger.warning(
                             "%s: AI returned None after provider call for market %s (%s)",
                             _brand,
                             market.id,
@@ -1821,6 +1823,9 @@ class SolMacroStrategy:
             # ── Final filters (both paths) ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
             effective_min_edge = max(effective_min_edge, self.hard_min_edge)
+            # BUY_NO requires stronger edge conviction (short bias in a mixed/bull regime).
+            if action == "BUY_NO" and self.min_edge_buy_no > 0:
+                effective_min_edge = max(effective_min_edge, self.min_edge_buy_no)
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and not is_5m:
                 effective_min_edge = max(
@@ -1901,7 +1906,7 @@ class SolMacroStrategy:
                 ai_used = True
                 if not ai2:
                     _bump_skip("ai_none_marginal_updown")
-                    logger.critical(
+                    logger.warning(
                         "%s: AI returned None after provider call for market %s (updown marginal, %s)",
                         _brand,
                         market.id,

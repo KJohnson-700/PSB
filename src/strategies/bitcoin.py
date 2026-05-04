@@ -996,8 +996,12 @@ class BitcoinStrategy:
 
                 # In updown markets: LONG → BUY_YES (UP), SHORT → BUY_NO (DOWN).
                 # Counter-trend: bullish HTF but 4H MACD histogram rolling over → BUY_NO (DOWN).
+                # Gated by disable_buy_no_counter_trend (set true in bull grind regimes — 36% WR).
+                _counter_trend_disabled = self.config.get("disable_buy_no_counter_trend", False)
                 btc_bull_rollover = (
-                    htf_bias == "BULLISH" and not macd_4h.histogram_rising
+                    not _counter_trend_disabled
+                    and htf_bias == "BULLISH"
+                    and not macd_4h.histogram_rising
                 )
                 if btc_bull_rollover:
                     action = "BUY_NO"
@@ -1395,7 +1399,7 @@ class BitcoinStrategy:
                         ai_calls += 1
                         ai_used = True
                         if not ai_analysis:
-                            logger.critical(
+                            logger.warning(
                                 "BTC: AI returned None after provider call for market %s — "
                                 "LLM chain failed or response invalid (see prior AI logs)",
                                 market.id,
@@ -1463,7 +1467,7 @@ class BitcoinStrategy:
                     ai_calls += 1
                     ai_used = True
                     if not ai_analysis:
-                        logger.critical(
+                        logger.warning(
                             "BTC: AI returned None after provider call for market %s — "
                             "LLM chain failed or response invalid",
                             market.id,
@@ -1484,6 +1488,10 @@ class BitcoinStrategy:
 
             # ── Final filters ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
+            # BUY_NO requires stronger edge conviction (counter-trend / short in bull market).
+            _min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
+            if action == "BUY_NO" and _min_edge_buy_no > 0:
+                effective_min_edge = max(effective_min_edge, _min_edge_buy_no)
             # NEUTRAL HTF: no confirmed bias — demand stronger edge for updown leans.
             # Applies to both 5m and 15m: the 5m path has zero backtest coverage under NEUTRAL
             # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).
@@ -1545,7 +1553,7 @@ class BitcoinStrategy:
                 ai_used = True
 
                 if not ai_analysis:
-                    logger.critical(
+                    logger.warning(
                         "BTC: AI returned None after provider call for market %s — "
                         "LLM chain failed or response invalid (marginal updown path)",
                         market.id,

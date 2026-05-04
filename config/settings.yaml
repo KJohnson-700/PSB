@@ -203,6 +203,11 @@ strategies:
     blocked_utc_hours_updown: [0, 1, 2, 7, 11]
     # false = allow BUY_YES when HTF is bullish (true suppressed LONG/up signals in practice).
     disable_buy_yes: false
+    # 2026-05-04: BTC grinding UP — counter-trend BUY_NO was 36% WR (-$14.60). Disable until
+    # BTC regime shifts. Re-enable when 4H MACD crosses bearish and price rolls over.
+    disable_buy_no_counter_trend: true
+    # Require stronger edge for BUY_NO entries (short in a bull/mixed market needs conviction).
+    min_edge_buy_no: 0.11
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
     macro_event_guard_after_min: 30
@@ -618,7 +623,8 @@ strategies:
     center_price_requires_catalyst: true
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: false
-    enforce_alt_1h_alignment: false
+    enforce_alt_1h_alignment: true    # 2026-05-04: re-enabled — without gate, BUY_NO fires freely in XRP bull trend
+    min_edge_buy_no: 0.10             # Require stronger edge for BUY_NO (was clearing at 0.085-0.095 on 5m, too loose)
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
@@ -689,6 +695,8 @@ ai:
       model: "MiniMax-M2.7"
       api_key_secret: MINIMAX_API_KEY
       json_mode: true
+      # M2.7 can exceed the global ai.timeout on long generations.
+      timeout_seconds: 120
       cooldown_on_429_seconds: 60
 
     # OpenRouter free-tier fallback. Key: OPENROUTER_API_KEY in secrets.env.
@@ -703,7 +711,9 @@ ai:
         - "nvidia/nemotron-3-super-120b-a12b:free"
         - "google/gemma-4-26b-a4b-it:free"
       json_mode: true
-      cooldown_on_429_seconds: 90
+      # Free tier: rotate models quickly on 429; long pause when daily free quota is exhausted.
+      cooldown_on_429_seconds: 25
+      cooldown_on_free_models_daily_exhausted_seconds: 7200
 
     # Local Ollama fallback (no API key required).
     - name: ollama_local
@@ -715,8 +725,8 @@ ai:
       json_mode: true
       cooldown_on_429_seconds: 0
 
-  # Request timeout (seconds) — higher for MiniMax M2.7 thinking model
-  timeout: 30
+  # Request timeout (seconds) — default for providers without timeout_seconds
+  timeout: 90
   # Temperature for responses
   temperature: 0.1
   # Maximum tokens per response. MiniMax-M2.5 uses ThinkingBlocks before JSON,
