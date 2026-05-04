@@ -78,6 +78,42 @@ class TestBacktestReportStrategyKey(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_crypto_backtest_strategy_key_map_matches_live_strategies(self):
+        """All CLI symbols map to dashboard keys; unknown symbol falls back to sol_macro."""
+        mod = _load_run_backtest_crypto_module()
+        mapping = mod.CRYPTO_BACKTEST_STRATEGY_KEY_BY_SYMBOL
+        expected = {
+            "BTC": "bitcoin",
+            "ETH": "eth_macro",
+            "SOL": "sol_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }
+        self.assertEqual(dict(mapping), expected)
+
+        save_report = mod.save_report
+        from src.backtest.updown_engine import UpdownBacktestResult
+
+        unknown = UpdownBacktestResult(
+            symbol="FOREIGN",
+            window_size=15,
+            start_date="2025-01-01",
+            end_date="2025-01-07",
+            initial_bankroll=500.0,
+            final_bankroll=500.0,
+            trades=[],
+            windows_scanned=1,
+            windows_entered=0,
+            wins=0,
+            losses=0,
+        )
+        path = save_report(unknown, {"1m": 0})
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("strategy"), "sol_macro_15m")
+        finally:
+            path.unlink(missing_ok=True)
+
 
 class TestBacktestETHLoadsBTCContext(unittest.TestCase):
     def test_eth_run_passes_btc_context_to_engine(self):
@@ -268,6 +304,19 @@ class TestUpdownBacktestSplit(unittest.TestCase):
         self.assertGreater(test.windows_scanned, 0)
         self.assertEqual(train.windows_entered, 1)
         self.assertEqual(test.windows_entered, 1)
+
+
+class TestUpdownEngineShortIsBuyNo(unittest.TestCase):
+    """UpdownBacktestEngine maps bearish / short side to BUY_NO only — not live SELL_YES."""
+
+    def test_updown_engine_short_action_is_buy_no_not_sell_yes(self):
+        root = Path(__file__).resolve().parent.parent
+        text = (root / "src" / "backtest" / "updown_engine.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"',
+            text,
+        )
+        self.assertNotIn("SELL_YES", text)
 
 
 if __name__ == "__main__":

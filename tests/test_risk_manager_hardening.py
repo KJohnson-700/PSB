@@ -54,6 +54,35 @@ def test_crypto_buy_position_counts_full_usd_cost():
     assert reason == "OK"
 
 
+def test_crypto_buy_no_position_counts_usd_notional():
+    rm = _risk_manager()
+    rm.active_positions["long_no"] = Position(
+        position_id="long_no",
+        market_id="m1",
+        market_question="Bitcoin Up or Down",
+        outcome="NO",
+        size=10.0,
+        entry_price=0.4,
+        current_price=0.4,
+        pnl=0.0,
+        opened_at=datetime.now(),
+        end_date=datetime.now() + timedelta(minutes=10),
+        strategy="bitcoin",
+        entry_leg="NO",
+    )
+
+    can_trade, size, reason = rm.evaluate_entry(
+        end_date=datetime.now() + timedelta(minutes=10),
+        current_edge=0.1,
+        bankroll=100.0,
+        strategy="bitcoin",
+    )
+
+    assert can_trade is True
+    assert size == 5.0
+    assert reason == "OK"
+
+
 def test_crypto_sell_yes_position_counts_share_cost():
     rm = _risk_manager()
     rm.active_positions["sell"] = Position(

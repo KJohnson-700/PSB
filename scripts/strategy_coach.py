@@ -499,7 +499,7 @@ Consider:
 2. Should stop losses be disabled for short-duration (5-15m) markets?
 3. Is the lag magnitude threshold too loose?
 4. Is the entry price band wrong?
-5. Should any direction (SELL_YES/BUY_YES) be gated on HTF bias?
+5. Should any direction (BUY_NO/BUY_YES) be gated on HTF bias?
 
 For each proposal:
 - config_path: exact dot-notation path (e.g. "strategies.bitcoin.blocked_utc_hours_updown")

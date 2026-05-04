@@ -476,7 +476,7 @@ class TestBitcoinSignalGating:
         ):
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
 
-        # If any signal, it should be SELL_YES (bearish on BTC) not BUY_YES
+        # If any signal, it should not be bullish BUY_YES on UP (expect BUY_NO on UP or BUY_YES on DOWN)
         for sig in signals:
             assert sig.action != "BUY_YES" or sig.direction != "UP"
 

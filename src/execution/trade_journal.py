@@ -24,6 +24,29 @@ ENTRY_PRICE_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "entr
 _UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_macro", "xrp_macro", "eth_macro", "hype_macro"})
 
 
+def infer_entry_leg(pos: Dict[str, Any]) -> str:
+    """Whether ``entry_price`` quotes the YES or NO token (``\"YES\"`` | ``\"NO\"``).
+
+    Prefer explicit ``entry_leg`` on journal rows; else infer from ``action`` / ``side`` /
+    ``outcome`` for older sessions.
+    """
+    leg = pos.get("entry_leg")
+    if leg in ("YES", "NO"):
+        return leg
+    action = (pos.get("action") or "").strip().upper()
+    if action == "BUY_NO":
+        return "NO"
+    if action == "SELL_YES":
+        return "YES"
+    side = (pos.get("side") or "").upper()
+    out = (pos.get("outcome") or "").upper()
+    if out == "NO" and side == "BUY":
+        return "NO"
+    if out == "NO" and side == "SELL":
+        return "YES"
+    return "YES"
+
+
 @dataclass
 class JournalEntry:
     """Single trade journal entry — immutable once written."""
@@ -199,9 +222,12 @@ class TradeJournal:
         reason: str = "",
         extra: Dict = None,
         market_end_at: Optional[datetime] = None,
+        entry_leg: str = "YES",
     ):
         """Log a new trade entry."""
+        entry_leg = entry_leg if entry_leg in ("YES", "NO") else "YES"
         merged_extra = enrich_entry_extra(extra, market_end_at=market_end_at)
+        merged_extra["entry_leg"] = entry_leg
         entry = JournalEntry(
             timestamp=datetime.now(timezone.utc).isoformat(),
             event="ENTRY",
@@ -243,6 +269,7 @@ class TradeJournal:
             "weather_subtype": merged_extra.get("weather_subtype"),
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
+            "entry_leg": entry_leg,
         }
         self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self._summary_cache = None  # invalidate on new entry
@@ -255,8 +282,14 @@ class TradeJournal:
         if strategy in _UPDOWN_STRATEGIES and 0.0 < entry_price < 1.0:
             try:
                 ENTRY_PRICE_LOG.parent.mkdir(parents=True, exist_ok=True)
+                yes_for_log = (1.0 - entry_price) if entry_leg == "NO" else entry_price
                 with ENTRY_PRICE_LOG.open("a") as _f:
-                    _f.write(json.dumps({"ts": entry.timestamp, "strategy": strategy, "yes_price": entry_price}) + "\n")
+                    _f.write(
+                        json.dumps(
+                            {"ts": entry.timestamp, "strategy": strategy, "yes_price": yes_for_log}
+                        )
+                        + "\n"
+                    )
             except OSError:
                 pass
 
@@ -266,13 +299,17 @@ class TradeJournal:
         if not pos:
             return
 
-        # Calculate unrealized PnL
-        if pos["side"] == "BUY":
+        leg = infer_entry_leg(pos)
+        if leg == "NO":
+            mark_no = 1.0 - current_price
+            pnl = (mark_no - pos["entry_price"]) * pos["size"]
+            pos["current_price"] = mark_no
+        elif pos["side"] == "BUY":
             pnl = (current_price - pos["entry_price"]) * pos["size"]
+            pos["current_price"] = current_price
         else:
             pnl = (pos["entry_price"] - current_price) * pos["size"]
-
-        pos["current_price"] = current_price
+            pos["current_price"] = current_price
         pos["pnl"] = round(pnl, 4)
 
         # Carry entry diagnostics forward — raw defaults (0 / "") made PRICE_UPDATE rows look like "empty" trades.
@@ -291,7 +328,7 @@ class TradeJournal:
             outcome=pos["outcome"],
             size=pos["size"],
             entry_price=pos["entry_price"],
-            current_price=current_price,
+            current_price=pos["current_price"],
             pnl=pnl,
             bankroll=bankroll,
             edge=_edge,
@@ -326,10 +363,16 @@ class TradeJournal:
         else:
             pnl = (pos["entry_price"] - exit_price) * pos["size"]
 
-        # Phantom exit guard: token-ordering bug produces exit_price ≈ 1 - entry_price
-        # and wildly large PnL. Silently drop these — the position stays open.
+        # Phantom exit guard: token-ordering bug (YES exit price logged against YES entry)
+        # produces exit_price ≈ 1 - entry_price. Only apply in YES-quote coordinates;
+        # long-NO legs often have entry_no + exit_no ≈ 1 legitimately.
         _ep = pos["entry_price"]
-        _is_token_flip = _ep > 0 and abs(_ep + exit_price - 1.0) < 0.02
+        leg = infer_entry_leg(pos)
+        _is_token_flip = (
+            leg == "YES"
+            and _ep > 0
+            and abs(_ep + exit_price - 1.0) < 0.02
+        )
         _is_oversized = abs(pnl) > 200.0
         if _is_token_flip or _is_oversized:
             logger.warning(

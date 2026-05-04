@@ -58,6 +58,15 @@ from src.backtest.ohlcv_loader  import OHLCVLoader
 from src.backtest.oracle_loader import OracleHistoryLoader
 from src.backtest.updown_engine import UpdownBacktestEngine, UpdownBacktestResult
 
+# Symbol → dashboard `strategy` key prefix; must align with live journal strategy names.
+CRYPTO_BACKTEST_STRATEGY_KEY_BY_SYMBOL = {
+    "BTC": "bitcoin",
+    "ETH": "eth_macro",
+    "XRP": "xrp_macro",
+    "HYPE": "hype_macro",
+    "SOL": "sol_macro",
+}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -269,9 +278,7 @@ def save_report(
     name = f"backtest_crypto_{result.symbol}_{result.window_size}m_{ts}.json"
     path = report_dir / name
 
-    _strategy_map = {"BTC": "bitcoin", "ETH": "eth_macro", "XRP": "xrp_macro",
-                     "HYPE": "hype_macro", "SOL": "sol_macro"}
-    _strategy_key = _strategy_map.get(result.symbol, "sol_macro")
+    _strategy_key = CRYPTO_BACKTEST_STRATEGY_KEY_BY_SYMBOL.get(result.symbol, "sol_macro")
 
     payload: dict = {
         # Dashboard-compatibility fields (updateBacktest() reads these from top level)

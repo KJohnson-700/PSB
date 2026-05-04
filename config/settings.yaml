@@ -390,7 +390,7 @@ strategies:
     # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
     # - signal_first: market 15m signal can set side directly (test mode)
     direction_source: signal_first
-    # Paper only (requires trading.dry_run): set BEARISH to exercise ETH SHORT / SELL_YES path without waiting for BTC.
+    # Paper only (requires trading.dry_run): set BEARISH to exercise ETH SHORT / BUY_NO path without waiting for BTC.
     btc_htf_bias_dry_run_override: null
     signal_15m_long_threshold: 0.55
     signal_15m_short_threshold: 0.45
@@ -417,7 +417,7 @@ strategies:
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
     rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
-    rsi_sell_block_below: 40.0    # Block SELL_YES when ETH is already oversold and more likely to bounce
+    rsi_sell_block_below: 40.0    # Block BUY_NO when alt is already oversold and more likely to bounce
     btc_follow_1h_hist_min: 6.0   # was 8.0 — fewer false skips when BTC 1H is valid but hist magnitude modest
     btc_follow_1h_required: true           # false = bypass BTC 1H continuation gate entirely (escape hatch)
     btc_follow_1h_allow_rising_recovery: true   # allow LONG when 1H hist negative but rising above -recovery floor; SHORT symmetric
@@ -454,7 +454,7 @@ strategies:
     # hours only after ≥15 closed trades with WR<0.46 AND avg PnL<-$2.
     blocked_utc_hours_updown: [1, 15, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
     # Direction gate is now ADAPTIVE via 1H trend in sol_macro.py — no manual flag needed.
-    # When 1H trend is BULLISH, SELL_YES is auto-suppressed; when BEARISH, BUY_YES is.
+    # When 1H trend is BULLISH, BUY_NO is auto-suppressed; when BEARISH, BUY_YES is.
     look_ahead_15m: 8
     look_ahead_5m: 3
     max_concurrent_positions: 3

@@ -32,7 +32,7 @@ from src.strategies.hype_macro import HYPEMacroStrategy
 from src.strategies.weather import WeatherStrategy, WeatherSignal
 from src.strategies.xrp_macro import XRPMacroStrategy
 from src.execution.clob_client import CLOBClient, RiskManager, Position
-from src.execution.trade_journal import TradeJournal
+from src.execution.trade_journal import TradeJournal, infer_entry_leg
 from src.execution.exposure_manager import ExposureManager
 from src.execution.resolution_tracker import ResolutionTracker
 from src.execution.ctf_redeemer import CTFRedeemer
@@ -516,6 +516,7 @@ class PolyBot:
                     opened_at=opened_at,
                     end_date=None,
                     strategy=pos_data.get("strategy", "unknown"),
+                    entry_leg=infer_entry_leg(pos_data),
                 )
                 # Add directly to dict — do NOT call add_position() as it increments daily_trades
                 self.risk_manager.active_positions[position.position_id] = position
@@ -1198,14 +1199,26 @@ class PolyBot:
             )
             return
 
-        token_id = signal.token_id_yes
-        side = "BUY" if signal.action == "BUY_YES" else "SELL"
+        if signal.action == "BUY_YES":
+            token_id = signal.token_id_yes
+            side = "BUY"
+        elif signal.action == "BUY_NO":
+            token_id = signal.token_id_no
+            side = "BUY"
+        elif signal.action == "SELL_YES":
+            token_id = signal.token_id_yes
+            side = "SELL"
+        else:
+            logging.error(
+                f"Bitcoin skip: unexpected action {signal.action!r} "
+                f"(expected BUY_YES, BUY_NO, or SELL_YES)"
+            )
+            return
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # Before placing any order, verify the position can be exited.
-        # BTC signals are BUY_YES / SELL_YES — both operate on the YES token,
-        # so we test that the YES token has resting bids before entering.
-        token_to_test = signal.token_id_yes
+        # BUY_YES / BUY_NO: test the token we are acquiring; SELL_YES tests YES.
+        token_to_test = token_id
         if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
             logging.warning(
                 f"Bitcoin unsellable-token skip '{signal.market_question[:40]}' "
@@ -1238,6 +1251,7 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
+            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -1250,6 +1264,7 @@ class PolyBot:
                 opened_at=datetime.now(),
                 end_date=signal.end_date,
                 strategy="bitcoin",
+                entry_leg=_entry_leg,
             )
             self.risk_manager.add_position(position)
 
@@ -1275,7 +1290,11 @@ class PolyBot:
                     "macro_leg": None,             # bitcoin path has no alt-lag leg
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
-                    "yes_price": signal.price,
+                    "yes_price": (
+                        round(1.0 - signal.price, 4)
+                        if signal.action == "BUY_NO"
+                        else float(signal.price)
+                    ),
                     "btc_price": signal.btc_current,
                     "edge": signal.edge,
                     "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
@@ -1287,6 +1306,7 @@ class PolyBot:
                     "signal_reason": signal.reason,
                 },
                 market_end_at=signal.end_date,
+                entry_leg=_entry_leg,
             )
 
             await self.notifier.notify_trade(
@@ -1349,15 +1369,18 @@ class PolyBot:
         elif signal.action == "SELL_YES":
             token_id = signal.token_id_yes
             side = "SELL"
+        elif signal.action == "BUY_NO":
+            token_id = signal.token_id_no
+            side = "BUY"
         else:
             logging.error(
-                f"{strat} skip: unexpected action {signal.action!r} (expected BUY_YES/SELL_YES)"
+                f"{strat} skip: unexpected action {signal.action!r} "
+                f"(expected BUY_YES, SELL_YES, or BUY_NO)"
             )
             return
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        # SOL/ETH/HYPE macro signals are BUY_YES / SELL_YES — both operate on the
-        # YES token, so we verify YES has bids before committing to an entry.
+        # BUY_YES / SELL_YES / BUY_NO — test the token we hold after fill (YES for sell-yes, else buy leg).
         token_to_test = token_id
         if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
             logging.warning(
@@ -1391,6 +1414,7 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
+            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -1403,6 +1427,7 @@ class PolyBot:
                 opened_at=datetime.now(),
                 end_date=signal.end_date,
                 strategy=strat,
+                entry_leg=_entry_leg,
             )
             self.risk_manager.add_position(position)
 
@@ -1427,7 +1452,11 @@ class PolyBot:
                     "btc_1h_regime": signal.btc_1h_regime,
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
-                    "yes_price": signal.price,
+                    "yes_price": (
+                        round(1.0 - signal.price, 4)
+                        if signal.action == "BUY_NO"
+                        else float(signal.price)
+                    ),
                     signal.spot_price_journal_key(): signal.sol_current,
                     "btc_price": signal.btc_current,
                     "lag_magnitude": signal.lag_magnitude,
@@ -1440,6 +1469,7 @@ class PolyBot:
                     "signal_reason": signal.reason,
                 },
                 market_end_at=signal.end_date,
+                entry_leg=_entry_leg,
             )
 
             await self.notifier.notify_trade(
@@ -1542,6 +1572,7 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
+            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -1554,6 +1585,7 @@ class PolyBot:
                 opened_at=datetime.now(),
                 end_date=signal.end_date,
                 strategy=strat,
+                entry_leg=_entry_leg,
             )
             self.risk_manager.add_position(position)
 
@@ -1585,6 +1617,7 @@ class PolyBot:
                     "weather_calibration_count": getattr(signal, "calibration_count", 0),
                 },
                 market_end_at=signal.end_date,
+                entry_leg=_entry_leg,
             )
 
             await self.notifier.notify_trade(

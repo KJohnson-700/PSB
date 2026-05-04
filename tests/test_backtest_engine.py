@@ -126,6 +126,14 @@ class TestSettlement:
         # Selling YES when YES wins = loss of size
         assert payout == -100
 
+    def test_sell_yes_loses_when_no_wins(self, base_config):
+        """YES loses → SELL_YES gets no debit in this engine (mirror: BUY_YES loses → payout 0)."""
+        engine = BacktestEngine(base_config, strategy_name="weather")
+        positions = [("SELL_YES", 100, 0.90, pd.Timestamp("2024-01-01"))]
+        payout, fee = engine._settle_positions(positions, yes_won=False)
+        assert payout == 0.0
+        assert fee == 0.0
+
     def test_fees_on_settlement(self, base_config):
         base_config["backtest"]["fee_bps"] = 10
         engine = BacktestEngine(base_config, strategy_name="weather")

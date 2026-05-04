@@ -62,7 +62,7 @@ def test_optional_rsi_buy_ceiling_blocks_extreme_long_entries():
 
     assert strategy._rsi_blocks_entry("BUY_YES", 84.8) is True
     assert strategy._rsi_blocks_entry("BUY_YES", 79.9) is False
-    assert strategy._rsi_blocks_entry("SELL_YES", 84.8) is False
+    assert strategy._rsi_blocks_entry("BUY_NO", 84.8) is False
 
 
 def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():

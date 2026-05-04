@@ -86,12 +86,12 @@ class UpdownTrade:
     window_close:  pd.Timestamp
     symbol:        str           # "BTC", "SOL", or "ETH"
     window_size:   int           # 5 or 15 (minutes)
-    action:        str           # "BUY_YES" or "SELL_YES"
+    action:        str           # "BUY_YES" or "BUY_NO"
     htf_bias:      str           # "BULLISH" | "BEARISH"
     ltf_confirmed: bool
     ltf_strength:  float
-    entry_price:   float         # Assumed mid YES price (0.50)
-    fill_price:    float         # After slippage
+    entry_price:   float         # Mid YES before slip (reference for both legs)
+    fill_price:    float         # After slip: YES fill for BUY_YES, NO fill for BUY_NO
     size:          float         # $ notional
     edge:          float         # Estimated edge vs 0.50
     confidence:    float
@@ -1648,9 +1648,8 @@ class UpdownBacktestEngine:
                     current += step_td
                     continue
 
-            # Determine action
-            action    = "BUY_YES" if allowed_side == "LONG" else "SELL_YES"
-            fill_side = "BUY" if action == "BUY_YES" else "SELL"
+            # Determine action (aligned with live: short side buys NO)
+            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
 
             # Position size
             size = self._size_position(bankroll, edge)
@@ -1673,7 +1672,10 @@ class UpdownBacktestEngine:
                 if edge < centered_min:
                     current += step_td
                     continue
-            fill_price, slip_cost = self._simulate_fill(mid_price, fill_side)
+            trade_mid = mid_price if action == "BUY_YES" else max(
+                0.01, min(0.99, 1.0 - mid_price)
+            )
+            fill_price, slip_cost = self._simulate_fill(trade_mid, "BUY")
             slippage_total += slip_cost * size
 
             # Settle using 1m data for the window
@@ -1694,14 +1696,14 @@ class UpdownBacktestEngine:
                     exit_price = 0.0
                     pnl        = -fill_price * size
                     outcome    = "LOSS"
-            else:  # SELL_YES -- we profit when YES = 0 (NO won)
+            else:  # BUY_NO — profit when NO wins (not yes_won)
                 if not yes_won:
-                    exit_price = 0.0
-                    pnl        = fill_price * size
+                    exit_price = 1.0
+                    pnl        = (1.0 - fill_price) * size
                     outcome    = "WIN"
                 else:
-                    exit_price = 1.0
-                    pnl        = -(1.0 - fill_price) * size
+                    exit_price = 0.0
+                    pnl        = -fill_price * size
                     outcome    = "LOSS"
 
             bankroll = max(0.0, bankroll + pnl)   # ruin cap

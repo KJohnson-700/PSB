@@ -43,7 +43,7 @@ Use as a **Skill** (copy to `.cursor/skills/strategy-test-review/SKILL.md` local
 - **Economics** — High win rate but flat/negative PnL; average win << average loss without documented reason; Kelly vs actual size mismatch.
 - **Consistency** — Same session: journal `total_trades` vs sum of strategy breakdown; dashboard vs API vs file.
 - **Temporal** — Indicators at time T using data after T; resolution price known before “entry” bar.
-- **Binary / Polymarket** — YES+NO costs, token side, SELL_YES vs BUY_YES PnL direction; min liquidity filters bypassed in backtest.
+- **Binary / Polymarket** — YES+NO costs, token side, `BUY_YES` vs `BUY_NO` PnL direction (legacy `SELL_YES` in old journals); min liquidity filters bypassed in backtest.
 - **Config drift** — `min_edge`, `entry_price_*`, `blocked_utc_hours_*` differ between live path and backtest path without an explicit experiment flag.
 - **Exposure** — `min_trade_usd` / tier caps: backtest uses different floors than `ExposureManager.scale_size` in live.
 - **Data quality** — Missing bars, stale OHLCV, wrong symbol; report claims N markets but list shows fewer.

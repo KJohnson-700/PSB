@@ -67,6 +67,8 @@ class Position:
     opened_at: datetime
     end_date: Optional[datetime]
     strategy: str = "unknown"
+    # YES = entry_price quotes YES token (BUY_YES, SELL_YES). NO = BUY_NO (NO token).
+    entry_leg: str = "YES"
 
 
 class CLOBClient:
@@ -283,6 +285,8 @@ class CLOBClient:
                     end_date=datetime.fromisoformat(p["end_date"])
                     if p.get("end_date")
                     else None,
+                    strategy=p.get("strategy", "unknown"),
+                    entry_leg=p.get("entry_leg", "YES"),
                 )
                 for p in positions_data
             ]
@@ -415,11 +419,15 @@ class RiskManager:
                 continue  # skip positions from the other pool
             pos_term, _ = self._get_market_term(pos.end_date)
             outcome = str(getattr(pos, "outcome", "") or "").upper()
-            side = str(getattr(pos, "side", "") or "").upper()
             entry_price = float(getattr(pos, "entry_price", 0) or 0)
-            # BUY_YES positions store size as USD outlay; SELL_YES positions store
-            # synthetic NO shares and need shares * price to recover USD outlay.
-            cost = pos.size * entry_price if side == "SELL" or outcome == "NO" else pos.size
+            entry_leg = str(getattr(pos, "entry_leg", "") or "").upper()
+            # BUY_YES / BUY_NO: size is USD notional. Legacy SELL_YES short: size * YES price.
+            if entry_leg == "NO":
+                cost = pos.size
+            elif outcome == "NO":
+                cost = pos.size * entry_price
+            else:
+                cost = pos.size
             current_exposure_dict[pos_term] += cost
 
         category_spent = current_exposure_dict.get(term, 0.0)

@@ -6,7 +6,7 @@ would encounter with real BTC market data and verifies the strategy's decisions.
 
 These provide "solid data points" per round by testing:
 1. Strong bullish trend → should generate BUY_YES on UP markets
-2. Strong bearish trend → should generate SELL_YES on UP markets (or BUY_YES on DOWN)
+2. Strong bearish trend → should generate BUY_NO on UP markets (or BUY_YES on DOWN)
 3. Choppy/sideways → should sit out (no signals)
 4. Trend reversal → should adapt (no stale signals)
 5. Kill switch trigger → should halt after consecutive losses
@@ -398,8 +398,8 @@ class TestBitcoinBullScenario:
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
         assert isinstance(signals, list)
         for s in signals:
-            assert s.action in ("BUY_YES", "SELL_YES"), f"Unexpected action: {s.action}"
-        assert not any(s.action == "SELL_YES" for s in signals)
+            assert s.action in ("BUY_YES", "BUY_NO"), f"Unexpected action: {s.action}"
+        assert not any(s.action == "BUY_NO" for s in signals)
 
     def test_bull_scenario_exposure_full_tier(self):
         """High vol + bull trend → FULL exposure tier ($5 max).
@@ -438,7 +438,7 @@ class TestBitcoinBearScenario:
         assert len(buy_yes) == 0
 
     def test_bearish_sells_overpriced_up(self):
-        """Bearish HTF on 15m updown → may emit SELL_YES (bet down), never BUY_YES."""
+        """Bearish HTF on 15m updown → may emit BUY_NO (bet down), never BUY_YES."""
         ta = _ltf_unconfirmed_bear(_make_bearish_ta(68000))
         market = _make_btc_updown_market(yes_price=0.55, mins_until_end=13.0)
         with patch.object(
@@ -446,11 +446,11 @@ class TestBitcoinBearScenario:
         ):
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
         if signals:
-            assert signals[0].action == "SELL_YES"
+            assert signals[0].action == "BUY_NO"
         assert not any(s.action == "BUY_YES" for s in signals)
 
     def test_bearish_buys_down_market(self):
-        """Updown markets: bearish HTF → SHORT side is SELL_YES (direction DOWN), not BUY_YES."""
+        """Updown markets: bearish HTF → SHORT side is BUY_NO (direction DOWN), not BUY_YES."""
         ta = _ltf_unconfirmed_bear(_make_bearish_ta(68000))
         market = _make_btc_updown_market(yes_price=0.40, mins_until_end=13.0)
         with patch.object(
@@ -458,7 +458,7 @@ class TestBitcoinBearScenario:
         ):
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
         if signals:
-            assert signals[0].action == "SELL_YES"
+            assert signals[0].action == "BUY_NO"
             assert signals[0].direction == "DOWN"
         assert not any(s.action == "BUY_YES" for s in signals)
 
@@ -768,8 +768,8 @@ class TestResolutionTracker:
         assert settled[0]["outcome_won"] == "NO"
         assert abs(settled[0]["pnl"] - (-0.90)) < 0.01  # (0.0 - 0.30) * 3.0
 
-    def test_sell_yes_wins_when_no_resolves(self):
-        """SELL_YES profits when market resolves NO."""
+    def test_buy_no_wins_when_no_resolves(self):
+        """BUY_NO profits when market resolves NO."""
         tracker = ResolutionTracker(check_interval_seconds=0)
 
         journal = MagicMock()
@@ -778,11 +778,11 @@ class TestResolutionTracker:
                 "trade_id": "trade-3",
                 "market_id": "market-btc-3",
                 "strategy": "bitcoin",
-                "action": "SELL_YES",
-                "side": "SELL",
+                "action": "BUY_NO",
+                "side": "BUY",
                 "outcome": "NO",
                 "size": 5.0,
-                "entry_price": 0.60,
+                "entry_price": 0.40,
                 "market_question": "Will BTC be above $100k?",
             }
         ]
@@ -801,10 +801,10 @@ class TestResolutionTracker:
             )
 
         assert len(settled) == 1
-        assert settled[0]["pnl"] == 3.0  # (0.60 - 0.0) * 5.0 → profit
+        assert settled[0]["pnl"] == 3.0  # (1.0 - 0.40) * 5.0
 
-    def test_sell_yes_win_redeems_no_tokens(self):
-        """Winning SELL_YES positions hold/redeem NO CTF tokens."""
+    def test_buy_no_win_redeems_no_tokens(self):
+        """Winning BUY_NO positions redeem NO CTF tokens."""
         tracker = ResolutionTracker(check_interval_seconds=0)
 
         journal = MagicMock()
@@ -813,11 +813,11 @@ class TestResolutionTracker:
                 "trade_id": "trade-sell-redeem",
                 "market_id": "market-btc-sell",
                 "strategy": "bitcoin",
-                "action": "SELL_YES",
-                "side": "SELL",
+                "action": "BUY_NO",
+                "side": "BUY",
                 "outcome": "NO",
                 "size": 5.0,
-                "entry_price": 0.60,
+                "entry_price": 0.40,
                 "market_question": "Will BTC be above $100k?",
             }
         ]
@@ -844,6 +844,35 @@ class TestResolutionTracker:
         assert len(settled) == 1
         redeemer.redeem.assert_called_once()
         assert redeemer.redeem.call_args.kwargs["outcome_won"] == "NO"
+
+    def test_legacy_sell_yes_journal_row_still_settles(self):
+        """Older rows may still use SELL_YES; settlement math remains supported."""
+        tracker = ResolutionTracker(check_interval_seconds=0)
+        journal = MagicMock()
+        journal.get_open_positions.return_value = [
+            {
+                "trade_id": "trade-legacy-sy",
+                "market_id": "m1",
+                "strategy": "bitcoin",
+                "action": "SELL_YES",
+                "side": "SELL",
+                "outcome": "NO",
+                "size": 5.0,
+                "entry_price": 0.60,
+                "market_question": "Will BTC be above $100k?",
+            }
+        ]
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"closed": True, "resolution": "NO"}
+        with patch(
+            "src.execution.resolution_tracker.requests.get", return_value=mock_resp
+        ):
+            settled = tracker.check_and_settle(
+                journal=journal, risk_manager=MagicMock(), bankroll=1000
+            )
+        assert len(settled) == 1
+        assert settled[0]["pnl"] == 3.0
 
     def test_unresolved_market_not_settled(self):
         """Open market should NOT be settled."""

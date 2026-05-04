@@ -131,9 +131,21 @@ async def test_execute_sol_macro_impl_unknown_action_returns_without_place():
     bot = _bare_polybot()
     _attach_mocks(bot)
     raw = _sol_like_signal(action="BUY_YES", strategy_name="sol_macro")
-    sig = raw.model_copy(update={"action": "BUY_NO"})
+    sig = raw.model_copy(update={"action": "INVALID_ACTION"})
     await bot._execute_sol_macro_signal_impl(sig)
     bot.clob_client.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_sol_macro_impl_buy_no():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _sol_like_signal(action="BUY_NO", strategy_name="sol_macro")
+    await bot._execute_sol_macro_signal_impl(sig)
+    bot.clob_client.place_order.assert_called_once()
+    kwargs = bot.clob_client.place_order.call_args.kwargs
+    assert kwargs["side"] == "BUY"
+    assert kwargs["token_id"] == sig.token_id_no
 
 
 @pytest.mark.asyncio

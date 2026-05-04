@@ -1,3 +1,5 @@
+from typing import Optional
+
 from nautilus_trader.model.data import Bar, BarType, QuoteTick
 from nautilus_trader.model.enums import OrderSide, TimeInForce
 from nautilus_trader.model.events import OrderFilled
@@ -10,6 +12,19 @@ from nautilus_trader.trading.strategy import Strategy
 
 from src.main import PolyBot
 from src.market.scanner import Market
+
+
+def signal_action_to_order_side(action: str) -> Optional[OrderSide]:
+    """Map live crypto/weather signal actions to CLOB order side (Nautilus backtests).
+
+    BUY_YES / BUY_NO → BUY (acquire YES or NO token). SELL_YES → SELL (short YES).
+    Unknown actions → None (skip).
+    """
+    if action in ("BUY_YES", "BUY_NO"):
+        return OrderSide.BUY
+    if action == "SELL_YES":
+        return OrderSide.SELL
+    return None
 
 
 class PolyBotStrategyAdapter(Strategy):
@@ -66,11 +81,8 @@ class PolyBotStrategyAdapter(Strategy):
 
         # Execute signals
         for signal in signals:
-            if signal.action == "BUY_YES":
-                order_side = OrderSide.BUY
-            elif signal.action == "SELL_YES":
-                order_side = OrderSide.SELL
-            else:
+            order_side = signal_action_to_order_side(signal.action)
+            if order_side is None:
                 continue
 
             order = LimitOrder(

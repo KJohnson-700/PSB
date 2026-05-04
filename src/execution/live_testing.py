@@ -150,33 +150,43 @@ class PositionExitManager:
             if current_yes_price is None:
                 continue
 
-            # entry_price is ALWAYS stored as the YES token price regardless of side.
-            # PnL direction depends on whether we are LONG (BUY_YES) or SHORT (SELL_YES).
-            #
-            # BUY_YES  → profit when YES price rises  → pnl = size × (yes_now - yes_entry)
-            # SELL_YES → profit when YES price falls  → pnl = size × (yes_entry - yes_now)
-            #
-            # Position.side does not exist on the Position dataclass — using pos.outcome
-            # instead:  outcome=="NO" → we are SHORT (SELL_YES), outcome=="YES" → LONG.
-            #
-            # Also guard against scanner returning the NO token price for sports/championship
-            # markets where token ordering is inverted (yes_price ≈ 1 - entry_price).
-            # If the price appears to have jumped by >0.50 from entry, the market data is
-            # mis-ordered; skip rather than book a massive phantom loss.
-            if abs(current_yes_price - pos.entry_price) > 0.50:
-                logger.debug(
-                    f"Skip exit check {pos.market_id}: price delta implausible "
-                    f"({pos.entry_price:.3f} → {current_yes_price:.3f}); "
-                    f"likely inverted token ordering in scanner"
-                )
-                continue
+            # entry_price is the traded token price at entry (YES for BUY_YES; NO for BUY_NO;
+            # YES for short YES / SELL_YES). Scanner passes YES mids. entry_leg disambiguates
+            # long NO (BUY_NO) from short YES (same outcome flag on some paths).
 
-            is_short = (pos.outcome == "NO")
-            if is_short:
+            entry_leg = getattr(pos, "entry_leg", "YES") or "YES"
+            if entry_leg not in ("YES", "NO"):
+                entry_leg = "YES"
+            current_no_price = 1.0 - current_yes_price
+
+            if entry_leg == "NO":
+                if abs(current_no_price - pos.entry_price) > 0.50:
+                    logger.debug(
+                        f"Skip exit check {pos.market_id}: NO price delta implausible "
+                        f"({pos.entry_price:.3f} → {current_no_price:.3f})"
+                    )
+                    continue
+                unrealized_pnl = pos.size * (current_no_price - pos.entry_price)
+                cost_basis = pos.entry_price * pos.size
+            elif pos.outcome == "NO":
+                # Short YES: lent/sold YES; mark in YES space.
+                if abs(current_yes_price - pos.entry_price) > 0.50:
+                    logger.debug(
+                        f"Skip exit check {pos.market_id}: price delta implausible "
+                        f"({pos.entry_price:.3f} → {current_yes_price:.3f}); "
+                        f"likely inverted token ordering in scanner"
+                    )
+                    continue
                 unrealized_pnl = pos.size * (pos.entry_price - current_yes_price)
-                # cost_basis = max possible loss (price rising to 1.0)
                 cost_basis = (1.0 - pos.entry_price) * pos.size
             else:
+                if abs(current_yes_price - pos.entry_price) > 0.50:
+                    logger.debug(
+                        f"Skip exit check {pos.market_id}: price delta implausible "
+                        f"({pos.entry_price:.3f} → {current_yes_price:.3f}); "
+                        f"likely inverted token ordering in scanner"
+                    )
+                    continue
                 unrealized_pnl = pos.size * (current_yes_price - pos.entry_price)
                 cost_basis = pos.entry_price * pos.size
 
@@ -214,9 +224,9 @@ class PositionExitManager:
                         # Market already past expiry but still open — exit immediately.
                         reason = "updown_expired"
                     elif mins_remaining is not None and mins_remaining <= self.updown_exit_window_mins:
-                        # Within the stop window: exit if price has moved against entry
-                        # by more than updown_stop_cents.
-                        if is_short:
+                        if entry_leg == "NO":
+                            adverse = current_no_price <= pos.entry_price - self.updown_stop_cents
+                        elif pos.outcome == "NO":
                             adverse = current_yes_price >= pos.entry_price + self.updown_stop_cents
                         else:
                             adverse = current_yes_price <= pos.entry_price - self.updown_stop_cents
@@ -235,19 +245,18 @@ class PositionExitManager:
                     reason = "time_limit"
 
             if reason:
-                # Get token IDs from market data
                 token_yes, token_no = token_map.get(pos.market_id, ("", ""))
 
-                # exit_price must be the YES token price in both cases so that
-                # log_exit (which also stores entry_price as YES price) computes
-                # PnL correctly as (entry - exit)*size for SELL or (exit - entry)*size for BUY.
-                exit_price = current_yes_price  # always YES price — consistent with entry_price
-
-                if pos.outcome == "YES":
+                if entry_leg == "NO":
+                    exit_price = current_no_price
+                    exit_action = "SELL"
+                    exit_token_id = token_no
+                elif pos.outcome == "YES":
+                    exit_price = current_yes_price
                     exit_action = "SELL"
                     exit_token_id = token_yes
                 else:
-                    # SELL_YES entries short the YES token; close by buying back YES.
+                    exit_price = current_yes_price
                     exit_action = "BUY"
                     exit_token_id = token_yes
 

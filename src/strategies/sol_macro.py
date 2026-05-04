@@ -74,7 +74,7 @@ class SolMacroSignal(BaseModel):
     """Represents a signal on a Solana price market."""
     market_id: str = Field(..., description="Market identifier")
     market_question: str = Field(..., description="The market question")
-    action: str = Field(..., description="BUY_YES or SELL_YES")
+    action: str = Field(..., description="BUY_YES or BUY_NO (journal may contain legacy SELL_YES)")
     price: float = Field(..., description="Order price")
     size: float = Field(..., description="Position size in USDC")
     confidence: float = Field(..., description="Strategy confidence")
@@ -427,7 +427,7 @@ class SolMacroStrategy:
             return True
 
         sell_floor = self.config.get("rsi_sell_block_below")
-        if action == "SELL_YES" and sell_floor is not None and rsi <= float(sell_floor):
+        if action == "BUY_NO" and sell_floor is not None and rsi <= float(sell_floor):
             return True
 
         return False
@@ -589,7 +589,7 @@ class SolMacroStrategy:
         """
         threshold = (
             self.min_positive_m5_adj_5m_sell
-            if action == "SELL_YES"
+            if action == "BUY_NO"
             else self.min_positive_m5_adj_5m
         )
         if threshold <= 0:
@@ -1216,7 +1216,7 @@ class SolMacroStrategy:
                     action = "BUY_YES"
                     direction = "UP"
                 else:
-                    action = "SELL_YES"
+                    action = "BUY_NO"
                     direction = "DOWN"
 
                 if getattr(corr, "degraded", False):
@@ -1258,16 +1258,16 @@ class SolMacroStrategy:
                 # Instead of manual disable_sell_yes / disable_buy_yes, use the asset's
                 # own 1H trend to suppress counter-trend trades. This replaces the static
                 # config flags with a dynamic check:
-                #   - 1H trend BULLISH  → suppress SELL_YES (don't short in an uptrend)
+                #   - 1H trend BULLISH  → suppress short / BUY_NO (don't short in an uptrend)
                 #   - 1H trend BEARISH  → suppress BUY_YES  (don't long in a downtrend)
                 #   - 1H trend NEUTRAL  → allow both sides
                 # The mtt (MultiTimeframeTrend) object is already fetched once per cycle.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
                 if self.enforce_alt_1h_alignment:
-                    if action == "SELL_YES" and _h1_trend == "BULLISH":
+                    if action == "BUY_NO" and _h1_trend == "BULLISH":
                         _bump_skip("sell_yes_suppressed_bullish_1h")
                         logger.info(
-                            f"  {self._signal_strategy_name} skip SELL_YES on '{market.question[:40]}' — "
+                            f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                             f"1H trend BULLISH, suppressing counter-trend short"
                         )
                         continue
@@ -1375,18 +1375,18 @@ class SolMacroStrategy:
                             m5_reasons.append(f"5m against ({macd_5m.crossover})")
 
                     _sample("m5_adj", m5_adj)
-                    if action == "SELL_YES" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
+                    if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
                         _bump_skip("sell_5m_low_corr")
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"SELL_YES corr {corr.correlation_1h:.2f} < floor {self.sell_5m_min_corr:.2f}"
+                            f"{action} corr {corr.correlation_1h:.2f} < floor {self.sell_5m_min_corr:.2f}"
                         )
                         continue
 
                     if not self._strong_enough_5m_signal(m5_adj, action):
                         _min_req = (
                             self.min_positive_m5_adj_5m_sell
-                            if action == "SELL_YES"
+                            if action == "BUY_NO"
                             else self.min_positive_m5_adj_5m
                         )
                         _bump_skip("weak_5m_signal")
@@ -1442,7 +1442,7 @@ class SolMacroStrategy:
                     # Confidence: 5m MACD momentum + RSI alignment + correlation strength
                     _rsi_conf_5m = 0.03 if (
                         (action == "BUY_YES" and sol.rsi_14 < 40) or
-                        (action == "SELL_YES" and sol.rsi_14 > 60)
+                        (action == "BUY_NO" and sol.rsi_14 > 60)
                     ) else 0.0
                     _corr_conf_5m = max(0.0, (corr.correlation_1h - 0.50) * 0.10)
                     confidence = max(0.50, min(0.85,
@@ -1614,9 +1614,9 @@ class SolMacroStrategy:
 
                 # Enforce macro trend gate
                 if allowed_side == "LONG":
-                    action = "BUY_YES" if direction == "UP" else "SELL_YES"
+                    action = "BUY_YES" if direction == "UP" else "BUY_NO"
                 else:
-                    action = "SELL_YES" if direction == "UP" else "BUY_YES"
+                    action = "BUY_NO" if direction == "UP" else "BUY_YES"
 
                 if self._rsi_blocks_entry(action, sol.rsi_14):
                     _bump_skip("threshold_rsi_block")
@@ -1954,8 +1954,8 @@ class SolMacroStrategy:
             # This band prevents entering when the market has already moved:
             #   - BUY_YES at yes_price > max: market too bullish, lag already priced in
             #   - BUY_YES at yes_price < min: market too bearish, going long against consensus
-            #   - SELL_YES at yes_price < min: market too bearish, lag already priced in
-            #   - SELL_YES at yes_price > max: market too bullish, going short against consensus
+            #   - BUY_NO at yes_price < min: bearish YES consensus → NO too expensive
+            #   - BUY_NO: allow yes_price > max (YES rich → cheap NO)
             #
             # Live data (2026-04-24 session, 29 trades):
             #   market YES in [0.46, 0.54] → 72% WR  (sweet spot)
@@ -1963,12 +1963,18 @@ class SolMacroStrategy:
             if is_updown:
                 _yp_low = self.entry_price_min
                 _yp_high = self.entry_price_max
-                if yes_price < _yp_low or yes_price > _yp_high:
+                if action == "BUY_YES":
+                    _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
+                elif action == "BUY_NO":
+                    _updown_band_bad = yes_price < _yp_low
+                else:
+                    _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
+                if _updown_band_bad:
                     _bump_skip("entry_price_band_updown")
                     logger.info(
                         f"  {self._signal_strategy_name} skip '{market.question[:40]}...' "
                         f"yes_price={yes_price:.3f} outside [{_yp_low:.3f}, {_yp_high:.3f}] "
-                        f"(market already moved, signal has no edge)"
+                        f"({action}, market already moved, signal has no edge)"
                     )
                     continue
 

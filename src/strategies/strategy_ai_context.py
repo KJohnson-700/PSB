@@ -24,6 +24,7 @@ def ai_recommendation_supports_action(recommendation: str, action: str) -> bool:
     rec = (recommendation or "").strip().upper()
     if action == "BUY_YES":
         return rec == "BUY_YES"
-    if action == "SELL_YES":
+    # Legacy SELL_YES and live BUY_NO both mean "model favors NO / short YES exposure."
+    if action in ("SELL_YES", "BUY_NO"):
         return rec == "BUY_NO"
     return False
