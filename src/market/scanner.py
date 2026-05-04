@@ -1,6 +1,7 @@
 """
 Market Scanner Module
-Fetches market data from Polymarket GraphQL API (primary) or Gamma REST API (fallback).
+Fetches market data from Polymarket Gamma REST API (bulk /markets and slug/event helpers).
+Historical note: GraphQL primary was removed; Gamma is the live list source.
 """
 import asyncio
 import json
@@ -142,6 +143,24 @@ _UPDOWN_TIME_RANGE_RE = re.compile(
     r"(\d{1,2}):(\d{2})\s*(AM|PM)?\s*[–-]\s*(\d{1,2}):(\d{2})\s*(AM|PM)",
     re.IGNORECASE,
 )
+
+
+def _coerce_json_list(raw: Any) -> List[Any]:
+    """Accept Gamma list-like fields serialized as JSON strings or arrays."""
+    if isinstance(raw, list):
+        return raw
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        payload = raw.strip()
+        if not payload:
+            return []
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
 
 
 def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
@@ -314,6 +333,9 @@ class MarketScanner:
         self._weather_refresh_future: Optional[Future[List[Market]]] = None
         self._weather_cache: List[Market] = []
         self._weather_cache_updated_at: Optional[datetime] = None
+        self._slug_cache_lock = Lock()
+        self._cycle_empty_event_slugs: set[str] = set()
+        self._slug_fetch_stats: Dict[str, Dict[str, int]] = {}
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
@@ -395,6 +417,9 @@ class MarketScanner:
         Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
         doesn't add to the wall-clock time of the other fetches.
         """
+        with self._slug_cache_lock:
+            self._cycle_empty_event_slugs = set()
+            self._slug_fetch_stats = {}
         look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
         fetch_hype = self._should_fetch_hype_alt_markets()
         fetch_weather = self._should_fetch_weather_markets()
@@ -528,6 +553,7 @@ class MarketScanner:
             "updown_5m_count": 0,
             "updown_hype_alt_count": 0,
             "weather_market_count": 0,
+            "slug_fetch_stats": {},
         }
         if sync_timeout:
             meta["sync_phase_timeout"] = True
@@ -658,7 +684,7 @@ class MarketScanner:
         for m in markets_data:
             try:
                 # Extract token IDs (YES and NO)
-                clob_token_ids = m.get('clobTokenIds', [])
+                clob_token_ids = _coerce_json_list(m.get('clobTokenIds', []))
                 if len(clob_token_ids) < 2:
                     continue
                     
@@ -739,9 +765,23 @@ class MarketScanner:
                 market.spread = max(0.0, 1.0 - (yes_price + no_price))
         
         return markets
+
+    def _set_slug_fetch_stats(
+        self, key: str, *, attempted: int, hit_slugs: int, empty_slugs: int
+    ) -> None:
+        with self._slug_cache_lock:
+            self._slug_fetch_stats[key] = {
+                "attempted_slugs": int(max(0, attempted)),
+                "hit_slugs": int(max(0, hit_slugs)),
+                "empty_slug_responses": int(max(0, empty_slugs)),
+            }
+
+    def _get_slug_fetch_stats_snapshot(self) -> Dict[str, Dict[str, int]]:
+        with self._slug_cache_lock:
+            return {key: dict(values) for key, values in self._slug_fetch_stats.items()}
     
     def _fetch_markets_gamma(self, limit: int = 100) -> List[Market]:
-        """Fallback: fetch markets from Gamma REST API when GraphQL is unavailable."""
+        """Fetch active markets from Gamma REST ``GET /markets`` (paginated)."""
         GAMMA_API = "https://gamma-api.polymarket.com"
         markets = []
         offset = 0
@@ -764,10 +804,10 @@ class MarketScanner:
                         )
                         if vol < threshold and liq < threshold:
                             continue
-                        outcomes = json.loads(gm.get("outcomePrices", "[]"))
+                        outcomes = _coerce_json_list(gm.get("outcomePrices", "[]"))
                         yes_price = float(outcomes[0]) if outcomes else 0.5
                         no_price = float(outcomes[1]) if len(outcomes) > 1 else 1.0 - yes_price
-                        tokens = json.loads(gm.get("clobTokenIds", "[]"))
+                        tokens = _coerce_json_list(gm.get("clobTokenIds", "[]"))
                         token_yes = tokens[0] if tokens else ""
                         token_no = tokens[1] if len(tokens) > 1 else ""
                         end_str = gm.get("endDate") or gm.get("end_date_iso")
@@ -804,8 +844,24 @@ class MarketScanner:
                 offset += len(batch)
                 if len(batch) < params["limit"]:
                     break
+        except requests.exceptions.HTTPError as e:
+            snippet = ""
+            if e.response is not None:
+                try:
+                    snippet = (e.response.text or "")[:400]
+                except Exception:
+                    snippet = ""
+            logger.error(
+                "Gamma /markets HTTP error status=%s: %s body=%r",
+                getattr(e.response, "status_code", None),
+                e,
+                snippet,
+                exc_info=True,
+            )
+        except requests.RequestException as e:
+            logger.error("Gamma /markets request error: %s", e, exc_info=True)
         except Exception as e:
-            logger.error(f"Gamma API fallback error: {e}")
+            logger.error("Gamma /markets unexpected error: %s", e, exc_info=True)
         logger.info(f"Gamma API fetched {len(markets)} markets")
         return markets
 
@@ -876,13 +932,13 @@ class MarketScanner:
     @staticmethod
     def _parse_gamma_event_market(gm: Dict[str, Any], slug: str) -> Optional[Market]:
         try:
-            outcomes = json.loads(gm.get("outcomePrices", "[]"))
+            outcomes = _coerce_json_list(gm.get("outcomePrices", "[]"))
             yes_price = float(outcomes[0]) if outcomes else 0.5
             no_price = float(outcomes[1]) if len(outcomes) > 1 else 1.0 - yes_price
             if yes_price <= 0.01 or yes_price >= 0.99:
                 return None
 
-            tokens = json.loads(gm.get("clobTokenIds", "[]"))
+            tokens = _coerce_json_list(gm.get("clobTokenIds", "[]"))
             vol = float(gm.get("volume", 0) or 0)
             liq = float(gm.get("liquidity", 0) or 0)
             question = gm.get("question", "")
@@ -932,8 +988,12 @@ class MarketScanner:
         *,
         timeout_sec: float,
         limit: Optional[int] = None,
+        stats_key: Optional[str] = None,
     ) -> List[Market]:
         def _fetch_one(slug: str) -> List[Market]:
+            with self._slug_cache_lock:
+                if slug in self._cycle_empty_event_slugs:
+                    return []
             parsed_markets: List[Market] = []
             try:
                 market_resp = requests.get(
@@ -946,7 +1006,9 @@ class MarketScanner:
                         parsed = self._parse_gamma_event_market(gm, slug)
                         if parsed is not None:
                             parsed_markets.append(parsed)
-                    if parsed_markets or "-updown-" in slug:
+                    # Non-empty /markets: done. Empty /markets on *-updown-* slugs must still
+                    # try /events — Gamma often nests those markets under the event only.
+                    if parsed_markets:
                         return parsed_markets
 
                 resp = requests.get(
@@ -954,27 +1016,36 @@ class MarketScanner:
                     params={"slug": slug},
                     timeout=timeout_sec,
                 )
-                if resp.status_code != 200:
-                    return parsed_markets
-                events = resp.json()
-                if not events:
-                    return parsed_markets
-                event = events[0]
-                for gm in event.get("markets", []):
-                    parsed = self._parse_gamma_event_market(gm, slug)
-                    if parsed is not None:
-                        parsed_markets.append(parsed)
+                if resp.status_code == 200:
+                    events = resp.json() or []
+                    if events:
+                        event = events[0]
+                        for gm in event.get("markets", []):
+                            parsed = self._parse_gamma_event_market(gm, slug)
+                            if parsed is not None:
+                                parsed_markets.append(parsed)
             except Exception as e:
                 logger.debug(f"Failed to fetch updown slug {slug}: {e}")
+            if not parsed_markets:
+                with self._slug_cache_lock:
+                    self._cycle_empty_event_slugs.add(slug)
             return parsed_markets
 
         markets: List[Market] = []
         seen_ids: set[str] = set()
+        hit_slugs = 0
+        empty_slugs = 0
         max_workers = max(1, min(20, len(slugs)))
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="updown-slug") as pool:
-            future_to_slug = {pool.submit(_fetch_one, slug): slug for slug in slugs}
+        pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="updown-slug")
+        future_to_slug = {pool.submit(_fetch_one, slug): slug for slug in slugs}
+        try:
             for future in as_completed(future_to_slug):
-                for parsed in future.result():
+                parsed_batch = future.result()
+                if parsed_batch:
+                    hit_slugs += 1
+                else:
+                    empty_slugs += 1
+                for parsed in parsed_batch:
                     if parsed is None or parsed.id in seen_ids:
                         continue
                     seen_ids.add(parsed.id)
@@ -983,6 +1054,15 @@ class MarketScanner:
                         break
                 if limit is not None and len(markets) >= limit:
                     break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        if stats_key:
+            self._set_slug_fetch_stats(
+                stats_key,
+                attempted=len(slugs),
+                hit_slugs=hit_slugs,
+                empty_slugs=empty_slugs,
+            )
         markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
         return markets
 
@@ -998,6 +1078,7 @@ class MarketScanner:
         markets = self._fetch_event_slug_markets(
             self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
             timeout_sec=8,
+            stats_key="updown_15m",
         )
         rejected = [m for m in markets if m.window_minutes and not (10 <= m.window_minutes <= 20)]
         markets = [m for m in markets if m.window_minutes and 10 <= m.window_minutes <= 20]
@@ -1040,6 +1121,7 @@ class MarketScanner:
         markets = self._fetch_event_slug_markets(
             self._iter_updown_event_slugs(step_minutes=5, look_ahead=look_ahead),
             timeout_sec=8,
+            stats_key="updown_5m",
         )
         rejected = [m for m in markets if m.window_minutes and m.window_minutes > 6]
         markets = [m for m in markets if m.window_minutes and m.window_minutes <= 6]
@@ -1087,7 +1169,12 @@ class MarketScanner:
                 look_ahead=max(1, min(look_ahead_5m, 24)),
             )
         )
-        markets = self._fetch_event_slug_markets(slugs, timeout_sec=4, limit=limit)
+        markets = self._fetch_event_slug_markets(
+            slugs,
+            timeout_sec=4,
+            limit=limit,
+            stats_key="updown_hype_alt",
+        )
         if markets:
             logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
         return markets
@@ -1320,6 +1407,7 @@ class MarketScanner:
             "updown_5m_count": len(opportunities.get("updown_5m", [])),
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
             "weather_market_count": len(opportunities.get("weather", [])),
+            "slug_fetch_stats": self._get_slug_fetch_stats_snapshot(),
         }
 
         logger.info(
