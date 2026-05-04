@@ -337,9 +337,11 @@ class ETHMacroStrategy(SolMacroStrategy):
         signal_4h = self._btc_htf_proxy_signal(btc_htf_bias)
 
         if self.direction_source == "signal_first":
-            if signal_15m >= self.signal_15m_long_threshold:
+            # Market 15m signal can set side, but require BTC HTF agreement (or NEUTRAL)
+            # so we don't LONG into a BEARISH macro purely from market YES price.
+            if signal_15m >= self.signal_15m_long_threshold and btc_htf_bias != "BEARISH":
                 return "LONG", "signal_first_long"
-            if signal_15m <= self.signal_15m_short_threshold:
+            if signal_15m <= self.signal_15m_short_threshold and btc_htf_bias != "BULLISH":
                 return "SHORT", "signal_first_short"
             return base_side, "signal_first_fallback"
 
@@ -644,11 +646,11 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             side_source_counts[side_source] = side_source_counts.get(side_source, 0) + 1
 
-            action = "BUY_YES" if market_allowed_side == "LONG" else "SELL_YES"
+            action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if market_allowed_side == "LONG" else "DOWN"
 
             if self.enforce_alt_1h_alignment:
-                if action == "SELL_YES" and mtt.h1_trend == "BULLISH":
+                if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
                     _bump_skip("eth_1h_bullish")
                     continue
                 if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
@@ -751,6 +753,36 @@ class ETHMacroStrategy(SolMacroStrategy):
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
             if self._btc_1h_regime_gates.get("enabled", False):
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
+
+            # Far from expiry → more time-stop risk; require extra min_edge.
+            _rstart = float(
+                self.config.get("updown_min_edge_mins_left_ramp_start_min", 0.0) or 0.0
+            )
+            _rmax = float(
+                self.config.get("updown_min_edge_mins_left_ramp_max_add", 0.0) or 0.0
+            )
+            _rspan = float(
+                self.config.get("updown_min_edge_mins_left_ramp_span_min", 18.0) or 18.0
+            )
+            if _rstart > 0 and _rmax > 0 and _rspan > 0 and _eval_left > _rstart:
+                _edge_addon = _rmax * min(1.0, (_eval_left - _rstart) / _rspan)
+                effective_min_edge += _edge_addon
+
+            # Block updown when journaled macro_leg disagrees with side (catch-up thesis off).
+            if self.block_counter_macro_leg_updown:
+                _lm = self._signal_lag_magnitude(corr)
+                if _lm is not None:
+                    _long_floor = float(
+                        self.config.get("updown_macro_leg_min_for_long", 0.0)
+                    )
+                    if market_allowed_side == "LONG" and _lm < _long_floor:
+                        _bump_skip("macro_leg_blocks_long")
+                        logger.info(
+                            f"  ETH skip '{market.question[:40]}' — "
+                            f"macro_leg={_lm:+.4f}% < long_floor={_long_floor:+.4f} (updown)"
+                        )
+                        continue
+
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
             _ai_override_bar = float(self.min_edge_5m_ai_override)
@@ -834,7 +866,32 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("edge_below_min")
                 continue
 
-            if yes_price < self.entry_price_min or yes_price > self.entry_price_max:
+            # Centered-price gate: near 50/50 entries need a BTC catalyst and a higher edge bar.
+            if self.center_price_band > 0:
+                _is_centered = abs(yes_price - 0.50) <= self.center_price_band
+                if _is_centered:
+                    if (
+                        self.center_price_requires_catalyst
+                        and not corr.lag_opportunity
+                        and not corr.btc_spike_detected
+                    ):
+                        _bump_skip("centered_price_no_catalyst")
+                        continue
+                    _center_min_edge = max(effective_min_edge, self.min_edge_when_centered)
+                    if edge < _center_min_edge:
+                        _bump_skip("centered_price_edge_below_min")
+                        continue
+
+            if action == "BUY_YES":
+                _entry_price_bad = (
+                    yes_price < self.entry_price_min
+                    or yes_price > self.entry_price_max
+                )
+            else:
+                # BUY_NO: allow rich-YES / cheap-NO setups above max YES;
+                # still reject overly bearish YES where NO is already expensive.
+                _entry_price_bad = yes_price < self.entry_price_min
+            if _entry_price_bad:
                 _bump_skip("entry_price_band")
                 continue
 

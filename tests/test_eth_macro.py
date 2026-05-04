@@ -52,10 +52,10 @@ def test_eth_btc_follow_5m_impulse_scores_only_real_btc_impulse():
     assert score == 0.0
 
 
-def test_eth_sell_yes_blocks_when_rsi_is_oversold():
+def test_eth_rsi_blocks_buy_no_when_oversold():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
-    assert strat._rsi_blocks_entry("SELL_YES", 35.0) is True
-    assert strat._rsi_blocks_entry("SELL_YES", 45.0) is False
+    assert strat._rsi_blocks_entry("BUY_NO", 35.0) is True
+    assert strat._rsi_blocks_entry("BUY_NO", 45.0) is False
 
 
 def test_eth_uses_its_own_ai_hold_config():
@@ -129,10 +129,21 @@ def test_eth_side_resolution_signal_first_toggle():
     cfg = _config()
     cfg["strategies"]["eth_macro"]["direction_source"] = "signal_first"
     strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    # signal_first lets the market 15m signal set side, but only when BTC HTF
+    # doesn't actively disagree (BULLISH HTF blocks SHORT, BEARISH HTF blocks LONG).
+    side, source = strat._resolve_market_side(
+        base_side="LONG",
+        btc_htf_bias="NEUTRAL",
+        market_yes_price=0.43,
+    )
+    assert side == "SHORT"
+    assert source == "signal_first_short"
+
+    # When BTC HTF disagrees with the market signal, fall back to base_side.
     side, source = strat._resolve_market_side(
         base_side="LONG",
         btc_htf_bias="BULLISH",
         market_yes_price=0.43,
     )
-    assert side == "SHORT"
-    assert source == "signal_first_short"
+    assert side == "LONG"
+    assert source == "signal_first_fallback"

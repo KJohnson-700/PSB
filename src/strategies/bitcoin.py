@@ -6,8 +6,8 @@ RULE HIERARCHY (strict — no exceptions):
 
 LAYER 1: HIGHER TIMEFRAME TREND (4H) — THE LAW
   Determined by: Trend Sabre trend direction + price vs Sabre MA + 4H MACD above/below zero
-  ► If 4H is BULLISH → ONLY allow LONG signals (BUY_YES on UP markets, SELL_YES on DOWN markets)
-  ► If 4H is BEARISH → ONLY allow SHORT signals (SELL_YES on UP markets, BUY_YES on DOWN markets)
+  ► If 4H is BULLISH → ONLY allow LONG signals (BUY_YES on UP markets, BUY_NO on DOWN markets)
+  ► If 4H is BEARISH → ONLY allow SHORT signals (BUY_NO on UP, BUY_YES on DOWN)
   ► Signals against the higher TF are DROPPED — no exceptions
 
 LAYER 2: LOWER TIMEFRAME ENTRY CONFIRMATION (15m)
@@ -55,7 +55,7 @@ class BitcoinSignal(BaseModel):
     """Represents a signal on a Bitcoin price market."""
     market_id: str = Field(..., description="Market identifier")
     market_question: str = Field(..., description="The market question")
-    action: str = Field(..., description="BUY_YES or SELL_YES")
+    action: str = Field(..., description="BUY_YES or BUY_NO")
     price: float = Field(..., description="Order price")
     size: float = Field(..., description="Position size in USDC")
     confidence: float = Field(..., description="Strategy confidence")
@@ -641,12 +641,13 @@ class BitcoinStrategy:
             if in_lvn and abs(tension_adj) < 0.02:  # Not already stretched
                 vp_adj += 0.02  # Slight boost — less friction for price movement
 
-        # 8. Time decay — more time = more uncertainty
+        final = base_prob + ltf_adj + timing_bonus + tension_adj + rsi_adj + sr_adj + vp_adj
+
+        # 8. Time decay — more time = more uncertainty. Applied to the full conviction
+        # (not just base_prob) so directional adjustments also decay with horizon.
         if days_to_resolution > 0:
             time_factor = min(1.0, days_to_resolution / 60.0)
-            base_prob = base_prob * (1 - time_factor * 0.3) + 0.50 * (time_factor * 0.3)
-
-        final = base_prob + ltf_adj + timing_bonus + tension_adj + rsi_adj + sr_adj + vp_adj
+            final = final * (1 - time_factor * 0.3) + 0.50 * (time_factor * 0.3)
 
         # Regime dampening: compress conviction toward 0.50 in choppy/bear regimes
         if regime == "RANGE":
@@ -993,17 +994,17 @@ class BitcoinStrategy:
                     )
                     continue
 
-                # In updown markets: LONG → BUY_YES (bet on UP), SHORT → SELL_YES (bet on DOWN)
+                # In updown markets: LONG → BUY_YES (bet on UP), SHORT → BUY_NO (bet on DOWN)
                 if allowed_side == "LONG":
                     action = "BUY_YES"
                     direction = "UP"
                 else:
-                    action = "SELL_YES"
+                    action = "BUY_NO"
                     direction = "DOWN"
 
                 # ── BUY_YES kill switch ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
-                # All profit comes from SELL_YES (78 trades, 51% WR, +$8.15).
+                # Downside leg uses BUY_NO on the NO token.
                 # Config-driven so it can be re-enabled if market regime changes.
                 if action == "BUY_YES" and self.config.get("disable_buy_yes", False):
                     _bump_skip("buy_yes_disabled")
@@ -1293,10 +1294,10 @@ class BitcoinStrategy:
                     if direction == "UP":
                         action = "BUY_YES"
                     else:
-                        action = "SELL_YES"
+                        action = "BUY_NO"
                 else:
                     if direction == "UP":
-                        action = "SELL_YES"
+                        action = "BUY_NO"
                     else:
                         action = "BUY_YES"
 
@@ -1636,10 +1637,20 @@ class BitcoinStrategy:
                 # self.entry_price_min/max are for directional threshold markets (0.10-0.90).
                 # Updown markets need a tighter band to avoid betting against strong consensus.
                 #   BUY_YES at yes_price < 0.46: market is already bearish → no momentum edge
-                #   SELL_YES at yes_price > 0.54: market is already bullish → no momentum edge
+                #   BUY_NO at yes_price > 0.54: allow (cheap NO when YES is rich)
+                #   BUY_YES at yes_price > 0.54 and BUY_NO at yes_price < 0.46: consensus extremes
                 _up_min = self.config.get("entry_price_min_updown", 0.46)
                 _up_max = self.config.get("entry_price_max_updown", 0.54)
-                if yes_price < _up_min or yes_price > _up_max:
+                _updown_band_bad = (
+                    (yes_price < _up_min or yes_price > _up_max)
+                    if action == "BUY_YES"
+                    else (
+                        yes_price < _up_min
+                        if action == "BUY_NO"
+                        else (yes_price < _up_min or yes_price > _up_max)
+                    )
+                )
+                if _updown_band_bad:
                     _bump_skip("entry_price_out_of_range_updown")
                     logger.info(
                         f"  BTC skip '{market.question[:45]}' {action} "
@@ -1670,14 +1681,17 @@ class BitcoinStrategy:
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
 
-            order_price = (yes_price - 0.01) if action == "BUY_YES" else (yes_price + 0.01)
+            if action == "BUY_YES":
+                order_price = yes_price - 0.01
+            else:
+                order_price = (1.0 - yes_price) - 0.01
             order_price = max(0.01, min(0.99, order_price))
 
             reason = " | ".join(reason_parts)
 
             # Reconstruct est_prob from edge + yes_price for journal logging.
             # BUY_YES:  edge = est_prob - yes_price  → est_prob = edge + yes_price
-            # SELL_YES: edge = yes_price - est_prob  → est_prob = yes_price - edge
+            # BUY_NO: edge = yes_price - est_prob  → est_prob = yes_price - edge
             _signal_est_prob = round(
                 (edge + yes_price) if action == "BUY_YES" else (yes_price - edge),
                 4,
