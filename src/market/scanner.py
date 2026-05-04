@@ -573,9 +573,21 @@ class MarketScanner:
         return look_15m, look_5m
         
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create HTTP session"""
+        """Get or create HTTP session.
+
+        Cap connection pool to prevent socket exhaustion under bursty fetches
+        (e.g. fetch_prices fan-out across many token_ids). Default aiohttp limit
+        is 100 with no per-host cap, which can exhaust ephemeral ports on
+        long-running processes and cause 5-10s tail stalls.
+        """
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(
+                limit=50, limit_per_host=20, ttl_dns_cache=300
+            )
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            self.session = aiohttp.ClientSession(
+                connector=connector, timeout=timeout
+            )
         return self.session
     
     async def fetch_markets(self, limit: int = 100) -> List[Market]:
@@ -606,13 +618,35 @@ class MarketScanner:
                             mid = float(data.get("mid", 0) or 0)
                             if mid > 0:
                                 return token_id, mid
-                except Exception:
-                    pass
+                        else:
+                            return token_id, None
+                except asyncio.TimeoutError:
+                    return token_id, "timeout"
+                except Exception as e:
+                    return token_id, f"err:{type(e).__name__}"
                 return token_id, None
 
         try:
             results = await asyncio.gather(*[_get_mid(tid) for tid in token_ids])
-            return {tid: price for tid, price in results if price is not None}
+            prices: Dict[str, float] = {}
+            timeouts = 0
+            errors = 0
+            misses = 0
+            for tid, val in results:
+                if isinstance(val, float):
+                    prices[tid] = val
+                elif val == "timeout":
+                    timeouts += 1
+                elif isinstance(val, str) and val.startswith("err:"):
+                    errors += 1
+                else:
+                    misses += 1
+            if timeouts or errors or misses:
+                logger.debug(
+                    "Scanner.fetch_prices: %d/%d ok (timeouts=%d errors=%d misses=%d)",
+                    len(prices), len(token_ids), timeouts, errors, misses,
+                )
+            return prices
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")
             return {}
@@ -636,8 +670,11 @@ class MarketScanner:
                 if m.get('endDate'):
                     try:
                         end_date = datetime.fromisoformat(m['endDate'].replace('Z', '+00:00'))
-                    except:
-                        pass
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logger.debug(
+                            "Scanner: failed to parse endDate=%r for market %s: %s",
+                            m.get('endDate'), m.get('id', '?'), e,
+                        )
                 question = m.get('question', '')
                 group_item_title = m.get('groupItemTitle', '')
                 slug = str(m.get("slug") or "")
