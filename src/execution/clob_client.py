@@ -121,7 +121,13 @@ class CLOBClient:
         market_id: str = None,
         post_only: bool = False,
         dry_run: bool = True,
+        order_outcome: Optional[str] = None,
     ) -> Optional[Order]:
+        _outcome = (
+            order_outcome
+            if order_outcome in ("YES", "NO")
+            else ("YES" if side == "BUY" else "NO")
+        )
         if dry_run:
             logger.info(f"[DRY RUN] Would place order: {side} {size} @ {price}")
             order = Order(
@@ -129,7 +135,7 @@ class CLOBClient:
                 market_id=market_id or "",
                 token_id=token_id,
                 side=side,
-                outcome="YES" if side == "BUY" else "NO",
+                outcome=_outcome,
                 price=price,
                 size=size,
                 filled_size=size,
@@ -169,7 +175,7 @@ class CLOBClient:
                 market_id=market_id or "",
                 token_id=token_id,
                 side=side,
-                outcome="YES" if side == "BUY" else "NO",
+                outcome=_outcome,
                 price=price,
                 size=size,
                 status=OrderStatus.PENDING,
@@ -297,6 +303,19 @@ class CLOBClient:
 
 class RiskManager:
     """Risk Management Engine"""
+
+    @staticmethod
+    def position_entry_notional(p: Any) -> float:
+        """Approximate USD cost at entry for exposure caps (matches evaluate_entry logic)."""
+        entry_price = float(getattr(p, "entry_price", 0) or 0)
+        entry_leg = str(getattr(p, "entry_leg", "") or "").upper()
+        outcome = str(getattr(p, "outcome", "") or "").upper()
+        sz = float(getattr(p, "size", 0) or 0)
+        if entry_leg == "NO":
+            return sz
+        if outcome == "NO":
+            return sz * entry_price
+        return sz
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config  # Pass the full config
@@ -464,7 +483,7 @@ class RiskManager:
 
         # Check max strategy exposure (dollar cost)
         current_exposure = sum(
-            p.size * getattr(p, "entry_price", 0)
+            self.position_entry_notional(p)
             for p in self.active_positions.values()
             if getattr(p, "strategy", "") == strategy_name
         )
@@ -517,9 +536,9 @@ class RiskManager:
         self.last_reset = datetime.now()
 
     def get_portfolio_summary(self, total_bankroll: float) -> Dict[str, Any]:
-        # Total cost (dollars) = sum of size * entry_price for each position
+        # Total cost (dollars) — entry-leg aware for BUY_NO vs SELL_YES
         total_cost = sum(
-            p.size * getattr(p, "entry_price", 0) for p in self.active_positions.values()
+            self.position_entry_notional(p) for p in self.active_positions.values()
         )
         total_exposure = total_cost
         return {

@@ -70,6 +70,30 @@ from src.analysis.btc_1h_regime import (
 logger = logging.getLogger(__name__)
 
 
+def macd_bearish_momentum_ok(m: Any) -> bool:
+    """True when MACD bundle shows momentum favoring DOWN (alt leg), for BUY_NO override."""
+    if m is None:
+        return False
+    crossover = getattr(m, "crossover", None) or ""
+    if crossover == "BEARISH_CROSS":
+        return True
+    try:
+        hist = float(getattr(m, "histogram", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        hist = 0.0
+    rising = bool(getattr(m, "histogram_rising", False))
+    try:
+        macd_line = float(getattr(m, "macd_line", 0.0) or 0.0)
+        signal_line = float(getattr(m, "signal_line", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        macd_line = signal_line = 0.0
+    if not rising and hist < 0:
+        return True
+    if macd_line < signal_line and hist <= 0:
+        return True
+    return False
+
+
 class SolMacroSignal(BaseModel):
     """Represents a signal on a Solana price market."""
     market_id: str = Field(..., description="Market identifier")
@@ -1265,12 +1289,20 @@ class SolMacroStrategy:
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
                 if self.enforce_alt_1h_alignment:
                     if action == "BUY_NO" and _h1_trend == "BULLISH":
-                        _bump_skip("sell_yes_suppressed_bullish_1h")
+                        if not macd_bearish_momentum_ok(
+                            sol.macd_5m if is_5m else sol.macd_15m
+                        ):
+                            _bump_skip("sell_yes_suppressed_bullish_1h")
+                            logger.info(
+                                f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
+                                f"alt 1H BULLISH, no alt MACD bearish confirmation"
+                            )
+                            continue
+                        reason_parts.append("alt_bearish_mom_override")
                         logger.info(
-                            f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
-                            f"1H trend BULLISH, suppressing counter-trend short"
+                            f"  {self._signal_strategy_name} allow {action} on '{market.question[:40]}' — "
+                            f"alt 1H BULLISH but {('5m' if is_5m else '15m')} MACD confirms DOWN"
                         )
-                        continue
                     if action == "BUY_YES" and _h1_trend == "BEARISH":
                         _bump_skip("buy_yes_suppressed_bearish_1h")
                         logger.info(

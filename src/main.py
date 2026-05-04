@@ -1247,6 +1247,7 @@ class PolyBot:
             market_id=signal.market_id,
             post_only=True,
             dry_run=self.config.get("trading", {}).get("dry_run", True),
+            order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
         )
 
         if order and hasattr(order, "order_id"):
@@ -1410,6 +1411,7 @@ class PolyBot:
             market_id=signal.market_id,
             post_only=True,
             dry_run=self.config.get("trading", {}).get("dry_run", True),
+            order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
         )
 
         if order and hasattr(order, "order_id"):
@@ -1568,6 +1570,7 @@ class PolyBot:
             market_id=signal.market_id,
             post_only=True,
             dry_run=self.config.get("trading", {}).get("dry_run", True),
+            order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
         )
 
         if order and hasattr(order, "order_id"):

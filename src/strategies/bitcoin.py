@@ -994,13 +994,24 @@ class BitcoinStrategy:
                     )
                     continue
 
-                # In updown markets: LONG → BUY_YES (bet on UP), SHORT → BUY_NO (bet on DOWN)
-                if allowed_side == "LONG":
+                # In updown markets: LONG → BUY_YES (UP), SHORT → BUY_NO (DOWN).
+                # Counter-trend: bullish HTF but 4H MACD histogram rolling over → BUY_NO (DOWN).
+                btc_bull_rollover = (
+                    htf_bias == "BULLISH" and not macd_4h.histogram_rising
+                )
+                if btc_bull_rollover:
+                    action = "BUY_NO"
+                    direction = "DOWN"
+                    effective_side = "SHORT"
+                    reason_parts.append("counter_trend=btc_4h_hist_declining")
+                elif allowed_side == "LONG":
                     action = "BUY_YES"
                     direction = "UP"
+                    effective_side = "LONG"
                 else:
                     action = "BUY_NO"
                     direction = "DOWN"
+                    effective_side = "SHORT"
 
                 # ── BUY_YES kill switch ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
@@ -1038,7 +1049,7 @@ class BitcoinStrategy:
                     # Fallback: if 4H is decelerating but 1H is building, allow entry
                     # (catches local momentum recovery within larger trend structure).
                     macd_1h = ta.macd_1h
-                    if allowed_side == "LONG" and not macd_4h.histogram_rising:
+                    if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
                             _bump_skip("hist_gate_5m_long_reject")
                             logger.info(
@@ -1050,7 +1061,7 @@ class BitcoinStrategy:
                             f"  BTC [5m] 1H gate pass '{market.question[:40]}' — "
                             f"4H falling but 1H rising — local momentum recovery"
                         )
-                    if allowed_side == "SHORT" and macd_4h.histogram_rising:
+                    if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
                             _bump_skip("hist_gate_5m_short_reject")
                             logger.info(
@@ -1068,7 +1079,7 @@ class BitcoinStrategy:
                     m5_dir = mom.m5_direction
                     m5_adj = 0.0
                     m5_reasons = []
-                    if allowed_side == "LONG":
+                    if effective_side == "LONG":
                         if m5_dir == "SPIKE_UP":
                             m5_adj = 0.06
                             m5_reasons.append(f"5m SPIKE_UP ({mom.m5_move_pct:+.3f}%)")
@@ -1101,14 +1112,14 @@ class BitcoinStrategy:
                             m5_adj = -0.01
                             m5_reasons.append(f"5m LEAN_UP against ({mom.m5_move_pct:+.3f}%)")
 
-                    if allowed_side == "LONG":
+                    if effective_side == "LONG":
                         est_prob_up += m5_adj
                     else:
                         est_prob_up -= m5_adj
 
                     # 5m prediction window bonus
                     if mom.m5_in_prediction_window:
-                        if allowed_side == "LONG":
+                        if effective_side == "LONG":
                             est_prob_up += 0.02
                         else:
                             est_prob_up -= 0.02
@@ -1185,7 +1196,7 @@ class BitcoinStrategy:
                     # Fallback: if 4H is decelerating but 1H is building, allow entry
                     # (catches local momentum recovery within larger trend structure).
                     macd_1h = ta.macd_1h
-                    if allowed_side == "LONG" and not macd_4h.histogram_rising:
+                    if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
                             _bump_skip("hist_gate_15m_long_reject")
                             logger.info(
@@ -1197,7 +1208,7 @@ class BitcoinStrategy:
                             f"  BTC [15m] 1H gate pass '{market.question[:40]}' — "
                             f"4H falling but 1H rising — local momentum recovery"
                         )
-                    if allowed_side == "SHORT" and macd_4h.histogram_rising:
+                    if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
                             _bump_skip("hist_gate_15m_short_reject")
                             logger.info(
@@ -1212,10 +1223,10 @@ class BitcoinStrategy:
 
                     # LTF confirmation adds conviction
                     ltf_adj = ltf_strength * 0.20
-                    est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
+                    est_prob_up += ltf_adj if effective_side == "LONG" else -ltf_adj
 
                     # Timing/momentum adds more
-                    if allowed_side == "LONG":
+                    if effective_side == "LONG":
                         est_prob_up += timing_bonus
                     else:
                         est_prob_up -= timing_bonus
@@ -1236,7 +1247,7 @@ class BitcoinStrategy:
                     # 72.9% of signals have tension_abs > 2.0; the 4.0 threshold almost never fired.
                     # Price stretched >2 ATR from the MA is meaningful mean-reversion risk.
                     if ta.trend_sabre.tension_abs > 2.0:
-                        if allowed_side == "LONG":
+                        if effective_side == "LONG":
                             est_prob_up += -0.02 if ta.trend_sabre.tension > 0 else 0.02
                         else:
                             est_prob_up += 0.02 if ta.trend_sabre.tension > 0 else -0.02

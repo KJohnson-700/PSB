@@ -935,6 +935,7 @@ def _positions_list_from_positions_json(pos_file: Path) -> List[Dict]:
                 "market_id": p.get("market_id", ""),
                 "market_question": (p.get("market_question") or "N/A")[:80],
                 "outcome": p.get("outcome", ""),
+                "entry_leg": p.get("entry_leg", ""),
                 "size": p.get("size", 0),
                 "entry_price": p.get("entry_price", 0),
                 "current_price": p.get("current_price", p.get("entry_price", 0)),
@@ -1082,6 +1083,7 @@ async def get_status():
                 "market_id": p.market_id,
                 "market_question": (p.market_question or "N/A")[:80],
                 "outcome": p.outcome,
+                "entry_leg": getattr(p, "entry_leg", "YES"),
                 "size": p.size,
                 "entry_price": p.entry_price,
                 "current_price": getattr(p, "current_price", p.entry_price),
@@ -2574,7 +2576,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
     out: Dict[str, Dict[str, Any]] = {
         "bitcoin": {
             "entries": 0,
-            "actions": {"BUY_YES": 0, "SELL_YES": 0},
+            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
@@ -2582,7 +2584,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         },
         "sol_macro": {
             "entries": 0,
-            "actions": {"BUY_YES": 0, "SELL_YES": 0},
+            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
@@ -2590,7 +2592,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         },
         "eth_macro": {
             "entries": 0,
-            "actions": {"BUY_YES": 0, "SELL_YES": 0},
+            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
@@ -2598,7 +2600,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         },
         "hype_macro": {
             "entries": 0,
-            "actions": {"BUY_YES": 0, "SELL_YES": 0},
+            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
             "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},

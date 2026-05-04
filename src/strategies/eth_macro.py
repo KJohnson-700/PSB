@@ -21,7 +21,7 @@ from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
-from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy
+from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -651,8 +651,16 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             if self.enforce_alt_1h_alignment:
                 if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
-                    _bump_skip("eth_1h_bullish")
-                    continue
+                    if not macd_bearish_momentum_ok(
+                        eth.macd_5m if is_5m else eth.macd_15m
+                    ):
+                        _bump_skip("eth_1h_bullish")
+                        continue
+                    reason_parts.append("eth_bearish_mom_override")
+                    logger.info(
+                        f"  ETH allow BUY_NO on '{market.question[:40]}' — "
+                        f"ETH 1H BULLISH but {('5m' if is_5m else '15m')} MACD confirms DOWN"
+                    )
                 if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
                     _bump_skip("eth_1h_bearish")
                     continue

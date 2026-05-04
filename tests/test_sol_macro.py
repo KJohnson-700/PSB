@@ -780,5 +780,44 @@ class TestSOLExposureIntegration(unittest.TestCase):
         self.assertEqual(len(signals), 0)
 
 
+def test_macd_bearish_momentum_ok_bear_cross():
+    from types import SimpleNamespace
+
+    from src.strategies.sol_macro import macd_bearish_momentum_ok
+
+    m = SimpleNamespace(crossover="BEARISH_CROSS")
+    assert macd_bearish_momentum_ok(m) is True
+
+
+def test_macd_bearish_momentum_ok_red_falling_histogram():
+    from types import SimpleNamespace
+
+    from src.strategies.sol_macro import macd_bearish_momentum_ok
+
+    m = SimpleNamespace(
+        crossover="",
+        histogram=-0.1,
+        histogram_rising=False,
+        macd_line=-1.0,
+        signal_line=0.5,
+    )
+    assert macd_bearish_momentum_ok(m) is True
+
+
+def test_macd_bearish_momentum_ok_rejects_bull_rising():
+    from types import SimpleNamespace
+
+    from src.strategies.sol_macro import macd_bearish_momentum_ok
+
+    m = SimpleNamespace(
+        crossover="",
+        histogram=0.1,
+        histogram_rising=True,
+        macd_line=1.0,
+        signal_line=0.5,
+    )
+    assert macd_bearish_momentum_ok(m) is False
+
+
 if __name__ == "__main__":
     unittest.main()

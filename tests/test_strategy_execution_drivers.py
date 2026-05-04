@@ -146,6 +146,7 @@ async def test_execute_sol_macro_impl_buy_no():
     kwargs = bot.clob_client.place_order.call_args.kwargs
     assert kwargs["side"] == "BUY"
     assert kwargs["token_id"] == sig.token_id_no
+    assert kwargs.get("order_outcome") == "NO"
 
 
 @pytest.mark.asyncio
@@ -153,7 +154,19 @@ async def test_execute_bitcoin_impl_sets_side_before_order():
     bot = _bare_polybot()
     _attach_mocks(bot)
     await bot._execute_bitcoin_signal_impl(_bitcoin_signal(action="BUY_YES"))
-    assert bot.clob_client.place_order.call_args.kwargs["side"] == "BUY"
+    kwargs = bot.clob_client.place_order.call_args.kwargs
+    assert kwargs["side"] == "BUY"
+    assert kwargs.get("order_outcome") == "YES"
+
+
+@pytest.mark.asyncio
+async def test_execute_bitcoin_impl_buy_no_order_outcome():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    await bot._execute_bitcoin_signal_impl(_bitcoin_signal(action="BUY_NO"))
+    kwargs = bot.clob_client.place_order.call_args.kwargs
+    assert kwargs["side"] == "BUY"
+    assert kwargs.get("order_outcome") == "NO"
 
 
 @pytest.mark.asyncio
