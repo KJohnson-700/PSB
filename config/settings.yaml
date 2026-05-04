@@ -401,7 +401,7 @@ strategies:
     signal_15m_short_threshold: 0.45
     signal_4h_long_threshold: 0.70
     signal_4h_short_threshold: 0.30
-    enforce_alt_1h_alignment: false
+    enforce_alt_1h_alignment: true    # 2026-05-04: same gap as XRP (was false) — proactive; ETH was +$9.45 but same class of risk
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -562,7 +562,7 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
-    enforce_alt_1h_alignment: false
+    enforce_alt_1h_alignment: true    # 2026-05-04: same macro lane as XRP — BUY_NO must have MACD bearish confirm when 1H BULLISH
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
