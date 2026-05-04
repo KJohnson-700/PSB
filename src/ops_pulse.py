@@ -26,6 +26,13 @@ OPS_PULSE_FILE = (
 CANONICAL_OPS_TIMEZONE = "UTC"
 
 
+def _coerce_skip_count(v: Any) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     """Per-lane top_skip_reasons for dashboard / OPS_JSON (no log grep)."""
     lanes = (
@@ -41,12 +48,13 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         block = ai_scan_stats.get(lane) or {}
         skips = block.get("top_skip_reasons") or {}
         if skips:
-            ordered = sorted(skips.items(), key=lambda kv: kv[1], reverse=True)[:10]
+            normalized = [(k, _coerce_skip_count(v)) for k, v in skips.items()]
+            ordered = sorted(normalized, key=lambda kv: kv[1], reverse=True)[:10]
             per_lane[lane] = {k: v for k, v in ordered}
     totals: Dict[str, int] = {}
     for skips in per_lane.values():
         for k, v in skips.items():
-            totals[k] = totals.get(k, 0) + int(v)
+            totals[k] = totals.get(k, 0) + v
     top_totals = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:20]
     return {
         "per_strategy": per_lane,

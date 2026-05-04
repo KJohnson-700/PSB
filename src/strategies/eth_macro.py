@@ -611,6 +611,14 @@ class ETHMacroStrategy(SolMacroStrategy):
                 is_5m=is_5m,
             )
 
+            if getattr(corr, "degraded", False) and self.skip_on_degraded_correlation:
+                _bump_skip("degraded_correlation")
+                logger.info(
+                    f"  ETH skip '{market.question[:40]}' — correlation degraded "
+                    f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
+                )
+                continue
+
             _btc_corr = corr.correlation_1h
             _low_corr_btc_bypass = float(self.config.get("btc_min_move_low_corr_threshold", 0.30))
             _btc_price = corr.btc_price or 0.0
@@ -917,6 +925,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             if self._btc_1h_regime_gates.get("enabled", False):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
+            if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
+                raw_size *= self.degraded_correlation_size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
