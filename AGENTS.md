@@ -32,6 +32,14 @@ The Obsidian vault at `projects/polymarket-bot/strategy-log/` is the authoritati
 
 For **auditing** backtest outputs, paper/live journals, and strategy code—hunting bugs, miscalculations, inconsistencies, and spec drift—use **`docs/polymarket-backtest-subagent-skill.md`**. That role is **not** the same as routine pytest/CI test running (green builds); it produces structured review findings and improvement suggestions.
 
+## Running pytest (local / Cursor)
+
+- Prefer the **project virtualenv** (`.venv`), **not** system `python3`. On macOS, system Python often lacks **`pytest-asyncio`** and other dev deps from [`requirements-dev.txt`](requirements-dev.txt), which breaks async tests (`@pytest.mark.asyncio`).
+- From repo root, either activate the venv and run `python -m pytest`, or invoke the venv interpreter directly:
+  - `.venv/bin/python -m pytest`
+  - Paths with a space in the folder name: `.venv/bin/python -m pytest` from inside the project directory (or quote the path).
+- **Agents:** when running the test suite in this repo, default to **`.venv/bin/python -m pytest`** (or an activated venv) when `.venv` exists.
+
 ## Learned Workspace Facts
 
 - **PSB (this repo) + Second Brain:** Project name **PSB**; Mac folder is often `psb-main 1` (Windows name may differ). **Hermes Obsidian vault note (operator second brain):** `Hermes Second Brain/projects/psb/notes/2026-04-21-psb-agent-memory-correctness-bundle.md`. **REST API (when plugin is up):** `docs/OBSIDIAN_LOCAL_REST_API.md`. If API is offline, **writing that vault path directly** is equivalent—Obsidian will see the file on disk.

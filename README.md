@@ -70,6 +70,26 @@ On macOS, stock Python may use **LibreSSL**; **urllib3 v2** can print a noisy `N
    - Risk limits
    - Notification settings
 
+4. **Tests (pytest)**
+   Install dev dependencies (includes **`pytest-asyncio`** for async tests):
+
+   ```bash
+   pip install -r requirements-dev.txt
+   ```
+
+   Run the suite with the **same venv** you use for the bot—not system `python3` (system Python often misses dev deps and async tests will fail):
+
+   ```bash
+   source .venv/bin/activate   # macOS / Linux
+   python -m pytest
+   ```
+
+   Or without activating:
+
+   ```bash
+   .venv/bin/python -m pytest
+   ```
+
 ## Usage
 
 **Paper sessions, Railway volumes, and journal files** (what persists, how to name/resume sessions, heatmap prerequisites): see [docs/RAILWAY.md](docs/RAILWAY.md#paper-sessions-and-test-data-local--hosted) and [docs/DASHBOARD_DATA_SOURCES.md](docs/DASHBOARD_DATA_SOURCES.md#session-id-and-entriesjsonl-heatmap--analytics).
