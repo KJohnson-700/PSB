@@ -42,7 +42,11 @@ from src.execution.live_testing import (
     ExitDecision,
 )
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
-from src.notifications.notification_manager import NotificationManager
+from src.notifications.notification_manager import (
+    NotificationManager,
+    merge_discord_webhook_from_env,
+    format_discord_notifications_log_line,
+)
 from src.env_bootstrap import load_project_dotenv
 
 # Kill switch: if this file exists, the bot will not place new trades (paper or live).
@@ -390,6 +394,8 @@ class PolyBot:
         from src.config_merge import deep_merge_config
 
         deep_merge_config(self.config, updates)
+        merge_discord_webhook_from_env(self.config)
+        self.notifier.reload_from_config(self.config)
         self._rebuild_runtime_config_dependents()
         self.ai_agent.refresh_from_config(self.config.get("ai", {}))
         if updates.get("exposure"):
@@ -1997,6 +2003,7 @@ async def main():
 
     _ai_st = compute_ai_status(bot.config, bot.ai_agent.api_keys)
     logging.info(format_ai_log_line(_ai_st))
+    logging.info(format_discord_notifications_log_line(bot.config))
     if not _ai_st.get("ready"):
         logging.warning(
             "LLM calls are disabled until AI is ready — check ai.enabled, "

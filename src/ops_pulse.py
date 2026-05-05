@@ -62,6 +62,62 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _coerce_nonnegative_int(v: Any) -> int:
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Per-lane and aggregate counters for optional AI pipeline instrumentation.
+
+    Supports both historical names (e.g. ai_calls) and newer names
+    (ai_assists/ai_overrides/ai_pipeline_calls) so ops stays backward-compatible.
+    """
+    lanes = (
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "weather",
+    )
+    aliases = {
+        "ai_pipeline_calls": ("ai_pipeline_calls", "ai_calls"),
+        "ai_assists": ("ai_assists", "research_plans_logged"),
+        "ai_overrides": ("ai_overrides",),
+        "research_calls": ("research_calls",),
+        "shadow_pipeline_calls": ("shadow_pipeline_calls",),
+        "shadow_pipeline_ok": ("shadow_pipeline_ok",),
+        "shadow_marginal_mismatch": ("shadow_marginal_mismatch",),
+    }
+    per_lane: Dict[str, Dict[str, int]] = {}
+    aggregate: Dict[str, int] = {k: 0 for k in aliases}
+
+    for lane in lanes:
+        block = ai_scan_stats.get(lane) or {}
+        lane_counts: Dict[str, int] = {}
+        for canonical, keys in aliases.items():
+            val = 0
+            for key in keys:
+                if key in block:
+                    val = _coerce_nonnegative_int(block.get(key))
+                    break
+            if val > 0:
+                lane_counts[canonical] = val
+                aggregate[canonical] += val
+        if lane_counts:
+            per_lane[lane] = lane_counts
+
+    aggregate_nonzero = {k: v for k, v in aggregate.items() if v > 0}
+    return {
+        "per_strategy": per_lane,
+        "aggregate": aggregate_nonzero,
+    }
+
+
 def _regime_hint(trading_cfg: Dict[str, Any], btc_spot: Optional[float]) -> Optional[Dict[str, Any]]:
     rcfg = (trading_cfg or {}).get("regime") or {}
     if not rcfg.get("enabled"):
@@ -159,6 +215,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "last_cycle_times": last_cycles,
         "ai_scan_stats": ai_scan_stats,
         "scan_skip_digest": _scan_skip_digest(ai_scan_stats),
+        "ai_pipeline": _ai_pipeline_digest(ai_scan_stats),
         "timestamps_policy": {
             "canonical": CANONICAL_OPS_TIMEZONE,
             "ops_ts": "ISO 8601 with Z/offset; this field is UTC",

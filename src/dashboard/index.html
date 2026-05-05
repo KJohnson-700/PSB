@@ -310,6 +310,7 @@
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
         <div id="ops-skip-digest" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;font-family:'IBM Plex Mono',monospace;" title="scan_skip_digest from bot — top reasons markets did not become signals"></div>
+        <div id="ops-ai-pipeline" style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;font-family:'IBM Plex Mono',monospace;" title="ai_pipeline from /api/status — cumulative AI scan counters (marginal + optional research)"></div>
         <div class="controls" style="padding:8px 0 4px;">
             <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
@@ -1517,6 +1518,66 @@ function toggleFreshSlate() {
     fetchAll();
 }
 
+/** Command Center auxiliary lines: scan skip digest + AI pipeline counters (partial updates from SSE ok). */
+function updateCommandCenterDigests(d) {
+    if (!d || typeof d !== 'object') return;
+    try {
+        if ('scan_skip_digest' in d) {
+            const skEl = document.getElementById('ops-skip-digest');
+            const agg = d.scan_skip_digest && d.scan_skip_digest.aggregate_top;
+            if (skEl) {
+                if (agg && typeof agg === 'object') {
+                    const entries = Object.entries(agg);
+                    if (entries.length) {
+                        entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+                        skEl.textContent = 'Top scan skips: ' + entries.slice(0, 8).map(([k, v]) => k + ':' + v).join(' · ');
+                    } else {
+                        skEl.textContent = '';
+                    }
+                } else {
+                    skEl.textContent = '';
+                }
+            }
+        }
+        if ('ai_pipeline' in d) {
+            const aiEl = document.getElementById('ops-ai-pipeline');
+            if (!aiEl) return;
+            const ap = d.ai_pipeline;
+            const bagg = ap && ap.aggregate && typeof ap.aggregate === 'object' ? ap.aggregate : null;
+            if (bagg && Object.keys(bagg).length) {
+                const order = ['ai_pipeline_calls', 'research_calls', 'ai_assists', 'ai_overrides'];
+                const seen = new Set();
+                const parts = [];
+                for (const k of order) {
+                    if (bagg[k] != null && bagg[k] !== undefined) {
+                        parts.push(k + ':' + bagg[k]);
+                        seen.add(k);
+                    }
+                }
+                for (const k of Object.keys(bagg)) {
+                    if (!seen.has(k)) parts.push(k + ':' + bagg[k]);
+                }
+                let line = 'AI pipeline (session): ' + parts.join(' · ');
+                const per = ap.per_strategy;
+                if (per && typeof per === 'object' && Object.keys(per).length) {
+                    const laneParts = Object.keys(per).slice(0, 6).map(lane => {
+                        const o = per[lane];
+                        const t = Object.values(o).reduce((a, b) => a + Number(b || 0), 0);
+                        return lane + ':' + t;
+                    });
+                    line += ' | lanes: ' + laneParts.join(' ');
+                    if (Object.keys(per).length > 6) line += '…';
+                }
+                aiEl.textContent = line;
+                aiEl.title = JSON.stringify(ap);
+            } else {
+                aiEl.textContent = '';
+                aiEl.title = 'ai_pipeline: no counters yet this session';
+            }
+        }
+    } catch (e) { console.error('[dashboard] ops digests:', e); }
+}
+
 /** Command Center hero numbers — shared by /api/status (updateStatus) and /api/events (SSE). */
 function applyHeroMetrics(d) {
     if (!d || typeof d !== 'object') return;
@@ -1647,6 +1708,9 @@ function applySSESnapshot(raw) {
     const shaped = sseSnapshotToStatusShape(raw);
     shaped.running = raw.running;
     applyHeroMetrics(shaped);
+    if (raw.ai_pipeline !== undefined) {
+        updateCommandCenterDigests({ ai_pipeline: raw.ai_pipeline });
+    }
     if (raw.dry_run !== undefined && raw.running !== undefined) {
         updateStatusBadgesAndKill({
             dry_run: raw.dry_run,
@@ -1666,22 +1730,7 @@ function updateStatus(d) {
 
     updateStatusBadgesAndKill(d);
     applyHeroMetrics(d);
-
-    try {
-        const skEl = document.getElementById('ops-skip-digest');
-        const agg = d.scan_skip_digest && d.scan_skip_digest.aggregate_top;
-        if (skEl && agg && typeof agg === 'object') {
-            const entries = Object.entries(agg);
-            if (entries.length) {
-                entries.sort((a, b) => Number(b[1]) - Number(a[1]));
-                skEl.textContent = 'Top scan skips: ' + entries.slice(0, 8).map(([k, v]) => k + ':' + v).join(' · ');
-            } else {
-                skEl.textContent = '';
-            }
-        } else if (skEl) {
-            skEl.textContent = '';
-        }
-    } catch (e) { console.error('[dashboard] skip digest:', e); }
+    updateCommandCenterDigests(d);
 
     // Positions table — always show real data (logs stay visible when viewing history)
     const posSection = document.getElementById('positions-section');

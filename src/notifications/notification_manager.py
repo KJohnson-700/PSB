@@ -3,6 +3,7 @@ Notification Module
 Discord and Telegram alerts
 """
 import logging
+import os
 from typing import Dict, Any, Optional, FrozenSet
 import aiohttp
 from datetime import datetime
@@ -17,6 +18,7 @@ DISCORD_TRADE_STRATEGIES: FrozenSet[str] = frozenset(
         "eth_macro",
         "hype_macro",
         "xrp_macro",
+        "xrp_dump_hedge",
     }
 )
 
@@ -27,6 +29,7 @@ STRATEGY_ALERT_TITLE = {
     "eth_macro": "ETH macro",
     "hype_macro": "HYPE macro",
     "xrp_macro": "XRP macro",
+    "xrp_dump_hedge": "XRP dump hedge",
 }
 
 
@@ -38,6 +41,36 @@ def _strategy_trade_title(strategy: Optional[str]) -> str:
 
 def _discord_trade_allowed(strategy: Optional[str]) -> bool:
     return bool(strategy and strategy in DISCORD_TRADE_STRATEGIES)
+
+
+def merge_discord_webhook_from_env(root_config: Dict[str, Any]) -> None:
+    """If YAML webhook is empty, fill from DISCORD_WEBHOOK_URL (same as startup _load_config)."""
+
+    notifications = root_config.setdefault("notifications", {})
+    if not notifications.get("discord_webhook") and os.getenv("DISCORD_WEBHOOK_URL"):
+        notifications["discord_webhook"] = os.getenv("DISCORD_WEBHOOK_URL")
+
+
+def format_discord_notifications_log_line(root_config: Dict[str, Any]) -> str:
+    """
+    One-line startup/helper visibility: webhook, flags, policy (entry pings are code-disabled).
+    """
+    n = root_config.get("notifications") or {}
+    enabled = bool(n.get("enabled", True))
+    hook = str(n.get("discord_webhook") or "").strip()
+    alert_exit = bool(n.get("alert_on_exit", n.get("alert_on_trade", True)))
+    alert_err = bool(n.get("alert_on_error", True))
+    if not enabled:
+        return "DISCORD STATUS: OFF — notifications.enabled is false"
+    if not hook:
+        return (
+            "DISCORD STATUS: no webhook — set notifications.discord_webhook or "
+            "DISCORD_WEBHOOK_URL; exit/kill/error embeds will not send (entry pings are exit-only by code)"
+        )
+    bits = ["webhook OK", "entry pings off (exit-only policy)"]
+    bits.append("exit embeds ON" if alert_exit else "exit embeds OFF")
+    bits.append("errors ON" if alert_err else "errors OFF")
+    return "DISCORD STATUS: " + "; ".join(bits)
 
 
 class NotificationManager:
@@ -59,6 +92,18 @@ class NotificationManager:
         self.telegram_chat_id = self.config.get("telegram_chat_id", "")
 
         self.session: Optional[aiohttp.ClientSession] = None
+
+    def reload_from_config(self, root_config: Dict[str, Any]) -> None:
+        """Re-read notifications.* after dashboard merge or env change (same process)."""
+        self.config = dict(root_config.get("notifications") or {})
+        self.enabled = self.config.get("enabled", True)
+        self.alert_on_trade = self.config.get("alert_on_trade", True)
+        self.alert_on_error = self.config.get("alert_on_error", True)
+        self.alert_on_exit = self.config.get("alert_on_exit", self.alert_on_trade)
+        self.alert_on_status = self.config.get("alert_on_status", False)
+        self.discord_webhook = self.config.get("discord_webhook", "")
+        self.telegram_bot_token = self.config.get("telegram_bot_token", "")
+        self.telegram_chat_id = self.config.get("telegram_chat_id", "")
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:

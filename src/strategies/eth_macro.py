@@ -529,6 +529,14 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         signals: List[SolMacroSignal] = []
         ai_calls = 0
+        research_calls = 0
+        research_plans_logged = 0
+        shadow_pipeline_calls = 0
+        shadow_pipeline_ok = 0
+        shadow_marginal_mismatch = 0
+        research_enabled = self.ai_agent.research_narrative_enabled()
+        research_max_calls = self.ai_agent.research_narrative_max_calls_per_scan()
+        research_min_conf = self.ai_agent.research_narrative_min_confidence()
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         side_source_counts: Dict[str, int] = {}
@@ -866,6 +874,69 @@ class ETHMacroStrategy(SolMacroStrategy):
                 edge = max(edge, ai_edge)
                 confidence = max(confidence, ai_analysis.confidence_score)
                 reason_parts.append("ai_updown_confirm")
+                research_plan = None
+                if (
+                    research_enabled
+                    and research_calls < research_max_calls
+                    and ai_analysis.confidence_score >= research_min_conf
+                ):
+                    research_calls += 1
+                    try:
+                        research_plan = await self.ai_agent.analyze_research_plan(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint=self._signal_strategy_name,
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_threshold=effective_min_edge,
+                        )
+                    except Exception as e:
+                        research_plan = None
+                        logger.debug(
+                            "ETH research narrative failed market=%s: %s", market.id, e
+                        )
+                    if research_plan is not None:
+                        research_plans_logged += 1
+                        reason_parts.append(
+                            f"research={research_plan.recommendation.value}"
+                        )
+                if (
+                    self.ai_agent.shadow_pipeline_enabled()
+                    and shadow_pipeline_calls
+                    < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                    and ai_analysis.confidence_score
+                    >= self.ai_agent.shadow_pipeline_min_confidence()
+                ):
+                    shadow_pipeline_calls += 1
+                    try:
+                        shadow_out = await self.ai_agent.run_shadow_pipeline(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint=self._signal_strategy_name,
+                            marginal_recommendation=str(ai_analysis.recommendation),
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_threshold=effective_min_edge,
+                            existing_research=research_plan,
+                        )
+                    except Exception as e:
+                        shadow_out = None
+                        logger.debug(
+                            "ETH shadow pipeline failed market=%s: %s",
+                            market.id,
+                            e,
+                        )
+                    if shadow_out and shadow_out.get("ok"):
+                        shadow_pipeline_ok += 1
+                        if shadow_out.get("marginal_mismatch"):
+                            shadow_marginal_mismatch += 1
+                        reason_parts.append(
+                            f"shadow_pm={shadow_out.get('portfolio_action', '')}"
+                        )
             elif (
                 edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
@@ -995,6 +1066,12 @@ class ETHMacroStrategy(SolMacroStrategy):
             "side_source_counts": side_source_counts,
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
+            "ai_calls": ai_calls,
+            "research_calls": research_calls,
+            "research_plans_logged": research_plans_logged,
+            "shadow_pipeline_calls": shadow_pipeline_calls,
+            "shadow_pipeline_ok": shadow_pipeline_ok,
+            "shadow_marginal_mismatch": shadow_marginal_mismatch,
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }

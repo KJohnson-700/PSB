@@ -370,7 +370,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-03-dash-hero-skips-fetchall",
+        "dashboard_ui_rev": "2026-05-04-dash-ai-pipeline-line",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -801,6 +801,7 @@ async def sse_stream(request: Request):
                     except Exception:
                         cfg_disk = {}
 
+                ai_pipeline_payload: Dict[str, Any] = {}
                 if bot:
                     dry_run = bot.config.get("trading", {}).get("dry_run", True)
                     can_trade, _reason = bot.risk_manager.can_trade()
@@ -808,6 +809,14 @@ async def sse_stream(request: Request):
                         can_trade = False
                     _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
                     ai_payload = compute_ai_status(bot.config, _ai_keys)
+                    try:
+                        from src.ops_pulse import _ai_pipeline_digest
+
+                        ai_pipeline_payload = _ai_pipeline_digest(
+                            dict(getattr(bot, "last_ai_scan_stats", {}) or {})
+                        )
+                    except Exception:
+                        ai_pipeline_payload = {}
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
                     can_trade = False
@@ -868,6 +877,7 @@ async def sse_stream(request: Request):
                     "btc_price": round(
                         float(_btc_analysis_cache.current_price), 0
                     ) if _btc_analysis_cache and hasattr(_btc_analysis_cache, "current_price") else 0,
+                    "ai_pipeline": ai_pipeline_payload,
                     "ts": int(_time_mod.time()),
                 }
                 yield f"data: {json.dumps(snapshot)}\n\n"
@@ -1128,6 +1138,7 @@ async def get_status():
             ),
             "session_id": getattr(bot.journal, "session_id", None),
             "scan_skip_digest": _ops.get("scan_skip_digest"),
+            "ai_pipeline": _ops.get("ai_pipeline"),
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
         }
@@ -1200,6 +1211,8 @@ async def get_status():
         "ai": compute_ai_status(cfg_disk, None),
         "strategy_state": _build_strategy_state(cfg_disk, False),
         "session_id": summary.get("session_id"),
+        "scan_skip_digest": None,
+        "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
     }
 
 

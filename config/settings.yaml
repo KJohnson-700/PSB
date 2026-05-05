@@ -757,10 +757,14 @@ ai:
     # Optional: force research calls through one provider/model while keeping
     # the normal marginal tiebreaker on the default provider_chain.
     provider_name: ""      # e.g. "minimax"
-    model_override: ""     # e.g. "MiniMax-M2.7"
-
-# ============================================
-# NOTIFICATIONS
+  # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.
+  shadow_pipeline:
+    enabled: false
+    max_calls_per_scan: 1
+    min_confidence_to_log: 0.60
+    log_jsonl: true
+    provider_name: ""      # optional: pin to one provider name from provider_chain
+    model_override: ""     # optional model id for all three stages
 # ============================================
 notifications:
   # Enable/disable notifications

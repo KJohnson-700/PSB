@@ -57,6 +57,12 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert data.get("dashboard_ui_rev") in snippet.text
 
 
+def test_command_center_includes_ai_pipeline_digest_stub():
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="ops-ai-pipeline"' in html
+    assert "function updateCommandCenterDigests" in html
+
+
 def test_command_center_trades_card_uses_daily_trades_not_session_fills():
     html = INDEX.read_text(encoding="utf-8")
     assert "Trades today (UTC)" in html
@@ -71,6 +77,7 @@ def test_dashboard_sse_uses_risk_manager_daily_fields():
     assert 'int(getattr(rm, "daily_trades", 0) or 0)' in server
     assert 'round(float(getattr(rm, "daily_pnl", 0) or 0), 2)' in server
     assert '"trades_today": daily_trades_n' in server
+    assert '"ai_pipeline": ai_pipeline_payload' in server
 
 
 def test_ai_summary_text_extractor_handles_provider_shapes():

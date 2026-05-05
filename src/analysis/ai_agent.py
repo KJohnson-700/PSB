@@ -5,6 +5,8 @@ This module defines the AIAgent, which is responsible for analyzing market
 conditions using a chain of Large Language Models (LLMs).
 
 Architecture Overview:
+- Config shape: pass the full bot YAML root (as `main.PolyBot` does) **or** the `ai`
+  subsection dict only; ``_extract_ai_config`` picks the right slice (avoids an empty chain).
 - Provider Chain: The agent uses a `provider_chain` defined in `config/settings.yaml`.
   It attempts to get an analysis from each provider in order until one succeeds.
 - API Key Management: API keys are loaded in `main.py` and passed to the agent.
@@ -22,7 +24,8 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     import openai
@@ -42,8 +45,31 @@ except ImportError:
     anthropic = None
 
 from src.analysis.usage_tracker import UsageTracker, usage_tracker as global_usage_tracker
+from src.ai.render import (
+    render_marginal_analysis,
+    render_portfolio_decision,
+    render_research_plan,
+    render_trader_proposal,
+)
+from src.ai.schema import (
+    AIRecommendation,
+    MarginalAIAnalysis,
+    PortfolioDecision,
+    PortfolioRating,
+    ResearchPlan,
+    TraderAction,
+    TraderProposal,
+    map_recommendation_to_portfolio_rating,
+)
 
 logger = logging.getLogger(__name__)
+
+AI_PIPELINE_LOG_DIR = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "ai_pipeline"
+)
+MARGINAL_LOG_FILE = AI_PIPELINE_LOG_DIR / "marginal_analysis.jsonl"
+RESEARCH_LOG_FILE = AI_PIPELINE_LOG_DIR / "research_plans.jsonl"
+SHADOW_PIPELINE_LOG_FILE = AI_PIPELINE_LOG_DIR / "shadow_pipeline.jsonl"
 
 
 class AIResponseValidationError(ValueError):
@@ -68,6 +94,31 @@ class AIAnalysis:
 
 class AIAgent:
     """AI-powered decision engine for market analysis"""
+
+    @staticmethod
+    def _extract_ai_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        ``AIAgent`` may be constructed with either the full bot YAML root (``main.PolyBot``)
+        or the ``ai:`` subtree only (tests, scripts). Mis-detection yields an empty chain.
+        """
+        if not config:
+            return {}
+        nested = config.get("ai")
+        if isinstance(nested, dict):
+            return dict(nested)
+        if "ai" in config:
+            return {}
+        root_markers = (
+            "trading",
+            "strategies",
+            "notifications",
+            "market_scanner",
+            "backtest",
+            "exposure",
+        )
+        if any(m in config for m in root_markers):
+            return {}
+        return dict(config)
     
     SYSTEM_PROMPT = """You are a probabilistic risk engine for prediction markets.
 Your job is to analyze events and estimate the true probability of outcomes.
@@ -89,9 +140,53 @@ OUTPUT (machine-parseable — follow exactly):
 
 Valid minimal example:
 {"reasoning":"Brief evidence-based rationale here.","confidence_score":0.68,"estimated_probability":0.57,"recommendation":"BUY_YES"}"""
+
+    RESEARCH_SYSTEM_PROMPT = """You are a research manager for short-horizon prediction-market trading.
+Your job is to summarize the setup and assign a structured portfolio-style rating.
+
+OUTPUT (machine-parseable — follow exactly):
+- Return one JSON object only. No markdown code fences, no extra text.
+- Keys:
+  - "market": string
+  - "recommendation": one of BULLISH, BEARISH, NEUTRAL, CONFIDENT_BULLISH, CONFIDENT_BEARISH
+  - "rationale": concise evidence-based reasoning (1-3 sentences)
+  - "strategic_actions": array of 1-4 short action strings
+  - "confidence": number between 0 and 1
+"""
+
+    TRADER_SHADOW_SYSTEM_PROMPT = """You are a trader for short-horizon prediction markets.
+Turn the research brief into a concrete trade proposal.
+
+OUTPUT (machine-parseable — follow exactly):
+- Return one JSON object only. No markdown code fences, no extra text.
+- Keys:
+  - "action": one of BUY_YES, BUY_NO, HOLD, SKIP
+  - "reasoning": short string (1-3 sentences)
+  - "entry_price": number between 0 and 1 (target YES token price)
+  - "stop_loss": null or number between 0 and 1
+  - "position_sizing": number between 0 and 1 (notional Kelly-style fraction; advisory only)
+  - "max_loss_acceptable": null or non-negative number (optional)
+"""
+
+    PORTFOLIO_SHADOW_SYSTEM_PROMPT = """You are a portfolio manager for short-horizon prediction markets.
+Synthesize the research plan and trader proposal into a final shadow decision.
+This is diagnostic only — it does not execute trades.
+
+OUTPUT (machine-parseable — follow exactly):
+- Return one JSON object only. No markdown code fences, no extra text.
+- Keys:
+  - "rating": one of BULLISH, BEARISH, NEUTRAL, CONFIDENT_BULLISH, CONFIDENT_BEARISH
+  - "action": one of BUY_YES, BUY_NO, HOLD, SKIP
+  - "executive_summary": string (2-4 sentences)
+  - "investment_horizon": short string (e.g. "15m window", "intra-session")
+  - "position_size": non-negative number (advisory sizing; not executed)
+  - "entry_price": number between 0 and 1
+  - "stop_loss": null or number between 0 and 1
+  - "metadata": object (may be empty {})
+"""
     
     def __init__(self, config: Dict[str, Any], usage_tracker: UsageTracker = global_usage_tracker):
-        self.config = config.get('ai', {})
+        self.config = self._extract_ai_config(config)
         self.provider_chain = self.config.get('provider_chain', [])
         self.temperature = self.config.get('temperature', 0.1)
         self.max_tokens = self.config.get('max_tokens', 800)  # Was 1500 — JSON responses don't need that much
@@ -118,13 +213,21 @@ Valid minimal example:
         self._quota_warned: Dict[str, set] = {}
         self._model_cooldown_until: Dict[str, float] = {}
         self.live_inferencing = self.config.get("live_inferencing", True)
+        self.structured_log = bool(self.config.get("structured_log", False))
+        self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
+        self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
+        # Round-robin first model for OpenRouter free tier (spread per-model limits).
+        self._openrouter_model_rr: Dict[str, int] = {}
 
     def refresh_from_config(self, ai_cfg: Dict[str, Any]) -> None:
         """
         Re-read AI settings after live config merge (dashboard save).
-        Keeps self.config as the same dict reference when ai_cfg is config['ai'].
+        ``ai_cfg`` should be ``bot.config['ai']`` (the ai subtree only).
+        Also accepts a full root dict for resilience (same rules as ``_extract_ai_config``).
         """
-        self.config = ai_cfg
+        self.config = self._extract_ai_config(
+            ai_cfg if isinstance(ai_cfg, dict) else {}
+        )
         self.provider_chain = self.config.get("provider_chain", [])
         self.temperature = self.config.get("temperature", 0.1)
         self.max_tokens = self.config.get("max_tokens", 800)
@@ -135,6 +238,9 @@ Valid minimal example:
         self._min_call_gap = self.config.get("min_call_gap", 1.5)
         self._free_tier_daily_budget = self.config.get("free_tier_daily_request_budget") or 0
         self.live_inferencing = self.config.get("live_inferencing", True)
+        self.structured_log = bool(self.config.get("structured_log", False))
+        self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
+        self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
 
     def is_available(self) -> bool:
         """
@@ -150,6 +256,686 @@ Valid minimal example:
     def set_api_keys(self, api_keys: Dict[str, str]):
         """Set all available API keys from a dictionary."""
         self.api_keys = api_keys
+
+    def research_narrative_enabled(self) -> bool:
+        return bool(self.research_narrative_cfg.get("enabled", False))
+
+    def research_narrative_max_calls_per_scan(self) -> int:
+        raw = self.research_narrative_cfg.get("max_calls_per_scan", 0)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def research_narrative_min_confidence(self) -> float:
+        raw = self.research_narrative_cfg.get("min_confidence_to_log", 0.0)
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def shadow_pipeline_enabled(self) -> bool:
+        return bool(self.shadow_pipeline_cfg.get("enabled", False))
+
+    def shadow_pipeline_max_calls_per_scan(self) -> int:
+        raw = self.shadow_pipeline_cfg.get("max_calls_per_scan", 0)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def shadow_pipeline_min_confidence(self) -> float:
+        raw = self.shadow_pipeline_cfg.get("min_confidence_to_log", 0.0)
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _named_provider_chain(self, cfg_block: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pick a single provider entry and optional model override from a config block."""
+        selected_name = str(cfg_block.get("provider_name", "") or "").strip()
+        model_override = str(cfg_block.get("model_override", "") or "").strip()
+
+        base = [dict(pc) for pc in self.provider_chain]
+        if selected_name:
+            match = next((pc for pc in base if str(pc.get("name")) == selected_name), None)
+            if match is None:
+                logger.warning(
+                    "AI provider_name '%s' not found; falling back to ai.provider_chain",
+                    selected_name,
+                )
+            else:
+                base = [dict(match)]
+
+        if model_override:
+            updated: List[Dict[str, Any]] = []
+            for idx, pc in enumerate(base):
+                pc2 = dict(pc)
+                pc2["model"] = model_override
+                if isinstance(pc2.get("models"), list) and pc2.get("models"):
+                    pc2["models"] = [model_override]
+                updated.append(pc2)
+                if selected_name and idx == 0:
+                    break
+            base = updated
+        return base
+
+    def _research_provider_chain(self) -> List[Dict[str, Any]]:
+        """Resolve provider/model overrides for research narrative calls."""
+        return self._named_provider_chain(self.research_narrative_cfg)
+
+    def _shadow_provider_chain(self) -> List[Dict[str, Any]]:
+        return self._named_provider_chain(self.shadow_pipeline_cfg)
+
+    def _extract_research_actions(self, value: Any) -> List[str]:
+        if isinstance(value, list):
+            out = []
+            for item in value:
+                text = str(item).strip()
+                if text:
+                    out.append(text)
+            return out[:4]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _normalize_portfolio_rating(self, raw: Any, confidence: float) -> PortfolioRating:
+        text = str(raw or "").strip().upper()
+        if text in {r.value for r in PortfolioRating}:
+            return PortfolioRating(text)
+        rec = self._normalize_recommendation(text)
+        try:
+            rec_enum = AIRecommendation(rec)
+        except Exception:
+            rec_enum = AIRecommendation.HOLD
+        return map_recommendation_to_portfolio_rating(rec_enum, confidence)
+
+    def _parse_research_response(
+        self,
+        content: str,
+        market_id: str,
+        market_question: str,
+    ) -> ResearchPlan:
+        cleaned = (content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start : end + 1]
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise AIResponseValidationError(
+                f"market={market_id} invalid research JSON: {e}"
+            ) from e
+        if not isinstance(data, dict):
+            raise AIResponseValidationError(
+                f"market={market_id} research JSON is not an object"
+            )
+
+        confidence = self._coerce_unit_interval(
+            data.get("confidence", data.get("confidence_score", 0.55)),
+            default=0.55,
+        )
+        recommendation = self._normalize_portfolio_rating(
+            data.get("recommendation"), confidence
+        )
+        rationale = str(
+            data.get("rationale") or data.get("reasoning") or data.get("analysis") or ""
+        ).strip()
+        if not rationale:
+            raise AIResponseValidationError(f"market={market_id} research rationale missing")
+        actions = self._extract_research_actions(data.get("strategic_actions"))
+        if not actions:
+            actions = ["Wait for edge and confidence alignment before execution."]
+
+        metadata = dict(data.get("metadata") or {})
+        metadata.setdefault("market_id", market_id)
+        return ResearchPlan(
+            market=str(data.get("market") or market_question),
+            recommendation=recommendation,
+            rationale=rationale,
+            strategic_actions=actions,
+            confidence=confidence,
+            metadata=metadata,
+        )
+
+    def _append_jsonl(self, path: Path, payload: Dict[str, Any]) -> None:
+        """Best-effort JSONL append for optional AI pipeline logs."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        except Exception as e:
+            logger.debug("AI pipeline log write failed %s: %s", path, e)
+
+    def _log_marginal_analysis(
+        self,
+        analysis: AIAnalysis,
+        *,
+        market_question: str,
+        strategy_hint: str,
+    ) -> None:
+        if not self.structured_log:
+            return
+        payload = {
+            "ts_utc": datetime.utcnow().isoformat() + "Z",
+            "market_id": analysis.market_id,
+            "market_question": market_question,
+            "strategy_hint": strategy_hint,
+            "recommendation": analysis.recommendation,
+            "confidence_score": analysis.confidence_score,
+            "estimated_probability": analysis.estimated_probability,
+            "reasoning": analysis.reasoning,
+            "markdown": render_marginal_analysis(
+                analysis,
+                market_id=analysis.market_id,
+                strategy_hint=strategy_hint,
+            ),
+        }
+        self._append_jsonl(MARGINAL_LOG_FILE, payload)
+
+    async def analyze_research_plan(
+        self,
+        *,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str = "",
+        quant_action: str = "",
+        quant_edge: Optional[float] = None,
+        quant_threshold: Optional[float] = None,
+    ) -> Optional[ResearchPlan]:
+        """
+        Optional second-pass narrative call (Tier B).
+
+        This intentionally does not affect execution gating. It is log-only.
+        """
+        if not self.research_narrative_enabled() or not self.live_inferencing:
+            return None
+        provider_chain = self._research_provider_chain()
+        if not provider_chain:
+            return None
+
+        context_parts = [
+            market_description,
+            "=== RESEARCH MANAGER REQUEST ===",
+            "Summarize this setup as a research note for operator review.",
+        ]
+        if quant_action:
+            context_parts.append(f"Suggested action from quant/tiebreaker: {quant_action}")
+        if quant_edge is not None:
+            context_parts.append(f"Quant edge: {quant_edge:.4f}")
+        if quant_threshold is not None:
+            context_parts.append(f"Edge threshold: {quant_threshold:.4f}")
+        context_parts.append(
+            "Return research JSON keys: market,recommendation,rationale,strategic_actions,confidence."
+        )
+        research_context = "\n".join(context_parts)
+
+        user_prompt = self._build_prompt(
+            market_question=f"Research note: {market_question}",
+            market_description=research_context,
+            current_yes_price=current_yes_price,
+            news_context="",
+        )
+        await self._rate_limit()
+
+        parser: Callable[[str, str, float], ResearchPlan] = (
+            lambda content, parsed_market_id, _anchor: self._parse_research_response(
+                content, parsed_market_id, market_question
+            )
+        )
+        provider_errors: List[str] = []
+        plan: Optional[ResearchPlan] = None
+        for provider_config in provider_chain:
+            provider_name = provider_config.get("name")
+            provider_type = provider_config.get("type")
+            model = provider_config.get("model")
+            api_key_name = provider_config.get("api_key_secret")
+            api_key = self.api_keys.get(api_key_name)
+            if not api_key:
+                if provider_config.get("local", False):
+                    api_key = "local"
+                else:
+                    provider_errors.append(f"{provider_name}=MissingAPIKey:{api_key_name}")
+                    continue
+
+            analysis_function = getattr(self, f"_analyze_with_{provider_type}", None)
+            if not analysis_function:
+                provider_errors.append(f"{provider_name}=UnknownProviderType:{provider_type}")
+                continue
+            try:
+                plan = await analysis_function(
+                    user_prompt,
+                    market_id,
+                    model,
+                    api_key,
+                    provider_config,
+                    current_yes_price,
+                    response_parser=parser,
+                    system_prompt=self.RESEARCH_SYSTEM_PROMPT,
+                )
+            except Exception as e:
+                provider_errors.append(f"{provider_name}={type(e).__name__}: {e}")
+                continue
+            if isinstance(plan, ResearchPlan):
+                break
+            plan = None
+
+        if plan is None:
+            if provider_errors:
+                logger.debug(
+                    "Research narrative providers failed market=%s: %s",
+                    market_id,
+                    "; ".join(provider_errors),
+                )
+            return None
+
+        plan.metadata.setdefault("market_id", market_id)
+        plan.metadata.setdefault("strategy_hint", strategy_hint)
+        plan.metadata.setdefault("quant_action", quant_action or "")
+        plan.metadata.setdefault("quant_edge", quant_edge)
+        plan.metadata.setdefault("quant_threshold", quant_threshold)
+
+        if bool(self.research_narrative_cfg.get("log_jsonl", True)):
+            if hasattr(plan, "model_dump"):
+                plan_payload = plan.model_dump(mode="json")
+            else:
+                plan_payload = plan.dict()
+            payload = {
+                "ts_utc": datetime.utcnow().isoformat() + "Z",
+                "market_id": market_id,
+                "strategy_hint": strategy_hint,
+                "research_plan": plan_payload,
+                "markdown": render_research_plan(plan),
+            }
+            self._append_jsonl(RESEARCH_LOG_FILE, payload)
+        return plan
+
+    @staticmethod
+    def _model_to_plain(obj: Any) -> Any:
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump(mode="json")
+        if hasattr(obj, "dict"):
+            return obj.dict()
+        return obj
+
+    def _extract_json_object(self, content: str, market_id: str, what: str) -> Dict[str, Any]:
+        cleaned = (content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start : end + 1]
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise AIResponseValidationError(
+                f"market={market_id} invalid {what} JSON: {e}"
+            ) from e
+        if not isinstance(data, dict):
+            raise AIResponseValidationError(
+                f"market={market_id} {what} JSON is not an object"
+            )
+        return data
+
+    def _normalize_trader_action(self, raw: Any) -> TraderAction:
+        text = str(raw or "").strip().upper()
+        for ta in TraderAction:
+            if text == ta.value:
+                return ta
+        nr = self._normalize_recommendation(text)
+        if nr == "BUY_YES":
+            return TraderAction.BUY_YES
+        if nr == "BUY_NO":
+            return TraderAction.BUY_NO
+        if "SKIP" in text:
+            return TraderAction.SKIP
+        return TraderAction.HOLD
+
+    def _parse_trader_response(self, content: str, market_id: str) -> TraderProposal:
+        data = self._extract_json_object(content, market_id, "trader")
+        reasoning = str(data.get("reasoning") or "").strip()
+        if not reasoning:
+            raise AIResponseValidationError(f"market={market_id} trader reasoning missing")
+        entry_price = float(data.get("entry_price", 0.5))
+        entry_price = max(0.0, min(1.0, entry_price))
+        pos_sz = float(data.get("position_sizing", 0.0))
+        pos_sz = max(0.0, min(1.0, pos_sz))
+        stop_raw = data.get("stop_loss")
+        stop = None
+        if stop_raw is not None and str(stop_raw).lower() not in ("null", "none", ""):
+            stop = max(0.0, min(1.0, float(stop_raw)))
+        max_loss = data.get("max_loss_acceptable")
+        max_loss_f = None
+        if max_loss is not None and str(max_loss).lower() not in ("null", "none", ""):
+            max_loss_f = max(0.0, float(max_loss))
+        return TraderProposal(
+            action=self._normalize_trader_action(data.get("action")),
+            reasoning=reasoning,
+            entry_price=entry_price,
+            stop_loss=stop,
+            position_sizing=pos_sz,
+            max_loss_acceptable=max_loss_f,
+        )
+
+    def _parse_portfolio_shadow_response(
+        self, content: str, market_id: str
+    ) -> PortfolioDecision:
+        data = self._extract_json_object(content, market_id, "portfolio")
+        conf_fallback = self._coerce_unit_interval(
+            data.get("confidence", data.get("confidence_score", 0.55)),
+            default=0.55,
+        )
+        rating = self._normalize_portfolio_rating(data.get("rating"), conf_fallback)
+        summary = str(data.get("executive_summary") or "").strip()
+        if not summary:
+            raise AIResponseValidationError(
+                f"market={market_id} portfolio executive_summary missing"
+            )
+        horizon = str(
+            data.get("investment_horizon") or data.get("horizon") or "short"
+        ).strip()
+        if not horizon:
+            horizon = "short"
+        action = self._normalize_trader_action(data.get("action"))
+        try:
+            position_size = float(data.get("position_size", 0.0))
+        except (TypeError, ValueError):
+            position_size = 0.0
+        position_size = max(0.0, position_size)
+        entry_price = float(data.get("entry_price", 0.5))
+        entry_price = max(0.0, min(1.0, entry_price))
+        stop_raw = data.get("stop_loss")
+        stop = None
+        if stop_raw is not None and str(stop_raw).lower() not in ("null", "none", ""):
+            stop = max(0.0, min(1.0, float(stop_raw)))
+        meta = data.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("market_id", market_id)
+        return PortfolioDecision(
+            rating=rating,
+            action=action,
+            executive_summary=summary,
+            investment_horizon=horizon,
+            position_size=position_size,
+            entry_price=entry_price,
+            stop_loss=stop,
+            metadata=meta,
+        )
+
+    def _shadow_marginal_mismatch(
+        self, marginal_recommendation: str, portfolio_action: TraderAction
+    ) -> bool:
+        m = str(marginal_recommendation or "").strip().upper()
+        if m not in {"BUY_YES", "BUY_NO", "HOLD"}:
+            return False
+        pa = portfolio_action
+        if pa == TraderAction.SKIP:
+            return m != "HOLD"
+        if pa == TraderAction.HOLD:
+            return m in {"BUY_YES", "BUY_NO"}
+        return m != pa.value
+
+    async def _json_llm_chain(
+        self,
+        *,
+        user_prompt: str,
+        market_id: str,
+        market_question: str,
+        current_yes_price: float,
+        system_prompt: str,
+        provider_chain: List[Dict[str, Any]],
+        response_parser: Callable[[str, str, float], Any],
+        type_guard: Any,
+    ) -> Any:
+        await self._rate_limit()
+        provider_errors: List[str] = []
+        out: Any = None
+        for provider_config in provider_chain:
+            provider_name = provider_config.get("name")
+            provider_type = provider_config.get("type")
+            model = provider_config.get("model")
+            api_key_name = provider_config.get("api_key_secret")
+            api_key = self.api_keys.get(api_key_name)
+            if not api_key:
+                if provider_config.get("local", False):
+                    api_key = "local"
+                else:
+                    provider_errors.append(f"{provider_name}=MissingAPIKey:{api_key_name}")
+                    continue
+
+            analysis_function = getattr(self, f"_analyze_with_{provider_type}", None)
+            if not analysis_function:
+                provider_errors.append(f"{provider_name}=UnknownProviderType:{provider_type}")
+                continue
+            try:
+                out = await analysis_function(
+                    user_prompt,
+                    market_id,
+                    model,
+                    api_key,
+                    provider_config,
+                    current_yes_price,
+                    response_parser=response_parser,
+                    system_prompt=system_prompt,
+                )
+            except Exception as e:
+                provider_errors.append(f"{provider_name}={type(e).__name__}: {e}")
+                continue
+            if isinstance(out, type_guard):
+                break
+            out = None
+
+        if out is None and provider_errors:
+            logger.debug(
+                "Shadow pipeline providers failed market=%s: %s",
+                market_id,
+                "; ".join(provider_errors),
+            )
+        return out
+
+    async def run_shadow_pipeline(
+        self,
+        *,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str = "",
+        marginal_recommendation: str = "",
+        quant_action: str = "",
+        quant_edge: Optional[float] = None,
+        quant_threshold: Optional[float] = None,
+        existing_research: Optional[ResearchPlan] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Tier C shadow: Research → Trader → Portfolio. Log-only; no execution impact.
+
+        If ``existing_research`` is set (e.g. Tier B just produced it), stage 1 is skipped
+        to save one LLM round-trip.
+        """
+        if not self.shadow_pipeline_enabled() or not self.live_inferencing:
+            return None
+        provider_chain = self._shadow_provider_chain()
+        if not provider_chain:
+            return None
+
+        research_plan = existing_research
+        if research_plan is None:
+            context_parts = [
+                market_description,
+                "=== RESEARCH MANAGER (SHADOW PIPELINE) ===",
+                "Produce structured research JSON only.",
+            ]
+            if quant_action:
+                context_parts.append(
+                    f"Suggested action from quant/tiebreaker: {quant_action}"
+                )
+            if quant_edge is not None:
+                context_parts.append(f"Quant edge: {quant_edge:.4f}")
+            if quant_threshold is not None:
+                context_parts.append(f"Edge threshold: {quant_threshold:.4f}")
+            context_parts.append(
+                "Return keys: market,recommendation,rationale,strategic_actions,confidence."
+            )
+            research_context = "\n".join(context_parts)
+            user_prompt = self._build_prompt(
+                market_question=f"Shadow research: {market_question}",
+                market_description=research_context,
+                current_yes_price=current_yes_price,
+                news_context="",
+            )
+            rparser: Callable[[str, str, float], ResearchPlan] = (
+                lambda content, mid, _a: self._parse_research_response(
+                    content, mid, market_question
+                )
+            )
+            research_plan = await self._json_llm_chain(
+                user_prompt=user_prompt,
+                market_id=market_id,
+                market_question=market_question,
+                current_yes_price=current_yes_price,
+                system_prompt=self.RESEARCH_SYSTEM_PROMPT,
+                provider_chain=provider_chain,
+                response_parser=rparser,
+                type_guard=ResearchPlan,
+            )
+
+        if not isinstance(research_plan, ResearchPlan):
+            return {"ok": False, "failed_stage": "research"}
+
+        rp_json = json.dumps(self._model_to_plain(research_plan), ensure_ascii=True)
+        trader_context = "\n".join(
+            [
+                market_description,
+                "=== TRADER (SHADOW PIPELINE) ===",
+                "Use RESEARCH_JSON for a concrete trade proposal. Shadow only.",
+                f"RESEARCH_JSON:\n{rp_json}",
+            ]
+        )
+        trader_prompt = self._build_prompt(
+            market_question=f"Shadow trader: {market_question}",
+            market_description=trader_context,
+            current_yes_price=current_yes_price,
+            news_context="",
+        )
+        tparser: Callable[[str, str, float], TraderProposal] = (
+            lambda content, mid, _a: self._parse_trader_response(content, mid)
+        )
+        trader = await self._json_llm_chain(
+            user_prompt=trader_prompt,
+            market_id=market_id,
+            market_question=market_question,
+            current_yes_price=current_yes_price,
+            system_prompt=self.TRADER_SHADOW_SYSTEM_PROMPT,
+            provider_chain=provider_chain,
+            response_parser=tparser,
+            type_guard=TraderProposal,
+        )
+        if not isinstance(trader, TraderProposal):
+            return {"ok": False, "failed_stage": "trader", "research": research_plan}
+
+        tr_json = json.dumps(self._model_to_plain(trader), ensure_ascii=True)
+        port_context = "\n".join(
+            [
+                market_description,
+                "=== PORTFOLIO MANAGER (SHADOW PIPELINE) ===",
+                "Synthesize research + trader into final JSON. Shadow only.",
+                f"RESEARCH_JSON:\n{rp_json}",
+                f"TRADER_JSON:\n{tr_json}",
+            ]
+        )
+        port_prompt = self._build_prompt(
+            market_question=f"Shadow portfolio: {market_question}",
+            market_description=port_context,
+            current_yes_price=current_yes_price,
+            news_context="",
+        )
+        pparser: Callable[[str, str, float], PortfolioDecision] = (
+            lambda content, mid, _a: self._parse_portfolio_shadow_response(content, mid)
+        )
+        decision = await self._json_llm_chain(
+            user_prompt=port_prompt,
+            market_id=market_id,
+            market_question=market_question,
+            current_yes_price=current_yes_price,
+            system_prompt=self.PORTFOLIO_SHADOW_SYSTEM_PROMPT,
+            provider_chain=provider_chain,
+            response_parser=pparser,
+            type_guard=PortfolioDecision,
+        )
+        if not isinstance(decision, PortfolioDecision):
+            return {
+                "ok": False,
+                "failed_stage": "portfolio",
+                "research": research_plan,
+                "trader": trader,
+            }
+
+        mismatch = self._shadow_marginal_mismatch(
+            marginal_recommendation, decision.action
+        )
+        if bool(self.shadow_pipeline_cfg.get("log_jsonl", True)):
+            payload = {
+                "ts_utc": datetime.utcnow().isoformat() + "Z",
+                "market_id": market_id,
+                "strategy_hint": strategy_hint,
+                "marginal_recommendation": marginal_recommendation or "",
+                "marginal_mismatch": mismatch,
+                "research_plan": self._model_to_plain(research_plan),
+                "trader_proposal": self._model_to_plain(trader),
+                "portfolio_decision": self._model_to_plain(decision),
+                "markdown": "\n---\n".join(
+                    [
+                        render_research_plan(research_plan),
+                        render_trader_proposal(trader),
+                        render_portfolio_decision(decision),
+                    ]
+                ),
+            }
+            self._append_jsonl(SHADOW_PIPELINE_LOG_FILE, payload)
+
+        return {
+            "ok": True,
+            "research": research_plan,
+            "trader": trader,
+            "portfolio": decision,
+            "marginal_mismatch": mismatch,
+            "portfolio_action": decision.action.value,
+        }
+
+    def _provider_timeout(self, provider_config: Optional[Dict[str, Any]]) -> float:
+        """HTTP wait for this provider; optional ``timeout_seconds`` on provider_chain entry."""
+        pc = provider_config or {}
+        raw = pc.get("timeout_seconds")
+        if raw is not None:
+            return max(5.0, float(raw))
+        return max(5.0, float(self.timeout))
+
+    def _openrouter_rotated_models(
+        self,
+        provider_label: str,
+        base_url: Optional[str],
+        models: List[str],
+    ) -> List[str]:
+        """Advance which free model is tried first on each call (OpenURLRouter rotation)."""
+        if len(models) <= 1:
+            return list(models)
+        if not base_url or "openrouter" not in str(base_url).lower():
+            return list(models)
+        i = self._openrouter_model_rr.get(provider_label, 0) % len(models)
+        self._openrouter_model_rr[provider_label] = i + 1
+        return models[i:] + models[:i]
 
     def _normalize_recommendation(self, rec: str) -> str:
         """Map recommendation to BUY_YES | BUY_NO | HOLD."""
@@ -573,6 +1359,11 @@ Valid minimal example:
             )
             if result:
                 self._set_cache(market_id, result, current_yes_price, strategy_hint, ttl=cache_ttl)
+                self._log_marginal_analysis(
+                    result,
+                    market_question=market_question,
+                    strategy_hint=strategy_hint,
+                )
             return result
 
         # Skip entirely if no providers configured
@@ -583,7 +1374,6 @@ Valid minimal example:
         # Rate limit before making the API call
         await self._rate_limit()
 
-        attempted_live_provider = False
         provider_errors: List[str] = []
         for provider_config in self.provider_chain:
             provider_name = provider_config.get("name")
@@ -611,7 +1401,6 @@ Valid minimal example:
                     logger.error(f"Unknown provider type '{provider_type}' in provider chain. Skipping.")
                     continue
 
-                attempted_live_provider = True
                 analysis_result = await analysis_function(
                     user_prompt,
                     market_id,
@@ -627,6 +1416,11 @@ Valid minimal example:
                         f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f}"
                     )
                     self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint, ttl=cache_ttl)
+                    self._log_marginal_analysis(
+                        analysis_result,
+                        market_question=market_question,
+                        strategy_hint=strategy_hint,
+                    )
                     return analysis_result
 
             except Exception as e:
@@ -640,10 +1434,8 @@ Valid minimal example:
                 f"All AI providers failed for market {market_id}. "
                 f"No analysis could be performed. Provider errors: {details}"
             )
-            if attempted_live_provider:
-                logger.critical(msg)
-            else:
-                logger.error(msg)
+            # Timeouts / rate limits are operational — avoid CRITICAL + Sentry fatals.
+            logger.warning(msg)
         else:
             logger.debug(f"No AI providers configured — skipping AI analysis for market {market_id}.")
         return None
@@ -678,6 +1470,10 @@ Valid minimal example:
                     pc, str(pc.get("model", ""))
                 )
                 model_for_call = model_candidates[0] if model_candidates else ""
+                outer = max(
+                    self._provider_timeout(pc),
+                    float(self.timeout),
+                )
                 return await asyncio.wait_for(
                     fn(
                         user_prompt,
@@ -687,7 +1483,7 @@ Valid minimal example:
                         pc,
                         anchor_yes_price,
                     ),
-                    timeout=self.timeout,
+                    timeout=outer,
                 )
             except Exception:
                 return None
@@ -786,6 +1582,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
         anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """OpenAI-compatible API (OpenAI, OpenRouter, and other base_url hosts)."""
         pc = provider_config or {}
@@ -793,6 +1591,9 @@ Reply with only the JSON object required by the system message (four keys: reaso
         base_url = pc.get("base_url")
         json_mode = pc.get("json_mode", True)
         cooldown_429 = float(pc.get("cooldown_on_429_seconds", 90.0))
+        cooldown_daily = float(pc.get("cooldown_on_free_models_daily_exhausted_seconds", 7200.0))
+        call_timeout = self._provider_timeout(pc)
+        account_ck = f"{provider_label}::__openrouter_account"
 
         extra_headers: Dict[str, str] = {}
         if pc.get("http_referer"):
@@ -807,8 +1608,16 @@ Reply with only the JSON object required by the system message (four keys: reaso
         if not models:
             logger.warning("OpenAI-compatible provider has no model configured — skipping.")
             return None
+        models = self._openrouter_rotated_models(provider_label, base_url, models)
         if openai is None:
             raise ImportError("openai package is not installed")
+
+        if base_url and "openrouter" in str(base_url).lower() and self._on_cooldown(account_ck):
+            logger.warning(
+                "OpenRouter provider '%s' on account-level cooldown (e.g. daily free cap) — skipping.",
+                provider_label,
+            )
+            raise RuntimeError("openrouter_account_cooldown")
 
         client_kw: Dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -831,7 +1640,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 kwargs: Dict[str, Any] = dict(
                     model=m,
                     messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=self.temperature,
@@ -842,7 +1651,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
 
                 response = await asyncio.wait_for(
                     client.chat.completions.create(**kwargs),
-                    timeout=self.timeout,
+                    timeout=call_timeout,
                 )
 
                 content = response.choices[0].message.content
@@ -861,10 +1670,9 @@ Reply with only the JSON object required by the system message (four keys: reaso
 
                 self._maybe_warn_header_quota(provider_label, hdrs)
 
+                parser = response_parser or self._parse_response
                 try:
-                    return self._parse_response(
-                        content or "", market_id, anchor_yes_price
-                    )
+                    return parser(content or "", market_id, anchor_yes_price)
                 except AIResponseValidationError as e:
                     logger.warning(
                         "OpenAI-compat: schema/parse error model=%s: %s — trying next.",
@@ -880,13 +1688,23 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 continue
             except OpenAIRateLimitError as e:
                 last_err = e
+                err_s = str(e).lower()
+                if "free-models-per-day" in err_s:
+                    self._set_cooldown(account_ck, cooldown_daily)
                 self._set_cooldown(ck, cooldown_429)
-                logger.warning(f"OpenAI-compat: rate limit model={m} — cooldown {cooldown_429:.0f}s, trying next.")
+                logger.warning(
+                    "OpenAI-compat: rate limit model=%s — account_cd=%s model_cd=%.0fs — trying next.",
+                    m,
+                    "on" if "free-models-per-day" in err_s else "off",
+                    cooldown_429,
+                )
                 continue
             except Exception as e:
                 last_err = e
                 msg = str(e).lower()
                 if "429" in msg or "rate" in msg:
+                    if "free-models-per-day" in msg:
+                        self._set_cooldown(account_ck, cooldown_daily)
                     self._set_cooldown(ck, cooldown_429)
                 logger.warning(
                     "OpenAI-compat error model=%s: %s: %s — trying next.",
@@ -908,6 +1726,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
         anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using Google Gemini API (GOOGLE_API_KEY from AI Studio)."""
         start_time = time.time()
@@ -923,7 +1743,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     model=model,
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
-                        system_instruction=self.SYSTEM_PROMPT,
+                        system_instruction=system_prompt or self.SYSTEM_PROMPT,
                         temperature=self.temperature,
                         max_output_tokens=self.max_tokens,
                         response_mime_type="application/json",
@@ -947,7 +1767,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
             )
 
             logger.debug(f"Received analysis from Gemini: {content[:100]}...")
-            return self._parse_response(content, market_id, anchor_yes_price)
+            parser = response_parser or self._parse_response
+            return parser(content, market_id, anchor_yes_price)
 
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Gemini API error details: {e}")
@@ -961,6 +1782,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
         anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """Analyzes using Groq API (free tier, no credit card). Get key at console.groq.com"""
         start_time = time.time()
@@ -975,7 +1798,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 client.chat.completions.create(
                     model=model,
                     messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=self.temperature,
@@ -1002,7 +1825,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
             )
 
             logger.debug(f"Received analysis from Groq: {content[:100]}...")
-            return self._parse_response(content, market_id, anchor_yes_price)
+            parser = response_parser or self._parse_response
+            return parser(content, market_id, anchor_yes_price)
 
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Groq API error details: {e}")
@@ -1016,6 +1840,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
         anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """Analyze using Anthropic API"""
         start_time = time.time()
@@ -1027,7 +1853,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
             response = await asyncio.wait_for(
                 client.messages.create(
                     model=model,
-                    system=self.SYSTEM_PROMPT,
+                    system=system_prompt or self.SYSTEM_PROMPT,
                     messages=[
                         {"role": "user", "content": prompt}
                     ],
@@ -1050,7 +1876,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     latency=latency
                 )
 
-            return self._parse_response(content, market_id, anchor_yes_price)
+            parser = response_parser or self._parse_response
+            return parser(content, market_id, anchor_yes_price)
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Anthropic API error details: {e}")
             raise e
@@ -1063,6 +1890,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         api_key: str,
         provider_config: Optional[Dict[str, Any]] = None,
         anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using the MiniMax Anthropic-compatible API (Coding Plan).
 
@@ -1070,6 +1899,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
         so a momentary spike doesn't cascade to broken fallback providers.
         """
         max_attempts = 2
+        call_timeout = self._provider_timeout(provider_config)
         for attempt in range(max_attempts):
             start_time = time.time()
             try:
@@ -1085,11 +1915,11 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     client.messages.create(
                         model=model,
                         max_tokens=self.max_tokens,
-                        system=self.SYSTEM_PROMPT,
+                        system=system_prompt or self.SYSTEM_PROMPT,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=self.temperature,
                     ),
-                    timeout=self.timeout
+                    timeout=call_timeout,
                 )
 
                 content = self._extract_text_from_content(response.content)
@@ -1107,10 +1937,13 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     )
 
                 logger.debug(f"Received analysis from Minimax: {content}")
-                return self._parse_response(content, market_id, anchor_yes_price)
+                parser = response_parser or self._parse_response
+                return parser(content, market_id, anchor_yes_price)
 
             except asyncio.TimeoutError:
-                logger.warning(f"Minimax API timed out after {self.timeout}s for market {market_id}")
+                logger.warning(
+                    f"Minimax API timed out after {call_timeout}s for market {market_id}"
+                )
                 raise
             except Exception as e:
                 err_msg = str(e)
@@ -1185,7 +2018,34 @@ Reply with only the JSON object required by the system message (four keys: reaso
             raise AIResponseValidationError(
                 f"market={market_id} could not build AIAnalysis after validation"
             )
-        return out
+        rec_raw = out.recommendation
+        s = str(rec_raw).strip().upper() if rec_raw is not None else "HOLD"
+        try:
+            if isinstance(rec_raw, AIRecommendation):
+                rec_enum = rec_raw
+            else:
+                rec_enum = AIRecommendation(s)
+        except ValueError:
+            rec_enum = AIRecommendation(self._normalize_recommendation(s))
+        try:
+            typed = MarginalAIAnalysis(
+                reasoning=out.reasoning,
+                confidence_score=out.confidence_score,
+                estimated_probability=out.estimated_probability,
+                recommendation=rec_enum,
+            )
+        except Exception as e:
+            raise AIResponseValidationError(
+                f"market={market_id} normalized output failed schema validation: {e}"
+            ) from e
+        return AIAnalysis(
+            reasoning=typed.reasoning,
+            confidence_score=float(typed.confidence_score),
+            estimated_probability=float(typed.estimated_probability),
+            recommendation=typed.recommendation.value,
+            market_id=market_id,
+            timestamp=datetime.now(),
+        )
     
     async def batch_analyze(
         self,

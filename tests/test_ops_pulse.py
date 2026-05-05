@@ -73,6 +73,70 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
     snap = build_ops_snapshot(bot, "test")
     assert "scan_skip_digest" in snap
     assert snap["scan_skip_digest"]["aggregate_top"].get("outside_entry_window") == 5
+    assert "ai_pipeline" in snap
+    assert snap["ai_pipeline"]["aggregate"] == {}
     assert snap["timestamps_policy"]["canonical"] == "UTC"
     assert snap["regime"]["btc_spot_usd"] == 78500.0
     assert snap["regime"].get("spot_gte_break_high") is False
+
+
+def test_build_ops_snapshot_ai_pipeline_digest_aggregates_aliases():
+    class J:
+        session_id = "s1"
+        session_dir = "/tmp"
+        _entries_file = "/tmp/e.jsonl"
+
+        def get_summary(self):
+            return {
+                "open_positions": 0,
+                "total_exits": 0,
+                "total_entries": 0,
+                "realized_pnl": 0,
+                "unrealized_pnl": 0,
+                "total_pnl": 0,
+            }
+
+    bot = SimpleNamespace(
+        config={"trading": {"dry_run": True}, "logging": {"ops_pulse": False}},
+        journal=J(),
+        risk_manager=SimpleNamespace(daily_trades=0, daily_pnl=0.0),
+        btc_exposure_manager=SimpleNamespace(
+            loss_kill_switch_enabled=True,
+            max_consecutive_losses=3,
+        ),
+        bankroll=1000.0,
+        running=True,
+        last_signal_counts={},
+        cumulative_signal_counts={},
+        last_cycle_times={},
+        last_ai_scan_stats={
+            "eth_macro": {
+                "ai_calls": 4,
+                "research_calls": 2,
+                "research_plans_logged": 1,
+                "shadow_pipeline_calls": 3,
+                "shadow_pipeline_ok": 2,
+                "shadow_marginal_mismatch": 1,
+            },
+            "bitcoin": {"ai_pipeline_calls": 3, "ai_assists": 2, "ai_overrides": 1},
+        },
+        scan_interval=60,
+    )
+    bot._kill_switch_active = lambda: False
+
+    snap = build_ops_snapshot(bot, "test")
+    per = snap["ai_pipeline"]["per_strategy"]
+    agg = snap["ai_pipeline"]["aggregate"]
+    assert per["eth_macro"]["ai_pipeline_calls"] == 4
+    assert per["eth_macro"]["research_calls"] == 2
+    assert per["eth_macro"]["ai_assists"] == 1
+    assert per["bitcoin"]["ai_pipeline_calls"] == 3
+    assert per["bitcoin"]["ai_assists"] == 2
+    assert per["bitcoin"]["ai_overrides"] == 1
+    assert agg["ai_pipeline_calls"] == 7
+    assert agg["ai_assists"] == 3
+    assert agg["ai_overrides"] == 1
+    assert agg["research_calls"] == 2
+    assert agg["shadow_pipeline_calls"] == 3
+    assert agg["shadow_pipeline_ok"] == 2
+    assert agg["shadow_marginal_mismatch"] == 1

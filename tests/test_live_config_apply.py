@@ -28,6 +28,14 @@ class _FakeScanner:
         self.reloaded_with = cfg
 
 
+class _FakeNotifier:
+    def __init__(self):
+        self.reloaded_with = None
+
+    def reload_from_config(self, cfg):
+        self.reloaded_with = cfg
+
+
 def test_apply_config_updates_refreshes_live_runtime_objects():
     bot = PolyBot.__new__(PolyBot)
     bot.config = {
@@ -50,13 +58,16 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
         "polymarket": {"min_liquidity": 10000, "scanner_sync_timeout_sec": 90},
     }
     bot.ai_agent = _FakeAIAgent()
+    bot.notifier = _FakeNotifier()
     bot.market_scanner = _FakeScanner()
     bot.btc_exposure_manager = _FakeExposureManager()
     bot.sol_exposure_manager = _FakeExposureManager()
     bot.eth_exposure_manager = _FakeExposureManager()
     bot.hype_exposure_manager = _FakeExposureManager()
     bot.xrp_exposure_manager = _FakeExposureManager()
-    bot.event_exposure_manager = _FakeExposureManager()
+    _weather_em = _FakeExposureManager()
+    bot.weather_exposure_manager = _weather_em
+    bot.event_exposure_manager = _weather_em
     bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
 
@@ -89,3 +100,4 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert callable(bot.bitcoin_strategy.dead_zone_skip_callback)
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.event_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
+    assert bot.notifier.reloaded_with is bot.config
