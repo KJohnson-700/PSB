@@ -24,7 +24,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
@@ -33,9 +33,26 @@ logger = logging.getLogger(__name__)
 
 
 def _get_hyperliquid_service():
-    """Lazy-import HyperliquidHypeService to avoid circular deps."""
-    from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
-    return HyperliquidHypeService()
+    """Lazy-import HyperliquidHypeService; apply ``hyperliquid`` from settings when present."""
+    from pathlib import Path
+
+    import yaml
+
+    from src.analysis.hyperliquid_hype_service import (
+        HyperliquidHypeService,
+        hyperliquid_kwargs_from_config,
+    )
+
+    hl_map: Dict[str, Any] = {}
+    try:
+        root = Path(__file__).resolve().parent.parent.parent / "config" / "settings.yaml"
+        if root.exists():
+            with open(root) as f:
+                doc = yaml.safe_load(f) or {}
+            hl_map = hyperliquid_kwargs_from_config(doc.get("hyperliquid"))
+    except Exception:
+        pass
+    return HyperliquidHypeService(**hl_map)
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"

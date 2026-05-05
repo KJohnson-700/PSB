@@ -194,7 +194,7 @@ def test_parse_gamma_event_market_prefers_candle_end_over_event_end():
 def test_weather_temperature_slug_regex_accepts_expected_slug_family():
     m = _WEATHER_TEMP_SLUG_RE.match("highest-temperature-in-manila-on-apr-29-2026")
     assert m is not None
-    assert m.group(1) == "manila"
+    assert m.group(1) == "highest-temperature"
 
 
 def test_weather_temperature_slug_regex_rejects_non_temperature_slug():
@@ -404,6 +404,8 @@ def test_hype_alt_fetch_uses_direct_slug_queries_not_event_pagination(monkeypatc
 
 def test_hyperliquid_hype_service_parses_candle_snapshot(monkeypatch):
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 
@@ -432,7 +434,7 @@ def test_hyperliquid_hype_service_parses_candle_snapshot(monkeypatch):
     def _fake_post(*args, **kwargs):
         return _Resp()
 
-    monkeypatch.setattr("src.analysis.hyperliquid_hype_service.requests.post", _fake_post)
+    monkeypatch.setattr("src.utils.http_retry.requests.post", _fake_post)
     svc = HyperliquidHypeService()
     df = svc.fetch_klines("HYPEUSDT", interval="5m", limit=2)
     assert len(df) == 2

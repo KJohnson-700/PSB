@@ -24,6 +24,16 @@ polymarket:
   # normal up/down fetch. This no longer crawls the full active event set.
   fetch_hype_alt_markets: true
   fetch_weather_markets: false
+  # Gamma REST: retries for transient timeouts / 5xx (slug and list fetches).
+  gamma_http_max_retries: 3
+  gamma_http_retry_backoff_base_sec: 0.5
+
+# Hyperliquid candle HTTP (live HYPE + OHLCV backfill). Retries tame transient timeouts.
+hyperliquid:
+  request_timeout_sec: 18
+  range_request_timeout_sec: 22
+  max_retries: 3
+  retry_backoff_base_sec: 0.5
 
 # ============================================
 # TRADING PARAMETERS
@@ -161,8 +171,8 @@ strategies:
     entry_price_max: 0.90
     # Tight band for updown markets — prevents betting against strong market consensus.
     # yes_price outside this range means the market has already priced in the move.
-    entry_price_min_updown: 0.46
-    entry_price_max_updown: 0.54
+    entry_price_min_updown: 0.45
+    entry_price_max_updown: 0.55
     # Up/down entry timing window (minutes until resolution); edge/price gates still apply.
     # Note: listings often appear with mins_left > 15 before the quoted candle — entry_window_15m_max must reflect that.
     entry_window_15m_min: 2.0
@@ -207,7 +217,7 @@ strategies:
     # BTC regime shifts. Re-enable when 4H MACD crosses bearish and price rolls over.
     disable_buy_no_counter_trend: true
     # Require stronger edge for BUY_NO entries (short in a bull/mixed market needs conviction).
-    min_edge_buy_no: 0.11
+    min_edge_buy_no: 0.10
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
     macro_event_guard_after_min: 30
@@ -269,7 +279,7 @@ strategies:
     min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
     min_edge_5m: 0.07             # flat tape: m5_adj often 0.04; require_btc_catalyst_5m guards 5m quality when enabled
     hard_min_edge: 0.07           # keep aligned with 5m floor; avoid blocking valid 5m edges
-    min_edge_15m_when_ltf_unconfirmed: 0.11   # macro-only entries (no LTF) need tighter price; was 0.09 = no extra filter
+    min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11: reduce 15m starvation when no LTF but other gates align
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip; stops pure macro-guess 15m entries
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
@@ -301,8 +311,12 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     # True = do not LONG into alt 1H bearish / SHORT into alt 1H bullish (reduces fading SOL headwind).
     enforce_alt_1h_alignment: true
-    rsi_buy_block_above: 70.0     # 2026-05-04: parity with ETH after n=98 attribution; cuts overbought BUY_YES (RSI>70)
-    rsi_sell_block_below: 30.0    # Mirror floor for BUY_NO oversold protection
+    rsi_buy_block_above: 70.0
+    rsi_sell_block_below: 30.0
+    rsi_hard_gate_enabled: false          # default to soft gating in trend regimes
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04        # reduce LONG conviction instead of binary veto
+    rsi_soft_penalty_buy_no: 0.04         # reduce SHORT conviction when oversold
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
@@ -389,7 +403,7 @@ strategies:
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
     min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
-    min_edge_15m_when_ltf_unconfirmed: 0.11   # explicit; was defaulting to 0.10 in code; raised to match SOL
+    min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11 to recover 15m participation
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
     # ETH side resolution:
@@ -423,8 +437,12 @@ strategies:
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
-    rsi_buy_block_above: 70.0     # 2026-05-04: tightened 80→70 — n=98 attribution: BUY_YES losers RSI median 64.6 vs winners 60.8; ETH 68.7 / HYPE 70.7 entries lost on 5m TS
-    rsi_sell_block_below: 40.0    # Block BUY_NO when alt is already oversold and more likely to bounce
+    rsi_buy_block_above: 70.0
+    rsi_sell_block_below: 40.0
+    rsi_hard_gate_enabled: false
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04
+    rsi_soft_penalty_buy_no: 0.04
     btc_follow_1h_hist_min: 6.0   # was 8.0 — fewer false skips when BTC 1H is valid but hist magnitude modest
     btc_follow_1h_required: true           # false = bypass BTC 1H continuation gate entirely (escape hatch)
     btc_follow_1h_allow_rising_recovery: true   # allow LONG when 1H hist negative but rising above -recovery floor; SHORT symmetric
@@ -518,7 +536,7 @@ strategies:
     min_edge: 0.09                # sol_macro parity
     min_edge_5m: 0.07             # sol_macro parity (flat tape MACD tiers need reachable floor)
     hard_min_edge: 0.07           # hype_macro.py post-scan floor; align with sol_macro hard_min_edge
-    min_edge_15m_when_ltf_unconfirmed: 0.11   # sol_macro parity
+    min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11: avoid starving macro-only 15m setups
     require_btc_catalyst_15m_when_unconfirmed: true
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
@@ -565,8 +583,12 @@ strategies:
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
     enforce_alt_1h_alignment: false    # 2026-05-05: staged rollback — HYPE first (per attribution playbook); was true 2026-05-04
-    rsi_buy_block_above: 70.0     # 2026-05-04: HYPE 70.7 RSI BUY_YES on 5m TS lost −$2.60 in test_20260504_150648; n=98 attribution support
+    rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
+    rsi_hard_gate_enabled: false
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04
+    rsi_soft_penalty_buy_no: 0.04
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
@@ -629,8 +651,12 @@ strategies:
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: true    # 2026-05-04: re-enabled — without gate, BUY_NO fires freely in XRP bull trend
     min_edge_buy_no: 0.10             # Require stronger edge for BUY_NO (was clearing at 0.085-0.095 on 5m, too loose)
-    rsi_buy_block_above: 70.0         # 2026-05-04: parity with SOL/ETH/HYPE after n=98 attribution
+    rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
+    rsi_hard_gate_enabled: false
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04
+    rsi_soft_penalty_buy_no: 0.04
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
@@ -705,21 +731,8 @@ ai:
       timeout_seconds: 120
       cooldown_on_429_seconds: 60
 
-    # OpenRouter free-tier fallback. Key: OPENROUTER_API_KEY in secrets.env.
-    - name: openrouter_free
-      type: openai
-      base_url: "https://openrouter.ai/api/v1"
-      api_key_secret: OPENROUTER_API_KEY
-      http_referer: "https://github.com/samuraifrenchienft/polymarket-bot"
-      x_title: "Polymarket Bot"
-      models:
-        - "google/gemma-4-31b-it:free"
-        - "nvidia/nemotron-3-super-120b-a12b:free"
-        - "google/gemma-4-26b-a4b-it:free"
-      json_mode: true
-      # Free tier: rotate models quickly on 429; long pause when daily free quota is exhausted.
-      cooldown_on_429_seconds: 25
-      cooldown_on_free_models_daily_exhausted_seconds: 7200
+    # Optional: re-add OpenRouter (OPENROUTER_API_KEY) as a middle tier between MiniMax and Ollama
+    # if you want cloud fallback without running a local model.
 
     # Local Ollama fallback (no API key required).
     - name: ollama_local

@@ -3279,13 +3279,24 @@ async def get_hype_analysis():
     """Live HYPE–BTC correlation for dashboard using HyperliquidHypeService."""
 
     def _hype_sync():
-        from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
+        from src.analysis.hyperliquid_hype_service import (
+            HyperliquidHypeService,
+            hyperliquid_kwargs_from_config,
+        )
 
         svc = None
         if bot_instance and hasattr(bot_instance, "hype_macro_strategy"):
             svc = getattr(bot_instance.hype_macro_strategy, "sol_service", None)
         if svc is None:
-            svc = HyperliquidHypeService()
+            hl = {}
+            try:
+                if CONFIG_PATH.exists():
+                    with open(CONFIG_PATH) as f:
+                        root = yaml.safe_load(f) or {}
+                    hl = hyperliquid_kwargs_from_config(root.get("hyperliquid"))
+            except Exception:
+                hl = {}
+            svc = HyperliquidHypeService(**hl)
         ta = svc.get_full_analysis()
         alt_sym = getattr(svc, "alt_symbol", "HYPEUSDT") or "HYPEUSDT"
         return ta, alt_sym

@@ -18,6 +18,8 @@ import aiohttp
 import requests
 from dataclasses import dataclass, field
 
+from src.utils.http_retry import requests_get_with_retries
+
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
@@ -363,11 +365,32 @@ class MarketScanner:
                 self._scanner_sync_timeout,
                 self._cycle_interval_sec,
             )
+        self._gamma_http_max_retries = max(1, int(_pm.get("gamma_http_max_retries", 3)))
+        self._gamma_http_retry_backoff_base_sec = max(
+            0.05, float(_pm.get("gamma_http_retry_backoff_base_sec", 0.5))
+        )
 
     def reload_from_config(self, config: Dict[str, Any]) -> None:
         """Apply updated config to the live scanner without replacing caches/pool."""
         self.config = config
         self._reload_config_fields()
+
+    def _gamma_get(
+        self,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: float = 15,
+    ) -> requests.Response:
+        p = path if path.startswith("/") else f"/{path}"
+        return requests_get_with_retries(
+            f"{self.GAMMA_API_BASE}{p}",
+            params=params or {},
+            timeout=timeout,
+            max_retries=self._gamma_http_max_retries,
+            backoff_base=self._gamma_http_retry_backoff_base_sec,
+            log_name="scanner.gamma",
+        )
 
     def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
         text = f"{question or ''} {description or ''}"
@@ -782,14 +805,13 @@ class MarketScanner:
     
     def _fetch_markets_gamma(self, limit: int = 100) -> List[Market]:
         """Fetch active markets from Gamma REST ``GET /markets`` (paginated)."""
-        GAMMA_API = "https://gamma-api.polymarket.com"
         markets = []
         offset = 0
         try:
             while len(markets) < limit:
                 params = {"limit": min(limit - len(markets), 100), "offset": offset,
                           "active": "true", "closed": "false"}
-                resp = requests.get(f"{GAMMA_API}/markets", params=params, timeout=15)
+                resp = self._gamma_get("/markets", params=params, timeout=15)
                 resp.raise_for_status()
                 batch = resp.json()
                 if not batch:
@@ -996,10 +1018,8 @@ class MarketScanner:
                     return []
             parsed_markets: List[Market] = []
             try:
-                market_resp = requests.get(
-                    f"{self.GAMMA_API_BASE}/markets",
-                    params={"slug": slug},
-                    timeout=timeout_sec,
+                market_resp = self._gamma_get(
+                    "/markets", params={"slug": slug}, timeout=timeout_sec
                 )
                 if market_resp.status_code == 200:
                     for gm in market_resp.json() or []:
@@ -1011,10 +1031,8 @@ class MarketScanner:
                     if parsed_markets:
                         return parsed_markets
 
-                resp = requests.get(
-                    f"{self.GAMMA_API_BASE}/events",
-                    params={"slug": slug},
-                    timeout=timeout_sec,
+                resp = self._gamma_get(
+                    "/events", params={"slug": slug}, timeout=timeout_sec
                 )
                 if resp.status_code == 200:
                     events = resp.json() or []
@@ -1217,11 +1235,7 @@ class MarketScanner:
                         "closed": "false",
                         "tag_slug": tag_slug,
                     }
-                    resp = requests.get(
-                        f"{self.GAMMA_API_BASE}/events",
-                        params=params,
-                        timeout=8,
-                    )
+                    resp = self._gamma_get("/events", params=params, timeout=8)
                     resp.raise_for_status()
                     events = resp.json() or []
                     if not events:
@@ -1263,11 +1277,7 @@ class MarketScanner:
                         "active": "true",
                         "closed": "false",
                     }
-                    resp = requests.get(
-                        f"{self.GAMMA_API_BASE}/markets",
-                        params=params,
-                        timeout=8,
-                    )
+                    resp = self._gamma_get("/markets", params=params, timeout=8)
                     resp.raise_for_status()
                     batch = resp.json()
                     if not batch:

@@ -8,15 +8,30 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 import requests
 
 from src.analysis.sol_btc_service import SOLBTCService
+from src.utils.http_retry import requests_post_with_retries
 
 logger = logging.getLogger(__name__)
+
+
+def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Map ``config['hyperliquid']`` subset to ``HyperliquidHypeService`` keyword args."""
+    m = dict(mapping or {})
+    out: Dict[str, Any] = {}
+    if "request_timeout_sec" in m and m["request_timeout_sec"] is not None:
+        out["request_timeout_sec"] = float(m["request_timeout_sec"])
+    if "range_request_timeout_sec" in m and m["range_request_timeout_sec"] is not None:
+        out["range_request_timeout_sec"] = float(m["range_request_timeout_sec"])
+    if "max_retries" in m and m["max_retries"] is not None:
+        out["max_retries"] = int(m["max_retries"])
+    if "retry_backoff_base_sec" in m and m["retry_backoff_base_sec"] is not None:
+        out["retry_backoff_base_sec"] = float(m["retry_backoff_base_sec"])
+    return out
 
 
 class HyperliquidHypeService(SOLBTCService):
@@ -44,6 +59,10 @@ class HyperliquidHypeService(SOLBTCService):
         btc_spike_floor_pct_5m: float = 0.3,
         btc_spike_floor_pct_15m: float = 0.8,
         lag_signal_min_pct: float = 0.2,
+        request_timeout_sec: float = 18.0,
+        range_request_timeout_sec: float = 22.0,
+        max_retries: int = 3,
+        retry_backoff_base_sec: float = 0.5,
     ):
         super().__init__(
             polygon_rpc=polygon_rpc,
@@ -57,6 +76,20 @@ class HyperliquidHypeService(SOLBTCService):
         )
         self._hype_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
         self._hype_cache_ttl = 30  # seconds
+        self._request_timeout_sec = max(5.0, float(request_timeout_sec))
+        self._range_request_timeout_sec = max(5.0, float(range_request_timeout_sec))
+        self._max_retries = max(1, int(max_retries))
+        self._retry_backoff_base_sec = max(0.05, float(retry_backoff_base_sec))
+
+    def _post_candles(self, payload: dict, *, timeout: float) -> requests.Response:
+        return requests_post_with_retries(
+            self.HYPERLIQUID_INFO_URL,
+            json=payload,
+            timeout=timeout,
+            max_retries=self._max_retries,
+            backoff_base=self._retry_backoff_base_sec,
+            log_name="hyperliquid.hype",
+        )
 
     def _fetch_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
         """Fetch HYPE candles from Hyperliquid (for live non-backtest use)."""
@@ -81,7 +114,7 @@ class HyperliquidHypeService(SOLBTCService):
         }
 
         try:
-            resp = requests.post(self.HYPERLIQUID_INFO_URL, json=payload, timeout=10)
+            resp = self._post_candles(payload, timeout=self._request_timeout_sec)
             resp.raise_for_status()
             rows = resp.json() or []
             if not isinstance(rows, list) or not rows:
@@ -149,7 +182,7 @@ class HyperliquidHypeService(SOLBTCService):
         }
 
         try:
-            resp = requests.post(self.HYPERLIQUID_INFO_URL, json=payload, timeout=15)
+            resp = self._post_candles(payload, timeout=self._range_request_timeout_sec)
             resp.raise_for_status()
             rows = resp.json() or []
             if not isinstance(rows, list) or not rows:

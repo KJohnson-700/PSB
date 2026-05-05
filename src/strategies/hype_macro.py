@@ -8,7 +8,10 @@ import re
 from typing import Any, Dict, List
 
 from src.analysis.ai_agent import AIAgent
-from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
+from src.analysis.hyperliquid_hype_service import (
+    HyperliquidHypeService,
+    hyperliquid_kwargs_from_config,
+)
 from src.analysis.math_utils import PositionSizer
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
@@ -38,6 +41,7 @@ class HYPEMacroStrategy(SolMacroStrategy):
     """HYPE macro strategy — same layered architecture as SOL macro."""
 
     def _build_alt_service(self) -> HyperliquidHypeService:
+        hk = hyperliquid_kwargs_from_config(self._hyperliquid_cfg)
         return HyperliquidHypeService(
             alt_symbol="HYPEUSDT",
             dynamic_beta_min=self.dynamic_beta_min,
@@ -46,6 +50,7 @@ class HYPEMacroStrategy(SolMacroStrategy):
             btc_spike_floor_pct_5m=self.btc_spike_floor_pct_5m,
             btc_spike_floor_pct_15m=self.btc_spike_floor_pct_15m,
             lag_signal_min_pct=self.lag_signal_min_pct,
+            **hk,
         )
 
     def __init__(
@@ -56,6 +61,7 @@ class HYPEMacroStrategy(SolMacroStrategy):
         kelly_sizer=None,
         exposure_manager: ExposureManager = None,
     ):
+        self._hyperliquid_cfg = dict(config.get("hyperliquid") or {})
         super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
         self.config = config.get("strategies", {}).get("hype_macro", {})
         self.enabled = resolve_enabled_flag(

@@ -1240,7 +1240,7 @@ function _winRateFraction(wr) {
     return n > 1 ? n / 100 : n;
 }
 
-/** Headers for mutating routes. Server enforces X-API-Key only when DASHBOARD_API_KEY is set in the environment. */
+/** Headers for mutating routes. With DASHBOARD_API_KEY set, send X-API-Key; when unset, non-loopback gets 503 until the env var is set (_mutatingFetch prompts like 403 once detail mentions DASHBOARD_API_KEY). */
 function dashAuthHeaders(extra) {
     const headers = Object.assign({}, extra || {});
     try {
@@ -1270,13 +1270,20 @@ async function _mutatingFetch(url, init = {}, retryOnAuth = true) {
     const merged = Object.assign({}, init);
     merged.headers = dashAuthHeaders(init.headers || {});
     let resp = await fetch(url, merged);
-    if (retryOnAuth && resp && resp.status === 403) {
-        const entered = prompt('Dashboard API key required for this action. Enter key to retry:');
-        if (entered && entered.trim()) {
-            _saveDashboardApiKey(entered.trim());
-            merged.headers = dashAuthHeaders(init.headers || {});
-            resp = await fetch(url, merged);
+    if (!retryOnAuth || !resp || (resp.status !== 403 && resp.status !== 503)) {
+        return resp;
+    }
+    if (resp.status === 503) {
+        const detail = await _readErrorDetail(resp);
+        if (!String(detail).includes('DASHBOARD_API_KEY')) {
+            return resp;
         }
+    }
+    const entered = prompt('Dashboard API key required for this action. Enter key to retry:');
+    if (entered && entered.trim()) {
+        _saveDashboardApiKey(entered.trim());
+        merged.headers = dashAuthHeaders(init.headers || {});
+        resp = await fetch(url, merged);
     }
     return resp;
 }
