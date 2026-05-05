@@ -301,6 +301,8 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     # True = do not LONG into alt 1H bearish / SHORT into alt 1H bullish (reduces fading SOL headwind).
     enforce_alt_1h_alignment: true
+    rsi_buy_block_above: 70.0     # 2026-05-04: parity with ETH after n=98 attribution; cuts overbought BUY_YES (RSI>70)
+    rsi_sell_block_below: 30.0    # Mirror floor for BUY_NO oversold protection
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
@@ -394,7 +396,7 @@ strategies:
     # - btc: legacy BTC HTF decides side
     # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
     # - signal_first: market 15m signal can set side directly (test mode)
-    direction_source: signal_first
+    direction_source: hybrid
     # Paper only (requires trading.dry_run): set BEARISH to exercise ETH SHORT / BUY_NO path without waiting for BTC.
     btc_htf_bias_dry_run_override: null
     signal_15m_long_threshold: 0.55
@@ -421,7 +423,7 @@ strategies:
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
-    rsi_buy_block_above: 80.0     # Apr 26 paper: ETH BUYs above RSI 80 were complete directional misses
+    rsi_buy_block_above: 70.0     # 2026-05-04: tightened 80→70 — n=98 attribution: BUY_YES losers RSI median 64.6 vs winners 60.8; ETH 68.7 / HYPE 70.7 entries lost on 5m TS
     rsi_sell_block_below: 40.0    # Block BUY_NO when alt is already oversold and more likely to bounce
     btc_follow_1h_hist_min: 6.0   # was 8.0 — fewer false skips when BTC 1H is valid but hist magnitude modest
     btc_follow_1h_required: true           # false = bypass BTC 1H continuation gate entirely (escape hatch)
@@ -562,7 +564,9 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
-    enforce_alt_1h_alignment: true    # 2026-05-04: same macro lane as XRP — BUY_NO must have MACD bearish confirm when 1H BULLISH
+    enforce_alt_1h_alignment: false    # 2026-05-05: staged rollback — HYPE first (per attribution playbook); was true 2026-05-04
+    rsi_buy_block_above: 70.0     # 2026-05-04: HYPE 70.7 RSI BUY_YES on 5m TS lost −$2.60 in test_20260504_150648; n=98 attribution support
+    rsi_sell_block_below: 30.0
     require_btc_catalyst_5m: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
@@ -625,6 +629,8 @@ strategies:
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: true    # 2026-05-04: re-enabled — without gate, BUY_NO fires freely in XRP bull trend
     min_edge_buy_no: 0.10             # Require stronger edge for BUY_NO (was clearing at 0.085-0.095 on 5m, too loose)
+    rsi_buy_block_above: 70.0         # 2026-05-04: parity with SOL/ETH/HYPE after n=98 attribution
+    rsi_sell_block_below: 30.0
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
@@ -732,6 +738,8 @@ ai:
   # Maximum tokens per response. MiniMax-M2.5 uses ThinkingBlocks before JSON,
   # so needs ~1500 total (thinking ~800 + JSON ~200). Was 4000, which was wasteful.
   max_tokens: 1500
+  # Optional markdown+JSONL dump of validated marginal AI outputs (off by default).
+  structured_log: false
 
   # ── Token conservation ──
   # Cache AI results per market for this many seconds (avoids re-analyzing same market every cycle)
@@ -740,6 +748,16 @@ ai:
   cache_ttl_5m: 60    # 1 minute — keep below ~20% of market lifetime
   # Minimum gap between consecutive API calls (seconds) — prevents burst rate limit hits
   min_call_gap: 2.0
+  # Optional second-pass narrative call (Tier B). Log-only; does not change trade gates.
+  research_narrative:
+    enabled: false
+    max_calls_per_scan: 2
+    min_confidence_to_log: 0.60
+    log_jsonl: true
+    # Optional: force research calls through one provider/model while keeping
+    # the normal marginal tiebreaker on the default provider_chain.
+    provider_name: ""      # e.g. "minimax"
+    model_override: ""     # e.g. "MiniMax-M2.7"
 
 # ============================================
 # NOTIFICATIONS
