@@ -106,6 +106,16 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Review sessions
 
+### 2026-05-06 — 1h follow-up after Candidate A/B/C rollout
+
+- **Window reviewed:** post-note heartbeat check at `2026-05-06T04:54:21Z` through `2026-05-06T07:02:51Z`.
+- **Closed trades (`xrp_macro`):** 1
+- **Net PnL:** `-$4.95`
+- **Exit mix:** `updown_time_stop` = 1/1 (100%)
+- **BUY_YES vs BUY_NO (closed):** `1 / 0`
+- **Interpretation:** still too little new sample for another immediate patch, but this is a negative datapoint consistent with the prior loss mode concentration.
+- **Guardrail for next action:** if next ~6–10 XRP closes still show zero BUY_NO participation or `updown_time_stop` remains >50% of loss contribution, apply next XRP-only adjustment/revert path immediately.
+
 ### 2026-05-04 — Paper `test_20260504_034719`
 
 - **Headline:** Positive net **+$2.38** with **69.6%** WR but **payoff skew** — average loss (~-$3.15) larger than average win (~+$1.53); one **BUY_NO** loss (-$3.05) — sample tiny on the short side.

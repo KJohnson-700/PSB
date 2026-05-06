@@ -86,6 +86,13 @@ def test_eth_uses_its_own_ai_hold_config():
     assert strat.min_edge_5m_ai_override == 0.12
 
 
+def test_eth_can_disable_5m_1h_impulse_bypass():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["btc_follow_5m_allow_1h_impulse_bypass"] = False
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strat.btc_follow_5m_allow_1h_impulse_bypass is False
+
+
 def test_eth_oracle_basis_gate_uses_eth_config():
     cfg = _config()
     cfg["strategies"]["eth_macro"]["oracle_max_basis_bps"] = 10.0

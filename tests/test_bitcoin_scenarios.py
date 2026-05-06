@@ -64,6 +64,8 @@ def _make_config():
                 # Raised to 0.30 so the test TA (est_prob_up≈0.75) can produce signals at
                 # yes_price=0.50 (edge≈0.25) within the [0.46, 0.54] updown entry price band.
                 "max_edge_updown": 0.30,
+                "disable_buy_no_counter_trend": True,
+                "min_edge_buy_no": 0.11,
             },
         },
         "exposure": {
@@ -462,8 +464,8 @@ class TestBitcoinBearScenario:
             assert signals[0].direction == "DOWN"
         assert not any(s.action == "BUY_YES" for s in signals)
 
-    def test_bullish_rollover_reopens_countertrend_buy_no_at_lower_edge_floor(self):
-        """Bullish HTF with 4H rollover may still admit BUY_NO in the 0.08+ edge cohort."""
+    def test_bullish_rollover_blocks_countertrend_buy_no_when_guardrail_enabled(self):
+        """Bullish HTF with 4H rollover should not force a counter-trend BUY_NO when guardrail is on."""
         ta = _make_bullish_ta(80500)
         ta.macd_4h = MACDResult(
             macd_line=350,
@@ -529,9 +531,7 @@ class TestBitcoinBearScenario:
             self.strategy.btc_service, "get_full_analysis", return_value=ta
         ):
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
-        assert signals, "expected counter-trend BUY_NO to survive the lower edge floor"
-        assert signals[0].action == "BUY_NO"
-        assert signals[0].edge >= 0.08
+        assert signals == []
 
 
 class TestBitcoinChoppyScenario:

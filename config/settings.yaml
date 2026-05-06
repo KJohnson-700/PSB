@@ -78,8 +78,11 @@ trading:
     updown_exit_window_mins: 2.25 # Apply adverse check in the last ~2.25m (not only final 1.5m)
     updown_max_hold_mins: 18.0  # Safety valve for missing end_date; trim from 20m
     # Optional per-strategy overrides for updown exits.
-    # Used to tune XRP independently without changing BTC/SOL/ETH/HYPE behavior.
+    # Used to tune individual lanes without changing global BTC/SOL/ETH/HYPE/XRP behavior.
     updown_overrides:
+      eth_macro:
+        updown_stop_cents: 0.02
+        updown_exit_window_mins: 3.0
       xrp_macro:
         updown_stop_cents: 0.04
         updown_exit_window_mins: 1.5
@@ -221,9 +224,9 @@ strategies:
     disable_buy_yes: false
     # 2026-05-04: BTC grinding UP — counter-trend BUY_NO was 36% WR (-$14.60). Disable until
     # BTC regime shifts. Re-enable when 4H MACD crosses bearish and price rolls over.
-    disable_buy_no_counter_trend: false
+    disable_buy_no_counter_trend: true
     # Require stronger edge for BUY_NO entries (short in a bull/mixed market needs conviction).
-    min_edge_buy_no: 0.08
+    min_edge_buy_no: 0.11
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
     macro_event_guard_after_min: 30
@@ -458,7 +461,7 @@ strategies:
     # When BTC 1H continuation already passes, do not require sharp 5m/15m SPIKE/DRIFT (reduces starvation in grindy uptrends).
     btc_follow_stf_bypass_if_1h_ok: true
     # 5m only: when false, do not apply bypass_5m_impulse_btc_1h_ok (15m still uses btc_follow_stf_bypass_if_1h_ok above).
-    btc_follow_5m_allow_1h_impulse_bypass: true
+    btc_follow_5m_allow_1h_impulse_bypass: false
     # If strict 15m still fails, allow rising MACD histogram above min (no candle-direction requirement).
     btc_follow_15m_allow_macd_grind: true
     # BULLISH+LONG or BEARISH+SHORT: allow past strict BTC 5m/15m follow if 4H HTF already agrees (reduces starvation).
