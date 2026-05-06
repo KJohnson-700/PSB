@@ -77,6 +77,12 @@ trading:
     updown_stop_cents: 0.03      # Exit if YES moves ≥3¢ against entry (entry = YES) within the window
     updown_exit_window_mins: 2.25 # Apply adverse check in the last ~2.25m (not only final 1.5m)
     updown_max_hold_mins: 18.0  # Safety valve for missing end_date; trim from 20m
+    # Optional per-strategy overrides for updown exits.
+    # Used to tune XRP independently without changing BTC/SOL/ETH/HYPE behavior.
+    updown_overrides:
+      xrp_macro:
+        updown_stop_cents: 0.04
+        updown_exit_window_mins: 1.5
 
 data_collection:
   weather:
@@ -639,6 +645,7 @@ strategies:
     kelly_fraction: 0.18
     entry_price_min: 0.42
     entry_price_max: 0.58
+    entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
@@ -649,8 +656,8 @@ strategies:
     center_price_requires_catalyst: true
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: false
-    enforce_alt_1h_alignment: true    # 2026-05-04: re-enabled — without gate, BUY_NO fires freely in XRP bull trend
-    min_edge_buy_no: 0.10             # Keep XRP stricter edge floor; this pass only removes trend/RSI suppression.
+    enforce_alt_1h_alignment: false   # 2026-05-05 forensic fix (Candidate A): allow BUY_NO participation for XRP
+    min_edge_buy_no: 0.08             # 2026-05-05 forensic fix (Candidate A): reduce extra BUY_NO edge floor
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false

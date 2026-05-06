@@ -2180,6 +2180,10 @@ class SolMacroStrategy:
             if is_updown:
                 _yp_low = self.entry_price_min
                 _yp_high = self.entry_price_max
+                if action == "BUY_YES" and not is_5m:
+                    _yp_high = float(
+                        self.config.get("entry_price_max_15m_buy_yes", _yp_high)
+                    )
                 if action == "BUY_YES":
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 elif action == "BUY_NO":
