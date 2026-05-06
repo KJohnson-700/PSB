@@ -439,6 +439,7 @@ class PolyBot:
                 mgr = getattr(self, attr, None)
                 if mgr is not None:
                     mgr.reload_from_config(exp)
+        self._log_effective_sizing_config(context="config_update")
 
     def _rebuild_runtime_config_dependents(self) -> None:
         """Refresh live objects that cache config-derived fields at init time."""
@@ -497,6 +498,25 @@ class PolyBot:
             self.ai_agent,
         )
         self._wire_strategy_callbacks()
+        self._log_effective_sizing_config(context="runtime_rebuild")
+
+    def _log_effective_sizing_config(self, context: str = "runtime") -> None:
+        """Log effective sizing knobs so runtime behavior is auditable from logs."""
+        trading_cfg = self.config.get("trading", {}) or {}
+        exposure_cfg = self.config.get("exposure", {}) or {}
+        logging.info(
+            "Sizing config (%s): trading[min=$%.2f max=$%.2f kelly=%.4f max_exposure_per_trade=%.4f] "
+            "exposure[full=$%.2f moderate=$%.2f minimal=$%.2f min_trade_usd=$%.2f]",
+            context,
+            float(trading_cfg.get("default_position_size", 10) or 10),
+            float(trading_cfg.get("max_position_size", 15) or 15),
+            float(trading_cfg.get("kelly_fraction", 0.25) or 0.25),
+            float(trading_cfg.get("max_exposure_per_trade", 0.05) or 0.05),
+            float(exposure_cfg.get("full_size", 15.0) or 15.0),
+            float(exposure_cfg.get("moderate_size", 13.0) or 13.0),
+            float(exposure_cfg.get("minimal_size", 10.0) or 10.0),
+            float(exposure_cfg.get("min_trade_usd", 0.0) or 0.0),
+        )
 
     def _wire_strategy_callbacks(self) -> None:
         cb = getattr(self, "_dead_zone_skip_callback", None)

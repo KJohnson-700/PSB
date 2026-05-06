@@ -349,12 +349,9 @@
             <div id="ops-ai-pipeline" class="ops-mini-body"></div>
         </div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;">
-            <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
-                Fresh slate
-            </label>
             <button class="btn-sm btn-green" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="btn-sm btn-red" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
+            <button class="btn-sm" id="fullscreen-btn" onclick="toggleFullscreen()">Enter Fullscreen</button>
             <button class="btn-sm ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh dashboard</button>
             <button class="btn-sm ab" onclick="runTests()">Run Unit Tests</button>
             <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
@@ -381,7 +378,7 @@
         </div>
         <div id="positions-section" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="togglePositions()">
-                <h3 style="margin-bottom:0;">Active Positions <span id="positions-count" class="badge badge-blue" style="margin-left:6px;font-size:0.7rem;">0</span><span id="fresh-slate-hint" style="display:none;margin-left:8px;font-size:0.7rem;color:var(--cyan);font-weight:normal;">(table shows real data)</span></h3>
+                <h3 style="margin-bottom:0;">Active Positions <span id="positions-count" class="badge badge-blue" style="margin-left:6px;font-size:0.7rem;">0</span></h3>
                 <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9660;</span>
             </div>
             <div id="positions-body-wrap" style="margin-top:6px;">
@@ -1025,8 +1022,8 @@
                 <div class="cfg-group">
                     <h3>Trading</h3>
                     <div class="cfg-field"><label>Bankroll</label><input type="number" id="cfg-backtest-initial_bankroll" step="100" value="10000"></div>
-                    <div class="cfg-field"><label>Fallback Min Size ($)</label><input type="number" id="cfg-trading-default_position_size" step="1" min="1" value="3"></div>
-                    <div class="cfg-field"><label>Fallback Max Size ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="5"></div>
+                    <div class="cfg-field"><label>Fallback Min Size ($)</label><input type="number" id="cfg-trading-default_position_size" step="1" min="1" value="10"></div>
+                    <div class="cfg-field"><label>Fallback Max Size ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="15"></div>
                     <div class="cfg-field"><label>Max Days to Resolution</label><input type="number" id="cfg-trading-max_days_to_resolution" step="1" min="1" max="90" value="14" title="Skip markets resolving > N days out (7-14 recommended)"></div>
                     <div class="cfg-field"><label>Min Hours to Resolution</label><input type="number" id="cfg-trading-min_hours_to_resolution" step="1" min="0" value="24" title="Skip markets resolving in < N hours"></div>
                     <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-trading-kelly_fraction" step="0.05" value="0.25"></div>
@@ -1077,9 +1074,9 @@
                 </div>
                 <div class="cfg-group">
                     <h3>Exposure Scaling</h3>
-                    <div class="cfg-field"><label>Full Size ($)</label><input type="number" id="cfg-exposure-full_size" step="0.5" value="5.0"></div>
-                    <div class="cfg-field"><label>Moderate ($)</label><input type="number" id="cfg-exposure-moderate_size" step="0.5" value="3.0"></div>
-                    <div class="cfg-field"><label>Minimal ($)</label><input type="number" id="cfg-exposure-minimal_size" step="0.5" value="1.0"></div>
+                    <div class="cfg-field"><label>Full Size ($)</label><input type="number" id="cfg-exposure-full_size" step="0.5" value="15.0"></div>
+                    <div class="cfg-field"><label>Moderate ($)</label><input type="number" id="cfg-exposure-moderate_size" step="0.5" value="10.0"></div>
+                    <div class="cfg-field"><label>Minimal ($)</label><input type="number" id="cfg-exposure-minimal_size" step="0.5" value="10.0"></div>
                     <div class="cfg-field"><label>Max Losses</label><input type="number" id="cfg-exposure-max_consecutive_losses" step="1" value="3"></div>
                     <div class="cfg-field"><label>Pause Cycles</label><input type="number" id="cfg-exposure-pause_cycles" step="1" value="2"></div>
                     <div class="cfg-field" style="grid-column:1/-1;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="cfg-exposure-loss_kill_switch_enabled"> 3-loss streak pauses that lane (exposure kill switch)</label></div>
@@ -1549,19 +1546,6 @@ async function fetchAll() {
     _dashStamp();
 }
 
-function isFreshSlate() {
-    // Fresh slate mode removed — always show live data
-    return false;
-}
-// Clear any stale fresh-slate flag left over from old sessions
-try { localStorage.removeItem('dashboard_fresh_slate'); } catch(e) {}
-
-function toggleFreshSlate() {
-    const cb = document.getElementById('fresh-slate-toggle');
-    try { localStorage.setItem('dashboard_fresh_slate', cb.checked ? '1' : '0'); } catch(e) {}
-    fetchAll();
-}
-
 /** Command Center auxiliary lines: scan skip digest + AI pipeline counters (partial updates from SSE ok). */
 function updateCommandCenterDigests(d) {
     if (!d || typeof d !== 'object') return;
@@ -1681,7 +1665,6 @@ function updateStatusBadgesAndKill(d) {
     const mode = d.dry_run ? 'Paper' : 'Live';
     const modeClass = d.dry_run ? 'badge-yellow' : 'badge-green';
     let run = d.running ? '<span class="badge badge-green">Running</span>' : '<span class="badge badge-red">Stopped</span>';
-    if (isFreshSlate()) run += ' <span class="badge" style="background:var(--cyan);color:#000;">Fresh slate</span>';
     const kill = d.kill_switch_active ? '<span class="badge badge-red">KILL SWITCH ON</span>' : '';
     const canTrade = d.can_trade ? '<span class="badge badge-green">Can Trade</span>' : `<span class="badge badge-red">Blocked</span>`;
     const ai = d.ai || {};
@@ -1767,11 +1750,6 @@ function applySSESnapshot(raw) {
 }
 
 function updateStatus(d) {
-    // Restore fresh slate checkbox state
-    const freshSlateCb = document.getElementById('fresh-slate-toggle');
-    if (freshSlateCb) freshSlateCb.checked = isFreshSlate();
-    const freshSlate = isFreshSlate();
-
     updateStatusBadgesAndKill(d);
     applyHeroMetrics(d);
     updateCommandCenterDigests(d);
@@ -1799,7 +1777,6 @@ function updateStatus(d) {
         posCount.textContent = '0';
         posBody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:12px;">No active positions</td></tr>';
     }
-    document.getElementById('fresh-slate-hint').style.display = (freshSlate && positions.length) ? 'inline' : 'none';
 }
 
 async function toggleKillSwitch() {
@@ -3077,12 +3054,42 @@ async function saveConfig() {
             const key = parts[parts.length - 1];
             obj[key] = el.type === 'checkbox' ? el.checked : readConfigNumber(el);
         });
+        const minTrade = Number(updates?.trading?.default_position_size ?? NaN);
+        const maxTrade = Number(updates?.trading?.max_position_size ?? NaN);
+        const minTier = Number(updates?.exposure?.minimal_size ?? NaN);
+        if (Number.isFinite(minTrade) && Number.isFinite(maxTrade) && minTrade > maxTrade) {
+            throw new Error('trading.default_position_size cannot be greater than trading.max_position_size');
+        }
+        if (Number.isFinite(minTrade) && Number.isFinite(minTier) && minTier < minTrade) {
+            throw new Error('exposure.minimal_size cannot be lower than trading.default_position_size');
+        }
         const r = await fetch('/api/config', {method: 'POST', headers: dashAuthHeaders({'Content-Type': 'application/json'}), body: JSON.stringify(updates)});
         const d = await r.json();
         statusEl.textContent = r.ok ? 'Saved!' : `Error: ${d.detail}`;
         statusEl.style.color = r.ok ? 'var(--green)' : 'var(--red)';
         if (r.ok) setTimeout(() => statusEl.textContent = '', 3000);
     } catch (e) { statusEl.textContent = 'Save failed: ' + e; statusEl.style.color = 'var(--red)'; }
+}
+
+function updateFullscreenButtonState() {
+    const btn = document.getElementById('fullscreen-btn');
+    if (!btn) return;
+    btn.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Enter Fullscreen';
+}
+
+async function toggleFullscreen() {
+    const statusEl = document.getElementById('process-status');
+    try {
+        if (document.fullscreenElement) {
+            await document.exitFullscreen();
+        } else {
+            await document.documentElement.requestFullscreen();
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = `Fullscreen unavailable: ${e && e.message ? e.message : e}`;
+    } finally {
+        updateFullscreenButtonState();
+    }
 }
 
 // ─── EXPOSURE MANAGER ────────────────────────────────────────
@@ -4279,6 +4286,8 @@ async function refreshDashboardData() {
 
 fetchAll();
 loadConfig();
+updateFullscreenButtonState();
+document.addEventListener('fullscreenchange', updateFullscreenButtonState);
 if (_currentMainView() === 'journal') {
     loadPnLChart();
     loadAISummary();

@@ -727,14 +727,6 @@ class ETHMacroStrategy(SolMacroStrategy):
                 )
                 _impulse_gate_ok = btc_impulse > 0
                 if (
-                    self.btc_follow_stf_bypass_if_1h_ok
-                    and self.btc_follow_5m_allow_1h_impulse_bypass
-                    and not _impulse_gate_ok
-                    and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
-                ):
-                    _impulse_gate_ok = True
-                    btc_reasons.append("bypass_5m_impulse_btc_1h_ok")
-                if (
                     self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side)
                     and not _impulse_gate_ok
                 ):

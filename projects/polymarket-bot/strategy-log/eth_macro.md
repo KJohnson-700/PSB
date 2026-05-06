@@ -12,6 +12,42 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-06 — ETH 5m logic correction: remove 1H-only impulse bypass; restore 15m math
+
+- **What changed:** Removed the ETH 5m `bypass_5m_impulse_btc_1h_ok` admission path in [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), so ETH 5m now requires real short-window BTC impulse or the separate macro-agreement bypass path. At the same time, the same-day experimental ETH 15m math tweak was reverted, restoring the prior 15m score and confidence behavior.
+- **Why:** Recent ETH 5m losses clustered around entries tagged `bypass_5m_impulse_btc_1h_ok` with `BTC5m=NONE`, `side_src=hybrid_fallback`, and weak `ETH5m green+rising` confirmation. That is a concrete failing decision path. The earlier 15m tweak targeted the wrong lane for the current issue and was therefore removed.
+- **Hypothesis:** Removing the 1H-only 5m bypass should cut the low-quality ETH 5m fallback longs that were entering without real BTC short-window confirmation, while leaving ETH 15m unchanged from its prior behavior.
+- **Expected outcome:** ETH 5m should show fewer `BTC5m=NONE` fallback entries and fewer losses from the `bypass_5m_impulse_btc_1h_ok` pattern. ETH 15m behavior should match the pre-tweak logic.
+- **Actual outcome:** `pending` (need post-change ETH sample, minimum ~15 closed trades).
+- **Status:** `pending`
+
+### 2026-05-06 — ETH 15m logic correction: weaken grind credit, separate confidence, reduce BTC HTF bump
+
+- **What changed:** Adjusted [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) 15m decision math instead of suppressing trades. `ETH15m green+rising` / `red+falling` score was reduced from `0.05` to `0.04`; the 15m BTC HTF probability bump was reduced from `0.08` to `0.05`; and 15m confidence now comes from a separate helper that gives higher confidence to real crossovers than to weaker grind states.
+- **Why:** ETH forensic review showed many losing 15m trades in the `0.10–0.12` edge band were admitted on weak reasons like `15m hist rising` / `15m MACD above signal`, while confidence was still printed around `0.61+` because it was derived almost directly from the same score constants. That made middling confirmation states look stronger than they were.
+- **Hypothesis:** Lowering weak 15m follow-through credit and reducing the unconditional BTC HTF push should shrink overstated ETH 15m edge without harming the cleaner crossover-driven setups.
+- **Expected outcome:** ETH 15m should emit fewer inflated `0.10–0.12`-style edges from weak grind states, and confidence should better separate true crossovers from softer histogram-follow entries.
+- **Actual outcome:** `pending` (need post-change ETH sample, minimum ~15 closed trades).
+- **Status:** `pending`
+
+### 2026-05-06 — Reverted ETH guardrail hotfix; switching to root-cause logic audit
+
+- **What changed:** Reverted the same-day ETH-only temporary guardrails that disabled `BUY_NO`, raised a hard 15m edge floor, and imposed a confidence floor. The codebase is back to its pre-guardrail ETH admission behavior while a root-cause logic/settings audit is performed.
+- **Why:** The operator explicitly rejected trade-limiting as the intervention. The stated problem is ETH logic/settings quality, not Kelly sizing and not broad trade frequency. Containment without proving the decision logic fault was the wrong move.
+- **Hypothesis:** A proper ETH forensic review should isolate the faulty score/gate/settings path more cleanly than hard-coded trade suppression.
+- **Expected outcome:** ETH remains behaviorally unchanged until the logic audit identifies a targeted fix backed by evidence.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-05-06 — ETH guardrails: disable short lane, raise 15m floor, block low-confidence entries
+
+- **What changed:** Added ETH-only guardrails in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) and [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py): `disable_buy_no: true`, `min_edge_15m_guard: 0.12`, and `min_confidence_floor: 0.55`. Strategy logic now skips ETH `BUY_NO`, enforces a 15m effective min edge floor of `0.12`, and rejects ETH entries whose pre-sizing confidence stays below `0.55`.
+- **Why:** ETH audit on closed journal exits showed the problem is not broad frequency. The worst buckets were low-confidence ETH (`confidence < 0.55`, net **-$31.07**) and 15m ETH in the `0.10–0.12` edge band (`n=25`, net **-$32.40**). Historical ETH short exposure was also materially poor, and current live ETH shorts route through `BUY_NO`.
+- **Hypothesis:** Removing ETH shorts for now and cutting the specific low-quality 15m / low-confidence buckets should improve ETH expectancy without changing Kelly sizing or reducing healthy higher-edge ETH longs.
+- **Expected outcome:** ETH should show fewer marginal 15m admissions, no new `BUY_NO` entries, and a cleaner post-change sample concentrated in stronger-confidence, stronger-edge long setups.
+- **Actual outcome:** `pending` (need post-change ETH sample, minimum ~15 closed trades).
+- **Status:** `pending`
+
 ### 2026-05-06 — ETH 5m admission hardening: disable 1H-only impulse bypass
 
 - **What changed:** Disabled [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.btc_follow_5m_allow_1h_impulse_bypass` (`true` → `false`). ETH 15m behavior and ETH side-resolution mode remain unchanged.
