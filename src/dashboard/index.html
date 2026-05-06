@@ -62,6 +62,7 @@
 
         /* ── Status hero / KPI grid ── */
         .status-hero{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:8px 0;min-width:0}
+        #status-hero{gap:10px;margin:10px 0 8px}
         .hero-item{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
             border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;
@@ -70,6 +71,8 @@
         .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.6vw,22px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px;min-width:0;overflow:hidden;text-overflow:ellipsis}
         .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        #status-hero .hero-item{padding:14px 16px;min-height:98px}
+        #status-hero .hero-item .hero-val{font-size:clamp(26px,2.6vw,42px);line-height:1.04}
         .crypto-hero-six{grid-template-columns:repeat(6,minmax(0,1fr))}
         .crypto-meta-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
         .crypto-meta-four>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -117,7 +120,33 @@
 
         /* ── Controls row ── */
         .status-bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-        .controls{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;align-items:center}
+        .controls{display:flex;gap:8px 10px;margin:9px 0;flex-wrap:wrap;align-items:center}
+        #command-center-controls .btn-sm{padding:6px 11px;font-size:11px}
+        .ops-mini{
+            border:1px solid var(--border);
+            border-radius:4px;
+            background:rgba(255,255,255,.02);
+            margin:4px 0 10px;
+            padding:8px 10px;
+        }
+        .ops-mini-head{
+            font-family:'IBM Plex Mono',monospace;
+            font-size:10px;
+            letter-spacing:.12em;
+            text-transform:uppercase;
+            color:var(--tm);
+            margin-bottom:5px;
+        }
+        .ops-mini-body{
+            font-size:0.74rem;
+            color:var(--text-muted);
+            font-family:'IBM Plex Mono',monospace;
+            max-height:58px;
+            overflow-y:auto;
+            overflow-x:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
 
         /* ── Tables ── */
         table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
@@ -245,9 +274,11 @@
             .crypto-grid.two,.crypto-grid.three,.equal-card-grid.two{grid-template-columns:1fr}
             .crypto-hero-six{grid-template-columns:repeat(2,minmax(0,1fr))}
             .signal-gates-grid{grid-template-columns:1fr}
+            #status-hero{grid-template-columns:repeat(2,minmax(0,1fr))}
         }
         @media (max-width:640px){
             .crypto-hero-six,.crypto-meta-four{grid-template-columns:1fr}
+            #status-hero{grid-template-columns:1fr}
         }
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
@@ -309,9 +340,15 @@
             <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
-        <div id="ops-skip-digest" style="font-size:0.7rem;color:var(--text-muted);margin-top:6px;font-family:'IBM Plex Mono',monospace;" title="scan_skip_digest from bot — top reasons markets did not become signals"></div>
-        <div id="ops-ai-pipeline" style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;font-family:'IBM Plex Mono',monospace;" title="ai_pipeline from /api/status — cumulative AI scan counters (marginal + optional research)"></div>
-        <div class="controls" style="padding:8px 0 4px;">
+        <div class="ops-mini" title="scan_skip_digest from bot — top reasons markets did not become signals">
+            <div class="ops-mini-head">Top Scan Skips</div>
+            <div id="ops-skip-digest" class="ops-mini-body"></div>
+        </div>
+        <div class="ops-mini" title="ai_pipeline from /api/status — cumulative AI scan counters (marginal + optional research)">
+            <div class="ops-mini-head">AI Pipeline Counters</div>
+            <div id="ops-ai-pipeline" class="ops-mini-body"></div>
+        </div>
+        <div class="controls" id="command-center-controls" style="padding:8px 0 4px;">
             <label style="font-family:’IBM Plex Mono’,monospace;font-size:11px;color:var(--tm);display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" id="fresh-slate-toggle" onchange="toggleFreshSlate()">
                 Fresh slate
@@ -2185,6 +2222,7 @@ async function loadLivePerformance() {
 function updateBacktest(d) {
     const el = document.getElementById('backtest-reports');
     const allReports = d.reports || [];
+    const latestCompleted = d.latest_completed || d.latest || null;
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     // Get the single latest report for a specific symbol+window combo.
@@ -2258,6 +2296,37 @@ function updateBacktest(d) {
 
     // ── Build HTML ───────────────────────────────────────────────────────────
     let html = '';
+    if (latestCompleted) {
+        function formatAge(ts) {
+            if (!ts) return '';
+            const t = new Date(ts);
+            if (Number.isNaN(t.getTime())) return '';
+            const ageMs = Date.now() - t.getTime();
+            if (ageMs < 0) return '';
+            const mins = Math.floor(ageMs / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            const days = Math.floor(hrs / 24);
+            return `${days}d ago`;
+        }
+        const lcSym = String(latestCompleted.symbol || '').toUpperCase();
+        const lcWin = Number(latestCompleted.window_minutes);
+        const lcRunAt = latestCompleted.run_at
+            ? latestCompleted.run_at.replace('T', ' ').slice(0, 19)
+            : '';
+        const lcDate = lcRunAt || (latestCompleted.filename || '').replace('.json', '');
+        const lcAge = formatAge(latestCompleted.run_at);
+        const lcLabel = (lcSym && Number.isFinite(lcWin) && lcWin > 0)
+            ? `${lcSym} ${lcWin}m`
+            : (latestCompleted.report_type || 'backtest');
+        html += `<div style="margin:0 0 12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);font-size:0.82rem;">
+            <span style="color:var(--text-muted);">Latest completed backtest:</span>
+            <span style="font-weight:700;"> ${lcLabel}</span>
+            <span style="color:var(--text-muted);"> — ${lcDate}${lcAge ? ` (${lcAge})` : ''}</span>
+        </div>`;
+    }
 
     // ── Section 1: Bitcoin Strategy ──────────────────────────────────────────
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
