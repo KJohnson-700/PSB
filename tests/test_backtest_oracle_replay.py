@@ -93,6 +93,19 @@ def test_oracle_loader_resolves_eth_feed():
     assert spec.address.startswith("0x")
 
 
+def test_cache_covers_accepts_last_tick_slightly_before_end_of_day():
+    """Avoid false 'not covered' when last Chainlink round is seconds before end_ts."""
+    start_ts = pd.Timestamp("2026-04-09 00:00:00", tz="UTC")
+    end_ts = pd.Timestamp("2026-04-20 23:59:59", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "updated_at": pd.to_datetime(
+                ["2026-04-08 20:00:00Z", "2026-04-20 23:59:44Z"], utc=True
+            ),
+        }
+    )
+    assert OracleHistoryLoader._cache_covers(df, start_ts, end_ts) is True
+
 def test_eth_backtest_skips_when_oracle_basis_exceeds_cap():
     engine = UpdownBacktestEngine(config=_base_config(), initial_bankroll=500.0)
     data = {"1m": _ohlcv_1m(), "5m": _blank_df(), "15m": _blank_df(), "1h": _blank_df()}

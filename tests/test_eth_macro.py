@@ -52,10 +52,32 @@ def test_eth_btc_follow_5m_impulse_scores_only_real_btc_impulse():
     assert score == 0.0
 
 
-def test_eth_rsi_blocks_buy_no_when_oversold():
+def test_eth_rsi_soft_penalty_buy_no_when_oversold_not_hard_block():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
-    assert strat._rsi_blocks_entry("BUY_NO", 35.0) is True
-    assert strat._rsi_blocks_entry("BUY_NO", 45.0) is False
+    hard, delta = strat._resolve_rsi_gate("BUY_NO", 35.0)
+    assert hard is False
+    assert delta > 0
+    hard2, delta2 = strat._resolve_rsi_gate("BUY_NO", 45.0)
+    assert hard2 is False
+    assert delta2 == 0.0
+
+
+def test_eth_rsi_hard_gate_when_enabled():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["rsi_hard_gate_enabled"] = True
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    hard, delta = strat._resolve_rsi_gate("BUY_NO", 35.0)
+    assert hard is True
+    assert delta == 0.0
+
+
+def test_eth_buy_no_rsi_penalty_can_be_disabled():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["rsi_soft_penalty_buy_no"] = 0.0
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    hard, delta = strat._resolve_rsi_gate("BUY_NO", 35.0)
+    assert hard is False
+    assert delta == 0.0
 
 
 def test_eth_uses_its_own_ai_hold_config():

@@ -1,0 +1,547 @@
+{
+  "meta": {
+    "label": "post_may4_150648",
+    "repo_relative": "data/paper_trades",
+    "closed_trades": 22,
+    "sessions_included": [
+      "test_20260503_164708",
+      "test_20260503_194556",
+      "test_20260503_223335",
+      "test_20260504_004812",
+      "test_20260504_025753",
+      "test_20260504_034719",
+      "test_20260504_150648"
+    ],
+    "filters": {
+      "since_iso": null,
+      "from_first_line": "data/paper_trades/test_20260504_150648/entries.jsonl",
+      "session_prefix": null,
+      "after_mtime": "2026-05-04",
+      "explicit_sessions": null
+    }
+  },
+  "by_strategy_action_exit": {
+    "bitcoin::BUY_YES::take_profit": {
+      "n": 1,
+      "wins": 1,
+      "win_rate": 1.0,
+      "pnl": 2.3,
+      "avg_pnl": 2.3
+    },
+    "eth_macro::BUY_YES::take_profit": {
+      "n": 3,
+      "wins": 3,
+      "win_rate": 1.0,
+      "pnl": 3.9,
+      "avg_pnl": 1.3
+    },
+    "eth_macro::BUY_YES::updown_time_stop": {
+      "n": 5,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -14.425,
+      "avg_pnl": -2.885
+    },
+    "hype_macro::BUY_YES::take_profit": {
+      "n": 1,
+      "wins": 1,
+      "win_rate": 1.0,
+      "pnl": 1.85,
+      "avg_pnl": 1.85
+    },
+    "hype_macro::BUY_YES::updown_expired": {
+      "n": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -4.5,
+      "avg_pnl": -4.5
+    },
+    "hype_macro::BUY_YES::updown_time_stop": {
+      "n": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -7.25,
+      "avg_pnl": -3.625
+    },
+    "sol_macro::BUY_YES::RESOLVED:NO (real)": {
+      "n": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.375,
+      "avg_pnl": -2.375
+    },
+    "sol_macro::BUY_YES::RESOLVED:YES (real)": {
+      "n": 1,
+      "wins": 1,
+      "win_rate": 1.0,
+      "pnl": 2.875,
+      "avg_pnl": 2.875
+    },
+    "sol_macro::BUY_YES::take_profit": {
+      "n": 4,
+      "wins": 4,
+      "win_rate": 1.0,
+      "pnl": 5.425,
+      "avg_pnl": 1.3563
+    },
+    "sol_macro::BUY_YES::updown_time_stop": {
+      "n": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -4.275,
+      "avg_pnl": -2.1375
+    },
+    "xrp_macro::BUY_YES::RESOLVED:NO (real)": {
+      "n": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.8,
+      "avg_pnl": -2.8
+    }
+  },
+  "by_strategy": {
+    "bitcoin": {
+      "n": 1,
+      "wins": 1,
+      "win_rate": 1.0,
+      "pnl": 2.3,
+      "avg_pnl": 2.3
+    },
+    "eth_macro": {
+      "n": 8,
+      "wins": 3,
+      "win_rate": 0.375,
+      "pnl": -10.525,
+      "avg_pnl": -1.3156
+    },
+    "hype_macro": {
+      "n": 4,
+      "wins": 1,
+      "win_rate": 0.25,
+      "pnl": -9.9,
+      "avg_pnl": -2.475
+    },
+    "sol_macro": {
+      "n": 8,
+      "wins": 5,
+      "win_rate": 0.625,
+      "pnl": 1.65,
+      "avg_pnl": 0.2062
+    },
+    "xrp_macro": {
+      "n": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.8,
+      "avg_pnl": -2.8
+    }
+  },
+  "by_exit_reason": {
+    "RESOLVED:NO (real)": {
+      "n": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -5.175,
+      "avg_pnl": -2.5875
+    },
+    "RESOLVED:YES (real)": {
+      "n": 1,
+      "wins": 1,
+      "win_rate": 1.0,
+      "pnl": 2.875,
+      "avg_pnl": 2.875
+    },
+    "take_profit": {
+      "n": 9,
+      "wins": 9,
+      "win_rate": 1.0,
+      "pnl": 13.475,
+      "avg_pnl": 1.4972
+    },
+    "updown_expired": {
+      "n": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -4.5,
+      "avg_pnl": -4.5
+    },
+    "updown_time_stop": {
+      "n": 9,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -25.95,
+      "avg_pnl": -2.8833
+    }
+  },
+  "eth_side_src_exit": {
+    "signal_first_fallback::take_profit": {
+      "n": 3,
+      "wins": 3,
+      "win_rate": 1.0,
+      "pnl": 3.9,
+      "avg_pnl": 1.3
+    },
+    "signal_first_fallback::updown_time_stop": {
+      "n": 5,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -14.425,
+      "avg_pnl": -2.885
+    }
+  },
+  "counter_trend_btc_bitcoin": null,
+  "closed_sample": [
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777932465.677314",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": 0.875,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-04T22:08:34.136597+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777932520.534005",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": 1.4,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-04T22:11:34.180773+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777933037.840098",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": -1.925,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-04T22:18:02.993185+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777933602.279812",
+      "strategy": "hype_macro",
+      "action": "BUY_YES",
+      "pnl": -2.6,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-04T22:28:10.267627+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777933777.900671",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": -2.375,
+      "exit_reason": "RESOLVED:NO (real)",
+      "exit_ts": "2026-05-04T22:37:12.286823+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777933978.878152",
+      "strategy": "xrp_macro",
+      "action": "BUY_YES",
+      "pnl": -2.8,
+      "exit_reason": "RESOLVED:NO (real)",
+      "exit_ts": "2026-05-04T22:51:02.385186+00:00",
+      "window_size": "15m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": 0.0147
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777939719.187217",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": -4.3,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T00:09:38.075382+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": true,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777940474.947543",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": -3.7,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T00:23:03.349991+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": true,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777941348.52603",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": -1.125,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T00:39:38.294752+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777941338.456106",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": 2.875,
+      "exit_reason": "RESOLVED:YES (real)",
+      "exit_ts": "2026-05-05T00:46:44.309247+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": 0.0254
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777941975.003095",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": 1.05,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T00:47:07.615026+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777942163.931558",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": 1.3,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T00:50:34.564239+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777942177.033331",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": 1.7,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T00:50:35.758743+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777942518.246067",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": -0.8,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T00:58:18.576666+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777942806.366861",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": -2.35,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T01:03:34.616668+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777942816.189991",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": -4.5,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T01:03:35.929447+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": true,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777943357.809439",
+      "strategy": "bitcoin",
+      "action": "BUY_YES",
+      "pnl": 2.3,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T01:10:55.532912+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": null,
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777943409.132884",
+      "strategy": "eth_macro",
+      "action": "BUY_YES",
+      "pnl": 1.15,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T01:10:56.714352+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "signal_first_fallback",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777943560.170576",
+      "strategy": "sol_macro",
+      "action": "BUY_YES",
+      "pnl": 1.85,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T01:13:40.631467+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777943886.984935",
+      "strategy": "hype_macro",
+      "action": "BUY_YES",
+      "pnl": 1.85,
+      "exit_reason": "take_profit",
+      "exit_ts": "2026-05-05T01:18:40.293570+00:00",
+      "window_size": "15m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": 0.1552
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777944388.814184",
+      "strategy": "hype_macro",
+      "action": "BUY_YES",
+      "pnl": -4.5,
+      "exit_reason": "updown_expired",
+      "exit_ts": "2026-05-05T01:30:08.546644+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    },
+    {
+      "session_id": "test_20260504_150648",
+      "trade_id": "dry_1777944663.586057",
+      "strategy": "hype_macro",
+      "action": "BUY_YES",
+      "pnl": -4.65,
+      "exit_reason": "updown_time_stop",
+      "exit_ts": "2026-05-05T01:33:06.980617+00:00",
+      "window_size": "5m",
+      "btc_1h_regime": "BULL",
+      "side_src": "",
+      "counter_trend_btc": false,
+      "btc_5m_against_or_sig": false,
+      "bypass_5m_impulse": false,
+      "lag_magnitude": null
+    }
+  ]
+}

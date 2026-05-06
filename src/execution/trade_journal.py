@@ -465,6 +465,63 @@ class TradeJournal:
         )
         self._append_entry(entry)
 
+    def log_buy_no_skip(
+        self,
+        *,
+        market_id: str,
+        market_question: str,
+        strategy: str,
+        bankroll: float,
+        skip_reason: str,
+        window_size: str,
+        yes_price: float,
+        edge: float,
+        effective_min_edge: float,
+        rsi: float,
+        htf_bias: str,
+        signal_reason: str,
+        alt_1h_trend: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist a post-side-selection BUY_NO suppression event."""
+        payload: Dict[str, Any] = {
+            "strategy": strategy,
+            "market_id": market_id,
+            "window_size": window_size,
+            "skip_reason": skip_reason,
+            "yes_price": float(yes_price),
+            "edge": float(edge),
+            "effective_min_edge": float(effective_min_edge),
+            "rsi": float(rsi),
+            "htf_bias": htf_bias,
+            "signal_reason": signal_reason,
+        }
+        if alt_1h_trend:
+            payload["alt_1h_trend"] = alt_1h_trend
+        if extra:
+            payload.update(extra)
+        entry = JournalEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            event="BUY_NO_SKIP",
+            trade_id="",
+            market_id=market_id,
+            market_question=market_question,
+            strategy=strategy,
+            action="BUY_NO",
+            side="",
+            outcome="NO",
+            size=0,
+            entry_price=max(0.0, min(1.0, 1.0 - float(yes_price))),
+            current_price=max(0.0, min(1.0, 1.0 - float(yes_price))),
+            pnl=0,
+            bankroll=bankroll,
+            edge=float(edge),
+            confidence=0.0,
+            reason=skip_reason,
+            extra=payload,
+        )
+        self._append_entry(entry)
+
     def log_dead_zone_skip(
         self,
         market_id: str,
@@ -1025,6 +1082,25 @@ class TradeJournal:
 
         # Rebuild closed trades and counters from entries log
         if self._entries_file.exists():
+            # First pass: ENTRY timestamps by trade_id (EXIT replay alone omits opened_at).
+            entry_opened_at: Dict[str, str] = {}
+            try:
+                with open(self._entries_file, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            e = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if e.get("event") == "ENTRY":
+                            tid = e.get("trade_id")
+                            if tid:
+                                entry_opened_at[tid] = str(e.get("timestamp") or "")
+            except OSError:
+                entry_opened_at = {}
+
             exits_count = 0
             rpnl = 0.0
             closed = []
@@ -1033,7 +1109,7 @@ class TradeJournal:
             # them from the summary so the dashboard shows accurate numbers even
             # when resuming a session that was running on the old code.
             _MAX_PLAUSIBLE_PNL = 200.0
-            with open(self._entries_file) as f:
+            with open(self._entries_file, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -1046,6 +1122,7 @@ class TradeJournal:
                         pnl = e.get("pnl", 0) or 0
                         ep  = e.get("entry_price", 0) or 0
                         cp  = e.get("current_price", 0) or 0
+                        tid = e.get("trade_id")
                         # Phantom-exit detection — two complementary checks:
                         # 1. Token-ordering mismatch: scanner returned the NO token
                         #    price (≈ 1 - YES_price) as the YES price.  The result is
@@ -1066,7 +1143,7 @@ class TradeJournal:
                         rpnl += pnl
                         closed.append(
                             {
-                                "trade_id": e.get("trade_id"),
+                                "trade_id": tid,
                                 "market_id": e.get("market_id"),
                                 "market_question": e.get("market_question"),
                                 "strategy": e.get("strategy"),
@@ -1076,8 +1153,10 @@ class TradeJournal:
                                 "size": e.get("size"),
                                 "entry_price": e.get("entry_price"),
                                 "exit_price": e.get("current_price"),
+                                "current_price": e.get("current_price"),
                                 "pnl": e.get("pnl"),
-                                "opened_at": "",
+                                "edge": e.get("edge", 0.0),
+                                "opened_at": entry_opened_at.get(tid, ""),
                                 "closed_at": e.get("timestamp"),
                                 "exit_reason": e.get("reason", ""),
                                 "extra": e.get("extra", {}),  # preserve signal features for coach

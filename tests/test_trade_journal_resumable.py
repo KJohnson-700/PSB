@@ -105,3 +105,29 @@ def test_dead_zone_skip_records_and_resolves(tmp_path: Path, monkeypatch) -> Non
     assert resolved["outcome"] == "YES"
     assert resolved["extra"]["hypothetical_result"] == "WIN"
     assert resolved["extra"]["hour_utc"] == 18
+
+
+def test_buy_no_skip_event_is_persisted(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260505_120000", resume_latest=False)
+    journal.log_buy_no_skip(
+        market_id="sol-updown-1",
+        market_question="Solana Up or Down - May 5, 5:00AM-5:05AM ET",
+        strategy="sol_macro",
+        bankroll=500.0,
+        skip_reason="edge_below_min",
+        window_size="5m",
+        yes_price=0.53,
+        edge=0.07,
+        effective_min_edge=0.09,
+        rsi=28.4,
+        htf_bias="NEUTRAL",
+        signal_reason="BTC_HTF=NEUTRAL | ALT_HTF=BEARISH | side=SHORT",
+        alt_1h_trend="BULLISH",
+    )
+    entries = journal.get_all_entries(limit=10)
+    event = next(entry for entry in entries if entry["event"] == "BUY_NO_SKIP")
+    assert event["action"] == "BUY_NO"
+    assert event["reason"] == "edge_below_min"
+    assert event["extra"]["effective_min_edge"] == 0.09
+    assert event["extra"]["alt_1h_trend"] == "BULLISH"

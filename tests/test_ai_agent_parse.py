@@ -33,6 +33,20 @@ def test_parse_strict_json_unchanged() -> None:
     assert a.confidence_score == 0.7
 
 
+def test_parse_salvages_missing_comma_between_fields() -> None:
+    raw = (
+        '{"reasoning":"BTC is strong and breadth remains supportive." '
+        '"confidence_score":"medium-high",'
+        '"estimated_probability":0.61,'
+        '"recommendation":"BUY_YES"}'
+    )
+    a = _agent()._parse_response(raw, "m2b", anchor_yes_price=0.5)
+    assert a.recommendation == "BUY_YES"
+    assert a.reasoning.startswith("BTC is strong")
+    assert a.confidence_score == 0.72
+    assert a.estimated_probability == 0.61
+
+
 def test_parse_missing_estimated_probability_raises() -> None:
     raw = (
         '{"reasoning":"x","confidence_score":0.7,"recommendation":"BUY_YES"}'

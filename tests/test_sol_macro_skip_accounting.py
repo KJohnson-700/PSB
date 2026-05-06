@@ -35,3 +35,14 @@ def test_updown_entry_band_uses_explicit_min_and_max() -> None:
     assert "_yp_low = self.entry_price_min" in source
     assert "_yp_high = self.entry_price_max" in source
     assert "_yp_low  = 1.0 - self.entry_price_max" not in source
+
+
+def test_buy_no_is_not_hard_suppressed_by_bullish_alt_1h() -> None:
+    source = SOL_MACRO.read_text(encoding="utf-8")
+    assert '_bump_skip("sell_yes_suppressed_bullish_1h")' not in source
+    assert "buy_no_against_alt_1h_bullish" in source
+
+
+def test_buy_yes_is_still_hard_suppressed_against_bearish_alt_1h() -> None:
+    source = SOL_MACRO.read_text(encoding="utf-8")
+    assert '_bump_skip("buy_yes_suppressed_bearish_1h")' in source

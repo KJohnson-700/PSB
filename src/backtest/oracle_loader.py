@@ -20,6 +20,10 @@ from src.analysis.sol_btc_service import ORACLE_FEEDS, SOLBTCService
 
 logger = logging.getLogger(__name__)
 
+# Oracle ticks are discrete; end_date uses end-of-day UTC. Without slack, last_round
+# can fall a few seconds short of end_ts and trigger a full on-chain backfill.
+_ORACLE_CACHE_COVER_END_SLACK = pd.Timedelta(minutes=2)
+
 CHAINLINK_HISTORY_ABI = [
     {
         "inputs": [],
@@ -183,7 +187,7 @@ class OracleHistoryLoader:
             return False
         first = pd.Timestamp(df["updated_at"].iloc[0])
         last = pd.Timestamp(df["updated_at"].iloc[-1])
-        return first <= start_ts and last >= end_ts
+        return first <= start_ts and last >= (end_ts - _ORACLE_CACHE_COVER_END_SLACK)
 
     def _fetch_history(
         self,

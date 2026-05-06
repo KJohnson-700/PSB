@@ -1,0 +1,123 @@
+{
+  "session_file": "data/paper_trades/test_20260504_150648/entries.jsonl",
+  "closed_trades": 8,
+  "by_strategy": {
+    "eth_macro": {
+      "trades": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -8.0,
+      "avg_win": null,
+      "avg_loss": -4.0
+    },
+    "hype_macro": {
+      "trades": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.6,
+      "avg_win": null,
+      "avg_loss": -2.6
+    },
+    "sol_macro": {
+      "trades": 4,
+      "wins": 2,
+      "win_rate": 0.5,
+      "pnl": -2.025,
+      "avg_win": 1.1375,
+      "avg_loss": -2.15
+    },
+    "xrp_macro": {
+      "trades": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.8,
+      "avg_win": null,
+      "avg_loss": -2.8
+    }
+  },
+  "by_strategy_action": {
+    "eth_macro::BUY_YES": {
+      "trades": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -8.0,
+      "avg_win": null,
+      "avg_loss": -4.0
+    },
+    "hype_macro::BUY_YES": {
+      "trades": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.6,
+      "avg_win": null,
+      "avg_loss": -2.6
+    },
+    "sol_macro::BUY_YES": {
+      "trades": 4,
+      "wins": 2,
+      "win_rate": 0.5,
+      "pnl": -2.025,
+      "avg_win": 1.1375,
+      "avg_loss": -2.15
+    },
+    "xrp_macro::BUY_YES": {
+      "trades": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -2.8,
+      "avg_win": null,
+      "avg_loss": -2.8
+    }
+  },
+  "by_exit_reason": {
+    "RESOLVED:NO (real)": {
+      "trades": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -5.175,
+      "avg_win": null,
+      "avg_loss": -2.5875
+    },
+    "take_profit": {
+      "trades": 2,
+      "wins": 2,
+      "win_rate": 1.0,
+      "pnl": 2.275,
+      "avg_win": 1.1375,
+      "avg_loss": null
+    },
+    "updown_time_stop": {
+      "trades": 4,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -12.525,
+      "avg_win": null,
+      "avg_loss": -3.1312
+    }
+  },
+  "bitcoin": {
+    "buy_no_trades": 0,
+    "buy_no_pnl": 0,
+    "buy_no_wins": 0,
+    "counter_trend_trades": 0,
+    "counter_trend_pnl": 0,
+    "counter_trend_wins": 0
+  },
+  "hype_macro": {
+    "trades": 1,
+    "lag_magnitude_null_trades": 1,
+    "lag_magnitude_null_share": 1.0
+  },
+  "hour_pt_entry": {
+    "15": {
+      "trades": 6,
+      "win_rate": 0.3333,
+      "pnl": -7.425
+    },
+    "17": {
+      "trades": 2,
+      "win_rate": 0.0,
+      "pnl": -8.0
+    }
+  }
+}

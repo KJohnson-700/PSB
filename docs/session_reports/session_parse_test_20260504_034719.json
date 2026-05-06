@@ -1,0 +1,221 @@
+{
+  "session_file": "data/paper_trades/test_20260504_034719/entries.jsonl",
+  "closed_trades": 115,
+  "by_strategy": {
+    "bitcoin": {
+      "trades": 48,
+      "wins": 26,
+      "win_rate": 0.5417,
+      "pnl": -21.42,
+      "avg_win": 1.9635,
+      "avg_loss": -3.2941
+    },
+    "eth_macro": {
+      "trades": 9,
+      "wins": 7,
+      "win_rate": 0.7778,
+      "pnl": 13.45,
+      "avg_win": 2.3786,
+      "avg_loss": -1.6
+    },
+    "hype_macro": {
+      "trades": 15,
+      "wins": 13,
+      "win_rate": 0.8667,
+      "pnl": 15.725,
+      "avg_win": 1.7173,
+      "avg_loss": -3.3
+    },
+    "sol_macro": {
+      "trades": 20,
+      "wins": 15,
+      "win_rate": 0.75,
+      "pnl": 12.2,
+      "avg_win": 1.8,
+      "avg_loss": -2.96
+    },
+    "xrp_macro": {
+      "trades": 23,
+      "wins": 16,
+      "win_rate": 0.6957,
+      "pnl": 2.375,
+      "avg_win": 1.525,
+      "avg_loss": -3.1464
+    }
+  },
+  "by_strategy_action": {
+    "bitcoin::BUY_NO": {
+      "trades": 10,
+      "wins": 3,
+      "win_rate": 0.3,
+      "pnl": -16.225,
+      "avg_win": 1.6333,
+      "avg_loss": -3.0179
+    },
+    "bitcoin::BUY_YES": {
+      "trades": 38,
+      "wins": 23,
+      "win_rate": 0.6053,
+      "pnl": -5.195,
+      "avg_win": 2.0065,
+      "avg_loss": -3.423
+    },
+    "eth_macro::BUY_YES": {
+      "trades": 9,
+      "wins": 7,
+      "win_rate": 0.7778,
+      "pnl": 13.45,
+      "avg_win": 2.3786,
+      "avg_loss": -1.6
+    },
+    "hype_macro::BUY_YES": {
+      "trades": 15,
+      "wins": 13,
+      "win_rate": 0.8667,
+      "pnl": 15.725,
+      "avg_win": 1.7173,
+      "avg_loss": -3.3
+    },
+    "sol_macro::BUY_NO": {
+      "trades": 2,
+      "wins": 1,
+      "win_rate": 0.5,
+      "pnl": -2.7,
+      "avg_win": 1.05,
+      "avg_loss": -3.75
+    },
+    "sol_macro::BUY_YES": {
+      "trades": 18,
+      "wins": 14,
+      "win_rate": 0.7778,
+      "pnl": 14.9,
+      "avg_win": 1.8536,
+      "avg_loss": -2.7625
+    },
+    "xrp_macro::BUY_NO": {
+      "trades": 1,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -3.05,
+      "avg_win": null,
+      "avg_loss": -3.05
+    },
+    "xrp_macro::BUY_YES": {
+      "trades": 22,
+      "wins": 16,
+      "win_rate": 0.7273,
+      "pnl": 5.425,
+      "avg_win": 1.525,
+      "avg_loss": -3.1625
+    }
+  },
+  "by_exit_reason": {
+    "RESOLVED:NO (real)": {
+      "trades": 2,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -9.4,
+      "avg_win": null,
+      "avg_loss": -4.7
+    },
+    "RESOLVED:YES (real)": {
+      "trades": 3,
+      "wins": 2,
+      "win_rate": 0.6667,
+      "pnl": 3.9,
+      "avg_win": 4.2375,
+      "avg_loss": -4.575
+    },
+    "take_profit": {
+      "trades": 75,
+      "wins": 75,
+      "win_rate": 1.0,
+      "pnl": 132.95,
+      "avg_win": 1.7727,
+      "avg_loss": null
+    },
+    "updown_time_stop": {
+      "trades": 35,
+      "wins": 0,
+      "win_rate": 0.0,
+      "pnl": -105.12,
+      "avg_win": null,
+      "avg_loss": -3.0034
+    }
+  },
+  "bitcoin": {
+    "buy_no_trades": 10,
+    "buy_no_pnl": -16.225,
+    "buy_no_wins": 3,
+    "counter_trend_trades": 9,
+    "counter_trend_pnl": -17.025,
+    "counter_trend_wins": 2
+  },
+  "hype_macro": {
+    "trades": 15,
+    "lag_magnitude_null_trades": 9,
+    "lag_magnitude_null_share": 0.6
+  },
+  "hour_pt_entry": {
+    "4": {
+      "trades": 4,
+      "win_rate": 0.75,
+      "pnl": -0.6
+    },
+    "5": {
+      "trades": 1,
+      "win_rate": 1.0,
+      "pnl": 3.45
+    },
+    "6": {
+      "trades": 3,
+      "win_rate": 0.6667,
+      "pnl": -0.15
+    },
+    "7": {
+      "trades": 20,
+      "win_rate": 0.7,
+      "pnl": -2.9
+    },
+    "8": {
+      "trades": 14,
+      "win_rate": 0.4286,
+      "pnl": -13.675
+    },
+    "9": {
+      "trades": 17,
+      "win_rate": 0.7647,
+      "pnl": 15.3
+    },
+    "10": {
+      "trades": 22,
+      "win_rate": 0.7727,
+      "pnl": 26.98
+    },
+    "11": {
+      "trades": 5,
+      "win_rate": 0.4,
+      "pnl": -9.85
+    },
+    "12": {
+      "trades": 6,
+      "win_rate": 0.8333,
+      "pnl": 4.1
+    },
+    "13": {
+      "trades": 4,
+      "win_rate": 0.0,
+      "pnl": -11.0
+    },
+    "14": {
+      "trades": 18,
+      "win_rate": 0.7222,
+      "pnl": 10.125
+    },
+    "15": {
+      "trades": 1,
+      "win_rate": 1.0,
+      "pnl": 0.55
+    }
+  }
+}

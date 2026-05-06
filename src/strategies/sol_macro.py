@@ -215,6 +215,7 @@ class SolMacroStrategy:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
         self._signal_strategy_name = "sol_macro"
         self.dead_zone_skip_callback = None
+        self.buy_no_skip_callback = None
         self._apply_strategy_config(rebuild_service=True)
 
         # AI-hold soft veto: cache market IDs where AI recently said HOLD so the
@@ -284,6 +285,21 @@ class SolMacroStrategy:
         self.enforce_alt_1h_alignment = bool(
             self.config.get("enforce_alt_1h_alignment", True)
         )
+        # RSI gating policy:
+        # - default soft penalty (preserve trend participation)
+        # - optional hard block fallback for emergency suppression
+        self.rsi_hard_gate_enabled = bool(
+            self.config.get("rsi_hard_gate_enabled", False)
+        )
+        self.rsi_soft_penalty_enabled = bool(
+            self.config.get("rsi_soft_penalty_enabled", True)
+        )
+        self.rsi_soft_penalty_buy_yes = float(
+            self.config.get("rsi_soft_penalty_buy_yes", 0.04)
+        )
+        self.rsi_soft_penalty_buy_no = float(
+            self.config.get("rsi_soft_penalty_buy_no", 0.04)
+        )
         self.low_corr_threshold_1h = float(
             self.config.get("low_corr_threshold_1h", 0.50)
         )
@@ -348,6 +364,60 @@ class SolMacroStrategy:
 
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
+
+    def _make_buy_no_skip_payload(
+        self,
+        *,
+        market: Market,
+        skip_reason: str,
+        window_size: str,
+        yes_price: float,
+        edge: float,
+        effective_min_edge: float,
+        rsi: float,
+        htf_bias: str,
+        signal_reason: str,
+        alt_1h_trend: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "strategy": self._signal_strategy_name,
+            "market_id": market.id,
+            "window_size": window_size,
+            "skip_reason": skip_reason,
+            "yes_price": float(yes_price),
+            "edge": float(edge),
+            "effective_min_edge": float(effective_min_edge),
+            "rsi": float(rsi),
+            "htf_bias": htf_bias,
+            "signal_reason": signal_reason,
+        }
+        if alt_1h_trend:
+            payload["alt_1h_trend"] = alt_1h_trend
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def _emit_buy_no_skip(
+        self,
+        *,
+        market: Market,
+        bankroll: float,
+        payload: Dict[str, Any],
+        counts: Dict[str, int],
+        last_sample: Dict[str, Any],
+    ) -> None:
+        reason = str(payload.get("skip_reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+        last_sample.clear()
+        last_sample.update(payload)
+        if callable(self.buy_no_skip_callback):
+            self.buy_no_skip_callback(
+                strategy=self._signal_strategy_name,
+                market=market,
+                bankroll=bankroll,
+                payload=payload,
+            )
 
     def _classify_btc_1h_regime(self, btc_ta: TechnicalAnalysis) -> str:
         """BULL / RANGE / BEAR from 1H close vs SMA(20)."""
@@ -446,17 +516,32 @@ class SolMacroStrategy:
         win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
         return win_min <= mins_left <= win_max
 
-    def _rsi_blocks_entry(self, action: str, rsi: float) -> bool:
-        """Optional config-scoped RSI hard gate for extreme one-sided entries."""
+    def _resolve_rsi_gate(self, action: str, rsi: float) -> tuple[bool, float]:
+        """Return (hard_block, est_prob_delta) for RSI-based suppression policy."""
         buy_ceiling = self.config.get("rsi_buy_block_above")
-        if action == "BUY_YES" and buy_ceiling is not None and rsi >= float(buy_ceiling):
-            return True
-
         sell_floor = self.config.get("rsi_sell_block_below")
-        if action == "BUY_NO" and sell_floor is not None and rsi <= float(sell_floor):
-            return True
+        hit = (
+            action == "BUY_YES"
+            and buy_ceiling is not None
+            and rsi >= float(buy_ceiling)
+        ) or (
+            action == "BUY_NO"
+            and sell_floor is not None
+            and rsi <= float(sell_floor)
+        )
+        if not hit:
+            return False, 0.0
 
-        return False
+        if self.rsi_hard_gate_enabled:
+            return True, 0.0
+        if not self.rsi_soft_penalty_enabled:
+            return False, 0.0
+
+        if action == "BUY_YES":
+            penalty = max(0.0, self.rsi_soft_penalty_buy_yes)
+            return False, -penalty
+        penalty = max(0.0, self.rsi_soft_penalty_buy_no)
+        return False, penalty
 
     def _oracle_basis_blocks_entry(self, oracle_basis_bps: Optional[float]) -> bool:
         """Optional hard gate when spot diverges too far from the oracle reference."""
@@ -622,19 +707,29 @@ class SolMacroStrategy:
             return True
         return m5_adj >= threshold
 
-    def _passes_15m_iql(self, sol, allowed_side: str) -> bool:
-        """Indicator Quality Layer (IQL) for 15m entries."""
+    def _passes_15m_iql(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> bool:
+        """Indicator Quality Layer (IQL) for 15m entries.
+
+        Reuses `_check_15m_confirmation` so cycle-level LTF strength and IQL agree on
+        the same MACD scoring: if 15m is already "confirmed" (late, strong
+        structure), IQL passes. Otherwise apply the relaxed cross / hist-floor rule
+        used for early entries.
+        """
         if not self.iql_15m_enabled:
             return True
-        hist = float(sol.macd_15m.histogram)
+        confirmed, _, _ = self._check_15m_confirmation(ta, allowed_side)
+        if confirmed:
+            return True
+        macd_15m = ta.sol.macd_15m
+        hist = float(macd_15m.histogram)
         if allowed_side == "LONG":
             return (
-                sol.macd_15m.crossover == "BULLISH_CROSS"
-                or (hist >= self.iql_15m_hist_floor and sol.macd_15m.histogram_rising)
+                macd_15m.crossover == "BULLISH_CROSS"
+                or (hist >= self.iql_15m_hist_floor and macd_15m.histogram_rising)
             )
         return (
-            sol.macd_15m.crossover == "BEARISH_CROSS"
-            or (hist <= -self.iql_15m_hist_floor and not sol.macd_15m.histogram_rising)
+            macd_15m.crossover == "BEARISH_CROSS"
+            or (hist <= -self.iql_15m_hist_floor and not macd_15m.histogram_rising)
         )
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
@@ -1081,6 +1176,8 @@ class SolMacroStrategy:
         ai_calls = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
+        buy_no_skip_counts: Dict[str, int] = {}
+        last_buy_no_skip_sample: Dict[str, Any] = {}
 
         def _bump_skip(reason: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -1126,6 +1223,8 @@ class SolMacroStrategy:
                 )
                 continue
             ai_used = False
+            rsi_soft_delta = 0.0
+            rsi_soft_penalty = 0.0
             reason_parts = [
                 f"BTC_HTF={primary_htf_bias}",
                 f"ALT_HTF={macro_trend}",
@@ -1274,6 +1373,25 @@ class SolMacroStrategy:
                         and not corr.lag_opportunity
                     ):
                         _bump_skip("flat_btc_no_lag")
+                        if action == "BUY_NO":
+                            self._emit_buy_no_skip(
+                                market=market,
+                                bankroll=bankroll,
+                                payload=self._make_buy_no_skip_payload(
+                                    market=market,
+                                    skip_reason="flat_btc_no_lag",
+                                    window_size="5m" if is_5m else "15m",
+                                    yes_price=yes_price,
+                                    edge=0.0,
+                                    effective_min_edge=0.0,
+                                    rsi=sol.rsi_14,
+                                    htf_bias=primary_htf_bias,
+                                    signal_reason=" | ".join(reason_parts),
+                                    alt_1h_trend=mtt.h1_trend,
+                                ),
+                                counts=buy_no_skip_counts,
+                                last_sample=last_buy_no_skip_sample,
+                            )
                         logger.info(
                             f"  {_brand} skip '{market.question[:40]}' — BTC move {_btc_move_for_gate:.3f}% "
                             f"< {_btc_min_move_pct:.3f}% and no spike/lag"
@@ -1291,19 +1409,10 @@ class SolMacroStrategy:
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
                 if self.enforce_alt_1h_alignment:
                     if action == "BUY_NO" and _h1_trend == "BULLISH":
-                        if not macd_bearish_momentum_ok(
-                            sol.macd_5m if is_5m else sol.macd_15m
-                        ):
-                            _bump_skip("sell_yes_suppressed_bullish_1h")
-                            logger.info(
-                                f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
-                                f"alt 1H BULLISH, no alt MACD bearish confirmation"
-                            )
-                            continue
-                        reason_parts.append("alt_bearish_mom_override")
+                        reason_parts.append("buy_no_against_alt_1h_bullish")
                         logger.info(
                             f"  {self._signal_strategy_name} allow {action} on '{market.question[:40]}' — "
-                            f"alt 1H BULLISH but {('5m' if is_5m else '15m')} MACD confirms DOWN"
+                            f"alt 1H BULLISH retained as diagnostic only"
                         )
                     if action == "BUY_YES" and _h1_trend == "BEARISH":
                         _bump_skip("buy_yes_suppressed_bearish_1h")
@@ -1312,13 +1421,38 @@ class SolMacroStrategy:
                             f"1H trend BEARISH, suppressing counter-trend long"
                         )
                         continue
-                if self._rsi_blocks_entry(action, sol.rsi_14):
-                    _bump_skip("rsi_extreme_block")
+                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
+                if _rsi_hard_block:
+                    _bump_skip("rsi_hard_blocked")
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason="rsi_hard_blocked",
+                                window_size="5m" if is_5m else "15m",
+                                yes_price=yes_price,
+                                edge=0.0,
+                                effective_min_edge=0.0,
+                                rsi=sol.rsi_14,
+                                htf_bias=primary_htf_bias,
+                                signal_reason=" | ".join(reason_parts),
+                                alt_1h_trend=mtt.h1_trend,
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
+                        )
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                         f"RSI={sol.rsi_14:.1f} hit configured hard gate"
                     )
                     continue
+                rsi_soft_penalty = abs(_rsi_soft_delta)
+                if rsi_soft_penalty > 0:
+                    reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
+                    _sample("rsi_soft_penalty", rsi_soft_penalty)
+                rsi_soft_delta = _rsi_soft_delta
                 if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
                     _bump_skip("oracle_basis_block")
                     logger.info(
@@ -1467,6 +1601,8 @@ class SolMacroStrategy:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr_5m({corr.correlation_1h:.2f})")
 
+                    if rsi_soft_delta != 0.0:
+                        est_prob_up += rsi_soft_delta
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
 
                     if action == "BUY_YES":
@@ -1510,7 +1646,7 @@ class SolMacroStrategy:
                     # SECONDARY signal: lag / spike (small probability booster only)
                     est_prob_up = 0.50
 
-                    if not self._passes_15m_iql(sol, allowed_side):
+                    if not self._passes_15m_iql(ta, allowed_side):
                         _bump_skip("iql_15m_reject")
                         logger.info(
                             f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
@@ -1603,6 +1739,8 @@ class SolMacroStrategy:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr({corr.correlation_1h:.2f})")
 
+                    if rsi_soft_delta != 0.0:
+                        est_prob_up += rsi_soft_delta
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
 
                     if action == "BUY_YES":
@@ -1652,13 +1790,18 @@ class SolMacroStrategy:
                 else:
                     action = "BUY_NO" if direction == "UP" else "BUY_YES"
 
-                if self._rsi_blocks_entry(action, sol.rsi_14):
-                    _bump_skip("threshold_rsi_block")
+                _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
+                if _rsi_hard_block:
+                    _bump_skip("rsi_hard_blocked")
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                         f"RSI={sol.rsi_14:.1f} hit configured hard gate"
                     )
                     continue
+                rsi_soft_penalty = abs(_rsi_soft_delta)
+                if rsi_soft_penalty > 0:
+                    reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
+                    _sample("rsi_soft_penalty", rsi_soft_penalty)
                 if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
                     _bump_skip("threshold_oracle_basis_block")
                     logger.info(
@@ -1676,6 +1819,9 @@ class SolMacroStrategy:
                     sol_price, threshold, direction, ta,
                     days_to_resolution, ltf_strength, timing_bonus,
                 )
+                if _rsi_soft_delta != 0.0:
+                    estimated_prob += _rsi_soft_delta
+                estimated_prob = max(0.10, min(0.90, estimated_prob))
 
                 if action == "BUY_YES":
                     edge = estimated_prob - yes_price
@@ -1861,9 +2007,17 @@ class SolMacroStrategy:
                         # SHORT path omitted: positive lag on BTC-down is often the valid SHORT setup.
                         if allowed_side == "LONG" and _lm < _long_floor:
                             _bump_skip("macro_leg_blocks_long")
+                            _lag_o = getattr(corr, "lag_opportunity", False)
+                            _opp_dir = getattr(
+                                corr, "opportunity_direction", None
+                            )
+                            _sol_lag = float(getattr(corr, "sol_lag_pct", 0.0) or 0.0)
+                            _spike = getattr(corr, "btc_spike_detected", False)
                             logger.info(
                                 f"  {_brand} skip '{market.question[:40]}' — "
-                                f"macro_leg={_lm:+.4f}% < long_floor={_long_floor:+.4f} (updown)"
+                                f"macro_leg={_lm:+.4f}% < long_floor={_long_floor:+.4f} (updown) | "
+                                f"lag_opp={_lag_o} opp_dir={_opp_dir} sol_lag_pct={_sol_lag:+.4f}% "
+                                f"btc_spike={_spike}"
                             )
                             continue
 
@@ -1953,7 +2107,33 @@ class SolMacroStrategy:
                 pass
             _sample("edge", edge)
             if edge < effective_min_edge:
+                if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
+                    _bump_skip("edge_after_penalty_below_threshold")
                 _bump_skip("edge_below_min")
+                if action == "BUY_NO":
+                    _skip_reason = (
+                        "edge_after_penalty_below_threshold"
+                        if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge
+                        else "edge_below_min"
+                    )
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason=_skip_reason,
+                            window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=sol.rsi_14,
+                            htf_bias=primary_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 _mkt_type = "5m" if is_5m else (
                     "15m_unconf" if (is_updown and ltf_strength == 0.0) else
                     ("15m" if is_updown else "threshold")
@@ -2008,6 +2188,25 @@ class SolMacroStrategy:
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 if _updown_band_bad:
                     _bump_skip("entry_price_band_updown")
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason="entry_price_band_updown",
+                                window_size="5m" if is_5m else "15m",
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=effective_min_edge,
+                                rsi=sol.rsi_14,
+                                htf_bias=primary_htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                alt_1h_trend=mtt.h1_trend,
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
+                        )
                     logger.info(
                         f"  {self._signal_strategy_name} skip '{market.question[:40]}...' "
                         f"yes_price={yes_price:.3f} outside [{_yp_low:.3f}, {_yp_high:.3f}] "
@@ -2022,6 +2221,25 @@ class SolMacroStrategy:
                 _max_edge_updown = self.config.get("max_edge_updown", 0.09)
                 if edge > _max_edge_updown:
                     _bump_skip("edge_above_cap")
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason="edge_above_cap",
+                                window_size="5m" if is_5m else "15m",
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=effective_min_edge,
+                                rsi=sol.rsi_14,
+                                htf_bias=primary_htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                alt_1h_trend=mtt.h1_trend,
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
+                        )
                     logger.info(
                         f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} "
                         f"> max={_max_edge_updown} updown cap (catch-up already priced in)"
@@ -2043,6 +2261,25 @@ class SolMacroStrategy:
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
+                if action == "BUY_NO":
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason="size_too_small",
+                            window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=sol.rsi_14,
+                            htf_bias=primary_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
 
@@ -2135,6 +2372,8 @@ class SolMacroStrategy:
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
             "skip_15m_gate": skip_15m_reason,
+            "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
+            "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }

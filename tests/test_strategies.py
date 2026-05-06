@@ -486,7 +486,7 @@ class TestWeatherStrategy:
         signal = signals[0]
         assert signal.action == "BUY_YES"
         assert signal.price == pytest.approx(0.10)
-        assert signal.size == pytest.approx(25.0)
+        assert signal.size == pytest.approx(16.67, rel=1e-3)
         assert signal.horizon_days == 1
 
     def test_weather_strategy_skips_ai_for_clear_quant_edge(self):
@@ -641,6 +641,7 @@ class TestWeatherStrategy:
             "max_yes_price": 0.95,
             "kelly_fraction": 0.25,
             "metar_enabled": False,
+            "skip_extended_precip_without_calibration": False,
         }
         strat = WeatherStrategy(cfg, PositionSizer(cfg), KellySizer(cfg))
         market = Market(

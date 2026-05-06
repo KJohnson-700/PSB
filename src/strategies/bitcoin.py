@@ -150,6 +150,7 @@ class BitcoinStrategy:
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "bitcoin"
         self.dead_zone_skip_callback = None
+        self.buy_no_skip_callback = None
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
 
@@ -857,6 +858,8 @@ class BitcoinStrategy:
         ai_holds = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
+        buy_no_skip_counts: Dict[str, int] = {}
+        last_buy_no_skip_sample: Dict[str, Any] = {}
 
         def _bump_skip(reason: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -879,6 +882,41 @@ class BitcoinStrategy:
                 idx = max(0, min(n - 1, int(round((n - 1) * p))))
                 return round(vs[idx], 4)
             return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
+
+        def _record_buy_no_skip(
+            *,
+            market,
+            skip_reason: str,
+            yes_price: float,
+            edge: float,
+            effective_min_edge: float,
+            rsi: float,
+            htf_bias_value: str,
+            signal_reason: str,
+            window_size: str,
+        ) -> None:
+            payload = {
+                "strategy": "bitcoin",
+                "market_id": market.id,
+                "window_size": window_size,
+                "skip_reason": skip_reason,
+                "yes_price": float(yes_price),
+                "edge": float(edge),
+                "effective_min_edge": float(effective_min_edge),
+                "rsi": float(rsi),
+                "htf_bias": htf_bias_value,
+                "signal_reason": signal_reason,
+            }
+            buy_no_skip_counts[skip_reason] = buy_no_skip_counts.get(skip_reason, 0) + 1
+            last_buy_no_skip_sample.clear()
+            last_buy_no_skip_sample.update(payload)
+            if callable(self.buy_no_skip_callback):
+                self.buy_no_skip_callback(
+                    strategy="bitcoin",
+                    market=market,
+                    bankroll=bankroll,
+                    payload=payload,
+                )
 
         _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
@@ -1628,6 +1666,18 @@ class BitcoinStrategy:
             _sample("edge", edge)
             if edge < effective_min_edge:
                 _bump_skip("edge_below_min")
+                if action == "BUY_NO":
+                    _record_buy_no_skip(
+                        market=market,
+                        skip_reason="edge_below_min",
+                        yes_price=yes_price,
+                        edge=edge,
+                        effective_min_edge=effective_min_edge,
+                        rsi=ta.rsi_14,
+                        htf_bias_value=htf_bias,
+                        signal_reason=" | ".join(reason_parts),
+                        window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                    )
                 _mkt_type = "updown_5m" if is_5m else (
                     "updown_15m_neutral" if (htf_bias == "NEUTRAL" and is_updown) else
                     ("updown_15m" if is_updown else "threshold")
@@ -1646,6 +1696,18 @@ class BitcoinStrategy:
                 _max_edge_updown = self.config.get("max_edge_updown", 0.12)
                 if edge > _max_edge_updown:
                     _bump_skip("edge_above_cap")
+                    if action == "BUY_NO":
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason="edge_above_cap",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(reason_parts),
+                            window_size="5m" if is_5m else "15m",
+                        )
                     logger.info(
                         f"  BTC skip '{market.question[:45]}' {action} "
                         f"edge={edge:.4f} > max={_max_edge_updown} updown cap (inflated signal)"
@@ -1671,6 +1733,18 @@ class BitcoinStrategy:
                 )
                 if _updown_band_bad:
                     _bump_skip("entry_price_out_of_range_updown")
+                    if action == "BUY_NO":
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason="entry_price_out_of_range_updown",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(reason_parts),
+                            window_size="5m" if is_5m else "15m",
+                        )
                     logger.info(
                         f"  BTC skip '{market.question[:45]}' {action} "
                         f"yes_price={yes_price:.3f} outside updown band [{_up_min:.2f}, {_up_max:.2f}]"
@@ -1697,6 +1771,18 @@ class BitcoinStrategy:
             size = self.exposure_manager.scale_size(raw_size)
             if size <= 0:
                 _bump_skip("scaled_size_nonpositive")
+                if action == "BUY_NO":
+                    _record_buy_no_skip(
+                        market=market,
+                        skip_reason="scaled_size_nonpositive",
+                        yes_price=yes_price,
+                        edge=edge,
+                        effective_min_edge=effective_min_edge,
+                        rsi=ta.rsi_14,
+                        htf_bias_value=htf_bias,
+                        signal_reason=" | ".join(reason_parts),
+                        window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                    )
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
 
@@ -1794,6 +1880,8 @@ class BitcoinStrategy:
             "ai_assists": ai_assists,
             "ai_vetos": ai_vetos,
             "ai_holds": ai_holds,
+            "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
+            "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": {k: v for k, v in top_skip_pairs},
             "gate_distributions": gate_distributions,
         }

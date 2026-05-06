@@ -235,6 +235,8 @@ class PolyBot:
         self.cumulative_signal_counts: Dict[str, int] = {}
         # Per-strategy scan diagnostics (AI usage + skip buckets) for observability.
         self.last_ai_scan_stats: Dict[str, Dict[str, Any]] = {}
+        self.last_buy_no_skip_counts: Dict[str, Dict[str, int]] = {}
+        self.last_buy_no_skip_samples: Dict[str, Dict[str, Any]] = {}
 
         # Trade journal: Railway container restarts always start a FRESH session at
         # initial_bankroll (500). This ensures every restart = clean test run.
@@ -279,7 +281,33 @@ class PolyBot:
                 extra=metadata,
             )
 
+        def _buy_no_skip_callback(
+            *,
+            strategy: str,
+            market: Market,
+            bankroll: float,
+            payload: Dict[str, Any],
+        ) -> None:
+            skip_reason = str(payload.get("skip_reason") or "unknown")
+            self.journal.log_buy_no_skip(
+                market_id=market.id,
+                market_question=market.question,
+                strategy=strategy,
+                bankroll=bankroll,
+                skip_reason=skip_reason,
+                window_size=str(payload.get("window_size") or ""),
+                yes_price=float(payload.get("yes_price", 0.0) or 0.0),
+                edge=float(payload.get("edge", 0.0) or 0.0),
+                effective_min_edge=float(payload.get("effective_min_edge", 0.0) or 0.0),
+                rsi=float(payload.get("rsi", 0.0) or 0.0),
+                htf_bias=str(payload.get("htf_bias") or ""),
+                signal_reason=str(payload.get("signal_reason") or ""),
+                alt_1h_trend=payload.get("alt_1h_trend"),
+                extra=payload,
+            )
+
         self._dead_zone_skip_callback = _dead_zone_skip_callback
+        self._buy_no_skip_callback = _buy_no_skip_callback
         self._wire_strategy_callbacks()
 
         # Resolution tracker — fetches REAL outcomes from Polymarket API
@@ -472,11 +500,17 @@ class PolyBot:
 
     def _wire_strategy_callbacks(self) -> None:
         cb = getattr(self, "_dead_zone_skip_callback", None)
+        buy_no_cb = getattr(self, "_buy_no_skip_callback", None)
         self.bitcoin_strategy.dead_zone_skip_callback = cb
+        self.bitcoin_strategy.buy_no_skip_callback = buy_no_cb
         self.sol_macro_strategy.dead_zone_skip_callback = cb
+        self.sol_macro_strategy.buy_no_skip_callback = buy_no_cb
         self.eth_macro_strategy.dead_zone_skip_callback = cb
+        self.eth_macro_strategy.buy_no_skip_callback = buy_no_cb
         self.hype_macro_strategy.dead_zone_skip_callback = cb
+        self.hype_macro_strategy.buy_no_skip_callback = buy_no_cb
         self.xrp_macro_strategy.dead_zone_skip_callback = cb
+        self.xrp_macro_strategy.buy_no_skip_callback = buy_no_cb
 
     def _default_config(self) -> Dict[str, Any]:
         """Default configuration"""
@@ -966,7 +1000,227 @@ class PolyBot:
                 [m.question[:100] for m in weather_markets[:3]],
             )
 
-        # Strategy 1: Weather — forecast vs market price
+        # Crypto: Bitcoin, SOL/ETH/HYPE macro, XRP macro
+        strategy_tasks: list[tuple[str, Any]] = [
+            ("bitcoin", self.bitcoin_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
+            ("sol_macro", self.sol_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
+        ]
+        open_positions_snapshot = list(self.risk_manager.active_positions.values())
+        self.sol_macro_strategy._open_positions_snapshot = open_positions_snapshot
+
+        eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
+        if eth_macro_cfg.get("enabled", False):
+            self.eth_macro_strategy._open_positions_snapshot = open_positions_snapshot
+            strategy_tasks.append(
+                ("eth_macro", self.eth_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+            )
+
+        hype_macro_cfg = self.config.get("strategies", {}).get("hype_macro", {})
+        if hype_macro_cfg.get("enabled", False):
+            self.hype_macro_strategy._open_positions_snapshot = open_positions_snapshot
+            strategy_tasks.append(
+                ("hype_macro", self.hype_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+            )
+
+        xrp_cfg = self.config.get("strategies", {}).get("xrp_macro", {})
+        if xrp_cfg.get("enabled", False) and self.xrp_macro_strategy:
+            self.xrp_macro_strategy._open_positions_snapshot = open_positions_snapshot
+            strategy_tasks.append(
+                ("xrp_macro", self.xrp_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+            )
+
+        scan_started = time.perf_counter()
+        scan_results = await asyncio.gather(
+            *(task for _, task in strategy_tasks),
+            return_exceptions=True,
+        )
+        logging.info(
+            "[TRADING] Crypto parallel scan phase complete in %dms (%d strategies)",
+            int((time.perf_counter() - scan_started) * 1000),
+            len(strategy_tasks),
+        )
+        strategy_signals = {
+            name: result for (name, _), result in zip(strategy_tasks, scan_results)
+        }
+
+        try:
+            btc_signals = strategy_signals.get("bitcoin", [])
+            if isinstance(btc_signals, Exception):
+                raise btc_signals
+            _now_iso = datetime.now().isoformat(timespec="seconds")
+            self.last_signal_counts["bitcoin"] = len(btc_signals)
+            self.last_cycle_times["bitcoin"] = _now_iso
+            self.cumulative_signal_counts["bitcoin"] = (
+                self.cumulative_signal_counts.get("bitcoin", 0) + len(btc_signals)
+            )
+            self.last_ai_scan_stats["bitcoin"] = dict(
+                getattr(self.bitcoin_strategy, "last_scan_stats", {}) or {}
+            )
+            self.last_buy_no_skip_counts["bitcoin"] = dict(
+                self.last_ai_scan_stats["bitcoin"].get("buy_no_skip_counts", {}) or {}
+            )
+            self.last_buy_no_skip_samples["bitcoin"] = dict(
+                self.last_ai_scan_stats["bitcoin"].get("last_buy_no_skip_sample", {}) or {}
+            )
+            for signal in btc_signals:
+                await self._execute_bitcoin_signal(signal)
+            if btc_signals:
+                logging.info(f"[TRADING] Crypto BTC: {len(btc_signals)} signals")
+            else:
+                logging.info("[TRADING] Crypto BTC: No signals this cycle")
+            _btc_stats = self.last_ai_scan_stats.get("bitcoin", {})
+            if _btc_stats:
+                logging.info(
+                    "[TRADING] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s top_skips=%s",
+                    _btc_stats.get("ai_calls", 0),
+                    _btc_stats.get("ai_assists", 0),
+                    _btc_stats.get("ai_vetos", 0),
+                    _btc_stats.get("ai_holds", 0),
+                    _btc_stats.get("top_skip_reasons", {}),
+                )
+        except Exception as e:
+            logging.error(f"Crypto BTC error: {e}", exc_info=True)
+
+        try:
+            sol_signals = strategy_signals.get("sol_macro", [])
+            if isinstance(sol_signals, Exception):
+                raise sol_signals
+            _now_iso = datetime.now().isoformat(timespec="seconds")
+            self.last_signal_counts["sol_macro"] = len(sol_signals)
+            self.last_cycle_times["sol_macro"] = _now_iso
+            self.cumulative_signal_counts["sol_macro"] = (
+                self.cumulative_signal_counts.get("sol_macro", 0) + len(sol_signals)
+            )
+            self.last_ai_scan_stats["sol_macro"] = dict(
+                getattr(self.sol_macro_strategy, "last_scan_stats", {}) or {}
+            )
+            self.last_buy_no_skip_counts["sol_macro"] = dict(
+                self.last_ai_scan_stats["sol_macro"].get("buy_no_skip_counts", {}) or {}
+            )
+            self.last_buy_no_skip_samples["sol_macro"] = dict(
+                self.last_ai_scan_stats["sol_macro"].get("last_buy_no_skip_sample", {}) or {}
+            )
+            for signal in sol_signals:
+                await self._execute_sol_macro_signal(signal)
+            if sol_signals:
+                logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
+            else:
+                logging.info("[TRADING] Crypto SOL: No signals this cycle")
+            _sol_stats = self.last_ai_scan_stats.get("sol_macro", {})
+            if _sol_stats:
+                logging.info(
+                    "[TRADING] SOL diagnostics: top_skips=%s",
+                    _sol_stats.get("top_skip_reasons", {}),
+                )
+        except Exception as e:
+            logging.error(f"Crypto SOL error: {e}", exc_info=True)
+
+        try:
+            if "eth_macro" in strategy_signals:
+                eth_signals = strategy_signals["eth_macro"]
+                if isinstance(eth_signals, Exception):
+                    raise eth_signals
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["eth_macro"] = len(eth_signals)
+                self.last_cycle_times["eth_macro"] = _now_iso
+                self.cumulative_signal_counts["eth_macro"] = (
+                    self.cumulative_signal_counts.get("eth_macro", 0) + len(eth_signals)
+                )
+                self.last_ai_scan_stats["eth_macro"] = dict(
+                    getattr(self.eth_macro_strategy, "last_scan_stats", {}) or {}
+                )
+                self.last_buy_no_skip_counts["eth_macro"] = dict(
+                    self.last_ai_scan_stats["eth_macro"].get("buy_no_skip_counts", {}) or {}
+                )
+                self.last_buy_no_skip_samples["eth_macro"] = dict(
+                    self.last_ai_scan_stats["eth_macro"].get("last_buy_no_skip_sample", {}) or {}
+                )
+                for signal in eth_signals:
+                    await self._execute_sol_macro_signal(signal)
+                if eth_signals:
+                    logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto ETH: No signals this cycle")
+                _eth_stats = self.last_ai_scan_stats.get("eth_macro", {})
+                if _eth_stats:
+                    logging.info(
+                        "[TRADING] ETH diagnostics: top_skips=%s",
+                        _eth_stats.get("top_skip_reasons", {}),
+                    )
+        except Exception as e:
+            logging.error(f"Crypto ETH error: {e}", exc_info=True)
+
+        try:
+            if "hype_macro" in strategy_signals:
+                hype_signals = strategy_signals["hype_macro"]
+                if isinstance(hype_signals, Exception):
+                    raise hype_signals
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["hype_macro"] = len(hype_signals)
+                self.last_cycle_times["hype_macro"] = _now_iso
+                self.cumulative_signal_counts["hype_macro"] = (
+                    self.cumulative_signal_counts.get("hype_macro", 0) + len(hype_signals)
+                )
+                self.last_ai_scan_stats["hype_macro"] = dict(
+                    getattr(self.hype_macro_strategy, "last_scan_stats", {}) or {}
+                )
+                self.last_buy_no_skip_counts["hype_macro"] = dict(
+                    self.last_ai_scan_stats["hype_macro"].get("buy_no_skip_counts", {}) or {}
+                )
+                self.last_buy_no_skip_samples["hype_macro"] = dict(
+                    self.last_ai_scan_stats["hype_macro"].get("last_buy_no_skip_sample", {}) or {}
+                )
+                for signal in hype_signals:
+                    await self._execute_sol_macro_signal(signal)
+                if hype_signals:
+                    logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto HYPE: No signals this cycle")
+                _hype_stats = self.last_ai_scan_stats.get("hype_macro", {})
+                if _hype_stats:
+                    logging.info(
+                        "[TRADING] HYPE diagnostics: top_skips=%s",
+                        _hype_stats.get("top_skip_reasons", {}),
+                    )
+        except Exception as e:
+            logging.error(f"Crypto HYPE error: {e}", exc_info=True)
+
+        try:
+            if "xrp_macro" in strategy_signals:
+                xrp_signals = strategy_signals["xrp_macro"]
+                if isinstance(xrp_signals, Exception):
+                    raise xrp_signals
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["xrp_macro"] = len(xrp_signals)
+                self.last_cycle_times["xrp_macro"] = _now_iso
+                self.cumulative_signal_counts["xrp_macro"] = (
+                    self.cumulative_signal_counts.get("xrp_macro", 0) + len(xrp_signals)
+                )
+                self.last_ai_scan_stats["xrp_macro"] = dict(
+                    getattr(self.xrp_macro_strategy, "last_scan_stats", {}) or {}
+                )
+                self.last_buy_no_skip_counts["xrp_macro"] = dict(
+                    self.last_ai_scan_stats["xrp_macro"].get("buy_no_skip_counts", {}) or {}
+                )
+                self.last_buy_no_skip_samples["xrp_macro"] = dict(
+                    self.last_ai_scan_stats["xrp_macro"].get("last_buy_no_skip_sample", {}) or {}
+                )
+                for signal in xrp_signals:
+                    await self._execute_xrp_macro_signal(signal)
+                if xrp_signals:
+                    logging.info(f"[TRADING] Crypto XRP macro: {len(xrp_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto XRP macro: No signals this cycle")
+                _xrp_stats = self.last_ai_scan_stats.get("xrp_macro", {})
+                if _xrp_stats:
+                    logging.info(
+                        "[TRADING] XRP diagnostics: top_skips=%s",
+                        _xrp_stats.get("top_skip_reasons", {}),
+                    )
+        except Exception as e:
+            logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
+
+        # Strategy 3: Weather — forecast vs market price (run after crypto lanes)
         if self.weather_strategy.enabled:
             try:
                 weather_signals = await self.weather_strategy.scan_and_analyze(
@@ -989,170 +1243,6 @@ class PolyBot:
                     logging.info("[TRADING] Weather: No signals this cycle")
             except Exception as e:
                 logging.error(f"Weather strategy error: {e}", exc_info=True)
-
-        # Crypto: Bitcoin, SOL/ETH/HYPE macro, XRP macro
-
-        try:
-            btc_signals = await self.bitcoin_strategy.scan_and_analyze(
-                markets=short_horizon, bankroll=self.bankroll
-            )
-            _now_iso = datetime.now().isoformat(timespec="seconds")
-            self.last_signal_counts["bitcoin"] = len(btc_signals)
-            self.last_cycle_times["bitcoin"] = _now_iso
-            self.cumulative_signal_counts["bitcoin"] = (
-                self.cumulative_signal_counts.get("bitcoin", 0) + len(btc_signals)
-            )
-            self.last_ai_scan_stats["bitcoin"] = dict(
-                getattr(self.bitcoin_strategy, "last_scan_stats", {}) or {}
-            )
-            for signal in btc_signals:
-                await self._execute_bitcoin_signal(signal)
-            if btc_signals:
-                logging.info(f"[TRADING] Crypto BTC: {len(btc_signals)} signals")
-            else:
-                logging.info("[TRADING] Crypto BTC: No signals this cycle")
-            _btc_stats = self.last_ai_scan_stats.get("bitcoin", {})
-            if _btc_stats:
-                logging.info(
-                    "[TRADING] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s top_skips=%s",
-                    _btc_stats.get("ai_calls", 0),
-                    _btc_stats.get("ai_assists", 0),
-                    _btc_stats.get("ai_vetos", 0),
-                    _btc_stats.get("ai_holds", 0),
-                    _btc_stats.get("top_skip_reasons", {}),
-                )
-        except Exception as e:
-            logging.error(f"Crypto BTC error: {e}", exc_info=True)
-
-        try:
-            self.sol_macro_strategy._open_positions_snapshot = list(
-                self.risk_manager.active_positions.values()
-            )
-            sol_signals = await self.sol_macro_strategy.scan_and_analyze(
-                markets=short_horizon, bankroll=self.bankroll
-            )
-            _now_iso = datetime.now().isoformat(timespec="seconds")
-            self.last_signal_counts["sol_macro"] = len(sol_signals)
-            self.last_cycle_times["sol_macro"] = _now_iso
-            self.cumulative_signal_counts["sol_macro"] = (
-                self.cumulative_signal_counts.get("sol_macro", 0) + len(sol_signals)
-            )
-            self.last_ai_scan_stats["sol_macro"] = dict(
-                getattr(self.sol_macro_strategy, "last_scan_stats", {}) or {}
-            )
-            for signal in sol_signals:
-                await self._execute_sol_macro_signal(signal)
-            if sol_signals:
-                logging.info(f"[TRADING] Crypto SOL: {len(sol_signals)} signals")
-            else:
-                logging.info("[TRADING] Crypto SOL: No signals this cycle")
-            _sol_stats = self.last_ai_scan_stats.get("sol_macro", {})
-            if _sol_stats:
-                logging.info(
-                    "[TRADING] SOL diagnostics: top_skips=%s",
-                    _sol_stats.get("top_skip_reasons", {}),
-                )
-        except Exception as e:
-            logging.error(f"Crypto SOL error: {e}", exc_info=True)
-
-        try:
-            eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
-            if eth_macro_cfg.get("enabled", False):
-                self.eth_macro_strategy._open_positions_snapshot = list(
-                    self.risk_manager.active_positions.values()
-                )
-                eth_signals = await self.eth_macro_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["eth_macro"] = len(eth_signals)
-                self.last_cycle_times["eth_macro"] = _now_iso
-                self.cumulative_signal_counts["eth_macro"] = (
-                    self.cumulative_signal_counts.get("eth_macro", 0) + len(eth_signals)
-                )
-                self.last_ai_scan_stats["eth_macro"] = dict(
-                    getattr(self.eth_macro_strategy, "last_scan_stats", {}) or {}
-                )
-                for signal in eth_signals:
-                    await self._execute_sol_macro_signal(signal)
-                if eth_signals:
-                    logging.info(f"[TRADING] Crypto ETH: {len(eth_signals)} signals")
-                else:
-                    logging.info("[TRADING] Crypto ETH: No signals this cycle")
-                _eth_stats = self.last_ai_scan_stats.get("eth_macro", {})
-                if _eth_stats:
-                    logging.info(
-                        "[TRADING] ETH diagnostics: top_skips=%s",
-                        _eth_stats.get("top_skip_reasons", {}),
-                    )
-        except Exception as e:
-            logging.error(f"Crypto ETH error: {e}", exc_info=True)
-
-        try:
-            hype_macro_cfg = self.config.get("strategies", {}).get("hype_macro", {})
-            if hype_macro_cfg.get("enabled", False):
-                self.hype_macro_strategy._open_positions_snapshot = list(
-                    self.risk_manager.active_positions.values()
-                )
-                hype_signals = await self.hype_macro_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["hype_macro"] = len(hype_signals)
-                self.last_cycle_times["hype_macro"] = _now_iso
-                self.cumulative_signal_counts["hype_macro"] = (
-                    self.cumulative_signal_counts.get("hype_macro", 0) + len(hype_signals)
-                )
-                self.last_ai_scan_stats["hype_macro"] = dict(
-                    getattr(self.hype_macro_strategy, "last_scan_stats", {}) or {}
-                )
-                for signal in hype_signals:
-                    await self._execute_sol_macro_signal(signal)
-                if hype_signals:
-                    logging.info(f"[TRADING] Crypto HYPE: {len(hype_signals)} signals")
-                else:
-                    logging.info("[TRADING] Crypto HYPE: No signals this cycle")
-                _hype_stats = self.last_ai_scan_stats.get("hype_macro", {})
-                if _hype_stats:
-                    logging.info(
-                        "[TRADING] HYPE diagnostics: top_skips=%s",
-                        _hype_stats.get("top_skip_reasons", {}),
-                    )
-        except Exception as e:
-            logging.error(f"Crypto HYPE error: {e}", exc_info=True)
-
-        try:
-            xrp_cfg = self.config.get("strategies", {}).get("xrp_macro", {})
-            if xrp_cfg.get("enabled", False) and self.xrp_macro_strategy:
-                self.xrp_macro_strategy._open_positions_snapshot = list(
-                    self.risk_manager.active_positions.values()
-                )
-                xrp_signals = await self.xrp_macro_strategy.scan_and_analyze(
-                    markets=short_horizon, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["xrp_macro"] = len(xrp_signals)
-                self.last_cycle_times["xrp_macro"] = _now_iso
-                self.cumulative_signal_counts["xrp_macro"] = (
-                    self.cumulative_signal_counts.get("xrp_macro", 0) + len(xrp_signals)
-                )
-                self.last_ai_scan_stats["xrp_macro"] = dict(
-                    getattr(self.xrp_macro_strategy, "last_scan_stats", {}) or {}
-                )
-                for signal in xrp_signals:
-                    await self._execute_xrp_macro_signal(signal)
-                if xrp_signals:
-                    logging.info(f"[TRADING] Crypto XRP macro: {len(xrp_signals)} signals")
-                else:
-                    logging.info("[TRADING] Crypto XRP macro: No signals this cycle")
-                _xrp_stats = self.last_ai_scan_stats.get("xrp_macro", {})
-                if _xrp_stats:
-                    logging.info(
-                        "[TRADING] XRP diagnostics: top_skips=%s",
-                        _xrp_stats.get("top_skip_reasons", {}),
-                    )
-        except Exception as e:
-            logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
 
         try:
             async with self._execution_lock:

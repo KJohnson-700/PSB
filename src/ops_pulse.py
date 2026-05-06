@@ -62,6 +62,32 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _buy_no_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Dedicated BUY_NO suppression counters and last sample per strategy."""
+    lanes = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+    per_lane: Dict[str, Dict[str, int]] = {}
+    last_samples: Dict[str, Dict[str, Any]] = {}
+    totals: Dict[str, int] = {}
+    for lane in lanes:
+        block = ai_scan_stats.get(lane) or {}
+        counts = block.get("buy_no_skip_counts") or {}
+        if counts:
+            normalized = [(k, _coerce_skip_count(v)) for k, v in counts.items()]
+            ordered = sorted(normalized, key=lambda kv: kv[1], reverse=True)[:10]
+            per_lane[lane] = {k: v for k, v in ordered}
+            for k, v in ordered:
+                totals[k] = totals.get(k, 0) + v
+        sample = block.get("last_buy_no_skip_sample") or {}
+        if sample:
+            last_samples[lane] = sample
+    top_totals = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:20]
+    return {
+        "per_strategy": per_lane,
+        "aggregate_top": {k: v for k, v in top_totals},
+        "last_samples": last_samples,
+    }
+
+
 def _coerce_nonnegative_int(v: Any) -> int:
     try:
         return max(0, int(v))
@@ -215,6 +241,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "last_cycle_times": last_cycles,
         "ai_scan_stats": ai_scan_stats,
         "scan_skip_digest": _scan_skip_digest(ai_scan_stats),
+        "buy_no_skip_diagnostics": _buy_no_skip_digest(ai_scan_stats),
         "ai_pipeline": _ai_pipeline_digest(ai_scan_stats),
         "timestamps_policy": {
             "canonical": CANONICAL_OPS_TIMEZONE,

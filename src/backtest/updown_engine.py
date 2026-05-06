@@ -664,15 +664,8 @@ class UpdownBacktestEngine:
     # ==========================================================================
 
     @staticmethod
-    def _sol_ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
-        """15m MACD confirmation -- SOL-family live weights, threshold 0.50.
-
-        Differences from BTC:
-          - hist rising (not flip): +0.15 (BTC uses +0.20)
-          - MACD > signal:          +0.10 (BTC uses +0.15)
-          - confirmed threshold:     0.50 (live anti-LTF gate)
-        """
-        m = ta.macd_15m
+    def _sol_ltf_strength_m(m: MACDResult, allowed_side: str) -> Tuple[bool, float]:
+        """SOL-family 15m MACD strength on a single MACD bundle (live parity)."""
         s = 0.0
         if allowed_side == "LONG":
             if m.crossover == "BULLISH_CROSS":              s += 0.40
@@ -694,8 +687,22 @@ class UpdownBacktestEngine:
         return confirmed, min(1.0, s)
 
     @staticmethod
+    def _sol_ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
+        """15m MACD confirmation -- SOL-family live weights, threshold 0.50.
+
+        Differences from BTC:
+          - hist rising (not flip): +0.15 (BTC uses +0.20)
+          - MACD > signal:          +0.10 (BTC uses +0.15)
+          - confirmed threshold:     0.50 (live anti-LTF gate)
+        """
+        return UpdownBacktestEngine._sol_ltf_strength_m(ta.macd_15m, allowed_side)
+
+    @staticmethod
     def _passes_15m_iql_macd(m: MACDResult, allowed_side: str, hist_floor: float) -> bool:
         """15m Indicator Quality Layer — matches live sol_macro._passes_15m_iql."""
+        confirmed, _ = UpdownBacktestEngine._sol_ltf_strength_m(m, allowed_side)
+        if confirmed:
+            return True
         hist = float(m.histogram)
         if allowed_side == "LONG":
             return m.crossover == "BULLISH_CROSS" or (

@@ -55,14 +55,38 @@ def _make_config():
     }
 
 
-def test_optional_rsi_buy_ceiling_blocks_extreme_long_entries():
+def test_optional_rsi_buy_ceiling_soft_penalty_by_default():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._rsi_blocks_entry("BUY_YES", 84.8) is True
-    assert strategy._rsi_blocks_entry("BUY_YES", 79.9) is False
-    assert strategy._rsi_blocks_entry("BUY_NO", 84.8) is False
+    hard, delta = strategy._resolve_rsi_gate("BUY_YES", 84.8)
+    assert hard is False
+    assert delta < 0
+    hard2, delta2 = strategy._resolve_rsi_gate("BUY_YES", 79.9)
+    assert hard2 is False
+    assert delta2 == 0.0
+    hard3, delta3 = strategy._resolve_rsi_gate("BUY_NO", 84.8)
+    assert hard3 is False
+    assert delta3 == 0.0
+
+
+def test_optional_rsi_buy_ceiling_hard_block_when_enabled():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
+    cfg["strategies"]["sol_macro"]["rsi_hard_gate_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._resolve_rsi_gate("BUY_YES", 84.8) == (True, 0.0)
+
+
+def test_buy_no_rsi_penalty_can_be_disabled():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["rsi_sell_block_below"] = 40.0
+    cfg["strategies"]["sol_macro"]["rsi_soft_penalty_buy_no"] = 0.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    hard, delta = strategy._resolve_rsi_gate("BUY_NO", 35.0)
+    assert hard is False
+    assert delta == 0.0
 
 
 def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
@@ -778,6 +802,57 @@ class TestSOLExposureIntegration(unittest.TestCase):
                 strategy.scan_and_analyze(markets, bankroll=10000.0)
             )
         self.assertEqual(len(signals), 0)
+
+
+class TestSOL15mIQL(unittest.TestCase):
+    """IQL shares LTF confirmation scoring then applies relaxed MACD rules."""
+
+    def setUp(self):
+        cfg = _make_config()
+        cfg["strategies"]["sol_macro"]["iql_15m_enabled"] = True
+        cfg["strategies"]["sol_macro"]["iql_15m_hist_floor"] = 0.15
+        self.strategy = SolMacroStrategy(
+            cfg,
+            MagicMock(),
+            MagicMock(),
+            exposure_manager=ExposureManager(cfg, is_paper=True),
+        )
+
+    def test_iql_short_circuits_when_ltf_confirmed(self):
+        ta = _make_choppy_ta()
+        with patch.object(
+            self.strategy,
+            "_check_15m_confirmation",
+            return_value=(True, 0.55, ["stub"]),
+        ):
+            self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
+
+    def test_iql_relaxed_hist_floor_when_unconfirmed(self):
+        ta = _make_choppy_ta()
+        ta.sol.macd_15m.crossover = "NONE"
+        ta.sol.macd_15m.prev_histogram = -0.1
+        ta.sol.macd_15m.histogram = 0.2
+        ta.sol.macd_15m.histogram_rising = True
+        ta.sol.macd_15m.macd_line = -0.01
+        ta.sol.macd_15m.signal_line = 0.01
+        confirmed, _, _ = self.strategy._check_15m_confirmation(ta, "LONG")
+        self.assertFalse(confirmed)
+        self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
+
+    def test_iql_rejects_when_unconfirmed_and_no_relaxed_signal(self):
+        ta = _make_choppy_ta()
+        ta.sol.macd_15m.crossover = "NONE"
+        ta.sol.macd_15m.histogram_rising = False
+        ta.sol.macd_15m.histogram = 0.01
+        ta.sol.macd_15m.prev_histogram = 0.01
+        ta.sol.macd_15m.macd_line = -1.0
+        ta.sol.macd_15m.signal_line = 1.0
+        self.assertFalse(self.strategy._passes_15m_iql(ta, "LONG"))
+
+    def test_iql_disabled_always_passes(self):
+        self.strategy.iql_15m_enabled = False
+        ta = _make_choppy_ta()
+        self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
 
 
 def test_macd_bearish_momentum_ok_bear_cross():

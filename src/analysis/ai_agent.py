@@ -1984,6 +1984,78 @@ Reply with only the JSON object required by the system message (four keys: reaso
             return "\n".join(fallback_parts)
         return ""
 
+    @staticmethod
+    def _strip_wrapping_json_string(raw: str) -> str:
+        text = (raw or "").strip().rstrip(",").strip()
+        if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            text = text[1:-1]
+        text = text.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
+        return text.strip()
+
+    def _salvage_four_key_response(
+        self,
+        content: str,
+        market_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Best-effort recovery for provider outputs that contain the required four keys
+        but fail strict JSON decoding due to minor formatting mistakes such as a
+        missing comma between fields.
+        """
+        cleaned = (content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+
+        key_pat = re.compile(
+            r'"(reasoning|confidence_score|estimated_probability|recommendation)"\s*:'
+        )
+        matches = list(key_pat.finditer(cleaned))
+        if len(matches) < 4:
+            return None
+
+        extracted: Dict[str, Any] = {}
+        for idx, match in enumerate(matches):
+            key = match.group(1)
+            value_start = match.end()
+            value_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(cleaned)
+            raw_value = cleaned[value_start:value_end].strip().rstrip(",").strip()
+            extracted[key] = raw_value
+
+        if set(extracted) != {
+            "reasoning",
+            "confidence_score",
+            "estimated_probability",
+            "recommendation",
+        }:
+            return None
+
+        reasoning = self._strip_wrapping_json_string(str(extracted["reasoning"]))
+        recommendation = self._strip_wrapping_json_string(str(extracted["recommendation"]))
+        conf_raw = self._strip_wrapping_json_string(str(extracted["confidence_score"]))
+        prob_raw = self._strip_wrapping_json_string(str(extracted["estimated_probability"]))
+
+        conf = self._coerce_confidence_score(conf_raw)
+        prob = self._parse_probability_scalar(prob_raw)
+        if not reasoning or prob is None:
+            return None
+
+        logger.warning(
+            "Recovered malformed AI JSON for market %s via four-key salvage parser",
+            market_id,
+        )
+        return {
+            "reasoning": reasoning,
+            "confidence_score": conf,
+            "estimated_probability": prob,
+            "recommendation": recommendation,
+        }
+
     def _parse_response(
         self,
         content: str,
@@ -2003,11 +2075,14 @@ Reply with only the JSON object required by the system message (four keys: reaso
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse AI response: %s", e)
-            logger.debug("Raw response: %s", content)
-            raise AIResponseValidationError(
-                f"market={market_id} invalid JSON: {e}"
-            ) from e
+            salvaged = self._salvage_four_key_response(content, market_id)
+            if salvaged is None:
+                logger.error("Failed to parse AI response: %s", e)
+                logger.debug("Raw response: %s", content)
+                raise AIResponseValidationError(
+                    f"market={market_id} invalid JSON: {e}"
+                ) from e
+            data = salvaged
         if not isinstance(data, dict):
             raise AIResponseValidationError(f"market={market_id} JSON is not an object")
         self._validate_llm_json_contract(data, market_id)

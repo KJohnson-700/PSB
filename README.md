@@ -103,6 +103,8 @@ python src/main.py --paper
 
 If your project path contains **spaces** (e.g. `psb-main 1`), quote the path when you `cd` or invoke the venv: `"/path/to/psb-main 1/.venv/bin/python" start.py`
 
+**Local dashboard:** default **http://127.0.0.1:8081** (port from `dashboard.dashboard_port` in `config/settings.yaml`). Stop, start, and restart: **[docs/LOCAL_BOT_RUN.md](docs/LOCAL_BOT_RUN.md)**.
+
 ### With API Keys
 ```python
 # In your code or environment

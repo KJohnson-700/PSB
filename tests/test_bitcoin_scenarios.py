@@ -462,6 +462,77 @@ class TestBitcoinBearScenario:
             assert signals[0].direction == "DOWN"
         assert not any(s.action == "BUY_YES" for s in signals)
 
+    def test_bullish_rollover_reopens_countertrend_buy_no_at_lower_edge_floor(self):
+        """Bullish HTF with 4H rollover may still admit BUY_NO in the 0.08+ edge cohort."""
+        ta = _make_bullish_ta(80500)
+        ta.macd_4h = MACDResult(
+            macd_line=350,
+            signal_line=250,
+            histogram=40,
+            prev_histogram=85,
+            crossover="NONE",
+            histogram_rising=False,
+            above_zero=True,
+        )
+        ta.trend_sabre = TrendSabreResult(
+            ma_value=81000,
+            trail_value=77000,
+            trend=1,
+            tension=-0.4,
+            tension_abs=0.4,
+            atr=1200,
+            snap_supports=[],
+            snap_resistances=[],
+        )
+        ta.macd_15m = MACDResult(
+            macd_line=-10,
+            signal_line=-6,
+            histogram=-4,
+            prev_histogram=-2,
+            crossover="BEARISH_CROSS",
+            histogram_rising=False,
+            above_zero=False,
+        )
+        ta.macd_1h = MACDResult(
+            macd_line=20,
+            signal_line=25,
+            histogram=-3,
+            prev_histogram=2,
+            crossover="BEARISH_CROSS",
+            histogram_rising=False,
+            above_zero=False,
+        )
+        ta.candle_momentum = CandleMomentum(
+            m15_direction="DRIFT_DOWN",
+            m15_move_pct=-0.08,
+            m15_in_prediction_window=False,
+            m5_direction="SPIKE_DOWN",
+            m5_move_pct=-0.14,
+            m5_in_prediction_window=True,
+            momentum_strength=0.6,
+        )
+        market = Market(
+            id="btc-updown-5m-test",
+            question="Bitcoin Up or Down - 12:00AM-12:05AM ET?",
+            description="Bitcoin 5m up/down candle",
+            volume=500000,
+            liquidity=50000,
+            yes_price=0.54,
+            no_price=0.46,
+            spread=0.02,
+            end_date=datetime.now(timezone.utc) + timedelta(minutes=3.0),
+            token_id_yes="tok_yes",
+            token_id_no="tok_no",
+            group_item_title="",
+        )
+        with patch.object(
+            self.strategy.btc_service, "get_full_analysis", return_value=ta
+        ):
+            signals = run_async(self.strategy.scan_and_analyze([market], 10000))
+        assert signals, "expected counter-trend BUY_NO to survive the lower edge floor"
+        assert signals[0].action == "BUY_NO"
+        assert signals[0].edge >= 0.08
+
 
 class TestBitcoinChoppyScenario:
     """Scenario: No clear trend — bot should produce zero signals."""

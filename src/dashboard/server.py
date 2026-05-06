@@ -1138,6 +1138,7 @@ async def get_status():
             ),
             "session_id": getattr(bot.journal, "session_id", None),
             "scan_skip_digest": _ops.get("scan_skip_digest"),
+            "buy_no_skip_diagnostics": _ops.get("buy_no_skip_diagnostics"),
             "ai_pipeline": _ops.get("ai_pipeline"),
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
@@ -1212,6 +1213,7 @@ async def get_status():
         "strategy_state": _build_strategy_state(cfg_disk, False),
         "session_id": summary.get("session_id"),
         "scan_skip_digest": None,
+        "buy_no_skip_diagnostics": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
     }
 
@@ -1286,7 +1288,7 @@ async def get_usage_records():
 async def get_backtest_reports():
     report_dir = DATA_ROOT / "backtest" / "reports"
     if not report_dir.exists():
-        return {"reports": [], "latest": None}
+        return {"reports": [], "latest": None, "latest_completed": None}
     files = sorted(
         report_dir.glob("backtest_*.json"),
         key=lambda p: p.stat().st_mtime,
@@ -1296,12 +1298,32 @@ async def get_backtest_reports():
     seen_crypto_keys: set[Tuple[str, int]] = set()
     non_crypto_kept = 0
     max_non_crypto = 30
+    latest_completed: Optional[Dict[str, Any]] = None
+    latest_mtime: float = -1.0
     for f in files:
         try:
             with open(f) as fp:
                 data = json.load(fp)
         except Exception:
             continue
+        try:
+            mtime = float(f.stat().st_mtime)
+        except Exception:
+            mtime = -1.0
+
+        # Keep a canonical pointer to the newest valid backtest report on disk,
+        # independent of per-(symbol,window) dedupe used by card rendering.
+        if mtime >= latest_mtime:
+            latest_mtime = mtime
+            latest_completed = {
+                "filename": f.name,
+                "symbol": data.get("symbol"),
+                "window_minutes": data.get("window_minutes"),
+                "report_type": data.get("report_type"),
+                "run_at": data.get("run_at"),
+                "start_date": data.get("start_date"),
+                "end_date": data.get("end_date"),
+            }
 
         sym_raw = data.get("symbol")
         sym = str(sym_raw).strip() if sym_raw is not None else ""
@@ -1338,7 +1360,11 @@ async def get_backtest_reports():
         data.pop("results", None)
         data.pop("stress_scenarios", None)
         reports.append(data)
-    return {"reports": reports, "latest": reports[0] if reports else None}
+    return {
+        "reports": reports,
+        "latest": reports[0] if reports else None,
+        "latest_completed": latest_completed,
+    }
 
 
 # ─── LIVE PERFORMANCE ──────────────────────────────────────────────

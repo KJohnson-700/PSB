@@ -138,6 +138,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             "signals": 0,
             "abort_reason": reason,
             "markets_considered": 0,
+            "buy_no_skip_counts": {},
+            "last_buy_no_skip_sample": {},
             "top_skip_reasons": {},
             "gate_distributions": {},
         }
@@ -540,6 +542,8 @@ class ETHMacroStrategy(SolMacroStrategy):
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         side_source_counts: Dict[str, int] = {}
+        buy_no_skip_counts: Dict[str, int] = {}
+        last_buy_no_skip_sample: Dict[str, Any] = {}
 
         def _bump_skip(reason: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -566,6 +570,8 @@ class ETHMacroStrategy(SolMacroStrategy):
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
         for market in eth_markets:
+            rsi_soft_delta = 0.0
+            rsi_soft_penalty = 0.0
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
                 _bump_skip("liquidity")
                 continue
@@ -664,35 +670,54 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if market_allowed_side == "LONG" else "DOWN"
-
-            if self.enforce_alt_1h_alignment:
-                if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
-                    if not macd_bearish_momentum_ok(
-                        eth.macd_5m if is_5m else eth.macd_15m
-                    ):
-                        _bump_skip("eth_1h_bullish")
-                        continue
-                    reason_parts.append("eth_bearish_mom_override")
-                    logger.info(
-                        f"  ETH allow BUY_NO on '{market.question[:40]}' — "
-                        f"ETH 1H BULLISH but {('5m' if is_5m else '15m')} MACD confirms DOWN"
-                    )
-                if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
-                    _bump_skip("eth_1h_bearish")
-                    continue
-            if self._rsi_blocks_entry(action, eth.rsi_14):
-                _bump_skip("rsi_block")
-                continue
-            if self._oracle_basis_blocks_entry(eth.oracle_basis_bps):
-                _bump_skip("oracle_basis_block")
-                continue
-
-            est_prob_up = 0.50
             reason_parts = [
                 f"BTC_HTF={btc_htf_bias}",
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
+
+            if self.enforce_alt_1h_alignment:
+                if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
+                    reason_parts.append("buy_no_against_alt_1h_bullish")
+                    logger.info(
+                        f"  ETH allow BUY_NO on '{market.question[:40]}' — "
+                        f"ETH 1H BULLISH retained as diagnostic only"
+                    )
+                if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
+                    _bump_skip("eth_1h_bearish")
+                    continue
+            _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, eth.rsi_14)
+            if _rsi_hard_block:
+                _bump_skip("rsi_hard_blocked")
+                if action == "BUY_NO":
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason="rsi_hard_blocked",
+                            window_size="5m" if is_5m else "15m",
+                            yes_price=yes_price,
+                            edge=0.0,
+                            effective_min_edge=0.0,
+                            rsi=eth.rsi_14,
+                            htf_bias=btc_htf_bias,
+                            signal_reason=" | ".join(reason_parts),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
+                continue
+            rsi_soft_penalty = abs(rsi_soft_delta)
+            if rsi_soft_penalty > 0:
+                reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
+                _sample("rsi_soft_penalty", rsi_soft_penalty)
+            if self._oracle_basis_blocks_entry(eth.oracle_basis_bps):
+                _bump_skip("oracle_basis_block")
+                continue
+
+            est_prob_up = 0.50
             confidence = 0.50
             ai_used = False
 
@@ -768,6 +793,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                     ]
                 )
 
+            if rsi_soft_delta != 0.0:
+                est_prob_up += rsi_soft_delta
             est_prob_up = max(0.10, min(0.90, est_prob_up))
             edge = est_prob_up - yes_price if action == "BUY_YES" else yes_price - est_prob_up
             if edge <= 0:
@@ -950,7 +977,33 @@ class ETHMacroStrategy(SolMacroStrategy):
             _sample("est_prob_up", est_prob_up)
             _sample("edge", edge)
             if edge < effective_min_edge:
+                if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
+                    _bump_skip("edge_after_penalty_below_threshold")
                 _bump_skip("edge_below_min")
+                if action == "BUY_NO":
+                    _skip_reason = (
+                        "edge_after_penalty_below_threshold"
+                        if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge
+                        else "edge_below_min"
+                    )
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason=_skip_reason,
+                            window_size="5m" if is_5m else "15m",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=eth.rsi_14,
+                            htf_bias=btc_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 continue
 
             # Centered-price gate: near 50/50 entries need a BTC catalyst and a higher edge bar.
@@ -980,11 +1033,49 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _entry_price_bad = yes_price < self.entry_price_min
             if _entry_price_bad:
                 _bump_skip("entry_price_band")
+                if action == "BUY_NO":
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason="entry_price_band",
+                            window_size="5m" if is_5m else "15m",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=eth.rsi_14,
+                            htf_bias=btc_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 continue
 
             max_edge_updown = float(self.config.get("max_edge_updown", 0.15))
             if edge > max_edge_updown:
                 _bump_skip("edge_above_cap")
+                if action == "BUY_NO":
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason="edge_above_cap",
+                            window_size="5m" if is_5m else "15m",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=eth.rsi_14,
+                            htf_bias=btc_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 continue
 
             if not self.kelly_sizer:
@@ -1001,6 +1092,25 @@ class ETHMacroStrategy(SolMacroStrategy):
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
+                if action == "BUY_NO":
+                    self._emit_buy_no_skip(
+                        market=market,
+                        bankroll=bankroll,
+                        payload=self._make_buy_no_skip_payload(
+                            market=market,
+                            skip_reason="size_too_small",
+                            window_size="5m" if is_5m else "15m",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=eth.rsi_14,
+                            htf_bias=btc_htf_bias,
+                            signal_reason=" | ".join(r for r in reason_parts if r),
+                            alt_1h_trend=mtt.h1_trend,
+                        ),
+                        counts=buy_no_skip_counts,
+                        last_sample=last_buy_no_skip_sample,
+                    )
                 continue
 
             reason_parts.extend([
@@ -1072,6 +1182,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             "shadow_pipeline_calls": shadow_pipeline_calls,
             "shadow_pipeline_ok": shadow_pipeline_ok,
             "shadow_marginal_mismatch": shadow_marginal_mismatch,
+            "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
+            "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }
