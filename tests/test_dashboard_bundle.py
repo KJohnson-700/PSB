@@ -160,6 +160,21 @@ def test_dashboard_status_handles_bootstrap_shim(monkeypatch):
     assert r.json()["running"] is False
 
 
+def test_resolve_bankroll_snapshot_preserves_real_zero(tmp_path):
+    from src.dashboard.server import _resolve_bankroll_snapshot
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    assert _resolve_bankroll_snapshot(
+        0.0,
+        session_dir,
+        summary_total_pnl=-500.0,
+        summary_has_session=True,
+        initial_bankroll=500.0,
+    ) == 0.0
+
+
 def test_config_post_fails_closed_without_dashboard_key(monkeypatch, tmp_path):
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient

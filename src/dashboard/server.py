@@ -830,28 +830,24 @@ async def sse_stream(request: Request):
                     session_dir_disk = (
                         j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
                     )
-                    bankroll_snap = 0.0
+                    bankroll_journal: Optional[float] = None
                     if j_disk:
                         try:
                             br = j_disk.last_bankroll_from_entries_log()
                             if br is not None:
-                                bankroll_snap = float(br)
+                                bankroll_journal = float(br)
                         except (TypeError, ValueError):
                             pass
-                    if bankroll_snap <= 0 and session_dir_disk:
-                        br_snap = _last_snapshot_bankroll(session_dir_disk)
-                        if br_snap is not None:
-                            bankroll_snap = round(br_snap, 2)
-                    if bankroll_snap <= 0:
-                        initial = float(
-                            (cfg_disk.get("backtest") or {}).get(
-                                "initial_bankroll", 500
-                            )
+                    bankroll_snap = _resolve_bankroll_snapshot(
+                        bankroll_journal,
+                        session_dir_disk,
+                        summary_total_pnl=float(js.get("total_pnl", 0) or 0),
+                        summary_has_session=bool(js.get("session_id")),
+                        initial_bankroll=float(
+                            (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500)
                             or 500
-                        )
-                        tp = float(js.get("total_pnl", 0) or 0)
-                        if js.get("session_id"):
-                            bankroll_snap = round(initial + tp, 2)
+                        ),
+                    )
 
                 snapshot = {
                     "running": bot.running if bot else False,
@@ -996,6 +992,28 @@ def _last_snapshot_bankroll(session_dir: Optional[Path]) -> Optional[float]:
         except (TypeError, ValueError):
             pass
     return last_br
+
+
+def _resolve_bankroll_snapshot(
+    journal_bankroll: Optional[float],
+    session_dir: Optional[Path],
+    *,
+    summary_total_pnl: float,
+    summary_has_session: bool,
+    initial_bankroll: float,
+) -> float:
+    """Preserve a real zero bankroll; synthesize only when bankroll is missing."""
+    if journal_bankroll is not None:
+        return round(float(journal_bankroll), 2)
+
+    br_snap = _last_snapshot_bankroll(session_dir)
+    if br_snap is not None:
+        return round(float(br_snap), 2)
+
+    if summary_has_session:
+        return round(float(initial_bankroll) + float(summary_total_pnl), 2)
+
+    return 0.0
 
 
 # ─── STATUS ───────────────────────────────────────────────────────
@@ -1161,25 +1179,23 @@ async def get_status():
 
     j_disk = _get_journal()
     session_dir_disk = j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
-    bankroll_disk = 0.0
+    bankroll_journal: Optional[float] = None
     if j_disk:
         try:
             br = j_disk.last_bankroll_from_entries_log()
             if br is not None:
-                bankroll_disk = float(br)
+                bankroll_journal = float(br)
         except (TypeError, ValueError):
             pass
-    if bankroll_disk <= 0 and session_dir_disk:
-        br_snap = _last_snapshot_bankroll(session_dir_disk)
-        if br_snap is not None:
-            bankroll_disk = round(br_snap, 2)
-    if bankroll_disk <= 0:
-        initial = float(
+    bankroll_disk = _resolve_bankroll_snapshot(
+        bankroll_journal,
+        session_dir_disk,
+        summary_total_pnl=float(summary.get("total_pnl", 0) or 0),
+        summary_has_session=bool(summary.get("session_id")),
+        initial_bankroll=float(
             (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500) or 500
-        )
-        tp = float(summary.get("total_pnl", 0) or 0)
-        if summary.get("session_id"):
-            bankroll_disk = round(initial + tp, 2)
+        ),
+    )
 
     open_disk = len(disk_positions)
     open_sum = int(summary.get("open_positions", 0) or 0)

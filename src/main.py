@@ -787,6 +787,13 @@ class PolyBot:
             return self.xrp_exposure_manager
         return getattr(self, "weather_exposure_manager", self.event_exposure_manager)
 
+    def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
+        """Apply realized PnL to paper/live bankroll with a hard floor at zero."""
+        self.bankroll = max(0.0, float(self.bankroll) + float(pnl))
+        self.risk_manager.update_pnl(float(pnl))
+        self.risk_manager.bankroll = self.bankroll
+        return self.bankroll
+
     async def _run_resolution_check(self, label: str = ""):
         """Shared resolution check — routes settlements to the correct exposure manager."""
         # We pass exposure_manager=None so the tracker doesn't call record_trade.
@@ -801,9 +808,7 @@ class PolyBot:
         )
         if settled:
             total_pnl = sum(s["pnl"] for s in settled)
-            self.bankroll += total_pnl
-            self.risk_manager.update_pnl(total_pnl)   # keeps daily_pnl in sync for dashboard
-            self.risk_manager.bankroll = self.bankroll  # keep loss-limit checks against real bankroll
+            self._apply_realized_pnl_to_bankroll(total_pnl)
 
             # Route each settlement to the correct exposure manager
             for s in settled:
@@ -884,9 +889,7 @@ class PolyBot:
                     window = _detect_window_from_question(mq)
                     self.kelly_sizer.record_outcome(strat, exit_decision.unrealized_pnl > 0, window)
                     exit_pnl = exit_decision.unrealized_pnl
-                    self.bankroll += exit_pnl
-                    self.risk_manager.update_pnl(exit_pnl)
-                    self.risk_manager.bankroll = self.bankroll
+                    self._apply_realized_pnl_to_bankroll(exit_pnl)
                     self.journal.log_exit(
                         trade_id=exit_decision.position_id,
                         exit_price=exit_decision.exit_price,

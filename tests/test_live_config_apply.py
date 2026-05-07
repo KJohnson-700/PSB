@@ -1,5 +1,7 @@
 """Tests for live dashboard config updates on a running bot."""
 
+from unittest.mock import MagicMock
+
 from src.main import PolyBot
 
 
@@ -101,3 +103,16 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.event_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.notifier.reloaded_with is bot.config
+
+
+def test_apply_realized_pnl_to_bankroll_floors_at_zero():
+    bot = PolyBot.__new__(PolyBot)
+    bot.bankroll = 3.5
+    bot.risk_manager = MagicMock()
+
+    updated = bot._apply_realized_pnl_to_bankroll(-10.0)
+
+    assert updated == 0.0
+    assert bot.bankroll == 0.0
+    bot.risk_manager.update_pnl.assert_called_once_with(-10.0)
+    assert bot.risk_manager.bankroll == 0.0
