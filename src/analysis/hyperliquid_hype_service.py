@@ -52,6 +52,21 @@ class HyperliquidHypeService(SOLBTCService):
         "1d": ("1d", 86_400_000),
     }
 
+    @staticmethod
+    def _empty_klines_df() -> pd.DataFrame:
+        """Return an empty klines frame with the columns downstream code expects."""
+        return pd.DataFrame(
+            {
+                "open_time": pd.Series(dtype="datetime64[ns, UTC]"),
+                "open": pd.Series(dtype="float64"),
+                "high": pd.Series(dtype="float64"),
+                "low": pd.Series(dtype="float64"),
+                "close": pd.Series(dtype="float64"),
+                "volume": pd.Series(dtype="float64"),
+                "close_time": pd.Series(dtype="datetime64[ns, UTC]"),
+            }
+        )
+
     def __init__(
         self,
         polygon_rpc: str = None,
@@ -129,7 +144,7 @@ class HyperliquidHypeService(SOLBTCService):
                 "Hyperliquid HYPE fetch failed (%s); no stale cache available — returning empty",
                 reason,
             )
-            return pd.DataFrame()
+            return self._empty_klines_df()
         ts, df = rec
         age = time.time() - ts
         if age > self._stale_on_error_max_age_sec:
@@ -139,7 +154,7 @@ class HyperliquidHypeService(SOLBTCService):
                 age,
                 self._stale_on_error_max_age_sec,
             )
-            return pd.DataFrame()
+            return self._empty_klines_df()
         logger.warning(
             "Hyperliquid HYPE fetch failed (%s); serving stale cache %.1fs old",
             reason,
@@ -161,7 +176,7 @@ class HyperliquidHypeService(SOLBTCService):
         mapped = self._INTERVAL_MAP.get(interval)
         if not mapped:
             logger.warning(f"Hyperliquid HYPE unsupported interval: {interval}")
-            return pd.DataFrame()
+            return self._empty_klines_df()
 
         hl_interval, interval_ms = mapped
         cache_key = f"hype_{interval}_{limit}"
@@ -185,7 +200,7 @@ class HyperliquidHypeService(SOLBTCService):
             resp.raise_for_status()
             rows = resp.json() or []
             if not isinstance(rows, list) or not rows:
-                return pd.DataFrame()
+                return self._empty_klines_df()
 
             parsed = []
             for row in rows:
@@ -207,7 +222,7 @@ class HyperliquidHypeService(SOLBTCService):
                     continue
 
             if not parsed:
-                return pd.DataFrame()
+                return self._empty_klines_df()
 
             df = pd.DataFrame(parsed).sort_values("open_time").drop_duplicates(subset=["open_time"])
             return df.tail(limit).reset_index(drop=True)
@@ -238,19 +253,35 @@ class HyperliquidHypeService(SOLBTCService):
     ) -> pd.DataFrame:
         """Fetch HYPE klines for a date range (used by backtest OHLCV loader).
 
-        Hyperliquid's candleSnapshot does not support startTime/endTime filtering
-        — it returns the most recent N candles. For backtesting we fetch a large
-        lookback and filter client-side to the requested window.
+        Build the request from the actual requested window so historical backtests
+        do not silently drift with wall-clock time.
         """
         mapped = self._INTERVAL_MAP.get(interval)
         if not mapped:
             logger.warning(f"Hyperliquid HYPE unsupported interval: {interval}")
-            return pd.DataFrame()
+            return self._empty_klines_df()
 
         hl_interval, interval_ms = mapped
-        now_ms = int(time.time() * 1000)
-        lookback_ms = min(90 * 24 * 3600 * 1000, now_ms)
-        start_ms = now_ms - lookback_ms
+        start_dt = (
+            pd.to_datetime(start_date, utc=True)
+            if start_date
+            else pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=90)
+        )
+        end_dt = (
+            pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+            if end_date
+            else pd.Timestamp.now(tz="UTC")
+        )
+        if end_dt < start_dt:
+            logger.warning(
+                "Hyperliquid HYPE invalid range request: start=%s end=%s",
+                start_date,
+                end_date,
+            )
+            return self._empty_klines_df()
+
+        start_ms = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000)
 
         payload = {
             "type": "candleSnapshot",
@@ -258,7 +289,7 @@ class HyperliquidHypeService(SOLBTCService):
                 "coin": self.HYPE_COIN,
                 "interval": hl_interval,
                 "startTime": start_ms,
-                "endTime": now_ms,
+                "endTime": end_ms,
             },
         }
 
@@ -267,7 +298,7 @@ class HyperliquidHypeService(SOLBTCService):
             resp.raise_for_status()
             rows = resp.json() or []
             if not isinstance(rows, list) or not rows:
-                return pd.DataFrame()
+                return self._empty_klines_df()
 
             parsed = []
             for row in rows:
@@ -289,17 +320,17 @@ class HyperliquidHypeService(SOLBTCService):
                     continue
 
             if not parsed:
-                return pd.DataFrame()
+                return self._empty_klines_df()
 
             df = pd.DataFrame(parsed).sort_values("open_time").drop_duplicates(subset=["open_time"])
             df = df.reset_index(drop=True)
 
             if start_date:
                 start_dt = pd.to_datetime(start_date, utc=True)
-                df = df[df["open_time"].dt.tz_localize(None) >= start_dt.replace(tzinfo=None)]
+                df = df[df["open_time"] >= start_dt]
             if end_date:
-                end_dt = pd.to_datetime(end_date, utc=True)
-                df = df[df["open_time"].dt.tz_localize(None) <= end_dt.replace(tzinfo=None)]
+                end_dt = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+                df = df[df["open_time"] <= end_dt]
 
             return df.reset_index(drop=True)
 
@@ -314,7 +345,7 @@ class HyperliquidHypeService(SOLBTCService):
             return _attempt()
         except Exception as e:
             logger.error("Hyperliquid HYPE fetch_klines_range failed (%s): %s", interval, e)
-            return pd.DataFrame()
+            return self._empty_klines_df()
 
     def fetch_klines(self, symbol: str, interval: str = "1h", limit: int = 200) -> pd.DataFrame:
         """Fetch klines; route HYPE to Hyperliquid and others to Binance."""

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from src.analysis.btc_price_service import BTCPriceService
+from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
 from src.analysis.sol_btc_service import SOLBTCService
 
 
@@ -25,14 +26,12 @@ def test_btc_fetch_klines_uses_stale_cache_when_binance_unreachable(monkeypatch)
     svc = BTCPriceService()
     cache_key = "binance_1h_200"
     expected = _sample_klines_df(100000.0)
-    svc._cache[cache_key] = (svc._cache_ttl * 0.0, expected)
+    svc._cache[cache_key] = (pd.Timestamp.utcnow().timestamp() - 30, expected)
 
     def _raise(*_args, **_kwargs):
         raise RuntimeError("Failed to resolve api3.binance.com")
 
-    monkeypatch.setattr("src.analysis.btc_price_service.requests.get", _raise)
-    # Keep stale cache inside fallback age window.
-    svc._cache[cache_key] = (svc._cache[cache_key][0] + (pd.Timestamp.utcnow().timestamp() - 30), expected)
+    monkeypatch.setattr(svc._http_session, "get", _raise)
 
     out = svc.fetch_klines("1h", 200)
     assert not out.empty
@@ -45,7 +44,7 @@ def test_btc_price_falls_back_to_chainlink(monkeypatch):
     def _raise(*_args, **_kwargs):
         raise RuntimeError("Failed to resolve api.binance.com")
 
-    monkeypatch.setattr("src.analysis.btc_price_service.requests.get", _raise)
+    monkeypatch.setattr(svc._http_session, "get", _raise)
     monkeypatch.setattr(
         svc,
         "get_chainlink_price",
@@ -62,7 +61,7 @@ def test_btc_price_falls_back_to_coingecko(monkeypatch):
     def _raise(*_args, **_kwargs):
         raise RuntimeError("Failed to resolve api.binance.com")
 
-    monkeypatch.setattr("src.analysis.btc_price_service.requests.get", _raise)
+    monkeypatch.setattr(svc._http_session, "get", _raise)
     monkeypatch.setattr(svc, "get_chainlink_price", lambda: (None, None))
     monkeypatch.setattr(svc, "_get_coingecko_price", lambda _asset: 97531.0)
 
@@ -79,7 +78,7 @@ def test_sol_price_falls_back_to_cached_close(monkeypatch):
     def _raise(*_args, **_kwargs):
         raise RuntimeError("Failed to resolve api.binance.com")
 
-    monkeypatch.setattr("src.analysis.sol_btc_service.requests.get", _raise)
+    monkeypatch.setattr(svc._http_session, "get", _raise)
     monkeypatch.setattr(svc, "get_chainlink_price_for_symbol", lambda _sym: (None, None, None))
 
     price = svc.get_current_price("SOLUSDT")
@@ -92,7 +91,7 @@ def test_sol_price_falls_back_to_coingecko(monkeypatch):
     def _raise(*_args, **_kwargs):
         raise RuntimeError("Failed to resolve api.binance.com")
 
-    monkeypatch.setattr("src.analysis.sol_btc_service.requests.get", _raise)
+    monkeypatch.setattr(svc._http_session, "get", _raise)
     monkeypatch.setattr(svc, "get_chainlink_price_for_symbol", lambda _sym: (None, None, None))
     monkeypatch.setattr(svc, "_get_coingecko_price", lambda _sym: 141.11)
 
@@ -122,3 +121,40 @@ def test_chainlink_arbitrum_rpcs_can_be_overridden_from_env(monkeypatch):
     arbs = svc._chainlink_rpcs_for_network("arbitrum")
     assert arbs[0] == "https://arb.custom.one"
     assert arbs[1] == "https://arb.custom.two"
+
+
+def test_hype_range_failure_returns_schema_empty_frame(monkeypatch):
+    svc = HyperliquidHypeService()
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("Failed to resolve api.hyperliquid.xyz")
+
+    monkeypatch.setattr(svc, "_post_candles", _raise)
+    out = svc.fetch_klines_range(interval="1m", start_date="2026-01-20", end_date="2026-01-21")
+    assert list(out.columns) == ["open_time", "open", "high", "low", "close", "volume", "close_time"]
+    assert out.empty
+
+
+def test_hype_range_request_uses_requested_dates(monkeypatch):
+    svc = HyperliquidHypeService()
+    payloads = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    def _fake_post(payload, *, timeout):
+        payloads.append(payload)
+        return _Resp()
+
+    monkeypatch.setattr(svc, "_post_candles", _fake_post)
+    svc.fetch_klines_range(interval="15m", start_date="2026-01-20", end_date="2026-04-20")
+
+    assert payloads
+    first = payloads[0]["req"]
+    assert first["startTime"] == int(pd.Timestamp("2026-01-20", tz="UTC").timestamp() * 1000)
+    expected_end = pd.Timestamp("2026-04-21", tz="UTC") - pd.Timedelta(milliseconds=1)
+    assert first["endTime"] == int(expected_end.timestamp() * 1000)
