@@ -293,10 +293,12 @@
     <style>
         /* ── Sticky header ── */
         .hdr{position:sticky;top:0;z-index:200;background:rgba(0,0,0,.88);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.05);padding:10px 18px 0}
-        .hdr-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px}
+        .hdr-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px}
         .brand{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;color:var(--tx)}
         .ver{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td)}
         .sid{background:rgba(30,80,200,.18);border:1px solid rgba(30,80,200,.45);border-radius:3px;padding:2px 8px;color:#70aaff;font-size:10px;display:inline-block;margin-left:10px;font-family:'IBM Plex Mono',monospace}
+        .hdr-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+        .hdr-btn{padding:5px 10px;font-size:10px;white-space:nowrap}
     </style>
 </head>
 <body>
@@ -309,7 +311,11 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);margin-left:14px;" id="last-updated">Dashboard loading...</span>
             <span class="sid" id="htmx-ui-rev" hx-get="/api/dashboard/health-snippet" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
         </div>
-        <span class="ver">v0.2.2</span>
+        <div class="hdr-actions">
+            <button class="btn-sm hdr-btn ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh</button>
+            <button class="btn-sm hdr-btn" id="fullscreen-btn" onclick="toggleFullscreen()">Enter Fullscreen</button>
+            <span class="ver">v0.2.2</span>
+        </div>
     </div>
     <div class="tabs" id="main-view-tabs">
         <div class="tab active" data-view="live" onclick="switchMainView('live')">live</div>
@@ -351,8 +357,6 @@
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;">
             <button class="btn-sm btn-green" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="btn-sm btn-red" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
-            <button class="btn-sm" id="fullscreen-btn" onclick="toggleFullscreen()">Enter Fullscreen</button>
-            <button class="btn-sm ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh dashboard</button>
             <button class="btn-sm ab" onclick="runTests()">Run Unit Tests</button>
             <button class="btn-sm ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
             <button class="btn-sm btn-purple" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
