@@ -829,6 +829,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
                 mins_left=_eval_left,
                 effective_min_edge=effective_min_edge,
+                is_5m=is_5m,
             )
             if not _late_ok:
                 _bump_skip("late_window_blocked")

@@ -321,6 +321,12 @@ class SolMacroStrategy:
         self.late_window_tighten_mins = float(
             self.config.get("late_window_tighten_mins", 0.0)
         )
+        self.late_window_block_mins_5m = float(
+            self.config.get("late_window_block_mins_5m", 0.75)
+        )
+        self.late_window_tighten_mins_5m = float(
+            self.config.get("late_window_tighten_mins_5m", 0.0)
+        )
         self.late_window_extra_min_edge = float(
             self.config.get("late_window_extra_min_edge", 0.0)
         )
@@ -532,15 +538,17 @@ class SolMacroStrategy:
         return win_min <= mins_left <= win_max
 
     def _apply_late_window_guard(
-        self, *, mins_left: float, effective_min_edge: float
+        self, *, mins_left: float, effective_min_edge: float, is_5m: bool = False
     ) -> tuple[bool, float, Optional[str]]:
         """Return late-window admission decision and any tightened edge reason."""
-        if self.late_window_block_mins > 0 and mins_left <= self.late_window_block_mins:
+        block_mins = self.late_window_block_mins_5m if is_5m else self.late_window_block_mins
+        tighten_mins = self.late_window_tighten_mins_5m if is_5m else self.late_window_tighten_mins
+        if block_mins > 0 and mins_left <= block_mins:
             return False, effective_min_edge, "late_window_blocked"
         if (
-            self.late_window_tighten_mins > 0
+            tighten_mins > 0
             and self.late_window_extra_min_edge > 0
-            and mins_left <= self.late_window_tighten_mins
+            and mins_left <= tighten_mins
         ):
             tightened_edge = max(effective_min_edge, self.late_window_extra_min_edge)
             if tightened_edge > effective_min_edge:
@@ -2055,6 +2063,7 @@ class SolMacroStrategy:
                 _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
                     mins_left=_eval_left,
                     effective_min_edge=effective_min_edge,
+                    is_5m=is_5m,
                 )
                 if not _late_ok:
                     _bump_skip("late_window_blocked")
