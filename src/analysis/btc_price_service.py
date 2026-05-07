@@ -18,6 +18,7 @@ Timing Logic:
 - Prediction window (9-12 of 15 min / 3-4 of 5 min)
 """
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
@@ -192,15 +193,75 @@ class BTCPriceService:
         "https://rpc.ankr.com/polygon",
         "https://polygon.llamarpc.com",
     ]
+    COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+
+    @staticmethod
+    def _parse_rpc_env(value: Optional[str]) -> List[str]:
+        """Parse comma-delimited RPC env vars into a de-duplicated ordered list."""
+        if not value:
+            return []
+        out: List[str] = []
+        seen = set()
+        for raw in str(value).split(","):
+            item = raw.strip()
+            if not item:
+                continue
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
 
     def __init__(self, polygon_rpc: str = None):
+        env_polygon = self._parse_rpc_env(os.getenv("CHAINLINK_POLYGON_RPCS"))
         self.polygon_rpc = polygon_rpc
-        self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
+        if polygon_rpc is not None:
+            self.polygon_rpcs = [polygon_rpc]
+        else:
+            self.polygon_rpcs = env_polygon + [u for u in self.POLYGON_RPCS if u not in env_polygon]
         self._w3 = None
         self._chainlink_contract = None
         self._warned_missing_web3 = False
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
+        self._stale_cache_max_age_sec = 15 * 60
+        self._chainlink_max_age_sec = 10 * 60
+        self._chainlink_fail_warn_ttl_sec = 120
+        self._last_chainlink_fail_warn_ts = 0.0
+        # Connection-reused HTTP session — pools TCP/TLS across calls so per-cycle
+        # Binance fetches don't pay handshake overhead each time. Same Session
+        # is reused for CoinGecko fallback (different host, separate pool entry).
+        self._http_session: requests.Session = requests.Session()
+
+    def _get_stale_cached_klines(self, cache_key: str) -> Tuple[pd.DataFrame, Optional[float]]:
+        """Return stale cached klines for key when fresh pull fails."""
+        cached = self._cache.get(cache_key)
+        if not cached:
+            return pd.DataFrame(), None
+        ts, df = cached
+        if df is None or df.empty:
+            return pd.DataFrame(), None
+        age = max(0.0, time.time() - float(ts))
+        if age > float(self._stale_cache_max_age_sec):
+            return pd.DataFrame(), age
+        return df, age
+
+    def _latest_cached_close(self) -> Optional[float]:
+        """Best-effort latest close from any cached BTCUSDT klines."""
+        best_close = None
+        best_ts = None
+        for _key, (_ts, df) in self._cache.items():
+            if df is None or df.empty or "close_time" not in df or "close" not in df:
+                continue
+            try:
+                row = df.iloc[-1]
+                ts_val = pd.to_datetime(row["close_time"], utc=True)
+                if best_ts is None or ts_val > best_ts:
+                    best_ts = ts_val
+                    best_close = float(row["close"])
+            except Exception:
+                continue
+        return best_close
 
     # ──────────────────────────────────────────────────────────────────
     # Binance API
@@ -217,7 +278,7 @@ class BTCPriceService:
         last_exc = None
         for host in self.BINANCE_HOSTS:
             try:
-                resp = requests.get(
+                resp = self._http_session.get(
                     f"{host}/api/v3/klines",
                     params={"symbol": "BTCUSDT", "interval": interval, "limit": limit},
                     timeout=10,
@@ -242,14 +303,25 @@ class BTCPriceService:
                 logger.debug(f"Binance host {host} failed for klines ({interval}): {e}, trying next...")
                 last_exc = e
 
+        stale_df, stale_age = self._get_stale_cached_klines(cache_key)
+        if not stale_df.empty:
+            logger.warning(
+                "BTC klines fallback: using stale cached data for %s (age=%.0fs) after Binance failure: %s",
+                interval,
+                stale_age or -1.0,
+                last_exc,
+            )
+            return stale_df
+
         logger.error(f"BTC klines unavailable - all Binance endpoints failed ({interval}): {last_exc}")
         return pd.DataFrame()
 
     def get_current_price(self) -> Optional[float]:
         """Get current BTC/USDT price from Binance."""
+        last_exc = None
         for host in self.BINANCE_HOSTS:
             try:
-                resp = requests.get(
+                resp = self._http_session.get(
                     f"{host}/api/v3/ticker/price",
                     params={"symbol": "BTCUSDT"},
                     timeout=5,
@@ -258,9 +330,63 @@ class BTCPriceService:
                 return float(resp.json()["price"])
             except Exception as e:
                 logger.debug(f"Binance host {host} failed for price: {e}, trying next...")
+                last_exc = e
+
+        cl_price, cl_updated = self.get_chainlink_price()
+        if cl_price is not None and cl_updated is not None:
+            age_sec = abs((datetime.utcnow() - cl_updated).total_seconds())
+            if age_sec <= float(self._chainlink_max_age_sec):
+                logger.warning(
+                    "BTC price fallback: using Chainlink BTC/USD (age=%.0fs) after Binance failure: %s",
+                    age_sec,
+                    last_exc,
+                )
+                return float(cl_price)
+
+        cg_price = self._get_coingecko_price("bitcoin")
+        if cg_price is not None:
+            logger.warning(
+                "BTC price fallback: using CoinGecko BTC/USD after Binance failure: %s",
+                last_exc,
+            )
+            return float(cg_price)
+
+        cached_close = self._latest_cached_close()
+        if cached_close is not None:
+            logger.warning(
+                "BTC price fallback: using last cached close %.2f after Binance failure: %s",
+                cached_close,
+                last_exc,
+            )
+            return float(cached_close)
 
         logger.error("BTC price unavailable - all Binance endpoints failed. BTC/SOL strategies will skip this cycle.")
         return None
+
+    def _get_coingecko_price(self, asset_id: str) -> Optional[float]:
+        """Fetch USD spot price from CoinGecko simple price endpoint."""
+        headers = {}
+        api_key = os.getenv("COINGECKO_API_KEY", "").strip()
+        if api_key:
+            # Demo and Pro keys use different header names; send both safely.
+            headers["x-cg-demo-api-key"] = api_key
+            headers["x-cg-pro-api-key"] = api_key
+        try:
+            resp = self._http_session.get(
+                self.COINGECKO_PRICE_URL,
+                params={"ids": asset_id, "vs_currencies": "usd"},
+                headers=headers or None,
+                timeout=6,
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+            px = (data.get(asset_id) or {}).get("usd")
+            if px is None:
+                return None
+            return float(px)
+        except Exception as e:
+            logger.debug("CoinGecko price fetch failed for %s: %s", asset_id, e)
+            return None
 
     # ──────────────────────────────────────────────────────────────────
     # Chainlink Oracle (Polygon)
@@ -308,7 +434,10 @@ class BTCPriceService:
                 logger.debug(f"Chainlink RPC {rpc_url} failed: {e}")
                 continue
 
-        logger.warning("Chainlink: all Polygon RPCs failed")
+        _now = time.time()
+        if (_now - float(self._last_chainlink_fail_warn_ts)) >= float(self._chainlink_fail_warn_ttl_sec):
+            logger.warning("Chainlink: all Polygon RPCs failed")
+            self._last_chainlink_fail_warn_ts = _now
         return None, None
 
     # ──────────────────────────────────────────────────────────────────

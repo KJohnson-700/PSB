@@ -826,6 +826,20 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                         continue
 
+            _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
+                mins_left=_eval_left,
+                effective_min_edge=effective_min_edge,
+            )
+            if not _late_ok:
+                _bump_skip("late_window_blocked")
+                logger.info(
+                    f"  ETH skip '{market.question[:40]}' — "
+                    f"mins_left={_eval_left:.2f} <= late_window_block_mins={self.late_window_block_mins:.2f}"
+                )
+                continue
+            if _late_reason:
+                reason_parts.append(_late_reason)
+
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
             _ai_override_bar = float(self.min_edge_5m_ai_override)
@@ -1081,6 +1095,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
+            if self.tuning_size_multiplier > 0:
+                raw_size *= self.tuning_size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -1114,6 +1130,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 f"oracle_basis={eth.oracle_basis_bps:+.1f}bps" if eth.oracle_basis_bps is not None else "",
                 f"exp={exp_tier.value}(x{exp_multiplier:.1f})",
             ])
+            if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
+                reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,

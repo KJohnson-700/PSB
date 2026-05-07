@@ -30,10 +30,19 @@ polymarket:
 
 # Hyperliquid candle HTTP (live HYPE + OHLCV backfill). Retries tame transient timeouts.
 hyperliquid:
-  request_timeout_sec: 18
-  range_request_timeout_sec: 22
-  max_retries: 3
+  # Read timeout: applies to body-receive only (split from connect). Bumped 2026-05-06
+  # after observing 18.5s tail-latency outliers timing out at the prior 18s ceiling.
+  request_timeout_sec: 25
+  range_request_timeout_sec: 30
+  # Connect timeout: TCP+TLS handshake budget. Short — if Cloudflare edge is dead,
+  # fail fast and retry rather than burn the read budget on connect.
+  connect_timeout_sec: 5
+  max_retries: 4
   retry_backoff_base_sec: 0.5
+  # Stale-on-error fallback: if all retries fail, serve last good cached candles
+  # up to this age (sec). Prevents a brief Hyperliquid blip from blacking out
+  # HYPE signal generation for an entire scan cycle.
+  stale_on_error_max_age_sec: 180
 
 # ============================================
 # TRADING PARAMETERS
@@ -84,8 +93,8 @@ trading:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
       xrp_macro:
-        updown_stop_cents: 0.04
-        updown_exit_window_mins: 1.5
+        updown_stop_cents: 0.03      # reverted from 0.04 (candidate B, 2026-05-06) — time_stop bleed -$28.47/9 trades
+        updown_exit_window_mins: 2.25 # reverted from 1.5 (candidate B, 2026-05-06) — back to global parity
 
 data_collection:
   weather:
@@ -286,7 +295,7 @@ strategies:
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
     min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
     min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
-    min_edge_5m: 0.07             # flat tape: m5_adj often 0.04; require_btc_catalyst_5m guards 5m quality when enabled
+    min_edge_5m: 0.085            # raised from 0.07 (2026-05-06) — 5m bleed mitigation; tighten marginal admissions
     hard_min_edge: 0.07           # keep aligned with 5m floor; avoid blocking valid 5m edges
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11: reduce 15m starvation when no LTF but other gates align
     require_btc_catalyst_15m_when_unconfirmed: true  # no LTF + no catalyst = skip; stops pure macro-guess 15m entries
@@ -328,8 +337,13 @@ strategies:
     rsi_soft_penalty_buy_no: 0.00         # keep BUY_NO RSI as diagnostic only; do not suppress entries
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
     require_btc_catalyst_5m: false
+    low_corr_suppresses_entries: true   # tuning guard: hard-veto low-corr SOL entries while 5m/15m lane is under review
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
+    late_window_block_mins: 1.0         # do not enter with <=1 minute left
+    late_window_tighten_mins: 3.0       # 1-3 minutes left needs stronger edge
+    late_window_extra_min_edge: 0.14
+    tuning_size_multiplier: 0.60        # temporary risk-downsize while expectancy is being repaired
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
@@ -337,7 +351,7 @@ strategies:
     # IQL: MACD histogram is in raw price units; 0.03 was far too tight for SOL (~$84).
     # 0.15 ≈ same order as typical SOL 15m hist on meaningful moves; keeps filter on vs disabling IQL entirely.
     iql_15m_enabled: true
-    iql_15m_hist_floor: 0.15
+    iql_15m_hist_floor: 0.10      # lowered from 0.15 (2026-05-06) — 0.15 too strict for SOL ~$80 MACD scale; 15m starvation
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -365,8 +379,8 @@ strategies:
     # 15m candle: widened from 13.0-14.33 (1.3min) to 12.0-14.5 (2.5min)
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
     # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
-    entry_window_15m_min: 2.0     # minutes remaining — balance early-candle edge vs cadence misses
-    entry_window_15m_max: 16.0
+    entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
+    entry_window_15m_max: 18.0    # widened from 16.0 (2026-05-06)
     # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
@@ -411,7 +425,7 @@ strategies:
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
-    min_edge_5m: 0.07             # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
+    min_edge_5m: 0.085            # raised from 0.07 (2026-05-06) — 5m bleed mitigation; tighten marginal admissions
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11 to recover 15m participation
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
@@ -468,7 +482,7 @@ strategies:
     btc_follow_stf_bypass_when_macro_agrees: true
     btc_follow_5m_requires_impulse: true
     eth_follow_5m_min_adj: 0.02   # lowered from 0.04 — easier 5m entry in grindy tape
-    eth_follow_15m_hist_min: 0.03 # ETH 15m needs real same-direction histogram magnitude, not just above/below signal
+    eth_follow_15m_hist_min: 0.02 # lowered from 0.03 (2026-05-06) — 15m starvation; only ETH 15m-exclusive lever
     eth_follow_15m_min_adj: 0.04  # was 0.05 — slight relax to recover 15m lane without dropping hist_min
     oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
@@ -493,8 +507,8 @@ strategies:
     look_ahead_5m: 3
     max_concurrent_positions: 3
     # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
+    entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
+    entry_window_15m_max: 18.0    # widened from 16.0 (2026-05-06)
     entry_window_5m_min: 0.5      # raised from 0.0 — removes zero-minute entries
     entry_window_5m_max: 3.0      # tightened from 4.5 — removes expired-market entries
     entry_window_auto_align: true
@@ -512,6 +526,10 @@ strategies:
     require_btc_catalyst_5m: true
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
+    late_window_block_mins: 1.0         # do not enter with <=1 minute left
+    late_window_tighten_mins: 3.0       # 1-3 minutes left needs stronger edge
+    late_window_extra_min_edge: 0.14
+    tuning_size_multiplier: 0.60        # temporary risk-downsize while expectancy is being repaired
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
@@ -543,6 +561,7 @@ strategies:
     use_ai: true
     min_liquidity: 1000           # match sol_macro — evaluate liquid books only
     min_edge: 0.09                # sol_macro parity
+    min_edge_buy_no: 0.08         # added 2026-05-06 — mirror xrp_macro candidate A; addresses 48% of HYPE BUY_NO edge_below_min skips
     min_edge_5m: 0.07             # sol_macro parity (flat tape MACD tiers need reachable floor)
     hard_min_edge: 0.07           # hype_macro.py post-scan floor; align with sol_macro hard_min_edge
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11: avoid starving macro-only 15m setups
@@ -903,9 +922,9 @@ backtest:
   min_edge_btc_15m:  0.10   # matches strategies.bitcoin.min_edge
   min_edge_btc_5m:   0.08   # matches strategies.bitcoin.min_edge_5m (raised 2026-04-24)
   min_edge_sol_15m:  0.09   # matches strategies.sol_macro.min_edge
-  min_edge_sol_5m:   0.07   # matches strategies.sol_macro.min_edge_5m
+  min_edge_sol_5m:   0.085  # matches strategies.sol_macro.min_edge_5m (raised 2026-05-06)
   min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
-  min_edge_eth_5m:   0.07   # matches strategies.eth_macro.min_edge_5m (lowered 2026-04-30)
+  min_edge_eth_5m:   0.085  # matches strategies.eth_macro.min_edge_5m (raised 2026-05-06)
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
   min_edge_xrp_5m:   0.07   # matches strategies.xrp_macro.min_edge_5m (lowered 2026-04-30)
   min_edge_hype_15m: 0.09   # matches strategies.hype_macro.min_edge

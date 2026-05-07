@@ -122,6 +122,46 @@ def test_ai_decision_window_uses_configured_remaining_minutes():
     assert strategy._within_ai_decision_window(mins_left=3.2, is_5m=True) is False
 
 
+def test_sol_late_window_guard_blocks_and_tightens_edge():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["late_window_block_mins"] = 1.0
+    cfg["strategies"]["sol_macro"]["late_window_tighten_mins"] = 3.0
+    cfg["strategies"]["sol_macro"]["late_window_extra_min_edge"] = 0.14
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    allowed, edge_bar, reason = strategy._apply_late_window_guard(
+        mins_left=0.8,
+        effective_min_edge=0.09,
+    )
+    assert allowed is False
+    assert edge_bar == 0.09
+    assert reason == "late_window_blocked"
+
+    allowed2, edge_bar2, reason2 = strategy._apply_late_window_guard(
+        mins_left=2.1,
+        effective_min_edge=0.09,
+    )
+    assert allowed2 is True
+    assert edge_bar2 == 0.14
+    assert reason2 == "late_window_edge>=0.140"
+
+
+def test_sol_low_corr_hard_veto_uses_config():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["low_corr_suppresses_entries"] = True
+    cfg["strategies"]["sol_macro"]["low_corr_threshold_1h"] = 0.5
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    corr = BTCSOLCorrelation(correlation_1h=0.16)
+    assert strategy._low_corr_blocks_entry(corr) is True
+
+
+def test_sol_tuning_size_multiplier_uses_lane_config():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["tuning_size_multiplier"] = 0.6
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy.tuning_size_multiplier == 0.6
+
+
 def test_macro_oracle_feed_map_covers_all_crypto_lanes():
     assert ORACLE_FEEDS["SOLUSDT"][0] == "polygon"
     assert ORACLE_FEEDS["ETHUSDT"][0] == "polygon"

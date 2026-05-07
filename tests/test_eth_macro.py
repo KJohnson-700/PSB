@@ -93,6 +93,37 @@ def test_eth_can_disable_5m_1h_impulse_bypass():
     assert strat.btc_follow_5m_allow_1h_impulse_bypass is False
 
 
+def test_eth_late_window_guard_blocks_and_tightens_edge():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["late_window_block_mins"] = 1.0
+    cfg["strategies"]["eth_macro"]["late_window_tighten_mins"] = 3.0
+    cfg["strategies"]["eth_macro"]["late_window_extra_min_edge"] = 0.14
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    allowed, edge_bar, reason = strat._apply_late_window_guard(
+        mins_left=0.9,
+        effective_min_edge=0.09,
+    )
+    assert allowed is False
+    assert edge_bar == 0.09
+    assert reason == "late_window_blocked"
+
+    allowed2, edge_bar2, reason2 = strat._apply_late_window_guard(
+        mins_left=2.4,
+        effective_min_edge=0.09,
+    )
+    assert allowed2 is True
+    assert edge_bar2 == 0.14
+    assert reason2 == "late_window_edge>=0.140"
+
+
+def test_eth_tuning_size_multiplier_uses_lane_config():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["tuning_size_multiplier"] = 0.6
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strat.tuning_size_multiplier == 0.6
+
+
 def test_eth_oracle_basis_gate_uses_eth_config():
     cfg = _config()
     cfg["strategies"]["eth_macro"]["oracle_max_basis_bps"] = 10.0

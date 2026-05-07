@@ -313,6 +313,21 @@ class SolMacroStrategy:
         self.degraded_correlation_size_multiplier = float(
             self.config.get("degraded_correlation_size_multiplier", 0.50)
         )
+        # Late-window guard for short-dated up/down markets:
+        # hard-block the final minute and require a stronger edge in the last few minutes.
+        self.late_window_block_mins = float(
+            self.config.get("late_window_block_mins", 0.0)
+        )
+        self.late_window_tighten_mins = float(
+            self.config.get("late_window_tighten_mins", 0.0)
+        )
+        self.late_window_extra_min_edge = float(
+            self.config.get("late_window_extra_min_edge", 0.0)
+        )
+        # Temporary lane-specific size haircut while ETH/SOL are being re-tuned.
+        self.tuning_size_multiplier = float(
+            self.config.get("tuning_size_multiplier", 1.0)
+        )
         self.degraded_bearish_est_up = float(
             self.config.get("degraded_bearish_est_up", 0.45)
         )
@@ -515,6 +530,22 @@ class SolMacroStrategy:
     def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
         win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
         return win_min <= mins_left <= win_max
+
+    def _apply_late_window_guard(
+        self, *, mins_left: float, effective_min_edge: float
+    ) -> tuple[bool, float, Optional[str]]:
+        """Return late-window admission decision and any tightened edge reason."""
+        if self.late_window_block_mins > 0 and mins_left <= self.late_window_block_mins:
+            return False, effective_min_edge, "late_window_blocked"
+        if (
+            self.late_window_tighten_mins > 0
+            and self.late_window_extra_min_edge > 0
+            and mins_left <= self.late_window_tighten_mins
+        ):
+            tightened_edge = max(effective_min_edge, self.late_window_extra_min_edge)
+            if tightened_edge > effective_min_edge:
+                return True, tightened_edge, f"late_window_edge>={tightened_edge:.3f}"
+        return True, effective_min_edge, None
 
     def _resolve_rsi_gate(self, action: str, rsi: float) -> tuple[bool, float]:
         """Return (hard_block, est_prob_delta) for RSI-based suppression policy."""
@@ -2021,6 +2052,20 @@ class SolMacroStrategy:
                             )
                             continue
 
+                _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
+                    mins_left=_eval_left,
+                    effective_min_edge=effective_min_edge,
+                )
+                if not _late_ok:
+                    _bump_skip("late_window_blocked")
+                    logger.info(
+                        f"  {_brand} skip '{market.question[:40]}' — "
+                        f"mins_left={_eval_left:.2f} <= late_window_block_mins={self.late_window_block_mins:.2f}"
+                    )
+                    continue
+                if _late_reason:
+                    reason_parts.append(_late_reason)
+
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (
                 is_updown
@@ -2262,6 +2307,8 @@ class SolMacroStrategy:
                 raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
+            if self.tuning_size_multiplier > 0:
+                raw_size *= self.tuning_size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -2286,6 +2333,8 @@ class SolMacroStrategy:
                     )
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
+            if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
+                reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
 
             reason_str = " | ".join(r for r in reason_parts if r)
 

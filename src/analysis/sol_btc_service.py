@@ -25,6 +25,7 @@ Multi-Timeframe Trend (SOL):
 - 5m trend (entry timing) — MACD crossover
 """
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -210,6 +211,31 @@ class SOLBTCService:
         "https://rpc.ankr.com/arbitrum",
         "https://arbitrum.llamarpc.com",
     ]
+    COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+    COINGECKO_IDS = {
+        "BTCUSDT": "bitcoin",
+        "ETHUSDT": "ethereum",
+        "SOLUSDT": "solana",
+        "XRPUSDT": "ripple",
+        "HYPEUSDT": "hyperliquid",
+    }
+
+    @staticmethod
+    def _parse_rpc_env(value: Optional[str]) -> List[str]:
+        """Parse comma-delimited RPC env vars into a de-duplicated ordered list."""
+        if not value:
+            return []
+        out: List[str] = []
+        seen = set()
+        for raw in str(value).split(","):
+            item = raw.strip()
+            if not item:
+                continue
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
 
     def __init__(
         self,
@@ -223,8 +249,14 @@ class SOLBTCService:
         btc_spike_floor_pct_15m: float = 0.8,
         lag_signal_min_pct: float = 0.2,
     ):
+        env_polygon = self._parse_rpc_env(os.getenv("CHAINLINK_POLYGON_RPCS"))
+        env_arbitrum = self._parse_rpc_env(os.getenv("CHAINLINK_ARBITRUM_RPCS"))
         self.polygon_rpc = polygon_rpc
-        self.polygon_rpcs = self.POLYGON_RPCS if polygon_rpc is None else [polygon_rpc]
+        if polygon_rpc is not None:
+            self.polygon_rpcs = [polygon_rpc]
+        else:
+            self.polygon_rpcs = env_polygon + [u for u in self.POLYGON_RPCS if u not in env_polygon]
+        self.arbitrum_rpcs = env_arbitrum + [u for u in self.ARBITRUM_RPCS if u not in env_arbitrum]
         self.alt_symbol = alt_symbol
         self.dynamic_beta_min = float(dynamic_beta_min)
         self.dynamic_beta_max = float(dynamic_beta_max)
@@ -237,8 +269,50 @@ class SOLBTCService:
         self._warned_missing_web3 = False
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
+        self._stale_cache_max_age_sec = 15 * 60
+        self._chainlink_max_age_sec = 10 * 60
+        self._chainlink_fail_warn_ttl_sec = 120
+        self._last_chainlink_fail_warn: Dict[Tuple[str, str], float] = {}
         # (direction, spike_window) -> (first_detected_at, btc_move_abs_pct)
         self._lag_opportunity_state: Dict[Tuple[str, str], Tuple[float, float]] = {}
+        # Connection-reused HTTP session — pools TCP/TLS across calls so per-cycle
+        # Binance fetches don't pay handshake overhead each time. Same Session
+        # is reused for CoinGecko fallback (different host, separate pool entry).
+        self._http_session: requests.Session = requests.Session()
+
+    def _get_stale_cached_klines(self, cache_key: str) -> Tuple[pd.DataFrame, Optional[float]]:
+        """Return stale cached klines for key when fresh pull fails."""
+        cached = self._cache.get(cache_key)
+        if not cached:
+            return pd.DataFrame(), None
+        ts, df = cached
+        if df is None or df.empty:
+            return pd.DataFrame(), None
+        age = max(0.0, time.time() - float(ts))
+        if age > float(self._stale_cache_max_age_sec):
+            return pd.DataFrame(), age
+        return df, age
+
+    def _latest_cached_close(self, symbol: str) -> Optional[float]:
+        """Best-effort latest close from cached klines for the symbol."""
+        symbol_u = (symbol or "").upper()
+        best_close = None
+        best_ts = None
+        needle = f"binance_{symbol_u}_"
+        for key, (_ts, df) in self._cache.items():
+            if not key.startswith(needle):
+                continue
+            if df is None or df.empty or "close_time" not in df or "close" not in df:
+                continue
+            try:
+                row = df.iloc[-1]
+                ts_val = pd.to_datetime(row["close_time"], utc=True)
+                if best_ts is None or ts_val > best_ts:
+                    best_ts = ts_val
+                    best_close = float(row["close"])
+            except Exception:
+                continue
+        return best_close
 
     # ──────────────────────────────────────────────────────────────────
     # Binance API
@@ -255,7 +329,7 @@ class SOLBTCService:
         last_exc = None
         for host in self.BINANCE_HOSTS:
             try:
-                resp = requests.get(
+                resp = self._http_session.get(
                     f"{host}/api/v3/klines",
                     params={"symbol": symbol, "interval": interval, "limit": limit},
                     timeout=10,
@@ -280,25 +354,98 @@ class SOLBTCService:
                 logger.debug(f"Binance host {host} failed for klines ({symbol} {interval}): {e}, trying next...")
                 last_exc = e
 
+        stale_df, stale_age = self._get_stale_cached_klines(cache_key)
+        if not stale_df.empty:
+            logger.warning(
+                "Klines fallback: using stale cached data for %s %s (age=%.0fs) after Binance failure: %s",
+                symbol,
+                interval,
+                stale_age or -1.0,
+                last_exc,
+            )
+            return stale_df
+
         logger.error(f"SOL/BTC klines unavailable - all Binance endpoints failed ({symbol} {interval}): {last_exc}")
         return pd.DataFrame()
 
     def get_current_price(self, symbol: str = "SOLUSDT") -> Optional[float]:
         """Get current price from Binance for any symbol."""
+        symbol_u = (symbol or "").upper()
+        last_exc = None
         for host in self.BINANCE_HOSTS:
             try:
-                resp = requests.get(
+                resp = self._http_session.get(
                     f"{host}/api/v3/ticker/price",
-                    params={"symbol": symbol},
+                    params={"symbol": symbol_u},
                     timeout=5,
                 )
                 resp.raise_for_status()
                 return float(resp.json()["price"])
             except Exception as e:
-                logger.debug(f"Binance host {host} failed for price ({symbol}): {e}, trying next...")
+                logger.debug(f"Binance host {host} failed for price ({symbol_u}): {e}, trying next...")
+                last_exc = e
 
-        logger.error(f"Price unavailable for {symbol} - all Binance endpoints failed. BTC/SOL strategies will skip this cycle.")
+        cl_price, cl_updated, cl_network = self.get_chainlink_price_for_symbol(symbol_u)
+        if cl_price is not None and cl_updated is not None:
+            age_sec = abs((datetime.utcnow() - cl_updated).total_seconds())
+            if age_sec <= float(self._chainlink_max_age_sec):
+                logger.warning(
+                    "Price fallback: using Chainlink %s/USD via %s (age=%.0fs) after Binance failure: %s",
+                    symbol_u.replace("USDT", ""),
+                    cl_network,
+                    age_sec,
+                    last_exc,
+                )
+                return float(cl_price)
+
+        cg_price = self._get_coingecko_price(symbol_u)
+        if cg_price is not None:
+            logger.warning(
+                "Price fallback: using CoinGecko %s/USD after Binance failure: %s",
+                symbol_u.replace("USDT", ""),
+                last_exc,
+            )
+            return float(cg_price)
+
+        cached_close = self._latest_cached_close(symbol_u)
+        if cached_close is not None:
+            logger.warning(
+                "Price fallback: using last cached close %.6f for %s after Binance failure: %s",
+                cached_close,
+                symbol_u,
+                last_exc,
+            )
+            return float(cached_close)
+
+        logger.error(f"Price unavailable for {symbol_u} - all Binance endpoints failed. BTC/SOL strategies will skip this cycle.")
         return None
+
+    def _get_coingecko_price(self, symbol: str) -> Optional[float]:
+        """Fetch USD spot price from CoinGecko for supported symbols."""
+        asset_id = self.COINGECKO_IDS.get((symbol or "").upper())
+        if not asset_id:
+            return None
+        headers = {}
+        api_key = os.getenv("COINGECKO_API_KEY", "").strip()
+        if api_key:
+            headers["x-cg-demo-api-key"] = api_key
+            headers["x-cg-pro-api-key"] = api_key
+        try:
+            resp = self._http_session.get(
+                self.COINGECKO_PRICE_URL,
+                params={"ids": asset_id, "vs_currencies": "usd"},
+                headers=headers or None,
+                timeout=6,
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+            px = (data.get(asset_id) or {}).get("usd")
+            if px is None:
+                return None
+            return float(px)
+        except Exception as e:
+            logger.debug("CoinGecko price fetch failed for %s: %s", symbol, e)
+            return None
 
     # ──────────────────────────────────────────────────────────────────
     # Chainlink Oracle Reference Feeds
@@ -308,7 +455,7 @@ class SOLBTCService:
         if network == "polygon":
             return list(self.polygon_rpcs)
         if network == "arbitrum":
-            return list(self.ARBITRUM_RPCS)
+            return list(self.arbitrum_rpcs)
         return []
 
     def get_chainlink_price_for_symbol(
@@ -367,7 +514,12 @@ class SOLBTCService:
                 logger.debug(f"Chainlink RPC {network}:{rpc_url} failed for {symbol}: {e}")
                 continue
 
-        logger.warning(f"Chainlink: all {network} RPCs failed for {symbol}")
+        _key = (network, (symbol or "").upper())
+        _now = time.time()
+        _last = self._last_chainlink_fail_warn.get(_key, 0.0)
+        if (_now - _last) >= float(self._chainlink_fail_warn_ttl_sec):
+            logger.warning(f"Chainlink: all {network} RPCs failed for {symbol}")
+            self._last_chainlink_fail_warn[_key] = _now
         return None, None, network
 
     def get_chainlink_btc_price(self) -> Tuple[Optional[float], Optional[datetime]]:

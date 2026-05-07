@@ -121,6 +121,28 @@ class PositionExitManager:
         self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03))
         self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0))
         self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0))
+        raw_overrides = exit_cfg.get("updown_overrides") or {}
+        self.updown_overrides: Dict[str, Dict[str, float]] = {}
+        if isinstance(raw_overrides, dict):
+            for strategy, override in raw_overrides.items():
+                if not isinstance(override, dict):
+                    continue
+                self.updown_overrides[str(strategy)] = {
+                    "updown_stop_cents": float(override.get("updown_stop_cents", self.updown_stop_cents)),
+                    "updown_exit_window_mins": float(
+                        override.get("updown_exit_window_mins", self.updown_exit_window_mins)
+                    ),
+                    "updown_max_hold_mins": float(override.get("updown_max_hold_mins", self.updown_max_hold_mins)),
+                }
+
+    def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float]:
+        """Return per-strategy updown exit params with global defaults as fallback."""
+        ov = self.updown_overrides.get(str(strategy_name), {})
+        return (
+            float(ov.get("updown_stop_cents", self.updown_stop_cents)),
+            float(ov.get("updown_exit_window_mins", self.updown_exit_window_mins)),
+            float(ov.get("updown_max_hold_mins", self.updown_max_hold_mins)),
+        )
 
     def check_exits(
         self,
@@ -144,6 +166,7 @@ class PositionExitManager:
 
         for pos_id, pos in active_positions.items():
             hours_held = (now - pos.opened_at).total_seconds() / 3600.0
+            strategy_name = getattr(pos, "strategy", "") or ""
 
             # Get current market price
             current_yes_price = market_prices.get(pos.market_id)
@@ -198,11 +221,12 @@ class PositionExitManager:
             # Check exit conditions
             reason = None
             is_updown = (
-                getattr(pos, "strategy", "") in self._CRYPTO_UPDOWN_STRATEGIES
+                strategy_name in self._CRYPTO_UPDOWN_STRATEGIES
                 and "up or down" in getattr(pos, "market_question", "").lower()
             )
 
             if is_updown:
+                up_stop_cents, up_exit_window_mins, up_max_hold_mins = self._resolve_updown_exit_params(strategy_name)
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
                 if pnl_pct >= self.take_profit_pct:
@@ -223,16 +247,16 @@ class PositionExitManager:
                     if mins_remaining is not None and mins_remaining < 0:
                         # Market already past expiry but still open — exit immediately.
                         reason = "updown_expired"
-                    elif mins_remaining is not None and mins_remaining <= self.updown_exit_window_mins:
+                    elif mins_remaining is not None and mins_remaining <= up_exit_window_mins:
                         if entry_leg == "NO":
-                            adverse = current_no_price <= pos.entry_price - self.updown_stop_cents
+                            adverse = current_no_price <= pos.entry_price - up_stop_cents
                         elif pos.outcome == "NO":
-                            adverse = current_yes_price >= pos.entry_price + self.updown_stop_cents
+                            adverse = current_yes_price >= pos.entry_price + up_stop_cents
                         else:
-                            adverse = current_yes_price <= pos.entry_price - self.updown_stop_cents
+                            adverse = current_yes_price <= pos.entry_price - up_stop_cents
                         if adverse:
                             reason = "updown_time_stop"
-                    elif mins_remaining is None and hours_held >= self.updown_max_hold_mins / 60.0:
+                    elif mins_remaining is None and hours_held >= up_max_hold_mins / 60.0:
                         # Safety valve for journal-reloaded positions that have no
                         # end_date: if still open after updown_max_hold_mins, exit.
                         reason = "updown_time_limit"

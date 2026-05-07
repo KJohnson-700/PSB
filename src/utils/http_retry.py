@@ -12,7 +12,8 @@ __all__ = ["requests_get_with_retries", "requests_post_with_retries"]
 
 
 def _is_transient_http_status(status_code: int) -> bool:
-    return status_code >= 500
+    # 5xx: server errors. 408: request timeout. 425: too early. 429: rate limited.
+    return status_code >= 500 or status_code in (408, 425, 429)
 
 
 def _is_transient_exception(exc: BaseException) -> bool:
@@ -32,7 +33,31 @@ def _is_transient_exception(exc: BaseException) -> bool:
     return False
 
 
-def _sleep_backoff(attempt: int, backoff_base: float) -> None:
+def _retry_after_seconds(resp: "requests.Response") -> Optional[float]:
+    """Parse Retry-After header. Returns seconds to wait, or None if not present/invalid.
+
+    Honored when the server tells us how long to back off (rate-limit, maintenance).
+    """
+    try:
+        raw = resp.headers.get("Retry-After")
+        if not raw:
+            return None
+        # Numeric seconds form
+        try:
+            return max(0.0, float(raw))
+        except (ValueError, TypeError):
+            pass
+        # HTTP-date form — fall back to a small default so we still wait something
+        return 1.0
+    except Exception:
+        return None
+
+
+def _sleep_backoff(attempt: int, backoff_base: float, *, override_seconds: Optional[float] = None) -> None:
+    if override_seconds is not None:
+        # Cap server-suggested wait so a hostile 3600s Retry-After can't stall us.
+        time.sleep(min(override_seconds, 10.0))
+        return
     delay = backoff_base * (2 ** (attempt - 1)) + random.uniform(0, 0.35)
     time.sleep(delay)
 
@@ -65,7 +90,7 @@ def requests_get_with_retries(
                         attempt,
                         max_retries,
                     )
-                    _sleep_backoff(attempt, backoff_base)
+                    _sleep_backoff(attempt, backoff_base, override_seconds=_retry_after_seconds(resp))
                     continue
             return resp
         except Exception as exc:
@@ -94,7 +119,7 @@ def requests_post_with_retries(
     session: Optional[requests.Session] = None,
     **kwargs: Any,
 ) -> requests.Response:
-    """POST with retries on connection/timeout errors and HTTP 5xx."""
+    """POST with retries on connection/timeout errors and HTTP 408/425/429/5xx."""
     sess = session or requests
     max_retries = max(1, int(max_retries))
     last_resp: Optional[requests.Response] = None
@@ -113,7 +138,7 @@ def requests_post_with_retries(
                         attempt,
                         max_retries,
                     )
-                    _sleep_backoff(attempt, backoff_base)
+                    _sleep_backoff(attempt, backoff_base, override_seconds=_retry_after_seconds(resp))
                     continue
             return resp
         except Exception as exc:

@@ -27,10 +27,14 @@ def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> 
         out["request_timeout_sec"] = float(m["request_timeout_sec"])
     if "range_request_timeout_sec" in m and m["range_request_timeout_sec"] is not None:
         out["range_request_timeout_sec"] = float(m["range_request_timeout_sec"])
+    if "connect_timeout_sec" in m and m["connect_timeout_sec"] is not None:
+        out["connect_timeout_sec"] = float(m["connect_timeout_sec"])
     if "max_retries" in m and m["max_retries"] is not None:
         out["max_retries"] = int(m["max_retries"])
     if "retry_backoff_base_sec" in m and m["retry_backoff_base_sec"] is not None:
         out["retry_backoff_base_sec"] = float(m["retry_backoff_base_sec"])
+    if "stale_on_error_max_age_sec" in m and m["stale_on_error_max_age_sec"] is not None:
+        out["stale_on_error_max_age_sec"] = float(m["stale_on_error_max_age_sec"])
     return out
 
 
@@ -59,10 +63,12 @@ class HyperliquidHypeService(SOLBTCService):
         btc_spike_floor_pct_5m: float = 0.3,
         btc_spike_floor_pct_15m: float = 0.8,
         lag_signal_min_pct: float = 0.2,
-        request_timeout_sec: float = 18.0,
-        range_request_timeout_sec: float = 22.0,
-        max_retries: int = 3,
+        request_timeout_sec: float = 25.0,
+        range_request_timeout_sec: float = 30.0,
+        connect_timeout_sec: float = 5.0,
+        max_retries: int = 4,
         retry_backoff_base_sec: float = 0.5,
+        stale_on_error_max_age_sec: float = 180.0,
     ):
         super().__init__(
             polygon_rpc=polygon_rpc,
@@ -75,46 +81,107 @@ class HyperliquidHypeService(SOLBTCService):
             lag_signal_min_pct=lag_signal_min_pct,
         )
         self._hype_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
-        self._hype_cache_ttl = 30  # seconds
+        self._hype_cache_ttl = 30  # seconds — fresh-window TTL
         self._request_timeout_sec = max(5.0, float(request_timeout_sec))
         self._range_request_timeout_sec = max(5.0, float(range_request_timeout_sec))
+        self._connect_timeout_sec = max(2.0, float(connect_timeout_sec))
         self._max_retries = max(1, int(max_retries))
         self._retry_backoff_base_sec = max(0.05, float(retry_backoff_base_sec))
+        # Stale-on-error: when a fetch fails, keep returning the last good cached
+        # frame for up to this age. Beats returning empty (which kills HYPE signals).
+        self._stale_on_error_max_age_sec = max(0.0, float(stale_on_error_max_age_sec))
+        # Last-good cache, separate from the TTL cache so it survives expiry.
+        self._hype_last_good: Dict[str, Tuple[float, pd.DataFrame]] = {}
+        # Connection-reused HTTP session — avoids per-call TLS handshake.
+        self._http_session: requests.Session = requests.Session()
+        self._http_session.headers.update(
+            {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "psb-main/hyperliquid-hype-service",
+            }
+        )
 
     def _post_candles(self, payload: dict, *, timeout: float) -> requests.Response:
+        # Tuple form: (connect_timeout, read_timeout). Slow DNS/TLS no longer
+        # eats into the read budget — connect must succeed within 5s, then we
+        # have the full read budget for the candleSnapshot response.
+        timeout_tuple = (self._connect_timeout_sec, float(timeout))
         return requests_post_with_retries(
             self.HYPERLIQUID_INFO_URL,
             json=payload,
-            timeout=timeout,
+            timeout=timeout_tuple,
             max_retries=self._max_retries,
             backoff_base=self._retry_backoff_base_sec,
             log_name="hyperliquid.hype",
+            session=self._http_session,
         )
 
+    def _stale_fallback(self, cache_key: str, *, reason: str) -> pd.DataFrame:
+        """Return last good frame if fresh enough, else empty.
+
+        Logged at WARNING so blackouts surface in ops logs (the prior code
+        swallowed errors at logger.error level only on the very last retry).
+        """
+        rec = self._hype_last_good.get(cache_key)
+        if not rec:
+            logger.warning(
+                "Hyperliquid HYPE fetch failed (%s); no stale cache available — returning empty",
+                reason,
+            )
+            return pd.DataFrame()
+        ts, df = rec
+        age = time.time() - ts
+        if age > self._stale_on_error_max_age_sec:
+            logger.warning(
+                "Hyperliquid HYPE fetch failed (%s); last good cache is %.1fs old (>%s) — returning empty",
+                reason,
+                age,
+                self._stale_on_error_max_age_sec,
+            )
+            return pd.DataFrame()
+        logger.warning(
+            "Hyperliquid HYPE fetch failed (%s); serving stale cache %.1fs old",
+            reason,
+            age,
+        )
+        return df.copy()
+
     def _fetch_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
-        """Fetch HYPE candles from Hyperliquid (for live non-backtest use)."""
+        """Fetch HYPE candles from Hyperliquid (for live non-backtest use).
+
+        Behavior on failure:
+          - Transient network errors / 408 / 425 / 429 / 5xx already retried by
+            ``requests_post_with_retries`` (per ``max_retries``).
+          - Non-list / empty response retried once (Hyperliquid occasionally
+            returns ``[]`` mid-update).
+          - Final failure falls back to the last good cached frame if it's
+            fresh enough (``stale_on_error_max_age_sec``); else empty.
+        """
         mapped = self._INTERVAL_MAP.get(interval)
         if not mapped:
             logger.warning(f"Hyperliquid HYPE unsupported interval: {interval}")
             return pd.DataFrame()
 
         hl_interval, interval_ms = mapped
-        now_ms = int(time.time() * 1000)
-        lookback_bars = max(5, min(500, limit + 5))
-        start_ms = now_ms - (lookback_bars * interval_ms)
+        cache_key = f"hype_{interval}_{limit}"
 
-        payload = {
-            "type": "candleSnapshot",
-            "req": {
-                "coin": self.HYPE_COIN,
-                "interval": hl_interval,
-                "startTime": start_ms,
-                "endTime": now_ms,
-            },
-        }
+        def _build_payload() -> dict:
+            now_ms = int(time.time() * 1000)
+            lookback_bars = max(5, min(500, limit + 5))
+            start_ms = now_ms - (lookback_bars * interval_ms)
+            return {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": self.HYPE_COIN,
+                    "interval": hl_interval,
+                    "startTime": start_ms,
+                    "endTime": now_ms,
+                },
+            }
 
-        try:
-            resp = self._post_candles(payload, timeout=self._request_timeout_sec)
+        def _attempt() -> pd.DataFrame:
+            resp = self._post_candles(_build_payload(), timeout=self._request_timeout_sec)
             resp.raise_for_status()
             rows = resp.json() or []
             if not isinstance(rows, list) or not rows:
@@ -144,9 +211,23 @@ class HyperliquidHypeService(SOLBTCService):
 
             df = pd.DataFrame(parsed).sort_values("open_time").drop_duplicates(subset=["open_time"])
             return df.tail(limit).reset_index(drop=True)
+
+        # First attempt
+        try:
+            df = _attempt()
+            if not df.empty:
+                self._hype_last_good[cache_key] = (time.time(), df)
+                return df
+            # Empty-result retry (one extra shot — Hyperliquid intermittently returns [])
+            logger.warning("Hyperliquid HYPE empty response (%s); retrying once", interval)
+            df2 = _attempt()
+            if not df2.empty:
+                self._hype_last_good[cache_key] = (time.time(), df2)
+                return df2
+            return self._stale_fallback(cache_key, reason=f"empty {interval}")
         except Exception as e:
-            logger.error(f"Hyperliquid HYPE candles unavailable ({interval}): {e}")
-            return pd.DataFrame()
+            logger.error("Hyperliquid HYPE candles unavailable (%s): %s", interval, e)
+            return self._stale_fallback(cache_key, reason=f"exception {interval}: {e}")
 
     def fetch_klines_range(
         self,
@@ -181,7 +262,7 @@ class HyperliquidHypeService(SOLBTCService):
             },
         }
 
-        try:
+        def _attempt() -> pd.DataFrame:
             resp = self._post_candles(payload, timeout=self._range_request_timeout_sec)
             resp.raise_for_status()
             rows = resp.json() or []
@@ -221,8 +302,18 @@ class HyperliquidHypeService(SOLBTCService):
                 df = df[df["open_time"].dt.tz_localize(None) <= end_dt.replace(tzinfo=None)]
 
             return df.reset_index(drop=True)
+
+        # Range-fetch failure paths intentionally return empty (no cache fallback for
+        # backtests — they re-run, unlike live which can't replay a missed candle).
+        try:
+            df = _attempt()
+            if not df.empty:
+                return df
+            # One empty-result retry, mirroring live path
+            logger.warning("Hyperliquid HYPE range empty response (%s); retrying once", interval)
+            return _attempt()
         except Exception as e:
-            logger.error(f"Hyperliquid HYPE fetch_klines_range failed ({interval}): {e}")
+            logger.error("Hyperliquid HYPE fetch_klines_range failed (%s): %s", interval, e)
             return pd.DataFrame()
 
     def fetch_klines(self, symbol: str, interval: str = "1h", limit: int = 200) -> pd.DataFrame:
