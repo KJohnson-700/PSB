@@ -299,6 +299,32 @@
         .sid{background:rgba(30,80,200,.18);border:1px solid rgba(30,80,200,.45);border-radius:3px;padding:2px 8px;color:#70aaff;font-size:10px;display:inline-block;margin-left:10px;font-family:'IBM Plex Mono',monospace}
         .hdr-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
         .hdr-btn{padding:5px 10px;font-size:10px;white-space:nowrap}
+
+        /* ── Fullscreen readability ── */
+        html.dashboard-fullscreen body{font-size:15px}
+        html.dashboard-fullscreen .container{max-width:none;padding:20px 26px 72px}
+        html.dashboard-fullscreen .card{padding:20px}
+        html.dashboard-fullscreen .crypto-grid{gap:16px}
+        html.dashboard-fullscreen .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
+        html.dashboard-fullscreen .hero-item{padding:18px 20px;min-height:116px}
+        html.dashboard-fullscreen .hero-item .hero-val{font-size:clamp(24px,2.2vw,34px);white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
+        html.dashboard-fullscreen .hero-item .hero-sub{font-size:12px;white-space:normal;overflow:visible;text-overflow:clip}
+        html.dashboard-fullscreen .hero-item .hero-lbl{font-size:11px}
+        html.dashboard-fullscreen .crypto-hero-six{gap:12px}
+        html.dashboard-fullscreen .crypto-meta-four{gap:12px;font-size:0.95rem}
+        html.dashboard-fullscreen .crypto-meta-four>div{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
+        html.dashboard-fullscreen .card p{font-size:0.82rem;line-height:1.55}
+        html.dashboard-fullscreen .metric-box{padding:16px}
+        html.dashboard-fullscreen .metric-box .value{font-size:clamp(20px,1.8vw,28px);white-space:normal;overflow:visible;text-overflow:clip}
+        html.dashboard-fullscreen .metric-box .label{font-size:10px}
+        html.dashboard-fullscreen h2{font-size:11px}
+        html.dashboard-fullscreen h3{font-size:12px}
+        html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:80px;white-space:normal;line-height:1.45}
+        html.dashboard-fullscreen .signal-row{font-size:13px}
+        html.dashboard-fullscreen .signal-gates-grid>div{padding:12px}
+        html.dashboard-fullscreen table{font-size:13px}
+        html.dashboard-fullscreen th{font-size:10px}
+        html.dashboard-fullscreen td{font-size:12px}
     </style>
 </head>
 <body>
@@ -3077,6 +3103,7 @@ async function saveConfig() {
 
 function updateFullscreenButtonState() {
     const btn = document.getElementById('fullscreen-btn');
+    document.documentElement.classList.toggle('dashboard-fullscreen', !!document.fullscreenElement);
     if (!btn) return;
     btn.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Enter Fullscreen';
 }
