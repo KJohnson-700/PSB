@@ -11,6 +11,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Lock
+from threading import local as thread_local
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -338,6 +339,7 @@ class MarketScanner:
         self._slug_cache_lock = Lock()
         self._cycle_empty_event_slugs: set[str] = set()
         self._slug_fetch_stats: Dict[str, Dict[str, int]] = {}
+        self._gamma_thread_state = thread_local()
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
@@ -390,7 +392,23 @@ class MarketScanner:
             max_retries=self._gamma_http_max_retries,
             backoff_base=self._gamma_http_retry_backoff_base_sec,
             log_name="scanner.gamma",
+            session=self._get_gamma_requests_session(),
         )
+
+    def _get_gamma_requests_session(self) -> requests.Session:
+        """Reuse a bounded requests session per worker thread for Gamma fetches."""
+        session = getattr(self._gamma_thread_state, "gamma_session", None)
+        if session is None:
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=32,
+                pool_maxsize=32,
+                max_retries=0,
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            self._gamma_thread_state.gamma_session = session
+        return session
 
     def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
         text = f"{question or ''} {description or ''}"
@@ -812,8 +830,11 @@ class MarketScanner:
                 params = {"limit": min(limit - len(markets), 100), "offset": offset,
                           "active": "true", "closed": "false"}
                 resp = self._gamma_get("/markets", params=params, timeout=15)
-                resp.raise_for_status()
-                batch = resp.json()
+                try:
+                    resp.raise_for_status()
+                    batch = resp.json()
+                finally:
+                    resp.close()
                 if not batch:
                     break
                 for gm in batch:
@@ -1021,27 +1042,33 @@ class MarketScanner:
                 market_resp = self._gamma_get(
                     "/markets", params={"slug": slug}, timeout=timeout_sec
                 )
-                if market_resp.status_code == 200:
-                    for gm in market_resp.json() or []:
-                        parsed = self._parse_gamma_event_market(gm, slug)
-                        if parsed is not None:
-                            parsed_markets.append(parsed)
-                    # Non-empty /markets: done. Empty /markets on *-updown-* slugs must still
-                    # try /events — Gamma often nests those markets under the event only.
-                    if parsed_markets:
-                        return parsed_markets
+                try:
+                    if market_resp.status_code == 200:
+                        for gm in market_resp.json() or []:
+                            parsed = self._parse_gamma_event_market(gm, slug)
+                            if parsed is not None:
+                                parsed_markets.append(parsed)
+                        # Non-empty /markets: done. Empty /markets on *-updown-* slugs must still
+                        # try /events — Gamma often nests those markets under the event only.
+                        if parsed_markets:
+                            return parsed_markets
+                finally:
+                    market_resp.close()
 
                 resp = self._gamma_get(
                     "/events", params={"slug": slug}, timeout=timeout_sec
                 )
-                if resp.status_code == 200:
-                    events = resp.json() or []
-                    if events:
-                        event = events[0]
-                        for gm in event.get("markets", []):
-                            parsed = self._parse_gamma_event_market(gm, slug)
-                            if parsed is not None:
-                                parsed_markets.append(parsed)
+                try:
+                    if resp.status_code == 200:
+                        events = resp.json() or []
+                        if events:
+                            event = events[0]
+                            for gm in event.get("markets", []):
+                                parsed = self._parse_gamma_event_market(gm, slug)
+                                if parsed is not None:
+                                    parsed_markets.append(parsed)
+                finally:
+                    resp.close()
             except Exception as e:
                 logger.debug(f"Failed to fetch updown slug {slug}: {e}")
             if not parsed_markets:
@@ -1073,7 +1100,7 @@ class MarketScanner:
                 if limit is not None and len(markets) >= limit:
                     break
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+            pool.shutdown(wait=True, cancel_futures=True)
         if stats_key:
             self._set_slug_fetch_stats(
                 stats_key,
@@ -1236,8 +1263,11 @@ class MarketScanner:
                         "tag_slug": tag_slug,
                     }
                     resp = self._gamma_get("/events", params=params, timeout=8)
-                    resp.raise_for_status()
-                    events = resp.json() or []
+                    try:
+                        resp.raise_for_status()
+                        events = resp.json() or []
+                    finally:
+                        resp.close()
                     if not events:
                         break
                     for event in events:
@@ -1278,8 +1308,11 @@ class MarketScanner:
                         "closed": "false",
                     }
                     resp = self._gamma_get("/markets", params=params, timeout=8)
-                    resp.raise_for_status()
-                    batch = resp.json()
+                    try:
+                        resp.raise_for_status()
+                        batch = resp.json()
+                    finally:
+                        resp.close()
                     if not batch:
                         break
                     parsed_batch = self._parse_markets(batch)

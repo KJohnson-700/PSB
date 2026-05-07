@@ -25,8 +25,8 @@ def test_parse_gamma_event_market_accepts_array_fields():
             "groupItemTitle": "",
             "outcomePrices": ["0.52", "0.48"],
             "clobTokenIds": ["yes", "no"],
-            "volume": "1000",
-            "liquidity": "1000",
+            "volume": "50000",
+            "liquidity": "50000",
             "endDate": "2026-04-29T03:00:00Z",
         },
         "bitcoin-up-or-down-april-28-2026-10pm-et",
@@ -37,18 +37,68 @@ def test_parse_gamma_event_market_accepts_array_fields():
     assert market.end_date == datetime(2026, 4, 29, 2, 15, tzinfo=timezone.utc)
 
 
-def test_fetch_event_slug_markets_records_per_source_slug_stats(monkeypatch):
+def test_fetch_markets_gamma_closes_bulk_response(monkeypatch):
     scanner = MarketScanner(_config())
+    closed = {"count": 0}
+    payload = [
+        {
+            "id": "m1",
+            "question": "Bitcoin Up or Down - April 28, 10:00PM-10:15PM ET",
+            "description": "",
+            "outcomePrices": ["0.52", "0.48"],
+            "clobTokenIds": ["yes", "no"],
+            "volume": "50000",
+            "liquidity": "50000",
+            "spread": "0.02",
+            "endDate": "2026-04-29T02:15:00Z",
+            "groupItemTitle": "",
+            "slug": "btc-updown-15m-123",
+        }
+    ]
 
     class _Resp:
         def __init__(self, payload):
             self.status_code = 200
             self._payload = payload
 
+        def raise_for_status(self):
+            return None
+
         def json(self):
             return self._payload
 
-    def _fake_get(url, params=None, timeout=None):  # noqa: ARG001
+        def close(self):
+            closed["count"] += 1
+
+    def _fake_gamma_get(path, params=None, timeout=None):  # noqa: ARG001
+        if (params or {}).get("offset", 0) == 0:
+            return _Resp(payload)
+        return _Resp([])
+
+    monkeypatch.setattr(scanner, "_gamma_get", _fake_gamma_get)
+
+    markets = scanner._fetch_markets_gamma(limit=1)
+    assert len(markets) == 1
+    assert closed["count"] == 1
+
+
+def test_fetch_event_slug_markets_records_per_source_slug_stats(monkeypatch):
+    scanner = MarketScanner(_config())
+    closed = []
+
+    class _Resp:
+        def __init__(self, payload, slug):
+            self.status_code = 200
+            self._payload = payload
+            self._slug = slug
+
+        def json(self):
+            return self._payload
+
+        def close(self):
+            closed.append(self._slug)
+
+    def _fake_gamma_get(path, params=None, timeout=None):  # noqa: ARG001
         slug = (params or {}).get("slug", "")
         if "hit" in slug:
             return _Resp(
@@ -62,11 +112,12 @@ def test_fetch_event_slug_markets_records_per_source_slug_stats(monkeypatch):
                         "volume": "1000",
                         "liquidity": "1000",
                     }
-                ]
+                ],
+                slug,
             )
-        return _Resp([])
+        return _Resp([], slug)
 
-    monkeypatch.setattr("src.market.scanner.requests.get", _fake_get)
+    monkeypatch.setattr(scanner, "_gamma_get", _fake_gamma_get)
 
     markets = scanner._fetch_event_slug_markets(
         ["btc-updown-15m-hit", "btc-updown-15m-miss"],
@@ -80,6 +131,7 @@ def test_fetch_event_slug_markets_records_per_source_slug_stats(monkeypatch):
     assert stats["attempted_slugs"] == 2
     assert stats["hit_slugs"] == 1
     assert stats["empty_slug_responses"] == 1
+    assert sorted(closed) == ["btc-updown-15m-hit", "btc-updown-15m-miss", "btc-updown-15m-miss"]
 
 
 def test_empty_slug_cache_skips_repeat_lookup_within_cycle(monkeypatch):
@@ -92,11 +144,14 @@ def test_empty_slug_cache_skips_repeat_lookup_within_cycle(monkeypatch):
         def json(self):
             return []
 
-    def _fake_get(url, params=None, timeout=None):  # noqa: ARG001
+        def close(self):
+            return None
+
+    def _fake_gamma_get(path, params=None, timeout=None):  # noqa: ARG001
         calls["count"] += 1
         return _Resp()
 
-    monkeypatch.setattr("src.market.scanner.requests.get", _fake_get)
+    monkeypatch.setattr(scanner, "_gamma_get", _fake_gamma_get)
 
     scanner._fetch_event_slug_markets(["btc-updown-15m-empty"], timeout_sec=1)
     # Empty /markets then /events attempt before caching miss as empty.
@@ -116,30 +171,38 @@ def test_updown_slug_falls_through_to_events_when_markets_empty(monkeypatch):
         "volume": "1000",
         "liquidity": "1000",
     }
+    closed = []
 
-    def _fake_get(url, params=None, timeout=None):  # noqa: ARG001
-        if "/markets" in url:
+    def _fake_gamma_get(path, params=None, timeout=None):  # noqa: ARG001
+        if "/markets" in path:
             class _MarketsResp:
                 status_code = 200
 
                 def json(self_inner):
                     return []
 
+                def close(self_inner):
+                    closed.append("markets")
+
             return _MarketsResp()
-        if "/events" in url:
+        if "/events" in path:
             class _EventsResp:
                 status_code = 200
 
                 def json(self_inner):
                     return [{"markets": [gm_payload]}]
 
-            return _EventsResp()
-        raise AssertionError(url)
+                def close(self_inner):
+                    closed.append("events")
 
-    monkeypatch.setattr("src.market.scanner.requests.get", _fake_get)
+            return _EventsResp()
+        raise AssertionError(path)
+
+    monkeypatch.setattr(scanner, "_gamma_get", _fake_gamma_get)
 
     markets = scanner._fetch_event_slug_markets(
         ["btc-updown-15m-1234567890"], timeout_sec=1
     )
     assert len(markets) == 1
     assert markets[0].id == "from-event"
+    assert closed == ["markets", "events"]
