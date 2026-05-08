@@ -184,7 +184,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.20
+    kelly_fraction: 0.40    # 2026-05-07: 0.20→0.40 after min_trade_usd fix exposed Kelly raw was too small for target $10–15 stake
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
     # Tight band for updown markets — prevents betting against strong market consensus.
@@ -315,7 +315,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.18
+    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed alt Kelly raw was too small
     entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
     entry_price_max: 0.58
     # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
@@ -343,7 +343,7 @@ strategies:
     late_window_block_mins: 1.0         # do not enter with <=1 minute left
     late_window_tighten_mins: 3.0       # 1-3 minutes left needs stronger edge
     late_window_extra_min_edge: 0.14
-    tuning_size_multiplier: 0.60        # temporary risk-downsize while expectancy is being repaired
+    tuning_size_multiplier: 1.0         # 2026-05-07: removed temporary 0.60 downsize; expectancy repair handled by gate changes this session
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
@@ -456,7 +456,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.18
+    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed alt Kelly raw was too small
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
@@ -529,7 +529,7 @@ strategies:
     late_window_block_mins: 1.0         # do not enter with <=1 minute left
     late_window_tighten_mins: 3.0       # 1-3 minutes left needs stronger edge
     late_window_extra_min_edge: 0.14
-    tuning_size_multiplier: 0.60        # temporary risk-downsize while expectancy is being repaired
+    tuning_size_multiplier: 1.0         # 2026-05-07: removed temporary 0.60 downsize; expectancy repair handled by gate changes this session
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
@@ -583,7 +583,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.16
+    kelly_fraction: 0.32    # 2026-05-07: 0.16→0.32 after min_trade_usd fix exposed HYPE Kelly raw was too small
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_lag_magnitude_pct: 0.40   # sol_macro parity — lag signals need magnitude before sizing entry
@@ -664,7 +664,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.18
+    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed XRP Kelly raw was too small
     entry_price_min: 0.42
     entry_price_max: 0.58
     entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES
