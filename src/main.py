@@ -685,6 +685,116 @@ class PolyBot:
                 "Polymarket private key (PRIVATE_KEY or POLYMARKET_PRIVATE_KEY) not found in .env / config/secrets.env."
             )
 
+    async def _run_startup_narrators(self) -> None:
+        """Run AI narrators against the previous session and write the result
+        into the current session's journal dir as `_ai_summary.md`. Fire-and-forget
+        from start() — never blocks the trading loop. Self-gates on
+        ai.session_summary.enabled."""
+        try:
+            summary_cfg = (self.config.get("ai", {}) or {}).get("session_summary", {}) or {}
+            if not summary_cfg.get("enabled", False):
+                return
+            if not getattr(self, "ai_agent", None) or not self.ai_agent.is_available():
+                return
+
+            from pathlib import Path as _Path
+            from src.execution.trade_journal import JOURNAL_DIR as _JD
+            from src.analysis.ai_narrators import (
+                aggregate_skip_exit_distributions,
+                detect_calibration_drift,
+                explain_strategy_conflict,
+                load_closed_trades_from_summary,
+                load_shadow_records,
+                summarize_skip_exit_reasons,
+                summarize_underperformance,
+            )
+            from src.execution.trade_journal import TradeJournal as _TJ
+
+            current_dir = _Path(self.journal.session_dir)
+            sessions = sorted(
+                [
+                    p for p in _Path(_JD).iterdir()
+                    if p.is_dir() and p.name < current_dir.name and _TJ.session_dir_has_activity(p)
+                ],
+                key=lambda p: p.name,
+                reverse=True,
+            )
+            if not sessions:
+                logging.info("No previous session found; skipping startup narrators.")
+                return
+            prev = sessions[0]
+            timeout = float(summary_cfg.get("timeout_seconds", 30))
+
+            blocks: list = []
+            from datetime import datetime as _dt, timezone as _tz
+            blocks.append(f"\n## AI session summary — startup {_dt.now(_tz.utc).isoformat(timespec='seconds')}\n")
+            blocks.append(f"_Previous session: `{prev.name}`_\n")
+
+            # Underperformance narrator (best-effort: looks for a recent saved report)
+            if summary_cfg.get("include_underperformance", True):
+                report_paths = sorted(
+                    (_Path(__file__).resolve().parents[1] / "docs" / "session_reports").glob("*underperformance*.md"),
+                    reverse=True,
+                )
+                if report_paths:
+                    try:
+                        report_dict = {"_raw_markdown": report_paths[0].read_text(encoding="utf-8", errors="replace")}
+                        text = await summarize_underperformance(report_dict, self.ai_agent, timeout=timeout)
+                        if text:
+                            blocks.append("### Underperformance\n" + text + "\n")
+                    except Exception as e:
+                        logging.debug("startup narrator (underperf) failed: %s", e)
+
+            if summary_cfg.get("include_skip_exit_reasons", True):
+                try:
+                    dist = aggregate_skip_exit_distributions(prev / "entries.jsonl")
+                    text = await summarize_skip_exit_reasons(
+                        dist.get("skip", {}), dist.get("exit", {}), self.ai_agent, timeout=timeout
+                    )
+                    if text:
+                        blocks.append("### Skip / exit reasons\n" + text + "\n")
+                except Exception as e:
+                    logging.debug("startup narrator (skip/exit) failed: %s", e)
+
+            if summary_cfg.get("include_calibration_drift", True):
+                try:
+                    shadow_path = _Path(__file__).resolve().parents[1] / "data" / "logs" / "ai_pipeline" / "shadow_pipeline.jsonl"
+                    shadow = load_shadow_records(shadow_path)
+                    closed = load_closed_trades_from_summary(prev / "summary.json")
+                    text = await detect_calibration_drift(shadow, closed, self.ai_agent, timeout=timeout)
+                    if text:
+                        blocks.append("### Calibration drift\n" + text + "\n")
+                except Exception as e:
+                    logging.debug("startup narrator (calibration) failed: %s", e)
+
+            if summary_cfg.get("include_strategy_conflict", True):
+                scan_summaries_path = prev / "scan_summaries.json"
+                if scan_summaries_path.exists():
+                    try:
+                        import json as _json
+                        with open(scan_summaries_path, encoding="utf-8") as f:
+                            scan_summaries = _json.load(f) or {}
+                        if scan_summaries:
+                            text = await explain_strategy_conflict(scan_summaries, self.ai_agent, timeout=timeout)
+                            if text:
+                                blocks.append("### Strategy conflict\n" + text + "\n")
+                    except Exception as e:
+                        logging.debug("startup narrator (conflict) failed: %s", e)
+
+            if len(blocks) <= 2:
+                logging.info("Startup narrators produced no output; nothing written.")
+                return
+
+            out_path = current_dir / "_ai_summary.md"
+            try:
+                with open(out_path, "a", encoding="utf-8") as f:
+                    f.write("\n".join(blocks))
+                logging.info("Startup AI summary written: %s", out_path)
+            except OSError as e:
+                logging.warning("Failed to write startup AI summary: %s", e)
+        except Exception as e:
+            logging.debug("startup narrators failed: %s", e)
+
     async def start(self):
         """Start the trading bot"""
         self.running = True
@@ -694,6 +804,10 @@ class PolyBot:
             f"Dry Run Mode: {self.config.get('trading', {}).get('dry_run', True)}"
         )
         logging.info("=" * 50)
+
+        # Fire-and-forget: narrate the previous session into the new session dir.
+        # Off the trading hot path; never awaited.
+        asyncio.create_task(self._run_startup_narrators())
 
         from src.ops_pulse import log_ops_startup
 
