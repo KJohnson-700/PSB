@@ -67,7 +67,7 @@ trading:
   # Daily loss limit before stopping (%)
   daily_loss_limit: 0.15
   # Kelly criterion fraction (0.0 - 1.0)
-  kelly_fraction: 0.25
+  kelly_fraction: 0.37    # 2026-05-07: 1.5× original 0.25; global default fallback aligned with calibrated per-strategy values
   # Optional BTC spot regime hints for ops (/api/ops/summary, OPS_JSON). Does not gate trades alone.
   regime:
     enabled: false
@@ -139,7 +139,7 @@ strategies:
     min_hours_to_resolution: 2.0
     max_hours_to_resolution: 72.0      # Used only when resolution_window_enabled=true
     max_yes_price: 0.45
-    kelly_fraction: 0.25
+    kelly_fraction: 0.37    # 2026-05-07: 1.5× original 0.25; weather (currently disabled but tracked)
     max_position_size: 20
     metar_enabled: true
     forecast_horizon_days: 3
