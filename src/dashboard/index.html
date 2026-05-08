@@ -372,6 +372,7 @@
             <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
+        <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="ops-mini" title="scan_skip_digest from bot — top reasons markets did not become signals">
             <div class="ops-mini-head">Top Scan Skips</div>
             <div id="ops-skip-digest" class="ops-mini-body"></div>
@@ -745,6 +746,16 @@
         <div id="kelly-status" style="margin-top:10px;font-size:0.75rem;color:var(--text-muted);"></div>
         <div class="scrollbox" id="live-equity" style="max-height:120px;margin-top:8px;"></div>
 
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <span style="font-weight:600;font-size:0.88rem;">Exit Reasons (current session)</span>
+                <span id="exit-reasons-total" style="font-size:0.72rem;color:var(--text-muted);">-</span>
+            </div>
+            <div id="exit-reasons-empty" style="display:none;color:var(--text-muted);font-size:0.78rem;">No closed trades yet</div>
+            <div id="exit-reasons-bar" style="display:flex;width:100%;height:40px;border-radius:6px;overflow:hidden;background:var(--surface2);border:1px solid var(--border);"></div>
+            <div id="exit-reasons-legend" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin-top:8px;font-size:0.74rem;color:var(--text-muted);"></div>
+        </div>
+
         <!-- Updown Strategy Breakdown -->
         <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -1053,10 +1064,10 @@
                     <h3>Trading</h3>
                     <div class="cfg-field"><label>Bankroll</label><input type="number" id="cfg-backtest-initial_bankroll" step="100" value="10000"></div>
                     <div class="cfg-field"><label>Fallback Min Size ($)</label><input type="number" id="cfg-trading-default_position_size" step="1" min="1" value="10"></div>
-                    <div class="cfg-field"><label>Fallback Max Size ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="15"></div>
-                    <div class="cfg-field"><label>Max Days to Resolution</label><input type="number" id="cfg-trading-max_days_to_resolution" step="1" min="1" max="90" value="14" title="Skip markets resolving > N days out (7-14 recommended)"></div>
-                    <div class="cfg-field"><label>Min Hours to Resolution</label><input type="number" id="cfg-trading-min_hours_to_resolution" step="1" min="0" value="24" title="Skip markets resolving in < N hours"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-trading-kelly_fraction" step="0.05" value="0.25"></div>
+                    <div class="cfg-field"><label>Fallback Max Size ($)</label><input type="number" id="cfg-trading-max_position_size" step="1" min="1" value="25"></div>
+                    <div class="cfg-field"><label>Max Days to Resolution</label><input type="number" id="cfg-trading-max_days_to_resolution" step="1" min="1" max="365" value="365" title="Skip markets resolving > N days out"></div>
+                    <div class="cfg-field"><label>Min Hours to Resolution</label><input type="number" id="cfg-trading-min_hours_to_resolution" step="1" min="0" value="1" title="Skip markets resolving in < N hours"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-trading-kelly_fraction" step="0.05" value="0.37"></div>
                     <div class="cfg-field"><label>Daily Loss Limit</label><input type="number" id="cfg-trading-daily_loss_limit" step="0.01" value="0.15"></div>
                 </div>
                 <div class="cfg-group">
@@ -1064,6 +1075,7 @@
                     <div class="cfg-field"><label>Take Profit %</label><input type="number" id="cfg-backtest-take_profit_pct" step="0.01" value="0.20"></div>
                     <div class="cfg-field"><label>Stop Loss %</label><input type="number" id="cfg-backtest-stop_loss_pct" step="0.01" value="0.15"></div>
                     <div class="cfg-field"><label>Max Hold (hrs)</label><input type="number" id="cfg-backtest-max_hold_hours" step="1" value="72"></div>
+                    <div class="cfg-field"><label>Updown Stop Loss %</label><input type="number" id="cfg-trading-exit_rules-updown_stop_loss_pct" step="0.01" min="0" max="1" value="0.20"></div>
                     <div class="cfg-field"><label>Max Exposure/Trade</label><input type="number" id="cfg-trading-max_exposure_per_trade" step="0.01" value="0.05"></div>
                 </div>
                 <div class="cfg-group">
@@ -1071,7 +1083,7 @@
                     <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-bitcoin-min_edge" step="0.01" value="0.08"></div>
                     <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-bitcoin-entry_price_min" step="0.01" value="0.15"></div>
                     <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-bitcoin-entry_price_max" step="0.01" value="0.85"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-bitcoin-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-bitcoin-kelly_fraction" step="0.01" value="0.30"></div>
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-bitcoin-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
@@ -1079,7 +1091,7 @@
                     <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-sol_macro-min_edge" step="0.01" value="0.08"></div>
                     <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-sol_macro-entry_price_min" step="0.01" value="0.15"></div>
                     <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-sol_macro-entry_price_max" step="0.01" value="0.85"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-sol_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-sol_macro-kelly_fraction" step="0.01" value="0.27"></div>
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-sol_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
@@ -1087,26 +1099,30 @@
                     <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-eth_macro-min_edge" step="0.01" value="0.06"></div>
                     <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-eth_macro-entry_price_min" step="0.01" value="0.46"></div>
                     <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-eth_macro-entry_price_max" step="0.01" value="0.54"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-eth_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-eth_macro-kelly_fraction" step="0.01" value="0.27"></div>
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-eth_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>XRP Macro Strategy</h3>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_macro-kelly_fraction" step="0.01" value="0.08"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-xrp_macro-kelly_fraction" step="0.01" value="0.27"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>HYPE Macro Strategy</h3>
                     <div class="cfg-field"><label>Min Edge</label><input type="number" id="cfg-strategies-hype_macro-min_edge" step="0.01" value="0.09"></div>
                     <div class="cfg-field"><label>Entry Min</label><input type="number" id="cfg-strategies-hype_macro-entry_price_min" step="0.01" value="0.46"></div>
                     <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-hype_macro-entry_price_max" step="0.01" value="0.54"></div>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-hype_macro-kelly_fraction" step="0.01" value="0.15"></div>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-hype_macro-kelly_fraction" step="0.01" value="0.24"></div>
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-hype_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
                 </div>
                 <div class="cfg-group">
+                    <h3>Weather Strategy</h3>
+                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-weather-kelly_fraction" step="0.01" value="0.37"></div>
+                </div>
+                <div class="cfg-group">
                     <h3>Exposure Scaling</h3>
-                    <div class="cfg-field"><label>Full Size ($)</label><input type="number" id="cfg-exposure-full_size" step="0.5" value="15.0"></div>
-                    <div class="cfg-field"><label>Moderate ($)</label><input type="number" id="cfg-exposure-moderate_size" step="0.5" value="10.0"></div>
-                    <div class="cfg-field"><label>Minimal ($)</label><input type="number" id="cfg-exposure-minimal_size" step="0.5" value="10.0"></div>
+                    <div class="cfg-field"><label>Full Size ($)</label><input type="number" id="cfg-exposure-full_size" step="0.5" value="25.0"></div>
+                    <div class="cfg-field"><label>Moderate ($)</label><input type="number" id="cfg-exposure-moderate_size" step="0.5" value="15.0"></div>
+                    <div class="cfg-field"><label>Minimal ($)</label><input type="number" id="cfg-exposure-minimal_size" step="0.5" value="8.0"></div>
                     <div class="cfg-field"><label>Max Losses</label><input type="number" id="cfg-exposure-max_consecutive_losses" step="1" value="3"></div>
                     <div class="cfg-field"><label>Pause Cycles</label><input type="number" id="cfg-exposure-pause_cycles" step="1" value="2"></div>
                     <div class="cfg-field" style="grid-column:1/-1;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="cfg-exposure-loss_kill_switch_enabled"> 3-loss streak pauses that lane (exposure kill switch)</label></div>
@@ -1205,6 +1221,19 @@
 </div><!-- /container -->
 
 <script>
+const EXIT_REASON_COLORS = {
+    take_profit: '#2ecc71',
+    updown_stop_loss: '#f39c12',
+    updown_time_stop: '#e67e22',
+    updown_time_limit: '#95a5a6',
+    updown_expired: '#7f8c8d',
+    stop_loss: '#e74c3c',
+    time_limit: '#bdc3c7',
+    'RESOLVED:YES': '#3498db',
+    'RESOLVED:NO': '#9b59b6',
+};
+const UNKNOWN_EXIT_REASON_COLOR = '#34495e';
+
 function switchMainView(which) {
     try { localStorage.setItem('psb_main_view', which); } catch (e) {}
     document.querySelectorAll('#main-view-tabs .tab').forEach(function(t) {
@@ -1427,9 +1456,9 @@ async function fetchAll() {
     const needPerformance = currentView === 'performance';
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
-    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR;
+    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR;
     try {
-        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR] = await Promise.all([
+        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
@@ -1448,6 +1477,7 @@ async function fetchAll() {
             needPerformance ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
             needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
+            needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
         ]);
     } catch (e) {
         console.error('[dashboard] fetch batch:', e);
@@ -1554,6 +1584,10 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] trade journey:', e); }
 
     try {
+        if (exitReasonR?.ok) updateExitReasons(await exitReasonR.json());
+    } catch (e) { console.error('[dashboard] exit reasons:', e); }
+
+    try {
         updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData);
     } catch (e) { console.error('[dashboard] crypto signal status:', e); }
 
@@ -1646,7 +1680,18 @@ function applyHeroMetrics(d) {
     if (bankEl) {
         bankEl.textContent = Number.isFinite(bankroll)
             ? '$' + bankroll.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})
-            : '-';
+            : '—';
+    }
+    const warnEl = document.getElementById('bankroll-warning');
+    if (warnEl) {
+        const warning = d.bankroll_warning || (d.bankroll_source === 'unavailable' ? 'Could not resolve bankroll from journal, summary, or snapshots.' : '');
+        if (warning) {
+            warnEl.textContent = warning;
+            warnEl.style.display = 'block';
+        } else {
+            warnEl.textContent = '';
+            warnEl.style.display = 'none';
+        }
     }
     const brSub = document.getElementById('hero-bankroll-sub');
     if (brSub) brSub.textContent = d.session_id ? ('id ' + String(d.session_id).slice(-14)) : '';
@@ -1719,6 +1764,8 @@ function sseSnapshotToStatusShape(raw) {
     const sessOpen = raw.session_open != null && raw.session_open !== undefined ? Number(raw.session_open) : openN;
     return {
         bankroll: raw.bankroll,
+        bankroll_source: raw.bankroll_source,
+        bankroll_warning: raw.bankroll_warning,
         session_id: raw.session_id,
         portfolio: {
             daily_pnl: raw.daily_pnl,
@@ -2941,6 +2988,7 @@ async function loadConfig() {
             'cfg-trading-kelly_fraction': d.trading?.kelly_fraction,
             'cfg-trading-daily_loss_limit': d.trading?.daily_loss_limit,
             'cfg-trading-max_exposure_per_trade': d.trading?.max_exposure_per_trade,
+            'cfg-trading-exit_rules-updown_stop_loss_pct': d.trading?.exit_rules?.updown_stop_loss_pct,
             'cfg-backtest-take_profit_pct': d.backtest?.take_profit_pct,
             'cfg-backtest-stop_loss_pct': d.backtest?.stop_loss_pct,
             'cfg-backtest-max_hold_hours': d.backtest?.max_hold_hours,
@@ -2965,6 +3013,7 @@ async function loadConfig() {
             'cfg-strategies-hype_macro-kelly_fraction': d.strategies?.hype_macro?.kelly_fraction,
             'cfg-strategies-hype_macro-ai_confidence_threshold': d.strategies?.hype_macro?.ai_confidence_threshold,
             'cfg-strategies-xrp_macro-kelly_fraction': d.strategies?.xrp_macro?.kelly_fraction,
+            'cfg-strategies-weather-kelly_fraction': d.strategies?.weather?.kelly_fraction,
             'cfg-exposure-full_size': d.exposure?.full_size,
             'cfg-exposure-moderate_size': d.exposure?.moderate_size,
             'cfg-exposure-minimal_size': d.exposure?.minimal_size,
@@ -3059,6 +3108,7 @@ function readConfigNumber(el) {
         'ai_confidence_threshold',
         'take_profit_pct',
         'stop_loss_pct',
+        'updown_stop_loss_pct',
         'daily_loss_limit',
         'max_exposure_per_trade',
     ];
@@ -3086,12 +3136,8 @@ async function saveConfig() {
         });
         const minTrade = Number(updates?.trading?.default_position_size ?? NaN);
         const maxTrade = Number(updates?.trading?.max_position_size ?? NaN);
-        const minTier = Number(updates?.exposure?.minimal_size ?? NaN);
         if (Number.isFinite(minTrade) && Number.isFinite(maxTrade) && minTrade > maxTrade) {
             throw new Error('trading.default_position_size cannot be greater than trading.max_position_size');
-        }
-        if (Number.isFinite(minTrade) && Number.isFinite(minTier) && minTier < minTrade) {
-            throw new Error('exposure.minimal_size cannot be lower than trading.default_position_size');
         }
         const r = await fetch('/api/config', {method: 'POST', headers: dashAuthHeaders({'Content-Type': 'application/json'}), body: JSON.stringify(updates)});
         const d = await r.json();
@@ -3398,6 +3444,45 @@ function updateSOLAnalysis(d) { updateAltLagAnalysis(d, 'sol'); }
 function updateETHAnalysis(d) { updateAltLagAnalysis(d, 'eth'); }
 function updateHYPEAnalysis(d) { updateAltLagAnalysis(d, 'hype'); }
 function updateXRPAnalysis(d) { updateAltLagAnalysis(d, 'xrp'); }
+
+function updateExitReasons(d) {
+    const bar = $('exit-reasons-bar');
+    const legend = $('exit-reasons-legend');
+    const empty = $('exit-reasons-empty');
+    const totalEl = $('exit-reasons-total');
+    if (!bar || !legend || !empty) return;
+    const total = Number(d?.total || 0);
+    if (totalEl) totalEl.textContent = total ? `${total} closed` : '-';
+    if (!total) {
+        empty.style.display = 'block';
+        bar.style.display = 'none';
+        legend.innerHTML = '';
+        return;
+    }
+    empty.style.display = 'none';
+    bar.style.display = 'flex';
+    const counts = d?.total_by_reason && typeof d.total_by_reason === 'object' ? d.total_by_reason : {};
+    const pnlStats = d?.win_loss_by_reason && typeof d.win_loss_by_reason === 'object' ? d.win_loss_by_reason : {};
+    const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const rows = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
+    bar.innerHTML = rows.map(([reason, count]) => {
+        const n = Number(count || 0);
+        const color = EXIT_REASON_COLORS[reason] || UNKNOWN_EXIT_REASON_COLOR;
+        const avg = n ? Number((pnlStats[reason]?.pnl || 0) / n) : 0;
+        const width = Math.max(1, (n / total) * 100);
+        return `<div title="${esc(reason)}: ${n} trades, avg pnl $${avg.toFixed(2)}" style="height:100%;width:${width}%;background:${color};"></div>`;
+    }).join('');
+    legend.innerHTML = rows.map(([reason, count]) => {
+        const n = Number(count || 0);
+        const color = EXIT_REASON_COLORS[reason] || UNKNOWN_EXIT_REASON_COLOR;
+        const avg = n ? Number((pnlStats[reason]?.pnl || 0) / n) : 0;
+        const avgColor = avg > 0 ? 'var(--green)' : avg < 0 ? 'var(--red)' : 'var(--text-muted)';
+        return `<div title="${esc(reason)}: ${n} trades, avg pnl $${avg.toFixed(2)}" style="display:flex;align-items:center;gap:6px;min-width:0;">
+            <span style="width:10px;height:10px;border-radius:2px;background:${color};flex:0 0 auto;"></span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(reason)}: ${n} <span style="color:${avgColor};">($${avg.toFixed(2)})</span></span>
+        </div>`;
+    }).join('');
+}
 
 function updateLivePerf(d) {
     if (!d) return;

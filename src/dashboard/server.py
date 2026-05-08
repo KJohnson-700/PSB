@@ -385,6 +385,8 @@ _journal_cache: Dict[str, object] = {
     "journal": None,  # cached TradeJournal instance
 }
 
+_exit_reason_summary_cache: Dict[Tuple[str, Optional[float]], Dict[str, Any]] = {}
+
 
 def _get_journal():
     """Return a TradeJournal, rebuilding only when entries.jsonl changes on disk.
@@ -822,9 +824,11 @@ async def sse_stream(request: Request):
                     can_trade = False
                     ai_payload = compute_ai_status(cfg_disk, None)
 
-                bankroll_snap = 0.0
+                bankroll_payload: Dict[str, Any] = {"bankroll": None, "source": "unavailable"}
+                bankroll_snap = None
                 if bot and hasattr(bot, "bankroll"):
                     bankroll_snap = round(float(bot.bankroll), 2)
+                    bankroll_payload = {"bankroll": bankroll_snap, "source": "bot"}
                 elif not bot:
                     j_disk = _get_journal()
                     session_dir_disk = (
@@ -838,7 +842,7 @@ async def sse_stream(request: Request):
                                 bankroll_journal = float(br)
                         except (TypeError, ValueError):
                             pass
-                    bankroll_snap = _resolve_bankroll_snapshot(
+                    bankroll_payload = _resolve_bankroll_snapshot(
                         bankroll_journal,
                         session_dir_disk,
                         summary_total_pnl=float(js.get("total_pnl", 0) or 0),
@@ -848,6 +852,7 @@ async def sse_stream(request: Request):
                             or 500
                         ),
                     )
+                    bankroll_snap = bankroll_payload.get("bankroll")
 
                 snapshot = {
                     "running": bot.running if bot else False,
@@ -858,6 +863,16 @@ async def sse_stream(request: Request):
                     "session_id": session_id,
                     "session_open": session_open,
                     "bankroll": bankroll_snap,
+                    "bankroll_source": (
+                        "bot"
+                        if bot and hasattr(bot, "bankroll")
+                        else bankroll_payload.get("source", "unavailable")
+                    ),
+                    "bankroll_warning": (
+                        None
+                        if bot and hasattr(bot, "bankroll")
+                        else bankroll_payload.get("warning")
+                    ),
                     "positions": open_n,
                     "trades_today": daily_trades_n,
                     "daily_pnl": daily_pnl_v,
@@ -1001,19 +1016,26 @@ def _resolve_bankroll_snapshot(
     summary_total_pnl: float,
     summary_has_session: bool,
     initial_bankroll: float,
-) -> float:
-    """Preserve a real zero bankroll; synthesize only when bankroll is missing."""
+) -> Dict[str, Any]:
+    """Preserve a real zero bankroll and surface source/availability to the UI."""
     if journal_bankroll is not None:
-        return round(float(journal_bankroll), 2)
+        return {"bankroll": round(float(journal_bankroll), 2), "source": "journal"}
 
     br_snap = _last_snapshot_bankroll(session_dir)
     if br_snap is not None:
-        return round(float(br_snap), 2)
+        return {"bankroll": round(float(br_snap), 2), "source": "snapshots"}
 
     if summary_has_session:
-        return round(float(initial_bankroll) + float(summary_total_pnl), 2)
+        return {
+            "bankroll": round(float(initial_bankroll) + float(summary_total_pnl), 2),
+            "source": "summary",
+        }
 
-    return 0.0
+    return {
+        "bankroll": None,
+        "source": "unavailable",
+        "warning": "Could not resolve bankroll from journal, summary, or snapshots.",
+    }
 
 
 # ─── STATUS ───────────────────────────────────────────────────────
@@ -1147,6 +1169,8 @@ async def get_status():
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
             "bankroll": bankroll,
+            "bankroll_source": "bot",
+            "bankroll_warning": None,
             "portfolio": portfolio,
             "positions": positions,
             "session": _command_center_session(_js),
@@ -1187,7 +1211,7 @@ async def get_status():
                 bankroll_journal = float(br)
         except (TypeError, ValueError):
             pass
-    bankroll_disk = _resolve_bankroll_snapshot(
+    bankroll_payload = _resolve_bankroll_snapshot(
         bankroll_journal,
         session_dir_disk,
         summary_total_pnl=float(summary.get("total_pnl", 0) or 0),
@@ -1217,7 +1241,9 @@ async def get_status():
         "kill_switch_active": kill_switch_active,
         "can_trade": False,
         "can_trade_reason": "Bot not running",
-        "bankroll": bankroll_disk,
+        "bankroll": bankroll_payload.get("bankroll"),
+        "bankroll_source": bankroll_payload.get("source"),
+        "bankroll_warning": bankroll_payload.get("warning"),
         "portfolio": portfolio_disk,
         "positions": disk_positions,
         # surface summary fields so the UI can show historical stats
@@ -2421,6 +2447,7 @@ async def invalidate_journal_cache(request: Request):
     _check_auth(request)
     global _journal_cache
     _journal_cache = {"path": None, "mtime": None, "journal": None}
+    _exit_reason_summary_cache.clear()
     return {"status": "ok"}
 
 
@@ -2458,6 +2485,91 @@ async def get_journal_trades(session_id: Optional[str] = None):
     if session_id and not j:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"trades": j.get_closed_trades() if j else []}
+
+
+def _journal_entries_mtime(journal: Any) -> Optional[float]:
+    entries_file = getattr(journal, "_entries_file", None)
+    if entries_file is None:
+        session_dir = getattr(journal, "session_dir", None)
+        entries_file = Path(session_dir) / "entries.jsonl" if session_dir else None
+    try:
+        p = Path(entries_file) if entries_file else None
+        return p.stat().st_mtime if p and p.exists() else None
+    except OSError:
+        return None
+
+
+def _build_exit_reason_summary(journal: Any) -> Dict[str, Any]:
+    session_id = str(getattr(journal, "session_id", "") or "")
+    mtime = _journal_entries_mtime(journal)
+    cache_key = (session_id, mtime)
+    cached = _exit_reason_summary_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    total_by_reason: Dict[str, int] = defaultdict(int)
+    by_strategy: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    win_loss_by_reason: Dict[str, Dict[str, float]] = defaultdict(
+        lambda: {"wins": 0, "losses": 0, "pnl": 0.0}
+    )
+    total = 0
+
+    for trade in journal.get_closed_trades():
+        reason = str(trade.get("exit_reason") or trade.get("reason") or "").strip()
+        if not reason:
+            logger.debug("Skipping closed trade with empty exit_reason: %s", trade.get("trade_id"))
+            continue
+        strategy = str(trade.get("strategy") or "unknown")
+        try:
+            pnl = float(trade.get("pnl", 0) or 0)
+        except (TypeError, ValueError):
+            pnl = 0.0
+
+        total += 1
+        total_by_reason[reason] += 1
+        by_strategy[strategy][reason] += 1
+        if pnl > 0:
+            win_loss_by_reason[reason]["wins"] += 1
+        else:
+            win_loss_by_reason[reason]["losses"] += 1
+        win_loss_by_reason[reason]["pnl"] += pnl
+
+    payload = {
+        "session_id": session_id or None,
+        "total": total,
+        "total_by_reason": dict(sorted(total_by_reason.items())),
+        "by_strategy": {
+            strategy: dict(sorted(reasons.items()))
+            for strategy, reasons in sorted(by_strategy.items())
+        },
+        "win_loss_by_reason": {
+            reason: {
+                "wins": int(stats["wins"]),
+                "losses": int(stats["losses"]),
+                "pnl": round(float(stats["pnl"]), 2),
+            }
+            for reason, stats in sorted(win_loss_by_reason.items())
+        },
+    }
+    _exit_reason_summary_cache.clear()
+    _exit_reason_summary_cache[cache_key] = payload
+    return payload
+
+
+@app.get("/api/journal/exit-reason-summary")
+async def get_exit_reason_summary(session_id: Optional[str] = None):
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not j:
+        return {
+            "session_id": session_id,
+            "total": 0,
+            "total_by_reason": {},
+            "by_strategy": {},
+            "win_loss_by_reason": {},
+        }
+    return _build_exit_reason_summary(j)
 
 
 @app.get("/api/journal/trade-points")
@@ -3411,8 +3523,23 @@ class ConfigUpdates(BaseModel):
                     "daily_loss_limit",
                     "max_exposure_per_trade",
                     "dry_run",
+                    "exit_rules",
                 },
             )
+            exit_rules = self.trading.get("exit_rules")
+            if exit_rules is not None:
+                _validate_section_keys(
+                    exit_rules,
+                    "trading.exit_rules",
+                    {"updown_stop_loss_pct"},
+                )
+                _validate_numeric_range(
+                    exit_rules,
+                    "trading.exit_rules",
+                    "updown_stop_loss_pct",
+                    ge=0,
+                    le=1,
+                )
             if self.trading.get("dry_run") is False:
                 raise ValueError("trading.dry_run cannot be disabled via dashboard config")
             _validate_numeric_range(self.trading, "trading", "default_position_size", gt=0)
@@ -3693,6 +3820,7 @@ async def reset_paper_session(request: Request):
         _journal_cache["journal"] = None
         _journal_cache["path"] = None
         _journal_cache["mtime"] = None
+        _exit_reason_summary_cache.clear()
         _ai_summary_cache.clear()
 
     logging.info(

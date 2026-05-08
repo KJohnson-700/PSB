@@ -166,13 +166,33 @@ def test_resolve_bankroll_snapshot_preserves_real_zero(tmp_path):
     session_dir = tmp_path / "session"
     session_dir.mkdir()
 
-    assert _resolve_bankroll_snapshot(
+    payload = _resolve_bankroll_snapshot(
         0.0,
         session_dir,
         summary_total_pnl=-500.0,
         summary_has_session=True,
         initial_bankroll=500.0,
-    ) == 0.0
+    )
+    assert payload["bankroll"] == 0.0
+    assert payload["source"] == "journal"
+
+
+def test_resolve_bankroll_snapshot_reports_unavailable(tmp_path):
+    from src.dashboard.server import _resolve_bankroll_snapshot
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    payload = _resolve_bankroll_snapshot(
+        None,
+        session_dir,
+        summary_total_pnl=0.0,
+        summary_has_session=False,
+        initial_bankroll=500.0,
+    )
+    assert payload["bankroll"] is None
+    assert payload["source"] == "unavailable"
+    assert "Could not resolve bankroll" in payload["warning"]
 
 
 def test_config_post_fails_closed_without_dashboard_key(monkeypatch, tmp_path):
@@ -210,3 +230,58 @@ def test_config_post_rejects_unsafe_values_with_auth(monkeypatch, tmp_path):
     )
     assert r.status_code == 422
     assert "kelly_fraction" in r.text
+
+
+def test_config_post_accepts_updown_stop_loss_pct_with_auth(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        "trading:\n  dry_run: true\n  exit_rules:\n    updown_stop_loss_pct: 0.2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/config",
+        headers={"X-API-Key": "test-key"},
+        json={"trading": {"exit_rules": {"updown_stop_loss_pct": 0.18}}},
+    )
+    assert r.status_code == 200
+    assert "updown_stop_loss_pct: 0.18" in config_path.read_text(encoding="utf-8")
+
+
+def test_exit_reason_summary_groups_current_journal(monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class FakeJournal:
+        session_id = "test_session"
+        session_dir = None
+
+        def get_closed_trades(self):
+            return [
+                {"strategy": "bitcoin", "exit_reason": "take_profit", "pnl": 1.5},
+                {"strategy": "bitcoin", "exit_reason": "updown_stop_loss", "pnl": -2.0},
+                {"strategy": "eth_macro", "exit_reason": "updown_stop_loss", "pnl": -1.0},
+                {"strategy": "eth_macro", "exit_reason": "", "pnl": 5.0},
+            ]
+
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: FakeJournal())
+    dashboard_server._exit_reason_summary_cache.clear()
+
+    r = TestClient(dashboard_server.app).get("/api/journal/exit-reason-summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 3
+    assert data["total_by_reason"]["updown_stop_loss"] == 2
+    assert data["by_strategy"]["bitcoin"]["take_profit"] == 1
+    assert data["win_loss_by_reason"]["updown_stop_loss"] == {
+        "wins": 0,
+        "losses": 2,
+        "pnl": -3.0,
+    }
