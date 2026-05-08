@@ -184,7 +184,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.80    # 2026-05-07: 4× original 0.20; restores target $10–15 stake band after min_trade_usd fix
+    kelly_fraction: 0.30    # 2026-05-07: calibrated so edge×kf×br lands in tier band — preserves edge differentiation
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
     # Tight band for updown markets — prevents betting against strong market consensus.
@@ -315,7 +315,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; SOL alt
+    kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; SOL
     entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
     entry_price_max: 0.58
     # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
@@ -456,7 +456,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; ETH alt
+    kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; ETH
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
@@ -583,7 +583,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.64    # 2026-05-07: 4× original 0.16; HYPE alt
+    kelly_fraction: 0.24    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; HYPE
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_lag_magnitude_pct: 0.40   # sol_macro parity — lag signals need magnitude before sizing entry
@@ -664,7 +664,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; XRP alt
+    kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; XRP
     entry_price_min: 0.42
     entry_price_max: 0.58
     entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES
@@ -868,9 +868,9 @@ exposure:
   # --- Tier sizing (max trade size per tier) ---
   # Operator target: FULL=$15, MODERATE=$10, MINIMAL=$5.
   # scale_size() also applies min_trade_usd after tier multiplier.
-  full_size: 15.0        # FULL tier cap
-  moderate_size: 10.0    # MODERATE tier cap
-  minimal_size: 5.0      # MINIMAL tier cap
+  full_size: 25.0        # FULL tier cap (raised 15→25 2026-05-07 to give edge room above $15 stake)
+  moderate_size: 15.0    # MODERATE tier cap (raised 10→15)
+  minimal_size: 8.0      # MINIMAL tier cap (raised 5→8)
   # After raw_size * tier_multiplier, apply this base floor, then cap by tier size.
   # With current multipliers (1.0 / 0.6 / 0.2) and caps above, the effective
   # results are FULL<=15, MODERATE<=10, MINIMAL<=5.
