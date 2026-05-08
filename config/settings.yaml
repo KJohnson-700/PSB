@@ -874,7 +874,7 @@ exposure:
   # After raw_size * tier_multiplier, apply this base floor, then cap by tier size.
   # With current multipliers (1.0 / 0.6 / 0.2) and caps above, the effective
   # results are FULL<=15, MODERATE<=10, MINIMAL<=5.
-  min_trade_usd: 25.0
+  min_trade_usd: 1.0
 
   # --- Kill switch ---
   loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)
