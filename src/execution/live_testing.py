@@ -121,6 +121,7 @@ class PositionExitManager:
         self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03))
         self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0))
         self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0))
+        self.updown_stop_loss_pct = float(exit_cfg.get("updown_stop_loss_pct", 0.20))
         raw_overrides = exit_cfg.get("updown_overrides") or {}
         self.updown_overrides: Dict[str, Dict[str, float]] = {}
         if isinstance(raw_overrides, dict):
@@ -231,6 +232,11 @@ class PositionExitManager:
                 # waiting for binary resolution (captures most of the gain).
                 if pnl_pct >= self.take_profit_pct:
                     reason = "take_profit"
+                elif self.updown_stop_loss_pct > 0 and pnl_pct <= -self.updown_stop_loss_pct:
+                    # Same-position percentage stop: cuts adverse drift early instead of
+                    # waiting for the late-window cents stop, which fires at whatever price
+                    # the position has already collapsed to.
+                    reason = "updown_stop_loss"
                 else:
                     # Time-based stop: when near expiry and price has moved against us,
                     # exit at the current partial-loss price rather than holding to a
