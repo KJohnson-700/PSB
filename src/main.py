@@ -1280,6 +1280,95 @@ class PolyBot:
         )
         log_ops_pulse(self, "main")
 
+    def _build_correlation_context(self, *, current_strategy: str, current_action: str) -> str:
+        """Compact one-line summary of currently-open positions for the post-trade
+        annotation prompt. Used when ai.post_trade_annotation.include_correlation_check
+        is true so the AI can flag highly correlated exposure."""
+        try:
+            positions = list(self.risk_manager.active_positions.values())
+        except Exception:
+            return ""
+        if not positions:
+            return ""
+        parts = []
+        for p in positions[:20]:
+            strat = getattr(p, "strategy", "?")
+            action = getattr(p, "action", "?")
+            mq = (getattr(p, "market_question", "") or "")[:40]
+            parts.append(f"{strat}/{action}:{mq}")
+        return f"Open positions ({len(positions)}): " + " | ".join(parts)
+
+    async def _annotate_entry_async(
+        self,
+        *,
+        trade_id: str,
+        market_id: str,
+        market_question: str,
+        strategy: str,
+        action: str,
+        edge: float,
+        confidence: float,
+        yes_price: float,
+    ) -> None:
+        """Fire-and-forget post-trade AI annotation. Writes a short narrative
+        into the journal as an ANNOTATION event. Never raises into the caller."""
+        try:
+            ai_cfg = (self.config.get("ai", {}) or {}).get("post_trade_annotation", {}) or {}
+            if not ai_cfg.get("enabled", False):
+                return
+            if not getattr(self, "ai_agent", None) or not self.ai_agent.is_available():
+                return
+            timeout_s = float(ai_cfg.get("timeout_seconds", 20))
+            include_corr = bool(ai_cfg.get("include_correlation_check", False))
+            corr_ctx = ""
+            if include_corr:
+                corr_ctx = self._build_correlation_context(
+                    current_strategy=strategy, current_action=action
+                )
+            prompt = (
+                f"Trade just entered: {strategy} {action} on '{market_question[:80]}'.\n"
+                f"Edge={edge:.4f} confidence={confidence:.2f}.\n"
+            )
+            if corr_ctx:
+                prompt += f"{corr_ctx}\n"
+                prompt += (
+                    "If this entry is highly correlated with existing exposure, "
+                    "flag it explicitly in one sentence. "
+                )
+            prompt += (
+                "In 3-5 sentences: thesis, expectations, key levels or invalidation."
+            )
+            try:
+                result = await asyncio.wait_for(
+                    self.ai_agent.analyze_market(
+                        market_question=market_question,
+                        market_description=prompt,
+                        current_yes_price=yes_price,
+                        market_id=market_id,
+                        strategy_hint=f"{strategy}_postentry",
+                    ),
+                    timeout=timeout_s,
+                )
+            except asyncio.TimeoutError:
+                logging.debug("post-trade annotation timeout trade=%s", trade_id)
+                return
+            if not result or not getattr(result, "reasoning", None):
+                return
+            self.journal.append_annotation(
+                trade_id=trade_id,
+                text=str(result.reasoning),
+                strategy=strategy,
+                market_id=market_id,
+                market_question=market_question,
+                extra={
+                    "source": "post_trade_annotation",
+                    "ai_confidence": float(getattr(result, "confidence_score", 0.0) or 0.0),
+                    "correlation_context": corr_ctx,
+                },
+            )
+        except Exception as exc:
+            logging.debug("post-trade annotation failed trade=%s: %s", trade_id, exc)
+
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
         async with self._execution_lock:
@@ -1428,6 +1517,16 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
+            asyncio.create_task(self._annotate_entry_async(
+                trade_id=order.order_id,
+                market_id=signal.market_id,
+                market_question=signal.market_question,
+                strategy="bitcoin",
+                action=signal.action,
+                edge=float(signal.edge or 0.0),
+                confidence=float(signal.confidence or 0.0),
+                yes_price=float(signal.price or 0.5),
+            ))
 
             await self.notifier.notify_trade(
                 {
@@ -1592,6 +1691,16 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
+            asyncio.create_task(self._annotate_entry_async(
+                trade_id=order.order_id,
+                market_id=signal.market_id,
+                market_question=signal.market_question,
+                strategy=strat,
+                action=signal.action,
+                edge=float(signal.edge or 0.0),
+                confidence=float(signal.confidence or 0.0),
+                yes_price=float(signal.price or 0.5),
+            ))
 
             await self.notifier.notify_trade(
                 {
@@ -1741,6 +1850,16 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
+            asyncio.create_task(self._annotate_entry_async(
+                trade_id=order.order_id,
+                market_id=signal.market_id,
+                market_question=signal.market_question,
+                strategy=strat,
+                action=signal.action,
+                edge=float(signal.gap or 0.0),
+                confidence=float(signal.gap or 0.0),
+                yes_price=float(signal.price or 0.5),
+            ))
 
             await self.notifier.notify_trade(
                 {

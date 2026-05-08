@@ -802,12 +802,35 @@ ai:
     provider_name: ""      # e.g. "minimax"
   # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.
   shadow_pipeline:
-    enabled: false
+    enabled: true
     max_calls_per_scan: 1
     min_confidence_to_log: 0.60
     log_jsonl: true
     provider_name: ""      # optional: pin to one provider name from provider_chain
     model_override: ""     # optional model id for all three stages
+  # Pre-entry veto: when AI is consulted on a marginal trade and returns very low
+  # confidence, kill the trade. Conservative — only fires on egregious uncertainty.
+  preentry_veto:
+    enabled: false
+    min_confidence: 0.25
+  # Post-trade journal annotation: after a successful entry is logged, fire-and-forget
+  # AI call that writes a thesis/expectations/invalidation note as a separate
+  # ANNOTATION journal line. Off the trade hot path. Includes correlation warning
+  # when include_correlation_check is true.
+  post_trade_annotation:
+    enabled: true
+    timeout_seconds: 20
+    include_correlation_check: true
+  # Off-cycle AI narrators (run via scripts/run_ai_session_summary.py).
+  # Each section is gated independently. Output is appended to the strategy log.
+  session_summary:
+    enabled: true
+    include_underperformance: true
+    include_skip_exit_reasons: true
+    include_calibration_drift: true
+    include_strategy_conflict: true
+    timeout_seconds: 30
+    output_path: "projects/polymarket-bot/strategy-log/_ai_summary.md"
 # ============================================
 notifications:
   # Enable/disable notifications

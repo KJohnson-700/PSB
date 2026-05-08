@@ -856,6 +856,9 @@ class BitcoinStrategy:
         ai_assists = 0
         ai_vetos = 0
         ai_holds = 0
+        shadow_pipeline_calls = 0
+        shadow_pipeline_ok = 0
+        preentry_veto_skips = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         buy_no_skip_counts: Dict[str, int] = {}
@@ -1453,6 +1456,14 @@ class BitcoinStrategy:
                                 f"{action} on '{market.question[:40]}...'"
                             )
                             continue
+                        if self.ai_agent.preentry_veto_active(ai_analysis.confidence_score):
+                            preentry_veto_skips += 1
+                            _bump_skip("ai_preentry_veto")
+                            logger.info(
+                                f"BTC: pre-entry veto — AI conf {ai_analysis.confidence_score:.2f} "
+                                f"on '{market.question[:40]}...' (action={action})"
+                            )
+                            continue
                         ai_edge = (
                             ai_analysis.estimated_probability - yes_price
                             if action == "BUY_YES"
@@ -1461,6 +1472,35 @@ class BitcoinStrategy:
                         edge = max(edge, ai_edge)
                         confidence = ai_analysis.confidence_score
                         reason_parts.append("ai_confirm")
+                        if (
+                            self.ai_agent.shadow_pipeline_enabled()
+                            and shadow_pipeline_calls
+                            < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                            and ai_analysis.confidence_score
+                            >= self.ai_agent.shadow_pipeline_min_confidence()
+                        ):
+                            shadow_pipeline_calls += 1
+                            try:
+                                shadow_out = await self.ai_agent.run_shadow_pipeline(
+                                    market_question=market.question,
+                                    market_description=ai_context,
+                                    current_yes_price=yes_price,
+                                    market_id=market.id,
+                                    strategy_hint="bitcoin",
+                                    marginal_recommendation=str(ai_analysis.recommendation),
+                                    quant_action=action,
+                                    quant_edge=edge,
+                                    quant_threshold=self.min_edge,
+                                    existing_research=None,
+                                )
+                                if shadow_out and shadow_out.get("ok"):
+                                    shadow_pipeline_ok += 1
+                            except Exception as e:
+                                logger.debug(
+                                    "BTC shadow pipeline failed market=%s: %s",
+                                    market.id,
+                                    e,
+                                )
 
                 else:
                     # No threshold — requires AI for probability estimate.
@@ -1520,9 +1560,46 @@ class BitcoinStrategy:
                             f"{action} on '{market.question[:40]}...'"
                         )
                         continue
+                    if self.ai_agent.preentry_veto_active(ai_analysis.confidence_score):
+                        preentry_veto_skips += 1
+                        _bump_skip("ai_preentry_veto")
+                        logger.info(
+                            f"BTC: pre-entry veto (ai_only) — AI conf {ai_analysis.confidence_score:.2f} "
+                            f"on '{market.question[:40]}...'"
+                        )
+                        continue
                     edge = abs(ai_analysis.estimated_probability - yes_price) - 0.02
                     confidence = ai_analysis.confidence_score
                     reason_parts.append(f"ai_only btc=${btc_price:,.0f}")
+                    if (
+                        self.ai_agent.shadow_pipeline_enabled()
+                        and shadow_pipeline_calls
+                        < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                        and ai_analysis.confidence_score
+                        >= self.ai_agent.shadow_pipeline_min_confidence()
+                    ):
+                        shadow_pipeline_calls += 1
+                        try:
+                            shadow_out = await self.ai_agent.run_shadow_pipeline(
+                                market_question=market.question,
+                                market_description=ai_context,
+                                current_yes_price=yes_price,
+                                market_id=market.id,
+                                strategy_hint="bitcoin",
+                                marginal_recommendation=str(ai_analysis.recommendation),
+                                quant_action=action,
+                                quant_edge=edge,
+                                quant_threshold=self.min_edge,
+                                existing_research=None,
+                            )
+                            if shadow_out and shadow_out.get("ok"):
+                                shadow_pipeline_ok += 1
+                        except Exception as e:
+                            logger.debug(
+                                "BTC shadow pipeline failed (ai_only) market=%s: %s",
+                                market.id,
+                                e,
+                            )
 
             # ── Final filters ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
@@ -1646,6 +1723,35 @@ class BitcoinStrategy:
                 confidence = max(confidence, ai_analysis.confidence_score)
                 ai_assists += 1
                 reason_parts.append("ai_updown_confirm")
+                if (
+                    self.ai_agent.shadow_pipeline_enabled()
+                    and shadow_pipeline_calls
+                    < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                    and ai_analysis.confidence_score
+                    >= self.ai_agent.shadow_pipeline_min_confidence()
+                ):
+                    shadow_pipeline_calls += 1
+                    try:
+                        shadow_out = await self.ai_agent.run_shadow_pipeline(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint="bitcoin",
+                            marginal_recommendation=str(ai_analysis.recommendation),
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_threshold=effective_min_edge,
+                            existing_research=None,
+                        )
+                        if shadow_out and shadow_out.get("ok"):
+                            shadow_pipeline_ok += 1
+                    except Exception as e:
+                        logger.debug(
+                            "BTC shadow pipeline failed (updown) market=%s: %s",
+                            market.id,
+                            e,
+                        )
             elif (
                 is_updown
                 and edge < effective_min_edge
@@ -1880,6 +1986,9 @@ class BitcoinStrategy:
             "ai_assists": ai_assists,
             "ai_vetos": ai_vetos,
             "ai_holds": ai_holds,
+            "shadow_pipeline_calls": shadow_pipeline_calls,
+            "shadow_pipeline_ok": shadow_pipeline_ok,
+            "preentry_veto_skips": preentry_veto_skips,
             "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": {k: v for k, v in top_skip_pairs},

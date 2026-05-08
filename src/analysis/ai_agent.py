@@ -216,6 +216,7 @@ OUTPUT (machine-parseable — follow exactly):
         self.structured_log = bool(self.config.get("structured_log", False))
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
+        self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         # Round-robin first model for OpenRouter free tier (spread per-model limits).
         self._openrouter_model_rr: Dict[str, int] = {}
 
@@ -241,6 +242,7 @@ OUTPUT (machine-parseable — follow exactly):
         self.structured_log = bool(self.config.get("structured_log", False))
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
+        self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
 
     def is_available(self) -> bool:
         """
@@ -290,6 +292,17 @@ OUTPUT (machine-parseable — follow exactly):
             return max(0.0, min(1.0, float(raw)))
         except (TypeError, ValueError):
             return 0.0
+
+    def preentry_veto_active(self, ai_confidence: float) -> bool:
+        """Return True when the AI confidence is low enough that a marginal
+        trade should be vetoed before execution. Off by default."""
+        if not bool(self.preentry_veto_cfg.get("enabled", False)):
+            return False
+        try:
+            threshold = float(self.preentry_veto_cfg.get("min_confidence", 0.0))
+        except (TypeError, ValueError):
+            return False
+        return float(ai_confidence) < threshold
 
     def _named_provider_chain(self, cfg_block: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Pick a single provider entry and optional model override from a config block."""

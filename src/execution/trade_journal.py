@@ -1059,6 +1059,46 @@ class TradeJournal:
         with open(self._entries_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(entry), default=str) + "\n")
 
+    def append_annotation(
+        self,
+        trade_id: str,
+        text: str,
+        strategy: str = "",
+        market_id: str = "",
+        market_question: str = "",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append a free-text annotation for an existing trade.
+
+        Pure side-channel — does NOT mutate open_positions or closed_trades.
+        Used by the post-trade AI annotator and correlation warning. Annotation
+        events are skipped by ``_load_state`` because that pass only consumes
+        ENTRY/EXIT events.
+        """
+        if not text:
+            return
+        merged_extra: Dict[str, Any] = {"text": str(text)}
+        if extra:
+            merged_extra.update(extra)
+        annotation = JournalEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            event="ANNOTATION",
+            trade_id=trade_id,
+            market_id=market_id,
+            market_question=market_question,
+            strategy=strategy,
+            action="",
+            side="",
+            outcome="",
+            size=0.0,
+            entry_price=0.0,
+            current_price=0.0,
+            pnl=0.0,
+            bankroll=0.0,
+            extra=merged_extra,
+        )
+        self._append_entry(annotation)
+
     def _append_snapshot(self, snap: PortfolioSnapshot):
         with open(self._snapshots_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(snap), default=str) + "\n")

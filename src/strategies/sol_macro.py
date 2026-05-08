@@ -1213,6 +1213,8 @@ class SolMacroStrategy:
         # ═══════════════════════════════════════════════
         signals = []
         ai_calls = 0
+        shadow_pipeline_calls = 0
+        shadow_pipeline_ok = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         buy_no_skip_counts: Dict[str, int] = {}
@@ -2004,6 +2006,38 @@ class SolMacroStrategy:
                     edge = max(edge, ai_edge)
                     confidence = max(confidence, ai_analysis.confidence_score)
                     reason_parts.append("ai_marginal_confirm")
+                    if (
+                        self.ai_agent.shadow_pipeline_enabled()
+                        and shadow_pipeline_calls
+                        < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                        and ai_analysis.confidence_score
+                        >= self.ai_agent.shadow_pipeline_min_confidence()
+                    ):
+                        shadow_pipeline_calls += 1
+                        try:
+                            shadow_out = await self.ai_agent.run_shadow_pipeline(
+                                market_question=market.question,
+                                market_description=ai_context,
+                                current_yes_price=yes_price,
+                                market_id=market.id,
+                                strategy_hint=self._signal_strategy_name,
+                                marginal_recommendation=str(ai_analysis.recommendation),
+                                quant_action=action,
+                                quant_edge=edge,
+                                quant_threshold=(
+                                    self.min_edge_5m if is_5m else self.min_edge
+                                ),
+                                existing_research=None,
+                            )
+                            if shadow_out and shadow_out.get("ok"):
+                                shadow_pipeline_ok += 1
+                        except Exception as e:
+                            logger.debug(
+                                "%s shadow pipeline failed market=%s: %s",
+                                self._signal_strategy_name,
+                                market.id,
+                                e,
+                            )
 
             # ── Final filters (both paths) ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
@@ -2138,6 +2172,36 @@ class SolMacroStrategy:
                         edge = max(edge, ae)
                         confidence = max(confidence, ai2.confidence_score)
                         reason_parts.append("ai_updown_confirm")
+                        if (
+                            self.ai_agent.shadow_pipeline_enabled()
+                            and shadow_pipeline_calls
+                            < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                            and ai2.confidence_score
+                            >= self.ai_agent.shadow_pipeline_min_confidence()
+                        ):
+                            shadow_pipeline_calls += 1
+                            try:
+                                shadow_out = await self.ai_agent.run_shadow_pipeline(
+                                    market_question=market.question,
+                                    market_description=ai_context2,
+                                    current_yes_price=yes_price,
+                                    market_id=market.id,
+                                    strategy_hint=self._signal_strategy_name,
+                                    marginal_recommendation=str(ai2.recommendation),
+                                    quant_action=action,
+                                    quant_edge=edge,
+                                    quant_threshold=effective_min_edge,
+                                    existing_research=None,
+                                )
+                                if shadow_out and shadow_out.get("ok"):
+                                    shadow_pipeline_ok += 1
+                            except Exception as e:
+                                logger.debug(
+                                    "%s shadow pipeline failed (updown) market=%s: %s",
+                                    self._signal_strategy_name,
+                                    market.id,
+                                    e,
+                                )
                     else:
                         _bump_skip("ai_nonpositive_edge_marginal_updown")
             elif (

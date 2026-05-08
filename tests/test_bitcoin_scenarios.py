@@ -700,6 +700,10 @@ class TestBitcoinAIIntegration:
         self.ai = MagicMock()
         self.ai.is_available = MagicMock(return_value=True)
         self.ai.analyze_market = AsyncMock(return_value=None)
+        self.ai.shadow_pipeline_enabled = MagicMock(return_value=False)
+        self.ai.shadow_pipeline_max_calls_per_scan = MagicMock(return_value=0)
+        self.ai.shadow_pipeline_min_confidence = MagicMock(return_value=1.0)
+        self.ai.preentry_veto_active = MagicMock(return_value=False)
         self.sizer = PositionSizer(kelly_fraction=0.25, max_position_pct=0.05)
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
 
