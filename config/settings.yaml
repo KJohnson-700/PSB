@@ -184,7 +184,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.40    # 2026-05-07: 0.20→0.40 after min_trade_usd fix exposed Kelly raw was too small for target $10–15 stake
+    kelly_fraction: 0.80    # 2026-05-07: 4× original 0.20; restores target $10–15 stake band after min_trade_usd fix
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
     # Tight band for updown markets — prevents betting against strong market consensus.
@@ -315,7 +315,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed alt Kelly raw was too small
+    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; SOL alt
     entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
     entry_price_max: 0.58
     # Require lag magnitude >= this % before entering on a real-lag signal (avoids weak false lags)
@@ -456,7 +456,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed alt Kelly raw was too small
+    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; ETH alt
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
@@ -583,7 +583,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.32    # 2026-05-07: 0.16→0.32 after min_trade_usd fix exposed HYPE Kelly raw was too small
+    kelly_fraction: 0.64    # 2026-05-07: 4× original 0.16; HYPE alt
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_lag_magnitude_pct: 0.40   # sol_macro parity — lag signals need magnitude before sizing entry
@@ -664,7 +664,7 @@ strategies:
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
-    kelly_fraction: 0.35    # 2026-05-07: 0.18→0.35 after min_trade_usd fix exposed XRP Kelly raw was too small
+    kelly_fraction: 0.72    # 2026-05-07: 4× original 0.18; XRP alt
     entry_price_min: 0.42
     entry_price_max: 0.58
     entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES

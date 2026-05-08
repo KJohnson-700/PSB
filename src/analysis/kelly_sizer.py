@@ -210,7 +210,7 @@ class KellySizer:
         if streak_multiplier is None:
             streak_multiplier = self.get_streak_multiplier(strategy)
         frac = frac * streak_multiplier
-        return max(cfg.min_kelly_fraction, min(frac, 0.25))
+        return max(cfg.min_kelly_fraction, min(frac, 1.0))
 
     def size_from_edge(
         self,
@@ -229,7 +229,7 @@ class KellySizer:
 
         base_size = edge * frac * bankroll
 
-        max_pct = 0.05
+        max_pct = 0.10
         cap = bankroll * max_pct
         size = min(base_size, cap)
 
