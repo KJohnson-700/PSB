@@ -336,7 +336,7 @@ strategies:
     rsi_soft_penalty_buy_yes: 0.04        # reduce LONG conviction instead of binary veto
     rsi_soft_penalty_buy_no: 0.00         # keep BUY_NO RSI as diagnostic only; do not suppress entries
     # 5m markets: require an active BTC spike or lag before entering (avoids guessing in flat markets)
-    require_btc_catalyst_5m: false
+    require_btc_catalyst_5m: true    # 2026-05-07: full intervention — SOL live trades were all 5m BUY_YES and backtest 5m remains deeply negative; require real catalyst on 5m
     low_corr_suppresses_entries: true   # tuning guard: hard-veto low-corr SOL entries while 5m/15m lane is under review
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
@@ -440,7 +440,7 @@ strategies:
     signal_15m_short_threshold: 0.45
     signal_4h_long_threshold: 0.70
     signal_4h_short_threshold: 0.30
-    enforce_alt_1h_alignment: true    # 2026-05-04: same gap as XRP (was false) — proactive; ETH was +$9.45 but same class of risk
+    enforce_alt_1h_alignment: false   # 2026-05-07: one-step loosening after all-night silence; keep other ETH follow / edge / price gates intact
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -467,7 +467,7 @@ strategies:
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.00
     btc_follow_1h_hist_min: 6.0   # was 8.0 — fewer false skips when BTC 1H is valid but hist magnitude modest
-    btc_follow_1h_required: true           # false = bypass BTC 1H continuation gate entirely (escape hatch)
+    btc_follow_1h_required: false          # 2026-05-07: stop whole-scan aborts; keep later per-market BTC/ETH follow checks so ETH can trade at all
     btc_follow_1h_allow_rising_recovery: true   # allow LONG when 1H hist negative but rising above -recovery floor; SHORT symmetric
     btc_follow_1h_recovery_hist_floor: 80.0    # magnitude: LONG hist > -80 when rising; SHORT hist < +80 when falling
     btc_follow_1h_allow_floor_without_rising: true   # LONG: hist > -floor even if histogram falling; SHORT: 0<=hist<floor
@@ -617,7 +617,7 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.00
-    require_btc_catalyst_5m: false
+    require_btc_catalyst_5m: true    # 2026-05-07: tighten failing HYPE 5m long path only; do not change 15m lane here
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
@@ -677,8 +677,8 @@ strategies:
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     neutral_macro_require_spike_or_lag: true
-    require_btc_catalyst_5m: false
-    enforce_alt_1h_alignment: false   # 2026-05-05 forensic fix (Candidate A): allow BUY_NO participation for XRP
+    require_btc_catalyst_5m: true    # 2026-05-07: full intervention — XRP 5m backtest is strongly negative; do not admit unstimulated 5m entries
+    enforce_alt_1h_alignment: true   # 2026-05-07: restore bearish-1H BUY_YES suppression; BUY_NO path remains allowed diagnostically in code
     min_edge_buy_no: 0.08             # 2026-05-05 forensic fix (Candidate A): reduce extra BUY_NO edge floor
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
