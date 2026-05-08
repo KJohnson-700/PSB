@@ -2943,9 +2943,68 @@ async def settle_archived_positions(request: Request):
 # ─── AI SESSION SUMMARY ──────────────────────────────────────────
 
 
+def _read_narrator_annotations(journal: Any) -> List[Dict[str, Any]]:
+    """Read ANNOTATION events written by the startup-narrators path.
+    Filters by extra.source == 'session_summary'."""
+    entries_file = getattr(journal, "_entries_file", None)
+    if entries_file is None:
+        session_dir = getattr(journal, "session_dir", None)
+        entries_file = Path(session_dir) / "entries.jsonl" if session_dir else None
+    if not entries_file:
+        return []
+    p = Path(entries_file)
+    if not p.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("event") != "ANNOTATION":
+                    continue
+                extra = rec.get("extra") or {}
+                if extra.get("source") != "session_summary":
+                    continue
+                out.append({
+                    "narrator": str(extra.get("narrator") or ""),
+                    "previous_session": str(extra.get("previous_session") or ""),
+                    "timestamp": str(rec.get("timestamp") or ""),
+                    "text": str(extra.get("text") or ""),
+                })
+    except OSError:
+        return []
+    return out
+
+
+def _format_narrator_block(annotations: List[Dict[str, Any]]) -> str:
+    if not annotations:
+        return ""
+    pretty_titles = {
+        "underperformance": "Underperformance",
+        "skip_exit_reasons": "Skip / exit reasons",
+        "calibration_drift": "Calibration drift",
+        "strategy_conflict": "Strategy conflict",
+    }
+    parts = ["", "— AI Narrators (from previous session) —"]
+    for ann in annotations:
+        title = pretty_titles.get(ann["narrator"], ann["narrator"] or "Note")
+        parts.append("")
+        parts.append(f"### {title}")
+        parts.append(ann["text"])
+    return "\n".join(parts)
+
+
 @app.get("/api/journal/ai-summary")
 async def get_session_ai_summary(session_id: Optional[str] = None):
-    """Generate AI natural-language summary of the most recent session. Cached per session_id."""
+    """Generate AI natural-language summary of the most recent session, plus
+    any startup-narrator annotations attached to the session journal. Cached
+    per session_id (cache invalidated when entries.jsonl mtime changes)."""
     import httpx
 
     journal = _journal_for_query(session_id) if session_id else _get_journal()
@@ -2958,9 +3017,16 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
     except Exception:
         return {"summary": "Could not read session data.", "session_id": None}
 
-    # Return cached result if session hasn't changed
-    if session_id in _ai_summary_cache:
-        return {"summary": _ai_summary_cache[session_id], "session_id": session_id, "cached": True}
+    narrator_anns = _read_narrator_annotations(journal)
+    narrator_block = _format_narrator_block(narrator_anns)
+
+    # Cache key includes entries.jsonl mtime so new narrator annotations appear
+    # without requiring a manual refresh.
+    mtime = _journal_entries_mtime(journal)
+    cache_key = f"{session_id}::{mtime}"
+    cached_text = _ai_summary_cache.get(cache_key)
+    if cached_text is not None:
+        return {"summary": cached_text, "session_id": session_id, "cached": True}
 
     trades = summary_data.get("total_trades", 0) or summary_data.get("total_entries", 0) or 0
     wins = summary_data.get("wins", 0)
@@ -2969,8 +3035,11 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
     realized_pnl = summary_data.get("realized_pnl", 0) or 0
 
     if trades == 0:
-        summary = "No trades have been completed in this session yet."
-        _ai_summary_cache[session_id] = summary
+        if narrator_block:
+            summary = "No trades have been completed in this session yet." + narrator_block
+        else:
+            summary = "No trades have been completed in this session yet."
+        _ai_summary_cache[cache_key] = summary
         return {"summary": summary, "session_id": session_id}
 
     trades_word = "trade" if trades == 1 else "trades"
@@ -3018,7 +3087,8 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
             f"{'Above break-even — strategy is generating edge.' if wr > 0.55 else 'Below 55% target — monitor for regime issues.'}"
         )
 
-    _ai_summary_cache[session_id] = summary
+    summary = summary + narrator_block
+    _ai_summary_cache[cache_key] = summary
     return {"summary": summary, "session_id": session_id, "cached": False}
 
 

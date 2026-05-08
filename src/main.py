@@ -686,10 +686,10 @@ class PolyBot:
             )
 
     async def _run_startup_narrators(self) -> None:
-        """Run AI narrators against the previous session and write the result
-        into the current session's journal dir as `_ai_summary.md`. Fire-and-forget
-        from start() — never blocks the trading loop. Self-gates on
-        ai.session_summary.enabled."""
+        """Run AI narrators against the previous session and write each block
+        as an ANNOTATION event into the *current* session's journal entries.jsonl.
+        Fire-and-forget from start() — never blocks the trading loop. Self-gates
+        on ai.session_summary.enabled."""
         try:
             summary_cfg = (self.config.get("ai", {}) or {}).get("session_summary", {}) or {}
             if not summary_cfg.get("enabled", False):
@@ -725,10 +725,19 @@ class PolyBot:
             prev = sessions[0]
             timeout = float(summary_cfg.get("timeout_seconds", 30))
 
-            blocks: list = []
-            from datetime import datetime as _dt, timezone as _tz
-            blocks.append(f"\n## AI session summary — startup {_dt.now(_tz.utc).isoformat(timespec='seconds')}\n")
-            blocks.append(f"_Previous session: `{prev.name}`_\n")
+            def _record(narrator_kind: str, text: str) -> None:
+                if not text:
+                    return
+                self.journal.append_annotation(
+                    trade_id=f"__session_summary__::{narrator_kind}",
+                    text=text,
+                    strategy="session_summary",
+                    extra={
+                        "source": "session_summary",
+                        "narrator": narrator_kind,
+                        "previous_session": prev.name,
+                    },
+                )
 
             # Underperformance narrator (best-effort: looks for a recent saved report)
             if summary_cfg.get("include_underperformance", True):
@@ -740,8 +749,7 @@ class PolyBot:
                     try:
                         report_dict = {"_raw_markdown": report_paths[0].read_text(encoding="utf-8", errors="replace")}
                         text = await summarize_underperformance(report_dict, self.ai_agent, timeout=timeout)
-                        if text:
-                            blocks.append("### Underperformance\n" + text + "\n")
+                        _record("underperformance", text)
                     except Exception as e:
                         logging.debug("startup narrator (underperf) failed: %s", e)
 
@@ -751,8 +759,7 @@ class PolyBot:
                     text = await summarize_skip_exit_reasons(
                         dist.get("skip", {}), dist.get("exit", {}), self.ai_agent, timeout=timeout
                     )
-                    if text:
-                        blocks.append("### Skip / exit reasons\n" + text + "\n")
+                    _record("skip_exit_reasons", text)
                 except Exception as e:
                     logging.debug("startup narrator (skip/exit) failed: %s", e)
 
@@ -762,8 +769,7 @@ class PolyBot:
                     shadow = load_shadow_records(shadow_path)
                     closed = load_closed_trades_from_summary(prev / "summary.json")
                     text = await detect_calibration_drift(shadow, closed, self.ai_agent, timeout=timeout)
-                    if text:
-                        blocks.append("### Calibration drift\n" + text + "\n")
+                    _record("calibration_drift", text)
                 except Exception as e:
                     logging.debug("startup narrator (calibration) failed: %s", e)
 
@@ -776,22 +782,11 @@ class PolyBot:
                             scan_summaries = _json.load(f) or {}
                         if scan_summaries:
                             text = await explain_strategy_conflict(scan_summaries, self.ai_agent, timeout=timeout)
-                            if text:
-                                blocks.append("### Strategy conflict\n" + text + "\n")
+                            _record("strategy_conflict", text)
                     except Exception as e:
                         logging.debug("startup narrator (conflict) failed: %s", e)
 
-            if len(blocks) <= 2:
-                logging.info("Startup narrators produced no output; nothing written.")
-                return
-
-            out_path = current_dir / "_ai_summary.md"
-            try:
-                with open(out_path, "a", encoding="utf-8") as f:
-                    f.write("\n".join(blocks))
-                logging.info("Startup AI summary written: %s", out_path)
-            except OSError as e:
-                logging.warning("Failed to write startup AI summary: %s", e)
+            logging.info("Startup AI narrators wrote ANNOTATION events into %s", current_dir / "entries.jsonl")
         except Exception as e:
             logging.debug("startup narrators failed: %s", e)
 
