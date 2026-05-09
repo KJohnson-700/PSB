@@ -10,7 +10,7 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 - **External-repo basis:** Implements the jmazzini-style lesson that composite confidence must be an entry gate, not only a logged diagnostic. The layer also preserves PSB's AI advantage by requiring `BUY_YES`/`BUY_NO` action match, confidence floor, and positive AI edge before approval.
 - **Scope:** Enabled for risky/marginal paths first. `ai.decision_layer.use_shadow_portfolio` is still `false` by default so the 3-stage Research→Trader→Portfolio path remains optional until latency/cost and closed-trade calibration justify enforcing it on live trades.
 - **Verification:** `pytest tests/test_ai_agent_parse.py tests/test_ai_narrators.py tests/test_live_exit_overrides.py -q` → `33 passed`; `py_compile` clean for `src/analysis/ai_agent.py` and `src/strategies/bitcoin.py`.
-- **Status:** active for BTC marginal/low-confidence AI approval path; next step is wiring the same helper into SOL/ETH/HYPE/XRP macro paths and then selectively enabling shadow-portfolio enforcement.
+- **Status:** active for BTC marginal/low-confidence approval and SOL/ETH macro marginal up/down approval paths. HYPE/XRP inherit the SOL macro path. Next step is selectively enabling shadow-portfolio enforcement after latency/cost and closed-trade calibration are reviewed.
 
 ## 2026-05-09 — Shadow calibration, BUY_NO attribution, and TP/SL replay tooling
 

@@ -334,6 +334,9 @@ class SolMacroStrategy:
         self.tuning_size_multiplier = float(
             self.config.get("tuning_size_multiplier", 1.0)
         )
+        self.calibration_size_multiplier_5m = float(
+            self.config.get("calibration_size_multiplier_5m", 1.0)
+        )
         self.degraded_bearish_est_up = float(
             self.config.get("degraded_bearish_est_up", 0.45)
         )
@@ -368,6 +371,18 @@ class SolMacroStrategy:
         self.block_counter_macro_leg_updown = bool(
             self.config.get("block_counter_macro_leg_updown", False)
         )
+        # Paper/live calibration lane: allow a SHORT/BUY_NO lane during bullish macro
+        # only when fast alt momentum is clearly bearish. This opens valid BUY_NO
+        # candidates without bypassing later edge, price, oracle, liquidity, and AI gates.
+        self.buy_no_ltf_override_enabled = bool(
+            self.config.get("buy_no_ltf_override_enabled", False)
+        )
+        self.buy_no_ltf_override_rsi_max = float(
+            self.config.get("buy_no_ltf_override_rsi_max", 45.0)
+        )
+        self.buy_no_ltf_override_max_btc_5m_pct = float(
+            self.config.get("buy_no_ltf_override_max_btc_5m_pct", 0.0)
+        )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
 
@@ -385,6 +400,32 @@ class SolMacroStrategy:
 
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
+
+    def _buy_no_ltf_override(self, ta: SOLTechnicalAnalysis) -> tuple[bool, str]:
+        """Permit SHORT side in bullish macro only on clear bearish short-window tape."""
+        if not self.buy_no_ltf_override_enabled:
+            return False, "disabled"
+        sol = ta.sol
+        corr = ta.correlation
+        bearish_15m = macd_bearish_momentum_ok(sol.macd_15m)
+        bearish_5m = macd_bearish_momentum_ok(sol.macd_5m)
+        rsi_ok = float(sol.rsi_14 or 50.0) <= self.buy_no_ltf_override_rsi_max
+        btc_ok = float(corr.btc_move_5m_pct or 0.0) <= self.buy_no_ltf_override_max_btc_5m_pct
+        if bearish_15m and bearish_5m and rsi_ok and btc_ok:
+            return True, (
+                f"bearish_ltf_override: 15m+5m bearish, RSI={sol.rsi_14:.1f}, "
+                f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+            )
+        missing = []
+        if not bearish_15m:
+            missing.append("15m_not_bearish")
+        if not bearish_5m:
+            missing.append("5m_not_bearish")
+        if not rsi_ok:
+            missing.append(f"rsi>{self.buy_no_ltf_override_rsi_max:.1f}")
+        if not btc_ok:
+            missing.append(f"btc5m>{self.buy_no_ltf_override_max_btc_5m_pct:+.3f}%")
+        return False, ",".join(missing)
 
     def _make_buy_no_skip_payload(
         self,
@@ -1138,6 +1179,17 @@ class SolMacroStrategy:
         else:
             # BULLISH or BEARISH macro — BTC 4H is primary, alt HTF is secondary
             allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
+            side_source = "primary_htf"
+            if primary_htf_bias == "BULLISH":
+                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
+                if _short_override:
+                    allowed_side = "SHORT"
+                    side_source = "bearish_ltf_override"
+                    logger.info(
+                        "%s: bullish macro SHORT override enabled — %s",
+                        _brand,
+                        _short_override_reason,
+                    )
 
             # MTF alignment note: fully aligned = trend has been running.
             # Live data shows lag=None trades (63% WR) outperform lag=value (50% WR) —
@@ -1954,58 +2006,63 @@ class SolMacroStrategy:
                         f"Should we take this {action} trade, or HOLD?\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
-                    ai_analysis = await self.ai_agent.analyze_market(
+                    ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context,
                         current_yes_price=yes_price,
                         market_id=market.id,
                         strategy_hint=self._signal_strategy_name,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
+                        require_shadow_portfolio=False,
                     )
                     ai_calls += 1
                     ai_used = True
+                    ai_analysis = ai_decision.direct_analysis
                     # Log reasoning so we can audit what the model is actually deciding
                     if ai_analysis:
                         logger.info(
-                            f"  {self._signal_strategy_name} AI [{ai_analysis.recommendation} "
-                            f"conf={ai_analysis.confidence_score:.2f} p={ai_analysis.estimated_probability:.3f}] "
+                            f"  {self._signal_strategy_name} AI decision [{ai_decision.action} "
+                            f"conf={ai_decision.confidence:.2f} edge={float(ai_decision.edge or 0.0):.4f}] "
                             f"'{market.question[:45]}' | {ai_analysis.reasoning[:120]}"
                         )
-                    if not ai_analysis:
-                        _bump_skip("ai_none_marginal_threshold")
+                    if not ai_decision.approved:
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
                         logger.warning(
-                            "%s: AI returned None after provider call for market %s (%s)",
+                            "%s: AI decision rejected market %s (%s): %s",
                             _brand,
                             market.id,
                             self._signal_strategy_name,
+                            ai_decision.reason,
                         )
                         continue
-                    if ai_analysis.recommendation == "HOLD":
+                    if ai_analysis is None:
+                        _bump_skip("ai_none_marginal_threshold")
+                        continue
+                    if ai_decision.action == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
                         _bump_skip("ai_hold_marginal_threshold")
                         logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
                     if not ai_recommendation_supports_action(
-                        ai_analysis.recommendation, action
+                        ai_decision.action, action
                     ):
                         _bump_skip("ai_veto_marginal_threshold")
                         logger.debug(
-                            f"{_brand}: AI {ai_analysis.recommendation} conflicts with {action} "
+                            f"{_brand}: AI {ai_decision.action} conflicts with {action} "
                             f"on '{market.question[:40]}...'"
                         )
                         continue
-                    if ai_analysis.confidence_score < self.ai_confidence_threshold:
+                    if ai_decision.confidence < self.ai_confidence_threshold:
                         _bump_skip("ai_low_confidence_marginal_threshold")
                         logger.debug(
-                            f"{_brand}: AI confidence {ai_analysis.confidence_score:.2f} "
+                            f"{_brand}: AI confidence {ai_decision.confidence:.2f} "
                             f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
                         )
                         continue
-                    ai_prob_yes = float(ai_analysis.estimated_probability)
-                    ai_edge = (
-                        ai_prob_yes - yes_price
-                        if action == "BUY_YES"
-                        else yes_price - ai_prob_yes
-                    )
+                    ai_edge = float(ai_decision.edge or 0.0)
                     if ai_edge <= 0:
                         _bump_skip("ai_nonpositive_edge_marginal_threshold")
                         logger.debug(
@@ -2014,14 +2071,14 @@ class SolMacroStrategy:
                         )
                         continue
                     edge = max(edge, ai_edge)
-                    confidence = max(confidence, ai_analysis.confidence_score)
-                    reason_parts.append("ai_marginal_confirm")
+                    confidence = max(confidence, ai_decision.confidence)
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
                     if (
                         self.ai_agent.shadow_pipeline_enabled()
                         and shadow_pipeline_calls
                         < self.ai_agent.shadow_pipeline_max_calls_per_scan()
-                        and ai_analysis.confidence_score
-                        >= self.ai_agent.shadow_pipeline_min_confidence()
+                            and ai_decision.confidence
+                            >= self.ai_agent.shadow_pipeline_min_confidence()
                     ):
                         shadow_pipeline_calls += 1
                         try:
@@ -2031,7 +2088,7 @@ class SolMacroStrategy:
                                 current_yes_price=yes_price,
                                 market_id=market.id,
                                 strategy_hint=self._signal_strategy_name,
-                                marginal_recommendation=str(ai_analysis.recommendation),
+                                    marginal_recommendation=str(ai_decision.action),
                                 quant_action=action,
                                 quant_edge=edge,
                                 quant_threshold=(
@@ -2147,46 +2204,40 @@ class SolMacroStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                ai2 = await self.ai_agent.analyze_market(
+                ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context2,
                     current_yes_price=yes_price,
                     market_id=market.id,
                     strategy_hint=self._signal_strategy_name,
+                    quant_action=action,
+                    quant_edge=edge,
+                    quant_confidence=confidence,
+                    quant_threshold=effective_min_edge,
+                    require_shadow_portfolio=False,
                 )
                 ai_calls += 1
                 ai_used = True
-                if not ai2:
-                    _bump_skip("ai_none_marginal_updown")
-                    logger.warning(
-                        "%s: AI returned None after provider call for market %s (updown marginal, %s)",
-                        _brand,
-                        market.id,
-                        self._signal_strategy_name,
-                    )
-                elif ai2.recommendation == "HOLD":
-                    _bump_skip("ai_hold_marginal_updown")
-                    logger.debug(f"{_brand}: AI HOLD updown marginal '{market.question[:40]}...'")
-                elif not ai_recommendation_supports_action(ai2.recommendation, action):
-                    _bump_skip("ai_veto_marginal_updown")
+                ai2 = ai_decision.direct_analysis
+                if not ai_decision.approved:
+                    _bump_skip(f"ai_decision_{ai_decision.reason}")
                     logger.debug(
-                        f"{_brand}: AI veto updown marginal {ai2.recommendation} vs {action}"
+                        f"{_brand}: AI decision rejected updown marginal "
+                        f"{ai_decision.reason} action={ai_decision.action} "
+                        f"conf={ai_decision.confidence:.2f}"
                     )
-                elif ai2.confidence_score < self.ai_confidence_threshold:
-                    _bump_skip("ai_low_confidence_marginal_updown")
-                    logger.debug(f"{_brand}: AI low conf updown marginal")
-                else:
-                    ap = float(ai2.estimated_probability)
-                    ae = ap - yes_price if action == "BUY_YES" else yes_price - ap
-                    if ae > 0:
-                        edge = max(edge, ae)
-                        confidence = max(confidence, ai2.confidence_score)
-                        reason_parts.append("ai_updown_confirm")
+                    continue
+                ae = float(ai_decision.edge or 0.0)
+                if ae > 0:
+                    edge = max(edge, ae)
+                    confidence = max(confidence, ai_decision.confidence)
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
+                    if ai2 is not None:
                         if (
                             self.ai_agent.shadow_pipeline_enabled()
                             and shadow_pipeline_calls
                             < self.ai_agent.shadow_pipeline_max_calls_per_scan()
-                            and ai2.confidence_score
+                            and ai_decision.confidence
                             >= self.ai_agent.shadow_pipeline_min_confidence()
                         ):
                             shadow_pipeline_calls += 1
@@ -2197,7 +2248,7 @@ class SolMacroStrategy:
                                     current_yes_price=yes_price,
                                     market_id=market.id,
                                     strategy_hint=self._signal_strategy_name,
-                                    marginal_recommendation=str(ai2.recommendation),
+                                    marginal_recommendation=str(ai_decision.action),
                                     quant_action=action,
                                     quant_edge=edge,
                                     quant_threshold=effective_min_edge,
@@ -2392,6 +2443,8 @@ class SolMacroStrategy:
                 raw_size *= self.degraded_correlation_size_multiplier
             if self.tuning_size_multiplier > 0:
                 raw_size *= self.tuning_size_multiplier
+            if is_5m and self.calibration_size_multiplier_5m > 0:
+                raw_size *= self.calibration_size_multiplier_5m
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -2418,6 +2471,8 @@ class SolMacroStrategy:
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
             if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
                 reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
+            if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
+                reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
 
             reason_str = " | ".join(r for r in reason_parts if r)
 
@@ -2489,7 +2544,8 @@ class SolMacroStrategy:
             logger.info(f"  [gate-dist] {gate_distributions}")
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
-            f"{_brand} SCAN_DIAG side={allowed_side} BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
+            f"{_brand} SCAN_DIAG side={allowed_side} source={side_source if 'side_source' in locals() else 'neutral_macro'} "
+            f"BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
             f"alt_1H_trend={mtt.h1_trend} enforce_alt_1h={self.enforce_alt_1h_alignment} "
             f"skip_15m={skip_15m_reason!s} markets={len(sol_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"

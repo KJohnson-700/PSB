@@ -497,6 +497,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 )
         else:
             allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
+            if btc_htf_bias == "BULLISH":
+                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
+                if _short_override:
+                    allowed_side = "SHORT"
+                    skip_btc_follow_1h = True
+                    logger.info(
+                        "ETH Macro: bullish macro SHORT override enabled — %s",
+                        _short_override_reason,
+                    )
 
         if (
             self.btc_follow_1h_required
@@ -880,36 +889,46 @@ class ETHMacroStrategy(SolMacroStrategy):
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                ai_analysis = await self.ai_agent.analyze_market(
+                ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context,
                     current_yes_price=yes_price,
                     market_id=market.id,
                     strategy_hint=self._signal_strategy_name,
+                    quant_action=action,
+                    quant_edge=edge,
+                    quant_confidence=confidence,
+                    quant_threshold=effective_min_edge,
+                    require_shadow_portfolio=False,
                 )
                 ai_calls += 1
                 ai_used = True
-                if not ai_analysis:
+                ai_analysis = ai_decision.direct_analysis
+                if not ai_decision.approved:
+                    _bump_skip(f"ai_decision_{ai_decision.reason}")
+                    if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
+                        self._ai_hold_cache[market.id] = time.time()
+                    continue
+                if ai_analysis is None:
                     _bump_skip("ai_none")
                     continue
-                if ai_analysis.recommendation == "HOLD":
+                if ai_decision.action == "HOLD":
                     self._ai_hold_cache[market.id] = time.time()
                     _bump_skip("ai_hold")
                     continue
-                if not ai_recommendation_supports_action(ai_analysis.recommendation, action):
+                if not ai_recommendation_supports_action(ai_decision.action, action):
                     _bump_skip("ai_veto")
                     continue
-                if ai_analysis.confidence_score < self.ai_confidence_threshold:
+                if ai_decision.confidence < self.ai_confidence_threshold:
                     _bump_skip("ai_low_confidence")
                     continue
-                ai_prob_yes = float(ai_analysis.estimated_probability)
-                ai_edge = ai_prob_yes - yes_price if action == "BUY_YES" else yes_price - ai_prob_yes
+                ai_edge = float(ai_decision.edge or 0.0)
                 if ai_edge <= 0:
                     _bump_skip("ai_nonpositive_edge")
                     continue
                 edge = max(edge, ai_edge)
-                confidence = max(confidence, ai_analysis.confidence_score)
-                reason_parts.append("ai_updown_confirm")
+                confidence = max(confidence, ai_decision.confidence)
+                reason_parts.append(f"ai_decision={ai_decision.source}")
                 research_plan = None
                 if (
                     research_enabled
@@ -1100,6 +1119,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 raw_size *= self.degraded_correlation_size_multiplier
             if self.tuning_size_multiplier > 0:
                 raw_size *= self.tuning_size_multiplier
+            if is_5m and self.calibration_size_multiplier_5m > 0:
+                raw_size *= self.calibration_size_multiplier_5m
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -1135,6 +1156,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             ])
             if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
                 reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
+            if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
+                reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
