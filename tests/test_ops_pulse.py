@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from src.ops_pulse import _scan_skip_digest, build_ops_snapshot
+from src.ops_pulse import _decision_gate_digest, _scan_skip_digest, build_ops_snapshot
 
 
 def test_scan_skip_digest_aggregate():
@@ -13,6 +13,61 @@ def test_scan_skip_digest_aggregate():
     d = _scan_skip_digest(ai)
     assert d["per_strategy"]["sol_macro"]["outside_entry_window"] == 16
     assert d["aggregate_top"]["outside_entry_window"] == 26
+
+
+def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
+    cfg = {
+        "updown_composite": {
+            "default_min_score": 0.62,
+            "btc_neutral_15m_min_score": 0.68,
+            "hype_15m_buy_yes_min_score": 0.70,
+        },
+        "ai": {
+            "decision_layer": {
+                "enabled": True,
+                "min_confidence": 0.60,
+                "hard_skip_if_unavailable_on_enforced": True,
+                "use_shadow_portfolio": False,
+                "enforced_lanes": {
+                    "bitcoin": ["neutral_15m", "marginal"],
+                    "hype_macro": ["marginal", "15m_buy_yes"],
+                },
+            }
+        },
+        "strategies": {
+            "bitcoin": {
+                "neutral_15m_requires_shadow_portfolio": True,
+                "neutral_15m_min_composite_score": 0.68,
+            },
+            "hype_macro": {
+                "require_oracle_for_updown": True,
+                "oracle_max_age_sec": 180,
+                "oracle_max_basis_bps": 12.0,
+                "require_shadow_portfolio_15m_buy_yes": True,
+                "calibration_size_multiplier_15m_buy_yes": 0.35,
+            },
+        },
+    }
+    stats = {
+        "bitcoin": {
+            "top_skip_reasons": {"composite_score_below_floor": 2, "ai_decision_direct_ai_hold": 1},
+            "gate_distributions": {"composite_score": {"min": 0.52, "avg": 0.63, "max": 0.71}},
+        },
+        "hype_macro": {
+            "top_skip_reasons": {"oracle_basis_block": 1},
+            "gate_distributions": {"composite_score": {"avg": 0.69}},
+        },
+    }
+
+    digest = _decision_gate_digest(cfg, stats)
+
+    assert digest["enabled"] is True
+    assert digest["floors"]["hype_15m_buy_yes_min_score"] == 0.70
+    assert digest["lanes"]["bitcoin"]["enforced_lanes"] == ["neutral_15m", "marginal"]
+    assert digest["lanes"]["bitcoin"]["shadow_required"] is True
+    assert digest["lanes"]["hype_macro"]["oracle"]["max_basis_bps"] == 12.0
+    assert digest["lanes"]["hype_macro"]["size_multiplier_15m_buy_yes"] == 0.35
+    assert digest["active_blocks"]["hype_macro"]["oracle_basis_block"] == 1
 
 
 def test_build_ops_snapshot_includes_skip_digest_and_regime():
@@ -91,6 +146,8 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
     assert snap["scan_skip_digest"]["aggregate_top"].get("outside_entry_window") == 5
     assert "ai_pipeline" in snap
     assert snap["ai_pipeline"]["aggregate"] == {}
+    assert "decision_gates" in snap
+    assert snap["decision_gates"]["enabled"] is False
     assert snap["ai_status"]["ready"] is True
     assert "zero calls" in snap["ai_activity_note"]
     assert snap["side_selection"]["aggregate"]["LONG"] == 1

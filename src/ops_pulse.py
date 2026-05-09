@@ -64,6 +64,95 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Decision-control config + current block telemetry for dashboard operators."""
+    cfg = config or {}
+    strategies = cfg.get("strategies") or {}
+    ai_cfg = (cfg.get("ai") or {}).get("decision_layer") or {}
+    composite = cfg.get("updown_composite") or {}
+    lanes = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+    oracle_block_keys = {"oracle_missing", "oracle_stale", "oracle_basis_block"}
+    control_prefixes = ("ai_decision_",)
+    control_keys = {
+        "composite_score_below_floor",
+        "ai_unavailable_neutral_15m",
+        "ai_call_limit_neutral_15m",
+        "ai_nonpositive_edge_neutral_15m",
+        "neutral_15m_low_conf_no_ai",
+    }
+
+    enforced_cfg = ai_cfg.get("enforced_lanes") if isinstance(ai_cfg, dict) else {}
+    if not isinstance(enforced_cfg, dict):
+        enforced_cfg = {}
+
+    active_blocks: Dict[str, Dict[str, int]] = {}
+    gate_scores: Dict[str, Any] = {}
+    lane_payload: Dict[str, Any] = {}
+    for lane in lanes:
+        scfg = strategies.get(lane) or {}
+        enforced = enforced_cfg.get(lane) or []
+        if not isinstance(enforced, list):
+            enforced = list(enforced) if isinstance(enforced, (tuple, set)) else []
+        stats = ai_scan_stats.get(lane) or {}
+        skips = stats.get("top_skip_reasons") or {}
+        filtered: Dict[str, int] = {}
+        for key, value in skips.items():
+            key_s = str(key)
+            if (
+                key_s in oracle_block_keys
+                or key_s in control_keys
+                or key_s.startswith(control_prefixes)
+            ):
+                filtered[key_s] = _coerce_skip_count(value)
+        if filtered:
+            active_blocks[lane] = dict(sorted(filtered.items(), key=lambda kv: kv[1], reverse=True))
+
+        dist = (stats.get("gate_distributions") or {}).get("composite_score")
+        if dist:
+            gate_scores[lane] = dist
+
+        oracle_required = bool(scfg.get("require_oracle_for_updown", False))
+        oracle_payload = {
+            "required": oracle_required,
+            "max_age_sec": scfg.get("oracle_max_age_sec"),
+            "max_basis_bps": scfg.get("oracle_max_basis_bps"),
+        }
+        if lane == "bitcoin":
+            oracle_payload = {"required": False, "note": "BTC neutral gate only"}
+
+        lane_payload[lane] = {
+            "enabled": bool(scfg.get("enabled", False)),
+            "enforced_lanes": [str(item) for item in enforced],
+            "oracle": oracle_payload,
+            "composite_floor": (
+                scfg.get("neutral_15m_min_composite_score")
+                if lane == "bitcoin"
+                else scfg.get("min_composite_score_15m_buy_yes")
+            ),
+            "shadow_required": bool(
+                scfg.get("neutral_15m_requires_shadow_portfolio", False)
+                or scfg.get("require_shadow_portfolio_15m_buy_yes", False)
+            ),
+            "size_multiplier_15m_buy_yes": scfg.get("calibration_size_multiplier_15m_buy_yes"),
+        }
+
+    return {
+        "enabled": bool(ai_cfg.get("enabled", False)),
+        "min_confidence": ai_cfg.get("min_confidence", 0.60),
+        "hard_skip_if_unavailable": bool(ai_cfg.get("hard_skip_if_unavailable_on_enforced", False)),
+        "shadow_global": bool(ai_cfg.get("use_shadow_portfolio", False)),
+        "floors": {
+            "default_min_score": composite.get("default_min_score"),
+            "btc_neutral_15m_min_score": composite.get("btc_neutral_15m_min_score"),
+            "hype_15m_buy_yes_min_score": composite.get("hype_15m_buy_yes_min_score"),
+            "low_confidence_min_score": composite.get("low_confidence_min_score"),
+        },
+        "lanes": lane_payload,
+        "active_blocks": active_blocks,
+        "gate_scores": gate_scores,
+    }
+
+
 def _buy_no_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     """Dedicated BUY_NO suppression counters and last sample per strategy."""
     lanes = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
@@ -309,6 +398,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "last_cycle_times": last_cycles,
         "ai_scan_stats": ai_scan_stats,
         "scan_skip_digest": _scan_skip_digest(ai_scan_stats),
+        "decision_gates": _decision_gate_digest(getattr(bot, "config", {}) or {}, ai_scan_stats),
         "buy_no_skip_diagnostics": _buy_no_skip_digest(ai_scan_stats),
         "side_selection": side_selection,
         "ai_status": ai_status,

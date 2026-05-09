@@ -147,6 +147,18 @@
             text-overflow:ellipsis;
             white-space:nowrap;
         }
+        .ops-mini-grid{display:grid;grid-template-columns:1.15fr 1.35fr 1.15fr;gap:8px;margin:4px 0 10px}
+        .ops-mini-grid .ops-mini{margin:0;min-width:0}
+        .decision-gate-line{display:flex;gap:6px;align-items:center;flex-wrap:wrap;white-space:normal;line-height:1.45}
+        .gate-chip{
+            display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.09);
+            border-radius:999px;padding:2px 7px;background:rgba(255,255,255,.03);
+            color:var(--tm);font-size:10px;letter-spacing:.02em;white-space:nowrap;
+        }
+        .gate-chip.good{border-color:rgba(0,255,136,.28);color:var(--gr);background:rgba(0,255,136,.06)}
+        .gate-chip.warn{border-color:rgba(255,215,0,.26);color:var(--ye);background:rgba(255,215,0,.06)}
+        .gate-chip.hot{border-color:rgba(255,68,102,.28);color:var(--re);background:rgba(255,68,102,.06)}
+        .gate-chip.ai{border-color:rgba(176,96,255,.32);color:var(--pu);background:rgba(176,96,255,.07)}
 
         /* ── Tables ── */
         table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
@@ -275,6 +287,7 @@
             .crypto-hero-six{grid-template-columns:repeat(2,minmax(0,1fr))}
             .signal-gates-grid{grid-template-columns:1fr}
             #status-hero{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .ops-mini-grid{grid-template-columns:1fr}
         }
         @media (max-width:640px){
             .crypto-hero-six,.crypto-meta-four{grid-template-columns:1fr}
@@ -373,13 +386,19 @@
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
-        <div class="ops-mini" title="scan_skip_digest from bot — top reasons markets did not become signals">
-            <div class="ops-mini-head">Top Scan Skips</div>
-            <div id="ops-skip-digest" class="ops-mini-body"></div>
-        </div>
-        <div class="ops-mini" title="ai_pipeline from /api/status — cumulative AI scan counters (marginal + optional research)">
-            <div class="ops-mini-head">AI Pipeline Counters</div>
-            <div id="ops-ai-pipeline" class="ops-mini-body"></div>
+        <div class="ops-mini-grid">
+            <div class="ops-mini" title="scan_skip_digest from bot — top reasons markets did not become signals">
+                <div class="ops-mini-head">Top Scan Skips</div>
+                <div id="ops-skip-digest" class="ops-mini-body"></div>
+            </div>
+            <div class="ops-mini" title="Decision gate controls from /api/status — oracle, composite, AI, shadow, and lane sizing">
+                <div class="ops-mini-head">Decision Gates</div>
+                <div id="ops-decision-gates" class="ops-mini-body"></div>
+            </div>
+            <div class="ops-mini" title="ai_pipeline from /api/status — cumulative AI scan counters (marginal + optional research)">
+                <div class="ops-mini-head">AI Pipeline Counters</div>
+                <div id="ops-ai-pipeline" class="ops-mini-body"></div>
+            </div>
         </div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;">
             <button class="btn-sm btn-green" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
@@ -1610,6 +1629,38 @@ async function fetchAll() {
     _dashStamp();
 }
 
+function _htmlEscape(v) {
+    return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function _gateChip(text, tone) {
+    return `<span class="gate-chip ${tone || ''}">${_htmlEscape(text)}</span>`;
+}
+
+function formatDecisionGateDigest(dg) {
+    if (!dg || typeof dg !== 'object') return '';
+    const floors = dg.floors || {};
+    const lanes = dg.lanes && typeof dg.lanes === 'object' ? dg.lanes : {};
+    const blocks = dg.active_blocks && typeof dg.active_blocks === 'object' ? dg.active_blocks : {};
+    const enforcedCount = Object.values(lanes).reduce((n, lane) => n + ((lane.enforced_lanes || []).length || 0), 0);
+    const oracleLanes = Object.entries(lanes)
+        .filter(([, lane]) => lane?.oracle?.required)
+        .map(([name, lane]) => `${name.replace('_macro', '')}≤${lane.oracle.max_basis_bps ?? '?'}bps`);
+    const blockParts = Object.entries(blocks).flatMap(([lane, reasons]) =>
+        Object.entries(reasons || {}).slice(0, 2).map(([reason, count]) => `${lane.replace('_macro', '')}:${reason} ${count}`)
+    );
+    const chips = [
+        _gateChip(dg.enabled ? `AI enforced ${enforcedCount}` : 'AI gate off', dg.enabled ? 'ai' : 'warn'),
+        _gateChip(dg.hard_skip_if_unavailable ? 'hard-skip on' : 'fallback allowed', dg.hard_skip_if_unavailable ? 'good' : 'warn'),
+        _gateChip(`floors ${floors.default_min_score ?? '?'} / BTC ${floors.btc_neutral_15m_min_score ?? '?'} / HYPE ${floors.hype_15m_buy_yes_min_score ?? '?'}`, 'good'),
+    ];
+    if (oracleLanes.length) chips.push(_gateChip(`oracle ${oracleLanes.slice(0, 4).join(' ')}`, 'good'));
+    const hype = lanes.hype_macro || {};
+    if (hype.size_multiplier_15m_buy_yes) chips.push(_gateChip(`HYPE 15m ${hype.size_multiplier_15m_buy_yes}x`, 'warn'));
+    if (blockParts.length) chips.push(_gateChip(`blocks ${blockParts.slice(0, 3).join(' · ')}`, 'hot'));
+    return `<div class="decision-gate-line">${chips.join('')}</div>`;
+}
+
 /** Command Center auxiliary lines: scan skip digest + AI pipeline counters (partial updates from SSE ok). */
 function updateCommandCenterDigests(d) {
     if (!d || typeof d !== 'object') return;
@@ -1629,6 +1680,14 @@ function updateCommandCenterDigests(d) {
                 } else {
                     skEl.textContent = '';
                 }
+            }
+        }
+        if ('decision_gates' in d) {
+            const gateEl = document.getElementById('ops-decision-gates');
+            if (gateEl) {
+                const html = formatDecisionGateDigest(d.decision_gates);
+                gateEl.innerHTML = html;
+                gateEl.title = d.decision_gates ? JSON.stringify(d.decision_gates) : 'decision_gates: no data yet';
             }
         }
         if ('ai_pipeline' in d) {
@@ -1814,6 +1873,9 @@ function applySSESnapshot(raw) {
     applyHeroMetrics(shaped);
     if (raw.ai_pipeline !== undefined) {
         updateCommandCenterDigests({ ai_pipeline: raw.ai_pipeline });
+    }
+    if (raw.decision_gates !== undefined) {
+        updateCommandCenterDigests({ decision_gates: raw.decision_gates });
     }
     if (raw.dry_run !== undefined && raw.running !== undefined) {
         updateStatusBadgesAndKill({

@@ -804,6 +804,7 @@ async def sse_stream(request: Request):
                         cfg_disk = {}
 
                 ai_pipeline_payload: Dict[str, Any] = {}
+                decision_gates_payload: Dict[str, Any] = {}
                 if bot:
                     dry_run = bot.config.get("trading", {}).get("dry_run", True)
                     can_trade, _reason = bot.risk_manager.can_trade()
@@ -812,17 +813,26 @@ async def sse_stream(request: Request):
                     _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
                     ai_payload = compute_ai_status(bot.config, _ai_keys)
                     try:
-                        from src.ops_pulse import _ai_pipeline_digest
+                        from src.ops_pulse import _ai_pipeline_digest, _decision_gate_digest
 
+                        scan_stats = dict(getattr(bot, "last_ai_scan_stats", {}) or {})
                         ai_pipeline_payload = _ai_pipeline_digest(
-                            dict(getattr(bot, "last_ai_scan_stats", {}) or {})
+                            scan_stats
                         )
+                        decision_gates_payload = _decision_gate_digest(bot.config, scan_stats)
                     except Exception:
                         ai_pipeline_payload = {}
+                        decision_gates_payload = {}
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
                     can_trade = False
                     ai_payload = compute_ai_status(cfg_disk, None)
+                    try:
+                        from src.ops_pulse import _decision_gate_digest
+
+                        decision_gates_payload = _decision_gate_digest(cfg_disk, {})
+                    except Exception:
+                        decision_gates_payload = {}
 
                 bankroll_payload: Dict[str, Any] = {"bankroll": None, "source": "unavailable"}
                 bankroll_snap = None
@@ -889,6 +899,7 @@ async def sse_stream(request: Request):
                         float(_btc_analysis_cache.current_price), 0
                     ) if _btc_analysis_cache and hasattr(_btc_analysis_cache, "current_price") else 0,
                     "ai_pipeline": ai_pipeline_payload,
+                    "decision_gates": decision_gates_payload,
                     "ts": int(_time_mod.time()),
                 }
                 yield f"data: {json.dumps(snapshot)}\n\n"
@@ -1180,6 +1191,7 @@ async def get_status():
             ),
             "session_id": getattr(bot.journal, "session_id", None),
             "scan_skip_digest": _ops.get("scan_skip_digest"),
+            "decision_gates": _ops.get("decision_gates"),
             "buy_no_skip_diagnostics": _ops.get("buy_no_skip_diagnostics"),
             "side_selection": _ops.get("side_selection"),
             "ops_ai_status": _ops.get("ai_status"),
@@ -1236,6 +1248,12 @@ async def get_status():
         "daily_trades": 0,
         "emergency_stopped": False,
     }
+    try:
+        from src.ops_pulse import _decision_gate_digest
+
+        decision_gates_disk = _decision_gate_digest(cfg_disk, {})
+    except Exception:
+        decision_gates_disk = None
 
     return {
         "running": False,
@@ -1258,6 +1276,7 @@ async def get_status():
         "strategy_state": _build_strategy_state(cfg_disk, False),
         "session_id": summary.get("session_id"),
         "scan_skip_digest": None,
+        "decision_gates": decision_gates_disk,
         "buy_no_skip_diagnostics": None,
         "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
