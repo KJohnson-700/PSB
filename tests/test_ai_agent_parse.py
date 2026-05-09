@@ -2,7 +2,9 @@
 
 import pytest
 
-from src.analysis.ai_agent import AIAgent, AIResponseValidationError
+from datetime import datetime
+
+from src.analysis.ai_agent import AIAgent, AIAnalysis, AIResponseValidationError
 from tests.async_helpers import run_async
 
 
@@ -310,3 +312,84 @@ def test_ai_agent_accepts_full_root_config_or_ai_section_only() -> None:
     assert from_full.provider_chain == ai_block["provider_chain"]
     from_full.refresh_from_config({"enabled": False, "provider_chain": []})
     assert from_full.provider_chain == []
+
+
+def test_decision_layer_approves_matching_ai_action() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+            }
+        }
+    )
+
+    async def fake_analyze_market(**kwargs):
+        return AIAnalysis(
+            reasoning="ok",
+            confidence_score=0.72,
+            estimated_probability=0.64,
+            recommendation="BUY_YES",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_analyze_market  # type: ignore[method-assign]
+    decision = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-decision",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.54,
+            quant_threshold=0.12,
+        )
+    )
+    assert decision.approved is True
+    assert decision.action == "BUY_YES"
+    assert decision.edge == pytest.approx(0.12)
+
+
+def test_decision_layer_rejects_low_confidence_ai_action() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+            }
+        }
+    )
+
+    async def fake_analyze_market(**kwargs):
+        return AIAnalysis(
+            reasoning="unclear",
+            confidence_score=0.51,
+            estimated_probability=0.64,
+            recommendation="BUY_YES",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_analyze_market  # type: ignore[method-assign]
+    decision = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-low-conf",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.54,
+            quant_threshold=0.12,
+        )
+    )
+    assert decision.approved is False
+    assert decision.reason == "direct_ai_low_confidence"

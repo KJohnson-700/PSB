@@ -92,6 +92,20 @@ class AIAnalysis:
         return 0.0  # Will be calculated with market price
 
 
+@dataclass
+class AIDecision:
+    """Enforced pre-entry decision returned by the AI decision layer."""
+    approved: bool
+    action: str
+    confidence: float
+    estimated_probability: Optional[float]
+    edge: Optional[float]
+    reason: str
+    source: str
+    direct_analysis: Optional[AIAnalysis] = None
+    shadow_result: Optional[Dict[str, Any]] = None
+
+
 class AIAgent:
     """AI-powered decision engine for market analysis"""
 
@@ -217,6 +231,7 @@ OUTPUT (machine-parseable — follow exactly):
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
+        self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
         # Round-robin first model for OpenRouter free tier (spread per-model limits).
         self._openrouter_model_rr: Dict[str, int] = {}
 
@@ -243,6 +258,7 @@ OUTPUT (machine-parseable — follow exactly):
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
+        self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
 
     def is_available(self) -> bool:
         """
@@ -303,6 +319,18 @@ OUTPUT (machine-parseable — follow exactly):
         except (TypeError, ValueError):
             return False
         return float(ai_confidence) < threshold
+
+    def decision_layer_enabled(self) -> bool:
+        return bool(self.decision_layer_cfg.get("enabled", False))
+
+    def decision_layer_min_confidence(self) -> float:
+        try:
+            return max(0.0, min(1.0, float(self.decision_layer_cfg.get("min_confidence", 0.60))))
+        except (TypeError, ValueError):
+            return 0.60
+
+    def decision_layer_use_shadow_portfolio(self) -> bool:
+        return bool(self.decision_layer_cfg.get("use_shadow_portfolio", False))
 
     def _named_provider_chain(self, cfg_block: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Pick a single provider entry and optional model override from a config block."""
@@ -948,7 +976,203 @@ OUTPUT (machine-parseable — follow exactly):
             "portfolio": decision,
             "marginal_mismatch": mismatch,
             "portfolio_action": decision.action.value,
+            "shadow_confidence": shadow_confidence,
         }
+
+    async def evaluate_trade_decision(
+        self,
+        *,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str,
+        quant_action: str,
+        quant_edge: float,
+        quant_confidence: float,
+        quant_threshold: float,
+        require_shadow_portfolio: Optional[bool] = None,
+    ) -> AIDecision:
+        """Enforced pre-entry AI decision layer.
+
+        This is deliberately stricter than log-only narrators: a HOLD/SKIP,
+        action mismatch, low confidence, or non-positive AI edge rejects the trade.
+        """
+        if not self.decision_layer_enabled():
+            return AIDecision(
+                approved=True,
+                action=quant_action,
+                confidence=float(quant_confidence),
+                estimated_probability=None,
+                edge=float(quant_edge),
+                reason="decision_layer_disabled",
+                source="disabled",
+            )
+        if not self.live_inferencing or not self.is_available():
+            return AIDecision(
+                approved=False,
+                action="SKIP",
+                confidence=0.0,
+                estimated_probability=None,
+                edge=None,
+                reason="ai_unavailable",
+                source="unavailable",
+            )
+
+        min_confidence = self.decision_layer_min_confidence()
+        analysis = await self.analyze_market(
+            market_question=market_question,
+            market_description=market_description,
+            current_yes_price=current_yes_price,
+            market_id=market_id,
+            strategy_hint=strategy_hint,
+        )
+        if analysis is None:
+            return AIDecision(False, "SKIP", 0.0, None, None, "direct_ai_failed", "direct")
+
+        rec = str(analysis.recommendation or "").strip().upper()
+        action = str(quant_action or "").strip().upper()
+        if rec == "HOLD":
+            return AIDecision(
+                False,
+                rec,
+                float(analysis.confidence_score),
+                float(analysis.estimated_probability),
+                None,
+                "direct_ai_hold",
+                "direct",
+                direct_analysis=analysis,
+            )
+        if self._shadow_marginal_mismatch(action, self._normalize_trader_action(rec)):
+            return AIDecision(
+                False,
+                rec,
+                float(analysis.confidence_score),
+                float(analysis.estimated_probability),
+                None,
+                "direct_ai_action_mismatch",
+                "direct",
+                direct_analysis=analysis,
+            )
+        if float(analysis.confidence_score) < min_confidence:
+            return AIDecision(
+                False,
+                rec,
+                float(analysis.confidence_score),
+                float(analysis.estimated_probability),
+                None,
+                "direct_ai_low_confidence",
+                "direct",
+                direct_analysis=analysis,
+            )
+
+        ai_edge = (
+            float(analysis.estimated_probability) - float(current_yes_price)
+            if action == "BUY_YES"
+            else float(current_yes_price) - float(analysis.estimated_probability)
+        )
+        if ai_edge <= 0:
+            return AIDecision(
+                False,
+                rec,
+                float(analysis.confidence_score),
+                float(analysis.estimated_probability),
+                ai_edge,
+                "direct_ai_nonpositive_edge",
+                "direct",
+                direct_analysis=analysis,
+            )
+
+        use_shadow = (
+            self.decision_layer_use_shadow_portfolio()
+            if require_shadow_portfolio is None
+            else bool(require_shadow_portfolio)
+        )
+        if use_shadow:
+            shadow = await self.run_shadow_pipeline(
+                market_question=market_question,
+                market_description=market_description,
+                current_yes_price=current_yes_price,
+                market_id=market_id,
+                strategy_hint=strategy_hint,
+                marginal_recommendation=rec,
+                quant_action=action,
+                quant_edge=quant_edge,
+                quant_threshold=quant_threshold,
+                existing_research=None,
+            )
+            if not shadow or not shadow.get("ok"):
+                return AIDecision(
+                    False,
+                    rec,
+                    float(analysis.confidence_score),
+                    float(analysis.estimated_probability),
+                    ai_edge,
+                    "shadow_portfolio_failed",
+                    "shadow_portfolio",
+                    direct_analysis=analysis,
+                    shadow_result=shadow,
+                )
+            portfolio_action = str(shadow.get("portfolio_action") or "").upper()
+            if portfolio_action in {"HOLD", "SKIP"}:
+                return AIDecision(
+                    False,
+                    portfolio_action,
+                    float(shadow.get("shadow_confidence") or analysis.confidence_score),
+                    float(analysis.estimated_probability),
+                    ai_edge,
+                    "shadow_portfolio_hold",
+                    "shadow_portfolio",
+                    direct_analysis=analysis,
+                    shadow_result=shadow,
+                )
+            if self._shadow_marginal_mismatch(action, self._normalize_trader_action(portfolio_action)):
+                return AIDecision(
+                    False,
+                    portfolio_action,
+                    float(shadow.get("shadow_confidence") or analysis.confidence_score),
+                    float(analysis.estimated_probability),
+                    ai_edge,
+                    "shadow_portfolio_action_mismatch",
+                    "shadow_portfolio",
+                    direct_analysis=analysis,
+                    shadow_result=shadow,
+                )
+            shadow_confidence = float(shadow.get("shadow_confidence") or analysis.confidence_score)
+            if shadow_confidence < min_confidence:
+                return AIDecision(
+                    False,
+                    portfolio_action,
+                    shadow_confidence,
+                    float(analysis.estimated_probability),
+                    ai_edge,
+                    "shadow_portfolio_low_confidence",
+                    "shadow_portfolio",
+                    direct_analysis=analysis,
+                    shadow_result=shadow,
+                )
+            return AIDecision(
+                True,
+                portfolio_action,
+                max(float(analysis.confidence_score), shadow_confidence),
+                float(analysis.estimated_probability),
+                ai_edge,
+                "shadow_portfolio_approved",
+                "shadow_portfolio",
+                direct_analysis=analysis,
+                shadow_result=shadow,
+            )
+
+        return AIDecision(
+            True,
+            rec,
+            float(analysis.confidence_score),
+            float(analysis.estimated_probability),
+            ai_edge,
+            "direct_ai_approved",
+            "direct",
+            direct_analysis=analysis,
+        )
 
     def _provider_timeout(self, provider_config: Optional[Dict[str, Any]]) -> float:
         """HTTP wait for this provider; optional ``timeout_seconds`` on provider_chain entry."""

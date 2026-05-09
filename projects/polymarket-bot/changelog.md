@@ -4,6 +4,14 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-09 — Enforced AI decision layer skeleton
+
+- **What changed:** Added `ai.decision_layer` config and `AIAgent.evaluate_trade_decision(...)`, an enforced pre-entry decision API that approves or rejects a quant candidate before Kelly sizing. BTC up/down marginal/low-confidence neutral approval now calls this decision layer instead of directly consuming raw `analyze_market()` output.
+- **External-repo basis:** Implements the jmazzini-style lesson that composite confidence must be an entry gate, not only a logged diagnostic. The layer also preserves PSB's AI advantage by requiring `BUY_YES`/`BUY_NO` action match, confidence floor, and positive AI edge before approval.
+- **Scope:** Enabled for risky/marginal paths first. `ai.decision_layer.use_shadow_portfolio` is still `false` by default so the 3-stage Research→Trader→Portfolio path remains optional until latency/cost and closed-trade calibration justify enforcing it on live trades.
+- **Verification:** `pytest tests/test_ai_agent_parse.py tests/test_ai_narrators.py tests/test_live_exit_overrides.py -q` → `33 passed`; `py_compile` clean for `src/analysis/ai_agent.py` and `src/strategies/bitcoin.py`.
+- **Status:** active for BTC marginal/low-confidence AI approval path; next step is wiring the same helper into SOL/ETH/HYPE/XRP macro paths and then selectively enabling shadow-portfolio enforcement.
+
 ## 2026-05-09 — Shadow calibration, BUY_NO attribution, and TP/SL replay tooling
 
 - **What changed:** Improved AI shadow-pipeline log records with top-level strategy/action/confidence fields (`shadow_action`, `shadow_confidence`, `quant_action`, `quant_edge`, `quant_threshold`) and made narrator calibration able to read nested shadow confidence values. Runtime diagnostics now print per-cycle `action_counts`, `side_source_counts`, `buy_no_skip_counts`, and the latest BUY_NO skip sample for BTC/SOL/ETH/HYPE/XRP.

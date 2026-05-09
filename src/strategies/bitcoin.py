@@ -870,6 +870,7 @@ class BitcoinStrategy:
         shadow_pipeline_calls = 0
         shadow_pipeline_ok = 0
         preentry_veto_skips = 0
+        ai_decision_layer_skips = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         action_counts: Dict[str, int] = {}
@@ -1698,61 +1699,63 @@ class BitcoinStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                ai_analysis = await self.ai_agent.analyze_market(
+                ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context,
                     current_yes_price=yes_price,
                     market_id=market.id,
                     strategy_hint="bitcoin",
+                    quant_action=action,
+                    quant_edge=edge,
+                    quant_confidence=confidence,
+                    quant_threshold=effective_min_edge,
+                    require_shadow_portfolio=False,
                 )
                 ai_calls += 1
                 ai_used = True
 
-                if not ai_analysis:
-                    logger.warning(
-                        "BTC: AI returned None after provider call for market %s — "
-                        "LLM chain failed or response invalid (marginal updown path)",
-                        market.id,
-                    )
-                    continue
-                if ai_analysis.recommendation == "HOLD":
-                    ai_holds += 1
-                    _bump_skip("ai_hold_marginal_updown")
-                    # Cache this HOLD — blocks the 5m quant path for ai_hold_veto_ttl_sec
-                    self._ai_hold_cache[market.id] = time.time()
+                if ai_decision.shadow_result is not None:
+                    shadow_pipeline_calls += 1
+                    if ai_decision.shadow_result.get("ok"):
+                        shadow_pipeline_ok += 1
+
+                if not ai_decision.approved:
+                    ai_decision_layer_skips += 1
+                    _bump_skip(f"ai_decision_{ai_decision.reason}")
+                    if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
+                        ai_holds += 1
+                        self._ai_hold_cache[market.id] = time.time()
+                    if "mismatch" in ai_decision.reason:
+                        ai_vetos += 1
                     logger.info(
-                        f"  BTC AI skip '{market.question[:45]}' — HOLD on marginal edge={edge:.4f} "
-                        f"(veto cached {self.ai_hold_veto_ttl_sec}s)"
-                    )
-                    continue
-                # Log AI reasoning for every decision so we can audit what the model is thinking
-                logger.info(
-                    f"  BTC AI [{ai_analysis.recommendation} conf={ai_analysis.confidence_score:.2f} "
-                    f"p={ai_analysis.estimated_probability:.3f}] '{market.question[:45]}' "
-                    f"| {ai_analysis.reasoning[:120]}"
-                )
-                if not ai_recommendation_supports_action(ai_analysis.recommendation, action):
-                    ai_vetos += 1
-                    _bump_skip("ai_veto_marginal_updown")
-                    logger.info(
-                        f"  BTC AI veto '{market.question[:45]}' — rec={ai_analysis.recommendation} "
-                        f"conflicts with action={action}"
-                    )
-                    continue
-                if ai_analysis.confidence_score < self.ai_confidence_threshold:
-                    _bump_skip("ai_low_confidence_marginal_updown")
-                    logger.info(
-                        f"  BTC AI skip '{market.question[:45]}' — confidence "
-                        f"{ai_analysis.confidence_score:.2f} < {self.ai_confidence_threshold:.2f}"
+                        f"  BTC AI decision skip '{market.question[:45]}' — "
+                        f"{ai_decision.reason} action={ai_decision.action} "
+                        f"conf={ai_decision.confidence:.2f}"
                     )
                     continue
 
-                ai_prob_yes = float(ai_analysis.estimated_probability)
-                ai_edge = (
-                    ai_prob_yes - yes_price
-                    if action == "BUY_YES"
-                    else yes_price - ai_prob_yes
+                logger.info(
+                    f"  BTC AI decision [{ai_decision.action} conf={ai_decision.confidence:.2f} "
+                    f"edge={float(ai_decision.edge or 0.0):.4f}] "
+                    f"'{market.question[:45]}' | {ai_decision.reason}"
                 )
+                if not ai_recommendation_supports_action(ai_decision.action, action):
+                    ai_vetos += 1
+                    _bump_skip("ai_veto_marginal_updown")
+                    logger.info(
+                        f"  BTC AI veto '{market.question[:45]}' — rec={ai_decision.action} "
+                        f"conflicts with action={action}"
+                    )
+                    continue
+                if ai_decision.confidence < self.ai_confidence_threshold:
+                    _bump_skip("ai_low_confidence_marginal_updown")
+                    logger.info(
+                        f"  BTC AI skip '{market.question[:45]}' — confidence "
+                        f"{ai_decision.confidence:.2f} < {self.ai_confidence_threshold:.2f}"
+                    )
+                    continue
+
+                ai_edge = float(ai_decision.edge or 0.0)
                 if ai_edge <= 0:
                     _bump_skip("ai_nonpositive_edge_marginal_updown")
                     logger.info(
@@ -1761,42 +1764,13 @@ class BitcoinStrategy:
                     continue
 
                 edge = max(edge, ai_edge)
-                confidence = max(confidence, ai_analysis.confidence_score)
+                confidence = max(confidence, ai_decision.confidence)
                 ai_assists += 1
-                reason_parts.append("ai_updown_confirm")
+                reason_parts.append(f"ai_decision={ai_decision.source}")
                 if _needs_ai_for_low_conf_neutral_15m:
                     reason_parts.append(
                         f"low_conf_ai_confirm={self.neutral_15m_min_quant_confidence:.2f}"
                     )
-                if (
-                    self.ai_agent.shadow_pipeline_enabled()
-                    and shadow_pipeline_calls
-                    < self.ai_agent.shadow_pipeline_max_calls_per_scan()
-                    and ai_analysis.confidence_score
-                    >= self.ai_agent.shadow_pipeline_min_confidence()
-                ):
-                    shadow_pipeline_calls += 1
-                    try:
-                        shadow_out = await self.ai_agent.run_shadow_pipeline(
-                            market_question=market.question,
-                            market_description=ai_context,
-                            current_yes_price=yes_price,
-                            market_id=market.id,
-                            strategy_hint="bitcoin",
-                            marginal_recommendation=str(ai_analysis.recommendation),
-                            quant_action=action,
-                            quant_edge=edge,
-                            quant_threshold=effective_min_edge,
-                            existing_research=None,
-                        )
-                        if shadow_out and shadow_out.get("ok"):
-                            shadow_pipeline_ok += 1
-                    except Exception as e:
-                        logger.debug(
-                            "BTC shadow pipeline failed (updown) market=%s: %s",
-                            market.id,
-                            e,
-                        )
             elif (
                 is_updown
                 and edge < effective_min_edge
@@ -2043,6 +2017,7 @@ class BitcoinStrategy:
             "shadow_pipeline_calls": shadow_pipeline_calls,
             "shadow_pipeline_ok": shadow_pipeline_ok,
             "preentry_veto_skips": preentry_veto_skips,
+            "ai_decision_layer_skips": ai_decision_layer_skips,
             "action_counts": dict(sorted(action_counts.items())),
             "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),

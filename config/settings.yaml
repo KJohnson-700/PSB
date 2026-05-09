@@ -805,6 +805,15 @@ ai:
     # Optional: force research calls through one provider/model while keeping
     # the normal marginal tiebreaker on the default provider_chain.
     provider_name: ""      # e.g. "minimax"
+  # Enforced pre-entry AI approval layer. Starts on risky/marginal paths; do not
+  # turn this into "AI generates every trade" until closed-trade calibration proves it.
+  decision_layer:
+    enabled: true
+    min_confidence: 0.60
+    use_shadow_portfolio: false  # direct AI is enforced now; shadow portfolio remains optional due latency/cost
+    enforce_on:
+      - low_confidence_neutral_15m
+      - marginal
   # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.
   shadow_pipeline:
     enabled: true
