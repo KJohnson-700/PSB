@@ -17,6 +17,34 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-09 — BTC 15m NEUTRAL edge floor to force AI/veto
+
+- **What changed:** Added `strategies.bitcoin.min_edge_15m_neutral=0.12` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) now applies that floor only to BTC 15m up/down markets when HTF bias is `NEUTRAL`; marginal entries below the floor must pass the existing AI up/down assist window or skip.
+- **Why:** Latest paper session `test_20260509_022248` showed BTC 15m `BUY_YES` as the main current damage lane: `11` closes, `36.4%` WR, `-$8.52`, all `HTF=NEUTRAL`, `ai_used=false`, average confidence about `0.53`, and average edge about `0.11`. The prior neutral-RSI patch would not catch most of this cohort because the losing entries were often RSI `59-64`, not only `45-55`.
+- **Hypothesis:** BTC 15m neutral-bias coin flips should either receive an AI confirmation/veto in the configured late-entry window or be skipped. BTC 5m remains unchanged because the same session showed BTC 5m positive (`24` closes, `58.3%` WR, `+$4.17`).
+- **Expected outcome:** Post-restart BTC 15m `HTF=NEUTRAL`, `ai_used=false`, low-confidence entries should drop sharply; BTC 15m net PnL should stop being the main negative lane without reducing BTC 5m participation.
+- **Actual outcome:** `pending` (need ≥15 closed BTC 15m trades after this change).
+- **Status:** `pending`
+
+### 2026-05-08 — Neutral-RSI up/down edge penalty
+
+- **What changed:** Added configurable BTC neutral-RSI penalties in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `neutral_rsi_min=45.0`, `neutral_rsi_max=55.0`, `neutral_rsi_extra_min_edge=0.02`. [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) now adds that penalty to the effective up/down edge floor when BTC RSI is in the configured neutral band.
+- **Why:** Current paper session `test_20260508_050455` showed BTC RSI `45-55` at `16` closes, `25%` WR, `-$14.12`, while RSI `<45` was `16` closes, `75%` WR, `+$13.68`. The loss pattern was context-specific, not solved by simply raising all BTC edge floors.
+- **Hypothesis:** Requiring an extra `0.02` edge in neutral RSI should suppress flat/chop BTC entries while preserving stronger non-neutral momentum and mean-reversion setups.
+- **Expected outcome:** Post-restart BTC entries with RSI `45-55` should drop materially, BTC WR should improve above the current `50%`, and BTC net PnL should stop hovering near flat/negative.
+- **Actual outcome:** `pending` (need ≥15 closed BTC trades after session `test_20260508_151000` restart).
+- **Status:** `pending`
+
+### 2026-05-06 — Pre-restart review: 50% WR is config-reload-lag artifact, not regression (commit `d6da79c`)
+
+- **What changed:** No BTC config or code changes in this entry. Recorded as a review note documenting that the dashboard-visible ~50% WR for BTC 5m is a stale-config artifact, not a regression.
+- **Why:** User flagged BTC 5m at ~50% WR despite the May-4 patches (`disable_buy_no_counter_trend: true` + `min_edge_buy_no: 0.11`). Investigation showed the patches were committed at 14:55:46 UTC May 4 but the running paper-trading process did NOT hot-reload — 74% of BUY_NO entries in early-post-commit tests fired below the 0.11 edge floor (i.e. running on stale cached config). The cleanest post-fix sample (`test_20260505_044854`, after a process restart) hit **70.7% WR / 41 trades / 17 BUY_NO**. The dashboard ~50% number averages stale-config and clean-config periods.
+- **Hypothesis:** A clean restart loads the May-4 BTC fixes alongside this session's commit `d6da79c` and the 70.7% pattern resumes.
+- **Expected outcome:** Within 1h of restart, BTC 5m BUY_NO entries fire only at edge ≥0.11. Within 12h, zero `counter_trend=btc_4h_hist_declining` tags. Within 24h, BTC 5m WR trends toward 70.7%.
+- **Actual outcome:** `pending` (validation requires post-restart 24h sample).
+- **Status:** `pending`
+- **Failure criteria → escalate:** if BUY_NO entries below 0.11 appear post-restart, the YAML reload path has a code-level bug. If 24h sample still ~50% with no counter-trend tags, escalate to non-counter-trend loss-mode investigation.
+
 ### 2026-05-06 — BTC 5m counter-trend guardrail restore
 
 - **What changed:** Restored the documented BTC-only guardrails in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `disable_buy_no_counter_trend: true` and `min_edge_buy_no: 0.11` (from live drifted values `false` / `0.08`).
@@ -136,6 +164,20 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 - **Status:** `pending`
 
 ## Review sessions
+
+### 2026-05-07 — BTC 15m backtest admission parity patch validated
+
+- **Headline:** BTC 15m backtest now produces real test-window trades after adding timing bonus and 1H recovery parity.
+- **What changed in the backtest:** [`src/backtest/updown_engine.py`](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py) now mirrors live BTC 15m timing bonuses (`15m` / `5m` early momentum + prediction window) and the live 1H recovery pass when 4H histogram is decelerating against the trade.
+- **Result:** Rerun [`backtest_crypto_BTC_15m_20260507_134222.json`](/Users/mainfolder/Documents/psb-main%201/data/backtest/reports/backtest_crypto_BTC_15m_20260507_134222.json) produced `82` trades, `68.3%` WR, `+$325.05`, where the earlier same-window rerun had `0` trades.
+- **Meaning:** The earlier BTC 15m backtest was under-representing the live admission path. This fixes a real parity defect, but it does not yet prove the live BTC 15m lane is healthy.
+
+### 2026-05-07 — Active paper failure session `test_20260507_035930` + backtest parity review
+
+- **Headline:** BTC is still the main damage lane in the active run, but the more important finding is that live and backtest are not parity-comparable right now.
+- **Session result:** `37` closed BTC trades in the active session, about `-37.2` net by summary. Realized losses are dominated by `updown_time_stop`, especially `5m`.
+- **Parity finding:** Live BTC is losing on path-dependent exits while the crypto up/down backtest had still been validating mostly settlement outcomes. Fresh forensic cut on the active session: `BTC 5m` time-stops `12` exits for `-39.25`; `BTC 15m` time-stops `4` exits for `-11.52`.
+- **Implication:** Strong BTC 5m backtests from the prior methodology overstated live viability. Treat the next BTC backtests after the 2026-05-07 exit-parity patch as the new baseline; do not compare them directly to older settlement-only runs.
 
 ### 2026-05-04 — Paper `test_20260504_034719` (journal parse)
 

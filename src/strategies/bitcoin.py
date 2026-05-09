@@ -162,6 +162,14 @@ class BitcoinStrategy:
         self.min_liquidity = self.config.get('min_liquidity', 10000)
         self.min_edge = self.config.get('min_edge', 0.08)
         self.min_edge_5m = self.config.get('min_edge_5m', self.min_edge)  # 5m-specific edge threshold
+        self.min_edge_15m_neutral = float(
+            self.config.get("min_edge_15m_neutral", self.min_edge) or self.min_edge
+        )
+        self.neutral_rsi_min = float(self.config.get("neutral_rsi_min", 0.0) or 0.0)
+        self.neutral_rsi_max = float(self.config.get("neutral_rsi_max", 0.0) or 0.0)
+        self.neutral_rsi_extra_min_edge = float(
+            self.config.get("neutral_rsi_extra_min_edge", 0.0) or 0.0
+        )
         self.ai_confidence_threshold = self.config.get('ai_confidence_threshold', 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
         self.kelly_fraction = self.config.get('kelly_fraction', 0.15)
@@ -1615,6 +1623,20 @@ class BitcoinStrategy:
             # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).
             if htf_bias == "NEUTRAL" and is_updown:
                 effective_min_edge = max(effective_min_edge, 0.09)
+                if not is_5m:
+                    effective_min_edge = max(effective_min_edge, self.min_edge_15m_neutral)
+                    reason_parts.append(f"neutral_15m_min_edge={self.min_edge_15m_neutral:.3f}")
+                    _sample("neutral_15m_min_edge", self.min_edge_15m_neutral)
+            if (
+                is_updown
+                and self.neutral_rsi_extra_min_edge > 0
+                and self.neutral_rsi_min <= ta.rsi_14 <= self.neutral_rsi_max
+            ):
+                effective_min_edge += self.neutral_rsi_extra_min_edge
+                reason_parts.append(
+                    f"neutral_rsi_penalty={self.neutral_rsi_extra_min_edge:.3f}"
+                )
+                _sample("neutral_rsi_penalty", self.neutral_rsi_extra_min_edge)
 
             # ── AI-hold soft veto ────────────────────────────────────────────
             # If AI said HOLD on this market within the last ai_hold_veto_ttl_sec,
