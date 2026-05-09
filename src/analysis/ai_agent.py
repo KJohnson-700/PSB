@@ -898,16 +898,39 @@ OUTPUT (machine-parseable — follow exactly):
         mismatch = self._shadow_marginal_mismatch(
             marginal_recommendation, decision.action
         )
+        research_plain = self._model_to_plain(research_plan)
+        trader_plain = self._model_to_plain(trader)
+        decision_plain = self._model_to_plain(decision)
+        shadow_confidence = float(
+            decision_plain.get(
+                "confidence",
+                trader_plain.get("confidence", research_plain.get("confidence", 0.0)),
+            )
+            or 0.0
+        )
         if bool(self.shadow_pipeline_cfg.get("log_jsonl", True)):
             payload = {
                 "ts_utc": datetime.utcnow().isoformat() + "Z",
                 "market_id": market_id,
+                "strategy": strategy_hint,
                 "strategy_hint": strategy_hint,
+                "quant_action": quant_action or "",
+                "quant_edge": quant_edge,
+                "quant_threshold": quant_threshold,
+                "shadow_action": decision.action,
+                "shadow_confidence": shadow_confidence,
+                "confidence": shadow_confidence,
+                "portfolio_action": decision.action,
+                "portfolio_confidence": float(decision_plain.get("confidence", 0.0) or 0.0),
+                "trader_action": trader.action,
+                "trader_confidence": float(trader_plain.get("confidence", 0.0) or 0.0),
+                "research_recommendation": research_plan.recommendation,
+                "research_confidence": float(research_plain.get("confidence", 0.0) or 0.0),
                 "marginal_recommendation": marginal_recommendation or "",
                 "marginal_mismatch": mismatch,
-                "research_plan": self._model_to_plain(research_plan),
-                "trader_proposal": self._model_to_plain(trader),
-                "portfolio_decision": self._model_to_plain(decision),
+                "research_plan": research_plain,
+                "trader_proposal": trader_plain,
+                "portfolio_decision": decision_plain,
                 "markdown": "\n---\n".join(
                     [
                         render_research_plan(research_plan),

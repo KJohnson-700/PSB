@@ -861,6 +861,7 @@ class BitcoinStrategy:
         preentry_veto_skips = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
+        action_counts: Dict[str, int] = {}
         buy_no_skip_counts: Dict[str, int] = {}
         last_buy_no_skip_sample: Dict[str, Any] = {}
 
@@ -1057,6 +1058,7 @@ class BitcoinStrategy:
                     action = "BUY_NO"
                     direction = "DOWN"
                     effective_side = "SHORT"
+                action_counts[action] = action_counts.get(action, 0) + 1
 
                 # ── BUY_YES kill switch ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
@@ -1356,6 +1358,7 @@ class BitcoinStrategy:
                         action = "BUY_NO"
                     else:
                         action = "BUY_YES"
+                action_counts[action] = action_counts.get(action, 0) + 1
 
                 if threshold:
                     distance_pct = abs(btc_price - threshold) / threshold
@@ -1989,6 +1992,7 @@ class BitcoinStrategy:
             "shadow_pipeline_calls": shadow_pipeline_calls,
             "shadow_pipeline_ok": shadow_pipeline_ok,
             "preentry_veto_skips": preentry_veto_skips,
+            "action_counts": dict(sorted(action_counts.items())),
             "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": {k: v for k, v in top_skip_pairs},

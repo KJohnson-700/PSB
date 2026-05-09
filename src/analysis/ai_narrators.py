@@ -177,11 +177,24 @@ def _join_shadow_with_outcomes(
         mid = str(rec.get("market_id") or "")
         if not mid or mid not in closed_index:
             continue
+        portfolio = rec.get("portfolio_decision") or {}
+        trader = rec.get("trader_proposal") or {}
+        research = rec.get("research_plan") or {}
+        ai_confidence = (
+            rec.get("shadow_confidence")
+            or rec.get("confidence_score")
+            or rec.get("confidence")
+            or portfolio.get("confidence")
+            or trader.get("confidence")
+            or research.get("confidence")
+            or 0.0
+        )
         joined.append({
             "market_id": mid,
             "strategy": rec.get("strategy_hint") or rec.get("strategy") or "",
-            "ai_confidence": float(rec.get("confidence_score") or rec.get("confidence") or 0.0),
+            "ai_confidence": float(ai_confidence),
             "marginal_recommendation": rec.get("marginal_recommendation") or rec.get("recommendation"),
+            "shadow_action": rec.get("shadow_action") or portfolio.get("action") or "",
             "outcome": closed_index[mid],
         })
     return joined

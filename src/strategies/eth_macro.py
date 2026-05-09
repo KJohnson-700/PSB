@@ -541,6 +541,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         research_min_conf = self.ai_agent.research_narrative_min_confidence()
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
+        action_counts: Dict[str, int] = {}
         side_source_counts: Dict[str, int] = {}
         buy_no_skip_counts: Dict[str, int] = {}
         last_buy_no_skip_sample: Dict[str, Any] = {}
@@ -669,6 +670,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             side_source_counts[side_source] = side_source_counts.get(side_source, 0) + 1
 
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
+            action_counts[action] = action_counts.get(action, 0) + 1
             direction = "UP" if market_allowed_side == "LONG" else "DOWN"
             reason_parts = [
                 f"BTC_HTF={btc_htf_bias}",
@@ -1184,6 +1186,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             "btc_htf_bias": btc_htf_bias,
             "allowed_side": allowed_side,
             "direction_source": self.direction_source,
+            "action_counts": dict(sorted(action_counts.items())),
             "side_source_counts": side_source_counts,
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,

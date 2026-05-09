@@ -1217,6 +1217,8 @@ class SolMacroStrategy:
         shadow_pipeline_ok = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
+        action_counts: Dict[str, int] = {}
+        side_source_counts: Dict[str, int] = {}
         buy_no_skip_counts: Dict[str, int] = {}
         last_buy_no_skip_sample: Dict[str, Any] = {}
 
@@ -1384,6 +1386,10 @@ class SolMacroStrategy:
                 else:
                     action = "BUY_NO"
                     direction = "DOWN"
+                action_counts[action] = action_counts.get(action, 0) + 1
+                side_source_counts[side_source if "side_source" in locals() else "neutral_macro"] = (
+                    side_source_counts.get(side_source if "side_source" in locals() else "neutral_macro", 0) + 1
+                )
 
                 if getattr(corr, "degraded", False):
                     if self.skip_on_degraded_correlation:
@@ -1830,6 +1836,10 @@ class SolMacroStrategy:
                     action = "BUY_YES" if direction == "UP" else "BUY_NO"
                 else:
                     action = "BUY_NO" if direction == "UP" else "BUY_YES"
+                action_counts[action] = action_counts.get(action, 0) + 1
+                side_source_counts[side_source if "side_source" in locals() else "neutral_macro"] = (
+                    side_source_counts.get(side_source if "side_source" in locals() else "neutral_macro", 0) + 1
+                )
 
                 _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
                 if _rsi_hard_block:
@@ -2495,6 +2505,8 @@ class SolMacroStrategy:
             "btc_htf_bias": primary_htf_bias,
             "alt_htf_bias": macro_trend,
             "allowed_side": allowed_side,
+            "action_counts": dict(sorted(action_counts.items())),
+            "side_source_counts": dict(sorted(side_source_counts.items())),
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
             "skip_15m_gate": skip_15m_reason,

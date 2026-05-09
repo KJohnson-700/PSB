@@ -4,6 +4,34 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-09 — Shadow calibration, BUY_NO attribution, and TP/SL replay tooling
+
+- **What changed:** Improved AI shadow-pipeline log records with top-level strategy/action/confidence fields (`shadow_action`, `shadow_confidence`, `quant_action`, `quant_edge`, `quant_threshold`) and made narrator calibration able to read nested shadow confidence values. Runtime diagnostics now print per-cycle `action_counts`, `side_source_counts`, `buy_no_skip_counts`, and the latest BUY_NO skip sample for BTC/SOL/ETH/HYPE/XRP.
+- **Tooling added:**
+  - [`scripts/buy_no_skip_report.py`](/Users/mainfolder/Documents/psb-main%201/scripts/buy_no_skip_report.py) summarizes persisted `BUY_NO_SKIP` events by strategy/reason/window and highlights near-miss edge gaps.
+  - [`scripts/replay_exit_thresholds.py`](/Users/mainfolder/Documents/psb-main%201/scripts/replay_exit_thresholds.py) replays journal `PRICE_UPDATE` rows across TP/SL grids for crypto up/down exits.
+- **Initial finding from recent journals:** `test_20260508_050455` + `test_20260508_151000` + `test_20260509_015113` have **0 `BUY_NO_SKIP` events**, while closed annotated entries were all `BUY_YES`. That implies BUY_NO starvation is upstream of post-side rejection; next live session diagnostics should inspect `action_counts` and `side_source_counts`.
+- **Initial TP/SL replay:** over `129` closed crypto up/down trades from the two populated May 8 sessions, the current-ish `TP=0.15 / SL=0.20` tied the best tested outcome at about **+$19.70**. Raising TP to `0.20` or `0.25` reduced total replay PnL in this sample, so no TP widening is justified from these data alone.
+- **Status:** instrumentation/tooling change only; no execution threshold changed.
+
+## 2026-05-09 — External repo settings research: PSB comparison baseline
+
+- **Source:** operator-provided research summary from other Polymarket/crypto bot repos. This is a research log, not a deployed tuning change.
+- **External knobs observed:**
+  - **Aulekator / PolyBullLabs-style:** fixed or simple percent sizing, explicit stop-loss / take-profit knobs, BTC-only or small bot families.
+  - **0xFives-style:** predict-then-hedge logic and confidence gating.
+  - **jmazzini 5m:** window delta + micro momentum + ATR, late entry about **10-50 seconds before close**, composite weighted confidence score, fixed `--amount`, no discretionary exit until settlement.
+  - **Paid / advanced tooling noted:** four trigger-rule groups plus Monte Carlo / Kelly support.
+- **PSB installed comparison:**
+  - **Multi-strategy:** active for `bitcoin`, `sol_macro`, `eth_macro`, `xrp_macro`, `hype_macro`; optional `xrp_dump_hedge` exists separately.
+  - **AI-assisted:** active for strategy AI calls, shadow pipeline, narrators, and post-trade annotations. **Important:** generic `ai.preentry_veto` is installed but currently **disabled**.
+  - **Kelly sizing:** active via `KellySizer.size_from_edge()` and `ExposureManager.scale_size()`, with global/per-strategy Kelly fractions and per-trade max caps.
+  - **Position caps:** `trading.default_position_size: 10`, `trading.max_position_size: 15`, `max_exposure_per_trade: 0.05`, plus exposure tier caps `25/15/8`.
+  - **Stop / take-profit:** `take_profit_pct: 0.15`, `stop_loss_pct: 0.30`, `updown_stop_loss_pct: 0.20`, `updown_stop_cents: 0.03`, with ETH/XRP updown overrides.
+  - **Regime gates:** installed across BTC/macro lanes via HTF/LTF, catalyst, alignment, macro-event, oracle/basis, and asset-specific gates.
+  - **Late-window entry:** installed, but PSB uses minute-level entry windows (`0-5m`, `1-18m`, etc.) rather than jmazzini's explicit 10-50 second band.
+  - **Hedge logic:** `xrp_dump_hedge` exists but should remain disabled until separately validated.
+
 ## 2026-05-07 — Dashboard wiring sweep for stop-loss knob, exit-reason visibility, and bankroll-state clarity
 
 - **Scope:** dashboard-only updates in [src/dashboard/server.py](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [src/dashboard/index.html](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), and [tests/test_dashboard_bundle.py](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py).

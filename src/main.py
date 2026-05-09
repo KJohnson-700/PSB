@@ -1203,12 +1203,15 @@ class PolyBot:
             _btc_stats = self.last_ai_scan_stats.get("bitcoin", {})
             if _btc_stats:
                 logging.info(
-                    "[TRADING] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s top_skips=%s",
+                    "[TRADING] BTC diagnostics: ai_calls=%s assists=%s vetos=%s holds=%s actions=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
                     _btc_stats.get("ai_calls", 0),
                     _btc_stats.get("ai_assists", 0),
                     _btc_stats.get("ai_vetos", 0),
                     _btc_stats.get("ai_holds", 0),
+                    _btc_stats.get("action_counts", {}),
                     _btc_stats.get("top_skip_reasons", {}),
+                    self.last_buy_no_skip_counts.get("bitcoin", {}),
+                    self.last_buy_no_skip_samples.get("bitcoin", {}),
                 )
         except Exception as e:
             logging.error(f"Crypto BTC error: {e}", exc_info=True)
@@ -1241,8 +1244,12 @@ class PolyBot:
             _sol_stats = self.last_ai_scan_stats.get("sol_macro", {})
             if _sol_stats:
                 logging.info(
-                    "[TRADING] SOL diagnostics: top_skips=%s",
+                    "[TRADING] SOL diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                    _sol_stats.get("action_counts", {}),
+                    _sol_stats.get("side_source_counts", {}),
                     _sol_stats.get("top_skip_reasons", {}),
+                    self.last_buy_no_skip_counts.get("sol_macro", {}),
+                    self.last_buy_no_skip_samples.get("sol_macro", {}),
                 )
         except Exception as e:
             logging.error(f"Crypto SOL error: {e}", exc_info=True)
@@ -1276,8 +1283,12 @@ class PolyBot:
                 _eth_stats = self.last_ai_scan_stats.get("eth_macro", {})
                 if _eth_stats:
                     logging.info(
-                        "[TRADING] ETH diagnostics: top_skips=%s",
+                        "[TRADING] ETH diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                        _eth_stats.get("action_counts", {}),
+                        _eth_stats.get("side_source_counts", {}),
                         _eth_stats.get("top_skip_reasons", {}),
+                        self.last_buy_no_skip_counts.get("eth_macro", {}),
+                        self.last_buy_no_skip_samples.get("eth_macro", {}),
                     )
         except Exception as e:
             logging.error(f"Crypto ETH error: {e}", exc_info=True)
@@ -1311,8 +1322,12 @@ class PolyBot:
                 _hype_stats = self.last_ai_scan_stats.get("hype_macro", {})
                 if _hype_stats:
                     logging.info(
-                        "[TRADING] HYPE diagnostics: top_skips=%s",
+                        "[TRADING] HYPE diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                        _hype_stats.get("action_counts", {}),
+                        _hype_stats.get("side_source_counts", {}),
                         _hype_stats.get("top_skip_reasons", {}),
+                        self.last_buy_no_skip_counts.get("hype_macro", {}),
+                        self.last_buy_no_skip_samples.get("hype_macro", {}),
                     )
         except Exception as e:
             logging.error(f"Crypto HYPE error: {e}", exc_info=True)
@@ -1346,8 +1361,12 @@ class PolyBot:
                 _xrp_stats = self.last_ai_scan_stats.get("xrp_macro", {})
                 if _xrp_stats:
                     logging.info(
-                        "[TRADING] XRP diagnostics: top_skips=%s",
+                        "[TRADING] XRP diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                        _xrp_stats.get("action_counts", {}),
+                        _xrp_stats.get("side_source_counts", {}),
                         _xrp_stats.get("top_skip_reasons", {}),
+                        self.last_buy_no_skip_counts.get("xrp_macro", {}),
+                        self.last_buy_no_skip_samples.get("xrp_macro", {}),
                     )
         except Exception as e:
             logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
