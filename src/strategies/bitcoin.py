@@ -165,6 +165,9 @@ class BitcoinStrategy:
         self.min_edge_15m_neutral = float(
             self.config.get("min_edge_15m_neutral", self.min_edge) or self.min_edge
         )
+        self.neutral_15m_min_quant_confidence = float(
+            self.config.get("neutral_15m_min_quant_confidence", 0.0) or 0.0
+        )
         self.neutral_rsi_min = float(self.config.get("neutral_rsi_min", 0.0) or 0.0)
         self.neutral_rsi_max = float(self.config.get("neutral_rsi_max", 0.0) or 0.0)
         self.neutral_rsi_extra_min_edge = float(
@@ -1654,12 +1657,25 @@ class BitcoinStrategy:
                     )
                     continue
 
+            _needs_ai_for_low_conf_neutral_15m = (
+                is_updown
+                and not is_5m
+                and htf_bias == "NEUTRAL"
+                and self.neutral_15m_min_quant_confidence > 0
+                and confidence < self.neutral_15m_min_quant_confidence
+            )
+
             # Updown AI assist: when quant edge is close but below threshold, let AI break ties.
             # This keeps strict HTF gating while allowing context-aware confirmation on borderline setups.
             if (
                 is_updown
-                and edge < effective_min_edge
-                and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                and (
+                    (
+                        edge < effective_min_edge
+                        and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
+                    )
+                    or _needs_ai_for_low_conf_neutral_15m
+                )
                 and _ai_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
@@ -1671,7 +1687,7 @@ class BitcoinStrategy:
                     f"{market.description}\n\n"
                     f"=== BTC UPDOWN CONTEXT ({_window}) ===\n"
                     f"BTC Price: ${btc_price:,.2f}\n"
-                    f"Market YES Price: {yes_price:.3f}\n"
+                    f"Market YES Price: {yes_price:.3f} | Quant confidence={confidence:.2f}\n"
                     f"HTF bias: {htf_bias} | Quant edge={edge:.4f} (threshold={effective_min_edge:.4f})\n\n"
                     f"4H MACD hist={macd_4h.histogram:+.2f} above0={macd_4h.above_zero} rising={macd_4h.histogram_rising}\n"
                     f"15m MACD hist={macd_15m.histogram:+.2f} cross={macd_15m.crossover}\n"
@@ -1748,6 +1764,10 @@ class BitcoinStrategy:
                 confidence = max(confidence, ai_analysis.confidence_score)
                 ai_assists += 1
                 reason_parts.append("ai_updown_confirm")
+                if _needs_ai_for_low_conf_neutral_15m:
+                    reason_parts.append(
+                        f"low_conf_ai_confirm={self.neutral_15m_min_quant_confidence:.2f}"
+                    )
                 if (
                     self.ai_agent.shadow_pipeline_enabled()
                     and shadow_pipeline_calls
@@ -1789,6 +1809,15 @@ class BitcoinStrategy:
                     f"  BTC AI window closed for marginal updown '{market.question[:40]}...' "
                     f"({_mins_left:.1f}m left)"
                 )
+
+            if _needs_ai_for_low_conf_neutral_15m and "low_conf_ai_confirm" not in " ".join(reason_parts):
+                _bump_skip("neutral_15m_low_conf_no_ai")
+                logger.info(
+                    f"  BTC skip '{market.question[:45]}' {action} "
+                    f"confidence={confidence:.2f} < neutral_15m_min_quant_confidence="
+                    f"{self.neutral_15m_min_quant_confidence:.2f} without AI confirmation"
+                )
+                continue
 
             try:
                 _sample("est_prob_up", est_prob_up)

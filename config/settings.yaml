@@ -167,6 +167,7 @@ strategies:
     min_edge: 0.10                # 15m: raised from 0.07 — backtest assumed 0.50 entry (unrealistic); real slippage needs more edge
     min_edge_5m: 0.08             # 5m: raised from 0.05 (2026-04-24) — NEUTRAL HTF 5m path has zero backtest coverage; 0.05 too loose
     min_edge_15m_neutral: 0.12    # 2026-05-09 audit: BTC 15m NEUTRAL quant-only was low-conf negative; force AI/veto or skip
+    neutral_15m_min_quant_confidence: 0.58  # jmazzini-style composite guard: low-conf neutral 15m must get AI confirmation
     neutral_rsi_min: 45.0         # 2026-05-08 live audit: RSI 45-55 was 25% WR / -$14.12
     neutral_rsi_max: 55.0
     neutral_rsi_extra_min_edge: 0.02
