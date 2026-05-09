@@ -84,13 +84,33 @@ def _full_bot_instance() -> Optional["PolyBot"]:
 _ai_summary_cache: Dict[str, str] = {}
 
 
+def _strip_ai_thinking_text(text: str) -> str:
+    """Remove provider reasoning wrappers before dashboard text reaches operators."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"(?is)<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>", "", text)
+    cleaned = re.sub(
+        r"(?ims)^\s*(?:thinking|reasoning|chain[- ]of[- ]thought)\s*:\s*.*?(?=^\s*(?:final|summary|answer)\s*:|\Z)",
+        "",
+        cleaned,
+    )
+    cleaned = re.sub(r"(?im)^\s*(?:final|summary|answer)\s*:\s*", "", cleaned)
+    return cleaned.strip()
+
+
 def _extract_ai_summary_text(payload: Any) -> str:
     """Extract assistant text from common MiniMax/Anthropic/OpenAI response shapes."""
     if isinstance(payload, str):
-        return payload.strip()
+        return _strip_ai_thinking_text(payload)
 
     if isinstance(payload, list):
-        parts = [_extract_ai_summary_text(item) for item in payload]
+        parts = []
+        for item in payload:
+            if isinstance(item, dict):
+                block_type = str(item.get("type") or "").lower()
+                if block_type in {"thinking", "reasoning", "redacted_thinking"}:
+                    continue
+            parts.append(_extract_ai_summary_text(item))
         return "\n".join(part for part in parts if part).strip()
 
     if not isinstance(payload, dict):
@@ -99,11 +119,11 @@ def _extract_ai_summary_text(payload: Any) -> str:
     for key in ("text", "output_text", "response"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _strip_ai_thinking_text(value)
 
     content = payload.get("content")
     if isinstance(content, str):
-        return content.strip()
+        return _strip_ai_thinking_text(content)
     if isinstance(content, list):
         extracted = _extract_ai_summary_text(content)
         if extracted:
@@ -111,7 +131,7 @@ def _extract_ai_summary_text(payload: Any) -> str:
 
     message = payload.get("message")
     if isinstance(message, str):
-        return message.strip()
+        return _strip_ai_thinking_text(message)
     if isinstance(message, dict):
         extracted = _extract_ai_summary_text(message)
         if extracted:
@@ -2998,7 +3018,7 @@ def _read_narrator_annotations(journal: Any) -> List[Dict[str, Any]]:
                     "narrator": str(extra.get("narrator") or ""),
                     "previous_session": str(extra.get("previous_session") or ""),
                     "timestamp": str(rec.get("timestamp") or ""),
-                    "text": str(extra.get("text") or ""),
+                    "text": _strip_ai_thinking_text(str(extra.get("text") or "")),
                 })
     except OSError:
         return []

@@ -89,6 +89,23 @@ def test_ai_summary_text_extractor_handles_provider_shapes():
     assert _extract_ai_summary_text({"content": [{"type": "tool_use", "name": "noop"}]}) == ""
 
 
+def test_ai_summary_text_extractor_hides_thinking_blocks():
+    from src.dashboard.server import _extract_ai_summary_text
+
+    assert (
+        _extract_ai_summary_text(
+            {
+                "content": [
+                    {"type": "thinking", "text": "internal chain of thought"},
+                    {"type": "text", "text": "Operator-safe summary."},
+                ]
+            }
+        )
+        == "Operator-safe summary."
+    )
+    assert _extract_ai_summary_text("<think>private reasoning</think>\nFinal summary.") == "Final summary."
+
+
 def test_dashboard_contains_operator_toggle_buttons():
     html = INDEX.read_text(encoding="utf-8")
     assert "toggleWeather72hCap()" in html
