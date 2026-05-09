@@ -1158,7 +1158,7 @@
         <p class="cmd-note">Web UI: <code>http://127.0.0.1:8081</code> — port is <code>config/settings.yaml</code> → <code>dashboard.dashboard_port</code>.</p>
 
         <h3>Paper trading + dashboard + AI</h3>
-        <p class="cmd-note">Default run: <strong>simulated orders</strong> (not <code>--live</code>). LLMs are off unless you set <code>ai.enabled: true</code> and a non-empty <code>provider_chain</code> in <code>config/settings.yaml</code>, with keys in <code>config/secrets.env</code>. Use per-strategy <code>use_ai</code> in YAML to control which strategies call the model.</p>
+        <p class="cmd-note">Default run: <strong>simulated orders</strong> (not <code>--live</code>). LLMs require <code>ai.enabled: true</code>, <code>ai.live_inferencing: true</code>, a non-empty <code>provider_chain</code> in <code>config/settings.yaml</code>, and provider keys in the repo <code>.env</code> or <code>config/secrets.env</code>. Use per-strategy <code>use_ai</code> in YAML to control which strategies call the model.</p>
         <div class="cmd-row">
             <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python start.py">Copy</button>
             <pre>python start.py</pre>

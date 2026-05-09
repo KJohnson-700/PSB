@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.ai_status import compute_ai_status
+
 OPS_PREFIX = "OPS_JSON"
 OPS_PULSE_FILE = (
     Path(__file__).resolve().parent.parent / "data" / "logs" / "ops_pulse.jsonl"
@@ -144,6 +146,64 @@ def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _side_selection_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Show whether strategies are selecting a short/NO side before BUY_NO filters run."""
+    lanes = (
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+    )
+    per_lane: Dict[str, Dict[str, Any]] = {}
+    aggregate = {"LONG": 0, "SHORT": 0, "unknown": 0}
+    for lane in lanes:
+        block = ai_scan_stats.get(lane) or {}
+        side = str(block.get("allowed_side") or "").upper()
+        side_counts = block.get("side_source_counts") or {}
+        signals = _coerce_nonnegative_int(block.get("signals"))
+        if side in ("LONG", "SHORT"):
+            aggregate[side] += 1
+        else:
+            aggregate["unknown"] += 1
+        per_lane[lane] = {
+            "allowed_side": side or None,
+            "signals": signals,
+            "side_source_counts": side_counts,
+            "buy_no_possible_this_pulse": side == "SHORT",
+        }
+    short_lanes = [lane for lane, data in per_lane.items() if data["allowed_side"] == "SHORT"]
+    return {
+        "per_strategy": per_lane,
+        "aggregate": aggregate,
+        "short_lanes": short_lanes,
+        "buy_no_absence_reason": (
+            "No strategy selected SHORT/NO side in this pulse; BUY_NO filters and "
+            "execution were not exercised."
+            if not short_lanes
+            else ""
+        ),
+    }
+
+
+def _ai_activity_note(ai_status: Dict[str, Any], ai_pipeline: Dict[str, Any]) -> str:
+    """Human-readable guardrail so zero call counters are not mistaken for disabled AI."""
+    if not ai_status.get("ready"):
+        return f"AI unavailable: {ai_status.get('reason', 'unknown')}"
+    if not ai_status.get("live_inferencing", True):
+        return "AI configured but live_inferencing is paused."
+    aggregate = ai_pipeline.get("aggregate") or {}
+    calls = int(aggregate.get("ai_pipeline_calls") or 0)
+    research = int(aggregate.get("research_calls") or 0)
+    shadow = int(aggregate.get("shadow_pipeline_calls") or 0)
+    if calls or research or shadow:
+        return "AI enabled and called in this pulse."
+    return (
+        "AI enabled and keys loaded; zero calls means no candidate reached an AI "
+        "decision path in this pulse."
+    )
+
+
 def _regime_hint(trading_cfg: Dict[str, Any], btc_spot: Optional[float]) -> Optional[Dict[str, Any]]:
     rcfg = (trading_cfg or {}).get("regime") or {}
     if not rcfg.get("enabled"):
@@ -201,6 +261,14 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
     cum = dict(getattr(bot, "cumulative_signal_counts", {}) or {})
     last_cycles = dict(getattr(bot, "last_cycle_times", {}) or {})
     ai_scan_stats = dict(getattr(bot, "last_ai_scan_stats", {}) or {})
+    ai_keys = {}
+    try:
+        ai_keys = dict(getattr(getattr(bot, "ai_agent", None), "api_keys", None) or {})
+    except Exception:
+        ai_keys = {}
+    ai_status = compute_ai_status(getattr(bot, "config", {}) or {}, ai_keys)
+    ai_pipeline = _ai_pipeline_digest(ai_scan_stats)
+    side_selection = _side_selection_digest(ai_scan_stats)
     btc_block = ai_scan_stats.get("bitcoin") or {}
     btc_spot = btc_block.get("btc_spot_usd")
     try:
@@ -242,7 +310,10 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "ai_scan_stats": ai_scan_stats,
         "scan_skip_digest": _scan_skip_digest(ai_scan_stats),
         "buy_no_skip_diagnostics": _buy_no_skip_digest(ai_scan_stats),
-        "ai_pipeline": _ai_pipeline_digest(ai_scan_stats),
+        "side_selection": side_selection,
+        "ai_status": ai_status,
+        "ai_pipeline": ai_pipeline,
+        "ai_activity_note": _ai_activity_note(ai_status, ai_pipeline),
         "timestamps_policy": {
             "canonical": CANONICAL_OPS_TIMEZONE,
             "ops_ts": "ISO 8601 with Z/offset; this field is UTC",

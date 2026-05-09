@@ -49,6 +49,17 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
                     "btc_break_below_usd": 75000,
                 },
             },
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [
+                    {
+                        "name": "minimax",
+                        "type": "minimax",
+                        "api_key_secret": "MINIMAX_API_KEY",
+                    }
+                ],
+            },
             "logging": {"ops_pulse": False},
         },
         journal=J(),
@@ -59,8 +70,13 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
         last_signal_counts={},
         cumulative_signal_counts={},
         last_cycle_times={},
+        ai_agent=SimpleNamespace(api_keys={"MINIMAX_API_KEY": "sk-test"}),
         last_ai_scan_stats={
-            "bitcoin": {"btc_spot_usd": 78500.0, "top_skip_reasons": {"x": 1}},
+            "bitcoin": {
+                "allowed_side": "LONG",
+                "btc_spot_usd": 78500.0,
+                "top_skip_reasons": {"x": 1},
+            },
             "sol_macro": {"top_skip_reasons": {"outside_entry_window": 5}},
         },
         scan_interval=60,
@@ -75,6 +91,11 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
     assert snap["scan_skip_digest"]["aggregate_top"].get("outside_entry_window") == 5
     assert "ai_pipeline" in snap
     assert snap["ai_pipeline"]["aggregate"] == {}
+    assert snap["ai_status"]["ready"] is True
+    assert "zero calls" in snap["ai_activity_note"]
+    assert snap["side_selection"]["aggregate"]["LONG"] == 1
+    assert snap["side_selection"]["short_lanes"] == []
+    assert "No strategy selected SHORT" in snap["side_selection"]["buy_no_absence_reason"]
     assert snap["timestamps_policy"]["canonical"] == "UTC"
     assert snap["regime"]["btc_spot_usd"] == 78500.0
     assert snap["regime"].get("spot_gte_break_high") is False
@@ -109,6 +130,7 @@ def test_build_ops_snapshot_ai_pipeline_digest_aggregates_aliases():
         last_signal_counts={},
         cumulative_signal_counts={},
         last_cycle_times={},
+        ai_agent=SimpleNamespace(api_keys={}),
         last_ai_scan_stats={
             "eth_macro": {
                 "ai_calls": 4,
@@ -140,3 +162,50 @@ def test_build_ops_snapshot_ai_pipeline_digest_aggregates_aliases():
     assert agg["shadow_pipeline_calls"] == 3
     assert agg["shadow_pipeline_ok"] == 2
     assert agg["shadow_marginal_mismatch"] == 1
+
+
+def test_build_ops_snapshot_side_selection_surfaces_short_side():
+    class J:
+        session_id = "s1"
+        session_dir = "/tmp"
+
+        def get_summary(self):
+            return {
+                "open_positions": 0,
+                "total_exits": 0,
+                "total_entries": 0,
+                "realized_pnl": 0,
+                "unrealized_pnl": 0,
+                "total_pnl": 0,
+            }
+
+    bot = SimpleNamespace(
+        config={"trading": {"dry_run": True}, "logging": {"ops_pulse": False}},
+        journal=J(),
+        risk_manager=SimpleNamespace(daily_trades=0, daily_pnl=0.0),
+        btc_exposure_manager=SimpleNamespace(
+            loss_kill_switch_enabled=True,
+            max_consecutive_losses=3,
+        ),
+        bankroll=1000.0,
+        running=True,
+        last_signal_counts={},
+        cumulative_signal_counts={},
+        last_cycle_times={},
+        ai_agent=SimpleNamespace(api_keys={}),
+        last_ai_scan_stats={
+            "bitcoin": {"allowed_side": "LONG", "signals": 0},
+            "eth_macro": {
+                "allowed_side": "SHORT",
+                "signals": 1,
+                "side_source_counts": {"hybrid_strong_short": 1},
+            },
+        },
+        scan_interval=60,
+    )
+    bot._kill_switch_active = lambda: False
+
+    snap = build_ops_snapshot(bot, "test")
+    assert snap["side_selection"]["aggregate"]["SHORT"] == 1
+    assert snap["side_selection"]["short_lanes"] == ["eth_macro"]
+    assert snap["side_selection"]["buy_no_absence_reason"] == ""

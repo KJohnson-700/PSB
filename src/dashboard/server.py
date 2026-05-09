@@ -1181,7 +1181,10 @@ async def get_status():
             "session_id": getattr(bot.journal, "session_id", None),
             "scan_skip_digest": _ops.get("scan_skip_digest"),
             "buy_no_skip_diagnostics": _ops.get("buy_no_skip_diagnostics"),
+            "side_selection": _ops.get("side_selection"),
+            "ops_ai_status": _ops.get("ai_status"),
             "ai_pipeline": _ops.get("ai_pipeline"),
+            "ai_activity_note": _ops.get("ai_activity_note"),
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
         }
@@ -1256,6 +1259,7 @@ async def get_status():
         "session_id": summary.get("session_id"),
         "scan_skip_digest": None,
         "buy_no_skip_diagnostics": None,
+        "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
     }
 

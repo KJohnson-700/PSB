@@ -17,6 +17,7 @@ import pytest
 from src.main import PolyBot
 from src.strategies.bitcoin import BitcoinSignal
 from src.strategies.sol_macro import SolMacroSignal
+from src.strategies.weather import WeatherSignal
 
 
 def _bare_polybot() -> PolyBot:
@@ -105,6 +106,43 @@ def _xrp_signal(*, action: str = "BUY_YES") -> SolMacroSignal:
     )
 
 
+def _weather_signal(*, action: str = "BUY_NO") -> WeatherSignal:
+    return WeatherSignal(
+        market_id="m_weather_1",
+        market_question="Will NYC hit 80F tomorrow?",
+        action=action,
+        price=0.45,
+        size=10.0,
+        token_id_yes="0x" + "1" * 64,
+        token_id_no="0x" + "2" * 64,
+        end_date=datetime.now(timezone.utc) + timedelta(hours=1),
+        subtype="temp",
+        forecast_prob=0.35,
+        market_price=0.55,
+        gap=0.20,
+        reason="weather execution driver test",
+    )
+
+
+def _assert_buy_no_execution(bot: PolyBot, *, token_id_no: str, strategy: str) -> None:
+    order_kwargs = bot.clob_client.place_order.call_args.kwargs
+    assert order_kwargs["side"] == "BUY"
+    assert order_kwargs["token_id"] == token_id_no
+    assert order_kwargs.get("order_outcome") == "NO"
+
+    position = bot.risk_manager.add_position.call_args.args[0]
+    assert position.outcome == "NO"
+    assert position.entry_leg == "NO"
+    assert position.strategy == strategy
+
+    journal_kwargs = bot.journal.log_entry.call_args.kwargs
+    assert journal_kwargs["strategy"] == strategy
+    assert journal_kwargs["action"] == "BUY_NO"
+    assert journal_kwargs["side"] == "BUY"
+    assert journal_kwargs["outcome"] == "NO"
+    assert journal_kwargs["entry_leg"] == "NO"
+
+
 @pytest.mark.asyncio
 async def test_execute_sol_macro_impl_hype_macro_buy_yes_no_unbound_side():
     bot = _bare_polybot()
@@ -143,10 +181,18 @@ async def test_execute_sol_macro_impl_buy_no():
     sig = _sol_like_signal(action="BUY_NO", strategy_name="sol_macro")
     await bot._execute_sol_macro_signal_impl(sig)
     bot.clob_client.place_order.assert_called_once()
-    kwargs = bot.clob_client.place_order.call_args.kwargs
-    assert kwargs["side"] == "BUY"
-    assert kwargs["token_id"] == sig.token_id_no
-    assert kwargs.get("order_outcome") == "NO"
+    _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="sol_macro")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro"])
+async def test_sol_style_strategies_execute_buy_no_as_no_leg(strategy_name: str):
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _sol_like_signal(action="BUY_NO", strategy_name=strategy_name)
+    await bot._execute_sol_macro_signal_impl(sig)
+    bot.clob_client.place_order.assert_called_once()
+    _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy=strategy_name)
 
 
 @pytest.mark.asyncio
@@ -163,10 +209,9 @@ async def test_execute_bitcoin_impl_sets_side_before_order():
 async def test_execute_bitcoin_impl_buy_no_order_outcome():
     bot = _bare_polybot()
     _attach_mocks(bot)
-    await bot._execute_bitcoin_signal_impl(_bitcoin_signal(action="BUY_NO"))
-    kwargs = bot.clob_client.place_order.call_args.kwargs
-    assert kwargs["side"] == "BUY"
-    assert kwargs.get("order_outcome") == "NO"
+    sig = _bitcoin_signal(action="BUY_NO")
+    await bot._execute_bitcoin_signal_impl(sig)
+    _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="bitcoin")
 
 
 @pytest.mark.asyncio
@@ -176,3 +221,23 @@ async def test_execute_xrp_macro_impl_buy_yes():
     await bot._execute_sol_macro_signal_impl(_xrp_signal(action="BUY_YES"))
     bot.clob_client.place_order.assert_called_once()
     assert bot.clob_client.place_order.call_args.kwargs["side"] == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_execute_xrp_macro_impl_buy_no():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _xrp_signal(action="BUY_NO")
+    await bot._execute_sol_macro_signal_impl(sig)
+    bot.clob_client.place_order.assert_called_once()
+    _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="xrp_macro")
+
+
+@pytest.mark.asyncio
+async def test_execute_weather_impl_buy_no():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _weather_signal(action="BUY_NO")
+    await bot._execute_weather_signal_impl(sig)
+    bot.clob_client.place_order.assert_called_once()
+    _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="weather")
