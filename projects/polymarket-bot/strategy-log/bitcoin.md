@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-09 — Enforce composite + AI/shadow approval on BTC neutral 15m
+
+- **What changed:** `bitcoin` 15m `HTF=NEUTRAL` up/down entries now must clear `neutral_15m_min_composite_score=0.68` and direct AI approval before Kelly sizing; `neutral_15m_requires_shadow_portfolio=true` requires the shadow portfolio to match as well. The existing `min_edge_15m_neutral=0.12` and low-confidence AI path remain in place.
+- **Why:** The bad BTC lane was neutral 15m quant-only BUY_YES. Raising edge alone still allowed strong-looking but weak-context quant candidates to size without independent validation.
+- **Hypothesis:** Neutral 15m entries become rare and evidence-backed; BTC 5m remains unaffected.
+- **Expected outcome:** Post-change journal should show no BTC neutral 15m `ai_used=false` entries, and skipped candidates should surface `composite_score_below_floor` or `ai_decision_*` reasons.
+- **Actual outcome:** `pending` (need ≥15 closed BTC 15m trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-09 — BTC 15m NEUTRAL edge floor to force AI/veto
 
 - **What changed:** Added `strategies.bitcoin.min_edge_15m_neutral=0.12` and `neutral_15m_min_quant_confidence=0.58` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) now applies that edge floor only to BTC 15m up/down markets when HTF bias is `NEUTRAL`; marginal entries below the floor must pass the existing AI up/down assist window or skip. It also applies a jmazzini-style composite confidence guard: low-confidence neutral BTC 15m entries must get AI confirmation even if raw edge clears the floor.

@@ -332,6 +332,25 @@ OUTPUT (machine-parseable — follow exactly):
     def decision_layer_use_shadow_portfolio(self) -> bool:
         return bool(self.decision_layer_cfg.get("use_shadow_portfolio", False))
 
+    def decision_layer_lane_enforced(self, strategy: str, lane: str) -> bool:
+        lanes = self.decision_layer_cfg.get("enforced_lanes")
+        if isinstance(lanes, dict):
+            configured = lanes.get(str(strategy or "").strip())
+            if isinstance(configured, (list, tuple, set)):
+                return str(lane or "").strip() in {str(item).strip() for item in configured}
+            return False
+        legacy = self.decision_layer_cfg.get("enforce_on")
+        if isinstance(legacy, (list, tuple, set)):
+            return str(lane or "").strip() in {str(item).strip() for item in legacy}
+        return False
+
+    def decision_layer_hard_skip_unavailable(self, strategy: str, lane: str) -> bool:
+        return bool(
+            self.decision_layer_enabled()
+            and self.decision_layer_lane_enforced(strategy, lane)
+            and self.decision_layer_cfg.get("hard_skip_if_unavailable_on_enforced", False)
+        )
+
     def _named_provider_chain(self, cfg_block: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Pick a single provider entry and optional model override from a config block."""
         selected_name = str(cfg_block.get("provider_name", "") or "").strip()

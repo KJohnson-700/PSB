@@ -393,3 +393,166 @@ def test_decision_layer_rejects_low_confidence_ai_action() -> None:
     )
     assert decision.approved is False
     assert decision.reason == "direct_ai_low_confidence"
+
+
+def test_decision_layer_enforced_lane_config_helpers() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [],
+                "decision_layer": {
+                    "enabled": True,
+                    "hard_skip_if_unavailable_on_enforced": True,
+                    "enforced_lanes": {
+                        "bitcoin": ["neutral_15m", "marginal"],
+                        "hype_macro": ["marginal", "15m_buy_yes"],
+                    },
+                },
+            }
+        }
+    )
+
+    assert ag.decision_layer_lane_enforced("bitcoin", "neutral_15m") is True
+    assert ag.decision_layer_lane_enforced("bitcoin", "5m") is False
+    assert ag.decision_layer_lane_enforced("hype_macro", "15m_buy_yes") is True
+    assert ag.decision_layer_hard_skip_unavailable("hype_macro", "15m_buy_yes") is True
+
+
+def test_decision_layer_rejects_hold_and_action_mismatch() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+            }
+        }
+    )
+
+    async def fake_hold(**kwargs):
+        return AIAnalysis(
+            reasoning="wait",
+            confidence_score=0.90,
+            estimated_probability=0.70,
+            recommendation="HOLD",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_hold  # type: ignore[method-assign]
+    hold = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-hold",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.70,
+            quant_threshold=0.12,
+        )
+    )
+    assert hold.approved is False
+    assert hold.reason == "direct_ai_hold"
+
+    async def fake_mismatch(**kwargs):
+        return AIAnalysis(
+            reasoning="downside",
+            confidence_score=0.90,
+            estimated_probability=0.30,
+            recommendation="BUY_NO",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_mismatch  # type: ignore[method-assign]
+    mismatch = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-mismatch",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.70,
+            quant_threshold=0.12,
+        )
+    )
+    assert mismatch.approved is False
+    assert mismatch.reason == "direct_ai_action_mismatch"
+
+
+def test_decision_layer_rejects_ai_unavailable_and_shadow_mismatch_when_required() -> None:
+    unavailable = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": False,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+            }
+        }
+    )
+    decision = run_async(
+        unavailable.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-unavailable",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.70,
+            quant_threshold=0.12,
+        )
+    )
+    assert decision.approved is False
+    assert decision.reason == "ai_unavailable"
+
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+                "shadow_pipeline": {"enabled": True, "log_jsonl": False},
+            }
+        }
+    )
+
+    async def fake_analyze_market(**kwargs):
+        return AIAnalysis(
+            reasoning="ok",
+            confidence_score=0.82,
+            estimated_probability=0.64,
+            recommendation="BUY_YES",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    async def fake_shadow(**kwargs):
+        return {"ok": True, "portfolio_action": "BUY_NO", "shadow_confidence": 0.90}
+
+    ag.analyze_market = fake_analyze_market  # type: ignore[method-assign]
+    ag.run_shadow_pipeline = fake_shadow  # type: ignore[method-assign]
+    shadow = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-shadow-required",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.70,
+            quant_threshold=0.12,
+            require_shadow_portfolio=True,
+        )
+    )
+    assert shadow.approved is False
+    assert shadow.reason == "shadow_portfolio_action_mismatch"

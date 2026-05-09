@@ -53,6 +53,12 @@ from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BTCSOLCorrelation
+from src.analysis.updown_composite_score import (
+    CompositeScore,
+    OracleValidation,
+    score_updown_candidate,
+    validate_oracle_reference,
+)
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -336,6 +342,35 @@ class SolMacroStrategy:
         )
         self.calibration_size_multiplier_5m = float(
             self.config.get("calibration_size_multiplier_5m", 1.0)
+        )
+        self.require_oracle_for_updown = bool(
+            self.config.get("require_oracle_for_updown", False)
+        )
+        self.oracle_max_age_sec = float(self.config.get("oracle_max_age_sec", 180.0))
+        self.oracle_max_basis_bps = float(
+            self.config.get("oracle_max_basis_bps", 10.0)
+        )
+        self.updown_composite_cfg = dict(self.full_config.get("updown_composite") or {})
+        self.default_min_composite_score = float(
+            self.updown_composite_cfg.get("default_min_score", 0.62)
+        )
+        self.low_confidence_min_composite_score = float(
+            self.updown_composite_cfg.get("low_confidence_min_score", 0.66)
+        )
+        self.min_composite_score_15m_buy_yes = float(
+            self.config.get(
+                "min_composite_score_15m_buy_yes",
+                self.updown_composite_cfg.get("hype_15m_buy_yes_min_score", self.default_min_composite_score),
+            )
+        )
+        self.require_ai_decision_15m_buy_yes = bool(
+            self.config.get("require_ai_decision_15m_buy_yes", False)
+        )
+        self.require_shadow_portfolio_15m_buy_yes = bool(
+            self.config.get("require_shadow_portfolio_15m_buy_yes", False)
+        )
+        self.calibration_size_multiplier_15m_buy_yes = float(
+            self.config.get("calibration_size_multiplier_15m_buy_yes", 1.0)
         )
         self.degraded_bearish_est_up = float(
             self.config.get("degraded_bearish_est_up", 0.45)
@@ -629,6 +664,73 @@ class SolMacroStrategy:
         if max_basis_bps is None or oracle_basis_bps is None:
             return False
         return abs(float(oracle_basis_bps)) > float(max_basis_bps)
+
+    def _validate_updown_oracle(
+        self,
+        sol: Any,
+        *,
+        now: Optional[datetime] = None,
+    ) -> OracleValidation:
+        return validate_oracle_reference(
+            oracle_price=getattr(sol, "chainlink_price", None),
+            exchange_spot=getattr(sol, "current_price", None),
+            oracle_updated_at=getattr(sol, "chainlink_updated_at", None),
+            max_age_sec=self.oracle_max_age_sec,
+            max_basis_bps=self.oracle_max_basis_bps,
+            require_oracle=self.require_oracle_for_updown,
+            now=now,
+        )
+
+    def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
+        lane_key = str(lane or "default")
+        if lane_key == "15m_buy_yes":
+            floor = self.min_composite_score_15m_buy_yes
+        else:
+            floor = self.default_min_composite_score
+        if quant_confidence is not None and float(quant_confidence) < self.ai_confidence_threshold:
+            floor = max(floor, self.low_confidence_min_composite_score)
+        return float(floor)
+
+    def _requires_ai_for_lane(self, lane: str) -> bool:
+        if lane == "15m_buy_yes":
+            return self.require_ai_decision_15m_buy_yes
+        check = getattr(self.ai_agent, "decision_layer_lane_enforced", None)
+        return bool(callable(check) and check(self._signal_strategy_name, lane) is True)
+
+    def _requires_shadow_for_lane(self, lane: str) -> bool:
+        if lane == "15m_buy_yes":
+            return self.require_shadow_portfolio_15m_buy_yes
+        return False
+
+    def _size_multiplier_for_lane(self, lane: str) -> float:
+        if lane == "15m_buy_yes":
+            return self.calibration_size_multiplier_15m_buy_yes
+        return 1.0
+
+    def _score_updown_candidate(
+        self,
+        *,
+        edge: float,
+        effective_min_edge: float,
+        confidence: float,
+        ltf_strength: float,
+        timeframe_alignment: float,
+        oracle: OracleValidation,
+        minutes_left: float,
+        yes_price: float,
+        lane: str,
+    ) -> CompositeScore:
+        return score_updown_candidate(
+            edge=edge,
+            min_edge=effective_min_edge,
+            quant_confidence=confidence,
+            micro_momentum=ltf_strength,
+            timeframe_alignment=timeframe_alignment,
+            oracle=oracle,
+            minutes_to_resolution=minutes_left,
+            yes_price=yes_price,
+            floor=self._updown_composite_floor(lane=lane, quant_confidence=confidence),
+        )
 
     def _extract_direction(self, question: str) -> str:
         q = question.lower()
@@ -1552,13 +1654,21 @@ class SolMacroStrategy:
                     reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
                     _sample("rsi_soft_penalty", rsi_soft_penalty)
                 rsi_soft_delta = _rsi_soft_delta
-                if self._oracle_basis_blocks_entry(sol.oracle_basis_bps):
-                    _bump_skip("oracle_basis_block")
+                oracle_validation = self._validate_updown_oracle(sol)
+                if not oracle_validation.passed:
+                    _bump_skip(oracle_validation.reason)
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
-                        f"oracle basis {sol.oracle_basis_bps:+.1f}bps exceeds cap"
+                        f"{oracle_validation.reason} "
+                        f"basis={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
+                        f"fresh={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}"
                     )
                     continue
+                reason_parts.append(
+                    f"oracle_basis={oracle_validation.basis_bps:+.1f}bps"
+                    if oracle_validation.basis_bps is not None
+                    else "oracle_basis=n/a"
+                )
 
                 if is_5m:
                     # ── [5m] FIVE-MINUTE UP/DOWN MARKET PATH ──
@@ -2322,6 +2432,125 @@ class SolMacroStrategy:
                 )
                 continue
 
+            _updown_lane = (
+                "15m_buy_yes"
+                if is_updown and not is_5m and action == "BUY_YES"
+                else "default"
+            )
+            if is_updown:
+                _tf_alignment = 1.0 if mtt.aligned else (0.70 if mtt.h1_trend == macro_trend else 0.35)
+                composite = self._score_updown_candidate(
+                    edge=edge,
+                    effective_min_edge=effective_min_edge,
+                    confidence=confidence,
+                    ltf_strength=ltf_strength,
+                    timeframe_alignment=_tf_alignment,
+                    oracle=oracle_validation,
+                    minutes_left=_eval_left,
+                    yes_price=yes_price,
+                    lane=_updown_lane,
+                )
+                _sample("composite_score", composite.score)
+                reason_parts.append(f"composite={composite.score:.3f}")
+                if not composite.passed:
+                    _bump_skip(composite.reason)
+                    logger.info(
+                        "%s composite skip '%s...' lane=%s action=%s edge=%.4f "
+                        "conf=%.2f score=%.3f floor=%.3f components=%s "
+                        "oracle_basis=%s oracle_fresh=%s",
+                        self._signal_strategy_name,
+                        market.question[:45],
+                        _updown_lane,
+                        action,
+                        edge,
+                        confidence,
+                        composite.score,
+                        composite.floor,
+                        composite.components,
+                        oracle_validation.basis_bps,
+                        oracle_validation.freshness_sec,
+                    )
+                    continue
+
+                if (
+                    self._requires_ai_for_lane(_updown_lane)
+                    and not ai_used
+                ):
+                    if not self.config.get("use_ai", True) or not self.ai_agent.is_available():
+                        _bump_skip(f"ai_unavailable_{_updown_lane}")
+                        logger.info(
+                            "%s AI-enforced lane skip '%s...' lane=%s action=%s "
+                            "edge=%.4f conf=%.2f composite=%.3f oracle_basis=%s",
+                            self._signal_strategy_name,
+                            market.question[:45],
+                            _updown_lane,
+                            action,
+                            edge,
+                            confidence,
+                            composite.score,
+                            oracle_validation.basis_bps,
+                        )
+                        continue
+                    if ai_calls >= self.max_ai_calls_per_scan:
+                        _bump_skip(f"ai_call_limit_{_updown_lane}")
+                        continue
+                    _win = "5m" if is_5m else "15m"
+                    ai_context3 = (
+                        f"{market.description}\n\n"
+                        f"=== {_brand} ENFORCED UPDOWN CONTEXT ({_win}) ===\n"
+                        f"Action={action} YES={yes_price:.3f} edge={edge:.4f} "
+                        f"confidence={confidence:.2f} composite={composite.score:.3f}/{composite.floor:.3f}\n"
+                        f"Oracle price={oracle_validation.oracle_price if oracle_validation.oracle_price is not None else 'n/a'} "
+                        f"exchange_spot={oracle_validation.exchange_spot if oracle_validation.exchange_spot is not None else 'n/a'} "
+                        f"basis_bps={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
+                        f"freshness_sec={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}\n"
+                        f"Components={composite.components}\n"
+                        f"BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
+                        f"LTF_strength={ltf_strength:.2f}\n\n"
+                        f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
+                        "Answer with BUY_YES, BUY_NO, or HOLD."
+                    )
+                    ai_decision = await self.ai_agent.evaluate_trade_decision(
+                        market_question=market.question,
+                        market_description=ai_context3,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
+                    )
+                    ai_calls += 1
+                    ai_used = True
+                    if ai_decision.shadow_result is not None:
+                        shadow_pipeline_calls += 1
+                        if ai_decision.shadow_result.get("ok"):
+                            shadow_pipeline_ok += 1
+                    if not ai_decision.approved:
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        logger.info(
+                            "%s AI-enforced lane rejected '%s...' lane=%s reason=%s "
+                            "action=%s conf=%.2f edge=%s composite=%.3f",
+                            self._signal_strategy_name,
+                            market.question[:45],
+                            _updown_lane,
+                            ai_decision.reason,
+                            ai_decision.action,
+                            ai_decision.confidence,
+                            ai_decision.edge,
+                            composite.score,
+                        )
+                        continue
+                    ai_edge = float(ai_decision.edge or 0.0)
+                    if ai_edge <= 0:
+                        _bump_skip(f"ai_nonpositive_edge_{_updown_lane}")
+                        continue
+                    edge = max(edge, ai_edge)
+                    confidence = max(confidence, ai_decision.confidence)
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
+
             if is_updown and self.center_price_band > 0:
                 _is_centered = abs(yes_price - 0.50) <= self.center_price_band
                 if _is_centered:
@@ -2445,6 +2674,10 @@ class SolMacroStrategy:
                 raw_size *= self.tuning_size_multiplier
             if is_5m and self.calibration_size_multiplier_5m > 0:
                 raw_size *= self.calibration_size_multiplier_5m
+            if is_updown:
+                _lane_mult = self._size_multiplier_for_lane(_updown_lane)
+                if _lane_mult > 0:
+                    raw_size *= _lane_mult
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("size_too_small")
@@ -2473,6 +2706,10 @@ class SolMacroStrategy:
                 reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
             if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
                 reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
+            if is_updown:
+                _lane_mult = self._size_multiplier_for_lane(_updown_lane)
+                if _lane_mult > 0 and _lane_mult < 0.999:
+                    reason_parts.append(f"{_updown_lane}_size={_lane_mult:.2f}x")
 
             reason_str = " | ".join(r for r in reason_parts if r)
 

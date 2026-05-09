@@ -12,6 +12,63 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-09 — Oracle-first + composite score gate for ETH up/down
+
+- **What changed:** `eth_macro` inherits the shared oracle-first and composite up/down gate, with `require_oracle_for_updown=true`, `oracle_max_age_sec=180`, and `oracle_max_basis_bps=10.0`.
+- **Why:** ETH up/down resolution references can diverge from exchange spot; stale/missing oracle data should skip before AI or Kelly sizing.
+- **Hypothesis:** ETH entries that remain after this change have valid oracle basis/freshness and stronger deterministic setup quality.
+- **Expected outcome:** ETH skip telemetry surfaces `oracle_missing`, `oracle_stale`, `oracle_basis_block`, or composite component values when blocked.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades after this change).
+- **Status:** `pending`
+
+### 2026-05-08 — Tighten ETH 5m calibration after weak live cohort
+
+- **What changed:** Raised [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.min_edge_5m` from `0.085` to `0.10`, mirrored `backtest.min_edge_eth_5m` to `0.10`, and reduced `strategies.eth_macro.calibration_size_multiplier_5m` from the prior calibration setting to `0.40`.
+- **Why:** Current paper session `test_20260508_050455` showed `eth_macro` at `17` closes, `47.1%` WR, `-$2.55`; the 5m slice was the weak lane in the audit (`9` closes, `33.3%` WR, `-$2.23` before restart). ETH is no longer starved, but the recovered 5m participation is not yet profitable.
+- **Hypothesis:** A higher 5m edge floor plus smaller 5m stake should cut the weakest marginal ETH 5m entries while still collecting enough calibration data.
+- **Expected outcome:** ETH 5m trade count should fall, average ETH 5m loss impact should shrink, and ETH overall WR should recover toward or above `50%`.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades after session `test_20260508_151000` restart).
+- **Status:** `pending`
+
+### 2026-05-08 — ETH 5m calibration-size cap while keeping lane active
+
+- **What changed:** Added `strategies.eth_macro.calibration_size_multiplier_5m=0.60` in [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) and wired the 5m calibration multiplier in [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py). Added [`scripts/journal_lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/scripts/journal_lane_calibration.py) to report closed trades by `strategy|window|action`.
+- **Why:** ETH 5m should stay active for calibration instead of being disabled/shadow-only, but latest local lane report on `test_20260508_050455` showed `eth_macro|5m|BUY_YES` at `9` closes, `-$2.23`, `33.3%` WR.
+- **Hypothesis:** Smaller ETH 5m stakes will keep the live paper calibration sample flowing while limiting drawdown from the currently weak 5m lane.
+- **Expected outcome:** ETH 5m continues to produce closed trades, but per-trade loss impact is lower while enough sample accumulates for settings calibration.
+- **Actual outcome:** `pending` (need ≥15 closed ETH 5m trades after this change).
+- **Status:** `pending`
+
+### 2026-05-07 — Relax ETH per-market 1H bearish suppression (`enforce_alt_1h_alignment: false`)
+
+- **What changed:** Set [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.enforce_alt_1h_alignment` from `true` to `false`.
+- **Why:** After disabling the whole-scan BTC 1H abort, ETH was still being overwhelmingly suppressed by the per-market `eth_1h_bearish` path in the active failure session. This is the next narrow lever to stop all-night ETH silence without removing the rest of the ETH follow, edge, catalyst, and price-band stack.
+- **Hypothesis:** Disabling the per-market ETH 1H bearish suppression should let some ETH candidates survive into the remaining downstream gates, producing non-zero participation instead of a silent lane.
+- **Expected outcome:** ETH skip mix should show fewer `eth_1h_bearish` suppressions and at least some live ETH signal count. If ETH still shows zero trades, the next suppressors are likely `price_too_far`, `eth_5m_weak_confirm`, and/or timing rather than the 1H bearish filter alone.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades post-change).
+- **Status:** `pending`
+
+### 2026-05-07 — Disable ETH whole-scan BTC 1H abort (`btc_follow_1h_required: false`)
+
+- **What changed:** Set [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.btc_follow_1h_required` from `true` to `false`.
+- **Why:** In active paper session `test_20260507_035930`, `eth_macro` ran overnight and produced `0` trades. Session audit showed the whole-scan abort `btc_follow_1h_blocked` fired hundreds of times, preventing ETH from even reaching its later per-market filters. A silent lane is not a viable live strategy.
+- **Hypothesis:** Removing the whole-scan BTC 1H abort should let ETH reach the existing per-market 5m/15m BTC-follow, ETH 1H alignment, edge, catalyst, and price-band checks. ETH should start participating again without fully unwinding the later confirmation stack.
+- **Expected outcome:** ETH produces non-zero signal counts in the next live paper session. Skip mix should shift away from `btc_follow_1h_blocked` dominance toward per-market gates like `eth_1h_bearish`, `eth_5m_weak_confirm`, `edge_below_min`, and price-band checks.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades post-change).
+- **Status:** `pending`
+
+### 2026-05-06 — ETH 15m window widen + 5m edge tighten + 15m hist floor relax (commit `d6da79c`)
+
+- **What changed:**
+  - `entry_window_15m_min`: 2.0 → 1.0 ; `entry_window_15m_max`: 16.0 → 18.0
+  - `min_edge_5m`: 0.07 → 0.085 (and `backtest.min_edge_eth_5m` mirror to 0.085)
+  - `eth_follow_15m_hist_min`: 0.03 → 0.02
+- **Why:** Same root pattern as SOL: 15m silent ~8h with `outside_entry_window` dominant, then ETH-specific 15m gates blocking what slips through. `eth_follow_15m_hist_min` is the only ETH 15m-exclusive lever — touching it doesn't unwind the 2026-05-04 `enforce_alt_1h_alignment: true` decision (only 2 days old, deliberately preserved). 5m bleed mitigation parallels SOL.
+- **Hypothesis:** The window widen + hist floor relax restores 15m fires; the 5m edge bump compresses the marginal admissions that were losing to resolution variance. Net: ETH 15m becomes the primary fire path again, ETH 5m bleeds less.
+- **Expected outcome:** ETH 15m fire rate ≥2 entries per 12h. ETH 5m fire rate drops ~15-25%; PnL trends up.
+- **Actual outcome:** `pending` (need ≥15 closed trades post-change).
+- **Status:** `pending`
+
 ### 2026-05-06 — ETH 5m logic correction: remove 1H-only impulse bypass; restore 15m math
 
 - **What changed:** Removed the ETH 5m `bypass_5m_impulse_btc_1h_ok` admission path in [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), so ETH 5m now requires real short-window BTC impulse or the separate macro-agreement bypass path. At the same time, the same-day experimental ETH 15m math tweak was reverted, restoring the prior 15m score and confidence behavior.
@@ -183,6 +240,12 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 - **Status:** `pending`
 
 ## Review sessions
+
+### 2026-05-07 — Post-loosening short backtest slice still silent
+
+- **Slice:** [`backtest_crypto_ETH_5m_20260507_134222.json`](/Users/mainfolder/Documents/psb-main%201/data/backtest/reports/backtest_crypto_ETH_5m_20260507_134222.json) and [`backtest_crypto_ETH_15m_20260507_134220.json`](/Users/mainfolder/Documents/psb-main%201/data/backtest/reports/backtest_crypto_ETH_15m_20260507_134220.json)
+- **Result:** Both reruns still produced `0` trades even after `btc_follow_1h_required: false` and `enforce_alt_1h_alignment: false`.
+- **Meaning:** ETH starvation is broader than the two most obvious gates. The next likely suppressors are ETH-specific entry quality and price/timing filters rather than just the 1H abort/alignment pair.
 
 ### 2026-05-04 — Paper `test_20260504_034719`
 

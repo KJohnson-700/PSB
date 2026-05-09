@@ -13,7 +13,7 @@ Tests cover:
 
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 
 from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
@@ -87,6 +87,47 @@ def test_buy_no_rsi_penalty_can_be_disabled():
     hard, delta = strategy._resolve_rsi_gate("BUY_NO", 35.0)
     assert hard is False
     assert delta == 0.0
+
+
+def test_buy_no_ltf_override_requires_confirmed_bearish_tape():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_ltf_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=39.0,
+            macd_15m=MACDResult(histogram=-0.08, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.03, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=-0.02),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+    allowed, reason = strategy._buy_no_ltf_override(ta)
+
+    assert allowed is True
+    assert "bearish_ltf_override" in reason
+
+
+def test_buy_no_ltf_override_rejects_weak_bearish_noise():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_ltf_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=52.0,
+            macd_15m=MACDResult(histogram=-0.02, histogram_rising=False),
+            macd_5m=MACDResult(histogram=0.01, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.04),
+    )
+
+    allowed, reason = strategy._buy_no_ltf_override(ta)
+
+    assert allowed is False
+    assert "5m_not_bearish" in reason
+    assert "rsi>45.0" in reason
+    assert "btc5m>+0.000%" in reason
 
 
 def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
@@ -227,6 +268,43 @@ def test_optional_oracle_basis_gate_blocks_large_divergence():
     assert strategy._oracle_basis_blocks_entry(-12.5) is True
     assert strategy._oracle_basis_blocks_entry(8.0) is False
     assert strategy._oracle_basis_blocks_entry(None) is False
+
+
+def test_required_updown_oracle_validation_blocks_missing_and_stale_oracle():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["require_oracle_for_updown"] = True
+    cfg["strategies"]["sol_macro"]["oracle_max_age_sec"] = 180
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 10.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    now = datetime.now(timezone.utc)
+    missing = strategy._validate_updown_oracle(SOLAnalysis(current_price=100.0), now=now)
+    assert missing.passed is False
+    assert missing.reason == "oracle_missing"
+
+    stale = strategy._validate_updown_oracle(
+        SOLAnalysis(
+            current_price=100.0,
+            chainlink_price=100.0,
+            chainlink_updated_at=now - timedelta(seconds=181),
+        ),
+        now=now,
+    )
+    assert stale.passed is False
+    assert stale.reason == "oracle_stale"
+
+
+def test_updown_composite_floor_uses_lane_specific_overrides():
+    cfg = _make_config()
+    cfg["updown_composite"] = {
+        "default_min_score": 0.62,
+        "hype_15m_buy_yes_min_score": 0.70,
+    }
+    cfg["strategies"]["sol_macro"]["min_composite_score_15m_buy_yes"] = 0.69
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._updown_composite_floor(lane="default") == 0.62
+    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.69
 
 
 def _make_bullish_ta():

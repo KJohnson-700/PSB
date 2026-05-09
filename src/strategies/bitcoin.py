@@ -41,6 +41,7 @@ from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
+from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
@@ -168,6 +169,16 @@ class BitcoinStrategy:
         self.neutral_15m_min_quant_confidence = float(
             self.config.get("neutral_15m_min_quant_confidence", 0.0) or 0.0
         )
+        self.neutral_15m_requires_shadow_portfolio = bool(
+            self.config.get("neutral_15m_requires_shadow_portfolio", False)
+        )
+        self.updown_composite_cfg = dict(self.full_config.get("updown_composite") or {})
+        self.neutral_15m_min_composite_score = float(
+            self.config.get(
+                "neutral_15m_min_composite_score",
+                self.updown_composite_cfg.get("btc_neutral_15m_min_score", 0.68),
+            )
+        )
         self.neutral_rsi_min = float(self.config.get("neutral_rsi_min", 0.0) or 0.0)
         self.neutral_rsi_max = float(self.config.get("neutral_rsi_max", 0.0) or 0.0)
         self.neutral_rsi_extra_min_edge = float(
@@ -198,6 +209,35 @@ class BitcoinStrategy:
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
+
+    def _score_neutral_15m_candidate(
+        self,
+        *,
+        edge: float,
+        effective_min_edge: float,
+        confidence: float,
+        ltf_strength: float,
+        minutes_left: float,
+        yes_price: float,
+    ):
+        return score_updown_candidate(
+            edge=edge,
+            min_edge=effective_min_edge,
+            quant_confidence=confidence,
+            micro_momentum=ltf_strength,
+            timeframe_alignment=0.50,
+            oracle=OracleValidation(
+                passed=True,
+                reason="oracle_not_applicable",
+                oracle_price=None,
+                exchange_spot=None,
+                basis_bps=None,
+                freshness_sec=None,
+            ),
+            minutes_to_resolution=minutes_left,
+            yes_price=yes_price,
+            floor=self.neutral_15m_min_composite_score,
+        )
 
     async def _ai_kill_switch_analysis(self, reason: str, loss_count: int) -> None:
         if not self.ai_agent or not self.ai_agent.is_available():
@@ -1709,7 +1749,11 @@ class BitcoinStrategy:
                     quant_edge=edge,
                     quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
-                    require_shadow_portfolio=False,
+                    require_shadow_portfolio=(
+                        self.neutral_15m_requires_shadow_portfolio
+                        if _needs_ai_for_low_conf_neutral_15m
+                        else False
+                    ),
                 )
                 ai_calls += 1
                 ai_used = True
@@ -1821,6 +1865,108 @@ class BitcoinStrategy:
                     f"edge={edge:.4f} < min={effective_min_edge} | {_mkt_type}"
                 )
                 continue
+
+            _is_neutral_15m = is_updown and not is_5m and htf_bias == "NEUTRAL"
+            if _is_neutral_15m:
+                composite = self._score_neutral_15m_candidate(
+                    edge=edge,
+                    effective_min_edge=effective_min_edge,
+                    confidence=confidence,
+                    ltf_strength=ltf_strength,
+                    minutes_left=_mins_left,
+                    yes_price=yes_price,
+                )
+                _sample("composite_score", composite.score)
+                reason_parts.append(f"composite={composite.score:.3f}")
+                if not composite.passed:
+                    _bump_skip(composite.reason)
+                    logger.info(
+                        "BTC neutral 15m composite skip '%s...' action=%s edge=%.4f "
+                        "conf=%.2f score=%.3f floor=%.3f components=%s",
+                        market.question[:45],
+                        action,
+                        edge,
+                        confidence,
+                        composite.score,
+                        composite.floor,
+                        composite.components,
+                    )
+                    continue
+
+                if not ai_used:
+                    if not self.config.get("use_ai", True) or not self.ai_agent.is_available():
+                        _bump_skip("ai_unavailable_neutral_15m")
+                        logger.info(
+                            "BTC neutral 15m AI skip '%s...' action=%s edge=%.4f "
+                            "conf=%.2f composite=%.3f",
+                            market.question[:45],
+                            action,
+                            edge,
+                            confidence,
+                            composite.score,
+                        )
+                        continue
+                    if ai_calls >= self.max_ai_calls_per_scan:
+                        _bump_skip("ai_call_limit_neutral_15m")
+                        continue
+                    ai_context = (
+                        f"{market.description}\n\n"
+                        f"=== BTC NEUTRAL 15M ENFORCED CONTEXT ===\n"
+                        f"BTC Price: ${btc_price:,.2f}\n"
+                        f"Market YES Price: {yes_price:.3f} | Quant confidence={confidence:.2f}\n"
+                        f"HTF bias: {htf_bias} | Quant edge={edge:.4f} "
+                        f"(threshold={effective_min_edge:.4f})\n"
+                        f"Composite={composite.score:.3f}/{composite.floor:.3f} "
+                        f"components={composite.components}\n\n"
+                        f"4H MACD hist={macd_4h.histogram:+.2f} above0={macd_4h.above_zero} rising={macd_4h.histogram_rising}\n"
+                        f"15m MACD hist={macd_15m.histogram:+.2f} cross={macd_15m.crossover}\n"
+                        f"1H MACD hist={ta.macd_1h.histogram:+.2f} rising={ta.macd_1h.histogram_rising}\n"
+                        f"Momentum: 15m={mom.m15_direction}({mom.m15_move_pct:+.3f}%) "
+                        f"5m={mom.m5_direction}({mom.m5_move_pct:+.3f}%)\n"
+                        f"RSI={ta.rsi_14:.1f} | Sabre trend={sabre.trend} tension={sabre.tension:+.2f}\n\n"
+                        f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
+                        "Answer with BUY_YES, BUY_NO, or HOLD."
+                    )
+                    ai_decision = await self.ai_agent.evaluate_trade_decision(
+                        market_question=market.question,
+                        market_description=ai_context,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint="bitcoin",
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        require_shadow_portfolio=self.neutral_15m_requires_shadow_portfolio,
+                    )
+                    ai_calls += 1
+                    ai_used = True
+                    if ai_decision.shadow_result is not None:
+                        shadow_pipeline_calls += 1
+                        if ai_decision.shadow_result.get("ok"):
+                            shadow_pipeline_ok += 1
+                    if not ai_decision.approved:
+                        ai_decision_layer_skips += 1
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        logger.info(
+                            "BTC neutral 15m AI rejected '%s...' reason=%s action=%s "
+                            "conf=%.2f edge=%s composite=%.3f",
+                            market.question[:45],
+                            ai_decision.reason,
+                            ai_decision.action,
+                            ai_decision.confidence,
+                            ai_decision.edge,
+                            composite.score,
+                        )
+                        continue
+                    ai_edge = float(ai_decision.edge or 0.0)
+                    if ai_edge <= 0:
+                        _bump_skip("ai_nonpositive_edge_neutral_15m")
+                        continue
+                    edge = max(edge, ai_edge)
+                    confidence = max(confidence, ai_decision.confidence)
+                    ai_assists += 1
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
 
             # ── Edge cap for updown markets ──
             # Live data: edge >0.12 on 15m/5m updown = 27% WR. The probability model

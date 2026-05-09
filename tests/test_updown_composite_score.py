@@ -1,0 +1,130 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from src.analysis.updown_composite_score import (
+    CompositeScore,
+    validate_oracle_reference,
+    score_updown_candidate,
+)
+
+
+def test_high_quality_setup_passes_default_floor() -> None:
+    oracle = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.05,
+        oracle_updated_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+
+    score = score_updown_candidate(
+        edge=0.11,
+        min_edge=0.09,
+        quant_confidence=0.72,
+        micro_momentum=0.80,
+        timeframe_alignment=0.85,
+        oracle=oracle,
+        minutes_to_resolution=8.0,
+        yes_price=0.51,
+        floor=0.62,
+    )
+
+    assert isinstance(score, CompositeScore)
+    assert score.passed is True
+    assert score.score >= 0.62
+    assert score.components["oracle_integrity"] == 1.0
+
+
+def test_low_momentum_fails_even_with_valid_oracle() -> None:
+    oracle = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.02,
+        oracle_updated_at=datetime.now(timezone.utc) - timedelta(seconds=20),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+
+    score = score_updown_candidate(
+        edge=0.07,
+        min_edge=0.09,
+        quant_confidence=0.52,
+        micro_momentum=0.0,
+        timeframe_alignment=0.20,
+        oracle=oracle,
+        minutes_to_resolution=14.0,
+        yes_price=0.56,
+        floor=0.62,
+    )
+
+    assert score.passed is False
+    assert score.reason == "composite_score_below_floor"
+    assert score.components["micro_momentum"] == 0.0
+
+
+def test_missing_stale_and_bad_basis_oracle_fail_validation() -> None:
+    missing = validate_oracle_reference(
+        oracle_price=None,
+        exchange_spot=100.0,
+        oracle_updated_at=None,
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+    assert missing.passed is False
+    assert missing.reason == "oracle_missing"
+
+    stale = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.0,
+        oracle_updated_at=datetime.now(timezone.utc) - timedelta(seconds=181),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+    assert stale.passed is False
+    assert stale.reason == "oracle_stale"
+
+    bad_basis = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.20,
+        oracle_updated_at=datetime.now(timezone.utc),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+    assert bad_basis.passed is False
+    assert bad_basis.reason == "oracle_basis_block"
+    assert bad_basis.basis_bps == pytest.approx(20.0)
+
+
+def test_lane_floors_rank_btc_neutral_and_hype_buy_yes_stricter() -> None:
+    oracle = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.01,
+        oracle_updated_at=datetime.now(timezone.utc),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+    kwargs = dict(
+        edge=0.067,
+        min_edge=0.09,
+        quant_confidence=0.58,
+        micro_momentum=0.55,
+        timeframe_alignment=0.55,
+        oracle=oracle,
+        minutes_to_resolution=8.0,
+        yes_price=0.54,
+    )
+
+    default = score_updown_candidate(**kwargs, floor=0.62)
+    btc_neutral = score_updown_candidate(**kwargs, floor=0.68)
+    hype_buy_yes = score_updown_candidate(**kwargs, floor=0.70)
+
+    assert default.passed is True
+    assert btc_neutral.floor > default.floor
+    assert hype_buy_yes.floor > btc_neutral.floor
+    assert hype_buy_yes.passed is False

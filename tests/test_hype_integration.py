@@ -264,6 +264,23 @@ def test_hype_low_correlation_settings_follow_yaml():
     assert strategy.low_corr_threshold_1h == 0.40
 
 
+def test_hype_15m_buy_yes_protection_config_helpers():
+    cfg = _config()
+    cfg["updown_composite"] = {
+        "default_min_score": 0.62,
+        "hype_15m_buy_yes_min_score": 0.70,
+    }
+    cfg["strategies"]["hype_macro"]["require_ai_decision_15m_buy_yes"] = True
+    cfg["strategies"]["hype_macro"]["require_shadow_portfolio_15m_buy_yes"] = True
+    cfg["strategies"]["hype_macro"]["calibration_size_multiplier_15m_buy_yes"] = 0.35
+    strategy = HYPEMacroStrategy(cfg, BacktestAIAgent(cfg), PositionSizer())
+
+    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.70
+    assert strategy._requires_ai_for_lane("15m_buy_yes") is True
+    assert strategy._requires_shadow_for_lane("15m_buy_yes") is True
+    assert strategy._size_multiplier_for_lane("15m_buy_yes") == 0.35
+
+
 def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(monkeypatch):
     import time
 

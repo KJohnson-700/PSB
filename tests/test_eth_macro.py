@@ -1,6 +1,13 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from src.analysis.btc_price_service import CandleMomentum, MACDResult, TechnicalAnalysis
+from src.analysis.sol_btc_service import (
+    BTCSOLCorrelation,
+    MultiTimeframeTrend,
+    SOLAnalysis,
+    SOLTechnicalAnalysis,
+)
 from src.strategies.eth_macro import ETHMacroStrategy
 
 
@@ -60,6 +67,26 @@ def test_eth_rsi_soft_penalty_buy_no_when_oversold_not_hard_block():
     hard2, delta2 = strat._resolve_rsi_gate("BUY_NO", 45.0)
     assert hard2 is False
     assert delta2 == 0.0
+
+
+def test_eth_buy_no_ltf_override_uses_eth_strategy_config():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["buy_no_ltf_override_enabled"] = True
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=38.0,
+            macd_15m=MACDResult(histogram=-0.05, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.02, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=-0.01),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+    allowed, reason = strat._buy_no_ltf_override(ta)
+
+    assert allowed is True
+    assert "bearish_ltf_override" in reason
 
 
 def test_eth_rsi_hard_gate_when_enabled():
@@ -130,6 +157,27 @@ def test_eth_oracle_basis_gate_uses_eth_config():
     strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
     assert strat._oracle_basis_blocks_entry(15.0) is True
     assert strat._oracle_basis_blocks_entry(5.0) is False
+
+
+def test_eth_required_updown_oracle_validation_uses_eth_config():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["require_oracle_for_updown"] = True
+    cfg["strategies"]["eth_macro"]["oracle_max_age_sec"] = 180
+    cfg["strategies"]["eth_macro"]["oracle_max_basis_bps"] = 10.0
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    now = datetime.now(timezone.utc)
+    result = strat._validate_updown_oracle(
+        SOLAnalysis(
+            current_price=100.2,
+            chainlink_price=100.0,
+            chainlink_updated_at=now - timedelta(seconds=30),
+        ),
+        now=now,
+    )
+
+    assert result.passed is False
+    assert result.reason == "oracle_basis_block"
 
 
 def test_eth_15m_follow_score_rejects_weak_above_signal_state():

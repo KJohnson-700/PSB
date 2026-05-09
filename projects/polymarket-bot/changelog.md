@@ -4,6 +4,13 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-09 — Full AI + oracle + composite decision-control layer
+
+- **What changed:** Added the shared `src/analysis/updown_composite_score.py` helper and upgraded `ai.decision_layer` config from legacy `enforce_on` to per-strategy `enforced_lanes`. SOL-family up/down paths now validate oracle freshness/basis before composite scoring and enforced AI lanes; BTC neutral 15m and HYPE 15m BUY_YES have lane-specific hardening.
+- **Why:** Up/down candidates should follow `quant → oracle/data validation → composite score → AI decision → Kelly/risk sizing`, not reach sizing on edge alone.
+- **Verification:** `pytest tests/test_ai_agent_parse.py tests/test_ai_narrators.py tests/test_sol_macro.py tests/test_eth_macro.py tests/test_live_exit_overrides.py tests/test_updown_composite_score.py -q` → `121 passed`; `py_compile` clean for touched strategy/analysis modules.
+- **Status:** active after restart; strategy-specific expected outcomes are tracked in `strategy-log/*.md`.
+
 ## 2026-05-09 — Enforced AI decision layer skeleton
 
 - **What changed:** Added `ai.decision_layer` config and `AIAgent.evaluate_trade_decision(...)`, an enforced pre-entry decision API that approves or rejects a quant candidate before Kelly sizing. BTC up/down marginal/low-confidence neutral approval now calls this decision layer instead of directly consuming raw `analyze_market()` output.
@@ -28,7 +35,7 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 - **External knobs observed:**
   - **Aulekator / PolyBullLabs-style:** fixed or simple percent sizing, explicit stop-loss / take-profit knobs, BTC-only or small bot families.
   - **0xFives-style:** predict-then-hedge logic and confidence gating.
-  - **jmazzini 5m:** window delta + micro momentum + ATR, late entry about **10-50 seconds before close**, composite weighted confidence score, fixed `--amount`, no discretionary exit until settlement.
+  - **jmazzini 5m:** window delta + micro momentum + ATR, late entry about **10-50 seconds before close**, composite weighted confidence score, fixed `--amount`, no discretionary exit before settlement.
   - **Paid / advanced tooling noted:** four trigger-rule groups plus Monte Carlo / Kelly support.
 - **PSB installed comparison:**
   - **Multi-strategy:** active for `bitcoin`, `sol_macro`, `eth_macro`, `xrp_macro`, `hype_macro`; optional `xrp_dump_hedge` exists separately.
@@ -39,6 +46,68 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
   - **Regime gates:** installed across BTC/macro lanes via HTF/LTF, catalyst, alignment, macro-event, oracle/basis, and asset-specific gates.
   - **Late-window entry:** installed, but PSB uses minute-level entry windows (`0-5m`, `1-18m`, etc.) rather than jmazzini's explicit 10-50 second band.
   - **Hedge logic:** `xrp_dump_hedge` exists but should remain disabled until separately validated.
+- **Immediate follow-up candidates:**
+  - Re-label the comparison as **"pre-entry veto installed, disabled"** unless `ai.preentry_veto.enabled` is intentionally flipped on.
+  - Test a jmazzini-inspired **composite quant confidence score** as a shadow metric first: window delta + micro momentum + ATR + existing regime flags, no execution change until journal/backtest evidence supports it.
+  - Audit whether PSB's minute-level late-entry windows are too broad versus the external 10-50 second close-entry pattern, especially for 5m HYPE/XRP lanes.
+
+## 2026-05-08 — Narrators write to journal + surface in dashboard AI Review panel (commit `acdbb3a`)
+
+- **Issue:** Phase 1 (`b1c177a`) auto-fired narrators on startup but wrote to a sibling `_ai_summary.md` next to the journal. That meant: (a) extra discovery surface for any consumer (dashboard, replay, audits), and (b) the existing dashboard AI Review card on the Journal tab didn't pick them up.
+- **Fix:** Two coupled changes so narrator output rides the same pipeline as everything else.
+  1. **`_run_startup_narrators` now writes ANNOTATION events into the current session's `entries.jsonl`**, not a sibling file. Each narrator block is a `JournalEntry(event="ANNOTATION", trade_id="__session_summary__::<kind>", extra={source: "session_summary", narrator: "<kind>", previous_session, text})`. `TradeJournal._load_state` already ignores non-ENTRY/EXIT events, so resume is unaffected.
+  2. **`GET /api/journal/ai-summary`** ([src/dashboard/server.py](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py)) extended:
+     - New helper `_read_narrator_annotations(journal)` walks entries.jsonl, filters `event=ANNOTATION` + `extra.source=session_summary`.
+     - New helper `_format_narrator_block(anns)` renders them as titled sections (Underperformance / Skip & exit reasons / Calibration drift / Strategy conflict).
+     - Endpoint appends the formatted block to the existing summary string the Journal-tab AI Review card already consumes.
+     - Cache key changed to `(session_id, entries.jsonl mtime)` so new narrator events appear automatically — no manual refresh required.
+- **Frontend untouched:** the existing `ai-summary-card` and `loadAISummary()` in `index.html` already call `/api/journal/ai-summary`. The narrator output drops into the same card.
+- **Tests:** [tests/test_dashboard_ai_narrator_summary.py](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_ai_narrator_summary.py) covers the filter (event + source), empty-file guard, and pretty-title rendering. Existing `tests/test_dashboard_bundle.py` still passes — no structural UI changes.
+- **Verification:** `pytest tests/test_dashboard_ai_narrator_summary.py tests/test_dashboard_bundle.py tests/test_ai_narrators.py tests/test_trade_journal_annotation.py tests/test_ai_preentry_veto.py` → 44 passed.
+
+## 2026-05-08 — Narrators auto-fire on bot startup (commit `b1c177a`)
+
+- **Issue:** Phase 1 (`0e9d579`) shipped narrators behind a manual `python3 scripts/run_ai_session_summary.py` invocation. Friction = nobody runs it = data not consumed.
+- **Fix:** New `PolyBot._run_startup_narrators()` method, called as fire-and-forget `asyncio.create_task(...)` at the top of `start()`. Finds the most recent prior session dir (lexicographic, < current name, with activity), runs all four narrators against it, writes the result into the **new** session's journal dir as `_ai_summary.md`.
+- **Why "previous session, written into new session":** The narrator output answers "what did we just learn?" — it's most useful when reviewing the upcoming session, so it lands where the next-session reviewer will look.
+- **Self-gates:** `ai.session_summary.enabled` (master) + per-narrator `include_*` flags. Each narrator wrapped in try/except so one bad section never blocks the others. Off the trade hot path; never awaited.
+- **Manual `scripts/run_ai_session_summary.py` still works** for ad-hoc runs, but it's no longer required.
+- **File:** [src/main.py](/Users/mainfolder/Documents/psb-main%201/src/main.py) — new `_run_startup_narrators()` method + one-line hook in `start()`.
+
+## 2026-05-08 — AI integration expanded: shadow pipeline + post-trade annotation + narrators + pre-entry veto helper (commit `0e9d579`)
+
+- **Goal:** Get AI more involved in the bot without touching the trade hot path. Three layers shipped together: data collection (shadow + annotation), off-cycle analysis (four narrators), and a stub for AI in actual decision-making (pre-entry veto helper, default off until calibration data warrants).
+- **Shadow pipeline expansion:**
+  - ETH macro had it; now BTC/SOL/XRP/HYPE all run the parallel 3-stage Research→Trader→Portfolio pipeline alongside their existing AI consults. XRP and HYPE inherit from `SolMacroStrategy`, so the SOL-side injection covers all three.
+  - Master `ai.shadow_pipeline.enabled` flipped to **true**. Logs to `data/logs/ai_pipeline/shadow_pipeline.jsonl`. Capped at 1 call per scan per strategy via `shadow_pipeline.max_calls_per_scan`.
+  - Files: [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) (3 sites), [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) (2 sites — covers SOL/XRP/HYPE).
+- **Post-trade journal annotation:**
+  - New `TradeJournal.append_annotation(trade_id, text, ...)` in [src/execution/trade_journal.py](/Users/mainfolder/Documents/psb-main%201/src/execution/trade_journal.py). Append-only side channel that writes an `ANNOTATION` event referencing an existing `trade_id` — never mutates `open_positions` or `closed_trades`. `_load_state` ignores non-ENTRY/EXIT events naturally, so resume is safe.
+  - New `PolyBot._annotate_entry_async` helper in [src/main.py](/Users/mainfolder/Documents/psb-main%201/src/main.py). Fire-and-forget after every `log_entry` (BTC, SOL/XRP/HYPE, weather). Wrapped in `asyncio.create_task` — entry path returns before the LLM call resolves, so trade timing is unchanged. Writes thesis/expectations/invalidation in 3-5 sentences.
+  - Optional **correlation/exposure warning**: when `ai.post_trade_annotation.include_correlation_check` is true, the prompt is augmented with current open positions and the AI flags correlated entries inline.
+  - `ai.post_trade_annotation.enabled` set to **true** by default this commit so data starts flowing immediately.
+- **Off-cycle AI narrators** ([src/analysis/ai_narrators.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_narrators.py)):
+  - `summarize_underperformance(audit_report, ai_agent)` — turns a `build_underperformance_report` dict into a 4-6 sentence operator-actionable note.
+  - `summarize_skip_exit_reasons(skip_dist, exit_dist, ai_agent)` — flags dominant skip/exit reasons (e.g. when `rsi_extreme_block` >30% of skips → tighten RSI threshold).
+  - `detect_calibration_drift(shadow_records, closed_trades, ai_agent)` — joins shadow JSONL with closed trades on `market_id`, buckets by AI confidence (low/mid/high), narrates miscalibration.
+  - `explain_strategy_conflict(scan_summaries, ai_agent)` — flags BTC/ETH/SOL/HYPE/XRP regime disagreement.
+  - All four self-gate on agent availability and return empty string on failure.
+- **Orchestrator** [scripts/run_ai_session_summary.py](/Users/mainfolder/Documents/psb-main%201/scripts/run_ai_session_summary.py): runs all four narrators against the latest session and appends a markdown block to `projects/polymarket-bot/strategy-log/_ai_summary.md`. Each narrator independently gated under `ai.session_summary.include_*`. Master `ai.session_summary.enabled` set to **true**.
+- **Pre-entry veto** (decision-making stub):
+  - New `AIAgent.preentry_veto_active(ai_confidence)` helper in [src/analysis/ai_agent.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py).
+  - Wired into BTC marginal sites 1 & 2 (the paths that previously had no confidence floor). SOL/XRP/HYPE already enforce `ai_confidence_threshold` so the veto is redundant there.
+  - `ai.preentry_veto.enabled` deliberately left **false**. Threshold default 0.25. Reason: it kills trades, which is a behavior change, not data collection — flip on after calibration drift narrator shows AI confidence correlates with realized PnL.
+- **Verification:**
+  - 25 new tests added: [tests/test_ai_preentry_veto.py](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_preentry_veto.py), [tests/test_ai_narrators.py](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_narrators.py), [tests/test_trade_journal_annotation.py](/Users/mainfolder/Documents/psb-main%201/tests/test_trade_journal_annotation.py).
+  - Patched `TestBitcoinAIIntegration.setup_method` in [tests/test_bitcoin_scenarios.py](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin_scenarios.py) to stub the new AI helpers (MagicMock returns Mock for new methods otherwise).
+  - Full suite: `347 passed`. 14 pre-existing failures (pytest-asyncio not installed in env + working-tree `max_position_size: 25` clash with stale weather kelly test) confirmed pre-existing via stash-and-rerun.
+- **Active state at end of session:**
+  - ON: shadow pipeline, post-trade annotation (with correlation check), session summary (all four narrators).
+  - OFF: pre-entry veto (intentional — flip after calibration data accumulates).
+- **Failure criteria → revert/disable:**
+  - If `_annotate_entry_async` exceptions bubble into the execution path, disable `ai.post_trade_annotation.enabled` immediately. The wrapper has try/except around the entire body, so this should not be possible — but watch journal `ENTRY` write timestamps vs `add_position` for any divergence.
+  - If shadow pipeline budget exhaustion starts erroring scans, lower `shadow_pipeline.max_calls_per_scan` to 0 (effectively off without flipping the master).
+  - If session summary appends nonsense, set individual `include_*` toggles false to isolate the bad narrator.
 
 ## 2026-05-07 — Dashboard wiring sweep for stop-loss knob, exit-reason visibility, and bankroll-state clarity
 

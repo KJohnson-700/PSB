@@ -168,6 +168,8 @@ strategies:
     min_edge_5m: 0.08             # 5m: raised from 0.05 (2026-04-24) — NEUTRAL HTF 5m path has zero backtest coverage; 0.05 too loose
     min_edge_15m_neutral: 0.12    # 2026-05-09 audit: BTC 15m NEUTRAL quant-only was low-conf negative; force AI/veto or skip
     neutral_15m_min_quant_confidence: 0.58  # jmazzini-style composite guard: low-conf neutral 15m must get AI confirmation
+    neutral_15m_requires_shadow_portfolio: true
+    neutral_15m_min_composite_score: 0.68
     neutral_rsi_min: 45.0         # 2026-05-08 live audit: RSI 45-55 was 25% WR / -$14.12
     neutral_rsi_max: 55.0
     neutral_rsi_extra_min_edge: 0.02
@@ -311,10 +313,16 @@ strategies:
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
+    buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
     use_ai_updown: true          # Re-enabled: lag signal stripped, AI now safe to use on updown
     ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
+    oracle_max_basis_bps: 10.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -431,10 +439,13 @@ strategies:
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
-    min_edge_5m: 0.085            # raised from 0.07 (2026-05-06) — 5m bleed mitigation; tighten marginal admissions
+    min_edge_5m: 0.10             # raised from 0.085 (2026-05-08) — current ETH 5m 33% WR / -$2.23
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11 to recover 15m participation
     neutral_macro_require_spike_or_lag: true  # blocks NEUTRAL entries on stale alt-1H without catalyst (was false/unset)
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    buy_no_ltf_override_enabled: true         # allow SHORT/BUY_NO in bullish macro only when 15m+5m alt tape is bearish
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
     # ETH side resolution:
     # - btc: legacy BTC HTF decides side
     # - hybrid: strong override when market 15m signal and BTC 4h proxy both agree
@@ -456,6 +467,8 @@ strategies:
     max_ai_calls_per_scan: 12
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -463,6 +476,7 @@ strategies:
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; ETH
+    calibration_size_multiplier_5m: 0.40  # keep ETH 5m active for calibration, but below normal risk until sample matures
     entry_price_min: 0.42
     entry_price_max: 0.58
     min_positive_m5_adj_5m: 0.03  # was 0.04 — allow +0.02 MACD>signal tier when other gates pass
@@ -575,6 +589,9 @@ strategies:
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -583,6 +600,13 @@ strategies:
     max_ai_calls_per_scan: 12
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
+    oracle_max_basis_bps: 12.0
+    require_ai_decision_15m_buy_yes: true
+    require_shadow_portfolio_15m_buy_yes: true
+    min_composite_score_15m_buy_yes: 0.70
+    calibration_size_multiplier_15m_buy_yes: 0.35
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -658,7 +682,7 @@ strategies:
     use_ai_updown: true
     min_liquidity: 1000
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
-    min_edge_5m: 0.07            # Lowered from 0.09 — flat BTC markets produce m5_adj=0.04 which can't reach 0.09
+    min_edge_5m: 0.085           # raised from 0.07 (2026-05-08) — XRP 5m remains negative in live and stored backtest data
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
@@ -666,11 +690,15 @@ strategies:
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
+    oracle_max_basis_bps: 10.0
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
     ai_entry_window_5m_min: 1.5
     ai_entry_window_5m_max: 2.5
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; XRP
+    calibration_size_multiplier_5m: 0.30  # keep XRP 5m diagnostic only until it has a positive live cohort
     entry_price_min: 0.42
     entry_price_max: 0.58
     entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES
@@ -679,6 +707,9 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -735,6 +766,12 @@ strategies:
         BULL: 1.0
         RANGE: 0.7
         BEAR: 0.5
+
+updown_composite:
+  default_min_score: 0.62
+  btc_neutral_15m_min_score: 0.68
+  hype_15m_buy_yes_min_score: 0.70
+  low_confidence_min_score: 0.66
 
 # ============================================
 # AI CONFIGURATION
@@ -810,10 +847,21 @@ ai:
   decision_layer:
     enabled: true
     min_confidence: 0.60
+    hard_skip_if_unavailable_on_enforced: true
     use_shadow_portfolio: false  # direct AI is enforced now; shadow portfolio remains optional due latency/cost
-    enforce_on:
-      - low_confidence_neutral_15m
-      - marginal
+    enforced_lanes:
+      bitcoin:
+        - neutral_15m
+        - marginal
+      sol_macro:
+        - marginal
+      eth_macro:
+        - marginal
+      hype_macro:
+        - marginal
+        - 15m_buy_yes
+      xrp_macro:
+        - marginal
   # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.
   shadow_pipeline:
     enabled: true
@@ -962,9 +1010,9 @@ backtest:
   min_edge_sol_15m:  0.09   # matches strategies.sol_macro.min_edge
   min_edge_sol_5m:   0.085  # matches strategies.sol_macro.min_edge_5m (raised 2026-05-06)
   min_edge_eth_15m:  0.09   # matches strategies.eth_macro.min_edge
-  min_edge_eth_5m:   0.085  # matches strategies.eth_macro.min_edge_5m (raised 2026-05-06)
+  min_edge_eth_5m:   0.10   # matches strategies.eth_macro.min_edge_5m (raised 2026-05-08)
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
-  min_edge_xrp_5m:   0.07   # matches strategies.xrp_macro.min_edge_5m (lowered 2026-04-30)
+  min_edge_xrp_5m:   0.085  # matches strategies.xrp_macro.min_edge_5m (raised 2026-05-08)
   min_edge_hype_15m: 0.09   # matches strategies.hype_macro.min_edge
   min_edge_hype_5m:  0.09   # matches strategies.hype_macro.min_edge_5m
 

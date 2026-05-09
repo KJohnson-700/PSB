@@ -14,6 +14,57 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-05-09 — Oracle-first + composite score gate for XRP up/down
+
+- **What changed:** `xrp_macro` inherits the shared oracle-first and composite up/down gate, with `require_oracle_for_updown=true`, `oracle_max_age_sec=180`, and `oracle_max_basis_bps=10.0`.
+- **Why:** XRP short-window entries should not size when the oracle reference is missing/stale or materially off exchange spot.
+- **Hypothesis:** Weak XRP entries become explicit oracle/composite skips, while remaining trades have cleaner resolution-source alignment.
+- **Expected outcome:** XRP skip telemetry includes oracle freshness/basis and composite component values whenever this gate blocks.
+- **Actual outcome:** `pending` (need ≥15 closed XRP trades after this change).
+- **Status:** `pending`
+
+### 2026-05-08 — Tighten XRP 5m diagnostic lane
+
+- **What changed:** Raised [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.xrp_macro.min_edge_5m` from `0.07` to `0.085`, mirrored `backtest.min_edge_xrp_5m` to `0.085`, and reduced `strategies.xrp_macro.calibration_size_multiplier_5m` to `0.30`.
+- **Why:** Current paper session `test_20260508_050455` showed `xrp_macro` at `8` closes, `37.5%` WR, `-$1.95`; the XRP 5m slice was `2` closes, `0%` WR, `-$1.98`, and the latest stored `XRP 5m` backtest remains strongly negative. The lane should remain diagnostic, not normal risk.
+- **Hypothesis:** A higher XRP 5m edge floor and smaller 5m size should reduce weak short-window XRP entries while keeping limited data collection alive for future BUY_YES/BUY_NO calibration.
+- **Expected outcome:** XRP 5m entries should be rarer and smaller; XRP total PnL should be less exposed to 5m drawdown while 15m continues to provide the primary sample.
+- **Actual outcome:** `pending` (need ≥15 closed XRP trades after session `test_20260508_151000` restart).
+- **Status:** `pending`
+
+### 2026-05-08 — XRP 5m calibration-size cap while keeping lane active
+
+- **What changed:** Added `strategies.xrp_macro.calibration_size_multiplier_5m=0.60` in [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). XRP inherits the 5m calibration multiplier from [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py). Added [`scripts/journal_lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/scripts/journal_lane_calibration.py) to report closed trades by `strategy|window|action`.
+- **Why:** XRP 5m should stay active for calibration instead of being disabled/shadow-only, but latest local lane report on `test_20260508_050455` showed `xrp_macro|5m|BUY_YES` at `2` closes, `-$1.98`, `0.0%` WR.
+- **Hypothesis:** Smaller XRP 5m stakes will preserve data collection for both YES/NO calibration while limiting loss impact from the still-unproven 5m lane.
+- **Expected outcome:** XRP 5m continues to collect closed-trade samples, with downside reduced until the lane has enough post-change data to judge gates and BUY_NO settings.
+- **Actual outcome:** `pending` (need ≥15 closed XRP 5m trades after this change).
+- **Status:** `pending`
+
+### 2026-05-07 — Full intervention: restore bearish-1H BUY_YES suppression and tighten XRP 5m catalyst gate
+
+- **What changed:**
+  - [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml)
+  - `strategies.xrp_macro.enforce_alt_1h_alignment: false -> true`
+  - `strategies.xrp_macro.require_btc_catalyst_5m: false -> true`
+- **Why:** In the active failure run `test_20260507_035930`, all 4 XRP closes were `15m` `BUY_YES`; 3 lost on `updown_time_stop` for `-$7.40` total and every entry was taken with `ALT_HTF=BEARISH`. The bearish-1H suppression branch in the shared `SolMacroStrategy` only blocks `BUY_YES` longs while still allowing `BUY_NO` diagnostically, so restoring it is a cleaner fix than shrinking price bands further. Separately, latest `XRP 5m` backtest remains strongly negative (`770` trades / `-492.825`), so unstimulated 5m entries do not deserve relaxed admission.
+- **Hypothesis:** Restoring bearish-1H long suppression should stop XRP from repeatedly buying into a bearish alt context while preserving the BUY_NO path the prior forensic work wanted to reopen. Requiring a BTC catalyst on `5m` prevents the worst short-window path from re-expanding while `15m` is re-evaluated.
+- **Expected outcome:** Fewer XRP `BUY_YES` longs in bearish-alt conditions; higher share of valid BUY_NO participation when the market side flips; no 5m expansion unless there is an actual BTC impulse/lag catalyst.
+- **Actual outcome:** `pending` (current live process has not been restarted onto this config yet).
+- **Status:** `pending`
+
+### 2026-05-06 — Candidate B revert: restore tighter time-stop / exit window (commit `d6da79c`)
+
+- **What changed:** [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `trading.exit_rules.updown_overrides.xrp_macro`:
+  - `updown_stop_cents`: 0.04 → **0.03** (back to global parity)
+  - `updown_exit_window_mins`: 1.5 → **2.25** (back to global parity)
+- **Why:** Live 48-72h slice showed XRP 15m at 66.7% WR / +$3.55 net with -$28.47 of time_stop loss across 9 trades (0% WR on time_stop) wiping ~70% of take_profit gains. Candidate B (deployed earlier) had widened the stop and shortened the exit window — the wrong direction for a strategy bleeding on time-stop. The earlier "0.09 → 0.11 min_edge" recommendation from the forensic audit was withdrawn after live data showed 0.09–0.11 bucket too thin (3 trades) and ≥0.11 bucket already at 67% WR / +$4.10 (no edge-tightening warranted).
+- **Hypothesis:** Tighter stop (3¢) + longer adverse-check window (2.25m) catches losers earlier and gives take_profit more time to hit. Brings XRP back to the same exit profile as HYPE/SOL/BTC for clean attribution baseline.
+- **Expected outcome:** XRP 15m avg time-stop loss compresses from -$3.16 (baseline) toward < -$2.50; take_profit count stable or up.
+- **Actual outcome:** `pending` (need ≥10 XRP 15m closed trades post-change).
+- **Status:** `pending`
+- **Failure criteria → escalate:** if avg time-stop loss unchanged or worse after 24h, the lever isn't here — investigate exit-routing in `sol_macro.py` `updown_time_stop` path.
+
 ### 2026-05-06 — Candidate C rollout (15m BUY_YES high-price tightening)
 
 - **What changed:** Added 15m BUY_YES-specific up/down price cap support in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) via optional config key `entry_price_max_15m_buy_yes` (defaults to existing `entry_price_max` behavior). Set [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.xrp_macro.entry_price_max_15m_buy_yes=0.55` (from implicit `0.58`).
@@ -105,6 +156,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 - **Status:** `pending`
 
 ## Review sessions
+
+### 2026-05-07 — Active failure run read: XRP is a 15m BUY_YES problem, not a broad lane-wide mystery
+
+- **Session:** `test_20260507_035930`
+- **Closed trades (`xrp_macro`):** `4`
+- **Net PnL:** `-$6.55`
+- **Exit shape:** `3x updown_time_stop`, `1x take_profit`
+- **Entry shape:** all `15m` `BUY_YES`, all with `ALT_HTF=BEARISH`, entry prices `0.435`, `0.495`, `0.50`, `0.51`
+- **Read:** this is the cleanest case for restoring shared bearish-1H `BUY_YES` suppression. The live problem is not that XRP trades too often; it is that it keeps taking long-side 15m entries against its own bearish alt context.
 
 ### 2026-05-06 — 1h follow-up after Candidate A/B/C rollout
 
