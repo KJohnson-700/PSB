@@ -78,6 +78,49 @@
         .crypto-meta-four>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .signal-gates-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
         .signal-gates-grid>div{min-width:0;overflow:hidden}
+        /* Live crypto cards: full readouts (no ellipsis); JS may add horizontal ticker if still too wide */
+        .crypto-grid .crypto-hero-six .hero-item{align-self:stretch}
+        .crypto-grid .crypto-hero-six .hero-item .hero-val{
+            white-space:normal;
+            overflow:visible;
+            text-overflow:clip;
+            line-height:1.18;
+            word-break:break-word;
+        }
+        .crypto-grid .crypto-hero-six .hero-item .hero-lbl{
+            white-space:normal;
+            overflow:visible;
+            text-overflow:clip;
+            line-height:1.2;
+        }
+        .crypto-grid .crypto-meta-four>div{
+            white-space:normal;
+            overflow:visible;
+            text-overflow:clip;
+            line-height:1.35;
+            word-break:break-word;
+        }
+        .crypto-grid .signal-gates-grid>div{overflow:visible}
+        .crypto-grid .signal-gates-grid [id$="-status-badge"]{
+            word-break:break-word;
+            overflow-wrap:anywhere;
+            line-height:1.25;
+        }
+        .crypto-grid .signal-gates-grid [id$="-status-detail"],
+        .crypto-grid .signal-gates-grid [id$="-wr"]{
+            word-break:break-word;
+            overflow-wrap:anywhere;
+        }
+        .dash-ticker-host{display:block;min-width:0;max-width:100%;overflow:hidden}
+        .dash-ticker-host .dash-ticker-track{display:block;width:100%;overflow:hidden}
+        .dash-ticker-host .dash-ticker-el{display:inline-block;white-space:nowrap;will-change:transform}
+        @keyframes dashTickerSlow{
+            0%,10%{transform:translateX(0)}
+            90%,100%{transform:translateX(var(--dash-ticker-shift,0px))}
+        }
+        @media (prefers-reduced-motion:reduce){
+            .dash-ticker-host .dash-ticker-el{animation:none!important;transform:none!important}
+        }
         .session-history-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
         .session-history-table{width:100%;min-width:1180px;border-collapse:collapse;font-size:0.76rem;table-layout:auto}
         .session-history-table th,.session-history-table td{padding:5px 8px;white-space:nowrap;vertical-align:middle}
@@ -141,11 +184,9 @@
             font-size:0.74rem;
             color:var(--text-muted);
             font-family:'IBM Plex Mono',monospace;
-            max-height:58px;
-            overflow-y:auto;
-            overflow-x:hidden;
-            text-overflow:ellipsis;
-            white-space:nowrap;
+            overflow:visible;
+            white-space:normal;
+            line-height:1.45;
         }
         .ops-mini-grid{display:grid;grid-template-columns:1.15fr 1.35fr 1.15fr;gap:8px;margin:4px 0 10px}
         .ops-mini-grid .ops-mini{margin:0;min-width:0}
@@ -153,7 +194,8 @@
         .gate-chip{
             display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.09);
             border-radius:999px;padding:2px 7px;background:rgba(255,255,255,.03);
-            color:var(--tm);font-size:10px;letter-spacing:.02em;white-space:nowrap;
+            color:var(--tm);font-size:10px;letter-spacing:.02em;white-space:normal;
+            min-width:0;max-width:100%;overflow-wrap:anywhere;
         }
         .gate-chip.good{border-color:rgba(0,255,136,.28);color:var(--gr);background:rgba(0,255,136,.06)}
         .gate-chip.warn{border-color:rgba(255,215,0,.26);color:var(--ye);background:rgba(255,215,0,.06)}
@@ -293,6 +335,14 @@
             .crypto-hero-six,.crypto-meta-four{grid-template-columns:1fr}
             #status-hero{grid-template-columns:1fr}
         }
+        @media (max-height:760px) and (min-width:901px){
+            .ops-mini-grid{grid-template-columns:1fr 1.8fr 1fr;gap:6px}
+            .ops-mini{padding:6px 8px;margin-bottom:8px}
+            .ops-mini-head{font-size:9px;margin-bottom:4px}
+            .ops-mini-body{font-size:0.68rem;line-height:1.35}
+            .decision-gate-line{gap:4px;line-height:1.35}
+            .gate-chip{font-size:9px;padding:1px 6px}
+        }
     </style>
     <!-- TradingView Lightweight Charts for BTC panel -->
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -332,12 +382,19 @@
         html.dashboard-fullscreen .metric-box .label{font-size:10px}
         html.dashboard-fullscreen h2{font-size:11px}
         html.dashboard-fullscreen h3{font-size:12px}
-        html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:80px;white-space:normal;line-height:1.45}
+        html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:none;white-space:normal;line-height:1.45}
         html.dashboard-fullscreen .signal-row{font-size:13px}
         html.dashboard-fullscreen .signal-gates-grid>div{padding:12px}
         html.dashboard-fullscreen table{font-size:13px}
         html.dashboard-fullscreen th{font-size:10px}
         html.dashboard-fullscreen td{font-size:12px}
+        /* Crypto KPI rows: fullscreen hero rules above target Command Center density; keep alt/BTC tiles shorter. */
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item{padding:14px 14px;min-height:0}
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-val{
+            font-size:clamp(15px,1.15vw,21px);
+            line-height:1.14;
+        }
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl{font-size:9px}
     </style>
 </head>
 <body>
@@ -1295,6 +1352,9 @@ function _runDashboardRelayout() {
         if (typeof _scheduleCanvasChartRedraw === 'function') _scheduleCanvasChartRedraw();
     } catch (e) {}
     try {
+        if (typeof dashRefreshCryptoLiveTickers === 'function') dashRefreshCryptoLiveTickers();
+    } catch (e) {}
+    try {
         if (window.AOS && typeof window.AOS.refreshHard === 'function') {
             window.AOS.refreshHard();
         } else if (window.AOS && typeof window.AOS.refresh === 'function') {
@@ -1652,9 +1712,13 @@ function formatDecisionGateDigest(dg) {
     const chips = [
         _gateChip(dg.enabled ? `AI enforced ${enforcedCount}` : 'AI gate off', dg.enabled ? 'ai' : 'warn'),
         _gateChip(dg.hard_skip_if_unavailable ? 'hard-skip on' : 'fallback allowed', dg.hard_skip_if_unavailable ? 'good' : 'warn'),
-        _gateChip(`floors ${floors.default_min_score ?? '?'} / BTC ${floors.btc_neutral_15m_min_score ?? '?'} / HYPE ${floors.hype_15m_buy_yes_min_score ?? '?'}`, 'good'),
+        _gateChip(`floor default ${floors.default_min_score ?? '?'}`, 'good'),
+        _gateChip(`BTC floor ${floors.btc_neutral_15m_min_score ?? '?'}`, 'good'),
+        _gateChip(`HYPE floor ${floors.hype_15m_buy_yes_min_score ?? '?'}`, 'good'),
     ];
-    if (oracleLanes.length) chips.push(_gateChip(`oracle ${oracleLanes.slice(0, 4).join(' ')}`, 'good'));
+    if (oracleLanes.length) {
+        for (const lane of oracleLanes.slice(0, 4)) chips.push(_gateChip(`oracle ${lane}`, 'good'));
+    }
     const hype = lanes.hype_macro || {};
     if (hype.size_multiplier_15m_buy_yes) chips.push(_gateChip(`HYPE 15m ${hype.size_multiplier_15m_buy_yes}x`, 'warn'));
     if (blockParts.length) chips.push(_gateChip(`blocks ${blockParts.slice(0, 3).join(' · ')}`, 'hot'));
@@ -3380,6 +3444,85 @@ async function resetPaperSession() {
     }
 }
 
+/** Measure nowrap width of element HTML (for overflow vs narrow crypto tiles). */
+function dashMeasureHtmlNoWrapWidth(el) {
+    const cs = getComputedStyle(el);
+    const probe = document.createElement('div');
+    probe.style.cssText = [
+        'position:fixed', 'left:-99999px', 'top:0', 'visibility:hidden', 'pointer-events:none', 'z-index:-1',
+        'white-space:nowrap', 'display:inline-block', 'box-sizing:border-box',
+        'font-family:' + cs.fontFamily,
+        'font-size:' + cs.fontSize,
+        'font-weight:' + cs.fontWeight,
+        'letter-spacing:' + cs.letterSpacing,
+        'font-variant-numeric:' + cs.fontVariantNumeric,
+    ].join(';');
+    probe.innerHTML = el.innerHTML;
+    document.body.appendChild(probe);
+    const w = probe.offsetWidth;
+    document.body.removeChild(probe);
+    return w;
+}
+
+/** Slow horizontal reveal when a crypto tile line is still wider than its box (respects reduced motion). */
+function dashApplySlowTickerIfNeeded(el) {
+    if (!el || !el.isConnected) return;
+    if (!el.closest('.crypto-grid')) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    let rawHtml = el.innerHTML;
+    if (el.classList.contains('dash-ticker-host')) {
+        const innerKeep = el.querySelector('.dash-ticker-el');
+        rawHtml = innerKeep ? innerKeep.innerHTML : rawHtml;
+        el.classList.remove('dash-ticker-host');
+    }
+    el.innerHTML = rawHtml;
+
+    const plain = (el.textContent || '').trim();
+    if (!plain || plain === '-') return;
+
+    const cw = el.clientWidth;
+    if (cw < 12) return;
+
+    if (dashMeasureHtmlNoWrapWidth(el) <= cw + 3) return;
+
+    el.classList.add('dash-ticker-host');
+    el.innerHTML = '<span class="dash-ticker-track"><span class="dash-ticker-el">' + rawHtml + '</span></span>';
+    const track = el.querySelector('.dash-ticker-track');
+    const inner = el.querySelector('.dash-ticker-el');
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            if (!inner || !track || !el.isConnected) return;
+            const over = Math.max(0, inner.scrollWidth - track.clientWidth);
+            if (over <= 2) {
+                el.innerHTML = rawHtml;
+                el.classList.remove('dash-ticker-host');
+                return;
+            }
+            inner.style.setProperty('--dash-ticker-shift', (-over) + 'px');
+            const pxPerSec = 14;
+            const dur = Math.min(48, Math.max(14, over / pxPerSec));
+            inner.style.animation = 'dashTickerSlow ' + dur + 's ease-in-out infinite alternate';
+        });
+    });
+}
+
+function dashRefreshCryptoLiveTickers() {
+    document.querySelectorAll('.crypto-grid .crypto-hero-six .hero-val').forEach(dashApplySlowTickerIfNeeded);
+    document.querySelectorAll('.crypto-grid .signal-gates-grid [id$="-status-badge"]').forEach(dashApplySlowTickerIfNeeded);
+    document.querySelectorAll('.crypto-grid .signal-gates-grid [id$="-wr"]').forEach(dashApplySlowTickerIfNeeded);
+}
+
+/** LONG/SHORT only — API uses NONE / NA / etc. when there is no directional lag leg (all alt lag panels). */
+function dashNormalizeLagDirection(raw) {
+    if (raw == null) return '';
+    const s = String(raw).trim();
+    if (!s) return '';
+    const u = s.toUpperCase().replace(/\s+/g, '');
+    if (u === 'NONE' || u === 'NULL' || u === 'N/A' || u === 'NA' || u === 'UNKNOWN' || u === '-') return '';
+    return s;
+}
+
 // ─── BTC LIVE ANALYSIS ──────────────────────────────────────
 function updateBTCAnalysis(d) {
     if (!d || d.error) {
@@ -3394,6 +3537,7 @@ function updateBTCAnalysis(d) {
             const el = document.getElementById(id);
             if (el) el.innerHTML = '-';
         });
+        dashRefreshCryptoLiveTickers();
         return;
     }
     const p = d.price || 0;
@@ -3415,6 +3559,7 @@ function updateBTCAnalysis(d) {
     document.getElementById('btc-vp-poc').textContent = d.vp_poc ? '$'+d.vp_poc.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
     document.getElementById('btc-vp-vah').textContent = d.vp_vah ? '$'+d.vp_vah.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
     document.getElementById('btc-vp-val').textContent = d.vp_val ? '$'+d.vp_val.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
+    dashRefreshCryptoLiveTickers();
 }
 
 // ─── SOL / ETH / XRP LIVE ANALYSIS (alt vs BTC, same API shape) ──
@@ -3475,10 +3620,13 @@ function updateAltLagAnalysis(d, prefix) {
     const corrEl = document.getElementById(prefix + '-corr');
     if (corrEl) corrEl.innerHTML = `<span style="color:${corr>0.7?'var(--green)':corr<0.4?'var(--red)':'var(--yellow)'}">${corr.toFixed(2)}</span>`;
     const lagOpp = d.lag_opportunity;
+    const lagDirDisp = dashNormalizeLagDirection(d.lag_direction);
     const lagEl = document.getElementById(prefix + '-lag');
-    if (lagEl) lagEl.innerHTML = lagOpp
-        ? `<span style="color:var(--green);font-weight:700;">${d.lag_direction} +${(d.lag_magnitude||0).toFixed(2)}%</span>`
-        : '<span style="color:var(--text-muted);">None</span>';
+    if (lagEl) lagEl.innerHTML = lagOpp && lagDirDisp
+        ? `<span style="color:var(--green);font-weight:700;">${lagDirDisp} +${(d.lag_magnitude||0).toFixed(2)}%</span>`
+        : lagOpp && !lagDirDisp
+            ? `<span style="color:var(--green);font-weight:700;">Opp +${(d.lag_magnitude||0).toFixed(2)}%</span>`
+            : '<span style="color:var(--text-muted);">None</span>';
     const btcMv = document.getElementById(prefix + '-btc-move');
     if (btcMv) btcMv.textContent = (d.btc_move_5m || 0).toFixed(2) + '%';
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
@@ -3490,7 +3638,7 @@ function updateAltLagAnalysis(d, prefix) {
     const lagMacroHero = document.getElementById(prefix + '-macro');
     if (lagMacroHero) {
         const opp = !!d.lag_opportunity;
-        const dir = d.lag_direction != null && d.lag_direction !== '' ? String(d.lag_direction) : '';
+        const dir = dashNormalizeLagDirection(d.lag_direction);
         const mag = Number(d.lag_magnitude ?? 0);
         if (opp && dir) {
             lagMacroHero.textContent = `${dir} ${mag >= 0 ? '+' : ''}${mag.toFixed(2)}%`;
@@ -3500,6 +3648,7 @@ function updateAltLagAnalysis(d, prefix) {
             lagMacroHero.textContent = opp ? `Opp ~${mag.toFixed(2)}%` : 'No lag opp';
         }
     }
+    dashRefreshCryptoLiveTickers();
 }
 
 function updateSOLAnalysis(d) { updateAltLagAnalysis(d, 'sol'); }
@@ -4159,6 +4308,7 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
+    dashRefreshCryptoLiveTickers();
     syncCryptoGateSummaryBar();
 }
 

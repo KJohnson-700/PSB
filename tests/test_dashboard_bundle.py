@@ -63,6 +63,43 @@ def test_command_center_includes_ai_pipeline_digest_stub():
     assert "function updateCommandCenterDigests" in html
 
 
+def test_command_center_decision_gates_do_not_trap_scroll():
+    html = INDEX.read_text(encoding="utf-8")
+    m = re.search(r"\.ops-mini-body\s*\{([^}]+)\}", html)
+    assert m, "ops mini body style missing"
+    body_rule = m.group(1)
+    assert "overflow-y:auto" not in body_rule.replace(" ", "")
+    assert "max-height" not in body_rule
+    assert "overflow:visible" in body_rule.replace(" ", "")
+    assert "@media (max-height:760px)" in html
+
+
+def test_command_center_decision_gate_chips_are_atomic():
+    html = INDEX.read_text(encoding="utf-8")
+    m = re.search(r"function formatDecisionGateDigest\(dg\) \{([\s\S]*?)\n\}", html)
+    assert m, "decision gate formatter missing"
+    formatter = m.group(1)
+    assert "oracle ${oracleLanes.slice" not in formatter
+    assert "oracleLanes.slice(0, 4).join" not in formatter
+    assert "floor default" in formatter
+    assert "BTC floor" in formatter
+    assert "HYPE floor" in formatter
+    assert "for (const lane of oracleLanes.slice(0, 4))" in formatter
+    assert "overflow-wrap:anywhere" in html
+
+
+def test_crypto_live_panels_wrap_and_slow_ticker_helpers_exist():
+    html = INDEX.read_text(encoding="utf-8")
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    assert ".crypto-grid .crypto-hero-six .hero-item .hero-val{" in html
+    assert "@keyframes dashTickerSlow" in html
+    assert "function dashRefreshCryptoLiveTickers()" in html
+    assert "function dashApplySlowTickerIfNeeded(el)" in html
+    assert "dashRefreshCryptoLiveTickers();" in html
+    assert "padding:14px 14px;min-height:0" in html
+    assert "2026-05-09-dash-fs-crypto-tile-density" in server
+
+
 def test_command_center_trades_card_uses_daily_trades_not_session_fills():
     html = INDEX.read_text(encoding="utf-8")
     assert "Trades today (UTC)" in html
