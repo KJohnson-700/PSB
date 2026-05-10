@@ -63,6 +63,30 @@ def test_build_underperformance_report_flags_exit_and_suppression():
     assert report["overall"]["recent_buy_yes_time_stop_loss_share_of_negative_pnl"] == 1.0
 
 
+def test_underperformance_report_counts_updown_stop_loss_as_exit_damage():
+    recent_rows = [
+        ClosedTrade("recent", "1", "bitcoin", "BUY_YES", -2.0, "updown_stop_loss", 0.10, 0.50, "15m", "BULLISH"),
+        ClosedTrade("recent", "2", "bitcoin", "BUY_YES", -1.0, "updown_time_stop", 0.10, 0.50, "15m", "BULLISH"),
+        ClosedTrade("recent", "3", "bitcoin", "BUY_YES", 1.0, "take_profit", 0.10, 0.50, "15m", "BULLISH"),
+    ]
+
+    report = build_underperformance_report(
+        baseline_rows=[],
+        recent_rows=recent_rows,
+        skip_rows=[],
+        backtests={},
+        baseline_sessions=[],
+        recent_sessions=["recent"],
+    )
+
+    recent_mix = report["overall"]["recent_side_mix"]["bitcoin"]
+    assert recent_mix["updown_time_stop_n"] == 1
+    assert recent_mix["updown_stop_loss_n"] == 1
+    assert recent_mix["updown_exit_damage_n"] == 2
+    assert report["overall"]["recent_buy_yes_time_stop_loss_share_of_negative_pnl"] == 0.3333
+    assert report["overall"]["recent_buy_yes_exit_damage_loss_share_of_negative_pnl"] == 1.0
+
+
 def test_diagnose_script_writes_outputs(tmp_path, monkeypatch):
     repo_root = tmp_path
     paper_root = repo_root / "data" / "paper_trades"

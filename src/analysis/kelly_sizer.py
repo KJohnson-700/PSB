@@ -86,6 +86,9 @@ class KellySizer:
 
         global_frac = float(trading_cfg.get("kelly_fraction", 0.25))
         self._global_kelly_fraction = global_frac
+        self._min_position = float(trading_cfg.get("default_position_size", 1.0) or 1.0)
+        self._max_position = float(trading_cfg.get("max_position_size", 0.0) or 0.0)
+        self._max_position_pct = float(trading_cfg.get("max_exposure_per_trade", 0.05) or 0.05)
 
         self._recent_outcomes: Dict[str, list] = {s: [] for s in self._defaults}
         self._recent_outcomes_by_window: Dict[tuple, list] = {}
@@ -100,6 +103,16 @@ class KellySizer:
                 cfg.base_kelly_fraction = float(strat_cfg["kelly_fraction"])
         self._global_kelly_fraction = float(
             trading_cfg.get("kelly_fraction", self._global_kelly_fraction)
+        )
+        self._min_position = float(
+            trading_cfg.get("default_position_size", self._min_position) or self._min_position
+        )
+        self._max_position = float(
+            trading_cfg.get("max_position_size", self._max_position) or self._max_position
+        )
+        self._max_position_pct = float(
+            trading_cfg.get("max_exposure_per_trade", self._max_position_pct)
+            or self._max_position_pct
         )
 
     def _window_key(self, strategy: str, window: str) -> tuple:
@@ -229,11 +242,14 @@ class KellySizer:
 
         base_size = edge * frac * bankroll
 
-        max_pct = 0.10
-        cap = bankroll * max_pct
-        size = min(base_size, cap)
+        cap = bankroll * self._max_position_pct
+        if self._max_position > 0:
+            cap = min(cap, self._max_position)
+        if cap <= 0:
+            return 0.0
+        size = min(max(base_size, self._min_position), cap)
 
-        return max(1.0, round(size, 2))
+        return round(size, 2)
 
     def size_binary_position(
         self,
@@ -257,9 +273,13 @@ class KellySizer:
 
         wager_fraction = full_kelly * frac
         base_size = bankroll * wager_fraction
-        cap = bankroll * 0.05
-        size = min(base_size, cap)
-        return max(1.0, round(size, 2))
+        cap = bankroll * self._max_position_pct
+        if self._max_position > 0:
+            cap = min(cap, self._max_position)
+        if cap <= 0:
+            return 0.0
+        size = min(max(base_size, self._min_position), cap)
+        return round(size, 2)
 
     def get_asset_config(self, strategy: str) -> Optional[AssetKellyConfig]:
         """Return Kelly config for a strategy, or None."""

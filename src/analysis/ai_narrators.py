@@ -40,10 +40,17 @@ async def _ai_narrate(
     if not ai_agent or not ai_agent.is_available():
         return ""
     try:
+        diagnostic_body = (
+            "This is a diagnostic note, not a tradable prediction market. "
+            "Do not mention market price, implied odds, BUY/SELL/HOLD, or "
+            "whether a diagnostic prompt is undervalued. Only summarize the "
+            "operator action implied by the supplied data.\n\n"
+            f"{body}"
+        )
         result = await asyncio.wait_for(
             ai_agent.analyze_market(
                 market_question=title,
-                market_description=body,
+                market_description=diagnostic_body,
                 current_yes_price=0.5,
                 market_id=f"narrator::{strategy_hint}",
                 strategy_hint=strategy_hint,
@@ -347,7 +354,11 @@ def load_shadow_records(shadow_jsonl: Path, max_records: int = 500) -> List[Dict
 
 
 def load_closed_trades_from_summary(summary_path: Path) -> List[Dict[str, Any]]:
-    """Extract the closed_trades list from a TradeJournal summary.json."""
+    """Extract closed trades for calibration from a TradeJournal session.
+
+    Older summaries may contain a ``closed_trades`` list. Current summaries are
+    aggregate-only, so fall back to sibling ``entries.jsonl`` EXIT records.
+    """
     if not summary_path.exists():
         return []
     try:
@@ -356,7 +367,39 @@ def load_closed_trades_from_summary(summary_path: Path) -> List[Dict[str, Any]]:
     except (OSError, json.JSONDecodeError):
         return []
     closed = data.get("closed_trades") or []
-    return [c for c in closed if isinstance(c, dict)]
+    if closed:
+        return [c for c in closed if isinstance(c, dict)]
+
+    entries_path = summary_path.with_name("entries.jsonl")
+    if not entries_path.exists():
+        return []
+
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(entries_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("event") != "EXIT":
+                    continue
+                out.append(
+                    {
+                        "market_id": rec.get("market_id"),
+                        "trade_id": rec.get("trade_id"),
+                        "strategy": rec.get("strategy"),
+                        "pnl": rec.get("pnl", 0.0),
+                        "reason": rec.get("reason"),
+                        "timestamp": rec.get("timestamp"),
+                    }
+                )
+    except OSError:
+        return []
+    return out
 
 
 def aggregate_skip_exit_distributions(

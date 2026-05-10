@@ -15,6 +15,7 @@ from src.analysis.ai_narrators import (
     _join_shadow_with_outcomes,
     detect_calibration_drift,
     explain_strategy_conflict,
+    load_closed_trades_from_summary,
     summarize_skip_exit_reasons,
     summarize_underperformance,
 )
@@ -147,6 +148,30 @@ def test_calibration_drift_calls_ai_when_enough_paired_records() -> None:
     out = asyncio.run(detect_calibration_drift(shadow, closed, agent, min_paired_records=5))
     assert "over-confident" in out
     agent.analyze_market.assert_awaited_once()
+
+
+def test_load_closed_trades_from_summary_falls_back_to_entries_jsonl(tmp_path) -> None:
+    summary = tmp_path / "summary.json"
+    summary.write_text('{"total_exits": 1}', encoding="utf-8")
+    entries = tmp_path / "entries.jsonl"
+    entries.write_text(
+        '{"event":"ENTRY","market_id":"m1","pnl":0}\n'
+        '{"event":"EXIT","market_id":"m1","trade_id":"t1","strategy":"bitcoin","pnl":1.25,"reason":"take_profit"}\n',
+        encoding="utf-8",
+    )
+
+    closed = load_closed_trades_from_summary(summary)
+
+    assert closed == [
+        {
+            "market_id": "m1",
+            "trade_id": "t1",
+            "strategy": "bitcoin",
+            "pnl": 1.25,
+            "reason": "take_profit",
+            "timestamp": None,
+        }
+    ]
 
 
 # ── strategy conflict ─────────────────────────────────────────────────────

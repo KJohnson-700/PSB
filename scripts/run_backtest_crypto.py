@@ -255,6 +255,7 @@ def _result_to_dict(result: UpdownBacktestResult) -> dict:
                 "size":          t.size,
                 "fill_price":    round(t.fill_price, 4),
                 "outcome":       t.outcome,
+                "exit_reason":   t.exit_reason,
                 "pnl":           round(t.pnl, 4),
                 "asset_open":    round(t.asset_open, 2),
                 "asset_close":   round(t.asset_close, 2),

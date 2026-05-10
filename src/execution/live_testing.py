@@ -91,9 +91,7 @@ class PositionExitManager:
     """
 
     # Strategies whose positions resolve in minutes (5m/15m updown markets).
-    # Stop losses destroy value on these — they convert potential winners into
-    # guaranteed losers because the market temporarily moves against you but
-    # resolves correctly.  Keep take-profit; skip stop-loss.
+    # Use updown-specific exits instead of the long-horizon generic hold rules.
     _CRYPTO_UPDOWN_STRATEGIES = frozenset(
         {
             "bitcoin",

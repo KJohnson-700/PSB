@@ -10,6 +10,18 @@ def _config() -> dict:
         "trading": {
             "default_position_size": 10.0,
             "max_position_size": 15.0,
+            "exit_rules": {
+                "take_profit_pct": 0.15,
+                "updown_stop_loss_pct": 0.20,
+                "updown_stop_cents": 0.03,
+                "updown_exit_window_mins": 2.25,
+                "updown_overrides": {
+                    "bitcoin": {
+                        "updown_stop_cents": 0.03,
+                        "updown_exit_window_mins": 2.25,
+                    }
+                },
+            },
         },
         "exposure": {
             "min_trade_usd": 25.0,
@@ -138,3 +150,183 @@ def test_sol_ltf_confirmation_threshold_matches_live_anti_signal_gate():
 
     assert strength == pytest.approx(0.25)
     assert confirmed is False
+
+
+def test_updown_yes_price_proxy_moves_with_underlying_direction():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+
+    bullish = engine._proxy_yes_price_from_underlying(100.0, 100.25, window_minutes=15)
+    bearish = engine._proxy_yes_price_from_underlying(100.0, 99.75, window_minutes=15)
+
+    assert bullish > 0.50
+    assert bearish < 0.50
+
+
+def test_updown_live_exit_proxy_can_time_stop_near_expiry():
+    cfg = _config()
+    cfg["trading"]["exit_rules"]["updown_stop_loss_pct"] = 0.80
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "close": [100.0, 99.98, 99.95, 99.9, 99.85],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=5),
+        action="BUY_YES",
+        entry_price=0.48,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.48,
+        symbol="BTC",
+        window_minutes=5,
+    )
+
+    assert exit_reason == "updown_time_stop"
+    assert outcome == "LOSS"
+    assert exit_price < 0.48
+    assert pnl < 0
+
+
+def test_updown_live_exit_proxy_can_stop_loss_before_expiry_window():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0, 99.90, 99.85, 99.80, 99.75],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=15),
+        action="BUY_YES",
+        entry_price=0.50,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.50,
+        symbol="BTC",
+        window_minutes=15,
+    )
+
+    assert exit_reason == "updown_stop_loss"
+    assert outcome == "LOSS"
+    assert exit_price < 0.50
+    assert pnl < 0
+
+
+def test_updown_live_exit_proxy_can_take_profit_before_settlement():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0, 100.10, 100.15, 100.20, 100.25],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=15),
+        action="BUY_YES",
+        entry_price=0.50,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.50,
+        symbol="BTC",
+        window_minutes=15,
+    )
+
+    assert exit_reason == "take_profit"
+    assert outcome == "WIN"
+    assert exit_price > 0.50
+    assert pnl > 0
+
+
+def test_updown_live_exit_proxy_falls_back_to_settlement_without_time_stop():
+    cfg = _config()
+    cfg["trading"]["exit_rules"]["take_profit_pct"] = 0.90
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "close": [100.0, 100.02, 100.01, 100.03, 100.04],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=5),
+        action="BUY_YES",
+        entry_price=0.48,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.48,
+        symbol="BTC",
+        window_minutes=5,
+    )
+
+    assert exit_reason == "settlement_yes"
+    assert outcome == "WIN"
+    assert exit_price == 1.0
+    assert pnl > 0
+
+
+def test_eth_backtest_respects_btc_follow_1h_required_flag():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"] = {"btc_follow_1h_required": False}
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+
+    assert engine.eth_btc_follow_1h_required is False
+
+
+def test_btc_15m_edge_uses_1h_recovery_and_timing_bonus():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=101.0,
+        rsi_14=50.0,
+        macd_4h=MACDResult(
+            histogram=10.0,
+            prev_histogram=12.0,
+            histogram_rising=False,
+            above_zero=True,
+        ),
+        macd_1h=MACDResult(
+            histogram=2.0,
+            prev_histogram=1.0,
+            histogram_rising=True,
+        ),
+        macd_15m=MACDResult(
+            macd_line=0.2,
+            signal_line=0.1,
+            histogram=0.03,
+            prev_histogram=0.01,
+            histogram_rising=True,
+            above_zero=True,
+        ),
+    )
+    ta.trend_sabre.trend = 1
+    ta.trend_sabre.ma_value = 100.0
+    ta.candle_momentum.m15_direction = "DRIFT_UP"
+    ta.candle_momentum.m5_direction = "DRIFT_UP"
+    ta.candle_momentum.m15_in_prediction_window = True
+
+    edge, confidence = engine._edge_15m(ta, "LONG", ltf_strength=0.35, htf_bias="BULLISH")
+
+    assert edge > 0.0
+    assert confidence > 0.57

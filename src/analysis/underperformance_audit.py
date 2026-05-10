@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 STRATEGY_ORDER = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+UPDOWN_EXIT_DAMAGE_REASONS = frozenset({"updown_time_stop", "updown_stop_loss"})
 STRATEGY_TO_SYMBOL = {
     "bitcoin": "BTC",
     "sol_macro": "SOL",
@@ -259,6 +260,7 @@ def _side_mix(rows: Iterable[ClosedTrade]) -> Dict[str, Dict[str, Any]]:
         buy_yes_n = sum(1 for r in group if r.action == "BUY_YES")
         tp_n = sum(1 for r in group if r.exit_reason == "take_profit")
         time_stop_n = sum(1 for r in group if r.exit_reason == "updown_time_stop")
+        stop_loss_n = sum(1 for r in group if r.exit_reason == "updown_stop_loss")
         out[strategy] = {
             "total": total,
             "buy_no_n": buy_no_n,
@@ -267,6 +269,8 @@ def _side_mix(rows: Iterable[ClosedTrade]) -> Dict[str, Dict[str, Any]]:
             "buy_yes_share": round(buy_yes_n / total, 4) if total else 0.0,
             "take_profit_n": tp_n,
             "updown_time_stop_n": time_stop_n,
+            "updown_stop_loss_n": stop_loss_n,
+            "updown_exit_damage_n": time_stop_n + stop_loss_n,
         }
     return out
 
@@ -367,6 +371,15 @@ def build_underperformance_report(
             if r.action == "BUY_YES" and r.exit_reason == "updown_time_stop" and r.pnl < 0
         )
     )
+    overall_recent_buy_yes_exit_damage_loss = abs(
+        sum(
+            r.pnl
+            for r in recent_rows
+            if r.action == "BUY_YES"
+            and r.exit_reason in UPDOWN_EXIT_DAMAGE_REASONS
+            and r.pnl < 0
+        )
+    )
 
     per_strategy: Dict[str, Any] = {}
     for strategy in STRATEGY_ORDER:
@@ -385,7 +398,16 @@ def build_underperformance_report(
                 if r.action == "BUY_YES" and r.exit_reason == "updown_time_stop" and r.pnl < 0
             )
         )
-        exit_ratio = round(time_stop_buy_yes_loss / strategy_negative, 4) if strategy_negative else 0.0
+        exit_damage_buy_yes_loss = abs(
+            sum(
+                r.pnl
+                for r in recent_group
+                if r.action == "BUY_YES"
+                and r.exit_reason in UPDOWN_EXIT_DAMAGE_REASONS
+                and r.pnl < 0
+            )
+        )
+        exit_ratio = round(exit_damage_buy_yes_loss / strategy_negative, 4) if strategy_negative else 0.0
         suppression_gap = max(
             0.0,
             float(base_mix.get("buy_no_share") or 0.0)
@@ -406,15 +428,16 @@ def build_underperformance_report(
         backtest_net = _safe_float((backtest_for_hypothesis or {}).get("net_pnl"))
 
         hypotheses: List[Dict[str, Any]] = []
-        if exit_ratio >= 0.35 and time_stop_buy_yes_loss >= 3.0:
+        if exit_ratio >= 0.35 and exit_damage_buy_yes_loss >= 3.0:
             hypotheses.append(
                 {
                     "cause": "exit_path_damage",
                     "priority": 1,
                     "confidence": "high",
                     "evidence": (
-                        f"{strategy} recent BUY_YES updown_time_stop losses were "
-                        f"{time_stop_buy_yes_loss:.2f}, {exit_ratio:.1%} of negative PnL."
+                        f"{strategy} recent BUY_YES updown exit-damage losses were "
+                        f"{exit_damage_buy_yes_loss:.2f}, {exit_ratio:.1%} of negative PnL "
+                        f"(time_stop={time_stop_buy_yes_loss:.2f})."
                     ),
                 }
             )
@@ -536,6 +559,12 @@ def build_underperformance_report(
             )
             if recent_total_negative
             else 0.0,
+            "recent_buy_yes_exit_damage_loss": round(overall_recent_buy_yes_exit_damage_loss, 4),
+            "recent_buy_yes_exit_damage_loss_share_of_negative_pnl": round(
+                overall_recent_buy_yes_exit_damage_loss / recent_total_negative, 4
+            )
+            if recent_total_negative
+            else 0.0,
         },
         "tables": {
             "baseline_strategy_action_exit": _aggregate_trade_rows(baseline_rows),
@@ -562,12 +591,13 @@ def render_underperformance_markdown(report: Dict[str, Any]) -> str:
         f"- **Recent sessions:** `{', '.join(meta['recent_sessions'])}`",
         f"- **Baseline net PnL:** {overall['baseline_net_pnl']:+.2f} across {meta['baseline_trade_count']} closes",
         f"- **Recent net PnL:** {overall['recent_net_pnl']:+.2f} across {meta['recent_trade_count']} closes",
+        f"- **Recent BUY_YES updown exit-damage loss share:** {overall['recent_buy_yes_exit_damage_loss_share_of_negative_pnl']:.1%}",
         f"- **Recent BUY_YES `updown_time_stop` loss share:** {overall['recent_buy_yes_time_stop_loss_share_of_negative_pnl']:.1%}",
         f"- **Recent `BUY_NO_SKIP` events recorded:** {meta['recent_buy_no_skip_count']}",
         "",
         "## Live Side Mix",
         "",
-        "| strategy | baseline BUY_NO share | recent BUY_NO share | baseline TP | recent TP | baseline time_stop | recent time_stop |",
+        "| strategy | baseline BUY_NO share | recent BUY_NO share | baseline TP | recent TP | baseline exit damage | recent exit damage |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for strategy in STRATEGY_ORDER:
@@ -577,7 +607,7 @@ def render_underperformance_markdown(report: Dict[str, Any]) -> str:
             f"| {strategy} | {float(base.get('buy_no_share') or 0.0):.1%} | "
             f"{float(recent.get('buy_no_share') or 0.0):.1%} | "
             f"{int(base.get('take_profit_n') or 0)} | {int(recent.get('take_profit_n') or 0)} | "
-            f"{int(base.get('updown_time_stop_n') or 0)} | {int(recent.get('updown_time_stop_n') or 0)} |"
+            f"{int(base.get('updown_exit_damage_n') or 0)} | {int(recent.get('updown_exit_damage_n') or 0)} |"
         )
 
     lines.extend(

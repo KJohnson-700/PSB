@@ -35,6 +35,28 @@ def test_full_tier_floor_unchanged() -> None:
     assert mgr.scale_size(30.0) == 15.0
 
 
+def test_explicit_tier_floors_override_scaled_legacy_floor() -> None:
+    mgr = ExposureManager(
+        {
+            "exposure": {
+                "full_size": 25.0,
+                "moderate_size": 15.0,
+                "minimal_size": 8.0,
+                "min_trade_usd": 10.0,
+                "full_min_trade_usd": 10.0,
+                "moderate_min_trade_usd": 8.0,
+                "minimal_min_trade_usd": 5.0,
+            }
+        }
+    )
+
+    mgr._current_tier = ExposureTier.MODERATE
+    assert mgr.scale_size(10.0) == 8.0
+
+    mgr._current_tier = ExposureTier.MINIMAL
+    assert mgr.scale_size(10.0) == 5.0
+
+
 def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
     cfg = {
         "exposure": {

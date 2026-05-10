@@ -44,7 +44,7 @@ def _load_config(repo_root: Path) -> Dict[str, Any]:
 
 
 def _latest_session_dir(repo_root: Path) -> Path | None:
-    journal_dir = repo_root / "data" / "paper_trading"
+    journal_dir = repo_root / "data" / "paper_trades"
     if not journal_dir.exists():
         return None
     sessions = sorted(

@@ -20,8 +20,8 @@ Architecture
     data/entry_prices/updown_fills.jsonl (recorded by TradeJournal at live fills).
     Falls back to N(0.50, 0.06) clipped to [0.30, 0.70] when <20 recorded prices.
     Previous hardcoded 0.50 inflated WR by 15-21% vs live results.
-7.  Settlement: 1m close at window end vs 1m open at window start
-    -> YES won (price went UP) or NO won (price went DOWN).
+7.  Exit handling: approximate live crypto up/down near-expiry adverse-stop
+    behavior from 1m replay bars. Falls back to settlement when no stop fires.
 8.  Ruin cap enforced: ``bankroll = max(0, bankroll + pnl)``.
 
 Signal fidelity
@@ -41,7 +41,7 @@ Checklist (from docs/BACKTEST.md)
 [x] Resolution settlement applied (actual OHLCV direction)
 [x] Universe pinned (exact date range + symbol logged in result)
 [x] Timestamp alignment: all slices use open_time < T (strict)
-[x] Exit strategy: hold to settlement (15m / 5m window close)
+[x] Exit strategy: approximate live up/down time-stop, else settlement
 """
 import json
 import logging
@@ -101,6 +101,7 @@ class UpdownTrade:
     slip:          float = 0.0   # Slippage cost in $ for this trade
     asset_open:    float = 0.0   # BTC / SOL / ETH price at window open
     asset_close:   float = 0.0   # BTC / SOL / ETH price at window close
+    exit_reason:   str = "settlement"
 
 
 @dataclass
@@ -297,10 +298,34 @@ class UpdownBacktestEngine:
         self.sell_5m_min_corr_eth = float(eth_cfg.get("sell_5m_min_corr", -1.0))
         self.sell_5m_min_corr_xrp = float(xrp_cfg.get("sell_5m_min_corr", -1.0))
         self.sell_5m_min_corr_hype = float(hype_cfg.get("sell_5m_min_corr", -1.0))
+        self.eth_btc_follow_1h_required = bool(eth_cfg.get("btc_follow_1h_required", True))
 
         trade_cfg         = config.get("trading", {})
         self.default_size  = trade_cfg.get("default_position_size", 10.0)
         self.max_size      = trade_cfg.get("max_position_size", 15.0)
+        exit_cfg = trade_cfg.get("exit_rules", {})
+        self.take_profit_pct = float(exit_cfg.get("take_profit_pct", 0.15) or 0.15)
+        self.updown_stop_loss_pct = float(exit_cfg.get("updown_stop_loss_pct", 0.20) or 0.20)
+        self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03) or 0.03)
+        self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0) or 2.0)
+        self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0) or 20.0)
+        raw_updown_overrides = exit_cfg.get("updown_overrides") or {}
+        self._updown_exit_overrides: Dict[str, Dict[str, float]] = {}
+        if isinstance(raw_updown_overrides, dict):
+            for strategy_name, override in raw_updown_overrides.items():
+                if not isinstance(override, dict):
+                    continue
+                self._updown_exit_overrides[str(strategy_name)] = {
+                    "updown_stop_cents": float(
+                        override.get("updown_stop_cents", self.updown_stop_cents)
+                    ),
+                    "updown_exit_window_mins": float(
+                        override.get("updown_exit_window_mins", self.updown_exit_window_mins)
+                    ),
+                    "updown_max_hold_mins": float(
+                        override.get("updown_max_hold_mins", self.updown_max_hold_mins)
+                    ),
+                }
         exposure_cfg = config.get("exposure", {})
         self.exposure_min_trade_usd = float(exposure_cfg.get("min_trade_usd", 0.0) or 0.0)
         self.exposure_full_size = float(exposure_cfg.get("full_size", self.max_size) or self.max_size)
@@ -387,6 +412,167 @@ class UpdownBacktestEngine:
             return float(np.random.choice(self._fill_prices))
         raw = float(np.random.normal(0.50, 0.06))
         return float(np.clip(raw, 0.30, 0.70))
+
+    def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float]:
+        strategy_name = {
+            "BTC": "bitcoin",
+            "SOL": "sol_macro",
+            "ETH": "eth_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }.get(symbol.upper(), "sol_macro")
+        ov = self._updown_exit_overrides.get(strategy_name, {})
+        return (
+            float(ov.get("updown_stop_cents", self.updown_stop_cents)),
+            float(ov.get("updown_exit_window_mins", self.updown_exit_window_mins)),
+            float(ov.get("updown_max_hold_mins", self.updown_max_hold_mins)),
+        )
+
+    @staticmethod
+    def _proxy_yes_price_from_underlying(
+        asset_open: float,
+        asset_current: float,
+        window_minutes: int,
+    ) -> float:
+        """Approximate in-window YES price from underlying move vs window open.
+
+        This is intentionally a proxy, not a claim of exact CLOB parity. It gives
+        the crypto up/down backtest a live-like mark-to-market path so TP and
+        near-expiry adverse-stop exits can be replayed instead of forcing every
+        trade to binary settlement.
+        """
+        if asset_open <= 0:
+            return 0.50
+        move_pct = (asset_current - asset_open) / asset_open
+        scale_pct = 0.0015 if window_minutes == 5 else 0.0025
+        score = move_pct / max(scale_pct, 1e-6)
+        yes_price = 0.50 + 0.45 * np.tanh(score)
+        return float(np.clip(yes_price, 0.01, 0.99))
+
+    def _settle_updown_with_live_exit_proxy(
+        self,
+        df_1m: pd.DataFrame,
+        window_open: pd.Timestamp,
+        window_close: pd.Timestamp,
+        action: str,
+        entry_price: float,
+        size: float,
+        asset_open: float,
+        fill_price: float,
+        symbol: str,
+        window_minutes: int,
+    ) -> Tuple[float, str, float, float, float, str]:
+        """Approximate live time-stop exits from 1m replay bars.
+
+        Returns:
+            pnl, outcome, exit_price_token, asset_open_px, asset_close_px, exit_reason
+        """
+        w = df_1m[
+            (df_1m["open_time"] >= window_open)
+            & (df_1m["open_time"] < window_close)
+        ].copy()
+        if w.empty:
+            return 0.0, "", 0.0, asset_open, asset_open, "unsettled"
+
+        asset_close = float(w.iloc[-1]["close"])
+        up_stop_cents, up_exit_window_mins, _ = self._resolve_updown_exit_params(symbol)
+        entry_leg_price = fill_price
+
+        for _, row in w.iterrows():
+            current_asset = float(row["close"])
+            mins_remaining = (window_close - row["open_time"]).total_seconds() / 60.0
+            current_yes = self._proxy_yes_price_from_underlying(
+                asset_open=asset_open,
+                asset_current=current_asset,
+                window_minutes=window_minutes,
+            )
+            current_no = 1.0 - current_yes
+            current_token = current_yes if action == "BUY_YES" else current_no
+            pnl_pct = (current_token - fill_price) / fill_price if fill_price > 0 else 0.0
+
+            if pnl_pct >= self.take_profit_pct:
+                exit_fill, _ = self._simulate_fill(current_token, "SELL")
+                exit_fill = max(0.01, min(0.99, exit_fill))
+                pnl = (exit_fill - fill_price) * size
+                return (
+                    pnl,
+                    "WIN" if pnl >= 0 else "LOSS",
+                    exit_fill,
+                    asset_open,
+                    current_asset,
+                    "take_profit",
+                )
+
+            if self.updown_stop_loss_pct > 0 and pnl_pct <= -self.updown_stop_loss_pct:
+                exit_fill, _ = self._simulate_fill(current_token, "SELL")
+                exit_fill = max(0.01, min(0.99, exit_fill))
+                pnl = (exit_fill - fill_price) * size
+                return (
+                    pnl,
+                    "WIN" if pnl >= 0 else "LOSS",
+                    exit_fill,
+                    asset_open,
+                    current_asset,
+                    "updown_stop_loss",
+                )
+
+            if mins_remaining <= up_exit_window_mins:
+                adverse = (
+                    current_yes <= entry_price - up_stop_cents
+                    if action == "BUY_YES"
+                    else current_no <= entry_leg_price - up_stop_cents
+                )
+                if adverse:
+                    exit_fill, exit_slip = self._simulate_fill(current_token, "SELL")
+                    exit_fill = max(0.01, min(0.99, exit_fill))
+                    pnl = (exit_fill - fill_price) * size
+                    return (
+                        pnl,
+                        "WIN" if pnl >= 0 else "LOSS",
+                        exit_fill,
+                        asset_open,
+                        current_asset,
+                        "updown_time_stop",
+                    )
+
+        yes_won, asset_open_px, asset_close_px = self._settle(df_1m, window_open, window_close)
+        if yes_won is None:
+            return 0.0, "", 0.0, asset_open_px, asset_close_px, "unsettled"
+        if action == "BUY_YES":
+            if yes_won:
+                return (
+                    (1.0 - fill_price) * size,
+                    "WIN",
+                    1.0,
+                    asset_open_px,
+                    asset_close_px,
+                    "settlement_yes",
+                )
+            return (
+                -fill_price * size,
+                "LOSS",
+                0.0,
+                asset_open_px,
+                asset_close_px,
+                "settlement_no",
+            )
+        if not yes_won:
+            return (
+                (1.0 - fill_price) * size,
+                "WIN",
+                1.0,
+                asset_open_px,
+                asset_close_px,
+                "settlement_no",
+            )
+        return (
+            -fill_price * size,
+            "LOSS",
+            0.0,
+            asset_open_px,
+            asset_close_px,
+            "settlement_yes",
+        )
 
     # -- slice helpers ---------------------------------------------------------
 
@@ -761,6 +947,8 @@ class UpdownBacktestEngine:
         """
         sabre   = ta.trend_sabre
         macd_4h = ta.macd_4h
+        macd_1h = ta.macd_1h
+        mom = ta.candle_momentum
 
         est_prob_up = 0.50
 
@@ -789,13 +977,40 @@ class UpdownBacktestEngine:
 
         est_prob_up += htf_boost
 
-        # 4H histogram hard gate
-        if allowed_side == "LONG"  and not macd_4h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_4h.histogram_rising: return 0.0, 0.0
+        # Histogram gate parity with live bitcoin.py:
+        # allow a 1H local recovery pass when 4H is decelerating against the side.
+        if allowed_side == "LONG" and not macd_4h.histogram_rising:
+            if not macd_1h.histogram_rising:
+                return 0.0, 0.0
+        if allowed_side == "SHORT" and macd_4h.histogram_rising:
+            if macd_1h.histogram_rising:
+                return 0.0, 0.0
 
         # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.20
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
+
+        # Timing bonus parity with live bitcoin.py.
+        timing_bonus = 0.0
+        if allowed_side == "LONG":
+            if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
+            elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus -= 0.05
+            if mom.m5_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
+        else:
+            if mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
+            elif mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus -= 0.05
+            if mom.m5_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
+        if mom.m15_in_prediction_window:
+            timing_bonus += 0.03
+        if mom.m5_in_prediction_window:
+            timing_bonus += 0.02
+        est_prob_up += timing_bonus if allowed_side == "LONG" else -timing_bonus
 
         # RSI 4-level (matches live bitcoin.py)
         if   ta.rsi_14 > 80: est_prob_up -= 0.03
@@ -812,9 +1027,7 @@ class UpdownBacktestEngine:
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
-        # Confidence: matches live = min(0.85, 0.50 + ltf_strength * 0.20 + timing_bonus)
-        # timing_bonus = 0 in backtest (no intra-candle data)
-        confidence = min(0.85, 0.50 + ltf_strength * 0.20)
+        confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
         return edge, confidence
 
     # ==========================================================================
@@ -1548,7 +1761,7 @@ class UpdownBacktestEngine:
 
             allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
 
-            if is_eth and not self._eth_follow_1h_ok(
+            if is_eth and self.eth_btc_follow_1h_required and not self._eth_follow_1h_ok(
                 btc_ta, allowed_side, float(self.config.get("strategies", {}).get("eth_macro", {}).get("btc_follow_1h_hist_min", 8.0))
             ):
                 current += step_td
@@ -1685,33 +1898,31 @@ class UpdownBacktestEngine:
             fill_price, slip_cost = self._simulate_fill(trade_mid, "BUY")
             slippage_total += slip_cost * size
 
-            # Settle using 1m data for the window
+            # Replay live-like exits from 1m data for the window, then settle if needed.
             df_1m    = data.get("1m", pd.DataFrame())
-            yes_won, asset_open, asset_close = self._settle(df_1m, window_open, window_close)
-            if yes_won is None:
+            window_df_1m = df_1m[
+                (df_1m["open_time"] >= window_open)
+                & (df_1m["open_time"] < window_close)
+            ].copy()
+            asset_open_px = float(window_df_1m.iloc[0]["open"]) if not window_df_1m.empty else 0.0
+            pnl, outcome, exit_price, asset_open, asset_close, exit_reason = (
+                self._settle_updown_with_live_exit_proxy(
+                    df_1m=df_1m,
+                    window_open=window_open,
+                    window_close=window_close,
+                    action=action,
+                    entry_price=mid_price,
+                    size=size,
+                    asset_open=asset_open_px,
+                    fill_price=fill_price,
+                    symbol=symbol,
+                    window_minutes=window_minutes,
+                )
+            )
+            if not outcome:
                 # Cannot settle this window (no 1m data) -- skip
                 current += step_td
                 continue
-
-            # PnL
-            if action == "BUY_YES":
-                if yes_won:
-                    exit_price = 1.0
-                    pnl        = (1.0 - fill_price) * size
-                    outcome    = "WIN"
-                else:
-                    exit_price = 0.0
-                    pnl        = -fill_price * size
-                    outcome    = "LOSS"
-            else:  # BUY_NO — profit when NO wins (not yes_won)
-                if not yes_won:
-                    exit_price = 1.0
-                    pnl        = (1.0 - fill_price) * size
-                    outcome    = "WIN"
-                else:
-                    exit_price = 0.0
-                    pnl        = -fill_price * size
-                    outcome    = "LOSS"
 
             bankroll = max(0.0, bankroll + pnl)   # ruin cap
 
@@ -1735,6 +1946,7 @@ class UpdownBacktestEngine:
                 slip=slip_cost * size,
                 asset_open=asset_open,
                 asset_close=asset_close,
+                exit_reason=exit_reason,
             ))
 
             if bankroll <= 0:
