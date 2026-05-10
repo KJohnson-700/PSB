@@ -450,6 +450,7 @@ class PerformanceTracker:
     def check_drift(
         self,
         backtest_expectations: Dict[str, Dict[str, float]],
+        min_live_sample: Optional[int] = None,
     ) -> List[DriftReport]:
         """Compare live performance against backtest predictions.
 
@@ -459,6 +460,7 @@ class PerformanceTracker:
                 "avg_edge": float,
                 "trades_per_day": float
             }
+            min_live_sample: Minimum EXIT count before divergence checks apply (default 15).
 
         Returns:
             List of DriftReport per strategy
@@ -526,7 +528,7 @@ class PerformanceTracker:
                 live_sample_size=len(strat_trades),
             )
 
-            min_drift_sample = 15
+            min_drift_sample = 15 if min_live_sample is None else int(min_live_sample)
             if len(strat_trades) < min_drift_sample:
                 report.is_diverging = False
                 report.verdict = (

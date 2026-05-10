@@ -38,8 +38,12 @@ from src.execution.resolution_tracker import ResolutionTracker
 from src.execution.ctf_redeemer import CTFRedeemer
 from src.execution.live_testing import (
     PositionExitManager,
-    PerformanceTracker,
     ExitDecision,
+)
+from src.analysis.journal_learning import (
+    learning_loop_enabled,
+    run_learning_cycle,
+    log_learning_summary_to_logger,
 )
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
 from src.notifications.notification_manager import (
@@ -310,6 +314,20 @@ class PolyBot:
         self._buy_no_skip_callback = _buy_no_skip_callback
         self._wire_strategy_callbacks()
 
+        if learning_loop_enabled(self.config):
+            try:
+                _lcfg = self.config.get("learning_loop") or {}
+                _vp = _lcfg.get("vault_path")
+                _vp_path = Path(_vp) if _vp else None
+                payload = run_learning_cycle(
+                    self.config,
+                    include_archive=bool(_lcfg.get("include_archive", True)),
+                    vault_path=_vp_path,
+                )
+                log_learning_summary_to_logger(payload)
+            except Exception as e:
+                logging.warning("Learning loop skipped: %s", e, exc_info=True)
+
         # Resolution tracker — fetches REAL outcomes from Polymarket API
         # Resolution check every 60s — crypto candle markets resolve in 15 minutes
         self.resolution_tracker = ResolutionTracker(check_interval_seconds=60)
@@ -327,8 +345,8 @@ class PolyBot:
         # Position exit manager — checks active positions for TP/SL/time exits
         self.exit_manager = PositionExitManager(self.config)
 
-        # Performance tracker — aggregates live trade metrics
-        self.perf_tracker = PerformanceTracker()
+        # Drift-driven runtime feedback cadence (see performance_feedback in settings.yaml)
+        self._performance_feedback_cycle = 0
 
         # State
         self.running = False
@@ -1045,6 +1063,21 @@ class PolyBot:
                     self.notifier.notify_kill_global(st, "global kill switch")
                 )
             return
+
+        self._performance_feedback_cycle += 1
+        _pf = self.config.get("performance_feedback") or {}
+        _n = max(1, int(_pf.get("refresh_every_n_cycles", 1)))
+        if bool(_pf.get("enabled", False)) and (self._performance_feedback_cycle % _n == 0):
+            try:
+                from src.execution.performance_feedback import refresh_performance_feedback
+
+                _jp = getattr(self.journal, "session_dir", None)
+                _jp_path = (_jp / "entries.jsonl") if _jp else None
+                refresh_performance_feedback(self.config, journal_path=_jp_path)
+            except Exception as e:
+                logging.warning(
+                    "performance_feedback refresh failed: %s", e, exc_info=True
+                )
 
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])

@@ -17,6 +17,7 @@ from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
 from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy
 from src.strategies.strategy_config import resolve_enabled_flag
+from src.execution.performance_feedback import get_drift_min_edge_mult
 
 import logging
 
@@ -114,6 +115,7 @@ class HYPEMacroStrategy(SolMacroStrategy):
             hard_min_edge = base_hard
             if self._btc_1h_regime_gates.get("enabled", False) and signal.btc_1h_regime:
                 hard_min_edge *= self._regime_min_edge_mult(signal.btc_1h_regime)
+            hard_min_edge *= get_drift_min_edge_mult("hype_macro", self.full_config)
             if float(signal.edge or 0.0) < hard_min_edge:
                 rejected += 1
                 logger.info(

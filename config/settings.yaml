@@ -1017,6 +1017,57 @@ backtest:
   min_edge_hype_5m:  0.09   # matches strategies.hype_macro.min_edge_5m
 
 # ============================================
+# LEARNING LOOP (journal → stats → proposals; never auto-edits YAML)
+# ============================================
+learning_loop:
+  enabled: false
+  # Minimum closed trades before RSI segment / edge-calibration rules fire
+  min_trades_for_rules: 15
+  min_trades_per_segment: 15
+  include_archive: true
+  persist_artifacts: true
+  proposal_dir: data/learning/proposals
+  write_vault_log: true
+  # AI path (journal extra.ai_used): propose ai_confidence_threshold after enough LLM-touched trades look weak
+  ai_proposal_min_trades: 75
+  # Optional: only evaluate when AI-touched count <= this (off = no upper limit)
+  ai_proposal_max_trades: null
+  ai_proposal_win_rate_below: 0.63
+  ai_proposal_require_negative_pnl: true
+  # Stricter margin: also require negative avg return / notional on AI trades (needs enough fills)
+  ai_proposal_require_negative_avg_return_on_notional: false
+  ai_proposal_margin_min_realized_n: 15
+  ai_confidence_bump: 0.02
+  # Kelly reduction skips when AI-touched cohort is this large (use AI proposal instead)
+  kelly_rule_max_ai_trades: 50
+  # Optional: strategy -> { win_rate, avg_edge, trades_per_day } for drift checks (see live_testing.DriftReport)
+  backtest_expectations: {}
+  # Override default vault append path (repo-relative or absolute)
+  # vault_path: projects/polymarket-bot/strategy-log/learning-loop.md
+
+# ============================================
+# PERFORMANCE FEEDBACK (runtime drift → bounded in-memory tightening)
+# ============================================
+# Compares live journal EXIT stats to backtest expectations (reports + optional YAML).
+# Never auto-edits settings.yaml; multipliers live in config["_runtime_feedback"] only.
+performance_feedback:
+  enabled: false
+  # Run drift check every N unified trading cycles (see trading.cycle_interval_sec).
+  refresh_every_n_cycles: 6
+  # Minimum live EXIT sample per strategy before labeling divergence (aligns with DriftReport gate).
+  min_live_sample: 15
+  # When DriftReport.is_diverging: multiply effective min_edge by this factor, then clamp.
+  min_min_edge_mult: 1.0
+  max_min_edge_mult: 1.15
+  diverge_min_edge_mult: 1.08
+  # Optional Kelly tightening when diverging (1.0 = off). Clamped to kelly_mult_min/max.
+  kelly_mult_when_diverging: 1.0
+  kelly_mult_min: 0.5
+  kelly_mult_max: 1.0
+  # Merge learning_loop.backtest_expectations into report-derived expectations (YAML fills gaps/overrides).
+  merge_learning_loop_expectations: true
+
+# ============================================
 # LOGGING
 # ============================================
 logging:

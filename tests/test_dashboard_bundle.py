@@ -97,7 +97,7 @@ def test_crypto_live_panels_wrap_and_slow_ticker_helpers_exist():
     assert "function dashApplySlowTickerIfNeeded(el)" in html
     assert "dashRefreshCryptoLiveTickers();" in html
     assert "padding:14px 14px;min-height:0" in html
-    assert "2026-05-09-dash-fs-crypto-tile-density" in server
+    assert "2026-05-10-dash-privacy-hacker-brand" in server
 
 
 def test_command_center_trades_card_uses_daily_trades_not_session_fills():

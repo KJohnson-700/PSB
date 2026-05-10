@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from src.execution.performance_feedback import get_drift_kelly_mult
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +94,7 @@ class KellySizer:
 
         self._recent_outcomes: Dict[str, list] = {s: [] for s in self._defaults}
         self._recent_outcomes_by_window: Dict[tuple, list] = {}
+        self._root_config = config
 
     def reload_from_config(self, config: Dict) -> None:
         """Refresh config-derived Kelly fractions without clearing streak state."""
@@ -114,6 +117,7 @@ class KellySizer:
             trading_cfg.get("max_exposure_per_trade", self._max_position_pct)
             or self._max_position_pct
         )
+        self._root_config = config
 
     def _window_key(self, strategy: str, window: str) -> tuple:
         return (strategy, window)
@@ -223,6 +227,7 @@ class KellySizer:
         if streak_multiplier is None:
             streak_multiplier = self.get_streak_multiplier(strategy)
         frac = frac * streak_multiplier
+        frac = frac * get_drift_kelly_mult(strategy, self._root_config)
         return max(cfg.min_kelly_fraction, min(frac, 1.0))
 
     def size_from_edge(

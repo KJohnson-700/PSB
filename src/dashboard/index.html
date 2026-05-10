@@ -7,7 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root{
-            --bg:#000;--border:rgba(255,255,255,.07);--bx:rgba(255,255,255,.45);
+            --bg:#000;--border:rgba(255,255,255,.07);--bx:rgba(0,229,255,.22);
             --tx:#dde0ee;--td:rgba(80,80,130,.9);--tm:#8888aa;
             --cy:#00e5ff;--gr:#00ff88;--re:#ff4466;--ye:#ffd700;--pu:#b060ff;
             /* legacy compat */
@@ -19,11 +19,7 @@
         }
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
         html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px}
-        body{
-            background-image:linear-gradient(rgba(0,229,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.045) 1px,transparent 1px);
-            background-size:32px 32px;
-            overflow-x:hidden;
-        }
+        body{overflow-x:hidden}
         body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 4px);pointer-events:none;z-index:9000}
 
         /* ── Layout ── */
@@ -357,7 +353,18 @@
         /* ── Sticky header ── */
         .hdr{position:sticky;top:0;z-index:200;background:rgba(0,0,0,.88);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.05);padding:10px 18px 0}
         .hdr-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px}
-        .brand{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;color:var(--tx)}
+        .brand{
+            font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;
+            color:var(--cy);position:relative;display:inline-block;cursor:default;
+            text-shadow:0 0 6px rgba(0,229,255,.45),0 0 14px rgba(0,229,255,.18);white-space:pre;
+        }
+        .brand::before,.brand::after{content:attr(data-text);position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;opacity:0;mix-blend-mode:screen}
+        .brand.glx::before{color:#ff4466;animation:brandGlxA .9s steps(1) 1;opacity:1}
+        .brand.glx::after{color:#00ff88;animation:brandGlxB .9s steps(1) 1;opacity:1}
+        @keyframes brandGlxA{0%{transform:translate(0,0);clip-path:inset(0 0 80% 0)}20%{transform:translate(2px,-1px);clip-path:inset(20% 0 60% 0)}40%{transform:translate(-2px,1px);clip-path:inset(50% 0 30% 0)}60%{transform:translate(1px,0);clip-path:inset(70% 0 10% 0)}80%{transform:translate(-1px,1px);clip-path:inset(10% 0 70% 0)}100%{transform:translate(0,0);clip-path:inset(100% 0 0 0)}}
+        @keyframes brandGlxB{0%{transform:translate(0,0);clip-path:inset(60% 0 20% 0)}25%{transform:translate(-2px,1px);clip-path:inset(30% 0 50% 0)}50%{transform:translate(2px,0);clip-path:inset(80% 0 5% 0)}75%{transform:translate(-1px,-1px);clip-path:inset(15% 0 65% 0)}100%{transform:translate(0,0);clip-path:inset(100% 0 0 0)}}
+        .brand-cur{display:inline-block;width:.55em;height:.9em;background:var(--cy);margin-left:.12em;vertical-align:-.1em;box-shadow:0 0 6px var(--cy);animation:brandBlink 1s steps(2) infinite}
+        @keyframes brandBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
         .ver{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td)}
         .sid{background:rgba(30,80,200,.18);border:1px solid rgba(30,80,200,.45);border-radius:3px;padding:2px 8px;color:#70aaff;font-size:10px;display:inline-block;margin-left:10px;font-family:'IBM Plex Mono',monospace}
         .hdr-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
@@ -509,19 +516,149 @@
         #status-hero .hero-item:nth-child(2){animation:fadeUp .4s .10s both}
         #status-hero .hero-item:nth-child(3){animation:fadeUp .4s .15s both}
         #status-hero .hero-item:nth-child(4){animation:fadeUp .4s .20s both}
+
+        /* Privacy / tab-loading overlay (Dashboard.html handoff wjmjS1K2…) */
+        .po-trigger{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:4px 10px;border:1px solid rgba(0,229,255,.4);background:rgba(0,229,255,.06);color:var(--cy);border-radius:3px;cursor:pointer;letter-spacing:.12em;text-transform:uppercase;margin-right:8px;transition:all .15s}
+        .po-trigger:hover{background:rgba(0,229,255,.16);border-color:var(--cy)}
+        .po-trigger::before{content:'■ ';font-size:8px;vertical-align:middle}
+        .po{position:fixed;inset:0;z-index:9500;background:#000;display:none;align-items:center;justify-content:center;flex-direction:column;font-family:'IBM Plex Mono',monospace;color:var(--cy);overflow:hidden}
+        .po.po-visible{display:flex;animation:poFade .25s ease both}
+        @keyframes poFade{from{opacity:0}to{opacity:1}}
+        .po canvas.po-mx{position:absolute;inset:0;width:100%;height:100%;opacity:.32;z-index:1}
+        .po .po-scan{position:absolute;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.18) 3px,transparent 4px);pointer-events:none;z-index:30;mix-blend-mode:multiply}
+        .po .po-vig{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.5) 100%);pointer-events:none;z-index:31}
+        .po .po-corner{position:absolute;width:36px;height:36px;border:1px solid;opacity:.85;z-index:20;box-shadow:0 0 10px currentColor}
+        .po .po-corner.tl{top:24px;left:24px;border-right:none;border-bottom:none;color:var(--cy)}
+        .po .po-corner.tr{top:24px;right:24px;border-left:none;border-bottom:none;color:var(--pu)}
+        .po .po-corner.bl{bottom:24px;left:24px;border-right:none;border-top:none;color:var(--gr)}
+        .po .po-corner.br{bottom:24px;right:24px;border-left:none;border-top:none;color:var(--ye)}
+        .po .po-htxt{position:absolute;font-size:11px;letter-spacing:.18em;text-transform:uppercase;opacity:.92;z-index:20;text-shadow:0 0 8px currentColor}
+        .po .po-htxt.tl{top:32px;left:72px;color:var(--cy)}.po .po-htxt.tr{top:32px;right:72px;text-align:right;color:var(--pu)}
+        .po .po-htxt.bl{bottom:32px;left:72px;color:var(--gr)}.po .po-htxt.br{bottom:32px;right:72px;text-align:right;color:var(--ye)}
+        .po .po-stage{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:24px;padding:0 32px}
+        .po .po-pre{display:flex;gap:14px;align-items:center;font-size:11px;letter-spacing:.3em;text-transform:uppercase;opacity:0;animation:poFade .4s ease .15s forwards}
+        .po .po-pre .a{color:var(--gr);text-shadow:0 0 6px var(--gr)}
+        .po .po-pre .b{color:var(--cy);text-shadow:0 0 6px var(--cy)}
+        .po .po-pre .c{color:var(--pu);text-shadow:0 0 6px var(--pu)}
+        .po .po-pre .d{color:var(--ye);text-shadow:0 0 6px var(--ye)}
+        .po .po-dot{width:9px;height:9px;background:var(--gr);border-radius:50%;box-shadow:0 0 14px var(--gr);animation:poPulse 1.4s ease-in-out infinite}
+        .po .po-sep{opacity:.4;color:var(--tm)}
+        @keyframes poPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.85)}}
+        .po .po-title-wrap{position:relative;padding:8px 32px}
+        .po .po-title{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:clamp(56px,11vw,148px);line-height:.95;letter-spacing:.04em;margin:0;
+            background:linear-gradient(96deg,var(--cy) 0%,#7dd3ff 25%,var(--pu) 55%,#ff6b9d 80%,var(--ye) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;
+            filter:drop-shadow(0 0 10px rgba(0,229,255,.5)) drop-shadow(0 0 24px rgba(176,96,255,.32));position:relative;user-select:none;white-space:nowrap}
+        .po .po-title.glx::before,.po .po-title.glx::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%;mix-blend-mode:screen}
+        .po .po-title.glx::before{-webkit-text-fill-color:var(--re);color:var(--re);background:none;transform:translate(2px,0);animation:poGlxA 1.6s steps(1) infinite;text-shadow:0 0 6px var(--re)}
+        .po .po-title.glx::after{-webkit-text-fill-color:var(--gr);color:var(--gr);background:none;transform:translate(-2px,0);animation:poGlxB 1.4s steps(1) infinite;text-shadow:0 0 6px var(--gr)}
+        @keyframes poGlxA{0%{clip-path:polygon(0 8%,100% 8%,100% 22%,0 22%);transform:translate(2px,0)}25%{clip-path:polygon(0 42%,100% 42%,100% 48%,0 48%);transform:translate(-3px,1px)}50%{clip-path:polygon(0 78%,100% 78%,100% 88%,0 88%);transform:translate(2px,-1px)}75%{clip-path:polygon(0 12%,100% 12%,100% 18%,0 18%);transform:translate(-2px,0)}100%{clip-path:polygon(0 60%,100% 60%,100% 70%,0 70%);transform:translate(3px,0)}}
+        @keyframes poGlxB{0%{clip-path:polygon(0 65%,100% 65%,100% 78%,0 78%);transform:translate(-2px,0)}33%{clip-path:polygon(0 18%,100% 18%,100% 28%,0 28%);transform:translate(2px,-1px)}66%{clip-path:polygon(0 50%,100% 50%,100% 56%,0 56%);transform:translate(-3px,1px)}100%{clip-path:polygon(0 38%,100% 38%,100% 46%,0 46%);transform:translate(-2px,-1px)}}
+        .po .po-bk{position:absolute;top:50%;transform:translateY(-50%);width:18px;height:74%;border:2px solid;opacity:0;animation:poBk .5s ease .9s forwards;box-shadow:0 0 14px currentColor}
+        .po .po-bk.l{left:0;border-right:none;color:var(--cy)}
+        .po .po-bk.r{right:0;border-left:none;color:var(--ye)}
+        @keyframes poBk{from{opacity:0;transform:translateY(-50%) scaleY(0)}to{opacity:.85;transform:translateY(-50%) scaleY(1)}}
+        .po .po-cur{display:inline-block;width:.45em;height:.85em;background:var(--ye);margin-left:.1em;vertical-align:-.06em;animation:poBlink 1s steps(2) infinite;box-shadow:0 0 14px var(--ye)}
+        @keyframes poBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+        .po .po-status{display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:6px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;opacity:0;animation:poFade .4s ease 1.4s forwards}
+        .po .po-seg{padding:5px 12px;border:1px solid;background:rgba(255,255,255,.02);border-radius:3px}
+        .po .po-seg.s1{color:#000;background:var(--gr);border-color:var(--gr);font-weight:700;box-shadow:0 0 12px rgba(0,255,136,.55)}
+        .po .po-seg.s1::before{content:'';display:inline-block;width:6px;height:6px;background:#000;border-radius:50%;margin-right:8px;vertical-align:middle;animation:poPulse 1s ease-in-out infinite}
+        .po .po-seg.s2{color:var(--cy);border-color:rgba(0,229,255,.5);background:rgba(0,229,255,.06)}
+        .po .po-seg.s3{color:var(--pu);border-color:rgba(176,96,255,.5);background:rgba(176,96,255,.06)}
+        .po .po-seg.s4{color:var(--ye);border-color:rgba(255,215,0,.5);background:rgba(255,215,0,.06)}
+        .po .po-seg.s5{color:var(--re);border-color:rgba(255,68,102,.5);background:rgba(255,68,102,.06)}
+        .po .po-seg .v{color:var(--tx)}
+        .po .po-log{position:absolute;left:32px;top:50%;transform:translateY(-50%);width:220px;font-size:10px;line-height:1.55;z-index:12;text-transform:uppercase;letter-spacing:.1em;color:var(--tm)}
+        .po .po-log .row{opacity:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .po .po-log .row.ok{color:rgba(0,255,136,.75)}
+        .po .po-log .row.ok::before{content:'[ok] ';color:var(--gr);text-shadow:0 0 6px var(--gr)}
+        .po .po-log .row.warn{color:rgba(255,215,0,.75)}
+        .po .po-log .row.warn::before{content:'[..] ';color:var(--ye);text-shadow:0 0 6px var(--ye)}
+        .po .po-log .row.err{color:rgba(255,68,102,.75)}
+        .po .po-log .row.err::before{content:'[!!] ';color:var(--re);text-shadow:0 0 6px var(--re)}
+        .po .po-tele{position:absolute;right:32px;top:50%;transform:translateY(-50%);width:210px;font-size:10px;z-index:12;text-transform:uppercase;letter-spacing:.12em;opacity:0;animation:poFade .4s ease 1.2s forwards}
+        .po .po-tele .lab{margin-bottom:4px;text-shadow:0 0 6px currentColor}
+        .po .po-tele .lab.c1{color:var(--cy)}.po .po-tele .lab.c2{color:var(--gr)}.po .po-tele .lab.c3{color:var(--pu)}
+        .po .po-tele .v{color:var(--tx);font-size:11px;margin-bottom:2px}
+        .po .po-bar{height:6px;background:rgba(255,255,255,.04);border:1px solid;margin-bottom:14px;position:relative;overflow:hidden}
+        .po .po-bar.c1{border-color:rgba(0,229,255,.35)}
+        .po .po-bar.c2{border-color:rgba(0,255,136,.35)}
+        .po .po-bar.c3{border-color:rgba(176,96,255,.35)}
+        .po .po-bar::after{content:'';position:absolute;inset:0;width:var(--w,0%);transition:width .3s ease;box-shadow:0 0 10px currentColor}
+        .po .po-bar.c1::after{background:linear-gradient(90deg,rgba(0,229,255,.3),var(--cy));color:var(--cy)}
+        .po .po-bar.c2::after{background:linear-gradient(90deg,rgba(0,255,136,.3),var(--gr));color:var(--gr)}
+        .po .po-bar.c3::after{background:linear-gradient(90deg,rgba(176,96,255,.3),var(--pu));color:var(--pu)}
+        .po .po-close{position:absolute;bottom:32px;left:50%;transform:translateX(-50%);z-index:60;background:linear-gradient(90deg,rgba(0,229,255,.08),rgba(176,96,255,.08));border:1px solid var(--cy);color:var(--cy);font-family:inherit;font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:10px 22px;cursor:pointer;opacity:0;animation:poFade .4s ease 2s forwards;transition:all .15s;text-shadow:0 0 8px currentColor;box-shadow:0 0 14px rgba(0,229,255,.25),inset 0 0 14px rgba(176,96,255,.1)}
+        .po .po-close:hover{background:var(--cy);color:#000;text-shadow:none;box-shadow:0 0 24px var(--cy)}
+        .po.mode-loading .po-close{display:none}
+        @media (prefers-reduced-motion:reduce){
+            .po.po-visible{animation:none}
+            .brand-cur,.po .po-cur,.po .po-dot,.po .po-seg.s1::before{animation:none!important}
+        }
     </style>
 </head>
 <body>
+
+<!-- Privacy / tab-transition overlay (design handoff) -->
+<div id="dash-privacy-overlay" class="po mode-privacy" aria-hidden="true" hidden>
+    <canvas class="po-mx" id="po-matrix-canvas" aria-hidden="true"></canvas>
+    <div class="po-corner tl"></div><div class="po-corner tr"></div>
+    <div class="po-corner bl"></div><div class="po-corner br"></div>
+    <div class="po-htxt tl">SYS // polybot.core</div>
+    <div class="po-htxt tr">NODE 04 :: SECURE</div>
+    <div class="po-htxt bl">UPLINK 226.0.14.7</div>
+    <div class="po-htxt br" id="po-corner-clock">--:--:-- UTC</div>
+    <div class="po-log" id="po-boot-log" aria-live="polite"></div>
+    <div class="po-tele">
+        <div class="lab c1">CPU LOAD</div>
+        <div class="v" id="po-tele-cpu-pct">00%</div>
+        <div class="po-bar c1" id="po-bar-cpu" style="--w:12%"></div>
+        <div class="lab c2">MEM</div>
+        <div class="v" id="po-tele-mem-gb">0.0 GB</div>
+        <div class="po-bar c2" id="po-bar-mem" style="--w:20%"></div>
+        <div class="lab c3">THROUGHPUT</div>
+        <div class="v" id="po-tele-net">0.0 Mbps</div>
+        <div class="po-bar c3" id="po-bar-net" style="--w:30%"></div>
+    </div>
+    <div class="po-stage">
+        <div class="po-pre">
+            <span class="po-dot"></span>
+            <span class="a" id="po-pre-a">Session locked</span>
+            <span class="po-sep">//</span>
+            <span class="b" id="po-hash">0x00000000</span>
+            <span class="po-sep">//</span>
+            <span class="c">handshake.ok</span>
+            <span class="po-sep">//</span>
+            <span class="d">node 04</span>
+        </div>
+        <div class="po-title-wrap">
+            <span class="po-bk l"></span>
+            <h1 class="po-title" id="po-title-el" data-text="POLYBOT AI"></h1>
+            <span class="po-bk r"></span>
+        </div>
+        <div class="po-status">
+            <div class="po-seg s1" id="po-seg-lock">LOCKED</div>
+            <div class="po-seg s2" id="po-seg-ver">v0.2.2</div>
+            <div class="po-seg s3">build <span class="v" id="po-seg-build">------</span></div>
+            <div class="po-seg s4">latency <span class="v" id="po-seg-lat">12ms</span></div>
+            <div class="po-seg s5" id="po-seg-foot">bot running</div>
+        </div>
+    </div>
+    <div class="po-scan"></div>
+    <div class="po-vig"></div>
+    <button type="button" class="po-close" id="po-close-btn">▶ unlock session [esc]</button>
+</div>
 
 <!-- STICKY HEADER -->
 <div class="hdr">
     <div class="hdr-top">
         <div>
-            <span class="brand">POLYBOT AI</span>
+            <span class="brand" id="hacker-brand" data-text="POLYBOT AI"><span id="hacker-brand-text">POLYBOT AI</span><span class="brand-cur" aria-hidden="true"></span></span>
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);margin-left:14px;" id="last-updated">Dashboard loading...</span>
             <span class="sid" id="htmx-ui-rev" hx-get="/api/dashboard/health-snippet" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
         </div>
         <div class="hdr-actions">
+            <button type="button" class="po-trigger hdr-btn" id="privacy-open-btn" title="Lock screen / privacy mode">privacy</button>
             <button class="btn-sm hdr-btn ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh</button>
             <button class="btn-sm hdr-btn" id="fullscreen-btn" onclick="toggleFullscreen()">Enter Fullscreen</button>
             <span class="ver">v0.2.2</span>
@@ -1409,6 +1546,11 @@ window.STRATS = {
     hype_lag: '#f97316',
     xrp_lag: '#fbbf24',
     weather: '#10b981',
+    // Journal / API strategy ids (same palette as *_lag display names)
+    sol_macro: '#a78bfa',
+    eth_macro: '#22d3ee',
+    hype_macro: '#f97316',
+    xrp_macro: '#fbbf24',
 };
 
 function stratPill(name) {
@@ -1507,46 +1649,339 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 }, { once: true });
 
-function switchMainView(which) {
-    try { localStorage.setItem('psb_main_view', which); } catch (e) {}
-    document.querySelectorAll('#main-view-tabs .tab').forEach(function(t) {
-        t.classList.toggle('active', t.getAttribute('data-view') === which);
-    });
-    ['live','performance','journal','backtest','commands'].forEach(function(v) {
-        var el = document.getElementById('view-' + v);
-        if (el) {
-            var on = (v === which);
-            el.style.display = on ? 'block' : 'none';
-            if (on) {
-                // re-trigger tabIn animation by toggling class
-                el.classList.remove('tab-content-active');
-                void el.offsetWidth; // reflow
-                el.classList.add('tab-content-active');
+/** Privacy overlay + tab-transition splash (Claude Design Dashboard.html handoff) */
+var DashPrivacy = (function() {
+    var rafMx = null;
+    var onResizeMx = null;
+    var intervals = [];
+    var logTimeouts = [];
+    var FINAL = 'POLYBOT AI';
+    var SCRAMBLE = '!<>-_/[]{}=+*^?#$%&01ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    var rainChars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホPOLYBOTAI01<>{}'.split('');
+
+    function stopAll() {
+        if (rafMx) cancelAnimationFrame(rafMx);
+        rafMx = null;
+        if (onResizeMx) {
+            window.removeEventListener('resize', onResizeMx);
+            onResizeMx = null;
+        }
+        intervals.forEach(clearInterval);
+        intervals = [];
+        logTimeouts.forEach(clearTimeout);
+        logTimeouts = [];
+    }
+
+    function syncVersionFromHeader() {
+        var ver = document.querySelector('.hdr .ver');
+        var el = document.getElementById('po-seg-ver');
+        if (ver && el) el.textContent = (ver.textContent || '').trim() || 'v0.2.2';
+    }
+
+    function tryHealthBuild() {
+        var b = document.getElementById('po-seg-build');
+        fetch('/health').then(function(r) { return r.json(); }).then(function(h) {
+            if (b && h && h.dashboard_ui_rev) {
+                b.textContent = String(h.dashboard_ui_rev).slice(0, 14);
+                b.setAttribute('data-from-health', '1');
+            }
+        }).catch(function() {});
+    }
+
+    function startMatrix() {
+        var cv = document.getElementById('po-matrix-canvas');
+        if (!cv) return;
+        var ctx = cv.getContext('2d');
+        var cols, drops, fontSize = 14;
+        function resize() {
+            cv.width = window.innerWidth;
+            cv.height = window.innerHeight;
+            cols = Math.floor(cv.width / fontSize);
+            drops = [];
+            for (var i = 0; i < cols; i++) drops[i] = Math.random() * -100;
+        }
+        resize();
+        onResizeMx = resize;
+        window.addEventListener('resize', onResizeMx);
+        function draw() {
+            ctx.fillStyle = 'rgba(0,0,0,.08)';
+            ctx.fillRect(0, 0, cv.width, cv.height);
+            ctx.font = fontSize + 'px IBM Plex Mono, monospace';
+            for (var i = 0; i < cols; i++) {
+                var ch = rainChars[Math.floor(Math.random() * rainChars.length)];
+                var x = i * fontSize, y = drops[i] * fontSize;
+                ctx.fillStyle = '#bff5ff';
+                ctx.fillText(ch, x, y);
+                ctx.fillStyle = '#00e5ff';
+                ctx.fillText(ch, x, y - fontSize);
+                drops[i]++;
+                if (y > cv.height && Math.random() > 0.975) drops[i] = 0;
+            }
+            rafMx = requestAnimationFrame(draw);
+        }
+        draw();
+    }
+
+    function startScramble(titleEl) {
+        if (!titleEl) return;
+        var start = performance.now();
+        function tick(now) {
+            var t = now - start;
+            var out = '';
+            for (var i = 0; i < FINAL.length; i++) {
+                var ch = FINAL[i];
+                if (ch === ' ') { out += ' '; continue; }
+                var lockAt = 600 + i * 150;
+                if (t < lockAt) out += SCRAMBLE[Math.floor(Math.random() * SCRAMBLE.length)];
+                else out += ch;
+            }
+            titleEl.innerHTML = out + '<span class="po-cur"></span>';
+            if (t < 600 + FINAL.length * 150 + 200) requestAnimationFrame(tick);
+            else {
+                titleEl.innerHTML = FINAL + '<span class="po-cur"></span>';
+                titleEl.classList.add('glx');
             }
         }
-    });
-    if (which === 'live') {
-        fetchAll();
+        requestAnimationFrame(tick);
     }
-    if (which === 'journal' && typeof loadJournalSessionList === 'function') {
-        loadJournalSessionList();
-        loadAISummary();
-        fetchAll();
+
+    function bootLog() {
+        var log = document.getElementById('po-boot-log');
+        if (!log) return;
+        log.innerHTML = '';
+        var lines = [
+            ['ok', 'boot.seq.start'], ['ok', 'mount /dev/polybot'], ['ok', 'kernel.load 4.21'],
+            ['warn', 'sandbox.expand'], ['ok', 'rsa.handshake'], ['ok', 'cipher xchacha20'],
+            ['warn', 'trace.deny .92'], ['ok', 'mesh.attach n04'], ['ok', 'shard sync 100%'],
+            ['err', 'noise floor +3'], ['ok', 'identity verify'], ['ok', 'vault sealed']
+        ];
+        lines.forEach(function(l, i) {
+            logTimeouts.push(setTimeout(function() {
+                var row = document.createElement('div');
+                row.className = 'row ' + l[0];
+                row.textContent = l[1];
+                log.appendChild(row);
+            }, 200 + i * 120));
+        });
     }
-    if (which === 'performance') {
-        loadLivePerformance();
-        loadSessionHistory();
+
+    function startTelemetry() {
+        var tele = { cpu: 12, mem: 20, net: 30 };
+        function hex(n) {
+            var s = '';
+            for (var i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+            return s;
+        }
+        function rnd() {
+            tele.cpu = Math.max(15, Math.min(95, tele.cpu + (Math.random() - 0.5) * 22));
+            tele.mem = Math.max(20, Math.min(90, tele.mem + (Math.random() - 0.5) * 18));
+            tele.net = Math.max(10, Math.min(95, tele.net + (Math.random() - 0.5) * 30));
+            var cpuEl = document.getElementById('po-tele-cpu-pct');
+            if (cpuEl) cpuEl.textContent = ('0' + Math.round(tele.cpu)).slice(-2) + '%';
+            var b1 = document.getElementById('po-bar-cpu');
+            if (b1) b1.style.setProperty('--w', tele.cpu + '%');
+            var memEl = document.getElementById('po-tele-mem-gb');
+            if (memEl) memEl.textContent = (tele.mem / 12.5).toFixed(1) + ' GB';
+            var b2 = document.getElementById('po-bar-mem');
+            if (b2) b2.style.setProperty('--w', tele.mem + '%');
+            var netEl = document.getElementById('po-tele-net');
+            if (netEl) netEl.textContent = (tele.net * 8.4).toFixed(1) + ' Mbps';
+            var b3 = document.getElementById('po-bar-net');
+            if (b3) b3.style.setProperty('--w', tele.net + '%');
+        }
+        rnd();
+        intervals.push(setInterval(rnd, 320));
+        var hashEl = document.getElementById('po-hash');
+        var buildEl = document.getElementById('po-seg-build');
+        intervals.push(setInterval(function() {
+            if (hashEl) hashEl.textContent = '0x' + hex(8);
+        }, 90));
+        intervals.push(setInterval(function() {
+            if (buildEl && !buildEl.getAttribute('data-from-health')) buildEl.textContent = hex(6);
+        }, 1400));
+        function utcClock() {
+            var d = new Date();
+            var p = function(n) { return String(n).padStart(2, '0'); };
+            var el = document.getElementById('po-corner-clock');
+            if (el) el.textContent = p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds()) + ' UTC';
+        }
+        utcClock();
+        intervals.push(setInterval(utcClock, 1000));
+    }
+
+    function setMode(mode) {
+        var o = document.getElementById('dash-privacy-overlay');
+        if (!o) return;
+        o.classList.remove('mode-privacy', 'mode-loading');
+        o.classList.add(mode === 'loading' ? 'mode-loading' : 'mode-privacy');
+        var preA = document.getElementById('po-pre-a');
+        var segLock = document.getElementById('po-seg-lock');
+        var segFoot = document.getElementById('po-seg-foot');
+        var btn = document.getElementById('po-close-btn');
+        if (preA) preA.textContent = mode === 'loading' ? 'Initializing' : 'Session locked';
+        if (segLock) segLock.textContent = mode === 'loading' ? 'LIVE' : 'LOCKED';
+        if (segFoot) segFoot.textContent = mode === 'loading' ? 'access granted' : 'bot running';
+        if (btn) btn.textContent = mode === 'loading' ? '▶ continue [esc]' : '▶ unlock session [esc]';
+    }
+
+    function show(mode) {
+        mode = mode || 'privacy';
+        var overlay = document.getElementById('dash-privacy-overlay');
+        if (!overlay) return;
+        stopAll();
+        overlay.removeAttribute('hidden');
+        overlay.classList.add('po-visible');
+        overlay.setAttribute('aria-hidden', 'false');
+        setMode(mode);
+        syncVersionFromHeader();
+        tryHealthBuild();
+        var titleEl = document.getElementById('po-title-el');
+        if (titleEl) {
+            titleEl.classList.remove('glx');
+            var blocks = '';
+            for (var j = 0; j < FINAL.length; j++) blocks += (FINAL[j] === ' ' ? ' ' : '█');
+            titleEl.innerHTML = blocks + '<span class="po-cur"></span>';
+        }
+        bootLog();
+        startTelemetry();
+        startMatrix();
+        startScramble(titleEl);
+    }
+
+    function hide() {
+        var o = document.getElementById('dash-privacy-overlay');
+        if (!o) return;
+        stopAll();
+        o.classList.remove('po-visible');
+        o.setAttribute('aria-hidden', 'true');
+        o.setAttribute('hidden', '');
+        var titleEl = document.getElementById('po-title-el');
+        if (titleEl) titleEl.classList.remove('glx');
+    }
+
+    function showTabTransition(applySwitch) {
+        show('loading');
         setTimeout(function() {
-            if (typeof loadAllocationChart === 'function') loadAllocationChart();
-            if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
-        }, 80);
+            applySwitch();
+            setTimeout(hide, 120);
+        }, 600);
     }
-    if (which === 'backtest') {
-        loadBacktestReports();
+
+    function init() {
+        var openBtn = document.getElementById('privacy-open-btn');
+        if (openBtn) openBtn.addEventListener('click', function() { show('privacy'); });
+        var closeBtn = document.getElementById('po-close-btn');
+        if (closeBtn) closeBtn.addEventListener('click', hide);
+        document.addEventListener('keydown', function(e) {
+            if (e.key !== 'Escape') return;
+            var o = document.getElementById('dash-privacy-overlay');
+            if (o && o.classList.contains('po-visible') && o.classList.contains('mode-privacy')) hide();
+        });
     }
-    if (typeof scheduleDashboardRelayout === 'function') {
-        scheduleDashboardRelayout();
+
+    return { show: show, hide: hide, showTabTransition: showTabTransition, init: init };
+})();
+
+document.addEventListener('DOMContentLoaded', function() {
+    DashPrivacy.init();
+    var text = 'POLYBOT AI';
+    var CHARS = '!<>-_/[]{}=+*^?#$%&01ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    var brand = document.getElementById('hacker-brand');
+    var brandText = document.getElementById('hacker-brand-text');
+    if (brand && brandText) {
+        function scramble(dur) {
+            dur = dur || 900;
+            var start = performance.now();
+            function tick(now) {
+                var p = Math.min(1, (now - start) / dur);
+                var out = '';
+                for (var i = 0; i < text.length; i++) {
+                    var ch = text[i];
+                    if (ch === ' ') { out += ' '; continue; }
+                    var lockAt = (i / text.length) * 0.85;
+                    if (p >= lockAt + Math.random() * 0.15) out += ch;
+                    else out += CHARS[Math.floor(Math.random() * CHARS.length)];
+                }
+                brandText.textContent = out;
+                if (p < 1) requestAnimationFrame(tick);
+                else brandText.textContent = text;
+            }
+            requestAnimationFrame(tick);
+        }
+        scramble(1100);
+        setInterval(function() {
+            if (Math.random() < 0.55) scramble(700);
+            brand.classList.remove('glx');
+            void brand.offsetWidth;
+            brand.classList.add('glx');
+        }, 5200);
+        brand.addEventListener('mouseenter', function() {
+            brand.classList.remove('glx');
+            void brand.offsetWidth;
+            brand.classList.add('glx');
+        });
     }
+}, { once: true });
+
+function switchMainView(which, opts) {
+    opts = opts || {};
+    var skipTransition = !!opts.skipTransition;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        skipTransition = true;
+    }
+
+    var cur = null;
+    document.querySelectorAll('#main-view-tabs .tab').forEach(function(t) {
+        if (t.classList.contains('active')) cur = t.getAttribute('data-view');
+    });
+    var changed = (cur !== which);
+
+    function applySwitch() {
+        try { localStorage.setItem('psb_main_view', which); } catch (e) {}
+        document.querySelectorAll('#main-view-tabs .tab').forEach(function(t) {
+            t.classList.toggle('active', t.getAttribute('data-view') === which);
+        });
+        ['live','performance','journal','backtest','commands'].forEach(function(v) {
+            var el = document.getElementById('view-' + v);
+            if (el) {
+                var on = (v === which);
+                el.style.display = on ? 'block' : 'none';
+                if (on) {
+                    el.classList.remove('tab-content-active');
+                    void el.offsetWidth;
+                    el.classList.add('tab-content-active');
+                }
+            }
+        });
+        if (which === 'live') {
+            fetchAll();
+        }
+        if (which === 'journal' && typeof loadJournalSessionList === 'function') {
+            loadJournalSessionList();
+            loadAISummary();
+            fetchAll();
+        }
+        if (which === 'performance') {
+            loadLivePerformance();
+            loadSessionHistory();
+            setTimeout(function() {
+                if (typeof loadAllocationChart === 'function') loadAllocationChart();
+                if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
+            }, 80);
+        }
+        if (which === 'backtest') {
+            loadBacktestReports();
+        }
+        if (typeof scheduleDashboardRelayout === 'function') {
+            scheduleDashboardRelayout();
+        }
+    }
+
+    if (!changed || skipTransition) {
+        applySwitch();
+        return;
+    }
+    DashPrivacy.showTabTransition(applySwitch);
 }
 
 let _dashboardRelayoutTimer = null;
@@ -4985,7 +5420,7 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
         var v = localStorage.getItem('psb_main_view');
         if (v && ['live','performance','journal','backtest','commands'].indexOf(v) >= 0)
-            switchMainView(v);
+            switchMainView(v, { skipTransition: true });
     } catch (e) {}
 });
 
@@ -5490,34 +5925,82 @@ function _formatAltWatchlistTriggers(watchlist) {
         bits.join(' <span style="opacity:0.35">|</span> ');
 }
 
+/** Parse #rrggbb (6 hex); returns null if invalid */
+function _hexToRgbTrade(hex) {
+    var s = String(hex || '').trim();
+    var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s);
+    if (!m) return null;
+    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
+function _rgbToHexTrade(r, g, b) {
+    function c(x) {
+        var n = Math.max(0, Math.min(255, Math.round(x)));
+        return n.toString(16).padStart(2, '0');
+    }
+    return '#' + c(r) + c(g) + c(b);
+}
+/** Shade: t<0 darkens toward black; t>0 lightens toward white (same hue family). */
+function _shadeHexTrade(hex, t) {
+    var rgb = _hexToRgbTrade(hex);
+    if (!rgb) return hex || '#888';
+    if (t < 0) {
+        var k = 1 + t;
+        return _rgbToHexTrade(rgb.r * k, rgb.g * k, rgb.b * k);
+    }
+    var u = Math.min(1, t);
+    return _rgbToHexTrade(
+        rgb.r + (255 - rgb.r) * u,
+        rgb.g + (255 - rgb.g) * u,
+        rgb.b + (255 - rgb.b) * u
+    );
+}
+
 function _tradeMarkersFromPoints(points, strategy) {
-    // Strategy colors aligned with design handoff window.STRATS palette
+    // Strategy colors: STRATS includes both design keys (sol_lag) and runtime ids (sol_macro)
     const stratKey = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',xrp_macro:'XRP',hype_macro:'HYPE',weather:'WX'};
-    // Map runtime strategy ids -> design's window.STRATS keys (bitcoin/sol_lag/eth_lag/hype_lag/xrp_lag/weather)
-    const designKey = {bitcoin:'bitcoin',sol_macro:'sol_lag',eth_macro:'eth_lag',xrp_macro:'xrp_lag',hype_macro:'hype_lag',weather:'weather'}[strategy];
-    const stratColor = (window.STRATS && designKey && window.STRATS[designKey]) || '#94a3b8';
+    const stratColor = (window.STRATS && window.STRATS[strategy])
+        || '#94a3b8';
     const key = stratKey[strategy] || (strategy || '?').slice(0,3).toUpperCase();
-    // Win = bright strategy color, loss = dim red — keeps win/loss readable while staying in the design palette
-    const colorWin = stratColor;
-    const colorLoss = '#7f1d1d';
+    // Same shapes as originally: win = circle, loss = square (PnL, not entry vs exit).
+    // When entry + exit times differ: darker at entry, lighter at exit (same hue).
+    var entryDarken = -0.44;
+    var exitLighten = 0.48;
     return (points || [])
         .filter((p) => p.strategy === strategy)
         .slice(-120)
-        .map((p) => {
+        .flatMap((p) => {
             const pnl = p.pnl || 0;
             const sign = pnl >= 0 ? '+' : '';
-            // time = entry (closed trades only); label shows realized PnL
-            let txt = key + ' ' + sign + pnl.toFixed(2);
-            if (p.closed_at != null && p.closed_at !== p.time) {
-                txt += ' ·in';
-            }
-            return {
+            const base = pnl >= 0 ? stratColor : '#7f1d1d';
+            const cIn = _shadeHexTrade(base, entryDarken);
+            const cOut = _shadeHexTrade(base, exitLighten);
+            const txt = key + ' ' + sign + pnl.toFixed(2);
+            const pos = pnl >= 0 ? 'belowBar' : 'aboveBar';
+            const shape = pnl >= 0 ? 'circle' : 'square';
+            const hasExit =
+                p.closed_at != null &&
+                p.closed_at !== p.time &&
+                Number.isFinite(Number(p.closed_at));
+            const entryMarker = {
                 time: p.time,
-                position: pnl >= 0 ? 'belowBar' : 'aboveBar',
-                shape: pnl >= 0 ? 'circle' : 'square',
-                color: pnl >= 0 ? colorWin : colorLoss,
-                text: txt,
+                position: pos,
+                shape: shape,
+                color: cIn,
+                text: hasExit ? txt + ' ·in' : txt,
             };
+            if (!hasExit) {
+                return [entryMarker];
+            }
+            return [
+                entryMarker,
+                {
+                    time: p.closed_at,
+                    position: pos,
+                    shape: shape,
+                    color: cOut,
+                    text: txt + ' ·out',
+                },
+            ];
         });
 }
 

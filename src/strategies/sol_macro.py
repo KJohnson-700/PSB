@@ -62,6 +62,7 @@ from src.analysis.updown_composite_score import (
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
+from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -2285,6 +2286,10 @@ class SolMacroStrategy:
                     continue
                 if _late_reason:
                     reason_parts.append(_late_reason)
+
+            effective_min_edge *= get_drift_min_edge_mult(
+                self._signal_strategy_name, self.full_config
+            )
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (

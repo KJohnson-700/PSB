@@ -46,6 +46,8 @@ from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
 from src.config_merge import deep_merge_config as _deep_merge
 from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
+from src.execution.backtest_expectations import load_backtest_expectations
+from src.execution.performance_feedback import public_feedback_status
 
 # Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
 load_project_dotenv(project_root_from_here(), quiet=True)
@@ -390,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-09-dash-fs-crypto-tile-density",
+        "dashboard_ui_rev": "2026-05-10-dash-privacy-hacker-brand",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1219,6 +1221,7 @@ async def get_status():
             "ai_activity_note": _ops.get("ai_activity_note"),
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
+            "performance_feedback": public_feedback_status(bot.config),
         }
 
     # ── No bot_instance: read everything from disk ──
@@ -1300,6 +1303,7 @@ async def get_status():
         "buy_no_skip_diagnostics": None,
         "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
+        "performance_feedback": public_feedback_status(cfg_disk),
     }
 
 
@@ -1546,35 +1550,19 @@ async def get_live_drift():
     from src.execution.live_testing import PerformanceTracker
 
     perf = PerformanceTracker()
-    # Load backtest expectations from latest reports
-    report_dir = DATA_ROOT / "backtest" / "reports"
-    expectations = {}
-    if report_dir.exists():
-        for f in sorted(
-            report_dir.glob("backtest_*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        ):
-            try:
-                with open(f) as fp:
-                    data = json.load(fp)
-                strategy = data.get("strategy")
-                if strategy and strategy not in expectations:
-                    bt_trades = data.get("trades", [])
-                    wins = sum(1 for t in bt_trades if t.get("pnl", 0) > 0)
-                    edges = [
-                        t.get("edge", 0) for t in bt_trades if t.get("edge") is not None
-                    ]
-                    expectations[strategy] = {
-                        "win_rate": wins / len(bt_trades) if bt_trades else 0,
-                        "avg_edge": sum(edges) / len(edges) if edges else 0,
-                        "trades_per_day": len(bt_trades)
-                        / max(1, data.get("data_row_count", 1) / 24),
-                    }
-            except Exception:
-                pass
-
-    drift = perf.check_drift(expectations)
+    cfg: Dict[str, Any] = {}
+    bot = _full_bot_instance()
+    if bot is not None:
+        cfg = bot.config
+    elif CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+    expectations = load_backtest_expectations(cfg, data_root=DATA_ROOT)
+    min_s = int((cfg.get("performance_feedback") or {}).get("min_live_sample", 15))
+    drift = perf.check_drift(expectations, min_live_sample=min_s)
     return {
         "reports": [
             {

@@ -48,6 +48,7 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
+from src.execution.performance_feedback import get_drift_min_edge_mult
 
 logger = logging.getLogger(__name__)
 
@@ -1681,6 +1682,8 @@ class BitcoinStrategy:
                     f"neutral_rsi_penalty={self.neutral_rsi_extra_min_edge:.3f}"
                 )
                 _sample("neutral_rsi_penalty", self.neutral_rsi_extra_min_edge)
+
+            effective_min_edge *= get_drift_min_edge_mult("bitcoin", self.full_config)
 
             # ── AI-hold soft veto ────────────────────────────────────────────
             # If AI said HOLD on this market within the last ai_hold_veto_ttl_sec,

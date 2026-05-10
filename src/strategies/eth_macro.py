@@ -26,6 +26,7 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
+from src.execution.performance_feedback import get_drift_min_edge_mult
 
 logger = logging.getLogger(__name__)
 
@@ -851,6 +852,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
             if _late_reason:
                 reason_parts.append(_late_reason)
+
+            effective_min_edge *= get_drift_min_edge_mult("eth_macro", self.full_config)
 
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
