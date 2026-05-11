@@ -242,7 +242,7 @@ class PolyBot:
         self.last_buy_no_skip_counts: Dict[str, Dict[str, int]] = {}
         self.last_buy_no_skip_samples: Dict[str, Dict[str, Any]] = {}
 
-        # Trade journal: Railway container restarts always start a FRESH session at
+        # Trade journal: every process restart starts a FRESH session at
         # initial_bankroll (500). This ensures every restart = clean test run.
         # Resume only if PAPER_SESSION_ID is explicitly set to an existing session name.
         _forced_session = os.environ.get("PAPER_SESSION_ID")
@@ -256,7 +256,7 @@ class PolyBot:
             self.journal = TradeJournal(resume_latest=True)
             logging.info(f"Resuming latest session: {self.journal.session_id}")
         else:
-            # Default: fresh session every restart ( Railway container lifecycle = test cycle)
+            # Default: fresh session every restart (process lifecycle = test cycle)
             new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
             self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
@@ -391,7 +391,7 @@ class PolyBot:
         logging.warning(
             "EXPOSURE per-lane: loss_kill_switch_enabled=%s max_consecutive_losses=%s pause_cycles=%s "
             "(btc/sol/eth/xrp/weather each have separate streaks). "
-            "If Railway runs an old image, set Variables EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true and restart.",
+            "If a stale image is running, set EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true in the environment and restart.",
             em0.loss_kill_switch_enabled,
             em0.max_consecutive_losses,
             em0.pause_cycles,
@@ -402,7 +402,7 @@ class PolyBot:
 
         Docker bakes ``config/settings.yaml`` at **build** time. Without a redeploy,
         production can still have ``loss_kill_switch_enabled: false`` even after Git
-        changes. Railway **Variables** override at **process start**:
+        changes. Environment variables override at **process start**:
 
         - ``EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true`` (or 1/yes/on) → force ON
         - ``false`` / ``0`` / ``no`` / ``off`` → force OFF
@@ -2059,7 +2059,7 @@ class PolyBot:
 def start_dashboard(bot: Optional["PolyBot"]):
     """Starts the Uvicorn server in a separate thread if enabled in config.
 
-    ``bot`` may be ``None`` during Railway/bootstrap: bind HTTP + /health before
+    ``bot`` may be ``None`` during bootstrap: bind HTTP + /health before
     ``PolyBot()`` journal I/O. Call ``set_bot_instance(bot)`` after the bot is ready.
     """
     import time
@@ -2070,7 +2070,7 @@ def start_dashboard(bot: Optional["PolyBot"]):
         logging.info("Dashboard is disabled in the configuration.")
         return
 
-    # PaaS (Railway, Render, etc.) sets PORT — bind 0.0.0.0 and ignore dashboard_port.
+    # PaaS hosts set PORT — bind 0.0.0.0 and ignore dashboard_port.
     if os.environ.get("PORT"):
         port = int(os.environ["PORT"])
         host = os.environ.get("DASHBOARD_HOST", "0.0.0.0")
@@ -2131,7 +2131,7 @@ def start_dashboard(bot: Optional["PolyBot"]):
             return False
 
     def _wait_until_port_accepts(timeout: float = 90.0) -> bool:
-        """Block until TCP accepts on connect_host:port (Railway health checks need this)."""
+        """Block until TCP accepts on connect_host:port (PaaS health checks need this)."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -2235,8 +2235,8 @@ def start_dashboard(bot: Optional["PolyBot"]):
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()
     if skip_browser:
-        # Before heavy PolyBot() / journal replay, ensure HTTP is up so Railway
-        # /health succeeds (otherwise Initializing can time out while main hogs CPU/GIL).
+        # Before heavy PolyBot() / journal replay, ensure HTTP is up so PaaS
+        # /health probes succeed (otherwise Initializing can time out while main hogs CPU/GIL).
         if os.environ.get("PORT") or os.environ.get("RAILWAY_ENVIRONMENT"):
             _wait_until_port_accepts(timeout=95.0)
         threading.Thread(target=log_when_ready_no_browser, daemon=True).start()

@@ -2220,9 +2220,14 @@ class SolMacroStrategy:
             # ── Final filters (both paths) ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
             effective_min_edge = max(effective_min_edge, self.hard_min_edge)
-            # BUY_NO requires stronger edge conviction (short bias in a mixed/bull regime).
+            # BUY_NO floor: min_edge_buy_no, when set, REPLACES the base floor for BUY_NO
+            # (instead of only being allowed to raise it). Lets per-strategy YAML overrides
+            # loosen BUY_NO admissions when the short side has been historically profitable
+            # (e.g. xrp/hype/eth at 0.08 vs base 0.09). Bitcoin's 0.11 still works the same
+            # way (raises above 0.10). Downstream layers (regime mult, LTF unconfirmed,
+            # NEUTRAL HTF, late-window add-on) still raise this further via max().
             if action == "BUY_NO" and self.min_edge_buy_no > 0:
-                effective_min_edge = max(effective_min_edge, self.min_edge_buy_no)
+                effective_min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and not is_5m:
                 effective_min_edge = max(

@@ -1659,10 +1659,13 @@ class BitcoinStrategy:
 
             # ── Final filters ──
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
-            # BUY_NO requires stronger edge conviction (counter-trend / short in bull market).
+            # BUY_NO floor: min_edge_buy_no, when set, REPLACES the base floor for BUY_NO
+            # (was previously max-clamped, silently inert when set below base). For BTC the
+            # explicit value 0.11 still acts as a stricter requirement than base 0.10.
+            # Downstream layers (NEUTRAL HTF, regime mult, late-window) still raise via max().
             _min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
             if action == "BUY_NO" and _min_edge_buy_no > 0:
-                effective_min_edge = max(effective_min_edge, _min_edge_buy_no)
+                effective_min_edge = _min_edge_buy_no
             # NEUTRAL HTF: no confirmed bias — demand stronger edge for updown leans.
             # Applies to both 5m and 15m: the 5m path has zero backtest coverage under NEUTRAL
             # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).

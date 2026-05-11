@@ -2,7 +2,7 @@
 Load local secrets for development: project root `.env`, then `config/secrets.env`
 (overrides). Uses pathlib — safe on Windows and Unix.
 
-Railway/Docker typically inject env only; missing files is normal there.
+Container/PaaS hosts typically inject env vars directly; missing files is normal there.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def load_project_dotenv(
         elif not quiet:
             print(
                 f"INFO: No {secrets} and no {root_env} — "
-                "using process environment (expected on Railway/Docker)."
+                "using process environment (normal for container/PaaS hosts)."
             )
     except Exception as e:
         if not quiet:

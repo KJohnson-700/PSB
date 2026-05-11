@@ -1,9 +1,9 @@
 """
-Structured operational logging for hosts that capture stdout (Railway, Docker, systemd).
+Structured operational logging for hosts that capture stdout (Docker, systemd, PaaS).
 
 Every pulse is one line prefixed with OPS_JSON so you can filter:
 
-  railway logs | findstr OPS_JSON
+  <host log command> | findstr OPS_JSON
 
 or ingest into log platforms as JSON.
 """
@@ -319,7 +319,7 @@ def _regime_hint(trading_cfg: Dict[str, Any], btc_spot: Optional[float]) -> Opti
 
 
 def public_dashboard_url() -> Optional[str]:
-    """HTTPS base URL for the dashboard when the platform sets a public domain (e.g. Railway)."""
+    """HTTPS base URL for the dashboard when the host platform exposes a public domain env var."""
     d = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_STATIC_URL")
     if not d:
         return None
@@ -416,7 +416,7 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
 
 
 def log_ops_pulse(bot: Any, loop: str) -> None:
-    """Emit one OPS_JSON line to the root logger (stdout on Railway)."""
+    """Emit one OPS_JSON line to the root logger (stdout)."""
     if not getattr(bot, "config", None):
         return
     if not bot.config.get("logging", {}).get("ops_pulse", True):
@@ -446,8 +446,8 @@ def log_ops_startup(bot: Any) -> None:
             "entries_file": str(getattr(bot.journal, "_entries_file", "")),
             "dry_run": bool(bot.config.get("trading", {}).get("dry_run", True)),
             "dashboard_url": public_dashboard_url(),
-            "hint": "Filter logs: railway logs | findstr OPS_JSON  —  API: {url}/api/ops/summary".format(
-                url=public_dashboard_url() or "(set PORT or RAILWAY_PUBLIC_DOMAIN)"
+            "hint": "Filter logs by grepping OPS_JSON  —  API: {url}/api/ops/summary".format(
+                url=public_dashboard_url() or "http://localhost:$PORT"
             ),
         }
         line = json.dumps(payload, separators=(",", ":"), default=str)

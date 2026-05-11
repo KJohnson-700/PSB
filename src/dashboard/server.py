@@ -54,7 +54,7 @@ load_project_dotenv(project_root_from_here(), quiet=True)
 
 bot_instance: Optional["PolyBot"] = None
 
-# Uvicorn server started from main.py before PolyBot finishes heavy init (Railway health checks).
+# Uvicorn server started from main.py before PolyBot finishes heavy init (PaaS health checks).
 _dashboard_uvicorn_server: Optional["uvicorn.Server"] = None
 
 
@@ -715,11 +715,11 @@ async def get_dashboard():
         return HTMLResponse(content="<h1>Dashboard file not found.</h1>")
 
 
-# ─── HEALTH (Railway / container uptime check) ────────────────────
+# ─── HEALTH (container / PaaS uptime check) ──────────────────────
 
 @app.get("/health")
 async def health_check():
-    """Keep ``status: ok`` for probes; extra fields help confirm the image matches Git (see docs/RAILWAY.md)."""
+    """Keep ``status: ok`` for probes; extra fields help confirm the image matches Git."""
     return _health_payload()
 
 

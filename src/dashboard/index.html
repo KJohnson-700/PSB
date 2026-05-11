@@ -1268,7 +1268,7 @@
     <div id="view-backtest" style="display:none;">
 
     <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:4px;margin-bottom:14px;">
-        <strong style="color:var(--tm);">Hosted (Railway, Docker):</strong> Use the buttons below while the bot runs — backtests start as a subprocess and do not replace the service. For one-off CLI runs, use the Commands tab.
+        <strong style="color:var(--tm);">While the bot is running:</strong> Use the buttons below — backtests start as a subprocess and do not replace the live process. For one-off CLI runs, use the Commands tab.
     </div>
 
     <!-- Backtest Controls -->
@@ -1512,7 +1512,7 @@
         </div>
 
         <h3>Backtest (CLI)</h3>
-        <p class="cmd-note">For <strong>local</strong> use or a <strong>separate</strong> scheduled job. On Railway (or any single-process deploy), keep the service on <code>--paper</code> / <code>--live</code> and run backtests from the <strong>Backtest</strong> tab instead — <code>main.py --backtest</code> as the container <em>CMD</em> replaces the long-lived bot.</p>
+        <p class="cmd-note">Use this when the bot is <strong>not</strong> running, or as a separate scheduled job. If the bot is already running (any host — local, Docker, PaaS), use the <strong>Backtest</strong> tab instead so backtests run as a subprocess. Invoking <code>main.py --backtest</code> as the service entry point would replace the long-lived bot.</p>
         <p class="cmd-note">Entry point forwards to <code>scripts/run_backtest.py</code>; extra args go after <code>--backtest</code>.</p>
         <div class="cmd-row">
             <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --backtest --plan config/backtest_plan.yaml">Copy</button>

@@ -710,7 +710,7 @@ def _append_vault_markdown(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def log_learning_summary_to_logger(payload: Dict[str, Any]) -> None:
-    """Structured INFO lines for Railway / local logs."""
+    """Structured INFO lines for stdout / local logs."""
     logger.info(
         "Learning loop: aggregated %d EXIT rows across sessions",
         payload.get("exit_events_used", 0),

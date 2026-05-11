@@ -806,6 +806,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
 
             effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
+            # BUY_NO floor: per-strategy override replaces base (previously not applied at
+            # all in eth_macro — the YAML setting `min_edge_buy_no: 0.08` was silently
+            # ignored here despite being honored — buggy — in sol/hype/xrp).
+            _min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
+            if action == "BUY_NO" and _min_edge_buy_no > 0:
+                effective_min_edge = max(
+                    float(getattr(self, "hard_min_edge", 0.0) or 0.0),
+                    _min_edge_buy_no,
+                )
             if self._btc_1h_regime_gates.get("enabled", False):
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
