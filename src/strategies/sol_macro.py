@@ -389,6 +389,14 @@ class SolMacroStrategy:
         self.require_btc_volatility_gate = bool(
             self.config.get("require_btc_volatility_gate", False)
         )
+        # When True, flat_btc_no_lag is bypassed if the alt itself has a 1h trend
+        # aligned with the intended side (BUY_NO ↔ BEARISH, BUY_YES ↔ BULLISH). The
+        # flat-BTC gate is a noise filter for BTC-derived signals; alt-driven setups
+        # (especially BUY_NO in bear markets) shouldn't be suppressed just because BTC
+        # is calm. Default True to unblock dead BUY_NO admissions. Set False to revert.
+        self.flat_btc_alt_aligned_bypass = bool(
+            self.config.get("flat_btc_alt_aligned_bypass", True)
+        )
         # BTC 1H close vs SMA(20): scales min_edge bars and size for RANGE/BEAR chop / downtrends.
         self._btc_1h_regime_gates: Dict[str, Any] = dict(
             self.config.get("btc_1h_regime_gates") or {}
@@ -1569,10 +1577,22 @@ class SolMacroStrategy:
                         if is_5m
                         else max(_abs_btc_move_5m, _abs_btc_move_15m)
                     )
+                    # Alt-aligned bypass: don't suppress alt-driven setups when BTC is
+                    # quiet but the alt's own 1h trend matches the intended direction.
+                    # Resurrects the BUY_NO short side in bear markets where BTC is flat
+                    # but the alt is independently trending down.
+                    _alt_aligned_bypass = False
+                    if self.flat_btc_alt_aligned_bypass:
+                        _alt_h1 = getattr(mtt, "h1_trend", "NEUTRAL")
+                        if action == "BUY_NO" and _alt_h1 == "BEARISH":
+                            _alt_aligned_bypass = True
+                        elif action == "BUY_YES" and _alt_h1 == "BULLISH":
+                            _alt_aligned_bypass = True
                     if (
                         _btc_move_for_gate < _btc_min_move_pct
                         and not corr.btc_spike_detected
                         and not corr.lag_opportunity
+                        and not _alt_aligned_bypass
                     ):
                         _bump_skip("flat_btc_no_lag")
                         if action == "BUY_NO":

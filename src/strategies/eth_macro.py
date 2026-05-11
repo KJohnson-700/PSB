@@ -655,7 +655,16 @@ class ETHMacroStrategy(SolMacroStrategy):
             else:
                 _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                 _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
-            if _btc_price > 0 and _btc_move < _btc_min_move:
+            # Alt-aligned bypass: when ETH itself has a 1h trend matching the intended
+            # side, don't require BTC to move. The BTC-move gate is a noise filter for
+            # BTC-derived signals; alt-driven setups should be allowed through.
+            _alt_aligned_bypass = False
+            if getattr(self, "flat_btc_alt_aligned_bypass", True):
+                if allowed_side == "SHORT" and alt_1h_trend == "BEARISH":
+                    _alt_aligned_bypass = True
+                elif allowed_side == "LONG" and alt_1h_trend == "BULLISH":
+                    _alt_aligned_bypass = True
+            if _btc_price > 0 and _btc_move < _btc_min_move and not _alt_aligned_bypass:
                 if _btc_corr < _low_corr_btc_bypass:
                     logger.debug(
                         f"  ETH btc_min_move bypassed (corr={_btc_corr:.2f} < {_low_corr_btc_bypass}) "
