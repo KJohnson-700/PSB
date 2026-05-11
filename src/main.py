@@ -1175,6 +1175,11 @@ class PolyBot:
         self.bitcoin_strategy._open_positions_snapshot = open_positions_snapshot
         self.sol_macro_strategy._open_positions_snapshot = open_positions_snapshot
 
+        strategy_tasks: list[tuple[str, Any]] = [
+            ("bitcoin", self.bitcoin_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
+            ("sol_macro", self.sol_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
+        ]
+
         eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
         if eth_macro_cfg.get("enabled", False):
             self.eth_macro_strategy._open_positions_snapshot = open_positions_snapshot
