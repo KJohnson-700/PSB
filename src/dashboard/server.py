@@ -356,8 +356,8 @@ async def _dashboard_lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="PolyBot AI Dashboard",
-    description="Live monitoring for PolyBot AI trading bot.",
+    title="Oracle AI Dashboard",
+    description="Live monitoring for Oracle AI (Polymarket trading bot).",
     version="0.2.0",
     lifespan=_dashboard_lifespan,
 )
@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-10-dash-privacy-hacker-brand",
+        "dashboard_ui_rev": "2026-05-10-strategy-pnl-full-rowset",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }

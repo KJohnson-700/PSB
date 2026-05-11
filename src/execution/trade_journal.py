@@ -222,10 +222,16 @@ class TradeJournal:
         reason: str = "",
         extra: Dict = None,
         market_end_at: Optional[datetime] = None,
-        entry_leg: str = "YES",
+        entry_leg: Optional[str] = None,
     ):
         """Log a new trade entry."""
-        entry_leg = entry_leg if entry_leg in ("YES", "NO") else "YES"
+        if isinstance(entry_leg, str) and entry_leg.strip().upper() in ("YES", "NO"):
+            entry_leg_resolved = entry_leg.strip().upper()
+        else:
+            entry_leg_resolved = infer_entry_leg(
+                {"action": action, "side": side, "outcome": outcome}
+            )
+        entry_leg = entry_leg_resolved
         merged_extra = enrich_entry_extra(extra, market_end_at=market_end_at)
         merged_extra["entry_leg"] = entry_leg
         entry = JournalEntry(
@@ -734,11 +740,24 @@ class TradeJournal:
     def _build_closed_stats(self) -> Dict:
         """Compute closed-trade stats from self.closed_trades. Called once per ENTRY/EXIT,
         cached in self._summary_cache between events."""
-        real_trades = [
-            ct for ct in self.closed_trades
-            if not (ct.get("entry_price", 0) > 0 and abs(ct.get("entry_price", 0) + ct.get("exit_price", ct.get("current_price", 0)) - 1.0) < 0.02)
-            and abs(ct.get("pnl", 0)) <= 200.0
-        ]
+        real_trades = []
+        for ct in self.closed_trades:
+            ep = float(ct.get("entry_price") or 0)
+            xv = ct.get("exit_price", ct.get("current_price", 0))
+            try:
+                xv = float(xv or 0)
+            except (TypeError, ValueError):
+                xv = 0.0
+            pnl = float(ct.get("pnl") or 0)
+            leg = infer_entry_leg(ct)
+            is_yes_flip = (
+                leg == "YES"
+                and ep > 0
+                and abs(ep + xv - 1.0) < 0.02
+            )
+            oversized = abs(pnl) > 200.0
+            if not is_yes_flip and not oversized:
+                real_trades.append(ct)
         wins = sum(1 for ct in real_trades if ct.get("pnl", 0) > 0)
         losses = sum(1 for ct in real_trades if ct.get("pnl", 0) <= 0)
         strat_stats: Dict = {}
@@ -834,15 +853,19 @@ class TradeJournal:
         for s in weather_open_stats.values():
             s["exposure"] = round(s["exposure"], 2)
             s["unrealized_pnl"] = round(s["unrealized_pnl"], 2)
-        # Fills = one entry per open position plus one per closed round-trip
-        # (avoids inflating counts with ENTRY lines that never became a position).
-        entry_fill_count = len(self.open_positions) + closed["total_exits"]
+        # Fills / closed totals must match journal state (same as log_entry assigns:
+        # open + len(closed_trades)), not len(real_trades). The phantom heuristic in
+        # _build_closed_stats mirrors pre-fix buggy EXIT rows across all legs while
+        # log_exit blocks it only for YES-quote rows — excluding real closes from stats
+        # under-counted fills on the dashboard.
+        n_closed = len(self.closed_trades)
+        entry_fill_count = len(self.open_positions) + n_closed
         realized_raw = float(closed["realized_pnl"])
         unreal_rounded = round(unrealized, 2)
         out = {
             "session_id": self.session_id,
             "total_entries": entry_fill_count,
-            "total_exits": closed["total_exits"],
+            "total_exits": n_closed,
             "open_positions": len(self.open_positions),
             "total_cost": round(total_cost, 2),
             "session_staked_notional": session_staked_notional,

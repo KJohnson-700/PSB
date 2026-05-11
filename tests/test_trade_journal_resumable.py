@@ -107,6 +107,42 @@ def test_dead_zone_skip_records_and_resolves(tmp_path: Path, monkeypatch) -> Non
     assert resolved["extra"]["hour_utc"] == 18
 
 
+def test_session_fill_count_matches_journal_not_phantom_filtered_subtotal(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """get_summary totals must mirror open + closed_trades counts.
+
+    _build_closed_stats drops some rows from WR/PnL (phantom ep+exit≈1); that filter was
+    written for YES-quote exits but applies to every close. NO-leg closures can satisfy
+    ep+exit≈1 without being phantom; fills were still wrongly excluded from session counters.
+    """
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260510_fillcount", resume_latest=False)
+    journal.log_entry(
+        trade_id="t-no-quote",
+        market_id="m1",
+        market_question="Ether up or Down",
+        strategy="eth_macro",
+        action="BUY_NO",
+        side="BUY",
+        outcome="NO",
+        size=10.0,
+        entry_price=0.35,
+        bankroll=1000.0,
+    )
+    # Would be blocked only for YES leg in log_exit; NO leg slips through — still a real exit.
+    journal.log_exit(
+        trade_id="t-no-quote",
+        exit_price=0.65,
+        bankroll=1003.0,
+        reason="test_resolve",
+    )
+    summary = journal.get_summary()
+    assert summary["total_entries"] == 1
+    assert summary["total_exits"] == 1
+    assert summary["open_positions"] == 0
+
+
 def test_buy_no_skip_event_is_persisted(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
     journal = TradeJournal(session_id="20260505_120000", resume_latest=False)

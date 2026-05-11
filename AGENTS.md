@@ -15,6 +15,8 @@
 
 ## Strategy Log — AI Editor Instructions
 
+**Agent backfill (no vault entry):** When Claude/Codex/Cursor ships code without a strategy-log or operator note, append a dated index under **`docs/AGENT_CHANGELOG.md`** so the repo still has a readable paper trail (git history remains authoritative).
+
 The Obsidian vault at `projects/polymarket-bot/strategy-log/` is the authoritative record for all strategy changes, test results, and reviews. When making strategy-related changes:
 
 1. **Read `_index.md` first** — it defines the exact template format. Do not invent your own structure.
@@ -50,6 +52,7 @@ For **auditing** backtest outputs, paper/live journals, and strategy code—hunt
 ## Learned Workspace Facts
 
 - **PSB (this repo) + Second Brain:** Project name **PSB**; Mac folder is often `psb-main 1` (Windows name may differ). **Hermes Obsidian vault note (operator second brain):** `Hermes Second Brain/projects/psb/notes/2026-04-21-psb-agent-memory-correctness-bundle.md`. **REST API (when plugin is up):** `docs/OBSIDIAN_LOCAL_REST_API.md`. If API is offline, **writing that vault path directly** is equivalent—Obsidian will see the file on disk.
+- **Canonical Git remote (this bot only):** **https://github.com/KJohnson-700/PSB** (`origin` / `kjohnson`). This PSB/Polymarket bot is **not** the same repo as other GitHub projects (e.g. do not use `samuraifrenchienft/polymarket-bot` or other URLs for push/deploy unless the operator explicitly switches remotes). Agents: verify `git remote -v` before commit/push.
 - **Local bot (no PaaS):** Dashboard defaults to **http://127.0.0.1:8081** (`dashboard.dashboard_port` in `config/settings.yaml`). Stop/start/restart and port checks: **`docs/LOCAL_BOT_RUN.md`**.
 - **PSB April 2026 fixes (Cursor / Claude):** **`scan_and_analyze` on `SolMacroStrategy`** (not nested in `_get_weekend_penalty`); **`_get_weekend_penalty`** module-level; **`self.enabled`** on base SOL macro; **`_bump_skip`** in SOL macro loop; **Discord** allowlist **`hype_macro`**; restart process for `src/` changes. **Infra log:** `projects/polymarket-bot/changelog.md` § 2026-04-21. **Hermes:** don’t treat Hermes app repos as PSB; patch PSB codebase only.
 - Intended ops: intermittent bot runs (multi-day sessions, partial monthly uptime) while strategies are tuned; treat true 24/7 production-style hosting as gated until at least two strategies are proven and higher infra spend is justified.

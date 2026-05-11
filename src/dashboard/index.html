@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>POLYBOT AI</title>
+    <title>Oracle AI</title>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root{
@@ -533,7 +533,16 @@
         .po .po-corner.bl{bottom:24px;left:24px;border-right:none;border-top:none;color:var(--gr)}
         .po .po-corner.br{bottom:24px;right:24px;border-left:none;border-top:none;color:var(--ye)}
         .po .po-htxt{position:absolute;font-size:11px;letter-spacing:.18em;text-transform:uppercase;opacity:.92;z-index:20;text-shadow:0 0 8px currentColor}
-        .po .po-htxt.tl{top:32px;left:72px;color:var(--cy)}.po .po-htxt.tr{top:32px;right:72px;text-align:right;color:var(--pu)}
+        .po .po-htxt.tl{
+            font-size:clamp(14px,1.65vw,20px);
+            font-weight:600;
+            letter-spacing:.1em;
+            top:26px;
+            left:66px;
+            color:var(--cy);
+            white-space:nowrap;
+        }
+        .po .po-htxt.tr{top:32px;right:72px;text-align:right;color:var(--pu)}
         .po .po-htxt.bl{bottom:32px;left:72px;color:var(--gr)}.po .po-htxt.br{bottom:32px;right:72px;text-align:right;color:var(--ye)}
         .po .po-stage{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:24px;padding:0 32px}
         .po .po-pre{display:flex;gap:14px;align-items:center;font-size:11px;letter-spacing:.3em;text-transform:uppercase;opacity:0;animation:poFade .4s ease .15s forwards}
@@ -604,9 +613,9 @@
     <canvas class="po-mx" id="po-matrix-canvas" aria-hidden="true"></canvas>
     <div class="po-corner tl"></div><div class="po-corner tr"></div>
     <div class="po-corner bl"></div><div class="po-corner br"></div>
-    <div class="po-htxt tl">SYS // polybot.core</div>
-    <div class="po-htxt tr">NODE 04 :: SECURE</div>
-    <div class="po-htxt bl">UPLINK 226.0.14.7</div>
+    <div class="po-htxt tl">SYS // oracle.core</div>
+    <div class="po-htxt tr">ORACLE NODE :: SECURE</div>
+    <div class="po-htxt bl">ORACLE UPLINK 226.0.14.7</div>
     <div class="po-htxt br" id="po-corner-clock">--:--:-- UTC</div>
     <div class="po-log" id="po-boot-log" aria-live="polite"></div>
     <div class="po-tele">
@@ -623,17 +632,17 @@
     <div class="po-stage">
         <div class="po-pre">
             <span class="po-dot"></span>
-            <span class="a" id="po-pre-a">Session locked</span>
+            <span class="a" id="po-pre-a">ORACLE · SESSION LOCKED</span>
             <span class="po-sep">//</span>
             <span class="b" id="po-hash">0x00000000</span>
             <span class="po-sep">//</span>
-            <span class="c">handshake.ok</span>
+            <span class="c">oracle.handshake.ok</span>
             <span class="po-sep">//</span>
-            <span class="d">node 04</span>
+            <span class="d">oracle-04</span>
         </div>
         <div class="po-title-wrap">
             <span class="po-bk l"></span>
-            <h1 class="po-title" id="po-title-el" data-text="POLYBOT AI"></h1>
+            <h1 class="po-title" id="po-title-el" data-text="ORACLE AI"></h1>
             <span class="po-bk r"></span>
         </div>
         <div class="po-status">
@@ -641,24 +650,24 @@
             <div class="po-seg s2" id="po-seg-ver">v0.2.2</div>
             <div class="po-seg s3">build <span class="v" id="po-seg-build">------</span></div>
             <div class="po-seg s4">latency <span class="v" id="po-seg-lat">12ms</span></div>
-            <div class="po-seg s5" id="po-seg-foot">bot running</div>
+            <div class="po-seg s5" id="po-seg-foot">ORACLE RUNTIME</div>
         </div>
     </div>
     <div class="po-scan"></div>
     <div class="po-vig"></div>
-    <button type="button" class="po-close" id="po-close-btn">▶ unlock session [esc]</button>
+    <button type="button" class="po-close" id="po-close-btn">▶ unlock ORACLE [esc]</button>
 </div>
 
 <!-- STICKY HEADER -->
 <div class="hdr">
     <div class="hdr-top">
         <div>
-            <span class="brand" id="hacker-brand" data-text="POLYBOT AI"><span id="hacker-brand-text">POLYBOT AI</span><span class="brand-cur" aria-hidden="true"></span></span>
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);margin-left:14px;" id="last-updated">Dashboard loading...</span>
+            <span class="brand" id="hacker-brand" data-text="ORACLE AI"><span id="hacker-brand-text">ORACLE AI</span><span class="brand-cur" aria-hidden="true"></span></span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);margin-left:14px;" id="last-updated">Oracle dashboard loading...</span>
             <span class="sid" id="htmx-ui-rev" hx-get="/api/dashboard/health-snippet" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
         </div>
         <div class="hdr-actions">
-            <button type="button" class="po-trigger hdr-btn" id="privacy-open-btn" title="Lock screen / privacy mode">privacy</button>
+            <button type="button" class="po-trigger hdr-btn" id="privacy-open-btn" title="Oracle privacy / lock screen">privacy</button>
             <button class="btn-sm hdr-btn ay" onclick="refreshDashboardData()" title="Invalidate journal cache and refetch all panels">Refresh</button>
             <button class="btn-sm hdr-btn" id="fullscreen-btn" onclick="toggleFullscreen()">Enter Fullscreen</button>
             <span class="ver">v0.2.2</span>
@@ -1655,9 +1664,9 @@ var DashPrivacy = (function() {
     var onResizeMx = null;
     var intervals = [];
     var logTimeouts = [];
-    var FINAL = 'POLYBOT AI';
+    var FINAL = 'ORACLE AI';
     var SCRAMBLE = '!<>-_/[]{}=+*^?#$%&01ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    var rainChars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホPOLYBOTAI01<>{}'.split('');
+    var rainChars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホORACLEAI01<>{}'.split('');
 
     function stopAll() {
         if (rafMx) cancelAnimationFrame(rafMx);
@@ -1750,7 +1759,7 @@ var DashPrivacy = (function() {
         if (!log) return;
         log.innerHTML = '';
         var lines = [
-            ['ok', 'boot.seq.start'], ['ok', 'mount /dev/polybot'], ['ok', 'kernel.load 4.21'],
+            ['ok', 'oracle.boot.seq.start'], ['ok', 'mount /dev/oracle'], ['ok', 'kernel.load 4.21'],
             ['warn', 'sandbox.expand'], ['ok', 'rsa.handshake'], ['ok', 'cipher xchacha20'],
             ['warn', 'trace.deny .92'], ['ok', 'mesh.attach n04'], ['ok', 'shard sync 100%'],
             ['err', 'noise floor +3'], ['ok', 'identity verify'], ['ok', 'vault sealed']
@@ -1818,10 +1827,10 @@ var DashPrivacy = (function() {
         var segLock = document.getElementById('po-seg-lock');
         var segFoot = document.getElementById('po-seg-foot');
         var btn = document.getElementById('po-close-btn');
-        if (preA) preA.textContent = mode === 'loading' ? 'Initializing' : 'Session locked';
+        if (preA) preA.textContent = mode === 'loading' ? 'ORACLE · INITIALIZING' : 'ORACLE · SESSION LOCKED';
         if (segLock) segLock.textContent = mode === 'loading' ? 'LIVE' : 'LOCKED';
-        if (segFoot) segFoot.textContent = mode === 'loading' ? 'access granted' : 'bot running';
-        if (btn) btn.textContent = mode === 'loading' ? '▶ continue [esc]' : '▶ unlock session [esc]';
+        if (segFoot) segFoot.textContent = mode === 'loading' ? 'ORACLE READY' : 'ORACLE RUNTIME';
+        if (btn) btn.textContent = mode === 'loading' ? '▶ continue ORACLE [esc]' : '▶ unlock ORACLE [esc]';
     }
 
     function show(mode) {
@@ -1884,7 +1893,7 @@ var DashPrivacy = (function() {
 
 document.addEventListener('DOMContentLoaded', function() {
     DashPrivacy.init();
-    var text = 'POLYBOT AI';
+    var text = 'ORACLE AI';
     var CHARS = '!<>-_/[]{}=+*^?#$%&01ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     var brand = document.getElementById('hacker-brand');
     var brandText = document.getElementById('hacker-brand-text');
@@ -4996,6 +5005,9 @@ async function _allocationCountsFromMetrics() {
     return Object.keys(counts).length ? counts : null;
 }
 
+// Canonical order — aligned with Strategy Performance table (#strategy-table).
+const PERFORMANCE_STRATS_ORDER = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'weather'];
+
 async function loadAllocationChart() {
     try {
         const canvas = document.getElementById('allocation-chart');
@@ -5141,9 +5153,19 @@ async function loadStrategyPnLChart() {
             }
         }
 
-        const labels = Object.keys(stratPnL);
-        const values = Object.values(stratPnL);
-        if (!labels.length) {
+        // Normalize so every core strategy keeps a slot (fixes missing hype_macro when BTC/ETH/etc. have PnL).
+        const labels = PERFORMANCE_STRATS_ORDER.slice();
+        const values = PERFORMANCE_STRATS_ORDER.map((id) =>
+            Number(stratPnL[id] ?? 0));
+        Object.keys(stratPnL).forEach((id) => {
+            if (PERFORMANCE_STRATS_ORDER.includes(id)) return;
+            const v = Number(stratPnL[id]);
+            if (!Number.isFinite(v) || Math.abs(v) <= 1e-6) return;
+            labels.push(id);
+            values.push(v);
+        });
+        const hasSignal = values.some((v) => Math.abs(Number(v)) > 1e-6);
+        if (!hasSignal) {
             _chartPlaceholder(ctx, w, h, 'No PnL by strategy', 'Trades will appear after closes');
             return;
         }
@@ -5216,12 +5238,13 @@ async function loadStrategyPnLChart() {
             ctx.fillRect(x, val >= 0 ? zeroY - barH : zeroY, barWidth, barH);
             ctx.shadowBlur = 0;
 
-            // Value label on bar
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 9px "Cascadia Code", monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = val >= 0 ? 'bottom' : 'top';
-            ctx.fillText('$' + val.toFixed(2), x + barWidth / 2, val >= 0 ? zeroY - barH - 3 : zeroY + barH + 3);
+            if (Math.abs(val) > 1e-6) {
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 9px "Cascadia Code", monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = val >= 0 ? 'bottom' : 'top';
+                ctx.fillText('$' + val.toFixed(2), x + barWidth / 2, val >= 0 ? zeroY - barH - 3 : zeroY + barH + 3);
+            }
 
             // Strategy label
             ctx.fillStyle = '#7a8da0';

@@ -223,7 +223,7 @@ class NotificationManager:
                 },
             ],
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
+                "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"
             },
         }
 
@@ -247,7 +247,7 @@ class NotificationManager:
                 },
             ],
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
+                "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"
             },
         }
         return await self.send_discord(None, embed)
@@ -267,7 +267,7 @@ class NotificationManager:
                 {"name": "Status", "value": "paused (kill switch)", "inline": False},
             ],
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%H:%M:%S')}"
+                "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"
             },
         }
         return await self.send_discord(None, embed)
@@ -284,7 +284,7 @@ class NotificationManager:
             "color": 16711680,
             "description": error_msg,
             "footer": {
-                "text": f"PolyBot AI • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                "text": f"Oracle AI • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             },
         }
 
