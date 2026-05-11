@@ -3126,9 +3126,31 @@ function updateBacktest(d) {
                 No qualifying entries${scanned > 0 ? ` across ${scanned} scanned windows` : ''}.
             </div>`
             : '';
+        // Per-card run timestamp + staleness flag. Cards older than 24h get a yellow
+        // "stale" badge so it's obvious when results don't reflect recent config edits.
+        const runAt = r.run_at || '';
+        let runAge = '';
+        let staleBadge = '';
+        if (runAt) {
+            const t = new Date(runAt);
+            if (!Number.isNaN(t.getTime())) {
+                const ageMs = Date.now() - t.getTime();
+                const ageHours = ageMs / 3600000;
+                if (ageHours < 1) runAge = `${Math.max(0, Math.floor(ageMs / 60000))}m ago`;
+                else if (ageHours < 24) runAge = `${Math.floor(ageHours)}h ago`;
+                else runAge = `${Math.floor(ageHours / 24)}d ago`;
+                if (ageHours >= 24) {
+                    staleBadge = `<span style="background:rgba(234,179,8,0.18);color:var(--yellow);padding:1px 6px;border-radius:3px;font-size:0.7rem;font-weight:700;margin-left:6px;">STALE</span>`;
+                }
+            }
+        }
+        const runAtDisplay = runAt
+            ? `<div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:4px;">Ran: ${runAt.replace('T',' ').slice(0,16)} ${runAge ? `(${runAge})` : ''}${staleBadge}</div>`
+            : '';
         return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
             ${header}
-            <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:8px;">${period}</div>
+            ${runAtDisplay}
+            <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:8px;">Data: ${period}</div>
             ${noEntryNote}
             ${row('Win Rate', winPct+'%', winColor)}
             ${row('Avg Edge', ((r.avg_edge||0)*100).toFixed(2)+'%')}
