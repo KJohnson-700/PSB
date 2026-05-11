@@ -224,7 +224,7 @@ strategies:
     clear_edge_high: 0.80
     # 5m scanner look-ahead: how many future 5m windows to fetch
     look_ahead_15m: 8
-    look_ahead_5m: 3
+    look_ahead_5m: 1
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep hours with strong backtest evidence
     # at meaningful negative expectancy, drop the borderline ones until live data
@@ -392,7 +392,7 @@ strategies:
     blocked_utc_hours_updown: [1, 6, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
     # 5m scanner look-ahead: how many future 5m windows to fetch
     look_ahead_15m: 8
-    look_ahead_5m: 3
+    look_ahead_5m: 1
     # Max concurrent SOL positions — prevents stacking 4-5 correlated bets on one macro call
     max_concurrent_positions: 3
 
@@ -531,7 +531,7 @@ strategies:
     # Direction gate is now ADAPTIVE via 1H trend in sol_macro.py — no manual flag needed.
     # When 1H trend is BULLISH, BUY_NO is auto-suppressed; when BEARISH, BUY_YES is.
     look_ahead_15m: 8
-    look_ahead_5m: 3
+    look_ahead_5m: 1
     max_concurrent_positions: 3
     # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
     entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
@@ -632,7 +632,7 @@ strategies:
     low_corr_suppresses_entries: false
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
-    look_ahead_5m: 3
+    look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
     entry_window_15m_max: 16.0
@@ -748,7 +748,7 @@ strategies:
     low_corr_damping: 0.80       # Mildly shrink edges instead of treating most XRP windows as near-untradable
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
-    look_ahead_5m: 3
+    look_ahead_5m: 1
     max_concurrent_positions: 2
     entry_window_15m_min: 2.0
     entry_window_15m_max: 16.0

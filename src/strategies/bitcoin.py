@@ -207,6 +207,7 @@ class BitcoinStrategy:
         self._btc_1h_regime_gates: Dict[str, Any] = dict(
             self.config.get("btc_1h_regime_gates") or {}
         )
+        self._open_positions_snapshot: list = []  # set by main.py before scan_and_analyze
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
@@ -1130,6 +1131,23 @@ class BitcoinStrategy:
                     # Still requires HTF bias (4H) — the macro law applies
                     # LTF: use 5m candle momentum instead of 15m MACD for entry timing
                     # Tighter: m5_direction must align (DRIFT_UP/LEAN_UP for long)
+
+                    # ── Correlated exposure skip ──
+                    # If market_id (or market_question stripped of time) already has an
+                    # open/recent BTC 5m position in the session, skip to avoid doubling up.
+                    # Check both current open positions and the session snapshot.
+                    _q_clean = re.sub(r'\d+:\d+[AP]M[-–]\d+:\d+[AP]M', '', market.question or '').strip()
+                    for _pos in self._open_positions_snapshot:
+                        _pq = getattr(_pos, 'market_question', None) or ''
+                        _pq_clean = re.sub(r'\d+:\d+[AP]M[-–]\d+:\d+[AP]M', '', _pq).strip()
+                        if _pq_clean == _q_clean:
+                            _bump_skip("correlated_exposure_5m")
+                            logger.info(
+                                f"  BTC [5m] skip '{market.question[:40]}' — "
+                                f"correlated_exposure_5m (open pos on same question)"
+                            )
+                            continue
+
                     est_prob_up = 0.50
 
                     # HTF bias — same as 15m, the 4H trend still matters for 5m bets
@@ -1224,6 +1242,15 @@ class BitcoinStrategy:
                         else:
                             est_prob_up -= 0.02
                         m5_reasons.append("5m predict window")
+
+                    # ── RSI overbought hard gate (5m LONG only) ──
+                    if effective_side == "LONG" and ta.rsi_14 > 65:
+                        _bump_skip("rsi_overbought_5m")
+                        logger.debug(
+                            f"  BTC skip '{market.question[:40]}' — "
+                            f"5m LONG blocked: RSI={ta.rsi_14:.0f} > 65"
+                        )
+                        continue
 
                     # RSI adjustments — expanded from 80/20 to 65/35 (lighter weight for noisy 5m)
                     if ta.rsi_14 > 80:
@@ -1712,10 +1739,12 @@ class BitcoinStrategy:
                 and confidence < self.neutral_15m_min_quant_confidence
             )
 
-            # Updown AI assist: when quant edge is close but below threshold, let AI break ties.
-            # This keeps strict HTF gating while allowing context-aware confirmation on borderline setups.
-            if (
+            # Updown AI assist: 5m entries always call AI when available (mandatory AI path).
+            # 15m entries use AI only on borderline edge or low-conf neutral HTF setups.
+            _ai_updown_5m = is_updown and is_5m
+            _ai_updown_15m_borderline = (
                 is_updown
+                and not is_5m
                 and (
                     (
                         edge < effective_min_edge
@@ -1723,6 +1752,9 @@ class BitcoinStrategy:
                     )
                     or _needs_ai_for_low_conf_neutral_15m
                 )
+            )
+            if (
+                (_ai_updown_5m or _ai_updown_15m_borderline)
                 and _ai_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)

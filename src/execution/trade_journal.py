@@ -1167,6 +1167,7 @@ class TradeJournal:
             exits_count = 0
             rpnl = 0.0
             closed = []
+            _exited_ids: set[str] = set()
             # Phantom exits from the pre-fix token-ordering bug produced PnL of
             # -$26 to -$466 per record on $3-$5 positions.  Cap at $200 to exclude
             # them from the summary so the dashboard shows accurate numbers even
@@ -1202,6 +1203,10 @@ class TradeJournal:
                                 f"strategy={e.get('strategy','?')}"
                             )
                             continue  # exclude from closed_trades, rpnl, and exit count
+                        _tid = tid or ""
+                        if _tid in _exited_ids:
+                            continue  # skip duplicate EXIT for same trade_id
+                        _exited_ids.add(_tid)
                         exits_count += 1
                         rpnl += pnl
                         closed.append(

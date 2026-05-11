@@ -617,6 +617,7 @@ class PolyBot:
         today = datetime.now().date()
         daily_pnl = 0.0
         daily_trades = 0
+        _seen_exit_trade_ids: set[str] = set()
         try:
             for entry in self.journal.get_all_entries(limit=5000):
                 ts_str = entry.get("timestamp", "")
@@ -641,6 +642,10 @@ class PolyBot:
                             f"strategy={entry.get('strategy','?')}"
                         )
                         continue
+                    _tid = entry.get("trade_id", "")
+                    if _tid in _seen_exit_trade_ids:
+                        continue  # skip duplicate EXIT for same trade_id
+                    _seen_exit_trade_ids.add(_tid)
                     daily_pnl += pnl
                 elif entry.get("event") == "ENTRY":
                     daily_trades += 1
@@ -1166,11 +1171,8 @@ class PolyBot:
             )
 
         # Crypto: Bitcoin, SOL/ETH/HYPE macro, XRP macro
-        strategy_tasks: list[tuple[str, Any]] = [
-            ("bitcoin", self.bitcoin_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
-            ("sol_macro", self.sol_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
-        ]
         open_positions_snapshot = list(self.risk_manager.active_positions.values())
+        self.bitcoin_strategy._open_positions_snapshot = open_positions_snapshot
         self.sol_macro_strategy._open_positions_snapshot = open_positions_snapshot
 
         eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
