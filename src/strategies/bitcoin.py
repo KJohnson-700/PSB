@@ -43,7 +43,7 @@ from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies._core import btc_htf_bias
+from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -399,54 +399,9 @@ class BitcoinStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _check_lower_tf_confirmation(self, ta: TechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check if 15m MACD confirms the allowed direction.
-
-        allowed_side: "LONG" or "SHORT"
-
-        Returns: (confirmed: bool, strength: float, reasons: list)
-        """
-        macd_15m = ta.macd_15m
-        reasons = []
-        strength = 0.0
-
-        if allowed_side == "LONG":
-            # Need: bullish cross OR rising histogram (red→green) OR MACD above signal
-            if macd_15m.crossover == "BULLISH_CROSS":
-                strength += 0.40
-                reasons.append("15m MACD bull cross")
-            if macd_15m.histogram_rising and macd_15m.histogram > macd_15m.prev_histogram:
-                # Histogram turning from red to green (or getting more green)
-                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
-                    strength += 0.35
-                    reasons.append("15m hist red->green")
-                elif macd_15m.histogram_rising:
-                    strength += 0.20
-                    reasons.append("15m hist rising")
-            if macd_15m.macd_line > macd_15m.signal_line:
-                strength += 0.15
-                reasons.append("15m MACD>signal")
-
-        elif allowed_side == "SHORT":
-            if macd_15m.crossover == "BEARISH_CROSS":
-                strength += 0.40
-                reasons.append("15m MACD bear cross")
-            if not macd_15m.histogram_rising and macd_15m.histogram < macd_15m.prev_histogram:
-                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
-                    strength += 0.35
-                    reasons.append("15m hist green->red")
-                elif not macd_15m.histogram_rising:
-                    strength += 0.20
-                    reasons.append("15m hist falling")
-            if macd_15m.macd_line < macd_15m.signal_line:
-                strength += 0.15
-                reasons.append("15m MACD<signal")
-
-        # Require stronger composite confirmation (0.50 instead of 0.35).
-        # Single signals (crossover=0.40, hist flip=0.35) no longer auto-confirm —
-        # must combine with rising/falling histogram or MACD>signal to block entry.
-        # 60s scan was catching every crossover as "late entry" before 15m could realign.
-        confirmed = strength >= 0.50
-        return confirmed, min(1.0, strength), reasons
+        """15m MACD confirmation. Delegates to strategies._core."""
+        r = btc_ltf_strength_15m(ta.macd_15m, allowed_side)
+        return r.confirmed, r.strength, r.reasons
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 3: Entry Timing

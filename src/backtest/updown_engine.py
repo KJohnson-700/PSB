@@ -61,7 +61,7 @@ from src.analysis.btc_price_service import (
     CandleMomentum,
     AnchoredVolumeProfile,
 )
-from src.strategies._core import btc_htf_bias
+from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m, sol_ltf_strength_15m
 
 logger = logging.getLogger(__name__)
 
@@ -807,21 +807,10 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
-        """15m MACD confirmation -- BTC weights, threshold 0.35."""
-        m = ta.macd_15m
-        s = 0.0
-        if allowed_side == "LONG":
-            if m.crossover == "BULLISH_CROSS":              s += 0.40
-            if m.histogram_rising and m.histogram > m.prev_histogram:
-                s += 0.35 if (m.prev_histogram < 0 and m.histogram > 0) else 0.20
-            if m.macd_line > m.signal_line:                 s += 0.15
-        else:  # SHORT
-            if m.crossover == "BEARISH_CROSS":              s += 0.40
-            if not m.histogram_rising and m.histogram < m.prev_histogram:
-                s += 0.35 if (m.prev_histogram > 0 and m.histogram < 0) else 0.20
-            if m.macd_line < m.signal_line:                 s += 0.15
-        confirmed = s >= 0.35
-        return confirmed, min(1.0, s)
+        """15m MACD confirmation -- BTC weights. Delegates to strategies._core.
+        Threshold is 0.50 (matching live); pre-refactor backtest used 0.35 (drift)."""
+        r = btc_ltf_strength_15m(ta.macd_15m, allowed_side)
+        return r.confirmed, r.strength
 
     # ==========================================================================
     # LTF strength -- SOL (matches sol_macro.py _check_15m_confirmation)
@@ -829,26 +818,9 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _sol_ltf_strength_m(m: MACDResult, allowed_side: str) -> Tuple[bool, float]:
-        """SOL-family 15m MACD strength on a single MACD bundle (live parity)."""
-        s = 0.0
-        if allowed_side == "LONG":
-            if m.crossover == "BULLISH_CROSS":              s += 0.40
-            if m.histogram_rising:
-                if m.prev_histogram < 0 and m.histogram > 0:
-                    s += 0.35        # red-to-green flip
-                elif m.histogram > m.prev_histogram:
-                    s += 0.15        # just rising
-            if m.macd_line > m.signal_line:                 s += 0.10
-        else:  # SHORT
-            if m.crossover == "BEARISH_CROSS":              s += 0.40
-            if not m.histogram_rising:
-                if m.prev_histogram > 0 and m.histogram < 0:
-                    s += 0.35        # green-to-red flip
-                elif m.histogram < m.prev_histogram:
-                    s += 0.15        # just falling
-            if m.macd_line < m.signal_line:                 s += 0.10
-        confirmed = s >= 0.50
-        return confirmed, min(1.0, s)
+        """SOL-family 15m MACD strength. Delegates to strategies._core."""
+        r = sol_ltf_strength_15m(m, allowed_side)
+        return r.confirmed, r.strength
 
     @staticmethod
     def _sol_ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:

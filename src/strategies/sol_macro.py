@@ -61,6 +61,7 @@ from src.analysis.updown_composite_score import (
 )
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
+from src.strategies._core import sol_ltf_strength_15m
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.strategies.strategy_ai_context import (
@@ -922,47 +923,9 @@ class SolMacroStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _check_15m_confirmation(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check if 15m MACD confirms the allowed direction.
-
-        Returns: (confirmed: bool, strength: float, reasons: list)
-        """
-        macd_15m = ta.sol.macd_15m
-        reasons = []
-        strength = 0.0
-
-        if allowed_side == "LONG":
-            if macd_15m.crossover == "BULLISH_CROSS":
-                strength += 0.40
-                reasons.append("15m MACD bull cross")
-            if macd_15m.histogram_rising:
-                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
-                    strength += 0.35
-                    reasons.append("15m hist red-to-green")
-                elif macd_15m.histogram > macd_15m.prev_histogram:
-                    strength += 0.15
-                    reasons.append("15m hist rising")
-            if macd_15m.macd_line > macd_15m.signal_line:
-                strength += 0.10
-                reasons.append("15m MACD above signal")
-        else:  # SHORT
-            if macd_15m.crossover == "BEARISH_CROSS":
-                strength += 0.40
-                reasons.append("15m MACD bear cross")
-            if not macd_15m.histogram_rising:
-                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
-                    strength += 0.35
-                    reasons.append("15m hist green-to-red")
-                elif macd_15m.histogram < macd_15m.prev_histogram:
-                    strength += 0.15
-                    reasons.append("15m hist falling")
-            if macd_15m.macd_line < macd_15m.signal_line:
-                strength += 0.10
-                reasons.append("15m MACD below signal")
-
-        # Keep at 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35
-        # on WR and net PnL, and this gate treats confirmed LTF as late-entry risk.
-        confirmed = strength >= 0.50
-        return confirmed, strength, reasons
+        """15m MACD confirmation. Delegates to strategies._core (SOL weights)."""
+        r = sol_ltf_strength_15m(ta.sol.macd_15m, allowed_side)
+        return r.confirmed, r.strength, r.reasons
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 3: 5m Entry Timing + Lag Detection
