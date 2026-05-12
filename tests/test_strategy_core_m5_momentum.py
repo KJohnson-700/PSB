@@ -1,6 +1,7 @@
 """Tests for the shared m5 direction → probability adjustment."""
 
-from src.strategies._core import score_m5_direction
+from src.analysis.btc_price_service import MACDResult
+from src.strategies._core import score_m5_direction, sol_m5_macd_adj
 
 
 # ── LONG side ────────────────────────────────────────────────────────────────
@@ -116,6 +117,51 @@ def test_backtest_calc_m5_momentum_emits_lean():
     )
     assert direction == "LEAN_UP"
     assert adj == 0.01
+
+
+# ── sol_m5_macd_adj ──────────────────────────────────────────────────────────
+
+def _m(*, cross="NONE", hist=0.0, prev_hist=0.0, rising=False, above_signal=False):
+    return MACDResult(
+        macd_line=1.0 if above_signal else -1.0,
+        signal_line=0.0,
+        histogram=hist, prev_histogram=prev_hist,
+        crossover=cross,
+        histogram_rising=rising,
+        above_zero=hist > 0,
+    )
+
+
+def test_sol_m5_long_bull_cross_top_tier():
+    r = sol_m5_macd_adj(_m(cross="BULLISH_CROSS"), "LONG")
+    assert r.adj == 0.06
+    assert "bull cross" in r.reason
+
+
+def test_sol_m5_long_green_rising_mid_tier():
+    r = sol_m5_macd_adj(_m(hist=0.05, rising=True), "LONG")
+    assert r.adj == 0.04
+
+
+def test_sol_m5_long_macd_above_signal_low_tier():
+    r = sol_m5_macd_adj(_m(hist=0.0, rising=False, above_signal=True), "LONG")
+    assert r.adj == 0.02
+
+
+def test_sol_m5_long_against_negative_hist():
+    r = sol_m5_macd_adj(_m(hist=-0.05, rising=False, above_signal=False), "LONG")
+    assert r.adj == -0.04
+
+
+def test_sol_m5_short_mirrors_long():
+    assert sol_m5_macd_adj(_m(cross="BEARISH_CROSS"), "SHORT").adj == 0.06
+    assert sol_m5_macd_adj(_m(hist=-0.05, rising=False), "SHORT").adj == 0.04
+
+
+def test_sol_m5_no_signal_zero():
+    r = sol_m5_macd_adj(_m(hist=0.0, rising=False, above_signal=False), "LONG")
+    assert r.adj == 0.0
+    assert r.reason == ""
 
 
 def test_backtest_replay_momentum_emits_lean():

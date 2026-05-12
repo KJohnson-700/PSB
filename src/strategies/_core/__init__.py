@@ -32,7 +32,7 @@ from .htf_boost import (
     btc_5m_htf_boost,
     btc_15m_htf_boost,
 )
-from .m5_momentum import score_m5_direction
+from .m5_momentum import SolM5MacdResult, score_m5_direction, sol_m5_macd_adj
 from .timing import TimingBonusResult, btc_15m_timing_bonus
 
 __all__ = [
@@ -44,6 +44,8 @@ __all__ = [
     "passes_15m_iql",
     "passes_15m_iql_relaxed_rule",
     "score_m5_direction",
+    "SolM5MacdResult",
+    "sol_m5_macd_adj",
     "HistGateResult",
     "btc_5m_htf_boost",
     "btc_5m_4h_1h_hist_gate",

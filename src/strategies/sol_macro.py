@@ -69,6 +69,7 @@ from src.strategies._core import (
     alt_1h_hist_gate,
     passes_15m_iql_relaxed_rule,
     sol_ltf_strength_15m,
+    sol_m5_macd_adj,
     sol_rsi_extremes_adj,
 )
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -1658,37 +1659,12 @@ class SolMacroStrategy:
                         )
                         continue
 
-                    # 5m MACD — primary entry signal for 5m markets
-                    # ta.sol.macd_5m exists on SOLAnalysis
+                    # 5m MACD — primary entry signal for 5m markets.
+                    # Scoring lives in strategies._core.sol_m5_macd_adj.
                     macd_5m = sol.macd_5m
-                    m5_adj = 0.0
-                    m5_reasons = []
-                    if allowed_side == "LONG":
-                        if macd_5m.crossover == "BULLISH_CROSS":
-                            m5_adj = 0.06
-                            m5_reasons.append("5m MACD bull cross")
-                        elif macd_5m.histogram_rising and macd_5m.histogram > 0:
-                            m5_adj = 0.04
-                            m5_reasons.append("5m hist green+rising")
-                        elif macd_5m.macd_line > macd_5m.signal_line:
-                            m5_adj = 0.02
-                            m5_reasons.append("5m MACD>signal")
-                        elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
-                            m5_adj = -0.04
-                            m5_reasons.append(f"5m against ({macd_5m.crossover})")
-                    else:  # SHORT
-                        if macd_5m.crossover == "BEARISH_CROSS":
-                            m5_adj = 0.06
-                            m5_reasons.append("5m MACD bear cross")
-                        elif not macd_5m.histogram_rising and macd_5m.histogram < 0:
-                            m5_adj = 0.04
-                            m5_reasons.append("5m hist red+falling")
-                        elif macd_5m.macd_line < macd_5m.signal_line:
-                            m5_adj = 0.02
-                            m5_reasons.append("5m MACD<signal")
-                        elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
-                            m5_adj = -0.04
-                            m5_reasons.append(f"5m against ({macd_5m.crossover})")
+                    _m5 = sol_m5_macd_adj(macd_5m, allowed_side)
+                    m5_adj = _m5.adj
+                    m5_reasons = [_m5.reason] if _m5.reason else []
 
                     _sample("m5_adj", m5_adj)
                     if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:

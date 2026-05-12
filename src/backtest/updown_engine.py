@@ -77,6 +77,7 @@ from src.strategies._core import (
     sabre_tension_adj,
     score_m5_direction,
     sol_ltf_strength_15m,
+    sol_m5_macd_adj,
     sol_rsi_extremes_adj,
 )
 
@@ -1206,24 +1207,7 @@ class UpdownBacktestEngine:
             elif not macd_5m.above_zero and not macd_5m.histogram_rising:
                 m5_trend = "BEARISH"
 
-            if allowed_side == "LONG":
-                if macd_5m.crossover == "BULLISH_CROSS":
-                    m5_adj = 0.06
-                elif macd_5m.histogram_rising and macd_5m.histogram > 0:
-                    m5_adj = 0.04
-                elif macd_5m.macd_line > macd_5m.signal_line:
-                    m5_adj = 0.02
-                elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
-                    m5_adj = -0.04
-            else:  # SHORT
-                if macd_5m.crossover == "BEARISH_CROSS":
-                    m5_adj = 0.06
-                elif not macd_5m.histogram_rising and macd_5m.histogram < 0:
-                    m5_adj = 0.04
-                elif macd_5m.macd_line < macd_5m.signal_line:
-                    m5_adj = 0.02
-                elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
-                    m5_adj = -0.04
+            m5_adj = sol_m5_macd_adj(macd_5m, allowed_side).adj
 
         if allowed_side == "SHORT" and sell_5m_min_corr >= 0:
             if corr_1h is None or corr_1h < sell_5m_min_corr:
@@ -1246,9 +1230,7 @@ class UpdownBacktestEngine:
         elif m5_trend == "BEARISH" and allowed_side == "SHORT":
             est_prob_up -= 0.02
 
-        # RSI extremes (matches live sol_macro 5m: >75/-0.02, <25/+0.02)
-        if   ta.rsi_14 > 75: est_prob_up -= 0.02
-        elif ta.rsi_14 < 25: est_prob_up += 0.02
+        est_prob_up += sol_rsi_extremes_adj(ta.rsi_14, magnitude=0.02)
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
