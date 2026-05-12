@@ -1,5 +1,6 @@
 ## Learned User Preferences
 
+- **Local bot default:** Assume PSB is run **locally** (dashboard `http://127.0.0.1:8081` by default, see `docs/LOCAL_BOT_RUN.md`). Do **not** volunteer Railway URLs, hosted deploy checks, or `railway logs` unless the user explicitly asks about the hosted/paper service.
 - Prefer very short default chat; use full sentences and clear structure for deliverables (reports, docs, long answers).
 - Before deep work on complex or explicitly high-priority tasks with thin scope, ask a few short clarifying questions (goal, constraints, priority).
 - Do not guess on technical claims; research and verify before recommending changes.

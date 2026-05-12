@@ -706,8 +706,8 @@
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
+            <div class="hero-item" title="Closed trades counted by the risk manager for the current UTC calendar day (not session-scoped). Session entry count stays on the Paper Journal tab.">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
@@ -1578,20 +1578,28 @@ const EXIT_REASON_COLORS = {
 };
 const UNKNOWN_EXIT_REASON_COLOR = '#34495e';
 
-// ── Design handoff helpers (vHTubxNudMcUB1Oe4FhHPA) ──────────────────────────
+// ── Canonical strategy colors (single source for pills, chart markers, journal, scan rows, BT cards, canvas charts) ──
 window.STRATS = {
-    bitcoin: '#3b82f6',
-    sol_lag: '#a78bfa',
-    eth_lag: '#22d3ee',
+    bitcoin: '#f59e0b',
+    sol_lag: '#a855f7',
+    eth_lag: '#627eea',
     hype_lag: '#f97316',
-    xrp_lag: '#fbbf24',
+    xrp_lag: '#38bdf8',
     weather: '#10b981',
-    // Journal / API strategy ids (same palette as *_lag display names)
-    sol_macro: '#a78bfa',
-    eth_macro: '#22d3ee',
+    sol_macro: '#a855f7',
+    eth_macro: '#627eea',
     hype_macro: '#f97316',
-    xrp_macro: '#fbbf24',
+    xrp_macro: '#38bdf8',
+    consensus: '#22d3ee',
+    unknown: '#64748b',
 };
+
+/** Hex for any strategy id (or chart bucket); never returns CSS `var()` — safe for canvas + marker APIs. */
+function stratHex(id) {
+    const k = String(id || '').trim();
+    if (window.STRATS && window.STRATS[k]) return window.STRATS[k];
+    return '#94a3b8';
+}
 
 function stratPill(name) {
     var c = window.STRATS[name] || '#888';
@@ -2398,13 +2406,10 @@ function formatDecisionGateDigest(dg) {
         _gateChip(dg.hard_skip_if_unavailable ? 'hard-skip on' : 'fallback allowed', dg.hard_skip_if_unavailable ? 'good' : 'warn'),
         _gateChip(`floor default ${floors.default_min_score ?? '?'}`, 'good'),
         _gateChip(`BTC floor ${floors.btc_neutral_15m_min_score ?? '?'}`, 'good'),
-        _gateChip(`HYPE floor ${floors.hype_15m_buy_yes_min_score ?? '?'}`, 'good'),
     ];
     if (oracleLanes.length) {
         for (const lane of oracleLanes.slice(0, 4)) chips.push(_gateChip(`oracle ${lane}`, 'good'));
     }
-    const hype = lanes.hype_macro || {};
-    if (hype.size_multiplier_15m_buy_yes) chips.push(_gateChip(`HYPE 15m ${hype.size_multiplier_15m_buy_yes}x`, 'warn'));
     if (blockParts.length) chips.push(_gateChip(`blocks ${blockParts.slice(0, 3).join(' · ')}`, 'hot'));
     return `<div class="decision-gate-line">${chips.join('')}</div>`;
 }
@@ -2556,9 +2561,6 @@ function applyHeroMetrics(d) {
     const dailyTrades = Number(p.daily_trades || 0);
     const tradesEl = document.getElementById('hero-trades');
     if (tradesEl) tradesEl.textContent = dailyTrades;
-    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
-    const tradesSub = document.getElementById('hero-trades-sub');
-    if (tradesSub) tradesSub.textContent = (fills != null) ? ('fills this session: ' + fills) : '';
 
 }
 
@@ -2679,7 +2681,7 @@ function updateStatus(d) {
                 <td>${pos.outcome}</td><td>${pos.size?.toFixed(1) || pos.size} ($${((pos.size||0)*(pos.entry_price||0)).toFixed(2)})</td>
                 <td>${pos.entry_price?.toFixed(3)}</td><td>${(pos.current_price||pos.entry_price)?.toFixed(3)}</td>
                 <td class="${pnlCls}">$${(pos.pnl||0).toFixed(2)}</td>
-                <td><span class="badge badge-blue">${pos.strategy}</span></td>
+                <td>${stratPillHTML(pos.strategy || '?')}</td>
             </tr>`;
         }).join('');
     } else {
@@ -2718,7 +2720,8 @@ function updateMetrics(d) {
         return Math.floor(ago/3600) + 'h ago';
     }
 
-    function sigBox(strat, color, label) {
+    function sigBox(strat, label) {
+        const color = stratHex(strat);
         const m = d[strat] || {};
         const sigs = m.signals ?? 0;
         const closedTrades = m.trades || 0;
@@ -2743,12 +2746,12 @@ function updateMetrics(d) {
     }
 
     boxes.innerHTML =
-        sigBox('bitcoin', 'var(--green)', 'BTC Signals') +
-        sigBox('sol_macro', 'var(--purple)', 'SOL Signals') +
-        sigBox('eth_macro', '#fb923c', 'ETH Signals') +
-        sigBox('hype_macro', '#a78bfa', 'HYPE Signals') +
-        sigBox('xrp_macro', '#38bdf8', 'XRP Signals') +
-        sigBox('weather', '#86efac', 'Weather Signals');
+        sigBox('bitcoin', 'BTC Signals') +
+        sigBox('sol_macro', 'SOL Signals') +
+        sigBox('eth_macro', 'ETH Signals') +
+        sigBox('hype_macro', 'HYPE Signals') +
+        sigBox('xrp_macro', 'XRP Signals') +
+        sigBox('weather', 'Weather Signals');
 
     const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', weather:'Event-based'};
     const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', weather:'Independent'};
@@ -2804,12 +2807,12 @@ function renderScanSignals() {
     if (!sigs.length) { el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">No ${currentScanFilter} signals in latest scan.</p>`; return; }
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
-        const colors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
+        const hx = stratHex(s.strategy);
         const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
-            <span class="badge" style="background:${colors[s.strategy]||'var(--text-muted)'}22;color:${colors[s.strategy]||'var(--text-muted)'};min-width:32px;text-align:center;">${badge}</span>
+            <span class="badge" style="background:${hx}22;color:${hx};min-width:32px;text-align:center;">${badge}</span>
             <span class="signal-action" style="color:${actionColor}">${s.action||''}</span>
             <span class="signal-market" title="${(s.market_question||'').replace(/"/g,'&quot;')}">${(s.market_question||s.market_id||'').slice(0,55)}</span>
             <span class="signal-meta">@${(s.price||0).toFixed(3)} $${(s.size||0).toFixed(0)} edge=${(s.edge||0).toFixed(2)}</span>
@@ -3156,7 +3159,9 @@ function updateBacktest(d) {
 
     function cryptoCard(sym, win, strategyKey) {
         const r = latestCryptoReport(sym, win);
-        const symColor = sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#a78bfa' : '#38bdf8';
+        const symColor = stratHex(strategyKey) || (
+            sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#f97316' : '#38bdf8'
+        );
         const keyLine = strategyKey
             ? `<div style="font-family:IBM Plex Mono,monospace;font-size:0.68rem;color:var(--tm);margin-bottom:6px;font-weight:600;">${strategyKey}</div>`
             : '';
@@ -3311,7 +3316,7 @@ function updateBacktest(d) {
                 <span style="font-size:0.88em;color:var(--tm);"> · same strategy key as journal</span></h3>`;
             html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
             html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:220px;flex:1;">
-                <div style="font-weight:700;margin-bottom:6px;"><span class="badge badge-green">weather</span></div>
+                <div style="font-weight:700;margin-bottom:6px;">${stratPillHTML('weather')}</div>
                 <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:6px;">${(latestWx.run_at||'').replace('T',' ').slice(0,19)}</div>
                 <div style="font-size:0.82rem;line-height:1.5;">
                     Signals: <strong>${latestWx.signals_generated ?? '—'}</strong> · W/L: <strong>${latestWx.wins ?? 0}/${latestWx.losses ?? 0}</strong><br/>
@@ -3340,8 +3345,7 @@ function updateBacktest(d) {
                 const ta = testAgg[s] || [0,0];
                 const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
                 const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                const stratColors = {bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
-                html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td><span class="badge ${stratColors[s]||'badge-blue'}">${s}</span></td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
+                html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td>${stratPillHTML(s)}</td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
             });
         });
         html += '</tbody></table>';
@@ -3522,7 +3526,6 @@ function updateJournal(d) {
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
     const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
-    const stratColors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
     const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',weather:'WX'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
@@ -3533,7 +3536,7 @@ function updateJournal(d) {
             const trades = v.trades || 0;
             const pnl = v.pnl || 0;
             const wr = ((v.win_rate||0)*100).toFixed(0);
-            const color = stratColors[s] || 'var(--text-muted)';
+            const color = stratHex(s);
             const label = stratLabels[s] || s.toUpperCase();
             const dim = trades === 0 ? ';opacity:0.45' : '';
             return `<div style="font-size:0.78rem;padding:4px 10px;background:rgba(0,229,255,0.03);border:1px solid var(--border);border-radius:3px${dim};">
@@ -3606,9 +3609,8 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Reason</th></tr></thead><tbody>' +
                 d.trades.slice(-50).reverse().map(t => {
                     const pnlCls = (t.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
-                        <td><span class="badge ${colors[t.strategy]||'badge-blue'}">${t.strategy||'?'}</span></td>
+                        <td>${stratPillHTML(t.strategy||'?')}</td>
                         <td>${t.action||''}</td>
                         <td title="${(t.market_question||'').replace(/"/g,'&quot;')}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(t.market_question||'').slice(0,40)}</td>
                         <td>$${(t.size||0).toFixed(0)}</td>
@@ -3629,10 +3631,11 @@ async function loadJournalTab(tab) {
             el.innerHTML = d.entries.slice(-200).reverse().map(e => {
                 const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
                 const evtColor = evtColors[e.event] || 'var(--text)';
+                const stCol = stratHex(e.strategy);
                 return `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid rgba(30,42,58,0.3);font-size:0.75rem;">
                     <span style="color:var(--text-muted);min-width:65px;">${ts}</span>
                     <span style="color:${evtColor};font-weight:600;min-width:50px;">${e.event}</span>
-                    <span style="color:var(--text-muted);min-width:55px;">${e.strategy||''}</span>
+                    <span style="color:${stCol};font-weight:600;min-width:72px;overflow:hidden;text-overflow:ellipsis;">${e.strategy||''}</span>
                     <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.action||''} ${(e.market_question||'').slice(0,35)}</span>
                     <span style="min-width:55px;text-align:right;">$${(e.size||0).toFixed(0)}</span>
                     <span style="min-width:50px;text-align:right;color:${(e.pnl||0)>=0?'var(--green)':'var(--red)'};">${e.pnl ? '$'+e.pnl.toFixed(2) : ''}</span>
@@ -4542,10 +4545,6 @@ function updateLivePerf(d) {
         return;
     }
     const ws = d.kelly_state._window_stats;
-    const stratColors = {
-        bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c',
-        hype_macro: '#a78bfa', xrp_macro: '#38bdf8',
-    };
     const stratLabel = {
         bitcoin: 'BTC', sol_macro: 'SOL', eth_macro: 'ETH',
         hype_macro: 'HYPE', xrp_macro: 'XRP',
@@ -4559,7 +4558,7 @@ function updateLivePerf(d) {
     let html = `<div style="font-weight:600;margin-bottom:6px;font-size:0.75rem;">Kelly Sizing — Per Window</div>`;
     html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;">`;
     stratKeys.forEach(([strat, v]) => {
-        const color = stratColors[strat] || '#7a8da0';
+        const color = stratHex(strat);
         const label = stratLabel[strat] || strat;
         const frac = Number(v?.fraction || 0) * 100;
         const win5 = ws?.[strat]?.['5m'] || {};
@@ -4702,9 +4701,10 @@ function updateTradeJourney(payload) {
         const bucket = t.updown_bucket || '';
         const reason = (t.exit_reason || '').slice(0, 48);
         return `<div style="border-bottom:1px solid var(--border);padding:6px 0;">
-            <div><span style="color:var(--cyan);font-weight:600;">${esc(strat)}</span>
-            <span style="color:var(--text-muted);font-size:0.68rem;margin-left:6px;">${esc(bucket)}</span>
-            <span style="float:right;font-weight:700;color:${pnlCol};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${strat ? stratPillHTML(strat) : ''}
+            <span style="color:var(--text-muted);font-size:0.68rem;">${esc(bucket)}</span>
+            <span style="margin-left:auto;font-weight:700;color:${pnlCol};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span></div>
             <div style="color:var(--text-muted);font-size:0.7rem;margin-top:2px;" title="${esc(t.market_question)}">${esc(q)}${(t.market_question || '').length > 72 ? '…' : ''}</div>
             ${reason ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;">exit: ${esc(reason)}</div>` : ''}
         </div>`;
@@ -5164,11 +5164,6 @@ async function loadAllocationChart() {
         canvas.width = w;
         const h = canvas.height = 220;
 
-        const colors = {
-            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
-            consensus: '#00bcd4', unknown: '#7a8da0'
-        };
-
         let counts = {};
         let subtitle = '';
 
@@ -5214,7 +5209,7 @@ async function loadAllocationChart() {
             ctx.arc(cx, cy, radius, startAngle, endAngle);
             ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
             ctx.closePath();
-            ctx.fillStyle = colors[label] || '#7a8da0';
+            ctx.fillStyle = stratHex(label);
             ctx.fill();
             startAngle = endAngle;
         });
@@ -5241,7 +5236,7 @@ async function loadAllocationChart() {
         }
         labels.forEach((label, i) => {
             const pct = ((values[i] / total) * 100).toFixed(0);
-            ctx.fillStyle = colors[label] || '#7a8da0';
+            ctx.fillStyle = stratHex(label);
             ctx.fillRect(legendX, legendY - 5, 12, 12);
             ctx.fillStyle = '#c8d6e5';
             ctx.font = '11px "Cascadia Code", monospace';
@@ -5359,16 +5354,12 @@ async function loadStrategyPnLChart() {
         // Bars
         const totalBarSpace = chartRight - chartLeft;
         const spacing = totalBarSpace / labels.length;
-        const colors = {
-            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
-            consensus: '#00bcd4', unknown: '#7a8da0'
-        };
 
         labels.forEach((label, i) => {
             const x = chartLeft + spacing * i + (spacing - barWidth) / 2;
             const val = values[i];
             const barH = (Math.abs(val) / maxAbs) * (chartHeight / 2);
-            const color = colors[label] || '#7a8da0';
+            const color = stratHex(label);
 
             // Bar
             ctx.fillStyle = color;
@@ -6095,55 +6086,19 @@ function _formatAltWatchlistTriggers(watchlist) {
         bits.join(' <span style="opacity:0.35">|</span> ');
 }
 
-/** Parse #rrggbb (6 hex); returns null if invalid */
-function _hexToRgbTrade(hex) {
-    var s = String(hex || '').trim();
-    var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s);
-    if (!m) return null;
-    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
-}
-function _rgbToHexTrade(r, g, b) {
-    function c(x) {
-        var n = Math.max(0, Math.min(255, Math.round(x)));
-        return n.toString(16).padStart(2, '0');
-    }
-    return '#' + c(r) + c(g) + c(b);
-}
-/** Shade: t<0 darkens toward black; t>0 lightens toward white (same hue family). */
-function _shadeHexTrade(hex, t) {
-    var rgb = _hexToRgbTrade(hex);
-    if (!rgb) return hex || '#888';
-    if (t < 0) {
-        var k = 1 + t;
-        return _rgbToHexTrade(rgb.r * k, rgb.g * k, rgb.b * k);
-    }
-    var u = Math.min(1, t);
-    return _rgbToHexTrade(
-        rgb.r + (255 - rgb.r) * u,
-        rgb.g + (255 - rgb.g) * u,
-        rgb.b + (255 - rgb.b) * u
-    );
-}
-
 function _tradeMarkersFromPoints(points, strategy) {
     // Strategy colors: STRATS includes both design keys (sol_lag) and runtime ids (sol_macro)
     const stratKey = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',xrp_macro:'XRP',hype_macro:'HYPE',weather:'WX'};
-    const stratColor = (window.STRATS && window.STRATS[strategy])
-        || '#94a3b8';
+    const stratColor = stratHex(strategy);
     const key = stratKey[strategy] || (strategy || '?').slice(0,3).toUpperCase();
-    // Same shapes as originally: win = circle, loss = square (PnL, not entry vs exit).
-    // When entry + exit times differ: darker at entry, lighter at exit (same hue).
-    var entryDarken = -0.44;
-    var exitLighten = 0.48;
+    // Win = circle, loss = square. Entry vs exit use the same hue so each strategy reads as one color on the chart.
     return (points || [])
         .filter((p) => p.strategy === strategy)
         .slice(-120)
         .flatMap((p) => {
             const pnl = p.pnl || 0;
             const sign = pnl >= 0 ? '+' : '';
-            const base = pnl >= 0 ? stratColor : '#7f1d1d';
-            const cIn = _shadeHexTrade(base, entryDarken);
-            const cOut = _shadeHexTrade(base, exitLighten);
+            const markColor = pnl >= 0 ? stratColor : '#b91c1c';
             const txt = key + ' ' + sign + pnl.toFixed(2);
             const pos = pnl >= 0 ? 'belowBar' : 'aboveBar';
             const shape = pnl >= 0 ? 'circle' : 'square';
@@ -6155,7 +6110,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                 time: p.time,
                 position: pos,
                 shape: shape,
-                color: cIn,
+                color: markColor,
                 text: hasExit ? txt + ' ·in' : txt,
             };
             if (!hasExit) {
@@ -6167,7 +6122,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                     time: p.closed_at,
                     position: pos,
                     shape: shape,
-                    color: cOut,
+                    color: markColor,
                     text: txt + ' ·out',
                 },
             ];

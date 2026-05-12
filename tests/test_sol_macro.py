@@ -294,17 +294,17 @@ def test_required_updown_oracle_validation_blocks_missing_and_stale_oracle():
     assert stale.reason == "oracle_stale"
 
 
-def test_updown_composite_floor_uses_lane_specific_overrides():
+def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     cfg = _make_config()
     cfg["updown_composite"] = {
         "default_min_score": 0.62,
-        "hype_15m_buy_yes_min_score": 0.70,
+        "low_confidence_min_score": 0.66,
     }
-    cfg["strategies"]["sol_macro"]["min_composite_score_15m_buy_yes"] = 0.69
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
     assert strategy._updown_composite_floor(lane="default") == 0.62
-    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.69
+    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.62
+    assert strategy._updown_composite_floor(lane="default", quant_confidence=0.55) == 0.66
 
 
 def _make_bullish_ta():

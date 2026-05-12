@@ -2441,11 +2441,7 @@ class SolMacroStrategy:
                 )
                 continue
 
-            _updown_lane = (
-                "15m_buy_yes"
-                if is_updown and _updown_tf != "5m" and action == "BUY_YES"
-                else "default"
-            )
+            _updown_lane = "default"
             if is_updown:
                 _tf_alignment = 1.0 if mtt.aligned else (0.70 if mtt.h1_trend == macro_trend else 0.35)
                 composite = self._score_updown_candidate(

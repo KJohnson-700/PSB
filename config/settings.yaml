@@ -773,7 +773,6 @@ strategies:
 updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
-  hype_15m_buy_yes_min_score: 0.70
   low_confidence_min_score: 0.66
 
 # ============================================
@@ -862,7 +861,6 @@ ai:
         - marginal
       hype_macro:
         - marginal
-        - 15m_buy_yes
       xrp_macro:
         - marginal
   # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.

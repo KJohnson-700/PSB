@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from src.analysis.ai_agent import AIAgent
 from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
 from src.analysis.math_utils import PositionSizer
@@ -264,18 +265,29 @@ def test_hype_low_correlation_settings_follow_yaml():
     assert strategy.low_corr_threshold_1h == 0.40
 
 
-def test_hype_15m_buy_yes_protection_config_helpers():
+def test_hype_updown_composite_floor_and_lane_helpers_inherit_sol_base():
     cfg = _config()
+    cfg["ai"] = {
+        "enabled": True,
+        "provider_chain": [],
+        "decision_layer": {
+            "enabled": True,
+            "hard_skip_if_unavailable_on_enforced": True,
+            "enforced_lanes": {"hype_macro": ["marginal"]},
+        },
+    }
     cfg["updown_composite"] = {
         "default_min_score": 0.62,
-        "hype_15m_buy_yes_min_score": 0.70,
+        "low_confidence_min_score": 0.66,
     }
-    strategy = HYPEMacroStrategy(cfg, BacktestAIAgent(cfg), PositionSizer())
+    strategy = HYPEMacroStrategy(cfg, AIAgent(cfg), PositionSizer())
 
-    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.70
-    assert strategy._requires_ai_for_lane("15m_buy_yes") is True
-    assert strategy._requires_shadow_for_lane("15m_buy_yes") is True
-    assert strategy._size_multiplier_for_lane("15m_buy_yes") == 0.35
+    assert strategy._updown_composite_floor(lane="default") == 0.62
+    assert strategy._updown_composite_floor(lane="marginal") == 0.62
+    assert strategy._requires_ai_for_lane("marginal") is True
+    assert strategy._requires_ai_for_lane("15m_buy_yes") is False
+    assert strategy._requires_shadow_for_lane("marginal") is False
+    assert strategy._size_multiplier_for_lane("marginal") == 1.0
 
 
 def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(monkeypatch):
