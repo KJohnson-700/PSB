@@ -143,6 +143,8 @@ class TechnicalAnalysis:
     macd_1h: MACDResult = field(default_factory=MACDResult)
     # MACD — lower TF (15m) for entry confirmation
     macd_15m: MACDResult = field(default_factory=MACDResult)
+    # MACD — 30m (between 15m and 1H)
+    macd_30m: MACDResult = field(default_factory=MACDResult)
     # Adaptive Trend Sabre (4H)
     trend_sabre: TrendSabreResult = field(default_factory=TrendSabreResult)
     # Candle Momentum
@@ -1031,8 +1033,8 @@ class BTCPriceService:
     def get_full_analysis(self) -> Optional[TechnicalAnalysis]:
         """Perform full multi-timeframe technical analysis on BTC.
 
-        Fetches 1m, 5m, 15m, 1h, 4h, 1d data and runs:
-        - MACD on 15m and 4h
+        Fetches 1m, 5m, 15m, 30m, 1h, 4h, 1d data and runs:
+        - MACD on 30m, 15m, 4h, 1h
         - Trend Sabre on 4h
         - Candle momentum on 1m data
         - EMA/RSI on 4h
@@ -1043,6 +1045,7 @@ class BTCPriceService:
         df_4h = self.fetch_klines("4h", 200)
         df_1d = self.fetch_klines("1d", 200)
         df_15m = self.fetch_klines("15m", 100)
+        df_30m = self.fetch_klines("30m", 120)
 
         if df_1h.empty or df_4h.empty or df_1d.empty:
             logger.warning("Could not fetch BTC klines for analysis")
@@ -1072,6 +1075,26 @@ class BTCPriceService:
 
         # --- MACD on 15m (lower TF entry confirmation) ---
         macd_15m = self.calc_macd(df_15m, fast=12, slow=26, signal=9) if not df_15m.empty else MACDResult()
+
+        if df_30m.empty and not df_15m.empty and len(df_15m) >= 60:
+            df_30m = (
+                df_15m.set_index("open_time")
+                .resample("30min")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna()
+                .reset_index()
+            )
+        macd_30m = (
+            self.calc_macd(df_30m, fast=12, slow=26, signal=9)
+            if not df_30m.empty and len(df_30m) >= 30
+            else MACDResult()
+        )
 
         # --- Adaptive Trend Sabre on 4h ---
         sabre = self.calc_trend_sabre(
@@ -1151,6 +1174,7 @@ class BTCPriceService:
             macd_4h=macd_4h,
             macd_1h=macd_1h,
             macd_15m=macd_15m,
+            macd_30m=macd_30m,
             trend_sabre=sabre,
             candle_momentum=candle_mom,
             trend_direction=overall,
@@ -1171,6 +1195,7 @@ class BTCPriceService:
             f"BTC ${current_price:,.0f} | {overall} ({strength:.0%}) | "
             f"MACD4H={macd_4h.histogram:+.0f} {'RISING' if macd_4h.histogram_rising else 'FALLING'} {macd_4h.crossover} | "
             f"MACD1H={macd_1h.histogram:+.2f} {'RISING' if macd_1h.histogram_rising else 'FALLING'} | "
+            f"MACD30m={macd_30m.histogram:+.1f} {macd_30m.crossover} | "
             f"MACD15m={macd_15m.histogram:+.0f} {macd_15m.crossover} | "
             f"Sabre={'BULL' if sabre.trend==1 else 'BEAR'} trail=${sabre.trail_value:,.0f} tension={sabre.tension:+.1f} | "
             f"RSI={rsi_14:.0f} | Mom={candle_mom.momentum_signal} | "

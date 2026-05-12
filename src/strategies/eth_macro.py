@@ -18,7 +18,7 @@ from src.analysis.btc_price_service import CandleMomentum, MACDResult, Technical
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager, ExposureTier
-from src.market.scanner import Market
+from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
 from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
@@ -587,7 +587,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("liquidity")
                 continue
 
-            is_5m = self._is_5m_market(market)
+            _updown_tf = updown_timeframe_label(resolved_updown_window_minutes(market))
+            is_5m = _updown_tf == "5m"
             yes_price = market.yes_price
 
             # UTC dead-zone — same config keys as sol_macro / bitcoin updown.
@@ -619,13 +620,17 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
             _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-            if is_5m:
+            if _updown_tf == "5m":
                 _win_min, _win_max = self._resolve_entry_window_bounds(
-                    is_5m=True, default_min=2.75, default_max=3.75
+                    tf="5m", default_min=2.75, default_max=3.75
+                )
+            elif _updown_tf == "30m":
+                _win_min, _win_max = self._resolve_entry_window_bounds(
+                    tf="30m", default_min=26.0, default_max=28.66
                 )
             else:
                 _win_min, _win_max = self._resolve_entry_window_bounds(
-                    is_5m=False, default_min=13.0, default_max=14.33
+                    tf="15m", default_min=13.0, default_max=14.33
                 )
             _sample("mins_left", _mins_left)
             if _eval_left < _win_min or _eval_left > _win_max:
@@ -633,7 +638,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
             _ai_window_open = self._within_ai_decision_window(
                 mins_left=_eval_left,
-                is_5m=is_5m,
+                tf=_updown_tf,
             )
 
             if getattr(corr, "degraded", False) and self.skip_on_degraded_correlation:
@@ -717,7 +722,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason="rsi_hard_blocked",
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=0.0,
                             effective_min_edge=0.0,
@@ -859,7 +864,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
                 mins_left=_eval_left,
                 effective_min_edge=effective_min_edge,
-                is_5m=is_5m,
+                tf=_updown_tf,
             )
             if not _late_ok:
                 _bump_skip("late_window_blocked")
@@ -891,7 +896,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and self.ai_agent.is_available()
                 and ai_calls < self.max_ai_calls_per_scan
             ):
-                _window = "5m" if is_5m else "15m"
+                _window = _updown_tf
                 ai_context = (
                     f"{market.description}\n\n"
                     f"=== ETH BTC-FOLLOW CONTEXT ({_window}) ===\n"
@@ -1041,7 +1046,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason=_skip_reason,
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -1089,7 +1094,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason="entry_price_band",
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -1113,7 +1118,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason="edge_above_cap",
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -1152,7 +1157,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason="size_too_small",
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -1201,7 +1206,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 alt_asset_code="eth",
                 htf_bias=btc_htf_bias,
                 btc_1h_regime=btc_1h_regime,
-                window_size="5m" if is_5m else "15m",
+                window_size=_updown_tf,
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(est_prob_up, 4),
                 rsi=round(eth.rsi_14, 1),

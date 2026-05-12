@@ -46,6 +46,7 @@ class HyperliquidHypeService(SOLBTCService):
     _INTERVAL_MAP = {
         "1m": ("1m", 60_000),
         "5m": ("5m", 300_000),
+        "30m": ("30m", 1_800_000),
         "15m": ("15m", 900_000),
         "1h": ("1h", 3_600_000),
         "4h": ("4h", 14_400_000),

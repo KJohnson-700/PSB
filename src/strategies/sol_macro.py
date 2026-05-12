@@ -48,7 +48,7 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 
-from src.market.scanner import Market
+from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
@@ -163,34 +163,8 @@ NON_SOL_ASSET_TERMS = (
 
 
 def _market_window_minutes(market: Market) -> int:
-    """Estimate candle window size (in minutes) from question time range.
-
-    Looks for patterns like "2:15AM-2:20AM" or "2:15AM–2:30AM".
-    Returns 5 for 5-minute windows, 15 for 15-minute windows (default).
-    """
-    m = re.search(r'(\d+):(\d+)(AM|PM)[–\-](\d+):(\d+)(AM|PM)', market.question, re.IGNORECASE)
-    if m:
-        h1, m1, p1, h2, m2, p2 = m.groups()
-        h1, m1, h2, m2 = int(h1), int(m1), int(h2), int(m2)
-        if p1.upper() == 'PM' and h1 != 12:
-            h1 += 12
-        if p1.upper() == 'AM' and h1 == 12:
-            h1 = 0
-        if p2.upper() == 'PM' and h2 != 12:
-            h2 += 12
-        if p2.upper() == 'AM' and h2 == 12:
-            h2 = 0
-        start_min = h1 * 60 + m1
-        end_min = h2 * 60 + m2
-        diff = end_min - start_min
-        if diff < 0:
-            diff += 1440  # midnight wrap
-        return diff
-    # Fall back to keyword detection
-    q = market.question.lower()
-    if '5m' in q or '5-min' in q:
-        return 5
-    return 15  # default: assume 15m
+    """Candle window minutes from Gamma metadata or question/slug text."""
+    return resolved_updown_window_minutes(market)
 
 PRICE_PATTERNS = [
     re.compile(r'\$\s*([\d,]+(?:\.\d+)?)\s*(?:k|K)', re.IGNORECASE),
@@ -581,10 +555,12 @@ class SolMacroStrategy:
         """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
         return _market_window_minutes(market) <= 5
 
-    def _resolve_entry_window_bounds(self, *, is_5m: bool, default_min: float, default_max: float) -> tuple[float, float]:
+    def _resolve_entry_window_bounds(self, *, tf: str, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
-        win_min = float(self.config.get("entry_window_5m_min" if is_5m else "entry_window_15m_min", default_min))
-        win_max = float(self.config.get("entry_window_5m_max" if is_5m else "entry_window_15m_max", default_max))
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
+        win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
 
@@ -592,7 +568,12 @@ class SolMacroStrategy:
             return win_min, win_max
 
         scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
-        default_expand = 1.0 if is_5m else 1.5
+        if tf == "5m":
+            default_expand = 1.0
+        elif tf == "30m":
+            default_expand = 2.5
+        else:
+            default_expand = 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
         jitter_sec = float(self.config.get("entry_window_auto_align_jitter_sec", 15))
         # At least half the scan interval (minutes), but do not cap expansion *below*
@@ -608,26 +589,32 @@ class SolMacroStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
-    def _resolve_ai_decision_window_bounds(self, *, is_5m: bool) -> tuple[float, float]:
+    def _resolve_ai_decision_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred AI-decision timing window in minutes remaining."""
-        default_min = 1.5 if is_5m else 8.0
-        default_max = 2.5 if is_5m else 13.0
-        win_min = float(self.config.get("ai_entry_window_5m_min" if is_5m else "ai_entry_window_15m_min", default_min))
-        win_max = float(self.config.get("ai_entry_window_5m_max" if is_5m else "ai_entry_window_15m_max", default_max))
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        default_min, default_max = presets[tf]
+        win_min = float(self.config.get(f"ai_entry_window_{tf}_min", default_min))
+        win_max = float(self.config.get(f"ai_entry_window_{tf}_max", default_max))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
         return win_min, win_max
 
-    def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
-        win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
+    def _within_ai_decision_window(self, *, mins_left: float, tf: str) -> bool:
+        win_min, win_max = self._resolve_ai_decision_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
     def _apply_late_window_guard(
-        self, *, mins_left: float, effective_min_edge: float, is_5m: bool = False
+        self, *, mins_left: float, effective_min_edge: float, tf: str = "15m"
     ) -> tuple[bool, float, Optional[str]]:
         """Return late-window admission decision and any tightened edge reason."""
-        block_mins = self.late_window_block_mins_5m if is_5m else self.late_window_block_mins
-        tighten_mins = self.late_window_tighten_mins_5m if is_5m else self.late_window_tighten_mins
+        if tf == "5m":
+            block_mins = self.late_window_block_mins_5m
+            tighten_mins = self.late_window_tighten_mins_5m
+        else:
+            block_mins = self.late_window_block_mins
+            tighten_mins = self.late_window_tighten_mins
         if block_mins > 0 and mins_left <= block_mins:
             return False, effective_min_edge, "late_window_blocked"
         if (
@@ -1421,8 +1408,13 @@ class SolMacroStrategy:
 
             yes_price = market.yes_price
             is_updown = self._is_updown_market(market)
-            is_5m = self._is_5m_market(market) if is_updown else False
-            if is_updown and not is_5m and skip_15m_reason:
+            _updown_tf = (
+                updown_timeframe_label(resolved_updown_window_minutes(market))
+                if is_updown
+                else "15m"
+            )
+            is_5m = _updown_tf == "5m"
+            if is_updown and _updown_tf != "5m" and skip_15m_reason:
                 _bump_skip(skip_15m_reason)
                 logger.debug(
                     f"  {_brand} skip '{market.question[:40]}' — {skip_15m_reason}"
@@ -1478,15 +1470,21 @@ class SolMacroStrategy:
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
                 _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-                if is_5m:
+                if _updown_tf == "5m":
                     _win_min, _win_max = self._resolve_entry_window_bounds(
-                        is_5m=True,
+                        tf="5m",
                         default_min=2.75,
                         default_max=3.75,
                     )
+                elif _updown_tf == "30m":
+                    _win_min, _win_max = self._resolve_entry_window_bounds(
+                        tf="30m",
+                        default_min=26.0,
+                        default_max=28.66,
+                    )
                 else:
                     _win_min, _win_max = self._resolve_entry_window_bounds(
-                        is_5m=False,
+                        tf="15m",
                         default_min=13.0,
                         default_max=14.33,
                     )
@@ -1500,7 +1498,7 @@ class SolMacroStrategy:
                     continue
                 _ai_window_open = self._within_ai_decision_window(
                     mins_left=_eval_left,
-                    is_5m=is_5m,
+                    tf=_updown_tf,
                 )
 
                 # ── BTC minimum dollar move before entering ──
@@ -1602,7 +1600,7 @@ class SolMacroStrategy:
                                 payload=self._make_buy_no_skip_payload(
                                     market=market,
                                     skip_reason="flat_btc_no_lag",
-                                    window_size="5m" if is_5m else "15m",
+                                    window_size=_updown_tf if is_updown else "15m",
                                     yes_price=yes_price,
                                     edge=0.0,
                                     effective_min_edge=0.0,
@@ -1653,7 +1651,7 @@ class SolMacroStrategy:
                             payload=self._make_buy_no_skip_payload(
                                 market=market,
                                 skip_reason="rsi_hard_blocked",
-                                window_size="5m" if is_5m else "15m",
+                                window_size=_updown_tf if is_updown else "15m",
                                 yes_price=yes_price,
                                 edge=0.0,
                                 effective_min_edge=0.0,
@@ -2249,7 +2247,7 @@ class SolMacroStrategy:
             if action == "BUY_NO" and self.min_edge_buy_no > 0:
                 effective_min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
-            if ltf_strength == 0.0 and is_updown and not is_5m:
+            if ltf_strength == 0.0 and is_updown and _updown_tf != "5m":
                 effective_min_edge = max(
                     effective_min_edge, self.min_edge_15m_when_ltf_unconfirmed
                 )
@@ -2300,7 +2298,7 @@ class SolMacroStrategy:
                 _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
                     mins_left=_eval_left,
                     effective_min_edge=effective_min_edge,
-                    is_5m=is_5m,
+                    tf=_updown_tf,
                 )
                 if not _late_ok:
                     _bump_skip("late_window_blocked")
@@ -2327,7 +2325,7 @@ class SolMacroStrategy:
                 and self.ai_agent.is_available()
                 and ai_calls < self.max_ai_calls_per_scan
             ):
-                _win = "5m" if is_5m else "15m"
+                _win = _updown_tf if is_updown else "15m"
                 ai_context2 = (
                     f"{market.description}\n\n"
                     f"=== {_alt_label} UPDOWN CONTEXT ({_win}) ===\n"
@@ -2441,7 +2439,7 @@ class SolMacroStrategy:
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason=_skip_reason,
-                            window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                            window_size=_updown_tf if is_updown else "threshold",
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -2453,10 +2451,12 @@ class SolMacroStrategy:
                         counts=buy_no_skip_counts,
                         last_sample=last_buy_no_skip_sample,
                     )
-                _mkt_type = "5m" if is_5m else (
-                    "15m_unconf" if (is_updown and ltf_strength == 0.0) else
-                    ("15m" if is_updown else "threshold")
-                )
+                if not is_updown:
+                    _mkt_type = "threshold"
+                elif ltf_strength == 0.0:
+                    _mkt_type = f"{_updown_tf}_unconf"
+                else:
+                    _mkt_type = _updown_tf
                 logger.info(
                     f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} < min={effective_min_edge} ({_mkt_type})"
                 )
@@ -2464,7 +2464,7 @@ class SolMacroStrategy:
 
             _updown_lane = (
                 "15m_buy_yes"
-                if is_updown and not is_5m and action == "BUY_YES"
+                if is_updown and _updown_tf != "5m" and action == "BUY_YES"
                 else "default"
             )
             if is_updown:
@@ -2524,7 +2524,7 @@ class SolMacroStrategy:
                     if ai_calls >= self.max_ai_calls_per_scan:
                         _bump_skip(f"ai_call_limit_{_updown_lane}")
                         continue
-                    _win = "5m" if is_5m else "15m"
+                    _win = _updown_tf if is_updown else "15m"
                     ai_context3 = (
                         f"{market.description}\n\n"
                         f"=== {_brand} ENFORCED UPDOWN CONTEXT ({_win}) ===\n"
@@ -2618,7 +2618,7 @@ class SolMacroStrategy:
             if is_updown:
                 _yp_low = self.entry_price_min
                 _yp_high = self.entry_price_max
-                if action == "BUY_YES" and not is_5m:
+                if action == "BUY_YES" and _updown_tf != "5m":
                     _yp_high = float(
                         self.config.get("entry_price_max_15m_buy_yes", _yp_high)
                     )
@@ -2637,7 +2637,7 @@ class SolMacroStrategy:
                             payload=self._make_buy_no_skip_payload(
                                 market=market,
                                 skip_reason="entry_price_band_updown",
-                                window_size="5m" if is_5m else "15m",
+                                window_size=_updown_tf if is_updown else "15m",
                                 yes_price=yes_price,
                                 edge=edge,
                                 effective_min_edge=effective_min_edge,
@@ -2670,7 +2670,7 @@ class SolMacroStrategy:
                             payload=self._make_buy_no_skip_payload(
                                 market=market,
                                 skip_reason="edge_above_cap",
-                                window_size="5m" if is_5m else "15m",
+                                window_size=_updown_tf if is_updown else "15m",
                                 yes_price=yes_price,
                                 edge=edge,
                                 effective_min_edge=effective_min_edge,
@@ -2718,7 +2718,7 @@ class SolMacroStrategy:
                         payload=self._make_buy_no_skip_payload(
                             market=market,
                             skip_reason="size_too_small",
-                            window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                            window_size=_updown_tf if is_updown else "threshold",
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -2765,7 +2765,7 @@ class SolMacroStrategy:
                 alt_asset_code=_spot_key,
                 htf_bias=primary_htf_bias,
                 btc_1h_regime=btc_1h_regime if btc_ta else None,
-                window_size="5m" if is_5m else "15m",
+                window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(estimated_prob, 4),
                 rsi=round(sol.rsi_14, 1),
@@ -2792,7 +2792,7 @@ class SolMacroStrategy:
                     metadata={
                         "confidence": float(confidence),
                         "yes_price": float(yes_price),
-                        "window_size": "5m" if is_5m else "15m",
+                        "window_size": _updown_tf if is_updown else "15m",
                         "htf_bias": primary_htf_bias,
                         "alt_htf_bias": macro_trend,
                         "reason": reason_str,

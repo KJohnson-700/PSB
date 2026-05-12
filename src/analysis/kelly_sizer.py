@@ -40,6 +40,8 @@ def detect_window_from_question(question: str) -> str:
         delta = abs(end_minutes - start_minutes)
         if delta <= 6:
             return "5m"
+        if delta >= 23:
+            return "30m"
         return "15m"
     except Exception:
         return "15m"
@@ -201,7 +203,7 @@ class KellySizer:
         result = {}
         for strat in self._defaults:
             result[strat] = {}
-            for win in ("5m", "15m"):
+            for win in ("5m", "15m", "30m"):
                 result[strat][win] = self.get_window_stats(strat, win)
         return result
 

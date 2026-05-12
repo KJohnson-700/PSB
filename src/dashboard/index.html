@@ -70,26 +70,29 @@
         #status-hero .hero-item{padding:14px 16px;min-height:98px}
         #status-hero .hero-item .hero-val{font-size:clamp(26px,2.6vw,42px);line-height:1.04}
         .crypto-hero-six{grid-template-columns:repeat(6,minmax(0,1fr))}
+        .crypto-hero-seven{grid-template-columns:repeat(7,minmax(0,1fr))}
         .crypto-meta-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
-        .crypto-meta-four>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .signal-gates-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0}
+        .crypto-meta-five{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
+        .crypto-meta-six{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
+        .crypto-meta-four>div,.crypto-meta-five>div,.crypto-meta-six>div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .signal-gates-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;min-width:0}
         .signal-gates-grid>div{min-width:0;overflow:hidden}
         /* Live crypto cards: full readouts (no ellipsis); JS may add horizontal ticker if still too wide */
-        .crypto-grid .crypto-hero-six .hero-item{align-self:stretch}
-        .crypto-grid .crypto-hero-six .hero-item .hero-val{
+        .crypto-grid .crypto-hero-six .hero-item,.crypto-grid .crypto-hero-seven .hero-item{align-self:stretch}
+        .crypto-grid .crypto-hero-six .hero-item .hero-val,.crypto-grid .crypto-hero-seven .hero-item .hero-val{
             white-space:normal;
             overflow:visible;
             text-overflow:clip;
             line-height:1.18;
             word-break:break-word;
         }
-        .crypto-grid .crypto-hero-six .hero-item .hero-lbl{
+        .crypto-grid .crypto-hero-six .hero-item .hero-lbl,.crypto-grid .crypto-hero-seven .hero-item .hero-lbl{
             white-space:normal;
             overflow:visible;
             text-overflow:clip;
             line-height:1.2;
         }
-        .crypto-grid .crypto-meta-four>div{
+        .crypto-grid .crypto-meta-four>div,.crypto-grid .crypto-meta-five>div,.crypto-grid .crypto-meta-six>div{
             white-space:normal;
             overflow:visible;
             text-overflow:clip;
@@ -318,17 +321,21 @@
         @media (max-width:1280px){
             .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
             .crypto-hero-six{grid-template-columns:repeat(3,minmax(0,1fr))}
+            .crypto-hero-seven{grid-template-columns:repeat(4,minmax(0,1fr))}
             .crypto-meta-four{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .crypto-meta-five{grid-template-columns:repeat(3,minmax(0,1fr))}
+            .crypto-meta-six{grid-template-columns:repeat(3,minmax(0,1fr))}
         }
         @media (max-width:900px){
             .crypto-grid.two,.crypto-grid.three,.equal-card-grid.two{grid-template-columns:1fr}
             .crypto-hero-six{grid-template-columns:repeat(2,minmax(0,1fr))}
+            .crypto-hero-seven{grid-template-columns:repeat(2,minmax(0,1fr))}
             .signal-gates-grid{grid-template-columns:1fr}
             #status-hero{grid-template-columns:repeat(2,minmax(0,1fr))}
             .ops-mini-grid{grid-template-columns:1fr}
         }
         @media (max-width:640px){
-            .crypto-hero-six,.crypto-meta-four{grid-template-columns:1fr}
+            .crypto-hero-six,.crypto-hero-seven,.crypto-meta-four,.crypto-meta-five,.crypto-meta-six{grid-template-columns:1fr}
             #status-hero{grid-template-columns:1fr}
         }
         @media (max-height:760px) and (min-width:901px){
@@ -380,9 +387,9 @@
         html.dashboard-fullscreen .hero-item .hero-val{font-size:clamp(24px,2.2vw,34px);white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
         html.dashboard-fullscreen .hero-item .hero-sub{font-size:12px;white-space:normal;overflow:visible;text-overflow:clip}
         html.dashboard-fullscreen .hero-item .hero-lbl{font-size:11px}
-        html.dashboard-fullscreen .crypto-hero-six{gap:12px}
-        html.dashboard-fullscreen .crypto-meta-four{gap:12px;font-size:0.95rem}
-        html.dashboard-fullscreen .crypto-meta-four>div{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
+        html.dashboard-fullscreen .crypto-hero-six,html.dashboard-fullscreen .crypto-hero-seven{gap:12px}
+        html.dashboard-fullscreen .crypto-meta-four,html.dashboard-fullscreen .crypto-meta-five,html.dashboard-fullscreen .crypto-meta-six{gap:12px;font-size:0.95rem}
+        html.dashboard-fullscreen .crypto-meta-four>div,html.dashboard-fullscreen .crypto-meta-five>div,html.dashboard-fullscreen .crypto-meta-six>div{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
         html.dashboard-fullscreen .card p{font-size:0.82rem;line-height:1.55}
         html.dashboard-fullscreen .metric-box{padding:16px}
         html.dashboard-fullscreen .metric-box .value{font-size:clamp(20px,1.8vw,28px);white-space:normal;overflow:visible;text-overflow:clip}
@@ -396,12 +403,12 @@
         html.dashboard-fullscreen th{font-size:10px}
         html.dashboard-fullscreen td{font-size:12px}
         /* Crypto KPI rows: fullscreen hero rules above target Command Center density; keep alt/BTC tiles shorter. */
-        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item{padding:14px 14px;min-height:0}
-        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-val{
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item{padding:14px 14px;min-height:0}
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-val,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-val{
             font-size:clamp(15px,1.15vw,21px);
             line-height:1.14;
         }
-        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl{font-size:9px}
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-lbl{font-size:9px}
 
         /* ── Design handoff (vHTubxNudMcUB1Oe4FhHPA) — additive layer ── */
         @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
@@ -696,7 +703,7 @@
             <div class="hero-item" title="Live bankroll from the bot">
                 <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
             <div class="hero-item" title="Realized PnL from closed trades this session.">
-                <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Realized P&L</div></div>
+                <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
             <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
@@ -754,6 +761,7 @@
                 <select id="btc-chart-interval" onchange="setBTCInterval(this.value)" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-size:0.75rem;font-family:inherit;">
                     <option value="15" selected>15m</option>
                     <option value="5">5m</option>
+                    <option value="30">30m</option>
                     <option value="60">1H</option>
                     <option value="240">4H</option>
                 </select>
@@ -797,23 +805,32 @@
           <h2 style="margin-bottom:0;">&#8383; BTC</h2>
           <div class="status-bar" id="btc-signal-badges"></div>
         </div>
-        <div class="status-hero crypto-hero-six">
+        <div class="status-hero crypto-hero-seven">
           <div class="hero-item"><div class="hero-val" id="btc-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">BTC Price</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-htf-bias">-</div><div class="hero-lbl">4H Bias</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
+          <div class="hero-item"><div class="hero-val" id="btc-macd30m">-</div><div class="hero-lbl">MACD 30m</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-macd15m">-</div><div class="hero-lbl">MACD 15m</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-momentum">-</div><div class="hero-lbl">Momentum</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-sabre">-</div><div class="hero-lbl">Sabre</div></div>
         </div>
-        <div class="crypto-meta-four">
+        <div class="crypto-meta-six">
           <div>MACD 4H: <span id="btc-macd4h" style="color:var(--text);">-</span></div>
           <div>MACD 1H: <span id="btc-macd1h" style="color:var(--text);">-</span></div>
+          <div>MACD 30m: <span id="btc-macd30m-meta" style="color:var(--text);">-</span></div>
+          <div>MACD 15m: <span id="btc-macd15m-meta" style="color:var(--text);">-</span></div>
           <div>VP POC: <span id="btc-vp-poc" style="color:var(--text);">-</span></div>
           <div>VAH/VAL: <span id="btc-vp-vah" style="color:var(--text);">-</span> / <span id="btc-vp-val" style="color:var(--text);">-</span></div>
         </div>
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
           <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">30m</div>
+              <div id="btc-30m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="btc-30m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="btc-30m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="btc-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -838,10 +855,11 @@
           <div class="hero-item"><div class="hero-val" id="sol-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-macro">-</div><div class="hero-lbl">BTC-SOL Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
-          <div class="hero-item"><div class="hero-val" id="sol-sol-move">-</div><div class="hero-lbl">SOL 5m</div></div>
+          <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="sol-sol-move">-</div><div class="hero-lbl">SOL Δ% 5·15·30m</div></div>
         </div>
-        <div class="crypto-meta-four">
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="sol-macd30m" style="color:var(--text);">-</span></div>
           <div>MACD 15m: <span id="sol-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="sol-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="sol-corr" style="color:var(--text);">-</span></div>
@@ -850,6 +868,12 @@
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
           <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">30m</div>
+              <div id="sol-30m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="sol-30m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="sol-30m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="sol-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -878,10 +902,11 @@
           <div class="hero-item"><div class="hero-val" id="eth-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-macro">-</div><div class="hero-lbl">BTC-ETH Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
-          <div class="hero-item"><div class="hero-val" id="eth-eth-move">-</div><div class="hero-lbl">ETH 5m</div></div>
+          <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="eth-eth-move">-</div><div class="hero-lbl">ETH Δ% 5·15·30m</div></div>
         </div>
-        <div class="crypto-meta-four">
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="eth-macd30m" style="color:var(--text);">-</span></div>
           <div>MACD 15m: <span id="eth-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="eth-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="eth-corr" style="color:var(--text);">-</span></div>
@@ -890,6 +915,12 @@
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
           <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">30m</div>
+              <div id="eth-30m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="eth-30m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="eth-30m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="eth-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -914,10 +945,11 @@
           <div class="hero-item"><div class="hero-val" id="hype-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-macro">-</div><div class="hero-lbl">BTC-HYPE Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
-          <div class="hero-item"><div class="hero-val" id="hype-hype-move">-</div><div class="hero-lbl">HYPE 5m</div></div>
+          <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="hype-hype-move">-</div><div class="hero-lbl">HYPE Δ% 5·15·30m</div></div>
         </div>
-        <div class="crypto-meta-four">
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="hype-macd30m" style="color:var(--text);">-</span></div>
           <div>MACD 15m: <span id="hype-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="hype-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="hype-corr" style="color:var(--text);">-</span></div>
@@ -926,6 +958,12 @@
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
           <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">30m</div>
+              <div id="hype-30m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="hype-30m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="hype-30m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="hype-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -950,10 +988,11 @@
           <div class="hero-item"><div class="hero-val" id="xrp-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-macro">-</div><div class="hero-lbl">BTC-XRP Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC 5m</div></div>
-          <div class="hero-item"><div class="hero-val" id="xrp-xrp-move">-</div><div class="hero-lbl">XRP 5m</div></div>
+          <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="xrp-xrp-move">-</div><div class="hero-lbl">XRP Δ% 5·15·30m</div></div>
         </div>
-        <div class="crypto-meta-four">
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="xrp-macd30m" style="color:var(--text);">-</span></div>
           <div>MACD 15m: <span id="xrp-macd15m" style="color:var(--text);">-</span></div>
           <div>MACD 5m: <span id="xrp-macd5m" style="color:var(--text);">-</span></div>
           <div>Corr: <span id="xrp-corr" style="color:var(--text);">-</span></div>
@@ -962,6 +1001,12 @@
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
           <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
           <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">30m</div>
+              <div id="xrp-30m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="xrp-30m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="xrp-30m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
             <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
               <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
               <div id="xrp-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
@@ -1278,14 +1323,19 @@
             <button class="btn-sm btn-purple" id="backtest-start-btn" onclick="startBacktest()">Run Backtest</button>
             <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
                 <option value="">-- Crypto --</option>
+                <option value="BTC-30">BTC 30m</option>
                 <option value="BTC-15">BTC 15m</option>
                 <option value="BTC-5">BTC 5m</option>
+                <option value="SOL-30">SOL 30m</option>
                 <option value="SOL-15">SOL 15m</option>
                 <option value="SOL-5">SOL 5m</option>
+                <option value="ETH-30">ETH 30m</option>
                 <option value="ETH-15">ETH 15m</option>
                 <option value="ETH-5">ETH 5m</option>
+                <option value="HYPE-30">HYPE 30m</option>
                 <option value="HYPE-15">HYPE 15m</option>
                 <option value="HYPE-5">HYPE 5m</option>
+                <option value="XRP-30">XRP 30m</option>
                 <option value="XRP-15">XRP 15m</option>
                 <option value="XRP-5">XRP 5m</option>
             </select>
@@ -2185,6 +2235,7 @@ async function fetchAll() {
     const needPerformance = currentView === 'performance';
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
+    const needUpdownWr = needLive || needPerformance;
     let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR;
     try {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR] = await Promise.all([
@@ -2203,7 +2254,7 @@ async function fetchAll() {
             needPerformance ? fetchT('/api/live/performance') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
+            needUpdownWr ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
             needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
@@ -2486,9 +2537,14 @@ function applyHeroMetrics(d) {
     const brSub = document.getElementById('hero-bankroll-sub');
     if (brSub) brSub.textContent = d.session_id ? ('id ' + String(d.session_id).slice(-14)) : '';
 
-    const sessionPnlRaw = (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '')
-        ? Number(s.realized_pnl)
-        : ((p.daily_pnl !== null && p.daily_pnl !== undefined) ? Number(p.daily_pnl) : null);
+    let sessionPnlRaw = null;
+    if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
+        sessionPnlRaw = Number(s.total_pnl);
+    } else if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
+        sessionPnlRaw = Number(s.realized_pnl);
+    } else if (p.daily_pnl !== null && p.daily_pnl !== undefined) {
+        sessionPnlRaw = Number(p.daily_pnl);
+    }
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
         if (Number.isFinite(sessionPnlRaw)) {
@@ -2571,6 +2627,7 @@ function sseSnapshotToStatusShape(raw) {
             closed: raw.session_closed,
             open_stake: raw.open_stake,
             realized_pnl: raw.session_realized_pnl,
+            total_pnl: raw.session_total_pnl,
             session_staked_notional: raw.session_staked,
         },
         positions: [],
@@ -3200,6 +3257,7 @@ function updateBacktest(d) {
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
         Bitcoin Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('BTC', 30)}
         ${cryptoCard('BTC', 15)}
         ${cryptoCard('BTC', 5)}
     </div>`;
@@ -3208,6 +3266,7 @@ function updateBacktest(d) {
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
         SOL Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('SOL', 30)}
         ${cryptoCard('SOL', 15)}
         ${cryptoCard('SOL', 5)}
     </div>`;
@@ -3216,6 +3275,7 @@ function updateBacktest(d) {
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
         ETH Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('ETH', 30)}
         ${cryptoCard('ETH', 15)}
         ${cryptoCard('ETH', 5)}
     </div>`;
@@ -3224,6 +3284,7 @@ function updateBacktest(d) {
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
         HYPE Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('HYPE', 30)}
         ${cryptoCard('HYPE', 15)}
         ${cryptoCard('HYPE', 5)}
     </div>`;
@@ -3232,6 +3293,7 @@ function updateBacktest(d) {
     html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
         XRP Macro Strategy — Updown</h3>`;
     html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        ${cryptoCard('XRP', 30)}
         ${cryptoCard('XRP', 15)}
         ${cryptoCard('XRP', 5)}
     </div>`;
@@ -4193,7 +4255,7 @@ function dashApplySlowTickerIfNeeded(el) {
 }
 
 function dashRefreshCryptoLiveTickers() {
-    document.querySelectorAll('.crypto-grid .crypto-hero-six .hero-val').forEach(dashApplySlowTickerIfNeeded);
+    document.querySelectorAll('.crypto-grid .crypto-hero-six .hero-val, .crypto-grid .crypto-hero-seven .hero-val').forEach(dashApplySlowTickerIfNeeded);
     document.querySelectorAll('.crypto-grid .signal-gates-grid [id$="-status-badge"]').forEach(dashApplySlowTickerIfNeeded);
     document.querySelectorAll('.crypto-grid .signal-gates-grid [id$="-wr"]').forEach(dashApplySlowTickerIfNeeded);
 }
@@ -4218,7 +4280,7 @@ function updateBTCAnalysis(d) {
                 el.style.color = '';
             }
         });
-        ['btc-macd15m', 'btc-macd4h', 'btc-macd1h', 'btc-sabre'].forEach((id) => {
+        ['btc-macd30m','btc-macd15m','btc-macd30m-meta','btc-macd15m-meta','btc-macd4h','btc-macd1h','btc-sabre'].forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = '-';
         });
@@ -4239,7 +4301,12 @@ function updateBTCAnalysis(d) {
     document.getElementById('btc-macd4h').innerHTML = `hist=${(d.macd_4h_hist||0).toFixed(0)} ${d.macd_4h_above_zero?'<span style="color:var(--green)">above 0</span>':'<span style="color:var(--red)">below 0</span>'}`;
     const macd1hEl = document.getElementById('btc-macd1h');
     if (macd1hEl) macd1hEl.innerHTML = `hist=${(d.macd_1h_hist||0).toFixed(1)} ${d.macd_1h_cross||''}`;
+    document.getElementById('btc-macd30m').innerHTML = `hist=${(d.macd_30m_hist||0).toFixed(1)} ${d.macd_30m_cross||''}`;
     document.getElementById('btc-macd15m').innerHTML = `hist=${(d.macd_15m_hist||0).toFixed(1)} ${d.macd_15m_cross||''}`;
+    const m30meta = document.getElementById('btc-macd30m-meta');
+    if (m30meta) m30meta.innerHTML = `hist=${(d.macd_30m_hist||0).toFixed(1)} ${d.macd_30m_cross||''}`;
+    const m15meta = document.getElementById('btc-macd15m-meta');
+    if (m15meta) m15meta.innerHTML = `hist=${(d.macd_15m_hist||0).toFixed(1)} ${d.macd_15m_cross||''}`;
     document.getElementById('btc-momentum').textContent = `15m:${d.mom_15m||'-'} 5m:${d.mom_5m||'-'}`;
     document.getElementById('btc-vp-poc').textContent = d.vp_poc ? '$'+d.vp_poc.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
     document.getElementById('btc-vp-vah').textContent = d.vp_vah ? '$'+d.vp_vah.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
@@ -4265,7 +4332,7 @@ function clearAltLagHero(prefix) {
             el.style.color = '';
         }
     });
-    [`${prefix}-macd15m`, `${prefix}-macd5m`].forEach((id) => {
+    [`${prefix}-macd30m`, `${prefix}-macd15m`, `${prefix}-macd5m`].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '-';
     });
@@ -4295,6 +4362,10 @@ function updateAltLagAnalysis(d, prefix) {
         rsiEl.textContent = rsi.toFixed(0);
         rsiEl.style.color = rsi > 70 ? 'var(--red)' : rsi < 30 ? 'var(--green)' : 'var(--text)';
     }
+    const triPct = (a, b, c) =>
+        `${Number(a ?? 0).toFixed(2)}/${Number(b ?? 0).toFixed(2)}/${Number(c ?? 0).toFixed(2)}%`;
+    const m30 = document.getElementById(prefix + '-macd30m');
+    if (m30) m30.innerHTML = `hist=${(d.macd_30m_hist||0).toFixed(4)} ${d.macd_30m_cross||''}`;
     const m15 = document.getElementById(prefix + '-macd15m');
     if (m15) m15.innerHTML = `hist=${(d.macd_15m_hist||0).toFixed(4)} ${d.macd_15m_cross||''}`;
     const m5 = document.getElementById(prefix + '-macd5m');
@@ -4313,12 +4384,14 @@ function updateAltLagAnalysis(d, prefix) {
             ? `<span style="color:var(--green);font-weight:700;">Opp +${(d.lag_magnitude||0).toFixed(2)}%</span>`
             : '<span style="color:var(--text-muted);">None</span>';
     const btcMv = document.getElementById(prefix + '-btc-move');
-    if (btcMv) btcMv.textContent = (d.btc_move_5m || 0).toFixed(2) + '%';
+    if (btcMv) btcMv.textContent = triPct(d.btc_move_5m, d.btc_move_15m, d.btc_move_30m);
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
     if (altMv) {
         const code = String(d.alt_asset_code || prefix || 'sol').toLowerCase();
-        const altPct = Number(d[`${code}_move_5m`] ?? d.sol_move_5m ?? 0);
-        altMv.textContent = (Number.isFinite(altPct) ? altPct : 0).toFixed(2) + '%';
+        const a5 = d[`${code}_move_5m`] ?? d.sol_move_5m;
+        const a15 = d[`${code}_move_15m`] ?? d.sol_move_15m;
+        const a30 = d[`${code}_move_30m`] ?? d.sol_move_30m;
+        altMv.textContent = triPct(a5, a15, a30);
     }
     const lagMacroHero = document.getElementById(prefix + '-macro');
     if (lagMacroHero) {
@@ -4465,27 +4538,37 @@ function updateLivePerf(d) {
         const frac = Number(v?.fraction || 0) * 100;
         const win5 = ws?.[strat]?.['5m'] || {};
         const win15 = ws?.[strat]?.['15m'] || {};
+        const win30 = ws?.[strat]?.['30m'] || {};
         const streak5 = win5?.streak || 0;
         const streak15 = win15?.streak || 0;
+        const streak30 = win30?.streak || 0;
         const wr5 = Number(win5?.wr || 0);
         const wr15 = Number(win15?.wr || 0);
+        const wr30 = Number(win30?.wr || 0);
         const trades5 = win5?.trades || 0;
         const trades15 = win15?.trades || 0;
+        const trades30 = win30?.trades || 0;
         const hot5 = streak5 >= 3;
         const hot15 = streak15 >= 3;
+        const hot30 = streak30 >= 3;
         const has5 = trades5 > 0;
         const has15 = trades15 > 0;
+        const has30 = trades30 > 0;
         html += `<div style="border:1px solid var(--border);border-radius:4px;padding:6px 8px;background:rgba(0,0,0,0.2);">
             <div style="font-weight:700;font-size:0.7rem;color:${color};margin-bottom:4px;">${label} <span style="color:var(--text-muted);font-weight:400;">${frac.toFixed(0)}%</span></div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;font-size:0.65rem;">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;font-size:0.65rem;">
                 <div style="color:var(--text-muted);text-align:center;">5m</div>
                 <div style="color:var(--text-muted);text-align:center;">15m</div>
+                <div style="color:var(--text-muted);text-align:center;">30m</div>
                 <div style="text-align:center;color:${hot5?'var(--green)':'var(--text-muted)'};font-weight:600;">${streak5}W</div>
                 <div style="text-align:center;color:${hot15?'var(--green)':'var(--text-muted)'};font-weight:600;">${streak15}W</div>
+                <div style="text-align:center;color:${hot30?'var(--green)':'var(--text-muted)'};font-weight:600;">${streak30}W</div>
                 <div style="text-align:center;color:var(--text-muted);">${has5 ? wr5.toFixed(0)+'%' : '—'}</div>
                 <div style="text-align:center;color:var(--text-muted);">${has15 ? wr15.toFixed(0)+'%' : '—'}</div>
+                <div style="text-align:center;color:var(--text-muted);">${has30 ? wr30.toFixed(0)+'%' : '—'}</div>
                 <div style="text-align:center;color:var(--text-muted);font-size:0.6rem;">${trades5}T</div>
                 <div style="text-align:center;color:var(--text-muted);font-size:0.6rem;">${trades15}T</div>
+                <div style="text-align:center;color:var(--text-muted);font-size:0.6rem;">${trades30}T</div>
             </div>
         </div>`;
     });
@@ -4495,17 +4578,19 @@ function updateLivePerf(d) {
 
 function updateUpdownBreakdown(ud) {
     if (!ud) return;
+
     const labelEl = document.getElementById('updown-code-label');
     if (labelEl) {
         if (ud.new_code_start) {
-            labelEl.textContent = '🟢 New code since ' + ud.new_code_start.slice(11,16);
+            labelEl.textContent = '🟢 New code since ' + ud.new_code_start.slice(11, 16);
             labelEl.style.color = 'var(--green)';
         } else {
             labelEl.textContent = '🟡 Old code — restart bot to activate';
             labelEl.style.color = '#f5a623';
         }
     }
-    const TARGET = ['BTC_updown_15m','BTC_updown_5m','SOL_updown_15m','SOL_updown_5m','ETH_updown_15m','ETH_updown_5m','HYPE_updown_15m','HYPE_updown_5m','XRP_updown_15m','XRP_updown_5m'];
+
+    const TARGET = ['BTC_updown_15m', 'BTC_updown_30m', 'BTC_updown_5m', 'SOL_updown_15m', 'SOL_updown_30m', 'SOL_updown_5m', 'ETH_updown_15m', 'ETH_updown_30m', 'ETH_updown_5m', 'HYPE_updown_15m', 'HYPE_updown_30m', 'HYPE_updown_5m', 'XRP_updown_15m', 'XRP_updown_30m', 'XRP_updown_5m'];
     function renderBucket(data, elId) {
         const el = document.getElementById(elId);
         if (!el) return;
@@ -4617,19 +4702,23 @@ function syncCryptoGateSummaryBar() {
     const rows = [['btc', 'BTC'], ['sol', 'SOL'], ['eth', 'ETH'], ['hype', 'HYPE'], ['xrp', 'XRP']];
     const parts = [];
     for (const [pfx, sym] of rows) {
+        const a30 = document.getElementById(pfx + '-30m-status-badge');
         const a = document.getElementById(pfx + '-15m-status-badge');
         const b = document.getElementById(pfx + '-5m-status-badge');
-        if (!a || !b) continue;
+        if (!a30 || !a || !b) continue;
+        const t30 = (a30.textContent || '\u2014').trim();
         const t15 = (a.textContent || '\u2014').trim();
         const t5 = (b.textContent || '\u2014').trim();
+        const s30 = t30.length > 22 ? t30.slice(0, 20) + '\u2026' : t30;
         const s15 = t15.length > 22 ? t15.slice(0, 20) + '\u2026' : t15;
         const s5 = t5.length > 22 ? t5.slice(0, 20) + '\u2026' : t5;
         const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         parts.push(
-            '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;margin:2px 8px 2px 0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:rgba(4,6,10,0.55);max-width:168px;">' +
+            '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;margin:2px 8px 2px 0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:rgba(4,6,10,0.55);max-width:200px;">' +
             '<span style="font-weight:700;font-size:0.65rem;color:var(--cyan);">' + sym + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="' + esc(t15) + '">15m ' + s15 + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="' + esc(t5) + '">5m ' + s5 + '</span>' +
+            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t30) + '">30m ' + s30 + '</span>' +
+            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t15) + '">15m ' + s15 + '</span>' +
+            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t5) + '">5m ' + s5 + '</span>' +
             '</span>'
         );
     }
@@ -4647,6 +4736,8 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         return;
     }
     if (stampEl) stampEl.textContent = 'updated ' + now;
+
+    const UP30_GATE_NOTE = '30m markets: gate state mirrors 15m TA; WR shows journaled 30m trades only.';
 
     // Helper: colour a badge element
     function setBadge(id, text, colour) {
@@ -4726,7 +4817,13 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         setBadge('btc-15m-status-badge', btc15Badge, btc15Colour);
         setDetail('btc-15m-status-detail', btc15Detail);
         const btc15wr = getWR(updownData, 'BTC_updown_15m');
-        document.getElementById('btc-15m-wr').innerHTML = wrLabel(btc15wr) || 'No trades yet';
+        const b15el = document.getElementById('btc-15m-wr');
+        if (b15el) b15el.innerHTML = wrLabel(btc15wr) || 'No trades yet';
+
+        setBadge('btc-30m-status-badge', btc15Badge, btc15Colour);
+        setDetail('btc-30m-status-detail', [UP30_GATE_NOTE]);
+        const b30el = document.getElementById('btc-30m-wr');
+        if (b30el) b30el.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_30m')) || 'No trades yet';
 
         // BTC 5m gate logic
         const histGate5Ok = side15 === 'LONG' ? hist4h === true : side15 === 'SHORT' ? hist4h === false : false;
@@ -4764,12 +4861,16 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         document.getElementById('btc-5m-wr').innerHTML = wrLabel(btc5wr) || 'No trades yet';
     } else {
         const hint = btcData && btcData.error && typeof btcData.error === 'string' ? btcData.error : '';
+        setBadge('btc-30m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('btc-30m-status-detail', []);
         setBadge('btc-15m-status-badge', '\u2014 no TA', 'grey');
         setDetail('btc-15m-status-detail', [hint ? (`BTC TA: ${hint}`) : 'BTC analysis unavailable.']);
         setBadge('btc-5m-status-badge', '\u2014 no TA', 'grey');
         setDetail('btc-5m-status-detail', []);
+        const bwr30 = document.getElementById('btc-30m-wr');
         const bwr15 = document.getElementById('btc-15m-wr');
         const bwr5 = document.getElementById('btc-5m-wr');
+        if (bwr30) bwr30.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_30m')) || 'No trades yet';
         if (bwr15) bwr15.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_15m')) || 'No trades yet';
         if (bwr5) bwr5.innerHTML = wrLabel(getWR(updownData, 'BTC_updown_5m')) || 'No trades yet';
     }
@@ -4826,6 +4927,11 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         const sol15wr = getWR(updownData, 'SOL_updown_15m');
         document.getElementById('sol-15m-wr').innerHTML = wrLabel(sol15wr) || 'No trades yet';
 
+        setBadge('sol-30m-status-badge', s15Badge, s15Colour);
+        setDetail('sol-30m-status-detail', [UP30_GATE_NOTE]);
+        const s30w = document.getElementById('sol-30m-wr');
+        if (s30w) s30w.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_30m')) || 'No trades yet';
+
         // SOL 5m
         let s5Badge, s5Colour, s5Detail;
         if (!sideS) {
@@ -4861,17 +4967,21 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         const sol5wr = getWR(updownData, 'SOL_updown_5m');
         document.getElementById('sol-5m-wr').innerHTML = wrLabel(sol5wr) || 'No trades yet';
     } else {
+        setBadge('sol-30m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('sol-30m-status-detail', []);
         setBadge('sol-15m-status-badge', '\u2014 no TA', 'grey');
         setDetail('sol-15m-status-detail', ['SOL analysis unavailable.']);
         setBadge('sol-5m-status-badge', '\u2014 no TA', 'grey');
         setDetail('sol-5m-status-detail', []);
+        const swr30 = document.getElementById('sol-30m-wr');
         const swr15 = document.getElementById('sol-15m-wr');
         const swr5 = document.getElementById('sol-5m-wr');
+        if (swr30) swr30.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_30m')) || 'No trades yet';
         if (swr15) swr15.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_15m')) || 'No trades yet';
         if (swr5) swr5.innerHTML = wrLabel(getWR(updownData, 'SOL_updown_5m')) || 'No trades yet';
     }
 
-    function applyAltLagGates(altData, prefix, wrKey15, wrKey5) {
+    function applyAltLagGates(altData, prefix, wrKey30, wrKey15, wrKey5) {
         if (!altData || altData.error) return;
         const macro   = altData.macro_trend || 'NEUTRAL';
         const hist15s = altData.macd_15m_hist_rising;
@@ -4917,6 +5027,12 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         const el15 = document.getElementById(prefix + '-15m-wr');
         if (el15) el15.innerHTML = wrLabel(w15) || 'No trades yet';
 
+        setBadge(prefix + '-30m-status-badge', s15Badge, s15Colour);
+        setDetail(prefix + '-30m-status-detail', [UP30_GATE_NOTE]);
+        const w30lag = getWR(updownData, wrKey30);
+        const el30lag = document.getElementById(prefix + '-30m-wr');
+        if (el30lag) el30lag.innerHTML = wrLabel(w30lag) || 'No trades yet';
+
         let s5Badge, s5Colour, s5Detail;
         if (!sideS) {
             s5Badge = '\u2014 NEUTRAL'; s5Colour = 'grey';
@@ -4953,43 +5069,58 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (el5) el5.innerHTML = wrLabel(w5) || 'No trades yet';
     }
 
-    applyAltLagGates(ethData, 'eth', 'ETH_updown_15m', 'ETH_updown_5m');
-    applyAltLagGates(hypeData, 'hype', 'HYPE_updown_15m', 'HYPE_updown_5m');
-    applyAltLagGates(xrpData, 'xrp', 'XRP_updown_15m', 'XRP_updown_5m');
+    applyAltLagGates(ethData, 'eth', 'ETH_updown_30m', 'ETH_updown_15m', 'ETH_updown_5m');
+    applyAltLagGates(hypeData, 'hype', 'HYPE_updown_30m', 'HYPE_updown_15m', 'HYPE_updown_5m');
+    applyAltLagGates(xrpData, 'xrp', 'XRP_updown_30m', 'XRP_updown_15m', 'XRP_updown_5m');
 
     if (!ethData || ethData.error) {
+        setBadge('eth-30m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('eth-30m-status-detail', []);
         setBadge('eth-15m-status-badge', '\u2014 no TA', 'grey');
         setDetail('eth-15m-status-detail', ['ETH analysis feed unavailable (WR below is from closed trades if journaled).']);
         setBadge('eth-5m-status-badge', '\u2014 no TA', 'grey');
         setDetail('eth-5m-status-detail', ['ETH analysis feed unavailable.']);
+        const ew30 = getWR(updownData, 'ETH_updown_30m');
         const ew15 = getWR(updownData, 'ETH_updown_15m');
         const ew5 = getWR(updownData, 'ETH_updown_5m');
+        const e30 = document.getElementById('eth-30m-wr');
         const e15 = document.getElementById('eth-15m-wr');
         const e5 = document.getElementById('eth-5m-wr');
+        if (e30) e30.innerHTML = wrLabel(ew30) || 'No trades yet';
         if (e15) e15.innerHTML = wrLabel(ew15) || 'No trades yet';
         if (e5) e5.innerHTML = wrLabel(ew5) || 'No trades yet';
     }
     if (!hypeData || hypeData.error) {
+        setBadge('hype-30m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('hype-30m-status-detail', []);
         setBadge('hype-15m-status-badge', '\u2014 no TA', 'grey');
         setDetail('hype-15m-status-detail', ['HYPE analysis feed unavailable (WR below is from closed trades if journaled).']);
         setBadge('hype-5m-status-badge', '\u2014 no TA', 'grey');
         setDetail('hype-5m-status-detail', ['HYPE analysis feed unavailable.']);
+        const hw30 = getWR(updownData, 'HYPE_updown_30m');
         const hw15 = getWR(updownData, 'HYPE_updown_15m');
         const hw5 = getWR(updownData, 'HYPE_updown_5m');
+        const h30 = document.getElementById('hype-30m-wr');
         const h15 = document.getElementById('hype-15m-wr');
         const h5 = document.getElementById('hype-5m-wr');
+        if (h30) h30.innerHTML = wrLabel(hw30) || 'No trades yet';
         if (h15) h15.innerHTML = wrLabel(hw15) || 'No trades yet';
         if (h5) h5.innerHTML = wrLabel(hw5) || 'No trades yet';
     }
     if (!xrpData || xrpData.error) {
+        setBadge('xrp-30m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('xrp-30m-status-detail', []);
         setBadge('xrp-15m-status-badge', '\u2014 no TA', 'grey');
         setDetail('xrp-15m-status-detail', ['XRP analysis feed unavailable (WR below is from closed trades if journaled).']);
         setBadge('xrp-5m-status-badge', '\u2014 no TA', 'grey');
         setDetail('xrp-5m-status-detail', ['XRP analysis feed unavailable.']);
+        const xw30 = getWR(updownData, 'XRP_updown_30m');
         const xw15 = getWR(updownData, 'XRP_updown_15m');
         const xw5 = getWR(updownData, 'XRP_updown_5m');
+        const x30 = document.getElementById('xrp-30m-wr');
         const x15 = document.getElementById('xrp-15m-wr');
         const x5 = document.getElementById('xrp-5m-wr');
+        if (x30) x30.innerHTML = wrLabel(xw30) || 'No trades yet';
         if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
@@ -5916,7 +6047,7 @@ function initBTCChart() {
 }
 
 function setBTCInterval(val) {
-    const map = { '5': '5m', '15': '15m', '60': '1h', '240': '4h' };
+    const map = { '5': '5m', '15': '15m', '30': '30m', '60': '1h', '240': '4h' };
     _btcChartInterval = map[val] || '15m';
     loadBTCChart();
 }

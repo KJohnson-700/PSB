@@ -134,7 +134,7 @@ _CRYPTO_ASSET_UPDOWN_PATTERN = re.compile(
 )
 # Slug prefix from Gamma event slugs (5m / 15m updown).
 _CRYPTO_UPDOWN_SLUG_RE = re.compile(
-    r"(?:btc|sol|eth|xrp|hype)-updown-(?:5m|15m)-", re.IGNORECASE
+    r"(?:btc|sol|eth|xrp|hype)-updown-(?:5m|15m|30m)-", re.IGNORECASE
 )
 _HYPE_ALT_UPDOWN_SLUG_RE = re.compile(
     r"(?:hyperliquid-up-or-down|hype-up-or-down)-", re.IGNORECASE
@@ -231,6 +231,42 @@ def is_crypto_updown_market(market: Market) -> bool:
     )
 
 
+def resolved_updown_window_minutes(market: Market) -> int:
+    """Best-effort candle length for routing (5 / 15 / 30). Prefer Gamma ``window_minutes``."""
+    wm = getattr(market, "window_minutes", None)
+    if wm is not None:
+        try:
+            wmi = int(wm)
+            if wmi > 0:
+                return wmi
+        except (TypeError, ValueError):
+            pass
+    blob = f"{market.question or ''} {market.group_item_title or ''}"
+    parsed = _parse_updown_window_minutes_from_text(blob)
+    if parsed is not None:
+        return int(parsed)
+    q = (market.question or "").lower()
+    slug_l = (market.slug or "").lower()
+    if "updown-5m-" in slug_l or "updown-5-" in slug_l:
+        return 5
+    if "updown-30m-" in slug_l:
+        return 30
+    if "5m" in q or "5-min" in q:
+        return 5
+    if "30m" in q or "30-min" in q:
+        return 30
+    return 15
+
+
+def updown_timeframe_label(window_minutes: int) -> str:
+    """Bucket for strategy entry logic: 5m, 15m, or 30m."""
+    if window_minutes <= 6:
+        return "5m"
+    if window_minutes <= 22:
+        return "15m"
+    return "30m"
+
+
 def _parse_updown_market_end_from_text(
     *, slug: str, question: str, group_item_title: str
 ) -> Optional[datetime]:
@@ -308,6 +344,8 @@ def _infer_updown_window_minutes(
         return 5
     if "updown-15m" in slug_l:
         return 15
+    if "updown-30m" in slug_l:
+        return 30
 
     # Current Gamma human slugs are hourly, e.g.
     # bitcoin-up-or-down-april-29-2026-9pm-et, with one market ending at 10PM ET.
@@ -451,9 +489,17 @@ class MarketScanner:
         )
 
     def _sync_network_phase(self) -> Tuple[
-        List[Market], List[Market], List[Market], List[Market], List[Market], int, int
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        int,
+        int,
+        int,
     ]:
-        """Blocking HTTP: Gamma list + 15m/5m updown + optional HYPE alt. Runs in a thread.
+        """Blocking HTTP: Gamma list + 15m/5m/30m updown + optional HYPE alt. Runs in a thread.
 
         Fetches run in parallel via ThreadPoolExecutor so the longest one (HYPE alt)
         doesn't add to the wall-clock time of the other fetches.
@@ -461,7 +507,7 @@ class MarketScanner:
         with self._slug_cache_lock:
             self._cycle_empty_event_slugs = set()
             self._slug_fetch_stats = {}
-        look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
+        look_ahead_15m, look_ahead_5m, look_ahead_30m = self._resolve_updown_lookahead()
         fetch_hype = self._should_fetch_hype_alt_markets()
         fetch_weather = self._should_fetch_weather_markets()
         weather_snapshot = self._get_weather_market_snapshot() if fetch_weather else []
@@ -470,6 +516,7 @@ class MarketScanner:
             "gamma": lambda: self._fetch_markets_gamma(limit=200),
             "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
             "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
+            "updown_30m": lambda: self.fetch_updown_30m_markets(look_ahead=look_ahead_30m),
         }
         if fetch_hype:
             tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
@@ -506,10 +553,12 @@ class MarketScanner:
             results.get("gamma", []),
             results.get("updown", []),
             results.get("updown_5m", []),
+            results.get("updown_30m", []),
             results.get("hype_alt", []),
             weather_snapshot,
             look_ahead_15m,
             look_ahead_5m,
+            look_ahead_30m,
         )
 
     def _get_weather_market_snapshot(self) -> List[Market]:
@@ -590,8 +639,10 @@ class MarketScanner:
         meta: Dict[str, Any] = {
             "look_ahead_15m": 0,
             "look_ahead_5m": 0,
+            "look_ahead_30m": 0,
             "updown_15m_count": 0,
             "updown_5m_count": 0,
+            "updown_30m_count": 0,
             "updown_hype_alt_count": 0,
             "weather_market_count": 0,
             "slug_fetch_stats": {},
@@ -606,16 +657,17 @@ class MarketScanner:
             "near_expiration": [],
             "updown": [],
             "updown_5m": [],
+            "updown_30m": [],
             "updown_hype_alt": [],
             "weather": [],
             "scanner_meta": meta,
         }
 
-    def _resolve_updown_lookahead(self) -> tuple[int, int]:
+    def _resolve_updown_lookahead(self) -> tuple[int, int, int]:
         """Resolve scanner look-ahead from enabled strategy configs.
 
         Returns:
-            (lookahead_15m, lookahead_5m)
+            (lookahead_15m, lookahead_5m, lookahead_30m)
         """
         strategies = self.config.get("strategies", {}) or {}
         keys = ["bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"]
@@ -631,13 +683,16 @@ class MarketScanner:
         # Seed low so max() across strategy configs reflects requested lookahead (not a floor of 8).
         look_15m = 1
         look_5m = 1
+        look_30m = 1
         for cfg in cfg_pool:
             look_15m = max(look_15m, int(cfg.get("look_ahead_15m", 8)))
             look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 3)))
+            look_30m = max(look_30m, int(cfg.get("look_ahead_30m", 4)))
 
         look_15m = max(1, min(96, look_15m))
         look_5m = max(1, min(288, look_5m))
-        return look_15m, look_5m
+        look_30m = max(1, min(48, look_30m))
+        return look_15m, look_5m, look_30m
         
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session.
@@ -1196,12 +1251,47 @@ class MarketScanner:
             )
         return markets
 
+    def fetch_updown_30m_markets(self, look_ahead: int = 4) -> List[Market]:
+        """Fetch current + upcoming 30-minute crypto Up/Down markets."""
+        markets = self._fetch_event_slug_markets(
+            self._iter_updown_event_slugs(step_minutes=30, look_ahead=look_ahead),
+            timeout_sec=8,
+            stats_key="updown_30m",
+        )
+        rejected = [m for m in markets if m.window_minutes and not (23 <= m.window_minutes <= 45)]
+        markets = [m for m in markets if m.window_minutes and 23 <= m.window_minutes <= 45]
+        if rejected:
+            logger.info(
+                "Skipped %d non-30m updown markets from 30m bucket (durations=%s)",
+                len(rejected),
+                sorted({m.window_minutes for m in rejected}),
+            )
+
+        if markets:
+            def _is_eth_mkt_30(m: Market) -> bool:
+                q = m.question.lower()
+                return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
+
+            def _is_hype_mkt_30(m: Market) -> bool:
+                q = m.question.lower()
+                return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
+
+            logger.info(
+                f"Fetched {len(markets)} 30m updown markets "
+                f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
+                f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
+                f"ETH: {sum(1 for m in markets if _is_eth_mkt_30(m))}, "
+                f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
+                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_30(m))})"
+            )
+        return markets
+
     def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
         """Fetch HYPE alias slugs directly without crawling the full event set.
 
         This is a bounded fallback path for named `hyperliquid` / `hype` event slugs.
         """
-        look_ahead_15m, look_ahead_5m = self._resolve_updown_lookahead()
+        look_ahead_15m, look_ahead_5m, look_ahead_30m = self._resolve_updown_lookahead()
         slugs = self._iter_named_event_slugs(
             prefixes=("hyperliquid", "hype"),
             step_minutes=15,
@@ -1212,6 +1302,13 @@ class MarketScanner:
                 prefixes=("hyperliquid", "hype"),
                 step_minutes=5,
                 look_ahead=max(1, min(look_ahead_5m, 24)),
+            )
+        )
+        slugs.extend(
+            self._iter_named_event_slugs(
+                prefixes=("hyperliquid", "hype"),
+                step_minutes=30,
+                look_ahead=max(1, min(look_ahead_30m, 12)),
             )
         )
         markets = self._fetch_event_slug_markets(
@@ -1349,7 +1446,7 @@ class MarketScanner:
 
         Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
         timeout so the asyncio event loop is not blocked for minutes on slow APIs.
-        Price hydration for gamma, weather, 15m updown, and 5m updown batches runs in
+        Price hydration for gamma, weather, 15m / 5m / 30m updown batches runs in
         parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
         """
         t_scan_start = time.perf_counter()
@@ -1359,10 +1456,12 @@ class MarketScanner:
                 markets,
                 updown,
                 updown_5m,
+                updown_30m,
                 hype_alt,
                 weather,
                 look_ahead_15m,
                 look_ahead_5m,
+                look_ahead_30m,
             ) = await asyncio.wait_for(
                 asyncio.to_thread(self._sync_network_phase),
                 timeout=self._scanner_sync_timeout + 2.0,
@@ -1382,11 +1481,12 @@ class MarketScanner:
         async def _hydrate(ms: List[Market]) -> List[Market]:
             return await self.update_market_prices(ms) if ms else []
 
-        markets, weather, updown, updown_5m = await asyncio.gather(
+        markets, weather, updown, updown_5m, updown_30m = await asyncio.gather(
             _hydrate(markets),
             _hydrate(weather),
             _hydrate(updown),
             _hydrate(updown_5m),
+            _hydrate(updown_30m),
         )
 
         opportunities: Dict[str, Any] = {
@@ -1422,12 +1522,18 @@ class MarketScanner:
         else:
             opportunities["updown_5m"] = []
 
+        if updown_30m:
+            opportunities["high_liquidity"].extend(updown_30m)
+            opportunities["updown_30m"] = updown_30m
+        else:
+            opportunities["updown_30m"] = []
+
         if hype_alt:
-            known_updown_ids = {
-                m.id for m in opportunities.get("updown", [])
-            } | {
-                m.id for m in opportunities.get("updown_5m", [])
-            }
+            known_updown_ids = (
+                {m.id for m in opportunities.get("updown", [])}
+                | {m.id for m in opportunities.get("updown_5m", [])}
+                | {m.id for m in opportunities.get("updown_30m", [])}
+            )
             hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
 
         if hype_alt:
@@ -1446,8 +1552,10 @@ class MarketScanner:
         opportunities["scanner_meta"] = {
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
+            "look_ahead_30m": look_ahead_30m,
             "updown_15m_count": len(opportunities.get("updown", [])),
             "updown_5m_count": len(opportunities.get("updown_5m", [])),
+            "updown_30m_count": len(opportunities.get("updown_30m", [])),
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
             "weather_market_count": len(opportunities.get("weather", [])),
             "slug_fetch_stats": self._get_slug_fetch_stats_snapshot(),

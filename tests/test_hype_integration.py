@@ -296,6 +296,7 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
     monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: core_15m)
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: core_5m)
+    monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_weather_markets", lambda limit=20: [])
 
     def _slow_hype(limit=100):
@@ -304,15 +305,27 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
 
     monkeypatch.setattr(scanner, "fetch_hype_alt_updown_markets", _slow_hype)
 
-    markets, updown, updown_5m, hype_alt, weather, look_15m, look_5m = scanner._sync_network_phase()
+    (
+        markets,
+        updown,
+        updown_5m,
+        updown_30m,
+        hype_alt,
+        weather,
+        look_15m,
+        look_5m,
+        look_30m,
+    ) = scanner._sync_network_phase()
 
     assert markets == []
     assert updown == core_15m
     assert updown_5m == core_5m
+    assert updown_30m == []
     assert hype_alt == []
     assert weather == []
     assert look_15m >= 1
     assert look_5m >= 1
+    assert look_30m >= 1
 
 
 def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypatch):
@@ -331,7 +344,7 @@ def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypa
     monkeypatch.setattr(
         scanner,
         "_sync_network_phase",
-        lambda: ([], [btc_15m], [sol_5m], [], [], 8, 8),
+        lambda: ([], [btc_15m], [sol_5m], [], [], [], 8, 8, 8),
     )
 
     async def _identity(markets):
@@ -348,6 +361,7 @@ def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypa
     assert {"snapshot-btc-15m", "snapshot-sol-5m"} <= high_liquidity_ids
     assert opportunities["scanner_meta"]["updown_15m_count"] == 1
     assert opportunities["scanner_meta"]["updown_5m_count"] == 1
+    assert opportunities["scanner_meta"]["updown_30m_count"] == 0
 
 
 def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypatch):
@@ -366,6 +380,7 @@ def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypa
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
     monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: [])
+    monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
 
     def _slow_weather(limit=20):
         time.sleep(0.08)
@@ -374,11 +389,11 @@ def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypa
     monkeypatch.setattr(scanner, "fetch_weather_markets", _slow_weather)
 
     first = scanner._sync_network_phase()
-    assert first[4] == []
+    assert first[5] == []
 
     time.sleep(0.12)
     second = scanner._sync_network_phase()
-    assert [m.id for m in second[4]] == [weather_market.id]
+    assert [m.id for m in second[5]] == [weather_market.id]
 
 
 def test_weather_scan_limit_defaults_to_120():
@@ -407,11 +422,15 @@ def test_hype_alt_fetch_uses_direct_slug_queries_not_event_pagination(monkeypatc
         def json(self):
             return []
 
-    def _fake_get(url, params=None, timeout=None):
+        def close(self):
+            return None
+
+    def _fake_requests_get(url, *, params=None, timeout=None, **kwargs):
         seen_params.append(dict(params or {}))
         return _Resp()
 
-    monkeypatch.setattr("src.market.scanner.requests.get", _fake_get)
+    # Gamma calls go through requests_get_with_retries + Session, not requests.get.
+    monkeypatch.setattr("src.market.scanner.requests_get_with_retries", _fake_requests_get)
     scanner.fetch_hype_alt_updown_markets(limit=10)
 
     assert seen_params
@@ -448,10 +467,14 @@ def test_hyperliquid_hype_service_parses_candle_snapshot(monkeypatch):
                 },
             ]
 
-    def _fake_post(*args, **kwargs):
+    def _fake_post(url, *, json=None, timeout=None, **kwargs):
         return _Resp()
 
-    monkeypatch.setattr("src.utils.http_retry.requests.post", _fake_post)
+    # Service uses requests_post_with_retries + Session, not requests.post.
+    monkeypatch.setattr(
+        "src.analysis.hyperliquid_hype_service.requests_post_with_retries",
+        _fake_post,
+    )
     svc = HyperliquidHypeService()
     df = svc.fetch_klines("HYPEUSDT", interval="5m", limit=2)
     assert len(df) == 2
@@ -467,6 +490,6 @@ def test_hype_strategy_keeps_entry_window_parity_with_sol():
     sol = SolMacroStrategy(cfg, ai, sizer)
     hype = HYPEMacroStrategy(cfg, ai, sizer)
 
-    sol_bounds = sol._resolve_entry_window_bounds(is_5m=False, default_min=13.0, default_max=14.33)
-    hype_bounds = hype._resolve_entry_window_bounds(is_5m=False, default_min=13.0, default_max=14.33)
+    sol_bounds = sol._resolve_entry_window_bounds(tf="15m", default_min=13.0, default_max=14.33)
+    hype_bounds = hype._resolve_entry_window_bounds(tf="15m", default_min=13.0, default_max=14.33)
     assert sol_bounds == hype_bounds

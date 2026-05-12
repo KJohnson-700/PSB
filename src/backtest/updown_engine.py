@@ -669,6 +669,24 @@ class UpdownBacktestEngine:
         # -- 15m MACD ----------------------------------------------------------
         macd_15m = self._svc.calc_macd(df_15m)
 
+        # -- 30m MACD (Binance/native or resampled from 15m) -------------------
+        df_30m = self._before(data.get("30m", pd.DataFrame()), t)
+        if (df_30m is None or df_30m.empty) and len(df_15m) >= 60:
+            df_30m = (
+                df_15m.set_index("open_time")
+                .resample("30min")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna()
+                .reset_index()
+            )
+        macd_30m = self._svc.calc_macd(df_30m) if len(df_30m) >= 30 else MACDResult()
+
         # -- 1h MACD -----------------------------------------------------------
         if "1h" in data:
             df_1h = self._before(data["1h"], t)
@@ -720,6 +738,7 @@ class UpdownBacktestEngine:
             macd_4h=macd_4h,
             macd_1h=macd_1h,
             macd_15m=macd_15m,
+            macd_30m=macd_30m,
             trend_sabre=sabre,
             candle_momentum=mom,
             volume_profile=vp,
@@ -1787,7 +1806,7 @@ class UpdownBacktestEngine:
             else:
                 # ETH 15m BTC-follow intentionally allows confirmed follow-through
                 # unless the strategy config explicitly enables anti-LTF.
-                skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes == 15)
+                skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes != 5)
                 if ltf_confirmed and skip_confirmed:
                     current += step_td
                     continue

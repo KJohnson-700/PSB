@@ -8,7 +8,7 @@ with a lag. We capitalize on this by detecting BTC moves early and positioning i
 SOL before the lag catches up.
 
 Technical Indicators (SOL):
-- MACD (12/26/9 EMA) on 15m and 5m charts
+- MACD (12/26/9 EMA) on 30m, 15m and 5m charts
 - RSI (14-period)
 - EMA crossovers (9/21/50)
 - ATR(14) for volatility
@@ -103,6 +103,8 @@ class SOLAnalysis:
     rsi_14: float = 50.0
     # MACD — 1H for HTF histogram gate (matches backtest engine's htf_key="1h" for SOL)
     macd_1h: MACDResult = field(default_factory=MACDResult)
+    # MACD — 30m intermediate confirmation
+    macd_30m: MACDResult = field(default_factory=MACDResult)
     # MACD — 15m for trend confirmation
     macd_15m: MACDResult = field(default_factory=MACDResult)
     # MACD — 5m for entry timing
@@ -129,11 +131,13 @@ class BTCSOLCorrelation:
     # BTC move detection
     btc_move_5m_pct: float = 0.0      # BTC % move in last 5 minutes
     btc_move_15m_pct: float = 0.0     # BTC % move in last 15 minutes
+    btc_move_30m_pct: float = 0.0     # BTC % move over last ~30 closed 1m bars
     btc_spike_detected: bool = False  # True if BTC moved >0.3% in 5m or >0.8% in 15m
     btc_spike_direction: str = "NONE" # "UP", "DOWN", "NONE"
     # SOL lag measurement
     sol_move_5m_pct: float = 0.0      # SOL % move in same 5-minute window
     sol_move_15m_pct: float = 0.0     # SOL % move in same 15-minute window
+    sol_move_30m_pct: float = 0.0     # Alt % move over last ~30 closed 1m bars
     sol_lag_pct: float = 0.0          # How much SOL is lagging BTC's move (%)
     # Opportunity
     lag_opportunity: bool = False     # True if BTC spiked but SOL hasn't caught up
@@ -145,6 +149,7 @@ class BTCSOLCorrelation:
     # BTC absolute dollar move (for dollar-threshold entry filters)
     btc_move_5m_dollars: float = 0.0   # Absolute BTC $ move in last 5 minutes
     btc_move_15m_dollars: float = 0.0  # Absolute BTC $ move in last 15 minutes
+    btc_move_30m_dollars: float = 0.0  # Absolute BTC $ move over last ~30×1m
     # BTC reference prices
     btc_price: float = 0.0
     btc_chainlink_price: Optional[float] = None
@@ -612,10 +617,11 @@ class SOLBTCService:
     def calc_sol_indicators(self) -> SOLAnalysis:
         """Calculate all SOL technical indicators.
 
-        Uses 15m data for EMAs/RSI/ATR, plus MACD on 1H (HTF gate), 15m, and 5m.
+        Uses 15m data for EMAs/RSI/ATR, plus MACD on 1H (HTF gate), 30m, 15m, and 5m.
         """
         df_15m = self.fetch_klines(self.alt_symbol, "15m", 200)
         df_5m = self.fetch_klines(self.alt_symbol, "5m", 100)
+        df_30m = self.fetch_klines(self.alt_symbol, "30m", 120)
         df_1h = self.fetch_klines(self.alt_symbol, "1h", 100)
 
         if df_15m.empty:
@@ -639,6 +645,26 @@ class SOLBTCService:
         # MACD on 1H (HTF histogram gate — matches backtest engine htf_key="1h" for SOL)
         macd_1h = self.calc_macd(df_1h, fast=12, slow=26, signal=9) if not df_1h.empty and len(df_1h) >= 30 else MACDResult()
 
+        if df_30m.empty and len(df_15m) >= 60:
+            df_30m = (
+                df_15m.set_index("open_time")
+                .resample("30min")
+                .agg({
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                })
+                .dropna()
+                .reset_index()
+            )
+        macd_30m = (
+            self.calc_macd(df_30m, fast=12, slow=26, signal=9)
+            if not df_30m.empty and len(df_30m) >= 30
+            else MACDResult()
+        )
+
         # MACD on 15m (trend confirmation)
         macd_15m = self.calc_macd(df_15m, fast=12, slow=26, signal=9)
 
@@ -661,6 +687,7 @@ class SOLBTCService:
             ema_50=ema_50,
             rsi_14=rsi_14,
             macd_1h=macd_1h,
+            macd_30m=macd_30m,
             macd_15m=macd_15m,
             macd_5m=macd_5m,
             atr_14=atr_14,
@@ -761,9 +788,9 @@ class SOLBTCService:
             if reason not in result.degraded_reasons:
                 result.degraded_reasons.append(reason)
 
-        # Fetch 1-minute data for both (last 60 = 1 hour for correlation)
-        df_sol_1m = self.fetch_klines(self.alt_symbol, "1m", 60)
-        df_btc_1m = self.fetch_klines("BTCUSDT", "1m", 60)
+        # Fetch 1-minute data — need ≥31 bars for 30m %-move parity with closed 1m indexing
+        df_sol_1m = self.fetch_klines(self.alt_symbol, "1m", 120)
+        df_btc_1m = self.fetch_klines("BTCUSDT", "1m", 120)
 
         if df_sol_1m.empty or df_btc_1m.empty:
             _mark_degraded("missing_1m_klines")
@@ -807,6 +834,12 @@ class SOLBTCService:
             btc_move_15m = (btc_price - btc_15m_ago) / btc_15m_ago * 100
             result.btc_move_15m_pct = btc_move_15m
             result.btc_move_15m_dollars = abs(btc_price - btc_15m_ago)
+
+        if len(df_btc_1m) >= 31:
+            btc_30m_ago = float(df_btc_1m["close"].iloc[-31])
+            btc_move_30m = (btc_price - btc_30m_ago) / btc_30m_ago * 100
+            result.btc_move_30m_pct = btc_move_30m
+            result.btc_move_30m_dollars = abs(btc_price - btc_30m_ago)
 
         # Z-score adaptive spike detection (rolling window on 1m-derived % moves)
         _z_threshold = self.spike_z_threshold
@@ -865,6 +898,10 @@ class SOLBTCService:
             sol_15m_ago = float(df_sol_1m["close"].iloc[-16])
             sol_move_15m = (sol_price - sol_15m_ago) / sol_15m_ago * 100
             result.sol_move_15m_pct = sol_move_15m
+
+        if len(df_sol_1m) >= 31:
+            sol_30m_ago = float(df_sol_1m["close"].iloc[-31])
+            result.sol_move_30m_pct = (sol_price - sol_30m_ago) / sol_30m_ago * 100
 
         # --- Lag opportunity detection ---
         # If BTC spiked, check if SOL has caught up
@@ -1109,11 +1146,14 @@ class SOLBTCService:
             _alt_label = self.alt_symbol.replace("USDT", "")
             logger.info(
                 f"{_alt_label} ${sol.current_price:.2f} | {sol.trend_direction} ({sol.trend_strength:.0%}) | "
+                f"MACD30m={sol.macd_30m.histogram:+.4f} | "
                 f"MACD15m={sol.macd_15m.histogram:+.4f} {sol.macd_15m.crossover} | "
                 f"MACD5m={sol.macd_5m.histogram:+.4f} {sol.macd_5m.crossover} | "
                 f"RSI={sol.rsi_14:.0f} ATR={sol.atr_14:.3f} | "
                 f"BTC ${correlation.btc_price:,.0f} corr={correlation.correlation_1h:.2f} "
-                f"BTC5m={correlation.btc_move_5m_pct:+.2f}% {_alt_label}5m={correlation.sol_move_5m_pct:+.2f}% | "
+                f"BTC5m={correlation.btc_move_5m_pct:+.2f}% "
+                f"BTC30m={correlation.btc_move_30m_pct:+.2f}% "
+                f"{_alt_label}5m={correlation.sol_move_5m_pct:+.2f}% | "
                 f"D={multi_tf.daily_trend} MTF={multi_tf.overall_direction} aligned={multi_tf.aligned}"
                 f"{f' | oracle={sol.chainlink_network}:${sol.chainlink_price:,.2f} basis={sol.oracle_basis_bps:+.1f}bps' if sol.chainlink_price else ''}"
                 f"{lag_info}"

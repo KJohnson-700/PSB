@@ -35,7 +35,7 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 
-from src.market.scanner import Market
+from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
@@ -99,34 +99,8 @@ NON_BTC_ASSET_TERMS = (
 
 
 def _market_window_minutes(market: Market) -> int:
-    """Estimate candle window size (in minutes) from question time range.
-
-    Looks for patterns like "2:15AM-2:20AM" or "2:15AM–2:30AM".
-    Returns 5 for 5-minute windows, 15 for 15-minute windows (default).
-    """
-    m = re.search(r'(\d+):(\d+)(AM|PM)[–\-](\d+):(\d+)(AM|PM)', market.question, re.IGNORECASE)
-    if m:
-        h1, m1, p1, h2, m2, p2 = m.groups()
-        h1, m1, h2, m2 = int(h1), int(m1), int(h2), int(m2)
-        if p1.upper() == 'PM' and h1 != 12:
-            h1 += 12
-        if p1.upper() == 'AM' and h1 == 12:
-            h1 = 0
-        if p2.upper() == 'PM' and h2 != 12:
-            h2 += 12
-        if p2.upper() == 'AM' and h2 == 12:
-            h2 = 0
-        start_min = h1 * 60 + m1
-        end_min = h2 * 60 + m2
-        diff = end_min - start_min
-        if diff < 0:
-            diff += 1440  # midnight wrap
-        return diff
-    # Fall back to keyword detection
-    q = market.question.lower()
-    if '5m' in q or '5-min' in q:
-        return 5
-    return 15  # default: assume 15m
+    """Candle window minutes from Gamma metadata or question/slug text."""
+    return resolved_updown_window_minutes(market)
 
 PRICE_PATTERNS = [
     re.compile(r'\$\s*([\d,]+(?:\.\d+)?)\s*(?:m|M)', re.IGNORECASE),  # $1m
@@ -296,10 +270,12 @@ class BitcoinStrategy:
         """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
         return _market_window_minutes(market) <= 5
 
-    def _resolve_entry_window_bounds(self, *, is_5m: bool, default_min: float, default_max: float) -> tuple[float, float]:
+    def _resolve_entry_window_bounds(self, *, tf: str, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
-        win_min = float(self.config.get("entry_window_5m_min" if is_5m else "entry_window_15m_min", default_min))
-        win_max = float(self.config.get("entry_window_5m_max" if is_5m else "entry_window_15m_max", default_max))
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
+        win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
 
@@ -309,7 +285,12 @@ class BitcoinStrategy:
         # The main loop scans every ~5m. Expand slightly so scans/latency don't
         # repeatedly miss a narrow valid window by seconds.
         scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
-        default_expand = 1.0 if is_5m else 1.5
+        if tf == "5m":
+            default_expand = 1.0
+        elif tf == "30m":
+            default_expand = 2.5
+        else:
+            default_expand = 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
         jitter_sec = float(self.config.get("entry_window_auto_align_jitter_sec", 15))
         cadence_half_min = scan_interval_sec / 120.0
@@ -325,18 +306,20 @@ class BitcoinStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
-    def _resolve_ai_decision_window_bounds(self, *, is_5m: bool) -> tuple[float, float]:
+    def _resolve_ai_decision_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred AI-decision timing window in minutes remaining."""
-        default_min = 1.5 if is_5m else 8.0
-        default_max = 2.5 if is_5m else 13.0
-        win_min = float(self.config.get("ai_entry_window_5m_min" if is_5m else "ai_entry_window_15m_min", default_min))
-        win_max = float(self.config.get("ai_entry_window_5m_max" if is_5m else "ai_entry_window_15m_max", default_max))
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        default_min, default_max = presets[tf]
+        win_min = float(self.config.get(f"ai_entry_window_{tf}_min", default_min))
+        win_max = float(self.config.get(f"ai_entry_window_{tf}_max", default_max))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
         return win_min, win_max
 
-    def _within_ai_decision_window(self, *, mins_left: float, is_5m: bool) -> bool:
-        win_min, win_max = self._resolve_ai_decision_window_bounds(is_5m=is_5m)
+    def _within_ai_decision_window(self, *, mins_left: float, tf: str) -> bool:
+        win_min, win_max = self._resolve_ai_decision_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
     def _active_macro_event_name(self, now_utc: datetime) -> Optional[str]:
@@ -985,7 +968,12 @@ class BitcoinStrategy:
 
             yes_price = market.yes_price
             is_updown = self._is_updown_market(market)
-            is_5m = self._is_5m_market(market) if is_updown else False
+            _updown_tf = (
+                updown_timeframe_label(resolved_updown_window_minutes(market))
+                if is_updown
+                else "15m"
+            )
+            is_5m = _updown_tf == "5m"
             ai_used = False
             threshold = None
             direction = "UP"  # default; overridden below
@@ -1052,17 +1040,23 @@ class BitcoinStrategy:
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
                 _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-                if is_5m:
+                if _updown_tf == "5m":
                     # 5m candles: enter near candle open. Optionally auto-align to scan cadence.
                     _win_min, _win_max = self._resolve_entry_window_bounds(
-                        is_5m=True,
+                        tf="5m",
                         default_min=2.5,
                         default_max=4.5,
+                    )
+                elif _updown_tf == "30m":
+                    _win_min, _win_max = self._resolve_entry_window_bounds(
+                        tf="30m",
+                        default_min=25.0,
+                        default_max=29.0,
                     )
                 else:
                     # 15m candles: enter near candle open. Optionally auto-align to scan cadence.
                     _win_min, _win_max = self._resolve_entry_window_bounds(
-                        is_5m=False,
+                        tf="15m",
                         default_min=12.5,
                         default_max=14.5,
                     )
@@ -1076,7 +1070,7 @@ class BitcoinStrategy:
                     continue
                 _ai_window_open = self._within_ai_decision_window(
                     mins_left=_eval_left,
-                    is_5m=is_5m,
+                    tf=_updown_tf,
                 )
 
                 # Skip markets where price has already moved far from 50/50
@@ -1698,7 +1692,7 @@ class BitcoinStrategy:
             # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).
             if htf_bias == "NEUTRAL" and is_updown:
                 effective_min_edge = max(effective_min_edge, 0.09)
-                if not is_5m:
+                if _updown_tf != "5m":
                     effective_min_edge = max(effective_min_edge, self.min_edge_15m_neutral)
                     reason_parts.append(f"neutral_15m_min_edge={self.min_edge_15m_neutral:.3f}")
                     _sample("neutral_15m_min_edge", self.min_edge_15m_neutral)
@@ -1733,7 +1727,7 @@ class BitcoinStrategy:
 
             _needs_ai_for_low_conf_neutral_15m = (
                 is_updown
-                and not is_5m
+                and _updown_tf != "5m"
                 and htf_bias == "NEUTRAL"
                 and self.neutral_15m_min_quant_confidence > 0
                 and confidence < self.neutral_15m_min_quant_confidence
@@ -1744,7 +1738,7 @@ class BitcoinStrategy:
             _ai_updown_5m = is_updown and is_5m
             _ai_updown_15m_borderline = (
                 is_updown
-                and not is_5m
+                and _updown_tf != "5m"
                 and (
                     (
                         edge < effective_min_edge
@@ -1760,7 +1754,7 @@ class BitcoinStrategy:
                 and self.ai_agent.is_available()
                 and ai_calls < self.max_ai_calls_per_scan
             ):
-                _window = "5m" if is_5m else "15m"
+                _window = _updown_tf if is_updown else "15m"
                 ai_context = (
                     f"{market.description}\n\n"
                     f"=== BTC UPDOWN CONTEXT ({_window}) ===\n"
@@ -1891,19 +1885,21 @@ class BitcoinStrategy:
                         rsi=ta.rsi_14,
                         htf_bias_value=htf_bias,
                         signal_reason=" | ".join(reason_parts),
-                        window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                        window_size=_updown_tf if is_updown else "threshold",
                     )
-                _mkt_type = "updown_5m" if is_5m else (
-                    "updown_15m_neutral" if (htf_bias == "NEUTRAL" and is_updown) else
-                    ("updown_15m" if is_updown else "threshold")
-                )
+                if not is_updown:
+                    _mkt_type = "threshold"
+                elif htf_bias == "NEUTRAL":
+                    _mkt_type = f"updown_{_updown_tf}_neutral"
+                else:
+                    _mkt_type = f"updown_{_updown_tf}"
                 logger.info(
                     f"  BTC skip '{market.question[:45]}' {action} "
                     f"edge={edge:.4f} < min={effective_min_edge} | {_mkt_type}"
                 )
                 continue
 
-            _is_neutral_15m = is_updown and not is_5m and htf_bias == "NEUTRAL"
+            _is_neutral_15m = is_updown and _updown_tf != "5m" and htf_bias == "NEUTRAL"
             if _is_neutral_15m:
                 composite = self._score_neutral_15m_candidate(
                     edge=edge,
@@ -2023,7 +2019,7 @@ class BitcoinStrategy:
                             rsi=ta.rsi_14,
                             htf_bias_value=htf_bias,
                             signal_reason=" | ".join(reason_parts),
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf if is_updown else "15m",
                         )
                     logger.info(
                         f"  BTC skip '{market.question[:45]}' {action} "
@@ -2060,7 +2056,7 @@ class BitcoinStrategy:
                             rsi=ta.rsi_14,
                             htf_bias_value=htf_bias,
                             signal_reason=" | ".join(reason_parts),
-                            window_size="5m" if is_5m else "15m",
+                            window_size=_updown_tf if is_updown else "15m",
                         )
                     logger.info(
                         f"  BTC skip '{market.question[:45]}' {action} "
@@ -2098,7 +2094,7 @@ class BitcoinStrategy:
                         rsi=ta.rsi_14,
                         htf_bias_value=htf_bias,
                         signal_reason=" | ".join(reason_parts),
-                        window_size="5m" if is_5m else ("15m" if is_updown else "threshold"),
+                        window_size=_updown_tf if is_updown else "threshold",
                     )
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
@@ -2136,7 +2132,7 @@ class BitcoinStrategy:
                 ai_used=ai_used,
                 reason=reason,
                 htf_bias=htf_bias,
-                window_size="5m" if is_5m else "15m",
+                window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=_signal_est_prob,
                 rsi=round(ta.rsi_14, 1),
@@ -2162,7 +2158,7 @@ class BitcoinStrategy:
                     metadata={
                         "confidence": float(confidence),
                         "yes_price": float(yes_price),
-                        "window_size": "5m" if is_5m else "15m",
+                        "window_size": _updown_tf if is_updown else "15m",
                         "htf_bias": htf_bias,
                         "reason": reason,
                     },

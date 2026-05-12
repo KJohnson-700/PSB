@@ -58,10 +58,11 @@ KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITC
 
 
 def _detect_window_from_question(question: str) -> str:
-    """Infer 5m vs 15m window from Polymarket question time range.
+    """Infer 5m / 15m / 30m window from Polymarket question time range.
 
     "April 21, 1:30AM-1:35AM ET" → "5m"
     "April 21, 1:30AM-1:45AM ET" → "15m"
+    "April 21, 1:30AM-2:00AM ET" → "30m"
     """
     m = re.search(r'(\d+):(\d+)(AM|PM)[–\-](\d+):(\d+)(AM|PM)', question, re.IGNORECASE)
     if not m:
@@ -79,7 +80,7 @@ def _detect_window_from_question(question: str) -> str:
     start_min = h1 * 60 + m1
     end_min = h2 * 60 + m2
     delta = abs(end_min - start_min)
-    return "5m" if delta <= 6 else "15m"
+    return "5m" if delta <= 6 else ("30m" if delta >= 23 else "15m")
 
 
 def _in_resolution_window(
@@ -171,7 +172,7 @@ def _is_crypto_market(market) -> bool:
         return True
     window_minutes = getattr(market, "window_minutes", None)
     if window_minutes is not None:
-        return window_minutes <= 20
+        return window_minutes <= 45
     return False
 
 
@@ -1091,11 +1092,13 @@ class PolyBot:
         if scanner_meta:
             self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
             logging.info(
-                "[TRADING] Scanner lookahead: 15m=%s 5m=%s | counts: 15m=%s 5m=%s hype_alt=%s",
+                "[TRADING] Scanner lookahead: 15m=%s 5m=%s 30m=%s | counts: 15m=%s 5m=%s 30m=%s hype_alt=%s",
                 scanner_meta.get("look_ahead_15m"),
                 scanner_meta.get("look_ahead_5m"),
+                scanner_meta.get("look_ahead_30m"),
                 scanner_meta.get("updown_15m_count"),
                 scanner_meta.get("updown_5m_count"),
+                scanner_meta.get("updown_30m_count"),
                 scanner_meta.get("updown_hype_alt_count"),
             )
 

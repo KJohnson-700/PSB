@@ -157,10 +157,10 @@ def test_ai_decision_window_uses_configured_remaining_minutes():
     cfg["strategies"]["sol_macro"]["ai_entry_window_5m_max"] = 2.5
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._within_ai_decision_window(mins_left=10.0, is_5m=False) is True
-    assert strategy._within_ai_decision_window(mins_left=14.0, is_5m=False) is False
-    assert strategy._within_ai_decision_window(mins_left=2.0, is_5m=True) is True
-    assert strategy._within_ai_decision_window(mins_left=3.2, is_5m=True) is False
+    assert strategy._within_ai_decision_window(mins_left=10.0, tf="15m") is True
+    assert strategy._within_ai_decision_window(mins_left=14.0, tf="15m") is False
+    assert strategy._within_ai_decision_window(mins_left=2.0, tf="5m") is True
+    assert strategy._within_ai_decision_window(mins_left=3.2, tf="5m") is False
 
 
 def test_sol_late_window_guard_blocks_and_tightens_edge():

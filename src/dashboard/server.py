@@ -296,8 +296,19 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             sym = "SOL"
         else:
             sym = "UNK"
-        sz = "5m" if window <= 5 else "15m"
+        sz = "5m" if window <= 6 else ("30m" if window >= 23 else "15m")
         return f"{sym}_updown_{sz}"
+
+    if "eth-updown-30m" in mid or "eth_updown_30m" in mid:
+        return "ETH_updown_30m"
+    if "hype-updown-30m" in mid or "hype_updown_30m" in mid:
+        return "HYPE_updown_30m"
+    if "xrp-updown-30m" in mid or "xrp_updown_30m" in mid:
+        return "XRP_updown_30m"
+    if "btc-updown-30m" in mid:
+        return "BTC_updown_30m"
+    if "sol-updown-30m" in mid:
+        return "SOL_updown_30m"
 
     if "eth-updown-15m" in mid or "eth_updown_15m" in mid:
         return "ETH_updown_15m"
@@ -312,34 +323,23 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
     if "xrp-updown-5m" in mid:
         return "XRP_updown_5m"
 
+    def _updown_sz_from_blob(s: str) -> str:
+        if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", s):
+            return "5m"
+        if re.search(r"(30m|30-m|updown-30m)", s):
+            return "30m"
+        return "15m"
+
     if strategy == "sol_macro":
-        sz = (
-            "5m"
-            if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
-            else "15m"
-        )
-        return f"SOL_updown_{sz}"
+        return f"SOL_updown_{_updown_sz_from_blob(blob)}"
     if strategy == "eth_macro":
-        sz = (
-            "5m"
-            if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
-            else "15m"
-        )
-        return f"ETH_updown_{sz}"
+        return f"ETH_updown_{_updown_sz_from_blob(blob)}"
     if strategy == "hype_macro":
-        sz = (
-            "5m"
-            if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
-            else "15m"
-        )
-        return f"HYPE_updown_{sz}"
+        return f"HYPE_updown_{_updown_sz_from_blob(blob)}"
     if strategy == "xrp_macro":
-        sz = (
-            "5m"
-            if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", blob)
-            else "15m"
-        )
-        return f"XRP_updown_{sz}"
+        return f"XRP_updown_{_updown_sz_from_blob(blob)}"
+    if strategy == "bitcoin":
+        return f"BTC_updown_{_updown_sz_from_blob(blob)}"
 
     return strategy
 
@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-10-strategy-pnl-full-rowset",
+        "dashboard_ui_rev": "2026-05-11-dashboard-30m-ta-wire",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -577,8 +577,11 @@ def _kelly_state_payload() -> Dict[str, Any]:
         base = float(sc.get("kelly_fraction", 0.15))
         out[k] = {"streak": 0, "fraction": round(base, 4)}
     out["_window_stats"] = {
-        k: {"5m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
-            "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0}}
+        k: {
+            "5m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+            "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+            "30m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+        }
         for k in _KELLY_STRATEGY_KEYS
     }
     return out
@@ -916,6 +919,9 @@ async def sse_stream(request: Request):
                     ),
                     "session_realized_pnl": round(
                         float(js.get("realized_pnl", 0) or 0), 2
+                    ),
+                    "session_total_pnl": round(
+                        float(js.get("total_pnl", 0) or 0), 2
                     ),
                     "btc_price": round(
                         float(_btc_analysis_cache.current_price), 0
@@ -2694,7 +2700,7 @@ async def get_trade_journey(
 
 @app.get("/api/journal/updown_breakdown")
 async def get_updown_breakdown():
-    """Break down closed trades by strategy type (BTC/SOL updown 15m/5m).
+    """Break down closed trades by up/down bucket (30m / 15m / 5m per asset).
     Also splits OLD CODE (pre-restart) vs NEW CODE (post-restart) results.
     NEW CODE is detected by first appearance of 'Anti-LTF gate passed' in today's log.
     """
@@ -2775,7 +2781,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "bitcoin": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2783,7 +2789,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "sol_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2791,7 +2797,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "eth_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2799,7 +2805,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "hype_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2807,7 +2813,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "xrp_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2815,7 +2821,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "weather": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -2844,6 +2850,8 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
 
         if "updown_5m" in r_low:
             bucket["path"]["updown_5m"] += 1
+        elif "updown_30m" in r_low:
+            bucket["path"]["updown_30m"] += 1
         elif "updown_15m" in r_low:
             bucket["path"]["updown_15m"] += 1
         elif "target=$" in r_low:
@@ -3323,9 +3331,17 @@ async def get_bitcoin_analysis():
                 "macd_4h_hist_rising": _b(macd_4h.histogram_rising),
                 "macd_4h_cross": _b(macd_4h.crossover),
                 "macd_4h_above_zero": _b(macd_4h.above_zero),
+                "macd_1h_hist": _f(ta.macd_1h.histogram),
+                "macd_1h_hist_rising": _b(ta.macd_1h.histogram_rising),
+                "macd_1h_cross": ta.macd_1h.crossover or "",
+                "macd_1h_above_zero": _b(ta.macd_1h.above_zero),
+                "macd_30m_hist": _f(ta.macd_30m.histogram),
+                "macd_30m_hist_rising": _b(ta.macd_30m.histogram_rising),
+                "macd_30m_cross": ta.macd_30m.crossover or "",
+                "macd_30m_above_zero": _b(ta.macd_30m.above_zero),
                 "macd_15m_hist": _f(ta.macd_15m.histogram),
                 "macd_15m_hist_rising": _b(ta.macd_15m.histogram_rising),
-                "macd_15m_cross": _b(ta.macd_15m.crossover),
+                "macd_15m_cross": ta.macd_15m.crossover or "",
                 "macd_15m_above_zero": _b(ta.macd_15m.above_zero),
                 "mom_15m": mom.m15_direction,
                 "mom_15m_pct": _f(mom.m15_move_pct),
@@ -3456,6 +3472,9 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
         "ema_9": sol.ema_9,
         "ema_21": sol.ema_21,
         "ema_50": sol.ema_50,
+        "macd_30m_hist": sol.macd_30m.histogram,
+        "macd_30m_hist_rising": sol.macd_30m.histogram_rising,
+        "macd_30m_cross": sol.macd_30m.crossover,
         "macd_15m_hist": sol.macd_15m.histogram,
         "macd_15m_hist_rising": sol.macd_15m.histogram_rising,
         "macd_15m_cross": sol.macd_15m.crossover,
@@ -3468,11 +3487,14 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
         "correlation_1h": corr.correlation_1h,
         "btc_move_5m": corr.btc_move_5m_pct,
         "btc_move_15m": corr.btc_move_15m_pct,
+        "btc_move_30m": corr.btc_move_30m_pct,
         # Alt-leg % moves — sol_move_* kept for backwards compatibility (same numeric series for any alt)
         "sol_move_5m": corr.sol_move_5m_pct,
         "sol_move_15m": corr.sol_move_15m_pct,
+        "sol_move_30m": corr.sol_move_30m_pct,
         f"{alt_code}_move_5m": corr.sol_move_5m_pct,
         f"{alt_code}_move_15m": corr.sol_move_15m_pct,
+        f"{alt_code}_move_30m": corr.sol_move_30m_pct,
         "btc_spike": corr.btc_spike_detected,
         "btc_spike_dir": corr.btc_spike_direction,
         "lag_opportunity": corr.lag_opportunity,
