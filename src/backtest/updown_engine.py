@@ -62,6 +62,8 @@ from src.analysis.btc_price_service import (
     AnchoredVolumeProfile,
 )
 from src.strategies._core import (
+    btc_5m_4h_1h_hist_gate,
+    btc_5m_htf_boost,
     btc_htf_bias,
     btc_ltf_strength_15m,
     passes_15m_iql,
@@ -1177,20 +1179,16 @@ class UpdownBacktestEngine:
         window_open: pd.Timestamp,
         macd_4h: MACDResult,
     ) -> Tuple[float, float]:
-        """BTC 5m path -- matches bitcoin.py 5m updown exactly."""
+        """BTC 5m path. HTF boost + 4H/1H gate from strategies._core."""
         sabre = ta.trend_sabre
         est_prob_up = 0.50
 
-        # HTF boost (matches live bitcoin.py 5m)
-        if   sabre.trend == 1  and     macd_4h.above_zero: htf_boost =  0.04
-        elif sabre.trend == 1  or      macd_4h.above_zero: htf_boost =  0.02
-        elif sabre.trend == -1 and not macd_4h.above_zero: htf_boost = -0.04
-        else:                                               htf_boost = -0.02
+        htf_boost = btc_5m_htf_boost(sabre, macd_4h)
         est_prob_up += htf_boost
 
-        # 4H histogram hard gate
-        if allowed_side == "LONG"  and not macd_4h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_4h.histogram_rising: return 0.0, 0.0
+        # 4H histogram gate with 1H momentum-recovery fallback (matches live)
+        if not btc_5m_4h_1h_hist_gate(macd_4h, ta.macd_1h, allowed_side).allowed:
+            return 0.0, 0.0
 
         # 5m candle momentum -- primary LTF signal for BTC 5m
         # Uses first ~2 1m bars of the window (mirrors live early-candle read)

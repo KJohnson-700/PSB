@@ -14,6 +14,7 @@ from .ltf_strength import (
     passes_15m_iql_relaxed_rule,
     sol_ltf_strength_15m,
 )
+from .htf_boost import HistGateResult, btc_5m_4h_1h_hist_gate, btc_5m_htf_boost
 from .m5_momentum import score_m5_direction
 
 __all__ = [
@@ -25,4 +26,7 @@ __all__ = [
     "passes_15m_iql",
     "passes_15m_iql_relaxed_rule",
     "score_m5_direction",
+    "HistGateResult",
+    "btc_5m_htf_boost",
+    "btc_5m_4h_1h_hist_gate",
 ]

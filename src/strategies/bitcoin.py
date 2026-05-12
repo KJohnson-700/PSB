@@ -43,7 +43,13 @@ from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m, score_m5_direction
+from src.strategies._core import (
+    btc_5m_4h_1h_hist_gate,
+    btc_5m_htf_boost,
+    btc_htf_bias,
+    btc_ltf_strength_15m,
+    score_m5_direction,
+)
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -1038,46 +1044,25 @@ class BitcoinStrategy:
 
                     est_prob_up = 0.50
 
-                    # HTF bias — same as 15m, the 4H trend still matters for 5m bets
-                    htf_boost = 0.0
-                    if sabre.trend == 1 and macd_4h.above_zero:
-                        htf_boost = 0.04  # Strong bull (slightly tighter than 15m)
-                    elif sabre.trend == 1 or macd_4h.above_zero:
-                        htf_boost = 0.02  # Partial bull
-                    elif sabre.trend == -1 and not macd_4h.above_zero:
-                        htf_boost = -0.04  # Strong bear
-                    elif sabre.trend == -1 or not macd_4h.above_zero:
-                        htf_boost = -0.02  # Partial bear
+                    # HTF bias — 4H trend boost (strategies._core.btc_5m_htf_boost)
+                    htf_boost = btc_5m_htf_boost(sabre, macd_4h)
                     est_prob_up += htf_boost
 
-                    # 4H/1H HISTOGRAM GATE (matches backtest engine)
-                    # Primary: 4H histogram must be building in trade direction.
-                    # Fallback: if 4H is decelerating but 1H is building, allow entry
-                    # (catches local momentum recovery within larger trend structure).
+                    # 4H/1H HISTOGRAM GATE — primary on 4H, 1H fallback for local recovery
                     macd_1h = ta.macd_1h
-                    if effective_side == "LONG" and not macd_4h.histogram_rising:
-                        if not macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_5m_long_reject")
-                            logger.info(
-                                f"  BTC [5m] skip '{market.question[:40]}' — "
-                                f"4H falling, 1H also falling — no momentum building for LONG"
-                            )
-                            continue
+                    _gate = btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, effective_side)
+                    if not _gate.allowed:
+                        _bump_skip(_gate.rejection_reason)
                         logger.info(
-                            f"  BTC [5m] 1H gate pass '{market.question[:40]}' — "
-                            f"4H falling but 1H rising — local momentum recovery"
+                            f"  BTC [5m] skip '{market.question[:40]}' — "
+                            f"4H {'falling' if effective_side == 'LONG' else 'rising'}, "
+                            f"1H also same direction — no momentum building"
                         )
-                    if effective_side == "SHORT" and macd_4h.histogram_rising:
-                        if macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_5m_short_reject")
-                            logger.info(
-                                f"  BTC [5m] skip '{market.question[:40]}' — "
-                                f"4H rising, 1H also rising — no momentum building for SHORT"
-                            )
-                            continue
+                        continue
+                    if _gate.fallback_used:
                         logger.info(
                             f"  BTC [5m] 1H gate pass '{market.question[:40]}' — "
-                            f"4H rising but 1H falling — local momentum recovery SHORT"
+                            f"4H decelerating but 1H {'rising' if effective_side == 'LONG' else 'falling'} — local momentum recovery"
                         )
 
                     # 5m momentum direction — primary LTF signal for 5m markets.
