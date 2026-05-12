@@ -8,6 +8,69 @@
 
 ---
 
+## 2026-05-12 — strategies/_core: live↔backtest decision-logic unification
+
+**Why:** `src/backtest/updown_engine.py` previously hand-copied ~2000 lines of
+entry-decision logic from `BitcoinStrategy` / `SolMacroStrategy` /
+`ETHMacroStrategy`. Five drift bugs were found in the process of unifying it,
+all now fixed. From this commit forward, any change to a strategy decision
+helper **must go in `src/strategies/_core/`** so live and backtest stay
+in lockstep.
+
+**`src/strategies/_core/`** modules (each is a pure function with no IO):
+
+- `htf_bias.py` — `btc_htf_bias` (3 callers: BitcoinStrategy, SolMacroStrategy,
+  UpdownBacktestEngine)
+- `ltf_strength.py` — `btc_ltf_strength_15m`, `sol_ltf_strength_15m`,
+  `passes_15m_iql`, `passes_15m_iql_relaxed_rule`
+- `m5_momentum.py` — `score_m5_direction` (BTC 5m), `sol_m5_macd_adj`
+- `htf_boost.py` — `btc_5m_htf_boost`, `btc_15m_htf_boost`, `btc_5m_4h_1h_hist_gate`
+- `timing.py` — `btc_15m_timing_bonus`
+- `adjustments.py` — `rsi_4_level_adj_5m`, `rsi_4_level_adj_15m`, `sabre_tension_adj`
+- `alt_gates.py` — `apply_primary_htf_bias`, `alt_1h_hist_gate`,
+  `anti_ltf_gate_skip_reason`, `sol_rsi_extremes_adj`, `btc_catalyst_boost`
+- `eth_follow.py` — `btc_follow_5m_impulse`, `btc_follow_15m_impulse_ok`,
+  `eth_5m_macd_score`, `eth_15m_follow_score`
+
+**Drift fixes shipped along with the extraction:**
+
+1. **BTC 15m LTF threshold** — backtest used 0.35, live 0.50. Backtest was
+   confirming pure-bull-cross signals (score 0.40) that live rejected. Both
+   now use 0.50.
+2. **BTC 5m 4H/1H histogram gate** — backtest had a hard 4H reject; live has
+   a 1H momentum-recovery fallback. Backtest was rejecting entries live
+   takes during 4H-decelerating / 1H-building windows. Both now share the
+   fallback.
+3. **BTC 15m HTF boost floor** — live had no floor on the graduated boost.
+   When HTF=BULLISH was decided via recovery/early-bull votes (sabre=-1 +
+   hist>0 below zero), the raw 3-vote lookup could yield a NEGATIVE
+   `htf_boost`. Backtest had the +/-0.03 floor with a comment calling out
+   the inconsistency. Live now applies the floor too.
+4. **SOL/alt 15m 1H histogram gate** — backtest had a hard "must be rising"
+   gate; live has a relaxed "block only when actively against" gate. Backtest
+   was rejecting alt entries with positive-but-decelerating 1H histograms.
+   Both now share the relaxed live form.
+5. **ETH 15m follow scoring** — different tiers (backtest:
+   0.06/0.04/0.02/0; live: 0.06/0.05/0/-0.05). Backtest had a 0.02 weak-MACD
+   tier; live has a 0.05 strong-hist tier and a -0.05 against penalty. Both
+   now use `eth_15m_follow_score`.
+
+**Code-correctness fix:** `btc_price_service.calc_candle_momentum.m5_direction`
+was undercoded — it only emitted SPIKE/DRIFT/empty, but BitcoinStrategy's 5m
+path had LEAN_UP/LEAN_DOWN handler cases that never fired. Added LEAN tier at
+`|move| > 0.01%` to the producer (and mirrored in
+updown_engine._replay_candle_momentum / _calc_m5_momentum). Live now gets
+the ±0.01 weak-nudge it always intended.
+
+**Tests:** 293 pass. New parity tests in `tests/test_strategy_core_*.py`
+lock both call sites for every extracted helper.
+
+**Going forward — invariant:** any strategy-decision logic change must
+either modify a `_core` helper (callers auto-update) or update **all**
+existing callers in lockstep. Adding a new branch in `bitcoin.py` without
+mirroring it in `updown_engine.py` will silently produce backtest results
+that diverge from live.
+
 ## 2026-05-11 — Dashboard: real 30m MACD & % moves on existing rows
 
 **SOL/BTC service:** `SOLAnalysis.macd_30m`, `BTCSOLCorrelation` 30m %-moves (1m×31), 120×1m pulls; **BTC** `TechnicalAnalysis.macd_30m` + **`get_full_analysis`**; **Hyperliquid** `"30m"` interval; **backtest** `_build_ta` populates `macd_30m`; **API:** `/api/bitcoin/analysis` macd 1h/30m/15m fields; alt payload `macd_30m_*`, `btc_move_30m`, `sol_move_30m`, `{alt}_move_30m`. **Dashboard:** BTC hero + meta strip MACD 30m; alt meta **MACD 30m \| 15m \| 5m \| Corr \| ATR**; hero **5·15·30m** Δ% triples. `dashboard_ui_rev` bumped.
