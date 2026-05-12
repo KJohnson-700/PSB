@@ -112,3 +112,30 @@ def test_live_and_backtest_callers_match():
         live = btc._get_higher_tf_bias(ta)
         back = UpdownBacktestEngine._get_htf_bias(ta, min_hist=20.0)
         assert live == back, f"parity drift: live={live} back={back}"
+
+
+def test_sol_macro_btc_htf_matches_bitcoin_strategy():
+    """SolMacroStrategy._get_btc_htf_bias was a 3rd hand-copy of the BTC 4H bias
+    logic with the same conviction-gate but a different config key. Both wrappers
+    must agree when given identical thresholds."""
+    from unittest.mock import MagicMock
+    from src.strategies.bitcoin import BitcoinStrategy
+    from src.strategies.sol_macro import SolMacroStrategy
+
+    # Live SolMacroStrategy reads `strategies.sol_macro.btc_min_4h_hist_magnitude`
+    cfg_btc = {"min_4h_hist_magnitude": 20.0}
+    cfg_sol = {"strategies": {"sol_macro": {"btc_min_4h_hist_magnitude": 20.0}}}
+
+    btc_strat = BitcoinStrategy(cfg_btc, MagicMock(), MagicMock())
+    sol_strat = SolMacroStrategy(cfg_sol, MagicMock(), MagicMock())
+
+    cases = [
+        _ta(trend=1, ma_value=70_000, price=75_000, macd_hist=120.0, above_zero=True),
+        _ta(trend=-1, ma_value=80_000, price=75_000, macd_hist=-120.0, above_zero=False),
+        _ta(trend=1, ma_value=70_000, price=75_000, macd_hist=5.0, above_zero=False),
+        _ta(trend=1, ma_value=70_000, price=75_000, macd_hist=80.0, above_zero=False),
+    ]
+    for ta in cases:
+        a = btc_strat._get_higher_tf_bias(ta)
+        b = sol_strat._get_btc_htf_bias(ta)
+        assert a == b, f"BTC↔SOL parity drift: bitcoin={a} sol_macro={b}"

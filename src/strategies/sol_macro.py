@@ -61,6 +61,7 @@ from src.analysis.updown_composite_score import (
 )
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
+from src.strategies._core import btc_htf_bias as _core_btc_htf_bias
 from src.strategies._core import sol_ltf_strength_15m
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.execution.performance_feedback import get_drift_min_edge_mult
@@ -797,53 +798,19 @@ class SolMacroStrategy:
         return "NEUTRAL"
 
     def _get_btc_htf_bias(self, ta: TechnicalAnalysis) -> str:
-        """Use BTC 4H structure as the primary macro gate for alt strategies."""
-        sabre = ta.trend_sabre
-        macd_4h = ta.macd_4h
-        price = ta.current_price
-
-        bull_votes = 0
-        bear_votes = 0
-
-        if sabre.trend == 1:
-            bull_votes += 1
-        elif sabre.trend == -1:
-            bear_votes += 1
-
-        if price > sabre.ma_value:
-            bull_votes += 1
-        elif price < sabre.ma_value:
-            bear_votes += 1
-
-        early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
-        early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
-        recovery = not macd_4h.above_zero and macd_4h.histogram > 0
-        if early_bear:
-            bear_votes += 1
-        elif macd_4h.above_zero or early_bull or recovery:
-            bull_votes += 1
-        else:
-            bear_votes += 1
-
-        if bull_votes >= 2:
-            bias = "BULLISH"
-        elif bear_votes >= 2:
-            bias = "BEARISH"
-        else:
-            return "NEUTRAL"
-
+        """BTC 4H structure as the primary macro gate for alt strategies.
+        Delegates to strategies._core (same code BitcoinStrategy uses)."""
         min_hist = float(self.config.get("btc_min_4h_hist_magnitude", 20.0))
-        if abs(macd_4h.histogram) < min_hist:
+        r = _core_btc_htf_bias(ta, min_hist_magnitude=min_hist)
+        if r.downgraded_to_neutral:
             logger.info(
                 "BTC HTF: %s by vote but 4H MACD hist=%+.1f below conviction threshold (%s) "
                 "— downgrading to NEUTRAL",
-                bias,
-                macd_4h.histogram,
+                r.raw_vote_bias,
+                r.macd_4h_hist,
                 min_hist,
             )
-            return "NEUTRAL"
-
-        return bias
+        return r.bias
 
     def _apply_primary_htf_bias(
         self, est_prob_up: float, primary_htf_bias: str, weight: float
