@@ -50,6 +50,9 @@ from src.strategies._core import (
     btc_15m_timing_bonus,
     btc_htf_bias,
     btc_ltf_strength_15m,
+    rsi_4_level_adj_5m,
+    rsi_4_level_adj_15m,
+    sabre_tension_adj,
     score_m5_direction,
 )
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -1070,15 +1073,8 @@ class BitcoinStrategy:
                         )
                         continue
 
-                    # RSI adjustments — expanded from 80/20 to 65/35 (lighter weight for noisy 5m)
-                    if ta.rsi_14 > 80:
-                        est_prob_up -= 0.02
-                    elif ta.rsi_14 > 65:
-                        est_prob_up -= 0.01
-                    elif ta.rsi_14 < 20:
-                        est_prob_up += 0.02
-                    elif ta.rsi_14 < 35:
-                        est_prob_up += 0.01
+                    # RSI mean-reversion adj (5m weights, lighter than 15m)
+                    est_prob_up += rsi_4_level_adj_5m(ta.rsi_14)
 
                     # NOTE: 4H histogram hard gate is applied above (continue on mismatch).
                     # If we reach here, 4H histogram is already aligned — no extra soft boost needed.
@@ -1152,26 +1148,11 @@ class BitcoinStrategy:
                     else:
                         est_prob_up -= timing_bonus
 
-                    # RSI adjustments — expanded from 80/20 to 65/35 range.
-                    # Live data: RSI 65-70 during SHORT had zero weight but is a real overbought signal.
-                    # Very extreme (>80/<20) gets full -0.03/+0.03; mid-extreme (65-80/20-35) gets -0.02/+0.02
-                    if ta.rsi_14 > 80:
-                        est_prob_up -= 0.03  # Very overbought — strong support for SHORT
-                    elif ta.rsi_14 > 65:
-                        est_prob_up -= 0.02  # Overbought zone — modest support for SHORT
-                    elif ta.rsi_14 < 20:
-                        est_prob_up += 0.03  # Very oversold — strong support for LONG
-                    elif ta.rsi_14 < 35:
-                        est_prob_up += 0.02  # Oversold zone — modest support for LONG
+                    # RSI mean-reversion adj (15m weights)
+                    est_prob_up += rsi_4_level_adj_15m(ta.rsi_14)
 
-                    # Sabre tension — lowered threshold from 4.0 to 2.0 to match threshold-market path.
-                    # 72.9% of signals have tension_abs > 2.0; the 4.0 threshold almost never fired.
-                    # Price stretched >2 ATR from the MA is meaningful mean-reversion risk.
-                    if ta.trend_sabre.tension_abs > 2.0:
-                        if effective_side == "LONG":
-                            est_prob_up += -0.02 if ta.trend_sabre.tension > 0 else 0.02
-                        else:
-                            est_prob_up += 0.02 if ta.trend_sabre.tension > 0 else -0.02
+                    # Sabre tension mean-reversion adj (threshold 2.0 ATR)
+                    est_prob_up += sabre_tension_adj(ta.trend_sabre, effective_side)
 
                     # NOTE: 4H histogram hard gate is applied above (continue on mismatch).
                     # If we reach here, 4H histogram is already aligned — no extra soft boost needed.

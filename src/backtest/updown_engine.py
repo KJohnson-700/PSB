@@ -69,6 +69,9 @@ from src.strategies._core import (
     btc_htf_bias,
     btc_ltf_strength_15m,
     passes_15m_iql,
+    rsi_4_level_adj_5m,
+    rsi_4_level_adj_15m,
+    sabre_tension_adj,
     score_m5_direction,
     sol_ltf_strength_15m,
 )
@@ -918,18 +921,8 @@ class UpdownBacktestEngine:
         timing_bonus = btc_15m_timing_bonus(ta.candle_momentum, allowed_side).bonus
         est_prob_up += timing_bonus if allowed_side == "LONG" else -timing_bonus
 
-        # RSI 4-level (matches live bitcoin.py)
-        if   ta.rsi_14 > 80: est_prob_up -= 0.03
-        elif ta.rsi_14 > 65: est_prob_up -= 0.02
-        elif ta.rsi_14 < 20: est_prob_up += 0.03
-        elif ta.rsi_14 < 35: est_prob_up += 0.02
-
-        # Sabre tension (matches live: threshold 2.0 ATR)
-        if sabre.tension_abs > 2.0:
-            if allowed_side == "LONG":
-                est_prob_up += -0.02 if sabre.tension > 0 else 0.02
-            else:
-                est_prob_up += 0.02 if sabre.tension > 0 else -0.02
+        est_prob_up += rsi_4_level_adj_15m(ta.rsi_14)
+        est_prob_up += sabre_tension_adj(sabre, allowed_side)
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
@@ -1155,11 +1148,7 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= m5_adj
 
-        # RSI 4-level (matches live bitcoin.py 5m: 80/65/20/35)
-        if   ta.rsi_14 > 80: est_prob_up -= 0.02
-        elif ta.rsi_14 > 65: est_prob_up -= 0.01
-        elif ta.rsi_14 < 20: est_prob_up += 0.02
-        elif ta.rsi_14 < 35: est_prob_up += 0.01
+        est_prob_up += rsi_4_level_adj_5m(ta.rsi_14)
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
