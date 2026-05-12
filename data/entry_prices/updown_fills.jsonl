@@ -2186,3 +2186,8 @@
 {"ts": "2026-05-12T19:42:14.826349+00:00", "strategy": "eth_macro", "yes_price": 0.485}
 {"ts": "2026-05-12T19:54:14.908226+00:00", "strategy": "eth_macro", "yes_price": 0.465}
 {"ts": "2026-05-12T20:34:39.905018+00:00", "strategy": "eth_macro", "yes_price": 0.515}
+{"ts": "2026-05-12T22:27:49.215923+00:00", "strategy": "bitcoin", "yes_price": 0.485}
+{"ts": "2026-05-12T22:39:18.541537+00:00", "strategy": "eth_macro", "yes_price": 0.505}
+{"ts": "2026-05-12T22:46:07.703703+00:00", "strategy": "eth_macro", "yes_price": 0.65}
+{"ts": "2026-05-12T22:47:23.064738+00:00", "strategy": "eth_macro", "yes_price": 0.65}
+{"ts": "2026-05-12T22:52:35.093481+00:00", "strategy": "bitcoin", "yes_price": 0.455}
