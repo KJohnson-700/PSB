@@ -19,6 +19,13 @@ from .adjustments import (
     rsi_4_level_adj_15m,
     sabre_tension_adj,
 )
+from .alt_gates import (
+    AltHistGateResult,
+    alt_1h_hist_gate,
+    apply_primary_htf_bias,
+    btc_catalyst_boost,
+    sol_rsi_extremes_adj,
+)
 from .htf_boost import (
     HistGateResult,
     btc_5m_4h_1h_hist_gate,
@@ -46,4 +53,9 @@ __all__ = [
     "rsi_4_level_adj_5m",
     "rsi_4_level_adj_15m",
     "sabre_tension_adj",
+    "AltHistGateResult",
+    "alt_1h_hist_gate",
+    "apply_primary_htf_bias",
+    "btc_catalyst_boost",
+    "sol_rsi_extremes_adj",
 ]

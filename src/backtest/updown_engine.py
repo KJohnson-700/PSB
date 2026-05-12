@@ -62,10 +62,13 @@ from src.analysis.btc_price_service import (
     AnchoredVolumeProfile,
 )
 from src.strategies._core import (
+    alt_1h_hist_gate,
+    apply_primary_htf_bias,
     btc_5m_4h_1h_hist_gate,
     btc_5m_htf_boost,
     btc_15m_htf_boost,
     btc_15m_timing_bonus,
+    btc_catalyst_boost,
     btc_htf_bias,
     btc_ltf_strength_15m,
     passes_15m_iql,
@@ -74,6 +77,7 @@ from src.strategies._core import (
     sabre_tension_adj,
     score_m5_direction,
     sol_ltf_strength_15m,
+    sol_rsi_extremes_adj,
 )
 
 logger = logging.getLogger(__name__)
@@ -942,42 +946,36 @@ class UpdownBacktestEngine:
         iql_enabled: bool = False,
         iql_hist_floor: float = 0.03,
     ) -> Tuple[float, float]:
-        """SOL 15m edge -- macro boost +/-0.07, LTF*0.22, 1H histogram gate.
+        """SOL 15m edge -- delegates to strategies._core for HTF/LTF/RSI logic.
 
-        Omits: lag/spike (requires live BTC feed), correlation dampen.
+        Omits (intentional, backtest doesn't have live correlation feed):
+        BTC lag/spike catalyst boosts, correlation damping, timing bonus.
         """
         if iql_enabled and not UpdownBacktestEngine._passes_15m_iql_macd(
             ta.macd_15m, allowed_side, iql_hist_floor
         ):
             return 0.0, 0.0
 
-        macd_1h = ta.macd_4h   # For SOL, macd_4h is computed from 1H data
+        # For SOL the TA's macd_4h field is computed from 1H data (SOL uses 1H as HTF)
+        macd_1h = ta.macd_4h
 
         est_prob_up = 0.50
 
-        # Macro trend boost (matches live sol_macro 15m: +/-0.07)
-        # htf_bias is already known to be BULLISH or BEARISH at this point
-        if allowed_side == "LONG":
-            est_prob_up += 0.07
-        else:
-            est_prob_up -= 0.07
+        # Primary HTF bias boost (BULLISH/BEARISH +/-0.07; NEUTRAL passed-through pre-filter)
+        primary_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
+        est_prob_up = apply_primary_htf_bias(est_prob_up, primary_bias, 0.07)
 
-        # 1H histogram hard gate (matches live sol_macro)
-        if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
+        # Relaxed 1H histogram gate (matches live, was a hard gate pre-refactor — DRIFT FIX)
+        if not alt_1h_hist_gate(macd_1h, allowed_side).allowed:
+            return 0.0, 0.0
 
-        # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.22
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
-        # RSI extremes (matches live sol_macro 15m: >75/-0.03, <25/+0.03)
-        if   ta.rsi_14 > 75: est_prob_up -= 0.03
-        elif ta.rsi_14 < 25: est_prob_up += 0.03
+        est_prob_up += sol_rsi_extremes_adj(ta.rsi_14)
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
-        # Confidence: matches live = min(0.85, 0.50 + ltf_strength * 0.22 + lag_conf + timing*0.5)
-        # lag_conf and timing = 0 in backtest
         confidence = min(0.85, 0.50 + ltf_strength * 0.22)
         return edge, confidence
 

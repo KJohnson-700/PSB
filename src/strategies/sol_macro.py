@@ -62,7 +62,15 @@ from src.analysis.updown_composite_score import (
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies._core import btc_htf_bias as _core_btc_htf_bias
-from src.strategies._core import passes_15m_iql_relaxed_rule, sol_ltf_strength_15m
+from src.strategies._core import (
+    apply_primary_htf_bias as _core_apply_primary_htf_bias,
+)
+from src.strategies._core import (
+    alt_1h_hist_gate,
+    passes_15m_iql_relaxed_rule,
+    sol_ltf_strength_15m,
+    sol_rsi_extremes_adj,
+)
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.strategies.strategy_ai_context import (
@@ -815,17 +823,8 @@ class SolMacroStrategy:
     def _apply_primary_htf_bias(
         self, est_prob_up: float, primary_htf_bias: str, weight: float
     ) -> float:
-        """Apply the same HTF bias that determined the allowed side.
-
-        Once BTC 4H became the primary gate for alt strategies, probability estimation
-        needs to use that same resolved bias. Otherwise the action can be chosen from
-        BTC HTF while the probability model still leans the other way from alt-only HTF.
-        """
-        if primary_htf_bias == "BULLISH":
-            return est_prob_up + weight
-        if primary_htf_bias == "BEARISH":
-            return est_prob_up - weight
-        return est_prob_up
+        """Signed primary-HTF probability boost. Delegates to strategies._core."""
+        return _core_apply_primary_htf_bias(est_prob_up, primary_htf_bias, weight)
 
     def _apply_degraded_corr_bias(
         self, est_prob_up: float, primary_htf_bias: str, corr: BTCSOLCorrelation
@@ -1726,11 +1725,8 @@ class SolMacroStrategy:
                         est_prob_up -= 0.02
                         m5_reasons.append("5m_trend_bear")
 
-                    # RSI extremes (very light for 5m)
-                    if sol.rsi_14 > 75:
-                        est_prob_up -= 0.02
-                    elif sol.rsi_14 < 25:
-                        est_prob_up += 0.02
+                    # RSI extremes (5m: lighter ±0.02 magnitude than 15m's ±0.03).
+                    est_prob_up += sol_rsi_extremes_adj(sol.rsi_14, magnitude=0.02)
 
                     # Correlation confidence — log for diagnostics.
                     # Light damping on low corr: primary edge is macro+LTF, not correlation.
@@ -1812,27 +1808,16 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
-                    # SOL 15m: without gate ~51% WR; with gate ~59.3% WR.
-                    # Relaxed: allow when histogram is in trade direction (positive for
-                    # LONG) even if decelerating, not just when accelerating. Blocks only
-                    # when histogram is actively against the trade direction.
+                    # 1H histogram gate — relaxed: blocks only when actively against
+                    # the trade direction. Logic shared with backtest via strategies._core.
                     _macd_1h = sol.macd_1h
-                    _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
-                    _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
-                        if allowed_side == "LONG" and not _h1_bull_ok:
-                            _bump_skip("histogram_1h_blocks_long_15m")
+                        _gate = alt_1h_hist_gate(_macd_1h, allowed_side)
+                        if not _gate.allowed:
+                            _bump_skip(_gate.rejection_reason)
                             logger.info(
                                 f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
-                            )
-                            continue
-                        if allowed_side == "SHORT" and not _h1_bear_ok:
-                            _bump_skip("histogram_1h_blocks_short_15m")
-                            logger.info(
-                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                                f"1H histogram against side (hist={_macd_1h.histogram:.4f})"
                             )
                             continue
 
@@ -1866,11 +1851,8 @@ class SolMacroStrategy:
                     else:
                         est_prob_up -= timing_bonus
 
-                    # RSI extremes
-                    if sol.rsi_14 > 75:
-                        est_prob_up -= 0.03
-                    elif sol.rsi_14 < 25:
-                        est_prob_up += 0.03
+                    # RSI extremes — shared with backtest via strategies._core.
+                    est_prob_up += sol_rsi_extremes_adj(sol.rsi_14)
 
                     # Correlation confidence — unified with 5m path.
                     # Light damping: primary edge is macro+LTF, not correlation.
