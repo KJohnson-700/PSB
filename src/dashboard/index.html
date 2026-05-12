@@ -6147,7 +6147,7 @@ function _tradeMarkersFromPoints(points, strategy) {
         .flatMap((p) => {
             const pnl = p.pnl || 0;
             const sign = pnl >= 0 ? '+' : '';
-            const base = pnl >= 0 ? stratColor : '#7f1d1d';
+            const base = pnl >= 0 ? stratColor : _shadeHexTrade(stratColor, -0.35);
             const cIn = _shadeHexTrade(base, entryDarken);
             const cOut = _shadeHexTrade(base, exitLighten);
             const txt = key + ' ' + sign + pnl.toFixed(2);
