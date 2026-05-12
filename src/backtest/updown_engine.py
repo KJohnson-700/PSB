@@ -69,8 +69,12 @@ from src.strategies._core import (
     btc_15m_htf_boost,
     btc_15m_timing_bonus,
     btc_catalyst_boost,
+    btc_follow_5m_impulse,
+    btc_follow_15m_impulse_ok,
     btc_htf_bias,
     btc_ltf_strength_15m,
+    eth_5m_macd_score,
+    eth_15m_follow_score,
     passes_15m_iql,
     rsi_4_level_adj_5m,
     rsi_4_level_adj_15m,
@@ -1259,41 +1263,19 @@ class UpdownBacktestEngine:
     def _eth_follow_btc_5m_impulse(
         btc_ta: TechnicalAnalysis, allowed_side: str
     ) -> float:
-        direction = btc_ta.candle_momentum.m5_direction
-        score = 0.0
-        if allowed_side == "LONG":
-            if direction == "SPIKE_UP":
-                score = 0.06
-            elif direction == "DRIFT_UP":
-                score = 0.04
-            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                score = -0.05
-        else:
-            if direction == "SPIKE_DOWN":
-                score = 0.06
-            elif direction == "DRIFT_DOWN":
-                score = 0.04
-            elif direction in ("SPIKE_UP", "DRIFT_UP"):
-                score = -0.05
-        if btc_ta.candle_momentum.m5_in_prediction_window and score > 0:
-            score += 0.02
-        return score
+        """Delegates to strategies._core.btc_follow_5m_impulse."""
+        return btc_follow_5m_impulse(btc_ta.candle_momentum, allowed_side).score
 
     @staticmethod
     def _eth_follow_btc_15m_impulse_ok(
         btc_ta: TechnicalAnalysis, allowed_side: str, min_hist: float
     ) -> bool:
-        macd_15m = btc_ta.macd_15m
-        if allowed_side == "LONG":
-            return (
-                macd_15m.crossover == "BULLISH_CROSS"
-                or (macd_15m.histogram > min_hist and macd_15m.histogram_rising)
-                or btc_ta.candle_momentum.m15_direction in ("SPIKE_UP", "DRIFT_UP")
-            )
-        return (
-            macd_15m.crossover == "BEARISH_CROSS"
-            or (macd_15m.histogram < -min_hist and not macd_15m.histogram_rising)
-            or btc_ta.candle_momentum.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN")
+        """Delegates to strategies._core.btc_follow_15m_impulse_ok."""
+        return btc_follow_15m_impulse_ok(
+            btc_ta.macd_15m,
+            btc_ta.candle_momentum.m15_direction,
+            allowed_side,
+            min_hist,
         )
 
     def _edge_5m_eth_follow(
@@ -1331,29 +1313,13 @@ class UpdownBacktestEngine:
         m5_adj = 0.0
         if len(df_5m) >= _MIN_5M_BARS:
             macd_5m = self._svc.calc_macd(df_5m)
-            if allowed_side == "LONG":
-                if macd_5m.crossover == "BULLISH_CROSS":
-                    m5_adj = 0.06
-                elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
-                    m5_adj = 0.04
-                elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
-                    m5_adj = -0.05
-            else:
-                if macd_5m.crossover == "BEARISH_CROSS":
-                    m5_adj = 0.06
-                elif macd_5m.histogram < 0 and not macd_5m.histogram_rising:
-                    m5_adj = 0.04
-                elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
-                    m5_adj = -0.05
+            m5_adj = eth_5m_macd_score(macd_5m, allowed_side).score
         if m5_adj < min_eth_adj:
             return 0.0, 0.0
 
         est_prob_up += btc_impulse if allowed_side == "LONG" else -btc_impulse
         est_prob_up += m5_adj if allowed_side == "LONG" else -m5_adj
-        if eth_ta.rsi_14 > 75:
-            est_prob_up -= 0.02
-        elif eth_ta.rsi_14 < 25:
-            est_prob_up += 0.02
+        est_prob_up += sol_rsi_extremes_adj(eth_ta.rsi_14, magnitude=0.02)
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
         confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(m5_adj) * 2.0))
@@ -1376,33 +1342,17 @@ class UpdownBacktestEngine:
             return 0.0, 0.0
         if not self._eth_follow_btc_15m_impulse_ok(btc_ta, allowed_side, min_btc_hist):
             return 0.0, 0.0
-        macd_15m = eth_ta.macd_15m
-        if allowed_side == "LONG":
-            if macd_15m.crossover == "BULLISH_CROSS":
-                eth_adj = 0.06
-            elif macd_15m.histogram > 0 and macd_15m.histogram_rising:
-                eth_adj = 0.04
-            elif macd_15m.macd_line > macd_15m.signal_line and macd_15m.histogram > 0:
-                eth_adj = 0.02
-            else:
-                eth_adj = 0.0
-        else:
-            if macd_15m.crossover == "BEARISH_CROSS":
-                eth_adj = 0.06
-            elif macd_15m.histogram < 0 and not macd_15m.histogram_rising:
-                eth_adj = 0.04
-            elif macd_15m.macd_line < macd_15m.signal_line and macd_15m.histogram < 0:
-                eth_adj = 0.02
-            else:
-                eth_adj = 0.0
+        # Pre-refactor backtest used (0.06/0.04/0.02/0) tiers; live uses
+        # (0.06/0.05/0/-0.05) — different scoring. Unifying on live via _core.
+        # min_btc_hist also serves as ETH 15m hist threshold (matches live default).
+        eth_adj = eth_15m_follow_score(
+            eth_ta.macd_15m, allowed_side, min_hist=min_btc_hist
+        ).score
         if eth_adj < min_eth_adj:
             return 0.0, 0.0
         est_prob_up = 0.50 + (0.08 if allowed_side == "LONG" else -0.08)
         est_prob_up += eth_adj if allowed_side == "LONG" else -eth_adj
-        if eth_ta.rsi_14 > 75:
-            est_prob_up -= 0.03
-        elif eth_ta.rsi_14 < 25:
-            est_prob_up += 0.03
+        est_prob_up += sol_rsi_extremes_adj(eth_ta.rsi_14)
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
         confidence = max(0.55, min(0.85, 0.50 + abs(eth_adj) * 2.2))

@@ -26,6 +26,13 @@ from .alt_gates import (
     btc_catalyst_boost,
     sol_rsi_extremes_adj,
 )
+from .eth_follow import (
+    FollowScoreResult,
+    btc_follow_5m_impulse,
+    btc_follow_15m_impulse_ok,
+    eth_5m_macd_score,
+    eth_15m_follow_score,
+)
 from .htf_boost import (
     HistGateResult,
     btc_5m_4h_1h_hist_gate,
@@ -60,4 +67,9 @@ __all__ = [
     "apply_primary_htf_bias",
     "btc_catalyst_boost",
     "sol_rsi_extremes_adj",
+    "FollowScoreResult",
+    "btc_follow_5m_impulse",
+    "btc_follow_15m_impulse_ok",
+    "eth_5m_macd_score",
+    "eth_15m_follow_score",
 ]
