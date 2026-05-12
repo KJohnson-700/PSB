@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-11-dashboard-30m-ta-wire",
+        "dashboard_ui_rev": "2026-05-11-alt-move-rename",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -3488,13 +3488,10 @@ def _solbtc_analysis_payload(ta, alt_symbol: str = "SOLUSDT") -> Dict[str, Any]:
         "btc_move_5m": corr.btc_move_5m_pct,
         "btc_move_15m": corr.btc_move_15m_pct,
         "btc_move_30m": corr.btc_move_30m_pct,
-        # Alt-leg % moves — sol_move_* kept for backwards compatibility (same numeric series for any alt)
-        "sol_move_5m": corr.sol_move_5m_pct,
-        "sol_move_15m": corr.sol_move_15m_pct,
-        "sol_move_30m": corr.sol_move_30m_pct,
-        f"{alt_code}_move_5m": corr.sol_move_5m_pct,
-        f"{alt_code}_move_15m": corr.sol_move_15m_pct,
-        f"{alt_code}_move_30m": corr.sol_move_30m_pct,
+        # Alt-leg % moves (per-alt; field name carries the alt code)
+        f"{alt_code}_move_5m": corr.alt_move_5m_pct,
+        f"{alt_code}_move_15m": corr.alt_move_15m_pct,
+        f"{alt_code}_move_30m": corr.alt_move_30m_pct,
         "btc_spike": corr.btc_spike_detected,
         "btc_spike_dir": corr.btc_spike_direction,
         "lag_opportunity": corr.lag_opportunity,

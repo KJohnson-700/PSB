@@ -4388,9 +4388,9 @@ function updateAltLagAnalysis(d, prefix) {
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
     if (altMv) {
         const code = String(d.alt_asset_code || prefix || 'sol').toLowerCase();
-        const a5 = d[`${code}_move_5m`] ?? d.sol_move_5m;
-        const a15 = d[`${code}_move_15m`] ?? d.sol_move_15m;
-        const a30 = d[`${code}_move_30m`] ?? d.sol_move_30m;
+        const a5 = d[`${code}_move_5m`];
+        const a15 = d[`${code}_move_15m`];
+        const a30 = d[`${code}_move_30m`];
         altMv.textContent = triPct(a5, a15, a30);
     }
     const lagMacroHero = document.getElementById(prefix + '-macro');
