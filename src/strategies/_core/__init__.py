@@ -22,6 +22,7 @@ from .adjustments import (
 from .alt_gates import (
     AltHistGateResult,
     alt_1h_hist_gate,
+    anti_ltf_gate_skip_reason,
     apply_primary_htf_bias,
     btc_catalyst_boost,
     sol_rsi_extremes_adj,
@@ -64,6 +65,7 @@ __all__ = [
     "sabre_tension_adj",
     "AltHistGateResult",
     "alt_1h_hist_gate",
+    "anti_ltf_gate_skip_reason",
     "apply_primary_htf_bias",
     "btc_catalyst_boost",
     "sol_rsi_extremes_adj",

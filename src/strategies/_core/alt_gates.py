@@ -34,6 +34,32 @@ class AltHistGateResult:
     rejection_reason: str = ""
 
 
+def anti_ltf_gate_skip_reason(
+    *,
+    ltf_confirmed: bool,
+    require_ltf_confirmation: bool,
+    anti_ltf_gate_enabled: bool,
+    eth_15m_follow_exception: bool = False,
+) -> str:
+    """Return a skip reason ("" if the gate passes) for the LTF policy gate.
+
+    Two policies:
+      - require_ltf_confirmation: skip when 15m is NOT confirmed
+      - anti-LTF (default): skip when 15m IS confirmed (late-entry risk; backtest
+        showed confirmed entries had ~52% WR vs ~65% for unconfirmed)
+
+    ETH 15m BTC-follow lanes are intentionally exempted from anti-LTF in both
+    live and backtest — pass eth_15m_follow_exception=True.
+    """
+    if require_ltf_confirmation:
+        return "" if ltf_confirmed else "ltf_required_unconfirmed_15m"
+    if not anti_ltf_gate_enabled:
+        return ""
+    if eth_15m_follow_exception:
+        return ""
+    return "anti_ltf_confirmed_15m" if ltf_confirmed else ""
+
+
 def alt_1h_hist_gate(macd_1h: MACDResult, allowed_side: str) -> AltHistGateResult:
     """Relaxed 1H histogram gate for alt 15m updown entries.
 

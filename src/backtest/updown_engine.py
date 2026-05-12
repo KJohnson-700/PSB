@@ -63,6 +63,7 @@ from src.analysis.btc_price_service import (
 )
 from src.strategies._core import (
     alt_1h_hist_gate,
+    anti_ltf_gate_skip_reason,
     apply_primary_htf_bias,
     btc_5m_4h_1h_hist_gate,
     btc_5m_htf_boost,
@@ -1589,22 +1590,15 @@ class UpdownBacktestEngine:
             else:
                 ltf_confirmed, ltf_str = self._sol_ltf_strength(ta, allowed_side)
 
-            # LTF gate policy parity with live strategy config.
-            # Default remains anti-LTF (skip confirmed entries), but strategy-level
-            # settings can flip to requiring confirmation for noisier assets.
-            require_ltf_confirmation = bool(strategy_cfg.get("require_ltf_confirmation", False))
-            anti_ltf_gate_enabled = bool(strategy_cfg.get("anti_ltf_gate_enabled", True))
-            if require_ltf_confirmation:
-                if not ltf_confirmed:
-                    current += step_td
-                    continue
-            else:
-                # ETH 15m BTC-follow intentionally allows confirmed follow-through
-                # unless the strategy config explicitly enables anti-LTF.
-                skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes != 5)
-                if ltf_confirmed and skip_confirmed:
-                    current += step_td
-                    continue
+            # LTF gate policy — shared with live via strategies._core.
+            if anti_ltf_gate_skip_reason(
+                ltf_confirmed=ltf_confirmed,
+                require_ltf_confirmation=bool(strategy_cfg.get("require_ltf_confirmation", False)),
+                anti_ltf_gate_enabled=bool(strategy_cfg.get("anti_ltf_gate_enabled", True)),
+                eth_15m_follow_exception=(is_eth and window_minutes != 5),
+            ):
+                current += step_td
+                continue
 
             # ==================================================================
             # Layer 3: Edge estimation (symbol + timeframe specific)

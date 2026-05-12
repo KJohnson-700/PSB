@@ -3,6 +3,7 @@
 from src.analysis.btc_price_service import MACDResult
 from src.strategies._core import (
     alt_1h_hist_gate,
+    anti_ltf_gate_skip_reason,
     apply_primary_htf_bias,
     btc_catalyst_boost,
     sol_rsi_extremes_adj,
@@ -119,6 +120,49 @@ def test_catalyst_short_flips_sign():
         btc_spike_detected=True, allowed_side="SHORT",
     )
     assert b == -0.03
+
+
+# ── anti_ltf_gate_skip_reason ────────────────────────────────────────────────
+
+def test_anti_ltf_default_skips_when_confirmed():
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=True, require_ltf_confirmation=False,
+        anti_ltf_gate_enabled=True,
+    ) == "anti_ltf_confirmed_15m"
+
+
+def test_anti_ltf_default_passes_when_unconfirmed():
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=False, require_ltf_confirmation=False,
+        anti_ltf_gate_enabled=True,
+    ) == ""
+
+
+def test_require_ltf_inverts_policy():
+    # unconfirmed -> skip
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=False, require_ltf_confirmation=True,
+        anti_ltf_gate_enabled=True,
+    ) == "ltf_required_unconfirmed_15m"
+    # confirmed -> pass
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=True, require_ltf_confirmation=True,
+        anti_ltf_gate_enabled=True,
+    ) == ""
+
+
+def test_anti_ltf_disabled_passes_through():
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=True, require_ltf_confirmation=False,
+        anti_ltf_gate_enabled=False,
+    ) == ""
+
+
+def test_eth_follow_exception_overrides_default_anti_ltf():
+    assert anti_ltf_gate_skip_reason(
+        ltf_confirmed=True, require_ltf_confirmation=False,
+        anti_ltf_gate_enabled=True, eth_15m_follow_exception=True,
+    ) == ""
 
 
 # ── parity: live wrappers use the core ───────────────────────────────────────

@@ -67,6 +67,7 @@ from src.strategies._core import (
 )
 from src.strategies._core import (
     alt_1h_hist_gate,
+    anti_ltf_gate_skip_reason,
     passes_15m_iql_relaxed_rule,
     sol_ltf_strength_15m,
     sol_m5_macd_adj,
@@ -1239,38 +1240,34 @@ class SolMacroStrategy:
         # ═══════════════════════════════════════════════
         ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
 
-        # LTF gate policy.
-        # Default keeps anti-LTF behavior (skip confirmed entries), but strategy-specific
-        # configs can opt into requiring confirmation when an asset performs poorly in
-        # weak/unconfirmed windows.
-        skip_15m_reason = None
-        if self.require_ltf_confirmation:
-            if not ltf_confirmed:
-                # 5m path has its own lag/timing signal stack and should not be blocked
-                # by the 15m confirmation requirement.
-                skip_15m_reason = "ltf_required_unconfirmed_15m"
-                logger.info(
-                    f"{_brand}: LTF confirmation required, but unconfirmed "
-                    f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
-                )
-            else:
-                logger.info(
-                    f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
-                )
+        # LTF gate policy (shared with backtest via strategies._core).
+        # Anti-LTF default: backtest (90 days, 2180→1208 trades) showed
+        #   LTF confirmed  (strength >= 0.50) → 51.9% WR  (late-entry risk)
+        #   LTF unconfirmed (strength < 0.50) → 65.0% WR  (early momentum phase)
+        # 5m path has its own lag/timing stack and is unaffected by 15m policy.
+        skip_15m_reason = anti_ltf_gate_skip_reason(
+            ltf_confirmed=ltf_confirmed,
+            require_ltf_confirmation=self.require_ltf_confirmation,
+            anti_ltf_gate_enabled=self.anti_ltf_gate_enabled,
+        ) or None
+        if skip_15m_reason == "ltf_required_unconfirmed_15m":
+            logger.info(
+                f"{_brand}: LTF confirmation required, but unconfirmed "
+                f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
+            )
+        elif skip_15m_reason == "anti_ltf_confirmed_15m":
+            logger.info(
+                f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
+                f"15m entries will be skipped. strength={ltf_strength:.2f}"
+            )
+        elif self.require_ltf_confirmation:
+            logger.info(
+                f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
+            )
         else:
-            # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
-            #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
-            #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
-            if self.anti_ltf_gate_enabled and ltf_confirmed:
-                skip_15m_reason = "anti_ltf_confirmed_15m"
-                logger.info(
-                    f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
-                    f"15m entries will be skipped. strength={ltf_strength:.2f}"
-                )
-            else:
-                logger.info(
-                    f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
-                )
+            logger.info(
+                f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
+            )
 
         # ═══════════════════════════════════════════════
         # LAYER 3: 5m entry timing + lag detection
