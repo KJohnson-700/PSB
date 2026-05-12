@@ -92,11 +92,35 @@ def test_eth_5m_against_uses_minus_0_05():
     assert r.score == -0.05
 
 
-def test_eth_5m_no_macd_above_signal_tier():
-    """ETH 5m has no '+0.02 macd>signal' tier (sol_m5 does)."""
-    # macd_line>signal but hist<=0 and not rising -> falls through to against
-    r = eth_5m_macd_score(_macd(hist=-0.01, rising=False), "LONG")
-    assert r.score == -0.05  # against, not +0.02
+def test_eth_5m_macd_above_signal_tier():
+    """ETH 5m HAS a +0.02 macd>signal tier (added 2026-05-12).
+
+    Honors the config knob eth_follow_5m_min_adj=0.02; previously the
+    scorer skipped this tier so the threshold had nothing to let through.
+    """
+    # macd_line > signal_line, hist not strictly > 0+rising -> +0.02 tier fires
+    # Need hist NOT > 0 to avoid the 0.04 tier ahead of this one
+    m = MACDResult(
+        macd_line=1.0, signal_line=0.5,    # macd > signal
+        histogram=-0.01, prev_histogram=-0.02,
+        crossover="NONE", histogram_rising=True,
+        above_zero=False,
+    )
+    r = eth_5m_macd_score(m, "LONG")
+    assert r.score == 0.02
+    assert "MACD>signal" in r.reasons[0]
+
+
+def test_eth_5m_against_still_negative_when_hist_negative_and_macd_below_signal():
+    """Pure 'against' (no MACD>signal lean) still hits -0.05."""
+    m = MACDResult(
+        macd_line=-1.0, signal_line=0.5,   # macd < signal
+        histogram=-0.01, prev_histogram=0.0,
+        crossover="NONE", histogram_rising=False,
+        above_zero=False,
+    )
+    r = eth_5m_macd_score(m, "LONG")
+    assert r.score == -0.05
 
 
 # ── eth_15m_follow_score ─────────────────────────────────────────────────────

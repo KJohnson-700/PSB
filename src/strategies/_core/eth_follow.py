@@ -87,8 +87,23 @@ def btc_follow_15m_impulse_ok(
 
 
 def eth_5m_macd_score(macd_5m: MACDResult, allowed_side: str) -> FollowScoreResult:
-    """ETH 5m MACD scoring. Distinct from sol_m5_macd_adj — ETH uses -0.05 against
-    (vs -0.04 in SOL) and has no separate MACD>signal tier."""
+    """ETH 5m MACD scoring.
+
+    Tiers (LONG; SHORT mirrors):
+      bull cross           : +0.06
+      hist > 0 and rising  : +0.04
+      MACD > signal        : +0.02   (weak-bullish, matches sol_m5_macd_adj)
+      bear cross or hist<0 : -0.05
+
+    The 0.02 MACD>signal tier was missing prior to 2026-05-12, leaving
+    the config knob `eth_follow_5m_min_adj: 0.02` (comment: "lowered
+    from 0.04 — easier 5m entry in grindy tape") as a silent no-op:
+    scores were always 0.04+ or 0/negative, so a 0.02 threshold filtered
+    nothing additional. Result: ETH 5m backtests produced zero trades
+    for windows where 5m was leaning bullish but not yet hist>0+rising.
+    Adding the 0.02 tier honors the config's clear intent and mirrors
+    SOL's scorer structure.
+    """
     reasons: List[str] = []
     score = 0.0
     if allowed_side == "LONG":
@@ -98,6 +113,9 @@ def eth_5m_macd_score(macd_5m: MACDResult, allowed_side: str) -> FollowScoreResu
         elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
             score = 0.04
             reasons.append("ETH5m green+rising")
+        elif macd_5m.macd_line > macd_5m.signal_line:
+            score = 0.02
+            reasons.append("ETH5m MACD>signal")
         elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
             score = -0.05
             reasons.append("ETH5m against")
@@ -108,6 +126,9 @@ def eth_5m_macd_score(macd_5m: MACDResult, allowed_side: str) -> FollowScoreResu
         elif macd_5m.histogram < 0 and not macd_5m.histogram_rising:
             score = 0.04
             reasons.append("ETH5m red+falling")
+        elif macd_5m.macd_line < macd_5m.signal_line:
+            score = 0.02
+            reasons.append("ETH5m MACD<signal")
         elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
             score = -0.05
             reasons.append("ETH5m against")
