@@ -1754,8 +1754,7 @@ class BitcoinStrategy:
                 )
             )
             if (
-                (_ai_updown_5m or _ai_updown_15m_borderline)
-                and _ai_window_open
+                (_ai_updown_5m or (_ai_updown_15m_borderline and _ai_window_open))
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()

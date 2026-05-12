@@ -197,8 +197,8 @@ strategies:
     # Values are minutes remaining until resolution.
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 1.5
-    ai_entry_window_5m_max: 2.5
+    ai_entry_window_5m_min: 0.5
+    ai_entry_window_5m_max: 5.0
     kelly_fraction: 0.30    # 2026-05-07: calibrated so edge×kf×br lands in tier band — preserves edge differentiation
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
@@ -334,8 +334,8 @@ strategies:
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 1.5
-    ai_entry_window_5m_max: 2.5
+    ai_entry_window_5m_min: 0.5
+    ai_entry_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; SOL
     entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
     entry_price_max: 0.58
@@ -480,8 +480,8 @@ strategies:
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 1.5
-    ai_entry_window_5m_max: 2.5
+    ai_entry_window_5m_min: 0.5
+    ai_entry_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; ETH
     calibration_size_multiplier_5m: 0.40  # keep ETH 5m active for calibration, but below normal risk until sample matures
     entry_price_min: 0.42
@@ -618,8 +618,8 @@ strategies:
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 1.5
-    ai_entry_window_5m_max: 2.5
+    ai_entry_window_5m_min: 0.5
+    ai_entry_window_5m_max: 5.0
     kelly_fraction: 0.24    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; HYPE
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -702,8 +702,8 @@ strategies:
     oracle_max_basis_bps: 10.0
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 1.5
-    ai_entry_window_5m_max: 2.5
+    ai_entry_window_5m_min: 0.5
+    ai_entry_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; XRP
     calibration_size_multiplier_5m: 0.30  # keep XRP 5m diagnostic only until it has a positive live cohort
     entry_price_min: 0.42
