@@ -610,10 +610,6 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 12.0
-    require_ai_decision_15m_buy_yes: true
-    require_shadow_portfolio_15m_buy_yes: true
-    min_composite_score_15m_buy_yes: 0.70
-    calibration_size_multiplier_15m_buy_yes: 0.35
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -777,7 +773,6 @@ strategies:
 updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
-  hype_15m_buy_yes_min_score: 0.70
   low_confidence_min_score: 0.66
 
 # ============================================
@@ -866,7 +861,6 @@ ai:
         - marginal
       hype_macro:
         - marginal
-        - 15m_buy_yes
       xrp_macro:
         - marginal
   # Tier C: shadow 3-stage pipeline (Research → Trader → Portfolio). Log-only; no execution.
@@ -968,6 +962,11 @@ exposure:
   # With current multipliers (1.0 / 0.6 / 0.2) and caps above, the effective
   # results are FULL<=15, MODERATE<=10, MINIMAL<=5.
   min_trade_usd: 1.0
+  # Hard post-multiplier floors. Prevent calibration/regime/exposure stacks from
+  # turning an executable trade into dust size.
+  full_min_trade_usd: 10.0
+  moderate_min_trade_usd: 10.0
+  minimal_min_trade_usd: 5.0
 
   # --- Kill switch ---
   loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)

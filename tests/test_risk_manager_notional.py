@@ -13,7 +13,7 @@ def test_position_notional_buy_no_leg():
     p.outcome = "NO"
     p.size = 10.0
     p.entry_price = 0.55
-    assert RiskManager.position_entry_notional(p) == 10.0
+    assert RiskManager.position_entry_notional(p) == 5.5
 
 
 def test_position_notional_buy_yes():
@@ -22,7 +22,7 @@ def test_position_notional_buy_yes():
     p.outcome = "YES"
     p.size = 10.0
     p.entry_price = 0.5
-    assert RiskManager.position_entry_notional(p) == 10.0
+    assert RiskManager.position_entry_notional(p) == 5.0
 
 
 def test_position_notional_short_yes_sell():

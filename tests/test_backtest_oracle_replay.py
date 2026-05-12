@@ -35,16 +35,19 @@ def _base_config() -> dict:
     }
 
 
-def _ohlcv_1m() -> pd.DataFrame:
+def _ohlcv_1m(last_close: float = 100.5) -> pd.DataFrame:
+    """Minimal 15×1m frame; bars differ open vs close so 15m windows can settle UP/DOWN."""
     ts = pd.date_range("2025-01-01T00:00:00Z", periods=15, freq="1min")
+    o = last_close - 0.5
+    c = last_close + 0.5
     return pd.DataFrame(
         {
             "open_time": ts,
             "close_time": ts,
-            "open": [100.0] * len(ts),
-            "high": [101.0] * len(ts),
-            "low": [99.0] * len(ts),
-            "close": [100.5] * len(ts),
+            "open": [o] * len(ts),
+            "high": [c + 0.5] * len(ts),
+            "low": [o - 0.5] * len(ts),
+            "close": [c] * len(ts),
             "volume": [1.0] * len(ts),
         }
     )
@@ -108,14 +111,15 @@ def test_cache_covers_accepts_last_tick_slightly_before_end_of_day():
 
 def test_eth_backtest_skips_when_oracle_basis_exceeds_cap():
     engine = UpdownBacktestEngine(config=_base_config(), initial_bankroll=500.0)
-    data = {"1m": _ohlcv_1m(), "5m": _blank_df(), "15m": _blank_df(), "1h": _blank_df()}
+    # Basis uses last 1m close before window (live-style spot); align with patched TA spot.
+    data = {"1m": _ohlcv_1m(2000.0), "5m": _blank_df(), "15m": _blank_df(), "1h": _blank_df()}
     btc_data = {"1m": _blank_df(), "5m": _blank_df(), "15m": _blank_df(), "4h": _blank_df()}
 
     with patch.object(
         engine,
         "_build_ta",
         side_effect=lambda t, dataset, htf_key: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
-    ), patch.object(engine, "_get_htf_bias", return_value="BULLISH"), patch.object(
+    ), patch.object(engine, "_get_sol_htf_bias", return_value="BULLISH"), patch.object(
         engine, "_eth_follow_1h_ok", return_value=True
     ), patch.object(engine, "_sol_ltf_strength", return_value=(False, 0.0)), patch.object(
         engine, "_edge_15m_eth_follow", return_value=(0.10, 0.60)
@@ -137,14 +141,14 @@ def test_eth_backtest_skips_when_oracle_basis_exceeds_cap():
 
 def test_eth_backtest_enters_when_oracle_basis_is_within_cap():
     engine = UpdownBacktestEngine(config=_base_config(), initial_bankroll=500.0)
-    data = {"1m": _ohlcv_1m(), "5m": _blank_df(), "15m": _blank_df(), "1h": _blank_df()}
+    data = {"1m": _ohlcv_1m(2000.0), "5m": _blank_df(), "15m": _blank_df(), "1h": _blank_df()}
     btc_data = {"1m": _blank_df(), "5m": _blank_df(), "15m": _blank_df(), "4h": _blank_df()}
 
     with patch.object(
         engine,
         "_build_ta",
         side_effect=lambda t, dataset, htf_key: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
-    ), patch.object(engine, "_get_htf_bias", return_value="BULLISH"), patch.object(
+    ), patch.object(engine, "_get_sol_htf_bias", return_value="BULLISH"), patch.object(
         engine, "_eth_follow_1h_ok", return_value=True
     ), patch.object(engine, "_sol_ltf_strength", return_value=(False, 0.0)), patch.object(
         engine, "_edge_15m_eth_follow", return_value=(0.10, 0.60)

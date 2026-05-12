@@ -1,8 +1,9 @@
 """
-XRP Macro Strategy — BTC-to-XRP correlation lag trading.
+XRP Macro Strategy.
 
-Inherits SolMacroStrategy's full layered architecture.
-Overrides: alt-coin service symbol, market filter patterns, config key, journal strategy name.
+XRP is its own alt leg: XRP spot/HTF/oracle data drives primary direction.
+BTC is secondary context only. The class still reuses the shared alt-macro base
+until that base is renamed/split, so keep XRP-specific overrides explicit here.
 """
 import re
 from typing import Any, Dict
@@ -31,9 +32,10 @@ NON_XRP_ASSET_TERMS = ("bitcoin", "btc", "solana", "ethereum", "ether", "hyperli
 
 
 class XRPMacroStrategy(SolMacroStrategy):
-    """XRP Macro strategy — same structure as SOL macro, XRPUSDT as the alt leg."""
+    """XRP macro strategy with XRP-first direction and XRPUSDT data."""
 
     def _build_alt_service(self) -> SOLBTCService:
+        """Build the XRP data/oracle service; never use SOL spot for this lane."""
         return SOLBTCService(
             alt_symbol="XRPUSDT",
             dynamic_beta_min=self.dynamic_beta_min,
@@ -61,6 +63,10 @@ class XRPMacroStrategy(SolMacroStrategy):
         )
         self._apply_strategy_config(rebuild_service=True)
         self._signal_strategy_name = "xrp_macro"
+
+    def _alt_asset_code(self) -> str:
+        """Hard-code XRP identity so shared-base naming cannot leak SOL labels."""
+        return "xrp"
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect XRP (not BTC-only) prediction markets."""

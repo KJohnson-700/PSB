@@ -20,7 +20,6 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
         "updown_composite": {
             "default_min_score": 0.62,
             "btc_neutral_15m_min_score": 0.68,
-            "hype_15m_buy_yes_min_score": 0.70,
         },
         "ai": {
             "decision_layer": {
@@ -30,7 +29,7 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
                 "use_shadow_portfolio": False,
                 "enforced_lanes": {
                     "bitcoin": ["neutral_15m", "marginal"],
-                    "hype_macro": ["marginal", "15m_buy_yes"],
+                    "hype_macro": ["marginal"],
                 },
             }
         },
@@ -43,8 +42,6 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
                 "require_oracle_for_updown": True,
                 "oracle_max_age_sec": 180,
                 "oracle_max_basis_bps": 12.0,
-                "require_shadow_portfolio_15m_buy_yes": True,
-                "calibration_size_multiplier_15m_buy_yes": 0.35,
             },
         },
     }
@@ -62,11 +59,14 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
     digest = _decision_gate_digest(cfg, stats)
 
     assert digest["enabled"] is True
-    assert digest["floors"]["hype_15m_buy_yes_min_score"] == 0.70
+    assert "hype_15m_buy_yes_min_score" not in digest["floors"]
     assert digest["lanes"]["bitcoin"]["enforced_lanes"] == ["neutral_15m", "marginal"]
     assert digest["lanes"]["bitcoin"]["shadow_required"] is True
+    assert digest["lanes"]["hype_macro"]["enforced_lanes"] == ["marginal"]
+    assert digest["lanes"]["hype_macro"]["composite_floor"] is None
+    assert digest["lanes"]["hype_macro"]["shadow_required"] is False
+    assert "size_multiplier_15m_buy_yes" not in digest["lanes"]["hype_macro"]
     assert digest["lanes"]["hype_macro"]["oracle"]["max_basis_bps"] == 12.0
-    assert digest["lanes"]["hype_macro"]["size_multiplier_15m_buy_yes"] == 0.35
     assert digest["active_blocks"]["hype_macro"]["oracle_basis_block"] == 1
 
 

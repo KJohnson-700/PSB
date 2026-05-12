@@ -706,8 +706,8 @@
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Daily trades from risk manager (UTC calendar day). Sub: session fills.">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Trades today (UTC)</div></div>
+            <div class="hero-item" title="Closed trades counted by the risk manager for the current UTC calendar day (not session-scoped). Session entry count stays on the Paper Journal tab.">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
@@ -801,10 +801,7 @@
 
       <!-- LEFT: BTC combined -->
       <div class="card" data-aos="fade-up" data-aos-delay="160" id="btc-analysis-panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <h2 style="margin-bottom:0;">&#8383; BTC</h2>
-          <div class="status-bar" id="btc-signal-badges"></div>
-        </div>
+        <h2 style="margin-bottom:8px;">&#8383; BTC</h2>
         <div class="status-hero crypto-hero-seven">
           <div class="hero-item"><div class="hero-val" id="btc-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">BTC Price</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-htf-bias">-</div><div class="hero-lbl">4H Bias</div></div>
@@ -892,7 +889,7 @@
 
     </div>
 
-    <!-- ETH + XRP (same lag-style gates as SOL; XRP dump-hedge uses book logic — panels show XRP–BTC context) -->
+    <!-- ETH + XRP macro panels (SOL-style lag gates; XRP–BTC correlation context) -->
     <div class="crypto-grid three">
 
       <div class="card" data-aos="fade-up" data-aos-delay="320" id="eth-analysis-panel">
@@ -1202,14 +1199,6 @@
         </table>
     </div>
 
-    <!-- Session History -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
-        <h2>Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
-        <div id="session-history-body" style="font-size:0.78rem;">
-            <p style="color:var(--text-muted);">Loading sessions...</p>
-        </div>
-    </div>
-
     <!-- Analytics Charts -->
     <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
         <div class="card" data-aos="fade-up">
@@ -1296,6 +1285,17 @@
         </div>
     </div>
 
+    <!-- Past sessions: wide table (same API as Test runs); row click loads session in journal above) -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="session-history-card">
+        <h2 style="margin-bottom:4px;">Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
+        <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
+            Completed and archived paper runs with per-strategy PnL. Click a row to load that session into the Paper Trade Journal (same API as Test runs above).
+        </p>
+        <div id="session-history-body" style="font-size:0.78rem;">
+            <p style="color:var(--text-muted);">Loading sessions...</p>
+        </div>
+    </div>
+
     <!-- AI Usage -->
     <div class="card" data-aos="fade-up" id="ai-usage-panel" style="margin-top:16px;">
         <h2>AI System Usage</h2>
@@ -1313,35 +1313,16 @@
     <div id="view-backtest" style="display:none;">
 
     <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:4px;margin-bottom:14px;">
-        <strong style="color:var(--tm);">While the bot is running:</strong> Use the buttons below — backtests start as a subprocess and do not replace the live process. For one-off CLI runs, use the Commands tab.
+        <strong style="color:var(--tm);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). One-off CLI runs: Commands tab.
     </div>
 
     <!-- Backtest Controls -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <h2>Backtest Controls</h2>
         <div class="controls">
-            <button class="btn-sm btn-purple" id="backtest-start-btn" onclick="startBacktest()">Run Backtest</button>
             <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
-                <option value="">-- Crypto --</option>
-                <option value="BTC-30">BTC 30m</option>
-                <option value="BTC-15">BTC 15m</option>
-                <option value="BTC-5">BTC 5m</option>
-                <option value="SOL-30">SOL 30m</option>
-                <option value="SOL-15">SOL 15m</option>
-                <option value="SOL-5">SOL 5m</option>
-                <option value="ETH-30">ETH 30m</option>
-                <option value="ETH-15">ETH 15m</option>
-                <option value="ETH-5">ETH 5m</option>
-                <option value="HYPE-30">HYPE 30m</option>
-                <option value="HYPE-15">HYPE 15m</option>
-                <option value="HYPE-5">HYPE 5m</option>
-                <option value="XRP-30">XRP 30m</option>
-                <option value="XRP-15">XRP 15m</option>
-                <option value="XRP-5">XRP 5m</option>
+                <option value="">-- Loading scopes from settings… --</option>
             </select>
-            <input type="date" id="crypto-bt-test-start"
-                title="Optional: walk-forward test-start date. Data before this date = TRAIN (tune here). Data from this date = TEST (validate only, never tune on it). Leave blank for in-sample run."
-                style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
             <label title="Consult data/ai_call_log/*.jsonl and replay the AI decisions live made. Backtest skips entries live's AI rejected." style="font-size:0.78rem;display:inline-flex;align-items:center;gap:4px;">
                 <input type="checkbox" id="crypto-bt-ai-replay" onchange="updateAiReplayInfo()">
                 <span>AI replay</span>
@@ -1351,7 +1332,7 @@
                 <span>strict</span>
             </label>
             <span id="ai-replay-info" style="font-size:0.7rem;color:var(--text-muted);"></span>
-            <button class="btn-sm btn-purple" onclick="startCryptoBacktest()">Run Crypto BT</button>
+            <button class="btn-sm btn-purple" type="button" id="crypto-bt-run-btn" onclick="startCryptoBacktest()">Run Crypto BT</button>
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
     </div>
@@ -1606,20 +1587,28 @@ const EXIT_REASON_COLORS = {
 };
 const UNKNOWN_EXIT_REASON_COLOR = '#34495e';
 
-// ── Design handoff helpers (vHTubxNudMcUB1Oe4FhHPA) ──────────────────────────
+// ── Canonical strategy colors (single source for pills, chart markers, journal, scan rows, BT cards, canvas charts) ──
 window.STRATS = {
-    bitcoin: '#3b82f6',
-    sol_lag: '#a78bfa',
-    eth_lag: '#22d3ee',
+    bitcoin: '#f59e0b',
+    sol_lag: '#a855f7',
+    eth_lag: '#627eea',
     hype_lag: '#f97316',
-    xrp_lag: '#fbbf24',
+    xrp_lag: '#38bdf8',
     weather: '#10b981',
-    // Journal / API strategy ids (same palette as *_lag display names)
-    sol_macro: '#a78bfa',
-    eth_macro: '#22d3ee',
+    sol_macro: '#a855f7',
+    eth_macro: '#627eea',
     hype_macro: '#f97316',
-    xrp_macro: '#fbbf24',
+    xrp_macro: '#38bdf8',
+    consensus: '#22d3ee',
+    unknown: '#64748b',
 };
+
+/** Hex for any strategy id (or chart bucket); never returns CSS `var()` — safe for canvas + marker APIs. */
+function stratHex(id) {
+    const k = String(id || '').trim();
+    if (window.STRATS && window.STRATS[k]) return window.STRATS[k];
+    return '#94a3b8';
+}
 
 function stratPill(name) {
     var c = window.STRATS[name] || '#888';
@@ -2027,11 +2016,11 @@ function switchMainView(which, opts) {
         if (which === 'journal' && typeof loadJournalSessionList === 'function') {
             loadJournalSessionList();
             loadAISummary();
+            loadSessionHistory();
             fetchAll();
         }
         if (which === 'performance') {
             loadLivePerformance();
-            loadSessionHistory();
             setTimeout(function() {
                 if (typeof loadAllocationChart === 'function') loadAllocationChart();
                 if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
@@ -2245,6 +2234,8 @@ async function fetchAll() {
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
     const needUpdownWr = needLive || needPerformance;
+    /** Journal + Performance both show session rollup; summary must be fetched for either. */
+    const needJournalSummary = needJournal || needPerformance;
     let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR;
     try {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR] = await Promise.all([
@@ -2252,7 +2243,7 @@ async function fetchAll() {
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
             needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
-            needJournal ? fetchT('/api/journal/summary') : Promise.resolve(null),
+            needJournalSummary ? fetchT('/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
             fetchT('/api/exposure'),
             needLive ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
@@ -2309,12 +2300,12 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] backtest:', e); }
 
     try {
-        if (needJournal && journalR?.ok) {
+        if (journalR?.ok && needJournalSummary) {
             const j = await journalR.json();
-            if (!window._journalViewSessionId) {
+            if (needJournal && !window._journalViewSessionId) {
                 updateJournal(j);
-                updateSessionSummary(j);
             }
+            updateSessionSummary(j);
         }
     } catch (e) { console.error('[dashboard] journal:', e); }
 
@@ -2424,13 +2415,10 @@ function formatDecisionGateDigest(dg) {
         _gateChip(dg.hard_skip_if_unavailable ? 'hard-skip on' : 'fallback allowed', dg.hard_skip_if_unavailable ? 'good' : 'warn'),
         _gateChip(`floor default ${floors.default_min_score ?? '?'}`, 'good'),
         _gateChip(`BTC floor ${floors.btc_neutral_15m_min_score ?? '?'}`, 'good'),
-        _gateChip(`HYPE floor ${floors.hype_15m_buy_yes_min_score ?? '?'}`, 'good'),
     ];
     if (oracleLanes.length) {
         for (const lane of oracleLanes.slice(0, 4)) chips.push(_gateChip(`oracle ${lane}`, 'good'));
     }
-    const hype = lanes.hype_macro || {};
-    if (hype.size_multiplier_15m_buy_yes) chips.push(_gateChip(`HYPE 15m ${hype.size_multiplier_15m_buy_yes}x`, 'warn'));
     if (blockParts.length) chips.push(_gateChip(`blocks ${blockParts.slice(0, 3).join(' · ')}`, 'hot'));
     return `<div class="decision-gate-line">${chips.join('')}</div>`;
 }
@@ -2582,9 +2570,6 @@ function applyHeroMetrics(d) {
     const dailyTrades = Number(p.daily_trades || 0);
     const tradesEl = document.getElementById('hero-trades');
     if (tradesEl) tradesEl.textContent = dailyTrades;
-    const fills = (s && (s.fills !== undefined && s.fills !== null)) ? Number(s.fills) : null;
-    const tradesSub = document.getElementById('hero-trades-sub');
-    if (tradesSub) tradesSub.textContent = (fills != null) ? ('fills this session: ' + fills) : '';
 
 }
 
@@ -2705,7 +2690,7 @@ function updateStatus(d) {
                 <td>${pos.outcome}</td><td>${pos.size?.toFixed(1) || pos.size} ($${((pos.size||0)*(pos.entry_price||0)).toFixed(2)})</td>
                 <td>${pos.entry_price?.toFixed(3)}</td><td>${(pos.current_price||pos.entry_price)?.toFixed(3)}</td>
                 <td class="${pnlCls}">$${(pos.pnl||0).toFixed(2)}</td>
-                <td><span class="badge badge-blue">${pos.strategy}</span></td>
+                <td>${stratPillHTML(pos.strategy || '?')}</td>
             </tr>`;
         }).join('');
     } else {
@@ -2744,7 +2729,8 @@ function updateMetrics(d) {
         return Math.floor(ago/3600) + 'h ago';
     }
 
-    function sigBox(strat, color, label) {
+    function sigBox(strat, label) {
+        const color = stratHex(strat);
         const m = d[strat] || {};
         const sigs = m.signals ?? 0;
         const closedTrades = m.trades || 0;
@@ -2769,12 +2755,12 @@ function updateMetrics(d) {
     }
 
     boxes.innerHTML =
-        sigBox('bitcoin', 'var(--green)', 'BTC Signals') +
-        sigBox('sol_macro', 'var(--purple)', 'SOL Signals') +
-        sigBox('eth_macro', '#fb923c', 'ETH Signals') +
-        sigBox('hype_macro', '#a78bfa', 'HYPE Signals') +
-        sigBox('xrp_macro', '#38bdf8', 'XRP Signals') +
-        sigBox('weather', '#86efac', 'Weather Signals');
+        sigBox('bitcoin', 'BTC Signals') +
+        sigBox('sol_macro', 'SOL Signals') +
+        sigBox('eth_macro', 'ETH Signals') +
+        sigBox('hype_macro', 'HYPE Signals') +
+        sigBox('xrp_macro', 'XRP Signals') +
+        sigBox('weather', 'Weather Signals');
 
     const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', weather:'Event-based'};
     const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', weather:'Independent'};
@@ -2830,12 +2816,12 @@ function renderScanSignals() {
     if (!sigs.length) { el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">No ${currentScanFilter} signals in latest scan.</p>`; return; }
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
-        const colors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
+        const hx = stratHex(s.strategy);
         const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
-            <span class="badge" style="background:${colors[s.strategy]||'var(--text-muted)'}22;color:${colors[s.strategy]||'var(--text-muted)'};min-width:32px;text-align:center;">${badge}</span>
+            <span class="badge" style="background:${hx}22;color:${hx};min-width:32px;text-align:center;">${badge}</span>
             <span class="signal-action" style="color:${actionColor}">${s.action||''}</span>
             <span class="signal-market" title="${(s.market_question||'').replace(/"/g,'&quot;')}">${(s.market_question||s.market_id||'').slice(0,55)}</span>
             <span class="signal-meta">@${(s.price||0).toFixed(3)} $${(s.size||0).toFixed(0)} edge=${(s.edge||0).toFixed(2)}</span>
@@ -3087,19 +3073,16 @@ async function startCryptoBacktest() {
     let symbol, window;
     [symbol, window] = val.split('-');
     window = parseInt(window, 10);
-    const testStart = (document.getElementById('crypto-bt-test-start')?.value || '').trim();
     const aiReplay = !!document.getElementById('crypto-bt-ai-replay')?.checked;
     const aiReplayStrict = !!document.getElementById('crypto-bt-ai-replay-strict')?.checked;
-    const btn = document.querySelector('button[onclick="startCryptoBacktest()"]');
+    const btn = document.getElementById('crypto-bt-run-btn');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
-    const splitLabel = testStart ? ` (test from ${testStart})` : ' ⚠ in-sample';
     const aiLabel = aiReplay ? (aiReplayStrict ? ' +ai-replay(strict)' : ' +ai-replay') : '';
-    status.textContent = `Running ${symbol} ${window}m backtest${splitLabel}${aiLabel}…`;
+    status.textContent = `Running ${symbol} ${window}m backtest${aiLabel}…`;
     status.style.color = 'var(--yellow)';
     try {
         const body = {symbol, window};
-        if (testStart) body.test_start = testStart;
         if (aiReplay) { body.ai_replay = true; if (aiReplayStrict) body.ai_replay_strict = true; }
         const r = await fetch('/api/backtest/start', {
             method: 'POST',
@@ -3137,23 +3120,49 @@ async function startCryptoBacktest() {
     }
 }
 
-async function startBacktest() {
-    const btn = document.getElementById('backtest-start-btn');
-    const status = document.getElementById('process-status-bt');
-    btn.disabled = false;
-    status.textContent = 'Legacy rigorous backtests were removed. Use the crypto backtest controls on this tab.';
-    status.style.color = 'var(--yellow)';
-}
-
 async function loadLivePerformance() {
     // Single source of truth: fetchAll already updates all Performance cards/widgets
     // with per-endpoint guards. Reuse it instead of maintaining a second render path.
     await fetchAll();
     if (_currentMainView() === 'performance') {
-        loadSessionHistory();
         if (typeof loadAllocationChart === 'function') loadAllocationChart();
         if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
     }
+}
+
+/** Populate crypto backtest dropdown from /api/backtest/reports.live_scope (settings.yaml). */
+function rebuildCryptoBacktestSelect(scope) {
+    const sel = document.getElementById('crypto-bt-select');
+    if (!sel) return;
+    const prev = sel.value;
+    const FALLBACK_CRYPTO = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+        strategy_key,
+        symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+        enabled: true,
+    }));
+    const sc = scope && Array.isArray(scope.crypto_strategies) ? scope.crypto_strategies : FALLBACK_CRYPTO;
+    const windows = scope && scope.windows && scope.windows.length ? scope.windows : [5, 15, 30];
+    const enabled = sc.filter(row => row.enabled);
+    sel.innerHTML = '';
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = enabled.length
+        ? '-- Enabled strategies (settings.yaml) --'
+        : '-- No crypto strategies enabled in settings.yaml --';
+    sel.appendChild(opt0);
+    for (const row of enabled) {
+        const sym = row.symbol || '';
+        const sk = row.strategy_key || '';
+        for (let i = windows.length - 1; i >= 0; i--) {
+            const w = windows[i];
+            const o = document.createElement('option');
+            o.value = sym + '-' + w;
+            o.textContent = sym + ' ' + w + 'm  (' + sk + ')';
+            sel.appendChild(o);
+        }
+    }
+    if (prev && Array.from(sel.options).some(opt => opt.value === prev))
+        sel.value = prev;
 }
 
 function updateBacktest(d) {
@@ -3165,6 +3174,7 @@ function updateBacktest(d) {
     // Get the single latest report for a specific symbol+window combo.
     // Accepts both new format (report_type='crypto_updown') and old format (symbol present, no report_type).
     function isCryptoReport(r) {
+        if (r.report_type === 'xrp_dump_hedge_sim' || r.report_type === 'weather') return false;
         return r.report_type === 'crypto_updown' || (r.symbol && r.window_minutes && !r.per_strategy_metrics);
     }
     function latestCryptoReport(sym, win) {
@@ -3181,19 +3191,24 @@ function updateBacktest(d) {
             })[0] || null;
     }
 
-    function cryptoCard(sym, win) {
+    function cryptoCard(sym, win, strategyKey) {
         const r = latestCryptoReport(sym, win);
-        const symColor = sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#a78bfa' : '#38bdf8';
-        const header = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        const symColor = stratHex(strategyKey) || (
+            sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#f97316' : '#38bdf8'
+        );
+        const keyLine = strategyKey
+            ? `<div style="font-family:IBM Plex Mono,monospace;font-size:0.68rem;color:var(--tm);margin-bottom:6px;font-weight:600;">${strategyKey}</div>`
+            : '';
+        const header = keyLine + `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
             <span style="background:${symColor};color:#000;padding:2px 8px;border-radius:4px;font-weight:700;font-size:0.8rem;">${sym}</span>
-            <span style="font-size:1rem;font-weight:700;">${win}m Windows</span>
+            <span style="font-size:1rem;font-weight:700;">${win}m</span>
         </div>`;
         if (!r) {
             return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
                 ${header}
                 <div style="color:var(--text-muted);font-size:0.82rem;text-align:center;padding:10px 0;">
                     Not yet run<br>
-                    <span style="font-size:0.75rem;">Use "Run Crypto BT" → ${sym} ${win}m</span>
+                    <span style="font-size:0.75rem;">Run Crypto BT · ${sym} ${win}m</span>
                 </div>
             </div>`;
         }
@@ -3253,8 +3268,26 @@ function updateBacktest(d) {
         </div>`;
     }
 
+    rebuildCryptoBacktestSelect(d.live_scope);
+
+    const FALLBACK_SCOPE = {
+        crypto_strategies: ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+            strategy_key,
+            symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+            enabled: true,
+        })),
+        windows: [5, 15, 30],
+        weather_enabled: false,
+    };
+    const scope = d.live_scope && d.live_scope.crypto_strategies ? d.live_scope : FALLBACK_SCOPE;
+    const stratRowsEnabled = scope.crypto_strategies.filter(row => row.enabled);
+    const wins = scope.windows && scope.windows.length ? scope.windows : [5, 15, 30];
+
     // ── Build HTML ───────────────────────────────────────────────────────────
     let html = '';
+    html += `<p style="font-size:0.74rem;color:var(--text-muted);margin:0 0 12px;line-height:1.45;font-family:'IBM Plex Mono',monospace;">
+        Crypto rows = <strong>strategies.*.enabled</strong> in settings.yaml · windows = live 5m / 15m / 30m buckets.
+        Weather only if <strong>strategies.weather.enabled</strong>.</p>`;
     if (latestCompleted) {
         function formatAge(ts) {
             if (!ts) return '';
@@ -3287,50 +3320,47 @@ function updateBacktest(d) {
         </div>`;
     }
 
-    // ── Section 1: Bitcoin Strategy ──────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        Bitcoin Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('BTC', 30)}
-        ${cryptoCard('BTC', 15)}
-        ${cryptoCard('BTC', 5)}
-    </div>`;
+    if (!stratRowsEnabled.length) {
+        html += `<div style="padding:12px;border:1px dashed var(--border);border-radius:6px;color:var(--yellow);font-size:0.82rem;">
+            No crypto strategies enabled in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> — backtest rows mirror nothing from live.<br/>
+            <span style="color:var(--text-muted);font-size:0.75rem;">Enable <code>bitcoin</code> / <code>*_macro</code> entries under <code>strategies</code>.</span></div>`;
+    } else {
+        for (let ri = 0; ri < stratRowsEnabled.length; ri++) {
+            const row = stratRowsEnabled[ri];
+            html += `<h3 style="margin:${ri === 0 ? '0' : '14px'} 0 8px;font-size:0.9rem;letter-spacing:0.03em;color:var(--text-muted);">
+                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">${row.strategy_key}</span>
+                <span style="font-size:0.88em;color:var(--tm);"> · ${row.symbol} up/down</span></h3>`;
+            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
+            for (let i = wins.length - 1; i >= 0; i--) {
+                html += cryptoCard(row.symbol, wins[i], row.strategy_key);
+            }
+            html += `</div>`;
+        }
+    }
 
-    // ── Section 2: SOL Macro Strategy ──────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        SOL Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('SOL', 30)}
-        ${cryptoCard('SOL', 15)}
-        ${cryptoCard('SOL', 5)}
-    </div>`;
-
-    // ── Section 3: ETH Macro Strategy — Updown ─────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        ETH Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('ETH', 30)}
-        ${cryptoCard('ETH', 15)}
-        ${cryptoCard('ETH', 5)}
-    </div>`;
-
-    // ── Section 4: HYPE Macro Strategy — Updown ───────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        HYPE Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('HYPE', 30)}
-        ${cryptoCard('HYPE', 15)}
-        ${cryptoCard('HYPE', 5)}
-    </div>`;
-
-    // ── Section 5: XRP Macro Strategy ───────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        XRP Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('XRP', 30)}
-        ${cryptoCard('XRP', 15)}
-        ${cryptoCard('XRP', 5)}
-    </div>`;
+    if (scope.weather_enabled) {
+        const weatherReports = allReports.filter(r => r.report_type === 'weather');
+        const sortWx = (a, b) => String(b.run_at || b.filename || '').localeCompare(String(a.run_at || a.filename || ''));
+        const latestWx = weatherReports.sort(sortWx)[0];
+        if (latestWx) {
+            const wlp = Number(latestWx.total_pnl != null ? latestWx.total_pnl : 0);
+            const wr = ((latestWx.win_rate || 0) * 100).toFixed(1);
+            html += `<h3 style="margin:12px 0 8px;font-size:0.9rem;letter-spacing:0.04em;color:var(--text-muted);">
+                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">weather</span>
+                <span style="font-size:0.88em;color:var(--tm);"> · same strategy key as journal</span></h3>`;
+            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
+            html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:220px;flex:1;">
+                <div style="font-weight:700;margin-bottom:6px;">${stratPillHTML('weather')}</div>
+                <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:6px;">${(latestWx.run_at||'').replace('T',' ').slice(0,19)}</div>
+                <div style="font-size:0.82rem;line-height:1.5;">
+                    Signals: <strong>${latestWx.signals_generated ?? '—'}</strong> · W/L: <strong>${latestWx.wins ?? 0}/${latestWx.losses ?? 0}</strong><br/>
+                    Win rate: <strong>${wr}%</strong><br/>
+                    Total PnL: <strong style="color:${wlp>=0?'var(--green)':'var(--red)'};">$${wlp.toFixed(2)}</strong>
+                </div>
+            </div>`;
+            html += `</div>`;
+        }
+    }
 
     // ── Section 4: Rigorous multi-strategy ───────────────────────────────────
     const rigorous = allReports.filter(r => r.per_strategy_metrics || r.test_aggregate);
@@ -3349,8 +3379,7 @@ function updateBacktest(d) {
                 const ta = testAgg[s] || [0,0];
                 const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
                 const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                const stratColors = {bitcoin:'badge-red',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
-                html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td><span class="badge ${stratColors[s]||'badge-blue'}">${s}</span></td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
+                html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td>${stratPillHTML(s)}</td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
             });
         });
         html += '</tbody></table>';
@@ -3531,7 +3560,6 @@ function updateJournal(d) {
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
     const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
-    const stratColors = {bitcoin:'var(--green)',sol_macro:'var(--purple)',eth_macro:'#fb923c',hype_macro:'#a78bfa',xrp_macro:'#38bdf8',weather:'#86efac'};
     const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',weather:'WX'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
@@ -3542,7 +3570,7 @@ function updateJournal(d) {
             const trades = v.trades || 0;
             const pnl = v.pnl || 0;
             const wr = ((v.win_rate||0)*100).toFixed(0);
-            const color = stratColors[s] || 'var(--text-muted)';
+            const color = stratHex(s);
             const label = stratLabels[s] || s.toUpperCase();
             const dim = trades === 0 ? ';opacity:0.45' : '';
             return `<div style="font-size:0.78rem;padding:4px 10px;background:rgba(0,229,255,0.03);border:1px solid var(--border);border-radius:3px${dim};">
@@ -3615,9 +3643,8 @@ async function loadJournalTab(tab) {
             el.innerHTML = '<table><thead><tr><th>Strategy</th><th>Action</th><th>Market</th><th>Size</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Reason</th></tr></thead><tbody>' +
                 d.trades.slice(-50).reverse().map(t => {
                     const pnlCls = (t.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    const colors = {bitcoin:'badge-green',sol_macro:'badge-purple',eth_macro:'badge-yellow',hype_macro:'badge-purple',xrp_macro:'badge-blue',weather:'badge-green'};
                     return `<tr>
-                        <td><span class="badge ${colors[t.strategy]||'badge-blue'}">${t.strategy||'?'}</span></td>
+                        <td>${stratPillHTML(t.strategy||'?')}</td>
                         <td>${t.action||''}</td>
                         <td title="${(t.market_question||'').replace(/"/g,'&quot;')}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(t.market_question||'').slice(0,40)}</td>
                         <td>$${(t.size||0).toFixed(0)}</td>
@@ -3638,10 +3665,11 @@ async function loadJournalTab(tab) {
             el.innerHTML = d.entries.slice(-200).reverse().map(e => {
                 const ts = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : '';
                 const evtColor = evtColors[e.event] || 'var(--text)';
+                const stCol = stratHex(e.strategy);
                 return `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid rgba(30,42,58,0.3);font-size:0.75rem;">
                     <span style="color:var(--text-muted);min-width:65px;">${ts}</span>
                     <span style="color:${evtColor};font-weight:600;min-width:50px;">${e.event}</span>
-                    <span style="color:var(--text-muted);min-width:55px;">${e.strategy||''}</span>
+                    <span style="color:${stCol};font-weight:600;min-width:72px;overflow:hidden;text-overflow:ellipsis;">${e.strategy||''}</span>
                     <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.action||''} ${(e.market_question||'').slice(0,35)}</span>
                     <span style="min-width:55px;text-align:right;">$${(e.size||0).toFixed(0)}</span>
                     <span style="min-width:50px;text-align:right;color:${(e.pnl||0)>=0?'var(--green)':'var(--red)'};">${e.pnl ? '$'+e.pnl.toFixed(2) : ''}</span>
@@ -4449,6 +4477,7 @@ function updateHYPEAnalysis(d) { updateAltLagAnalysis(d, 'hype'); }
 function updateXRPAnalysis(d) { updateAltLagAnalysis(d, 'xrp'); }
 
 function updateExitReasons(d) {
+    const $ = (id) => document.getElementById(id);
     const bar = $('exit-reasons-bar');
     const legend = $('exit-reasons-legend');
     const empty = $('exit-reasons-empty');
@@ -4550,10 +4579,6 @@ function updateLivePerf(d) {
         return;
     }
     const ws = d.kelly_state._window_stats;
-    const stratColors = {
-        bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c',
-        hype_macro: '#a78bfa', xrp_macro: '#38bdf8',
-    };
     const stratLabel = {
         bitcoin: 'BTC', sol_macro: 'SOL', eth_macro: 'ETH',
         hype_macro: 'HYPE', xrp_macro: 'XRP',
@@ -4567,7 +4592,7 @@ function updateLivePerf(d) {
     let html = `<div style="font-weight:600;margin-bottom:6px;font-size:0.75rem;">Kelly Sizing — Per Window</div>`;
     html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;">`;
     stratKeys.forEach(([strat, v]) => {
-        const color = stratColors[strat] || '#7a8da0';
+        const color = stratHex(strat);
         const label = stratLabel[strat] || strat;
         const frac = Number(v?.fraction || 0) * 100;
         const win5 = ws?.[strat]?.['5m'] || {};
@@ -4710,9 +4735,10 @@ function updateTradeJourney(payload) {
         const bucket = t.updown_bucket || '';
         const reason = (t.exit_reason || '').slice(0, 48);
         return `<div style="border-bottom:1px solid var(--border);padding:6px 0;">
-            <div><span style="color:var(--cyan);font-weight:600;">${esc(strat)}</span>
-            <span style="color:var(--text-muted);font-size:0.68rem;margin-left:6px;">${esc(bucket)}</span>
-            <span style="float:right;font-weight:700;color:${pnlCol};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            ${strat ? stratPillHTML(strat) : ''}
+            <span style="color:var(--text-muted);font-size:0.68rem;">${esc(bucket)}</span>
+            <span style="margin-left:auto;font-weight:700;color:${pnlCol};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</span></div>
             <div style="color:var(--text-muted);font-size:0.7rem;margin-top:2px;" title="${esc(t.market_question)}">${esc(q)}${(t.market_question || '').length > 72 ? '…' : ''}</div>
             ${reason ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;">exit: ${esc(reason)}</div>` : ''}
         </div>`;
@@ -4730,43 +4756,11 @@ async function fetchTradeJourney() {
 }
 
 // ─── CRYPTO SIGNAL STATUS PANEL ───────────────────────────────
-function syncCryptoGateSummaryBar() {
-    const el = document.getElementById('btc-signal-badges');
-    if (!el) return;
-    const rows = [['btc', 'BTC'], ['sol', 'SOL'], ['eth', 'ETH'], ['hype', 'HYPE'], ['xrp', 'XRP']];
-    const parts = [];
-    for (const [pfx, sym] of rows) {
-        const a30 = document.getElementById(pfx + '-30m-status-badge');
-        const a = document.getElementById(pfx + '-15m-status-badge');
-        const b = document.getElementById(pfx + '-5m-status-badge');
-        if (!a30 || !a || !b) continue;
-        const t30 = (a30.textContent || '\u2014').trim();
-        const t15 = (a.textContent || '\u2014').trim();
-        const t5 = (b.textContent || '\u2014').trim();
-        const s30 = t30.length > 22 ? t30.slice(0, 20) + '\u2026' : t30;
-        const s15 = t15.length > 22 ? t15.slice(0, 20) + '\u2026' : t15;
-        const s5 = t5.length > 22 ? t5.slice(0, 20) + '\u2026' : t5;
-        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-        parts.push(
-            '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;margin:2px 8px 2px 0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:rgba(4,6,10,0.55);max-width:200px;">' +
-            '<span style="font-weight:700;font-size:0.65rem;color:var(--cyan);">' + sym + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t30) + '">30m ' + s30 + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t15) + '">15m ' + s15 + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t5) + '">5m ' + s5 + '</span>' +
-            '</span>'
-        );
-    }
-    el.innerHTML = parts.length
-        ? '<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:flex-end;gap:2px;">' + parts.join('') + '</div>'
-        : '';
-}
-
 function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData) {
     const now = new Date().toLocaleTimeString();
     const stampEl = document.getElementById('signal-status-updated');
     if (!btcData && !solData && !ethData && !hypeData && !xrpData && !updownData) {
         if (stampEl) stampEl.textContent = '';
-        syncCryptoGateSummaryBar();
         return;
     }
     if (stampEl) stampEl.textContent = 'updated ' + now;
@@ -5159,7 +5153,6 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
     dashRefreshCryptoLiveTickers();
-    syncCryptoGateSummaryBar();
 }
 
 // ─── STRATEGY ALLOCATION DONUT CHART ─────────────────────────
@@ -5204,11 +5197,6 @@ async function loadAllocationChart() {
         if (w < 120) w = 400;
         canvas.width = w;
         const h = canvas.height = 220;
-
-        const colors = {
-            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
-            consensus: '#00bcd4', unknown: '#7a8da0'
-        };
 
         let counts = {};
         let subtitle = '';
@@ -5255,7 +5243,7 @@ async function loadAllocationChart() {
             ctx.arc(cx, cy, radius, startAngle, endAngle);
             ctx.arc(cx, cy, innerRadius, endAngle, startAngle, true);
             ctx.closePath();
-            ctx.fillStyle = colors[label] || '#7a8da0';
+            ctx.fillStyle = stratHex(label);
             ctx.fill();
             startAngle = endAngle;
         });
@@ -5282,7 +5270,7 @@ async function loadAllocationChart() {
         }
         labels.forEach((label, i) => {
             const pct = ((values[i] / total) * 100).toFixed(0);
-            ctx.fillStyle = colors[label] || '#7a8da0';
+            ctx.fillStyle = stratHex(label);
             ctx.fillRect(legendX, legendY - 5, 12, 12);
             ctx.fillStyle = '#c8d6e5';
             ctx.font = '11px "Cascadia Code", monospace';
@@ -5400,16 +5388,12 @@ async function loadStrategyPnLChart() {
         // Bars
         const totalBarSpace = chartRight - chartLeft;
         const spacing = totalBarSpace / labels.length;
-        const colors = {
-            bitcoin: '#00e676', sol_macro: '#e040fb', eth_macro: '#fb923c', hype_macro: '#a78bfa', xrp_macro: '#38bdf8', weather: '#86efac',
-            consensus: '#00bcd4', unknown: '#7a8da0'
-        };
 
         labels.forEach((label, i) => {
             const x = chartLeft + spacing * i + (spacing - barWidth) / 2;
             const val = values[i];
             const barH = (Math.abs(val) / maxAbs) * (chartHeight / 2);
-            const color = colors[label] || '#7a8da0';
+            const color = stratHex(label);
 
             // Bar
             ctx.fillStyle = color;
@@ -5470,6 +5454,7 @@ async function refreshDashboardData() {
         await fetchAll();
         if (typeof loadPnLChart === 'function') await loadPnLChart();
         if (typeof loadJournalSessionList === 'function') await loadJournalSessionList();
+        if (typeof loadSessionHistory === 'function' && _currentMainView() === 'journal') await loadSessionHistory();
         if (st) { st.textContent = 'Dashboard data refreshed.'; st.style.color = 'var(--green)'; setTimeout(() => { if (st.textContent === 'Dashboard data refreshed.') st.textContent = ''; }, 4000); }
     } catch (e) {
         if (st) { st.textContent = 'Refresh failed: ' + e; st.style.color = 'var(--red)'; }
@@ -5484,11 +5469,11 @@ if (_currentMainView() === 'journal') {
     loadPnLChart();
     loadAISummary();
     loadJournalSessionList();
+    loadSessionHistory();
 } else if (_currentMainView() === 'performance') {
     loadAllocationChart();
     loadStrategyPnLChart();
     loadLivePerformance();
-    loadSessionHistory();
 } else if (_currentMainView() === 'backtest') {
     loadBacktestReports();
 }
@@ -5536,10 +5521,10 @@ _registerInterval(() => {
     if (view === 'journal') {
         loadPnLChart();
         loadAISummary();
+        loadSessionHistory();
     } else if (view === 'performance') {
         loadAllocationChart();
         loadStrategyPnLChart();
-        loadSessionHistory();
     }
 }, 30000);
 
@@ -5645,11 +5630,11 @@ async function loadSessionHistory() {
         const sessions = data.sessions || [];
         const historySessions = sessions.filter(s => !s._is_current);
         if (!historySessions.length) {
-            countEl.textContent = '(0 past runs)';
+            if (countEl) countEl.textContent = '(0 past runs)';
             el.innerHTML = '<p style="color:var(--text-muted);">No completed test runs yet.</p>';
             return;
         }
-        countEl.textContent = `(${historySessions.length} past runs)`;
+        if (countEl) countEl.textContent = `(${historySessions.length} past runs)`;
 
         // Table layout
         let html = `<div class="session-history-wrap"><table class="session-history-table">
@@ -6135,55 +6120,19 @@ function _formatAltWatchlistTriggers(watchlist) {
         bits.join(' <span style="opacity:0.35">|</span> ');
 }
 
-/** Parse #rrggbb (6 hex); returns null if invalid */
-function _hexToRgbTrade(hex) {
-    var s = String(hex || '').trim();
-    var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s);
-    if (!m) return null;
-    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
-}
-function _rgbToHexTrade(r, g, b) {
-    function c(x) {
-        var n = Math.max(0, Math.min(255, Math.round(x)));
-        return n.toString(16).padStart(2, '0');
-    }
-    return '#' + c(r) + c(g) + c(b);
-}
-/** Shade: t<0 darkens toward black; t>0 lightens toward white (same hue family). */
-function _shadeHexTrade(hex, t) {
-    var rgb = _hexToRgbTrade(hex);
-    if (!rgb) return hex || '#888';
-    if (t < 0) {
-        var k = 1 + t;
-        return _rgbToHexTrade(rgb.r * k, rgb.g * k, rgb.b * k);
-    }
-    var u = Math.min(1, t);
-    return _rgbToHexTrade(
-        rgb.r + (255 - rgb.r) * u,
-        rgb.g + (255 - rgb.g) * u,
-        rgb.b + (255 - rgb.b) * u
-    );
-}
-
 function _tradeMarkersFromPoints(points, strategy) {
     // Strategy colors: STRATS includes both design keys (sol_lag) and runtime ids (sol_macro)
     const stratKey = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',xrp_macro:'XRP',hype_macro:'HYPE',weather:'WX'};
-    const stratColor = (window.STRATS && window.STRATS[strategy])
-        || '#94a3b8';
+    const stratColor = stratHex(strategy);
     const key = stratKey[strategy] || (strategy || '?').slice(0,3).toUpperCase();
-    // Same shapes as originally: win = circle, loss = square (PnL, not entry vs exit).
-    // When entry + exit times differ: darker at entry, lighter at exit (same hue).
-    var entryDarken = -0.44;
-    var exitLighten = 0.48;
+    // Win = circle, loss = square. Entry vs exit use the same hue so each strategy reads as one color on the chart.
     return (points || [])
         .filter((p) => p.strategy === strategy)
         .slice(-120)
         .flatMap((p) => {
             const pnl = p.pnl || 0;
             const sign = pnl >= 0 ? '+' : '';
-            const base = pnl >= 0 ? stratColor : _shadeHexTrade(stratColor, -0.35);
-            const cIn = _shadeHexTrade(base, entryDarken);
-            const cOut = _shadeHexTrade(base, exitLighten);
+            const markColor = pnl >= 0 ? stratColor : '#b91c1c';
             const txt = key + ' ' + sign + pnl.toFixed(2);
             const pos = pnl >= 0 ? 'belowBar' : 'aboveBar';
             const shape = pnl >= 0 ? 'circle' : 'square';
@@ -6195,7 +6144,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                 time: p.time,
                 position: pos,
                 shape: shape,
-                color: cIn,
+                color: markColor,
                 text: hasExit ? txt + ' ·in' : txt,
             };
             if (!hasExit) {
@@ -6207,7 +6156,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                     time: p.closed_at,
                     position: pos,
                     shape: shape,
-                    color: cOut,
+                    color: markColor,
                     text: txt + ' ·out',
                 },
             ];

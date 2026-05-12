@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-12-ai-replay-backtest",
+        "dashboard_ui_rev": "2026-05-12-ai-replay-on-strathex",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1409,11 +1409,52 @@ async def get_ai_call_log_stats():
 # ─── BACKTEST REPORTS ─────────────────────────────────────────────
 
 
+def _live_backtest_scope_from_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Backtest-tab scope aligned with configured live strategies (not historical reports)."""
+    strat = (cfg or {}).get("strategies") or {}
+    crypto_strategies: List[Dict[str, Any]] = []
+    for key, symbol in (
+        ("bitcoin", "BTC"),
+        ("sol_macro", "SOL"),
+        ("eth_macro", "ETH"),
+        ("hype_macro", "HYPE"),
+        ("xrp_macro", "XRP"),
+    ):
+        block = strat.get(key) or {}
+        crypto_strategies.append(
+            {
+                "strategy_key": key,
+                "symbol": symbol,
+                "enabled": bool(block.get("enabled", False)),
+            }
+        )
+    weather_cfg = strat.get("weather") or {}
+    return {
+        "crypto_strategies": crypto_strategies,
+        # Matches live slug routing buckets (scanner + updown_timeframe_label).
+        "windows": [5, 15, 30],
+        "weather_enabled": bool(weather_cfg.get("enabled", False)),
+    }
+
+
 @app.get("/api/backtest/reports")
 async def get_backtest_reports():
     report_dir = DATA_ROOT / "backtest" / "reports"
+    cfg_disk: Dict[str, Any] = {}
+    try:
+        if CONFIG_PATH.is_file():
+            with open(CONFIG_PATH, encoding="utf-8") as cf:
+                cfg_disk = yaml.safe_load(cf) or {}
+    except Exception:
+        cfg_disk = {}
+    live_scope = _live_backtest_scope_from_config(cfg_disk)
     if not report_dir.exists():
-        return {"reports": [], "latest": None, "latest_completed": None}
+        return {
+            "reports": [],
+            "latest": None,
+            "latest_completed": None,
+            "live_scope": live_scope,
+        }
     files = sorted(
         report_dir.glob("backtest_*.json"),
         key=lambda p: p.stat().st_mtime,
@@ -1454,8 +1495,14 @@ async def get_backtest_reports():
         sym = str(sym_raw).strip() if sym_raw is not None else ""
         wm_raw = data.get("window_minutes")
         crypto_key: Optional[Tuple[str, int]] = None
-        if data.get("report_type") == "crypto_updown" or (
-            sym
+        rt = data.get("report_type")
+        # Sim / auxiliary reports share symbol+window fields but must not occupy
+        # crypto up/down card slots (e.g. XRP 15m vs xrp_dump_hedge sim).
+        if rt in {"xrp_dump_hedge_sim"}:
+            pass
+        elif rt == "crypto_updown" or (
+            rt in (None, "")
+            and sym
             and wm_raw is not None
             and str(wm_raw).strip() != ""
             and not data.get("per_strategy_metrics")
@@ -1489,6 +1536,7 @@ async def get_backtest_reports():
         "reports": reports,
         "latest": reports[0] if reports else None,
         "latest_completed": latest_completed,
+        "live_scope": live_scope,
     }
 
 

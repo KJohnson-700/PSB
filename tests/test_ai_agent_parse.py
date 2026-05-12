@@ -406,7 +406,7 @@ def test_decision_layer_enforced_lane_config_helpers() -> None:
                     "hard_skip_if_unavailable_on_enforced": True,
                     "enforced_lanes": {
                         "bitcoin": ["neutral_15m", "marginal"],
-                        "hype_macro": ["marginal", "15m_buy_yes"],
+                        "hype_macro": ["marginal"],
                     },
                 },
             }
@@ -415,8 +415,9 @@ def test_decision_layer_enforced_lane_config_helpers() -> None:
 
     assert ag.decision_layer_lane_enforced("bitcoin", "neutral_15m") is True
     assert ag.decision_layer_lane_enforced("bitcoin", "5m") is False
-    assert ag.decision_layer_lane_enforced("hype_macro", "15m_buy_yes") is True
-    assert ag.decision_layer_hard_skip_unavailable("hype_macro", "15m_buy_yes") is True
+    assert ag.decision_layer_lane_enforced("hype_macro", "marginal") is True
+    assert ag.decision_layer_hard_skip_unavailable("hype_macro", "marginal") is True
+    assert ag.decision_layer_lane_enforced("hype_macro", "15m_buy_yes") is False
 
 
 def test_decision_layer_rejects_hold_and_action_mismatch() -> None:

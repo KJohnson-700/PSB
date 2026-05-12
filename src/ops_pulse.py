@@ -125,15 +125,13 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
             "enforced_lanes": [str(item) for item in enforced],
             "oracle": oracle_payload,
             "composite_floor": (
-                scfg.get("neutral_15m_min_composite_score")
-                if lane == "bitcoin"
-                else scfg.get("min_composite_score_15m_buy_yes")
+                scfg.get("neutral_15m_min_composite_score") if lane == "bitcoin" else None
             ),
             "shadow_required": bool(
                 scfg.get("neutral_15m_requires_shadow_portfolio", False)
-                or scfg.get("require_shadow_portfolio_15m_buy_yes", False)
+                if lane == "bitcoin"
+                else False
             ),
-            "size_multiplier_15m_buy_yes": scfg.get("calibration_size_multiplier_15m_buy_yes"),
         }
 
     return {
@@ -144,7 +142,6 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
         "floors": {
             "default_min_score": composite.get("default_min_score"),
             "btc_neutral_15m_min_score": composite.get("btc_neutral_15m_min_score"),
-            "hype_15m_buy_yes_min_score": composite.get("hype_15m_buy_yes_min_score"),
             "low_confidence_min_score": composite.get("low_confidence_min_score"),
         },
         "lanes": lane_payload,

@@ -71,6 +71,67 @@ existing callers in lockstep. Adding a new branch in `bitcoin.py` without
 mirroring it in `updown_engine.py` will silently produce backtest results
 that diverge from live.
 
+## 2026-05-12 — ETH 5m: add missing 0.02 MACD>signal tier (silent-noop fix)
+
+**`src/strategies/_core/eth_follow.py`:** `eth_5m_macd_score` tiers were
+`{0.06 bull cross, 0.04 hist>0+rising, 0 else, -0.05 against}`. Config
+knob `eth_follow_5m_min_adj: 0.02` (comment "lowered from 0.04 — easier
+5m entry in grindy tape") was a silent no-op because the scorer never
+emitted a value in (0, 0.04). Result: ETH 5m backtests had been
+producing zero trades. Added the 0.02 `macd_line > signal_line` tier
+(matching `sol_m5_macd_adj`). HYPE/XRP were checked and don't have the
+same shape of bug.
+
+## 2026-05-12 — Command Center strategy boxes + positions: use canonical `STRATS` / `stratHex`
+
+**`index.html`:** The six **strategy metric boxes** (BTC/SOL/ETH/HYPE/XRP/Weather signal counts) still used **hardcoded colors** (`var(--green)` for bitcoin, `#fb923c` for eth_macro, etc.), so the same strategy looked **different** from journal pills, scan badges, and chart markers. **`sigBox`** now takes `(strat, label)` and sets the big number color with **`stratHex(strat)`**. **Active positions** strategy column uses **`stratPillHTML`** instead of a generic cyan badge. Backtest weather summary card uses **`stratPillHTML('weather')`**. Removed unused **`_hexToRgbTrade` / `_shadeHexTrade`** helpers after marker color simplification. **`dashboard_ui_rev`:** **`2026-05-12-strategy-metric-boxes-strathex`**.
+
+## 2026-05-12 — Command Center: drop duplicate session fills line under Trades today
+
+**`index.html`:** Removed **`hero-trades-sub`** (`fills this session: N`) under the hero trades figure — it repeated the same count as **`daily_trades`** for many operators and read as redundant noise. Session-scoped entry counts remain on **Paper Trade Journal** (**Session fills**). Tooltip now states UTC day vs session scope. **`dashboard_ui_rev`:** **`2026-05-12-command-center-no-duplicate-trades-line`**.
+
+## 2026-05-12 — Scrub unused May 9 `15m_buy_yes` AI bridge
+
+Removed **`hype_macro`** enforced lane **`15m_buy_yes`**, **`updown_composite.hype_15m_buy_yes_min_score`**, and digest/UI wiring (`size_multiplier_15m_buy_yes`, hype floor chip). **`sol_macro`** up/down scoring lane is always **`default`** for AI enforcement checks; **XRP** **`entry_price_max_15m_buy_yes`** (price cap) is unchanged. Tests updated for lane-agnostic composite floor. **`dashboard_ui_rev`:** **`2026-05-12-scrub-15m-buy-yes-bridge-ui`**.
+
+## 2026-05-12 — Crypto updown replay: oracle basis uses 1m spot (not HTF close)
+
+**`UpdownBacktestEngine`:** `oracle_max_basis_bps` compared Chainlink to **`ta.current_price`**, which is the last **4h/1h** close before the window—often very stale vs a fresh oracle tick, so ETH (and other) backtests with oracle replay could show **zero trades** while the same run with `oracle_history=None` still produced signals. Basis now prefers **last 1m close strictly before `window_open`**, falling back to `ta.current_price` if 1m is missing (**`src/backtest/updown_engine.py`**). **`tests/test_backtest_oracle_replay.py`:** align ETH patches with **`_get_sol_htf_bias`**, keep **`_ohlcv_1m`** open≠close so windows can settle.
+
+## 2026-05-12 — Pytest and crypto CLI: explicit completion banners
+
+**`tests/conftest.py`** — **`pytest_sessionfinish`** prints a **`PYTEST COMPLETE`** footer (pass vs non-zero exit). **`scripts/run_backtest_crypto.py`** prints **`CRYPTO BACKTEST COMPLETE (SYMBOL Xm)`** after a successful full run.
+
+## 2026-05-12 — Dashboard Backtest: single Run Crypto BT button
+
+Removed legacy **Run Backtest** stub (duplicate UX; **`startBacktest()`** only warned about rigorous mode). **`Run Crypto BT`** uses **`crypto-bt-run-btn`**. **`dashboard_ui_rev`:** **`2026-05-12-backtest-single-run-btn`**.
+
+## 2026-05-12 — Dashboard Backtest: remove optional test-split date input
+
+Backtest tab no longer shows the walk-forward **`test_start`** date picker; dashboard runs stay full-range in-sample unless **`--test-start`** is passed from CLI. **`dashboard_ui_rev`:** **`2026-05-12-backtest-no-test-date-ui`**.
+
+## 2026-05-12 — Dashboard Backtest tab: mirrors live strategies from settings.yaml
+
+**`GET /api/backtest/reports`** adds **`live_scope`** (crypto **`strategies.*.enabled`**, **`windows`** [5,15,30] aligned with live routing buckets, **`weather_enabled`**). **`index.html`** renders only enabled journal keys (**`bitcoin`**, **`*_macro`**), dropdown options built from that scope, **weather** summary only when **`strategies.weather.enabled`**. **XRP dump-hedge** sim removed from dashboard UI (not live); **`xrp_dump_hedge_sim`** JSON remains excluded from crypto card dedupe in **`server.py`**. Weather reports use **`backtest_weather_*.json`** under **`data/backtest/reports/`**. **`dashboard_ui_rev`:** **`2026-05-12-backtest-live-scope`**.
+
+## 2026-05-12 — Live crypto macro direction rule: alt-first, BTC-secondary
+
+Operator correction: **all non-BTC live strategies must choose direction from the asset’s own alt indicators first**; BTC is secondary context/fallback and must not override a usable alt HTF side. Patched **`sol_macro.py`** base behavior and **`eth_macro.py`** so `direction_source: hybrid` no longer lets BTC/market proxy choose over ETH 1H. Important cleanup note: **`hype_macro.py`** and **`xrp_macro.py` currently inherit `SolMacroStrategy` in code while swapping their own services/market filters**, so they are affected by base-class behavior even though they are not SOL strategies and should retain their own oracle/data assumptions. Follow-up audit: split/rename the shared alt macro base or verify each subclass override so no HYPE/XRP/ETH path accidentally inherits SOL-specific assumptions.
+
+## 2026-05-11 — Dashboard: Performance Exit Reasons strip (undefined `$`)
+
+**`updateExitReasons`** called `$('…')` but **`$`** was only defined inside **`updateLivePerf`**, so successful **`/api/journal/exit-reason-summary`** responses threw **`ReferenceError`**, **`fetchAll` caught it**, and the bar stayed blank. Added local **`const $ = (id) => document.getElementById(id)`** inside **`updateExitReasons`**. **`dashboard_ui_rev`:** `2026-05-11-exit-reasons-strip-fix`.
+
+## 2026-05-11 — Dashboard: Performance tab polls journal summary for Session Summary
+
+**`fetchAll`** uses **`needJournalSummary = needJournal || needPerformance`** so **`GET /api/journal/summary`** runs on **Performance**, not only **Journal**. **`updateSessionSummary(j)`** always runs off that payload; **`updateJournal(j)`** still only when **Journal** and not archive-pinned. Fixes empty **Session Summary** card when staying on Performance. **`dashboard_ui_rev`:** `2026-05-11-performance-session-summary-poll`.
+
+## 2026-05-11 — Dashboard: Journal session history + cleaner BTC header
+
+- **Test Session History** moved **Performance → Journal** (after **Test runs**; same `/api/journal/sessions` + row click → `selectJournalSession`). **`loadSessionHistory()`** tied to Journal tab, journal poll, and refresh when Journal is active.
+- **BTC card:** removed **`#btc-signal-badges`** mini gate summary (duplicate of **Signal Gates** below). Removed **`syncCryptoGateSummaryBar`**.
+- **`dashboard_ui_rev`:** superseded by **Performance session-summary poll** bump (verify **`/health`**).
+
 ## 2026-05-11 — Dashboard: real 30m MACD & % moves on existing rows
 
 **SOL/BTC service:** `SOLAnalysis.macd_30m`, `BTCSOLCorrelation` 30m %-moves (1m×31), 120×1m pulls; **BTC** `TechnicalAnalysis.macd_30m` + **`get_full_analysis`**; **Hyperliquid** `"30m"` interval; **backtest** `_build_ta` populates `macd_30m`; **API:** `/api/bitcoin/analysis` macd 1h/30m/15m fields; alt payload `macd_30m_*`, `btc_move_30m`, `sol_move_30m`, `{alt}_move_30m`. **Dashboard:** BTC hero + meta strip MACD 30m; alt meta **MACD 30m \| 15m \| 5m \| Corr \| ATR**; hero **5·15·30m** Δ% triples. `dashboard_ui_rev` bumped.

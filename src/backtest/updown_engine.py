@@ -28,8 +28,8 @@ Signal fidelity
 ───────────────
 BTC: mirrors bitcoin.py exactly (HTF 3-vote with early_bull/early_bear/
      recovery, graduated 15m boost, anti-LTF gate, 5m candle momentum).
-SOL: mirrors sol_macro.py (1H EMA trend + 15m EMA alignment + 15m RSI for
-     HTF, SOL-specific LTF weights, 5m MACD with live weights).
+Non-BTC crypto: uses each alt's own 1H/15m/5m indicators as the primary
+     direction source; BTC remains secondary context/follow/correlation input.
      Lag/correlation signals are omitted (require live BTC feed).
      15m IQL + optional stricter 5m SELL gates (min m5_adj + min BTC-alt 1h
      correlation via aligned 1m bars) mirror live config when enabled.
@@ -636,6 +636,8 @@ class UpdownBacktestEngine:
     @staticmethod
     def _before(df: pd.DataFrame, t: pd.Timestamp) -> pd.DataFrame:
         """All rows with open_time strictly BEFORE t -- no look-ahead."""
+        if df is None or df.empty or "open_time" not in df.columns:
+            return pd.DataFrame()
         return df[df["open_time"] < t].copy()
 
     @staticmethod
@@ -1447,6 +1449,21 @@ class UpdownBacktestEngine:
         return round(size, 2)
 
     @staticmethod
+    def _last_1m_close_before(df_1m: pd.DataFrame, t: pd.Timestamp) -> Optional[float]:
+        """Spot proxy for oracle basis: last 1m close strictly before *t*.
+
+        Live strategies compare Chainlink vs exchange spot; replay TA's
+        ``current_price`` is the last *HTF* close (1h/4h) before *t*, which can
+        lag by up to nearly one HTF bar and blows up bogus basis vs oracle.
+        """
+        if df_1m is None or df_1m.empty or "close" not in df_1m.columns:
+            return None
+        sub = df_1m.loc[df_1m["open_time"] < t, "close"]
+        if sub.empty:
+            return None
+        return float(sub.iloc[-1])
+
+    @staticmethod
     def _oracle_price_at(
         oracle_times_ns: Optional[np.ndarray],
         oracle_prices: Optional[np.ndarray],
@@ -1548,7 +1565,7 @@ class UpdownBacktestEngine:
         else:  # SOL
             min_edge = _min_edge("sol")
 
-        # BTC uses 4h HTF candles; SOL uses 1h
+        # BTC uses 4h HTF candles; non-BTC crypto uses each alt's 1h HTF.
         htf_key = "4h" if is_btc else "1h"
 
         # Snap start to the nearest window boundary
@@ -1621,7 +1638,9 @@ class UpdownBacktestEngine:
                 if btc_ta is None:
                     current += step_td
                     continue
-                htf_bias = self._get_htf_bias(btc_ta, min_hist=self.min_4h_hist_magnitude)
+                # ETH live strategy is alt-first: ETH 1H/15m context chooses
+                # direction; BTC is retained for follow/quality filters below.
+                htf_bias = self._get_sol_htf_bias(ta, df_15m)
             else:
                 htf_bias = self._get_sol_htf_bias(ta, df_15m)
                 btc_ta = None
@@ -1726,7 +1745,9 @@ class UpdownBacktestEngine:
 
             oracle_price = self._oracle_price_at(oracle_times_ns, oracle_prices, window_open)
             if oracle_max_basis_bps is not None and oracle_price and oracle_price > 0:
-                basis_bps = ((ta.current_price - oracle_price) / oracle_price) * 10000.0
+                spot_basis = self._last_1m_close_before(data.get("1m", pd.DataFrame()), window_open)
+                spot_for_basis = spot_basis if spot_basis is not None else float(ta.current_price)
+                basis_bps = ((spot_for_basis - oracle_price) / oracle_price) * 10000.0
                 if abs(basis_bps) > float(oracle_max_basis_bps):
                     oracle_basis_skips += 1
                     current += step_td

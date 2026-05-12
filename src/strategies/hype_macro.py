@@ -1,8 +1,9 @@
 """
-HYPE Macro Strategy — BTC-to-HYPE correlation lag trading.
+HYPE Macro Strategy.
 
-Uses SolMacroStrategy architecture and gates, but swaps in Hyperliquid HYPE
-candle data via HyperliquidHypeService.
+HYPE is its own alt leg: HYPE spot/HTF/oracle data drives primary direction.
+BTC is secondary context only. The class still reuses the shared alt-macro base
+until that base is renamed/split, so keep HYPE-specific overrides explicit here.
 """
 import re
 from typing import Any, Dict, List
@@ -39,9 +40,10 @@ NON_HYPE_ASSET_TERMS = ("bitcoin", "btc", "solana", "ethereum", "ether", "xrp", 
 
 
 class HYPEMacroStrategy(SolMacroStrategy):
-    """HYPE macro strategy — same layered architecture as SOL macro."""
+    """HYPE macro strategy with HYPE-first direction and Hyperliquid data."""
 
     def _build_alt_service(self) -> HyperliquidHypeService:
+        """Build the HYPE data/oracle service; never use SOL spot for this lane."""
         hk = hyperliquid_kwargs_from_config(self._hyperliquid_cfg)
         return HyperliquidHypeService(
             alt_symbol="HYPEUSDT",
@@ -72,6 +74,10 @@ class HYPEMacroStrategy(SolMacroStrategy):
         )
         self._apply_strategy_config(rebuild_service=True)
         self._signal_strategy_name = "hype_macro"
+
+    def _alt_asset_code(self) -> str:
+        """Hard-code HYPE identity so shared-base naming cannot leak SOL labels."""
+        return "hype"
 
     def _is_solana_market(self, market: Market) -> bool:
         """Detect HYPE/Hyperliquid prediction markets."""

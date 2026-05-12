@@ -26,7 +26,7 @@ def _risk_manager() -> RiskManager:
     )
 
 
-def test_crypto_buy_position_counts_full_usd_cost():
+def test_crypto_buy_position_counts_share_cost():
     rm = _risk_manager()
     rm.active_positions["buy"] = Position(
         position_id="buy",
@@ -50,7 +50,7 @@ def test_crypto_buy_position_counts_full_usd_cost():
     )
 
     assert can_trade is True
-    assert size == 5.0
+    assert size == 10.0
     assert reason == "OK"
 
 
@@ -79,7 +79,7 @@ def test_crypto_buy_no_position_counts_usd_notional():
     )
 
     assert can_trade is True
-    assert size == 5.0
+    assert size == 11.0
     assert reason == "OK"
 
 
