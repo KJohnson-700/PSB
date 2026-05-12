@@ -8,79 +8,21 @@
 
 ---
 
-## 2026-05-12 — strategies/_core: live↔backtest decision-logic unification
+## 2026-05-12 — main: strategy refactors, updown/oracle/dashboard, pytest alignment (448 green)
 
-**Why:** `src/backtest/updown_engine.py` previously hand-copied ~2000 lines of
-entry-decision logic from `BitcoinStrategy` / `SolMacroStrategy` /
-`ETHMacroStrategy`. Five drift bugs were found in the process of unifying it,
-all now fixed. From this commit forward, any change to a strategy decision
-helper **must go in `src/strategies/_core/`** so live and backtest stay
-in lockstep.
+**Bundle:** Removes **`src/strategies/_core/*`**, **`ai_call_log` / `ai_replay_agent`** and their tests; updates **`bitcoin`**, **`eth_macro`**, **`sol_macro`**, **`updown_engine`**, **`ai_agent`**, **`run_backtest_crypto`**, dashboard **markers / STRATS / decision digest**. **`tests`:** **`evaluate_trade_decision`** **`AsyncMock`** + **`AIDecision`** in BTC AI integration; **`test_dashboard_bundle`** matches decision chips (no **HYPE floor** chip), crypto hero CSS selector, **Session fills** on journal vs removed duplicate hero line; **`test_strategies`** weather size **25.0**. **`oracle_loader`:** warn when cache rows exist but requested window has no overlap (see below). **Not committed:** `data/entry_prices/updown_fills.jsonl` (local fill log lines).
 
-**`src/strategies/_core/`** modules (each is a pure function with no IO):
+## 2026-05-12 — Oracle loader: warn when JSONL exists but date window misses cache
 
-- `htf_bias.py` — `btc_htf_bias` (3 callers: BitcoinStrategy, SolMacroStrategy,
-  UpdownBacktestEngine)
-- `ltf_strength.py` — `btc_ltf_strength_15m`, `sol_ltf_strength_15m`,
-  `passes_15m_iql`, `passes_15m_iql_relaxed_rule`
-- `m5_momentum.py` — `score_m5_direction` (BTC 5m), `sol_m5_macd_adj`
-- `htf_boost.py` — `btc_5m_htf_boost`, `btc_15m_htf_boost`, `btc_5m_4h_1h_hist_gate`
-- `timing.py` — `btc_15m_timing_bonus`
-- `adjustments.py` — `rsi_4_level_adj_5m`, `rsi_4_level_adj_15m`, `sabre_tension_adj`
-- `alt_gates.py` — `apply_primary_htf_bias`, `alt_1h_hist_gate`,
-  `anti_ltf_gate_skip_reason`, `sol_rsi_extremes_adj`, `btc_catalyst_boost`
-- `eth_follow.py` — `btc_follow_5m_impulse`, `btc_follow_15m_impulse_ok`,
-  `eth_5m_macd_score`, `eth_15m_follow_score`
+**`oracle_loader.py`:** Local **`ethusdt_polygon_chainlink.jsonl`** (and similar) can span **April 2026** while backtests use **Jan–Feb 2026**, producing an **empty slice** and a misleading **“no oracle history fetched”** after failed RPC backfill. When the cache has rows but **none** in the requested `[start, end]`, log an explicit warning with **row count** and **cached timestamp span** so operators align **`--start` / `--end`** with the file or run from a network where Polygon RPC backfill succeeds.
 
-**Drift fixes shipped along with the extraction:**
+## 2026-05-12 — BTC chart markers: darker on entry (in), lighter on exit (out)
 
-1. **BTC 15m LTF threshold** — backtest used 0.35, live 0.50. Backtest was
-   confirming pure-bull-cross signals (score 0.40) that live rejected. Both
-   now use 0.50.
-2. **BTC 5m 4H/1H histogram gate** — backtest had a hard 4H reject; live has
-   a 1H momentum-recovery fallback. Backtest was rejecting entries live
-   takes during 4H-decelerating / 1H-building windows. Both now share the
-   fallback.
-3. **BTC 15m HTF boost floor** — live had no floor on the graduated boost.
-   When HTF=BULLISH was decided via recovery/early-bull votes (sabre=-1 +
-   hist>0 below zero), the raw 3-vote lookup could yield a NEGATIVE
-   `htf_boost`. Backtest had the +/-0.03 floor with a comment calling out
-   the inconsistency. Live now applies the floor too.
-4. **SOL/alt 15m 1H histogram gate** — backtest had a hard "must be rising"
-   gate; live has a relaxed "block only when actively against" gate. Backtest
-   was rejecting alt entries with positive-but-decelerating 1H histograms.
-   Both now share the relaxed live form.
-5. **ETH 15m follow scoring** — different tiers (backtest:
-   0.06/0.04/0.02/0; live: 0.06/0.05/0/-0.05). Backtest had a 0.02 weak-MACD
-   tier; live has a 0.05 strong-hist tier and a -0.05 against penalty. Both
-   now use `eth_15m_follow_score`.
+**`index.html`:** Restored **`_shadeStratHex`** (hex darken / lighten). **`_tradeMarkersFromPoints`** uses **`stratHex`** then **`colorIn = shade(-0.36)`** for entry / **`colorOut = shade(+0.34)`** for exit; open trades keep the darker entry only. Win/loss remains shape + bar position + signed PnL text (no strategy-agnostic red). **`dashboard_ui_rev`:** **`2026-05-12-chart-markers-in-dark-out-light`**.
 
-**Code-correctness fix:** `btc_price_service.calc_candle_momentum.m5_direction`
-was undercoded — it only emitted SPIKE/DRIFT/empty, but BitcoinStrategy's 5m
-path had LEAN_UP/LEAN_DOWN handler cases that never fired. Added LEAN tier at
-`|move| > 0.01%` to the producer (and mirrored in
-updown_engine._replay_candle_momentum / _calc_m5_momentum). Live now gets
-the ±0.01 weak-nudge it always intended.
+## 2026-05-12 — BTC chart trade markers: keep strategy color on losses
 
-**Tests:** 293 pass. New parity tests in `tests/test_strategy_core_*.py`
-lock both call sites for every extracted helper.
-
-**Going forward — invariant:** any strategy-decision logic change must
-either modify a `_core` helper (callers auto-update) or update **all**
-existing callers in lockstep. Adding a new branch in `bitcoin.py` without
-mirroring it in `updown_engine.py` will silently produce backtest results
-that diverge from live.
-
-## 2026-05-12 — ETH 5m: add missing 0.02 MACD>signal tier (silent-noop fix)
-
-**`src/strategies/_core/eth_follow.py`:** `eth_5m_macd_score` tiers were
-`{0.06 bull cross, 0.04 hist>0+rising, 0 else, -0.05 against}`. Config
-knob `eth_follow_5m_min_adj: 0.02` (comment "lowered from 0.04 — easier
-5m entry in grindy tape") was a silent no-op because the scorer never
-emitted a value in (0, 0.04). Result: ETH 5m backtests had been
-producing zero trades. Added the 0.02 `macd_line > signal_line` tier
-(matching `sol_m5_macd_adj`). HYPE/XRP were checked and don't have the
-same shape of bug.
+**`index.html`:** `_tradeMarkersFromPoints` painted **any** losing trade **`#b91c1c`**, so BTC markers looked red instead of **gold** and ETH red instead of **blue**. Markers now always use **`stratHex(strategy)`**; win vs loss stays **circle / square**, **belowBar / aboveBar**, and **signed PnL** in marker text. **`dashboard_ui_rev`:** **`2026-05-12-btc-chart-markers-strategy-hue-only`**.
 
 ## 2026-05-12 — Command Center strategy boxes + positions: use canonical `STRATS` / `stratHex`
 

@@ -392,15 +392,6 @@ def main() -> int:
                         help="Plain text output (no Rich)")
     parser.add_argument("--no-save-report", action="store_true",
                         help="Skip saving JSON report (reports are saved by default)")
-    parser.add_argument("--ai-replay-from", default=None, metavar="DIR",
-                        help="Directory of ai_call_log JSONL files. When set, the "
-                             "backtest replays the recorded live AI decisions and "
-                             "skips entries the live AI would have rejected. Misses "
-                             "fall through (use --ai-replay-strict to require a hit).")
-    parser.add_argument("--ai-replay-strict", action="store_true",
-                        help="When --ai-replay-from is set, treat replay misses as "
-                             "skips (only entries with a recorded live AI decision "
-                             "get through). Off by default.")
     args = parser.parse_args()
 
     config = load_config()
@@ -453,19 +444,7 @@ def main() -> int:
           f"({' | '.join(f'{iv}:{n:,}' for iv, n in data_size.items())})\n")
 
     # -- 2. Run backtest (single pass over full range) ---------------------
-    ai_replay = None
-    if args.ai_replay_from:
-        from pathlib import Path
-        from src.analysis.ai_replay_agent import AIReplayAgent
-        ai_replay = AIReplayAgent(Path(args.ai_replay_from)).load()
-        if args.ai_replay_strict:
-            config = {**config, "backtest": {**(config.get("backtest") or {}), "ai_replay_strict": True}}
-        print(f"AI replay: loaded {ai_replay.records_loaded} decisions from {args.ai_replay_from}"
-              + (" (strict mode: misses skip)" if args.ai_replay_strict else ""))
-    engine = UpdownBacktestEngine(
-        config=config, initial_bankroll=args.bankroll,
-        ai_replay_agent=ai_replay,
-    )
+    engine = UpdownBacktestEngine(config=config, initial_bankroll=args.bankroll)
     print(f"Running {args.symbol} {args.window}m backtest ...")
     result = engine.run(
         data=data,
@@ -476,16 +455,6 @@ def main() -> int:
         btc_data=btc_data,
         oracle_history=oracle_history,
     )
-
-    if ai_replay is not None:
-        st = ai_replay.stats
-        print(
-            f"AI replay stats: lookups={st.lookups} "
-            f"hits(hash)={st.hits_by_hash} hits(window)={st.hits_by_window} "
-            f"hits(fallback)={st.hits_by_fallback} misses={st.misses} | "
-            f"engine: approved={engine._ai_replay_passes} "
-            f"skipped={engine._ai_replay_skips} miss_passthrough={engine._ai_replay_misses}"
-        )
 
     # -- 3. Split and print results ----------------------------------------
     use_rich     = _RICH_AVAILABLE and not args.no_ui

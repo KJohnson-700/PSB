@@ -18,21 +18,7 @@ from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
-from src.strategies._core import (
-    btc_follow_5m_impulse as _core_btc_follow_5m_impulse,
-)
-from src.strategies._core import (
-    eth_5m_macd_score as _core_eth_5m_macd_score,
-)
-from src.strategies._core import (
-    eth_15m_follow_score as _core_eth_15m_follow_score,
-)
-from src.strategies.sol_macro import (
-    SolMacroSignal,
-    SolMacroStrategy,
-    _ai_window_args,
-    macd_bearish_momentum_ok,
-)
+from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -251,22 +237,85 @@ class ETHMacroStrategy(SolMacroStrategy):
         return False
 
     def _btc_follow_5m_impulse_score(self, momentum: CandleMomentum, allowed_side: str) -> tuple[float, List[str]]:
-        """BTC 5m impulse confirmation. Delegates to strategies._core."""
-        r = _core_btc_follow_5m_impulse(momentum, allowed_side)
-        return r.score, r.reasons
+        direction = momentum.m5_direction
+        reasons: List[str] = []
+        score = 0.0
+        if allowed_side == "LONG":
+            if direction == "SPIKE_UP":
+                score = 0.06
+                reasons.append(f"BTC5m SPIKE_UP ({momentum.m5_move_pct:+.3f}%)")
+            elif direction == "DRIFT_UP":
+                score = 0.04
+                reasons.append(f"BTC5m DRIFT_UP ({momentum.m5_move_pct:+.3f}%)")
+            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                score = -0.05
+                reasons.append(f"BTC5m against ({direction})")
+        else:
+            if direction == "SPIKE_DOWN":
+                score = 0.06
+                reasons.append(f"BTC5m SPIKE_DOWN ({momentum.m5_move_pct:+.3f}%)")
+            elif direction == "DRIFT_DOWN":
+                score = 0.04
+                reasons.append(f"BTC5m DRIFT_DOWN ({momentum.m5_move_pct:+.3f}%)")
+            elif direction in ("SPIKE_UP", "DRIFT_UP"):
+                score = -0.05
+                reasons.append(f"BTC5m against ({direction})")
+        if momentum.m5_in_prediction_window and score > 0:
+            score += 0.02
+            reasons.append("BTC5m predict window")
+        return score, reasons
 
     @staticmethod
     def _eth_5m_macd_score(macd_5m: MACDResult, allowed_side: str) -> tuple[float, List[str]]:
-        """ETH 5m MACD scoring. Delegates to strategies._core."""
-        r = _core_eth_5m_macd_score(macd_5m, allowed_side)
-        return r.score, r.reasons
+        reasons: List[str] = []
+        score = 0.0
+        if allowed_side == "LONG":
+            if macd_5m.crossover == "BULLISH_CROSS":
+                score = 0.06
+                reasons.append("ETH5m bull cross")
+            elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
+                score = 0.04
+                reasons.append("ETH5m green+rising")
+            elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
+                score = -0.05
+                reasons.append("ETH5m against")
+        else:
+            if macd_5m.crossover == "BEARISH_CROSS":
+                score = 0.06
+                reasons.append("ETH5m bear cross")
+            elif macd_5m.histogram < 0 and not macd_5m.histogram_rising:
+                score = 0.04
+                reasons.append("ETH5m red+falling")
+            elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
+                score = -0.05
+                reasons.append("ETH5m against")
+        return score, reasons
 
     def _eth_15m_follow_score(self, macd_15m: MACDResult, allowed_side: str) -> tuple[float, List[str]]:
-        """ETH 15m MACD follow scoring. Delegates to strategies._core."""
-        r = _core_eth_15m_follow_score(
-            macd_15m, allowed_side, min_hist=self.eth_follow_15m_hist_min,
-        )
-        return r.score, r.reasons
+        reasons: List[str] = []
+        score = 0.0
+        min_hist = self.eth_follow_15m_hist_min
+        if allowed_side == "LONG":
+            if macd_15m.crossover == "BULLISH_CROSS":
+                score = 0.06
+                reasons.append("ETH15m bull cross")
+            elif macd_15m.histogram >= min_hist and macd_15m.histogram_rising:
+                score = 0.05
+                reasons.append(f"ETH15m green+rising>{min_hist:.2f}")
+            elif macd_15m.crossover == "BEARISH_CROSS" or macd_15m.histogram < 0:
+                score = -0.05
+                reasons.append("ETH15m against")
+        else:
+            if macd_15m.crossover == "BEARISH_CROSS":
+                score = 0.06
+                reasons.append("ETH15m bear cross")
+            elif macd_15m.histogram <= -min_hist and not macd_15m.histogram_rising:
+                score = 0.05
+                reasons.append(f"ETH15m red+falling>{min_hist:.2f}")
+            elif macd_15m.crossover == "BULLISH_CROSS" or macd_15m.histogram > 0:
+                score = -0.05
+                reasons.append("ETH15m against")
+        return score, reasons
 
     @staticmethod
     def _btc_htf_proxy_signal(bias: str) -> float:
@@ -836,7 +885,6 @@ class ETHMacroStrategy(SolMacroStrategy):
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                _wm, _wo = _ai_window_args(market, self._is_updown_market(market))
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context,
@@ -848,8 +896,6 @@ class ETHMacroStrategy(SolMacroStrategy):
                     quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
                     require_shadow_portfolio=False,
-                    window_minutes=_wm,
-                    window_open_utc=_wo,
                 )
                 ai_calls += 1
                 ai_used = True

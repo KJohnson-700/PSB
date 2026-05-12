@@ -1323,15 +1323,6 @@
             <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
                 <option value="">-- Loading scopes from settings… --</option>
             </select>
-            <label title="Consult data/ai_call_log/*.jsonl and replay the AI decisions live made. Backtest skips entries live's AI rejected." style="font-size:0.78rem;display:inline-flex;align-items:center;gap:4px;">
-                <input type="checkbox" id="crypto-bt-ai-replay" onchange="updateAiReplayInfo()">
-                <span>AI replay</span>
-            </label>
-            <label title="When AI replay is on, treat 'no record for this window' as a skip (only entries with a recorded live AI decision get through)." style="font-size:0.78rem;display:inline-flex;align-items:center;gap:4px;opacity:0.7;">
-                <input type="checkbox" id="crypto-bt-ai-replay-strict">
-                <span>strict</span>
-            </label>
-            <span id="ai-replay-info" style="font-size:0.7rem;color:var(--text-muted);"></span>
             <button class="btn-sm btn-purple" type="button" id="crypto-bt-run-btn" onclick="startCryptoBacktest()">Run Crypto BT</button>
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
@@ -3045,27 +3036,6 @@ function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
     tick();
 }
 
-async function updateAiReplayInfo() {
-    const info = document.getElementById('ai-replay-info');
-    const cb = document.getElementById('crypto-bt-ai-replay');
-    if (!cb || !cb.checked) { info.textContent = ''; return; }
-    info.textContent = 'loading…';
-    try {
-        const r = await fetch('/api/ai_call_log/stats', { headers: dashAuthHeaders() });
-        if (!r.ok) { info.textContent = '(stats unavailable)'; return; }
-        const d = await r.json();
-        if (!d || d.records === 0) {
-            info.textContent = `no records yet — run live to populate ${d?.dir || 'data/ai_call_log'}`;
-            info.style.color = 'var(--yellow)';
-        } else {
-            info.textContent = `${d.records} records across ${d.days} day(s) — ${d.first_day} to ${d.last_day}`;
-            info.style.color = 'var(--green)';
-        }
-    } catch (e) {
-        info.textContent = '(stats error)';
-    }
-}
-
 async function startCryptoBacktest() {
     const sel = document.getElementById('crypto-bt-select');
     const val = sel.value;
@@ -3073,17 +3043,13 @@ async function startCryptoBacktest() {
     let symbol, window;
     [symbol, window] = val.split('-');
     window = parseInt(window, 10);
-    const aiReplay = !!document.getElementById('crypto-bt-ai-replay')?.checked;
-    const aiReplayStrict = !!document.getElementById('crypto-bt-ai-replay-strict')?.checked;
     const btn = document.getElementById('crypto-bt-run-btn');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
-    const aiLabel = aiReplay ? (aiReplayStrict ? ' +ai-replay(strict)' : ' +ai-replay') : '';
-    status.textContent = `Running ${symbol} ${window}m backtest${aiLabel}…`;
+    status.textContent = `Running ${symbol} ${window}m backtest…`;
     status.style.color = 'var(--yellow)';
     try {
         const body = {symbol, window};
-        if (aiReplay) { body.ai_replay = true; if (aiReplayStrict) body.ai_replay_strict = true; }
         const r = await fetch('/api/backtest/start', {
             method: 'POST',
             headers: dashAuthHeaders({'Content-Type': 'application/json'}),
@@ -4450,9 +4416,9 @@ function updateAltLagAnalysis(d, prefix) {
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
     if (altMv) {
         const code = String(d.alt_asset_code || prefix || 'sol').toLowerCase();
-        const a5 = d[`${code}_move_5m`];
-        const a15 = d[`${code}_move_15m`];
-        const a30 = d[`${code}_move_30m`];
+        const a5 = d[`${code}_move_5m`] ?? d.sol_move_5m;
+        const a15 = d[`${code}_move_15m`] ?? d.sol_move_15m;
+        const a30 = d[`${code}_move_30m`] ?? d.sol_move_30m;
         altMv.textContent = triPct(a5, a15, a30);
     }
     const lagMacroHero = document.getElementById(prefix + '-macro');
@@ -6120,19 +6086,50 @@ function _formatAltWatchlistTriggers(watchlist) {
         bits.join(' <span style="opacity:0.35">|</span> ');
 }
 
+/** Parse #rrggbb for marker shading. */
+function _hexToRgbStrat(hex) {
+    var s = String(hex || '').trim();
+    var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s);
+    if (!m) return null;
+    return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
+}
+function _rgbToHexStrat(r, g, b) {
+    function c(x) {
+        var n = Math.max(0, Math.min(255, Math.round(x)));
+        return n.toString(16).padStart(2, '0');
+    }
+    return '#' + c(r) + c(g) + c(b);
+}
+/** t<0 darkens toward black; t>0 lightens toward white (same hue family). */
+function _shadeStratHex(hex, t) {
+    var rgb = _hexToRgbStrat(hex);
+    if (!rgb) return hex || '#888';
+    if (t < 0) {
+        var k = 1 + t;
+        return _rgbToHexStrat(rgb.r * k, rgb.g * k, rgb.b * k);
+    }
+    var u = Math.min(1, t);
+    return _rgbToHexStrat(
+        rgb.r + (255 - rgb.r) * u,
+        rgb.g + (255 - rgb.g) * u,
+        rgb.b + (255 - rgb.b) * u
+    );
+}
+
 function _tradeMarkersFromPoints(points, strategy) {
     // Strategy colors: STRATS includes both design keys (sol_lag) and runtime ids (sol_macro)
     const stratKey = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',xrp_macro:'XRP',hype_macro:'HYPE',weather:'WX'};
     const stratColor = stratHex(strategy);
-    const key = stratKey[strategy] || (strategy || '?').slice(0,3).toUpperCase();
-    // Win = circle, loss = square. Entry vs exit use the same hue so each strategy reads as one color on the chart.
+    const colorIn = _shadeStratHex(stratColor, -0.36);
+    const colorOut = _shadeStratHex(stratColor, 0.34);
+    const key = stratKey[strategy] || (strategy || '?').slice(0, 3).toUpperCase();
+    // Entry = darker hue, exit = lighter hue (same asset color). Win vs loss: circle/square + bar position + signed PnL text.
     return (points || [])
         .filter((p) => p.strategy === strategy)
         .slice(-120)
         .flatMap((p) => {
             const pnl = p.pnl || 0;
             const sign = pnl >= 0 ? '+' : '';
-            const markColor = pnl >= 0 ? stratColor : '#b91c1c';
             const txt = key + ' ' + sign + pnl.toFixed(2);
             const pos = pnl >= 0 ? 'belowBar' : 'aboveBar';
             const shape = pnl >= 0 ? 'circle' : 'square';
@@ -6144,7 +6141,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                 time: p.time,
                 position: pos,
                 shape: shape,
-                color: markColor,
+                color: colorIn,
                 text: hasExit ? txt + ' ·in' : txt,
             };
             if (!hasExit) {
@@ -6156,7 +6153,7 @@ function _tradeMarkersFromPoints(points, strategy) {
                     time: p.closed_at,
                     position: pos,
                     shape: shape,
-                    color: markColor,
+                    color: colorOut,
                     text: txt + ' ·out',
                 },
             ];

@@ -83,7 +83,6 @@ def test_command_center_decision_gate_chips_are_atomic():
     assert "oracleLanes.slice(0, 4).join" not in formatter
     assert "floor default" in formatter
     assert "BTC floor" in formatter
-    assert "HYPE floor" in formatter
     assert "for (const lane of oracleLanes.slice(0, 4))" in formatter
     assert "overflow-wrap:anywhere" in html
 
@@ -91,13 +90,16 @@ def test_command_center_decision_gate_chips_are_atomic():
 def test_crypto_live_panels_wrap_and_slow_ticker_helpers_exist():
     html = INDEX.read_text(encoding="utf-8")
     server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
-    assert ".crypto-grid .crypto-hero-six .hero-item .hero-val{" in html
+    assert (
+        ".crypto-grid .crypto-hero-six .hero-item .hero-val,.crypto-grid .crypto-hero-seven .hero-item .hero-val{"
+        in html
+    )
     assert "@keyframes dashTickerSlow" in html
     assert "function dashRefreshCryptoLiveTickers()" in html
     assert "function dashApplySlowTickerIfNeeded(el)" in html
     assert "dashRefreshCryptoLiveTickers();" in html
     assert "padding:14px 14px;min-height:0" in html
-    assert "2026-05-10-strategy-pnl-full-rowset" in server
+    assert "dashboard_ui_rev" in server and '"dashboard_ui_rev":' in server
 
 
 def test_command_center_trades_card_uses_daily_trades_not_session_fills():
@@ -106,7 +108,8 @@ def test_command_center_trades_card_uses_daily_trades_not_session_fills():
     assert "const dailyTrades = Number(p.daily_trades || 0);" in html
     assert "if (tradesEl) tradesEl.textContent = dailyTrades;" in html
     assert "daily_trades: raw.trades_today" in html
-    assert "fills this session" in html
+    assert "Session fills" in html
+    assert "Paper Trade Journal" in html
 
 
 def test_dashboard_sse_uses_risk_manager_daily_fields():

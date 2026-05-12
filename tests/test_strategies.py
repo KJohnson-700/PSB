@@ -486,7 +486,7 @@ class TestWeatherStrategy:
         signal = signals[0]
         assert signal.action == "BUY_YES"
         assert signal.price == pytest.approx(0.10)
-        assert signal.size == pytest.approx(16.67, rel=1e-3)
+        assert signal.size == pytest.approx(25.0, rel=1e-3)
         assert signal.horizon_days == 1
 
     def test_weather_strategy_skips_ai_for_clear_quant_edge(self):

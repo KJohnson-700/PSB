@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 from src.market.scanner import Market
 from src.analysis.math_utils import PositionSizer
-from src.analysis.ai_agent import AIAnalysis
+from src.analysis.ai_agent import AIAnalysis, AIDecision
 from src.analysis.btc_price_service import (
     MACDResult,
     TrendSabreResult,
@@ -704,6 +704,17 @@ class TestBitcoinAIIntegration:
         self.ai.shadow_pipeline_max_calls_per_scan = MagicMock(return_value=0)
         self.ai.shadow_pipeline_min_confidence = MagicMock(return_value=1.0)
         self.ai.preentry_veto_active = MagicMock(return_value=False)
+        self.ai.evaluate_trade_decision = AsyncMock(
+            return_value=AIDecision(
+                approved=True,
+                action="BUY_YES",
+                confidence=0.85,
+                estimated_probability=0.70,
+                edge=0.18,
+                reason="direct_ai_approved",
+                source="direct",
+            )
+        )
         self.sizer = PositionSizer(kelly_fraction=0.25, max_position_pct=0.05)
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
 
@@ -730,12 +741,23 @@ class TestBitcoinAIIntegration:
 
         assert len(signals) >= 1
         assert signals[0].ai_used is True
-        assert "ai_updown_confirm" in signals[0].reason
+        assert "ai_decision=direct" in signals[0].reason
         assert signals[0].edge >= self.strategy.min_edge
 
     def test_updown_ai_veto_blocks_conflicting_action(self):
         ta = _ltf_unconfirmed_bull(_make_bullish_ta(82000))
         market = _make_btc_updown_market(yes_price=0.69, mins_until_end=13.0)
+        self.ai.evaluate_trade_decision = AsyncMock(
+            return_value=AIDecision(
+                approved=True,
+                action="BUY_NO",
+                confidence=0.90,
+                estimated_probability=0.30,
+                edge=0.39,
+                reason="direct_ai_approved",
+                source="direct",
+            )
+        )
         self.ai.analyze_market = AsyncMock(
             return_value=AIAnalysis(
                 reasoning="Disagrees with long setup",

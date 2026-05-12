@@ -53,7 +53,6 @@ from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 
-from src.analysis.ai_replay_agent import AIReplayAgent  # noqa: F401 — type-checking only
 from src.analysis.btc_price_service import (
     BTCPriceService,
     TechnicalAnalysis,
@@ -61,30 +60,6 @@ from src.analysis.btc_price_service import (
     TrendSabreResult,
     CandleMomentum,
     AnchoredVolumeProfile,
-)
-from src.strategies._core import (
-    alt_1h_hist_gate,
-    anti_ltf_gate_skip_reason,
-    apply_primary_htf_bias,
-    btc_5m_4h_1h_hist_gate,
-    btc_5m_htf_boost,
-    btc_15m_htf_boost,
-    btc_15m_timing_bonus,
-    btc_catalyst_boost,
-    btc_follow_5m_impulse,
-    btc_follow_15m_impulse_ok,
-    btc_htf_bias,
-    btc_ltf_strength_15m,
-    eth_5m_macd_score,
-    eth_15m_follow_score,
-    passes_15m_iql,
-    rsi_4_level_adj_5m,
-    rsi_4_level_adj_15m,
-    sabre_tension_adj,
-    score_m5_direction,
-    sol_ltf_strength_15m,
-    sol_m5_macd_adj,
-    sol_rsi_extremes_adj,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,26 +237,9 @@ class UpdownBacktestEngine:
     pre-fetched by the caller via OHLCVLoader and passed into ``run()``.
     """
 
-    def __init__(
-        self,
-        config: Dict[str, Any],
-        initial_bankroll: float = 500.0,
-        *,
-        ai_replay_agent: Optional["AIReplayAgent"] = None,
-    ):
+    def __init__(self, config: Dict[str, Any], initial_bankroll: float = 500.0):
         self.config           = config
         self.initial_bankroll = initial_bankroll
-        # When provided, the engine consults the replay agent after edge calc
-        # but before commit; not-approved decisions are skipped just like live.
-        # Misses (no record for the window) pass-through unless the operator
-        # sets backtest.ai_replay_strict to require a hit.
-        self.ai_replay_agent  = ai_replay_agent
-        self.ai_replay_strict = bool(
-            config.get("backtest", {}).get("ai_replay_strict", False)
-        )
-        self._ai_replay_skips = 0
-        self._ai_replay_misses = 0
-        self._ai_replay_passes = 0
 
         # Slippage config
         slip_cfg         = config.get("backtest", {}).get("slippage", {})
@@ -305,21 +263,14 @@ class UpdownBacktestEngine:
 
         self.min_edge_15m       = bt_cfg.get("min_edge_btc_15m",   0.06)
         self.min_edge_5m        = bt_cfg.get("min_edge_btc_5m",    0.07)
-        # 30m falls back to 15m by default (live ships unified 15m/30m thresholds);
-        # operators can override per-symbol if 30m calibration diverges.
-        self.min_edge_30m       = bt_cfg.get("min_edge_btc_30m",   self.min_edge_15m)
         self.min_edge_sol_15m   = bt_cfg.get("min_edge_sol_15m",   0.06)
         self.min_edge_sol_5m    = bt_cfg.get("min_edge_sol_5m",    0.06)
-        self.min_edge_sol_30m   = bt_cfg.get("min_edge_sol_30m",   self.min_edge_sol_15m)
         self.min_edge_eth_15m   = bt_cfg.get("min_edge_eth_15m",   self.min_edge_sol_15m)
         self.min_edge_eth_5m    = bt_cfg.get("min_edge_eth_5m",    self.min_edge_sol_5m)
-        self.min_edge_eth_30m   = bt_cfg.get("min_edge_eth_30m",   self.min_edge_eth_15m)
         self.min_edge_xrp_15m   = bt_cfg.get("min_edge_xrp_15m",  self.min_edge_sol_15m)
         self.min_edge_xrp_5m    = bt_cfg.get("min_edge_xrp_5m",   self.min_edge_sol_5m)
-        self.min_edge_xrp_30m   = bt_cfg.get("min_edge_xrp_30m",  self.min_edge_xrp_15m)
         self.min_edge_hype_15m  = bt_cfg.get("min_edge_hype_15m", self.min_edge_sol_15m)
         self.min_edge_hype_5m   = bt_cfg.get("min_edge_hype_5m",  self.min_edge_sol_5m)
-        self.min_edge_hype_30m  = bt_cfg.get("min_edge_hype_30m", self.min_edge_hype_15m)
         # Each symbol has independent min_edge keys; XRP/HYPE fall back to SOL if not set.
         self._kelly_btc   = btc_cfg.get("kelly_fraction",  0.15)
         self._kelly_sol   = sol_cfg.get("kelly_fraction",  self._kelly_btc)
@@ -493,15 +444,7 @@ class UpdownBacktestEngine:
         if asset_open <= 0:
             return 0.50
         move_pct = (asset_current - asset_open) / asset_open
-        # Tanh price-mapping scale: smaller scale_pct => price reacts faster to
-        # the same underlying move. 5m windows need tighter scale (less time for
-        # the asset to move); 30m gets a wider scale than 15m.
-        if window_minutes == 5:
-            scale_pct = 0.0015
-        elif window_minutes == 30:
-            scale_pct = 0.0035
-        else:
-            scale_pct = 0.0025
+        scale_pct = 0.0015 if window_minutes == 5 else 0.0025
         score = move_pct / max(scale_pct, 1e-6)
         yes_price = 0.50 + 0.45 * np.tanh(score)
         return float(np.clip(yes_price, 0.01, 0.99))
@@ -681,7 +624,6 @@ class UpdownBacktestEngine:
             early_close = float(m5_early.iloc[-1]["close"])
             move_pct = (early_close - candle_open) / candle_open * 100 if candle_open > 0 else 0.0
             result.m5_move_pct = move_pct
-            # Mirrors btc_price_service.calc_candle_momentum m5 tiers.
             if move_pct > 0.08:
                 result.m5_direction = "SPIKE_UP"
             elif move_pct < -0.08:
@@ -690,10 +632,6 @@ class UpdownBacktestEngine:
                 result.m5_direction = "DRIFT_UP"
             elif move_pct < -0.03:
                 result.m5_direction = "DRIFT_DOWN"
-            elif move_pct > 0.01:
-                result.m5_direction = "LEAN_UP"
-            elif move_pct < -0.01:
-                result.m5_direction = "LEAN_DOWN"
 
         return result
 
@@ -818,8 +756,50 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _get_htf_bias(ta: TechnicalAnalysis, min_hist: float = 20.0) -> str:
-        """BTC 3-vote 4H bias. Delegates to strategies._core (same code live uses)."""
-        return btc_htf_bias(ta, min_hist_magnitude=min_hist).bias
+        """BTC 3-vote system -- exact copy of BitcoinStrategy._get_higher_tf_bias().
+
+        Vote 1: Trend Sabre direction
+        Vote 2: Price vs Sabre SMA(35)
+        Vote 3: 4H MACD with early_bull / early_bear / recovery signals
+        """
+        sabre   = ta.trend_sabre
+        macd_4h = ta.macd_4h
+        price   = ta.current_price
+        bull = bear = 0
+
+        # Vote 1: Trend Sabre direction
+        if sabre.trend == 1:    bull += 1
+        elif sabre.trend == -1: bear += 1
+
+        # Vote 2: Price vs Sabre MA
+        if price > sabre.ma_value:   bull += 1
+        elif price < sabre.ma_value: bear += 1
+
+        # Vote 3: 4H MACD -- matches live early_bull / early_bear / recovery
+        _early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
+        _early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
+        _recovery   = not macd_4h.above_zero and macd_4h.histogram > 0
+
+        if _early_bear:
+            bear += 1
+        elif macd_4h.above_zero or _early_bull or _recovery:
+            bull += 1
+        else:
+            bear += 1
+
+        if bull >= 2:
+            bias = "BULLISH"
+        elif bear >= 2:
+            bias = "BEARISH"
+        else:
+            return "NEUTRAL"
+
+        # Conviction gate -- matches bitcoin.py _get_higher_tf_bias().
+        # Threshold read from config (min_4h_hist_magnitude); default 20.0.
+        # Near-zero histograms with a 2/3 vote produce coin-flip entries.
+        if abs(macd_4h.histogram) < min_hist:
+            return "NEUTRAL"
+        return bias
 
     # ==========================================================================
     # HTF bias -- SOL (matches sol_macro.py _get_macro_trend exactly)
@@ -870,10 +850,21 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
-        """15m MACD confirmation -- BTC weights. Delegates to strategies._core.
-        Threshold is 0.50 (matching live); pre-refactor backtest used 0.35 (drift)."""
-        r = btc_ltf_strength_15m(ta.macd_15m, allowed_side)
-        return r.confirmed, r.strength
+        """15m MACD confirmation -- BTC weights, threshold 0.35."""
+        m = ta.macd_15m
+        s = 0.0
+        if allowed_side == "LONG":
+            if m.crossover == "BULLISH_CROSS":              s += 0.40
+            if m.histogram_rising and m.histogram > m.prev_histogram:
+                s += 0.35 if (m.prev_histogram < 0 and m.histogram > 0) else 0.20
+            if m.macd_line > m.signal_line:                 s += 0.15
+        else:  # SHORT
+            if m.crossover == "BEARISH_CROSS":              s += 0.40
+            if not m.histogram_rising and m.histogram < m.prev_histogram:
+                s += 0.35 if (m.prev_histogram > 0 and m.histogram < 0) else 0.20
+            if m.macd_line < m.signal_line:                 s += 0.15
+        confirmed = s >= 0.35
+        return confirmed, min(1.0, s)
 
     # ==========================================================================
     # LTF strength -- SOL (matches sol_macro.py _check_15m_confirmation)
@@ -881,9 +872,26 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _sol_ltf_strength_m(m: MACDResult, allowed_side: str) -> Tuple[bool, float]:
-        """SOL-family 15m MACD strength. Delegates to strategies._core."""
-        r = sol_ltf_strength_15m(m, allowed_side)
-        return r.confirmed, r.strength
+        """SOL-family 15m MACD strength on a single MACD bundle (live parity)."""
+        s = 0.0
+        if allowed_side == "LONG":
+            if m.crossover == "BULLISH_CROSS":              s += 0.40
+            if m.histogram_rising:
+                if m.prev_histogram < 0 and m.histogram > 0:
+                    s += 0.35        # red-to-green flip
+                elif m.histogram > m.prev_histogram:
+                    s += 0.15        # just rising
+            if m.macd_line > m.signal_line:                 s += 0.10
+        else:  # SHORT
+            if m.crossover == "BEARISH_CROSS":              s += 0.40
+            if not m.histogram_rising:
+                if m.prev_histogram > 0 and m.histogram < 0:
+                    s += 0.35        # green-to-red flip
+                elif m.histogram < m.prev_histogram:
+                    s += 0.15        # just falling
+            if m.macd_line < m.signal_line:                 s += 0.10
+        confirmed = s >= 0.50
+        return confirmed, min(1.0, s)
 
     @staticmethod
     def _sol_ltf_strength(ta: TechnicalAnalysis, allowed_side: str) -> Tuple[bool, float]:
@@ -898,8 +906,18 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _passes_15m_iql_macd(m: MACDResult, allowed_side: str, hist_floor: float) -> bool:
-        """15m Indicator Quality Layer. Delegates to strategies._core."""
-        return passes_15m_iql(m, allowed_side, hist_floor)
+        """15m Indicator Quality Layer — matches live sol_macro._passes_15m_iql."""
+        confirmed, _ = UpdownBacktestEngine._sol_ltf_strength_m(m, allowed_side)
+        if confirmed:
+            return True
+        hist = float(m.histogram)
+        if allowed_side == "LONG":
+            return m.crossover == "BULLISH_CROSS" or (
+                hist >= hist_floor and m.histogram_rising
+            )
+        return m.crossover == "BEARISH_CROSS" or (
+            hist <= -hist_floor and not m.histogram_rising
+        )
 
     @staticmethod
     def _btc_alt_corr_1h_approx(
@@ -950,24 +968,83 @@ class UpdownBacktestEngine:
         """
         sabre   = ta.trend_sabre
         macd_4h = ta.macd_4h
+        macd_1h = ta.macd_1h
+        mom = ta.candle_momentum
 
         est_prob_up = 0.50
 
-        htf_boost = btc_15m_htf_boost(sabre, macd_4h, ta.current_price, htf_bias)
+        # Graduated HTF boost -- live uses 3/3 for +/-0.08, 2/3 for +/-0.03
+        _price_above_ma = ta.current_price > sabre.ma_value
+        if sabre.trend == 1 and _price_above_ma and macd_4h.above_zero:
+            htf_boost = 0.08       # All 3 votes bullish
+        elif sabre.trend == -1 and not _price_above_ma and not macd_4h.above_zero:
+            htf_boost = -0.08      # All 3 votes bearish
+        elif sabre.trend == 1 and macd_4h.above_zero:
+            htf_boost = 0.03       # 2/3 bull (price below MA)
+        elif sabre.trend == -1 and not macd_4h.above_zero:
+            htf_boost = -0.03      # 2/3 bear (price above MA)
+        else:
+            htf_boost = 0.0        # Mixed -- no directional boost
+
+        # Ensure boost direction matches the HTF vote.  Recovery/early_bull
+        # windows can produce BULLISH from the 3-vote system while raw
+        # indicators remain mixed (e.g., sabre=-1 + recovery → BULLISH).
+        # Without this floor, those windows get 0 or negative boost and
+        # never generate trades — contradicting the HTF decision.
+        if htf_bias == "BULLISH" and htf_boost < 0.03:
+            htf_boost = 0.03
+        elif htf_bias == "BEARISH" and htf_boost > -0.03:
+            htf_boost = -0.03
+
         est_prob_up += htf_boost
 
-        # 4H histogram gate with 1H momentum-recovery fallback (matches live BTC 15m)
-        if not btc_5m_4h_1h_hist_gate(macd_4h, ta.macd_1h, allowed_side).allowed:
-            return 0.0, 0.0
+        # Histogram gate parity with live bitcoin.py:
+        # allow a 1H local recovery pass when 4H is decelerating against the side.
+        if allowed_side == "LONG" and not macd_4h.histogram_rising:
+            if not macd_1h.histogram_rising:
+                return 0.0, 0.0
+        if allowed_side == "SHORT" and macd_4h.histogram_rising:
+            if macd_1h.histogram_rising:
+                return 0.0, 0.0
 
+        # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.20
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
-        timing_bonus = btc_15m_timing_bonus(ta.candle_momentum, allowed_side).bonus
+        # Timing bonus parity with live bitcoin.py.
+        timing_bonus = 0.0
+        if allowed_side == "LONG":
+            if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
+            elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus -= 0.05
+            if mom.m5_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
+        else:
+            if mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
+            elif mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
+                timing_bonus -= 0.05
+            if mom.m5_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
+        if mom.m15_in_prediction_window:
+            timing_bonus += 0.03
+        if mom.m5_in_prediction_window:
+            timing_bonus += 0.02
         est_prob_up += timing_bonus if allowed_side == "LONG" else -timing_bonus
 
-        est_prob_up += rsi_4_level_adj_15m(ta.rsi_14)
-        est_prob_up += sabre_tension_adj(sabre, allowed_side)
+        # RSI 4-level (matches live bitcoin.py)
+        if   ta.rsi_14 > 80: est_prob_up -= 0.03
+        elif ta.rsi_14 > 65: est_prob_up -= 0.02
+        elif ta.rsi_14 < 20: est_prob_up += 0.03
+        elif ta.rsi_14 < 35: est_prob_up += 0.02
+
+        # Sabre tension (matches live: threshold 2.0 ATR)
+        if sabre.tension_abs > 2.0:
+            if allowed_side == "LONG":
+                est_prob_up += -0.02 if sabre.tension > 0 else 0.02
+            else:
+                est_prob_up += 0.02 if sabre.tension > 0 else -0.02
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
@@ -987,36 +1064,42 @@ class UpdownBacktestEngine:
         iql_enabled: bool = False,
         iql_hist_floor: float = 0.03,
     ) -> Tuple[float, float]:
-        """SOL 15m edge -- delegates to strategies._core for HTF/LTF/RSI logic.
+        """SOL 15m edge -- macro boost +/-0.07, LTF*0.22, 1H histogram gate.
 
-        Omits (intentional, backtest doesn't have live correlation feed):
-        BTC lag/spike catalyst boosts, correlation damping, timing bonus.
+        Omits: lag/spike (requires live BTC feed), correlation dampen.
         """
         if iql_enabled and not UpdownBacktestEngine._passes_15m_iql_macd(
             ta.macd_15m, allowed_side, iql_hist_floor
         ):
             return 0.0, 0.0
 
-        # For SOL the TA's macd_4h field is computed from 1H data (SOL uses 1H as HTF)
-        macd_1h = ta.macd_4h
+        macd_1h = ta.macd_4h   # For SOL, macd_4h is computed from 1H data
 
         est_prob_up = 0.50
 
-        # Primary HTF bias boost (BULLISH/BEARISH +/-0.07; NEUTRAL passed-through pre-filter)
-        primary_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
-        est_prob_up = apply_primary_htf_bias(est_prob_up, primary_bias, 0.07)
+        # Macro trend boost (matches live sol_macro 15m: +/-0.07)
+        # htf_bias is already known to be BULLISH or BEARISH at this point
+        if allowed_side == "LONG":
+            est_prob_up += 0.07
+        else:
+            est_prob_up -= 0.07
 
-        # Relaxed 1H histogram gate (matches live, was a hard gate pre-refactor — DRIFT FIX)
-        if not alt_1h_hist_gate(macd_1h, allowed_side).allowed:
-            return 0.0, 0.0
+        # 1H histogram hard gate (matches live sol_macro)
+        if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
+        if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
 
+        # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.22
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
-        est_prob_up += sol_rsi_extremes_adj(ta.rsi_14)
+        # RSI extremes (matches live sol_macro 15m: >75/-0.03, <25/+0.03)
+        if   ta.rsi_14 > 75: est_prob_up -= 0.03
+        elif ta.rsi_14 < 25: est_prob_up += 0.03
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        # Confidence: matches live = min(0.85, 0.50 + ltf_strength * 0.22 + lag_conf + timing*0.5)
+        # lag_conf and timing = 0 in backtest
         confidence = min(0.85, 0.50 + ltf_strength * 0.22)
         return edge, confidence
 
@@ -1064,17 +1147,24 @@ class UpdownBacktestEngine:
 
         move_pct = (early_close - candle_open) / candle_open * 100
 
-        # Tiers mirror btc_price_service.calc_candle_momentum:
-        # SPIKE > 0.08% | DRIFT > 0.03% | LEAN > 0.01%.
+        # Only SPIKE and DRIFT -- live calc_candle_momentum never produces LEAN
         if   move_pct >  0.08: direction = "SPIKE_UP"
         elif move_pct < -0.08: direction = "SPIKE_DOWN"
         elif move_pct >  0.03: direction = "DRIFT_UP"
         elif move_pct < -0.03: direction = "DRIFT_DOWN"
-        elif move_pct >  0.01: direction = "LEAN_UP"
-        elif move_pct < -0.01: direction = "LEAN_DOWN"
         else:                  direction = "NONE"
 
-        return direction, score_m5_direction(direction, allowed_side)
+        m5_adj = 0.0
+        if allowed_side == "LONG":
+            if   direction == "SPIKE_UP":                    m5_adj =  0.06
+            elif direction == "DRIFT_UP":                    m5_adj =  0.04
+            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):  m5_adj = -0.04
+        else:
+            if   direction == "SPIKE_DOWN":                  m5_adj =  0.06
+            elif direction == "DRIFT_DOWN":                  m5_adj =  0.04
+            elif direction in ("SPIKE_UP", "DRIFT_UP"):      m5_adj = -0.04
+
+        return direction, m5_adj
 
     # ==========================================================================
     # 5m edge -- BTC and SOL paths (matches live strategies)
@@ -1164,16 +1254,20 @@ class UpdownBacktestEngine:
         window_open: pd.Timestamp,
         macd_4h: MACDResult,
     ) -> Tuple[float, float]:
-        """BTC 5m path. HTF boost + 4H/1H gate from strategies._core."""
+        """BTC 5m path -- matches bitcoin.py 5m updown exactly."""
         sabre = ta.trend_sabre
         est_prob_up = 0.50
 
-        htf_boost = btc_5m_htf_boost(sabre, macd_4h)
+        # HTF boost (matches live bitcoin.py 5m)
+        if   sabre.trend == 1  and     macd_4h.above_zero: htf_boost =  0.04
+        elif sabre.trend == 1  or      macd_4h.above_zero: htf_boost =  0.02
+        elif sabre.trend == -1 and not macd_4h.above_zero: htf_boost = -0.04
+        else:                                               htf_boost = -0.02
         est_prob_up += htf_boost
 
-        # 4H histogram gate with 1H momentum-recovery fallback (matches live)
-        if not btc_5m_4h_1h_hist_gate(macd_4h, ta.macd_1h, allowed_side).allowed:
-            return 0.0, 0.0
+        # 4H histogram hard gate
+        if allowed_side == "LONG"  and not macd_4h.histogram_rising: return 0.0, 0.0
+        if allowed_side == "SHORT" and     macd_4h.histogram_rising: return 0.0, 0.0
 
         # 5m candle momentum -- primary LTF signal for BTC 5m
         # Uses first ~2 1m bars of the window (mirrors live early-candle read)
@@ -1187,7 +1281,11 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= m5_adj
 
-        est_prob_up += rsi_4_level_adj_5m(ta.rsi_14)
+        # RSI 4-level (matches live bitcoin.py 5m: 80/65/20/35)
+        if   ta.rsi_14 > 80: est_prob_up -= 0.02
+        elif ta.rsi_14 > 65: est_prob_up -= 0.01
+        elif ta.rsi_14 < 20: est_prob_up += 0.02
+        elif ta.rsi_14 < 35: est_prob_up += 0.01
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
@@ -1247,7 +1345,24 @@ class UpdownBacktestEngine:
             elif not macd_5m.above_zero and not macd_5m.histogram_rising:
                 m5_trend = "BEARISH"
 
-            m5_adj = sol_m5_macd_adj(macd_5m, allowed_side).adj
+            if allowed_side == "LONG":
+                if macd_5m.crossover == "BULLISH_CROSS":
+                    m5_adj = 0.06
+                elif macd_5m.histogram_rising and macd_5m.histogram > 0:
+                    m5_adj = 0.04
+                elif macd_5m.macd_line > macd_5m.signal_line:
+                    m5_adj = 0.02
+                elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
+                    m5_adj = -0.04
+            else:  # SHORT
+                if macd_5m.crossover == "BEARISH_CROSS":
+                    m5_adj = 0.06
+                elif not macd_5m.histogram_rising and macd_5m.histogram < 0:
+                    m5_adj = 0.04
+                elif macd_5m.macd_line < macd_5m.signal_line:
+                    m5_adj = 0.02
+                elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
+                    m5_adj = -0.04
 
         if allowed_side == "SHORT" and sell_5m_min_corr >= 0:
             if corr_1h is None or corr_1h < sell_5m_min_corr:
@@ -1270,7 +1385,9 @@ class UpdownBacktestEngine:
         elif m5_trend == "BEARISH" and allowed_side == "SHORT":
             est_prob_up -= 0.02
 
-        est_prob_up += sol_rsi_extremes_adj(ta.rsi_14, magnitude=0.02)
+        # RSI extremes (matches live sol_macro 5m: >75/-0.02, <25/+0.02)
+        if   ta.rsi_14 > 75: est_prob_up -= 0.02
+        elif ta.rsi_14 < 25: est_prob_up += 0.02
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
@@ -1299,19 +1416,41 @@ class UpdownBacktestEngine:
     def _eth_follow_btc_5m_impulse(
         btc_ta: TechnicalAnalysis, allowed_side: str
     ) -> float:
-        """Delegates to strategies._core.btc_follow_5m_impulse."""
-        return btc_follow_5m_impulse(btc_ta.candle_momentum, allowed_side).score
+        direction = btc_ta.candle_momentum.m5_direction
+        score = 0.0
+        if allowed_side == "LONG":
+            if direction == "SPIKE_UP":
+                score = 0.06
+            elif direction == "DRIFT_UP":
+                score = 0.04
+            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
+                score = -0.05
+        else:
+            if direction == "SPIKE_DOWN":
+                score = 0.06
+            elif direction == "DRIFT_DOWN":
+                score = 0.04
+            elif direction in ("SPIKE_UP", "DRIFT_UP"):
+                score = -0.05
+        if btc_ta.candle_momentum.m5_in_prediction_window and score > 0:
+            score += 0.02
+        return score
 
     @staticmethod
     def _eth_follow_btc_15m_impulse_ok(
         btc_ta: TechnicalAnalysis, allowed_side: str, min_hist: float
     ) -> bool:
-        """Delegates to strategies._core.btc_follow_15m_impulse_ok."""
-        return btc_follow_15m_impulse_ok(
-            btc_ta.macd_15m,
-            btc_ta.candle_momentum.m15_direction,
-            allowed_side,
-            min_hist,
+        macd_15m = btc_ta.macd_15m
+        if allowed_side == "LONG":
+            return (
+                macd_15m.crossover == "BULLISH_CROSS"
+                or (macd_15m.histogram > min_hist and macd_15m.histogram_rising)
+                or btc_ta.candle_momentum.m15_direction in ("SPIKE_UP", "DRIFT_UP")
+            )
+        return (
+            macd_15m.crossover == "BEARISH_CROSS"
+            or (macd_15m.histogram < -min_hist and not macd_15m.histogram_rising)
+            or btc_ta.candle_momentum.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN")
         )
 
     def _edge_5m_eth_follow(
@@ -1349,13 +1488,29 @@ class UpdownBacktestEngine:
         m5_adj = 0.0
         if len(df_5m) >= _MIN_5M_BARS:
             macd_5m = self._svc.calc_macd(df_5m)
-            m5_adj = eth_5m_macd_score(macd_5m, allowed_side).score
+            if allowed_side == "LONG":
+                if macd_5m.crossover == "BULLISH_CROSS":
+                    m5_adj = 0.06
+                elif macd_5m.histogram > 0 and macd_5m.histogram_rising:
+                    m5_adj = 0.04
+                elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
+                    m5_adj = -0.05
+            else:
+                if macd_5m.crossover == "BEARISH_CROSS":
+                    m5_adj = 0.06
+                elif macd_5m.histogram < 0 and not macd_5m.histogram_rising:
+                    m5_adj = 0.04
+                elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
+                    m5_adj = -0.05
         if m5_adj < min_eth_adj:
             return 0.0, 0.0
 
         est_prob_up += btc_impulse if allowed_side == "LONG" else -btc_impulse
         est_prob_up += m5_adj if allowed_side == "LONG" else -m5_adj
-        est_prob_up += sol_rsi_extremes_adj(eth_ta.rsi_14, magnitude=0.02)
+        if eth_ta.rsi_14 > 75:
+            est_prob_up -= 0.02
+        elif eth_ta.rsi_14 < 25:
+            est_prob_up += 0.02
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
         confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(m5_adj) * 2.0))
@@ -1378,17 +1533,33 @@ class UpdownBacktestEngine:
             return 0.0, 0.0
         if not self._eth_follow_btc_15m_impulse_ok(btc_ta, allowed_side, min_btc_hist):
             return 0.0, 0.0
-        # Pre-refactor backtest used (0.06/0.04/0.02/0) tiers; live uses
-        # (0.06/0.05/0/-0.05) — different scoring. Unifying on live via _core.
-        # min_btc_hist also serves as ETH 15m hist threshold (matches live default).
-        eth_adj = eth_15m_follow_score(
-            eth_ta.macd_15m, allowed_side, min_hist=min_btc_hist
-        ).score
+        macd_15m = eth_ta.macd_15m
+        if allowed_side == "LONG":
+            if macd_15m.crossover == "BULLISH_CROSS":
+                eth_adj = 0.06
+            elif macd_15m.histogram > 0 and macd_15m.histogram_rising:
+                eth_adj = 0.04
+            elif macd_15m.macd_line > macd_15m.signal_line and macd_15m.histogram > 0:
+                eth_adj = 0.02
+            else:
+                eth_adj = 0.0
+        else:
+            if macd_15m.crossover == "BEARISH_CROSS":
+                eth_adj = 0.06
+            elif macd_15m.histogram < 0 and not macd_15m.histogram_rising:
+                eth_adj = 0.04
+            elif macd_15m.macd_line < macd_15m.signal_line and macd_15m.histogram < 0:
+                eth_adj = 0.02
+            else:
+                eth_adj = 0.0
         if eth_adj < min_eth_adj:
             return 0.0, 0.0
         est_prob_up = 0.50 + (0.08 if allowed_side == "LONG" else -0.08)
         est_prob_up += eth_adj if allowed_side == "LONG" else -eth_adj
-        est_prob_up += sol_rsi_extremes_adj(eth_ta.rsi_14)
+        if eth_ta.rsi_14 > 75:
+            est_prob_up -= 0.03
+        elif eth_ta.rsi_14 < 25:
+            est_prob_up += 0.03
         est_prob_up = max(0.10, min(0.90, est_prob_up))
         edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
         confidence = max(0.55, min(0.85, 0.50 + abs(eth_adj) * 2.2))
@@ -1531,39 +1702,16 @@ class UpdownBacktestEngine:
         strategy_cfg = self.config.get("strategies", {}).get(strategy_cfg_key, {})
 
         # Symbol-specific min_edge thresholds
-        # Per-symbol per-window min_edge lookup. 30m support added 2026-05-12;
-        # pre-refactor 30m fell through to 15m's "else" branch silently.
-        def _min_edge(sym_key: str) -> float:
-            edges = {
-                ("btc", 5):  self.min_edge_5m,
-                ("btc", 15): self.min_edge_15m,
-                ("btc", 30): self.min_edge_30m,
-                ("sol", 5):  self.min_edge_sol_5m,
-                ("sol", 15): self.min_edge_sol_15m,
-                ("sol", 30): self.min_edge_sol_30m,
-                ("eth", 5):  self.min_edge_eth_5m,
-                ("eth", 15): self.min_edge_eth_15m,
-                ("eth", 30): self.min_edge_eth_30m,
-                ("xrp", 5):  self.min_edge_xrp_5m,
-                ("xrp", 15): self.min_edge_xrp_15m,
-                ("xrp", 30): self.min_edge_xrp_30m,
-                ("hype", 5):  self.min_edge_hype_5m,
-                ("hype", 15): self.min_edge_hype_15m,
-                ("hype", 30): self.min_edge_hype_30m,
-            }
-            # Default unknown window_minutes to 15m thresholds (safe fallback).
-            return edges.get((sym_key, window_minutes), edges[(sym_key, 15)])
-
         if is_btc:
-            min_edge = _min_edge("btc")
+            min_edge = self.min_edge_5m if window_minutes == 5 else self.min_edge_15m
         elif symbol == "ETH":
-            min_edge = _min_edge("eth")
+            min_edge = self.min_edge_eth_5m if window_minutes == 5 else self.min_edge_eth_15m
         elif symbol == "XRP":
-            min_edge = _min_edge("xrp")
+            min_edge = self.min_edge_xrp_5m if window_minutes == 5 else self.min_edge_xrp_15m
         elif symbol == "HYPE":
-            min_edge = _min_edge("hype")
+            min_edge = self.min_edge_hype_5m if window_minutes == 5 else self.min_edge_hype_15m
         else:  # SOL
-            min_edge = _min_edge("sol")
+            min_edge = self.min_edge_sol_5m if window_minutes == 5 else self.min_edge_sol_15m
 
         # BTC uses 4h HTF candles; non-BTC crypto uses each alt's 1h HTF.
         htf_key = "4h" if is_btc else "1h"
@@ -1665,15 +1813,22 @@ class UpdownBacktestEngine:
             else:
                 ltf_confirmed, ltf_str = self._sol_ltf_strength(ta, allowed_side)
 
-            # LTF gate policy — shared with live via strategies._core.
-            if anti_ltf_gate_skip_reason(
-                ltf_confirmed=ltf_confirmed,
-                require_ltf_confirmation=bool(strategy_cfg.get("require_ltf_confirmation", False)),
-                anti_ltf_gate_enabled=bool(strategy_cfg.get("anti_ltf_gate_enabled", True)),
-                eth_15m_follow_exception=(is_eth and window_minutes != 5),
-            ):
-                current += step_td
-                continue
+            # LTF gate policy parity with live strategy config.
+            # Default remains anti-LTF (skip confirmed entries), but strategy-level
+            # settings can flip to requiring confirmation for noisier assets.
+            require_ltf_confirmation = bool(strategy_cfg.get("require_ltf_confirmation", False))
+            anti_ltf_gate_enabled = bool(strategy_cfg.get("anti_ltf_gate_enabled", True))
+            if require_ltf_confirmation:
+                if not ltf_confirmed:
+                    current += step_td
+                    continue
+            else:
+                # ETH 15m BTC-follow intentionally allows confirmed follow-through
+                # unless the strategy config explicitly enables anti-LTF.
+                skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes != 5)
+                if ltf_confirmed and skip_confirmed:
+                    current += step_td
+                    continue
 
             # ==================================================================
             # Layer 3: Edge estimation (symbol + timeframe specific)
@@ -1755,31 +1910,6 @@ class UpdownBacktestEngine:
 
             # Determine action (aligned with live: short side buys NO)
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
-
-            # AI replay gate (Option A step 3). Only consulted when an agent
-            # was injected; replays the live decision recorded for this window.
-            if self.ai_replay_agent is not None:
-                strat_hint = "bitcoin" if is_btc else strategy_cfg_map.get(symbol, "sol_macro")
-                replay = self.ai_replay_agent.evaluate_sync(
-                    strategy_hint=strat_hint,
-                    quant_action=action,
-                    quant_edge=float(edge),
-                    quant_confidence=float(confidence),
-                    window_minutes=int(window_minutes),
-                    window_open_utc=window_open.isoformat(),
-                )
-                if replay.reason == "replay_miss":
-                    self._ai_replay_misses += 1
-                    if self.ai_replay_strict:
-                        current += step_td
-                        continue
-                    # Non-strict: fall through (current backtest behavior)
-                elif not replay.approved:
-                    self._ai_replay_skips += 1
-                    current += step_td
-                    continue
-                else:
-                    self._ai_replay_passes += 1
 
             # Position size
             size = self._size_position(bankroll, edge)

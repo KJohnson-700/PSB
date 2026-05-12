@@ -61,18 +61,6 @@ from src.analysis.updown_composite_score import (
 )
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies._core import btc_htf_bias as _core_btc_htf_bias
-from src.strategies._core import (
-    apply_primary_htf_bias as _core_apply_primary_htf_bias,
-)
-from src.strategies._core import (
-    alt_1h_hist_gate,
-    anti_ltf_gate_skip_reason,
-    passes_15m_iql_relaxed_rule,
-    sol_ltf_strength_15m,
-    sol_m5_macd_adj,
-    sol_rsi_extremes_adj,
-)
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.strategies.strategy_ai_context import (
@@ -177,17 +165,6 @@ NON_SOL_ASSET_TERMS = (
 def _market_window_minutes(market: Market) -> int:
     """Candle window minutes from Gamma metadata or question/slug text."""
     return resolved_updown_window_minutes(market)
-
-
-def _ai_window_args(market: Market, is_updown: bool):
-    """Return (window_minutes, window_open_utc) for evaluate_trade_decision logging
-    so backtest replay can match by window. Returns (None, None) on non-updown."""
-    if not is_updown or not market.end_date:
-        return None, None
-    wm = resolved_updown_window_minutes(market)
-    if not wm:
-        return None, None
-    return wm, market.end_date - timedelta(minutes=wm)
 
 PRICE_PATTERNS = [
     re.compile(r'\$\s*([\d,]+(?:\.\d+)?)\s*(?:k|K)', re.IGNORECASE),
@@ -794,25 +771,68 @@ class SolMacroStrategy:
         return "NEUTRAL"
 
     def _get_btc_htf_bias(self, ta: TechnicalAnalysis) -> str:
-        """BTC 4H structure as the primary macro gate for alt strategies.
-        Delegates to strategies._core (same code BitcoinStrategy uses)."""
+        """Use BTC 4H structure as the primary macro gate for alt strategies."""
+        sabre = ta.trend_sabre
+        macd_4h = ta.macd_4h
+        price = ta.current_price
+
+        bull_votes = 0
+        bear_votes = 0
+
+        if sabre.trend == 1:
+            bull_votes += 1
+        elif sabre.trend == -1:
+            bear_votes += 1
+
+        if price > sabre.ma_value:
+            bull_votes += 1
+        elif price < sabre.ma_value:
+            bear_votes += 1
+
+        early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
+        early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
+        recovery = not macd_4h.above_zero and macd_4h.histogram > 0
+        if early_bear:
+            bear_votes += 1
+        elif macd_4h.above_zero or early_bull or recovery:
+            bull_votes += 1
+        else:
+            bear_votes += 1
+
+        if bull_votes >= 2:
+            bias = "BULLISH"
+        elif bear_votes >= 2:
+            bias = "BEARISH"
+        else:
+            return "NEUTRAL"
+
         min_hist = float(self.config.get("btc_min_4h_hist_magnitude", 20.0))
-        r = _core_btc_htf_bias(ta, min_hist_magnitude=min_hist)
-        if r.downgraded_to_neutral:
+        if abs(macd_4h.histogram) < min_hist:
             logger.info(
                 "BTC HTF: %s by vote but 4H MACD hist=%+.1f below conviction threshold (%s) "
                 "— downgrading to NEUTRAL",
-                r.raw_vote_bias,
-                r.macd_4h_hist,
+                bias,
+                macd_4h.histogram,
                 min_hist,
             )
-        return r.bias
+            return "NEUTRAL"
+
+        return bias
 
     def _apply_primary_htf_bias(
         self, est_prob_up: float, primary_htf_bias: str, weight: float
     ) -> float:
-        """Signed primary-HTF probability boost. Delegates to strategies._core."""
-        return _core_apply_primary_htf_bias(est_prob_up, primary_htf_bias, weight)
+        """Apply the same HTF bias that determined the allowed side.
+
+        Once BTC 4H became the primary gate for alt strategies, probability estimation
+        needs to use that same resolved bias. Otherwise the action can be chosen from
+        BTC HTF while the probability model still leans the other way from alt-only HTF.
+        """
+        if primary_htf_bias == "BULLISH":
+            return est_prob_up + weight
+        if primary_htf_bias == "BEARISH":
+            return est_prob_up - weight
+        return est_prob_up
 
     def _apply_degraded_corr_bias(
         self, est_prob_up: float, primary_htf_bias: str, corr: BTCSOLCorrelation
@@ -841,19 +861,28 @@ class SolMacroStrategy:
         return m5_adj >= threshold
 
     def _passes_15m_iql(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> bool:
-        """Indicator Quality Layer for 15m entries.
+        """Indicator Quality Layer (IQL) for 15m entries.
 
-        Goes through self._check_15m_confirmation (patchable seam used by tests)
-        for the "already confirmed" short-circuit, then falls back to the shared
-        relaxed-rule helper in strategies._core.
+        Reuses `_check_15m_confirmation` so cycle-level LTF strength and IQL agree on
+        the same MACD scoring: if 15m is already "confirmed" (late, strong
+        structure), IQL passes. Otherwise apply the relaxed cross / hist-floor rule
+        used for early entries.
         """
         if not self.iql_15m_enabled:
             return True
         confirmed, _, _ = self._check_15m_confirmation(ta, allowed_side)
         if confirmed:
             return True
-        return passes_15m_iql_relaxed_rule(
-            ta.sol.macd_15m, allowed_side, self.iql_15m_hist_floor
+        macd_15m = ta.sol.macd_15m
+        hist = float(macd_15m.histogram)
+        if allowed_side == "LONG":
+            return (
+                macd_15m.crossover == "BULLISH_CROSS"
+                or (hist >= self.iql_15m_hist_floor and macd_15m.histogram_rising)
+            )
+        return (
+            macd_15m.crossover == "BEARISH_CROSS"
+            or (hist <= -self.iql_15m_hist_floor and not macd_15m.histogram_rising)
         )
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
@@ -868,9 +897,47 @@ class SolMacroStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _check_15m_confirmation(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> tuple:
-        """15m MACD confirmation. Delegates to strategies._core (SOL weights)."""
-        r = sol_ltf_strength_15m(ta.sol.macd_15m, allowed_side)
-        return r.confirmed, r.strength, r.reasons
+        """Check if 15m MACD confirms the allowed direction.
+
+        Returns: (confirmed: bool, strength: float, reasons: list)
+        """
+        macd_15m = ta.sol.macd_15m
+        reasons = []
+        strength = 0.0
+
+        if allowed_side == "LONG":
+            if macd_15m.crossover == "BULLISH_CROSS":
+                strength += 0.40
+                reasons.append("15m MACD bull cross")
+            if macd_15m.histogram_rising:
+                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
+                    strength += 0.35
+                    reasons.append("15m hist red-to-green")
+                elif macd_15m.histogram > macd_15m.prev_histogram:
+                    strength += 0.15
+                    reasons.append("15m hist rising")
+            if macd_15m.macd_line > macd_15m.signal_line:
+                strength += 0.10
+                reasons.append("15m MACD above signal")
+        else:  # SHORT
+            if macd_15m.crossover == "BEARISH_CROSS":
+                strength += 0.40
+                reasons.append("15m MACD bear cross")
+            if not macd_15m.histogram_rising:
+                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
+                    strength += 0.35
+                    reasons.append("15m hist green-to-red")
+                elif macd_15m.histogram < macd_15m.prev_histogram:
+                    strength += 0.15
+                    reasons.append("15m hist falling")
+            if macd_15m.macd_line < macd_15m.signal_line:
+                strength += 0.10
+                reasons.append("15m MACD below signal")
+
+        # Keep at 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35
+        # on WR and net PnL, and this gate treats confirmed LTF as late-entry risk.
+        confirmed = strength >= 0.50
+        return confirmed, strength, reasons
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 3: 5m Entry Timing + Lag Detection
@@ -1228,34 +1295,38 @@ class SolMacroStrategy:
         # ═══════════════════════════════════════════════
         ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
 
-        # LTF gate policy (shared with backtest via strategies._core).
-        # Anti-LTF default: backtest (90 days, 2180→1208 trades) showed
-        #   LTF confirmed  (strength >= 0.50) → 51.9% WR  (late-entry risk)
-        #   LTF unconfirmed (strength < 0.50) → 65.0% WR  (early momentum phase)
-        # 5m path has its own lag/timing stack and is unaffected by 15m policy.
-        skip_15m_reason = anti_ltf_gate_skip_reason(
-            ltf_confirmed=ltf_confirmed,
-            require_ltf_confirmation=self.require_ltf_confirmation,
-            anti_ltf_gate_enabled=self.anti_ltf_gate_enabled,
-        ) or None
-        if skip_15m_reason == "ltf_required_unconfirmed_15m":
-            logger.info(
-                f"{_brand}: LTF confirmation required, but unconfirmed "
-                f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
-            )
-        elif skip_15m_reason == "anti_ltf_confirmed_15m":
-            logger.info(
-                f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
-                f"15m entries will be skipped. strength={ltf_strength:.2f}"
-            )
-        elif self.require_ltf_confirmation:
-            logger.info(
-                f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
-            )
+        # LTF gate policy.
+        # Default keeps anti-LTF behavior (skip confirmed entries), but strategy-specific
+        # configs can opt into requiring confirmation when an asset performs poorly in
+        # weak/unconfirmed windows.
+        skip_15m_reason = None
+        if self.require_ltf_confirmation:
+            if not ltf_confirmed:
+                # 5m path has its own lag/timing signal stack and should not be blocked
+                # by the 15m confirmation requirement.
+                skip_15m_reason = "ltf_required_unconfirmed_15m"
+                logger.info(
+                    f"{_brand}: LTF confirmation required, but unconfirmed "
+                    f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
+                )
+            else:
+                logger.info(
+                    f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
+                )
         else:
-            logger.info(
-                f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
-            )
+            # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
+            #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
+            #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
+            if self.anti_ltf_gate_enabled and ltf_confirmed:
+                skip_15m_reason = "anti_ltf_confirmed_15m"
+                logger.info(
+                    f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
+                    f"15m entries will be skipped. strength={ltf_strength:.2f}"
+                )
+            else:
+                logger.info(
+                    f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
+                )
 
         # ═══════════════════════════════════════════════
         # LAYER 3: 5m entry timing + lag detection
@@ -1645,12 +1716,37 @@ class SolMacroStrategy:
                         )
                         continue
 
-                    # 5m MACD — primary entry signal for 5m markets.
-                    # Scoring lives in strategies._core.sol_m5_macd_adj.
+                    # 5m MACD — primary entry signal for 5m markets
+                    # ta.sol.macd_5m exists on SOLAnalysis
                     macd_5m = sol.macd_5m
-                    _m5 = sol_m5_macd_adj(macd_5m, allowed_side)
-                    m5_adj = _m5.adj
-                    m5_reasons = [_m5.reason] if _m5.reason else []
+                    m5_adj = 0.0
+                    m5_reasons = []
+                    if allowed_side == "LONG":
+                        if macd_5m.crossover == "BULLISH_CROSS":
+                            m5_adj = 0.06
+                            m5_reasons.append("5m MACD bull cross")
+                        elif macd_5m.histogram_rising and macd_5m.histogram > 0:
+                            m5_adj = 0.04
+                            m5_reasons.append("5m hist green+rising")
+                        elif macd_5m.macd_line > macd_5m.signal_line:
+                            m5_adj = 0.02
+                            m5_reasons.append("5m MACD>signal")
+                        elif macd_5m.crossover == "BEARISH_CROSS" or macd_5m.histogram < 0:
+                            m5_adj = -0.04
+                            m5_reasons.append(f"5m against ({macd_5m.crossover})")
+                    else:  # SHORT
+                        if macd_5m.crossover == "BEARISH_CROSS":
+                            m5_adj = 0.06
+                            m5_reasons.append("5m MACD bear cross")
+                        elif not macd_5m.histogram_rising and macd_5m.histogram < 0:
+                            m5_adj = 0.04
+                            m5_reasons.append("5m hist red+falling")
+                        elif macd_5m.macd_line < macd_5m.signal_line:
+                            m5_adj = 0.02
+                            m5_reasons.append("5m MACD<signal")
+                        elif macd_5m.crossover == "BULLISH_CROSS" or macd_5m.histogram > 0:
+                            m5_adj = -0.04
+                            m5_reasons.append(f"5m against ({macd_5m.crossover})")
 
                     _sample("m5_adj", m5_adj)
                     if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
@@ -1687,8 +1783,11 @@ class SolMacroStrategy:
                         est_prob_up -= 0.02
                         m5_reasons.append("5m_trend_bear")
 
-                    # RSI extremes (5m: lighter ±0.02 magnitude than 15m's ±0.03).
-                    est_prob_up += sol_rsi_extremes_adj(sol.rsi_14, magnitude=0.02)
+                    # RSI extremes (very light for 5m)
+                    if sol.rsi_14 > 75:
+                        est_prob_up -= 0.02
+                    elif sol.rsi_14 < 25:
+                        est_prob_up += 0.02
 
                     # Correlation confidence — log for diagnostics.
                     # Light damping on low corr: primary edge is macro+LTF, not correlation.
@@ -1770,16 +1869,27 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H histogram gate — relaxed: blocks only when actively against
-                    # the trade direction. Logic shared with backtest via strategies._core.
+                    # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
+                    # SOL 15m: without gate ~51% WR; with gate ~59.3% WR.
+                    # Relaxed: allow when histogram is in trade direction (positive for
+                    # LONG) even if decelerating, not just when accelerating. Blocks only
+                    # when histogram is actively against the trade direction.
                     _macd_1h = sol.macd_1h
+                    _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
+                    _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
-                        _gate = alt_1h_hist_gate(_macd_1h, allowed_side)
-                        if not _gate.allowed:
-                            _bump_skip(_gate.rejection_reason)
+                        if allowed_side == "LONG" and not _h1_bull_ok:
+                            _bump_skip("histogram_1h_blocks_long_15m")
                             logger.info(
                                 f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                                f"1H histogram against side (hist={_macd_1h.histogram:.4f})"
+                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
+                            )
+                            continue
+                        if allowed_side == "SHORT" and not _h1_bear_ok:
+                            _bump_skip("histogram_1h_blocks_short_15m")
+                            logger.info(
+                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
                             )
                             continue
 
@@ -1813,8 +1923,11 @@ class SolMacroStrategy:
                     else:
                         est_prob_up -= timing_bonus
 
-                    # RSI extremes — shared with backtest via strategies._core.
-                    est_prob_up += sol_rsi_extremes_adj(sol.rsi_14)
+                    # RSI extremes
+                    if sol.rsi_14 > 75:
+                        est_prob_up -= 0.03
+                    elif sol.rsi_14 < 25:
+                        est_prob_up += 0.03
 
                     # Correlation confidence — unified with 5m path.
                     # Light damping: primary edge is macro+LTF, not correlation.
@@ -2000,7 +2113,6 @@ class SolMacroStrategy:
                         f"Should we take this {action} trade, or HOLD?\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
-                    _wm, _wo = _ai_window_args(market, is_updown)
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context,
@@ -2012,8 +2124,6 @@ class SolMacroStrategy:
                         quant_confidence=confidence,
                         quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
                         require_shadow_portfolio=False,
-                        window_minutes=_wm,
-                        window_open_utc=_wo,
                     )
                     ai_calls += 1
                     ai_used = True
@@ -2211,7 +2321,6 @@ class SolMacroStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                _wm, _wo = _ai_window_args(market, is_updown)
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context2,
@@ -2223,8 +2332,6 @@ class SolMacroStrategy:
                     quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
                     require_shadow_portfolio=False,
-                    window_minutes=_wm,
-                    window_open_utc=_wo,
                 )
                 ai_calls += 1
                 ai_used = True
@@ -2409,7 +2516,6 @@ class SolMacroStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
-                    _wm, _wo = _ai_window_args(market, is_updown)
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context3,
@@ -2421,8 +2527,6 @@ class SolMacroStrategy:
                         quant_confidence=confidence,
                         quant_threshold=effective_min_edge,
                         require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
-                        window_minutes=_wm,
-                        window_open_utc=_wo,
                     )
                     ai_calls += 1
                     ai_used = True

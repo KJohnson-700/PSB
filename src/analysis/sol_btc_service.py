@@ -135,9 +135,9 @@ class BTCSOLCorrelation:
     btc_spike_detected: bool = False  # True if BTC moved >0.3% in 5m or >0.8% in 15m
     btc_spike_direction: str = "NONE" # "UP", "DOWN", "NONE"
     # SOL lag measurement
-    alt_move_5m_pct: float = 0.0      # Alt % move in same 5-minute window
-    alt_move_15m_pct: float = 0.0     # Alt % move in same 15-minute window
-    alt_move_30m_pct: float = 0.0     # Alt % move over last ~30 closed 1m bars
+    sol_move_5m_pct: float = 0.0      # SOL % move in same 5-minute window
+    sol_move_15m_pct: float = 0.0     # SOL % move in same 15-minute window
+    sol_move_30m_pct: float = 0.0     # Alt % move over last ~30 closed 1m bars
     sol_lag_pct: float = 0.0          # How much SOL is lagging BTC's move (%)
     # Opportunity
     lag_opportunity: bool = False     # True if BTC spiked but SOL hasn't caught up
@@ -789,31 +789,31 @@ class SOLBTCService:
                 result.degraded_reasons.append(reason)
 
         # Fetch 1-minute data — need ≥31 bars for 30m %-move parity with closed 1m indexing
-        df_alt_1m = self.fetch_klines(self.alt_symbol, "1m", 120)
+        df_sol_1m = self.fetch_klines(self.alt_symbol, "1m", 120)
         df_btc_1m = self.fetch_klines("BTCUSDT", "1m", 120)
 
-        if df_alt_1m.empty or df_btc_1m.empty:
+        if df_sol_1m.empty or df_btc_1m.empty:
             _mark_degraded("missing_1m_klines")
             logger.warning("Could not fetch 1m klines for correlation")
             return result
 
         # Current prices
-        alt_price = float(df_alt_1m["close"].iloc[-1])
+        sol_price = float(df_sol_1m["close"].iloc[-1])
         btc_price = float(df_btc_1m["close"].iloc[-1])
         result.btc_price = btc_price
 
         # --- Rolling 1h correlation of returns ---
-        alt_returns = df_alt_1m["close"].pct_change().dropna()
+        sol_returns = df_sol_1m["close"].pct_change().dropna()
         btc_returns = df_btc_1m["close"].pct_change().dropna()
 
         # Align lengths
-        min_len = min(len(alt_returns), len(btc_returns))
+        min_len = min(len(sol_returns), len(btc_returns))
         if min_len >= 10:
-            alt_ret = alt_returns.iloc[-min_len:].values
+            sol_ret = sol_returns.iloc[-min_len:].values
             btc_ret = btc_returns.iloc[-min_len:].values
             # Pearson correlation
-            if np.std(alt_ret) > 0 and np.std(btc_ret) > 0:
-                correlation = float(np.corrcoef(alt_ret, btc_ret)[0, 1])
+            if np.std(sol_ret) > 0 and np.std(btc_ret) > 0:
+                correlation = float(np.corrcoef(sol_ret, btc_ret)[0, 1])
                 result.correlation_1h = correlation
             else:
                 _mark_degraded("zero_volatility_returns")
@@ -888,20 +888,20 @@ class SOLBTCService:
             dominant_move = result.btc_move_5m_pct if spike_5m else result.btc_move_15m_pct
             result.btc_spike_direction = "UP" if dominant_move > 0 else "DOWN"
 
-        # --- Alt lag measurement ---
-        if len(df_alt_1m) >= 6:
-            alt_5m_ago = float(df_alt_1m["close"].iloc[-6])
-            alt_move_5m = (alt_price - alt_5m_ago) / alt_5m_ago * 100
-            result.alt_move_5m_pct = alt_move_5m
+        # --- SOL lag measurement ---
+        if len(df_sol_1m) >= 6:
+            sol_5m_ago = float(df_sol_1m["close"].iloc[-6])
+            sol_move_5m = (sol_price - sol_5m_ago) / sol_5m_ago * 100
+            result.sol_move_5m_pct = sol_move_5m
 
-        if len(df_alt_1m) >= 16:
-            alt_15m_ago = float(df_alt_1m["close"].iloc[-16])
-            alt_move_15m = (alt_price - alt_15m_ago) / alt_15m_ago * 100
-            result.alt_move_15m_pct = alt_move_15m
+        if len(df_sol_1m) >= 16:
+            sol_15m_ago = float(df_sol_1m["close"].iloc[-16])
+            sol_move_15m = (sol_price - sol_15m_ago) / sol_15m_ago * 100
+            result.sol_move_15m_pct = sol_move_15m
 
-        if len(df_alt_1m) >= 31:
-            alt_30m_ago = float(df_alt_1m["close"].iloc[-31])
-            result.alt_move_30m_pct = (alt_price - alt_30m_ago) / alt_30m_ago * 100
+        if len(df_sol_1m) >= 31:
+            sol_30m_ago = float(df_sol_1m["close"].iloc[-31])
+            result.sol_move_30m_pct = (sol_price - sol_30m_ago) / sol_30m_ago * 100
 
         # --- Lag opportunity detection ---
         # If BTC spiked, check if SOL has caught up
@@ -909,12 +909,12 @@ class SOLBTCService:
         if result.btc_spike_detected:
             # Dynamic beta: use ratio of SOL vs BTC volatility as a proxy
             # When both have enough data, compare recent move magnitudes
-            if len(df_alt_1m) >= 30 and len(df_btc_1m) >= 30:
-                alt_returns = df_alt_1m["close"].pct_change().dropna().tail(30)
+            if len(df_sol_1m) >= 30 and len(df_btc_1m) >= 30:
+                sol_returns = df_sol_1m["close"].pct_change().dropna().tail(30)
                 btc_returns = df_btc_1m["close"].pct_change().dropna().tail(30)
                 btc_var = btc_returns.var()
                 if btc_var > 0:
-                    dynamic_beta = float(alt_returns.cov(btc_returns) / btc_var)
+                    dynamic_beta = float(sol_returns.cov(btc_returns) / btc_var)
                     # Regime-aware beta clamp: during extreme BTC spikes (>1.5%),
                     # SOL beta can exceed 4x. Clamping to 3.0 in those regimes
                     # underestimates expected SOL move -> false lag opportunities.
@@ -930,12 +930,12 @@ class SOLBTCService:
 
             spike_window = "5m" if spike_5m else "15m"
             btc_move_for_lag = result.btc_move_5m_pct if spike_5m else result.btc_move_15m_pct
-            expected_alt_move = btc_move_for_lag * dynamic_beta
-            actual_alt_move = result.alt_move_5m_pct if spike_5m else result.alt_move_15m_pct
+            expected_sol_move = btc_move_for_lag * dynamic_beta
+            actual_sol_move = result.sol_move_5m_pct if spike_5m else result.sol_move_15m_pct
 
-            # Lag = how much the alt should have moved but hasn't
+            # Lag = how much SOL should have moved but hasn't
             if result.btc_spike_direction == "UP":
-                lag = expected_alt_move - actual_alt_move
+                lag = expected_sol_move - actual_sol_move
                 result.sol_lag_pct = lag
                 # Opportunity if SOL is lagging by more than lag_signal_min_pct
                 if lag > self.lag_signal_min_pct:
@@ -943,7 +943,7 @@ class SOLBTCService:
                     result.opportunity_direction = "LONG"
                     result.opportunity_magnitude = lag
             elif result.btc_spike_direction == "DOWN":
-                lag = actual_alt_move - expected_alt_move  # expected is negative, actual should be too
+                lag = actual_sol_move - expected_sol_move  # expected is negative, actual should be too
                 result.sol_lag_pct = lag
                 # Opportunity if SOL hasn't dropped as much as expected
                 if lag > self.lag_signal_min_pct:
@@ -1153,7 +1153,7 @@ class SOLBTCService:
                 f"BTC ${correlation.btc_price:,.0f} corr={correlation.correlation_1h:.2f} "
                 f"BTC5m={correlation.btc_move_5m_pct:+.2f}% "
                 f"BTC30m={correlation.btc_move_30m_pct:+.2f}% "
-                f"{_alt_label}5m={correlation.alt_move_5m_pct:+.2f}% | "
+                f"{_alt_label}5m={correlation.sol_move_5m_pct:+.2f}% | "
                 f"D={multi_tf.daily_trend} MTF={multi_tf.overall_direction} aligned={multi_tf.aligned}"
                 f"{f' | oracle={sol.chainlink_network}:${sol.chainlink_price:,.2f} basis={sol.oracle_basis_bps:+.1f}bps' if sol.chainlink_price else ''}"
                 f"{lag_info}"

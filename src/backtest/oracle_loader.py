@@ -110,6 +110,20 @@ class OracleHistoryLoader:
         if self._cache_covers(history, start_ts, end_ts):
             return history
 
+        if history.empty and not cache.empty:
+            lo = pd.Timestamp(cache["updated_at"].min())
+            hi = pd.Timestamp(cache["updated_at"].max())
+            logger.warning(
+                "oracle_loader: %s cache has %s rows but none in [%s, %s]; "
+                "cached timestamps span %s .. %s. Widen the JSONL (RPC backfill below) or use --start/--end inside that span.",
+                spec.symbol,
+                len(cache),
+                start_ts.isoformat(),
+                end_ts.isoformat(),
+                lo.isoformat(),
+                hi.isoformat(),
+            )
+
         fetched = self._fetch_history(spec, start_ts - pd.Timedelta(days=1), end_ts)
         if fetched.empty:
             return history
