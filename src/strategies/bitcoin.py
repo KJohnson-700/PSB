@@ -43,7 +43,7 @@ from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m
+from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m, score_m5_direction
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -1080,43 +1080,23 @@ class BitcoinStrategy:
                             f"4H rising but 1H falling — local momentum recovery SHORT"
                         )
 
-                    # 5m momentum direction — the primary LTF signal for 5m markets
-                    # mom.m5_direction: SPIKE_UP, DRIFT_UP, LEAN_UP, NONE, LEAN_DOWN, DRIFT_DOWN, SPIKE_DOWN
+                    # 5m momentum direction — primary LTF signal for 5m markets.
+                    # Scoring lives in strategies._core.score_m5_direction.
+                    # NB: producer (btc_price_service) only emits SPIKE/DRIFT for
+                    # m5_direction; the LEAN_* +/-0.01 cases in score_m5_direction
+                    # are dead until/unless the producer changes.
                     m5_dir = mom.m5_direction
-                    m5_adj = 0.0
+                    m5_adj = score_m5_direction(m5_dir, effective_side)
                     m5_reasons = []
-                    if effective_side == "LONG":
-                        if m5_dir == "SPIKE_UP":
-                            m5_adj = 0.06
-                            m5_reasons.append(f"5m SPIKE_UP ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir == "DRIFT_UP":
-                            m5_adj = 0.04
-                            m5_reasons.append(f"5m DRIFT_UP ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir == "LEAN_UP":
-                            m5_adj = 0.01  # Weak nudge — don't rely on it alone
-                            m5_reasons.append(f"5m LEAN_UP ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                            m5_adj = -0.04  # 5m moving against us — penalty
+                    if m5_adj != 0.0:
+                        _aligned = (
+                            (effective_side == "LONG" and "UP" in m5_dir)
+                            or (effective_side == "SHORT" and "DOWN" in m5_dir)
+                        )
+                        if _aligned:
+                            m5_reasons.append(f"5m {m5_dir} ({mom.m5_move_pct:+.3f}%)")
+                        else:
                             m5_reasons.append(f"5m against ({m5_dir})")
-                        elif m5_dir == "LEAN_DOWN":
-                            m5_adj = -0.01  # Weak opposing nudge
-                            m5_reasons.append(f"5m LEAN_DOWN ({mom.m5_move_pct:+.3f}%)")
-                    else:  # SHORT
-                        if m5_dir == "SPIKE_DOWN":
-                            m5_adj = 0.06
-                            m5_reasons.append(f"5m SPIKE_DOWN ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir == "DRIFT_DOWN":
-                            m5_adj = 0.04
-                            m5_reasons.append(f"5m DRIFT_DOWN ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir == "LEAN_DOWN":
-                            m5_adj = 0.01
-                            m5_reasons.append(f"5m LEAN_DOWN ({mom.m5_move_pct:+.3f}%)")
-                        elif m5_dir in ("SPIKE_UP", "DRIFT_UP"):
-                            m5_adj = -0.04
-                            m5_reasons.append(f"5m against ({m5_dir})")
-                        elif m5_dir == "LEAN_UP":
-                            m5_adj = -0.01
-                            m5_reasons.append(f"5m LEAN_UP against ({mom.m5_move_pct:+.3f}%)")
 
                     if effective_side == "LONG":
                         est_prob_up += m5_adj

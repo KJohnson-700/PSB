@@ -65,6 +65,7 @@ from src.strategies._core import (
     btc_htf_bias,
     btc_ltf_strength_15m,
     passes_15m_iql,
+    score_m5_direction,
     sol_ltf_strength_15m,
 )
 
@@ -1078,17 +1079,7 @@ class UpdownBacktestEngine:
         elif move_pct < -0.03: direction = "DRIFT_DOWN"
         else:                  direction = "NONE"
 
-        m5_adj = 0.0
-        if allowed_side == "LONG":
-            if   direction == "SPIKE_UP":                    m5_adj =  0.06
-            elif direction == "DRIFT_UP":                    m5_adj =  0.04
-            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):  m5_adj = -0.04
-        else:
-            if   direction == "SPIKE_DOWN":                  m5_adj =  0.06
-            elif direction == "DRIFT_DOWN":                  m5_adj =  0.04
-            elif direction in ("SPIKE_UP", "DRIFT_UP"):      m5_adj = -0.04
-
-        return direction, m5_adj
+        return direction, score_m5_direction(direction, allowed_side)
 
     # ==========================================================================
     # 5m edge -- BTC and SOL paths (matches live strategies)

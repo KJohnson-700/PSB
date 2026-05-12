@@ -14,6 +14,7 @@ from .ltf_strength import (
     passes_15m_iql_relaxed_rule,
     sol_ltf_strength_15m,
 )
+from .m5_momentum import score_m5_direction
 
 __all__ = [
     "BtcHtfBiasResult",
@@ -23,4 +24,5 @@ __all__ = [
     "sol_ltf_strength_15m",
     "passes_15m_iql",
     "passes_15m_iql_relaxed_rule",
+    "score_m5_direction",
 ]
