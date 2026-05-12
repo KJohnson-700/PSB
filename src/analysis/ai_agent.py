@@ -1012,11 +1012,63 @@ OUTPUT (machine-parseable — follow exactly):
         quant_threshold: float,
         require_shadow_portfolio: Optional[bool] = None,
     ) -> AIDecision:
-        """Enforced pre-entry AI decision layer.
+        """Enforced pre-entry AI decision layer (logs to ai_call_log on each call).
 
         This is deliberately stricter than log-only narrators: a HOLD/SKIP,
         action mismatch, low confidence, or non-positive AI edge rejects the trade.
         """
+        decision = await self._evaluate_trade_decision_inner(
+            market_question=market_question,
+            market_description=market_description,
+            current_yes_price=current_yes_price,
+            market_id=market_id,
+            strategy_hint=strategy_hint,
+            quant_action=quant_action,
+            quant_edge=quant_edge,
+            quant_confidence=quant_confidence,
+            quant_threshold=quant_threshold,
+            require_shadow_portfolio=require_shadow_portfolio,
+        )
+        if self._ai_call_log_enabled():
+            from src.analysis import ai_call_log
+            ai_call_log.append_record(
+                market_question=market_question,
+                market_id=market_id,
+                strategy_hint=strategy_hint,
+                quant_action=quant_action,
+                quant_edge=quant_edge,
+                quant_confidence=quant_confidence,
+                quant_threshold=quant_threshold,
+                approved=decision.approved,
+                ai_action=decision.action,
+                ai_confidence=decision.confidence,
+                ai_estimated_probability=decision.estimated_probability,
+                ai_edge=decision.edge,
+                ai_reason=decision.reason,
+                ai_source=decision.source,
+            )
+        return decision
+
+    def _ai_call_log_enabled(self) -> bool:
+        """Whether to record each evaluate_trade_decision result. Default True;
+        operators can flip off via ai.call_log_enabled=false."""
+        return bool(self.config.get("call_log_enabled", True))
+
+    async def _evaluate_trade_decision_inner(
+        self,
+        *,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str,
+        quant_action: str,
+        quant_edge: float,
+        quant_confidence: float,
+        quant_threshold: float,
+        require_shadow_portfolio: Optional[bool] = None,
+    ) -> AIDecision:
+        """Inner logic — does not log. Public evaluate_trade_decision wraps + logs."""
         if not self.decision_layer_enabled():
             return AIDecision(
                 approved=True,
