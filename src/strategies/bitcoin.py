@@ -43,6 +43,7 @@ from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
+from src.strategies._core import btc_htf_bias
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -383,77 +384,15 @@ class BitcoinStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _get_higher_tf_bias(self, ta: TechnicalAnalysis) -> str:
-        """Determine the 4H trend bias. This is THE LAW.
-
-        Uses three inputs from the 4H chart:
-        1. Trend Sabre direction (trend == 1 or -1)
-        2. Price position vs Sabre MA (above = bullish, below = bearish)
-        3. 4H MACD above/below zero line
-
-        Returns: "BULLISH", "BEARISH", or "NEUTRAL" (rare — all three conflict)
-        """
-        sabre = ta.trend_sabre
-        macd_4h = ta.macd_4h
-        price = ta.current_price
-
-        bull_votes = 0
-        bear_votes = 0
-
-        # Vote 1: Trend Sabre trend direction
-        if sabre.trend == 1:
-            bull_votes += 1
-        elif sabre.trend == -1:
-            bear_votes += 1
-
-        # Vote 2: Price vs Sabre SMA(35) — is price above or below the moving range?
-        if price > sabre.ma_value:
-            bull_votes += 1
-        elif price < sabre.ma_value:
-            bear_votes += 1
-
-        # Vote 3: 4H MACD momentum direction
-        # Three cases for bull vote:
-        #   a) MACD line above zero (confirmed uptrend)
-        #   b) BULLISH_CROSS crossover (fresh bull cross, even if below zero)
-        #   c) Histogram rising strongly below zero — recovery in progress before zero-line cross.
-        #      Live data: large positive histograms (+200 to +300) below zero were counting as
-        #      bear votes (bug), causing false BEARISH HTF calls during BTC recoveries.
-        _early_bull = (macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising)
-        _early_bear = (macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising)
-        # Recovery signal: histogram positive while still below zero line
-        # MACD above signal line (histogram > 0) is bullish even if decelerating.
-        # Requiring histogram_rising was causing false BEARISH calls during pumps
-        # where histogram was large/positive but momentarily decelerating.
-        _recovery = (not macd_4h.above_zero
-                     and macd_4h.histogram > 0)
-        if _early_bear:
-            bear_votes += 1
-        elif macd_4h.above_zero or _early_bull or _recovery:
-            bull_votes += 1
-        else:
-            bear_votes += 1
-
-        if bull_votes >= 2:
-            bias = "BULLISH"
-        elif bear_votes >= 2:
-            bias = "BEARISH"
-        else:
-            return "NEUTRAL"
-
-        # ── Conviction gate: require meaningful MACD histogram magnitude ──
-        # Without this, 2/3 vote with a histogram near zero (e.g. +5 when typical
-        # range is +/-200) produces weak directional calls → 50/50 coin-flip entries.
-        # Require |histogram| > min_hist_magnitude (default 20) to confirm direction.
-        # If below threshold, downgrade to NEUTRAL — tighter edge will be enforced.
-        _min_hist = self.config.get("min_4h_hist_magnitude", 20.0)
-        if abs(macd_4h.histogram) < _min_hist:
+        """Determine the 4H trend bias. THE LAW. Delegates to strategies._core."""
+        min_hist = float(self.config.get("min_4h_hist_magnitude", 20.0))
+        result = btc_htf_bias(ta, min_hist_magnitude=min_hist)
+        if result.downgraded_to_neutral:
             logger.info(
-                f"BTC HTF: {bias} by vote but 4H MACD hist={macd_4h.histogram:+.1f} "
-                f"below conviction threshold ({_min_hist}) — downgrading to NEUTRAL"
+                f"BTC HTF: {result.raw_vote_bias} by vote but 4H MACD hist={result.macd_4h_hist:+.1f} "
+                f"below conviction threshold ({min_hist}) — downgrading to NEUTRAL"
             )
-            return "NEUTRAL"
-
-        return bias
+        return result.bias
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 2: Lower Timeframe Confirmation (15m MACD)

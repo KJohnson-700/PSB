@@ -61,6 +61,7 @@ from src.analysis.btc_price_service import (
     CandleMomentum,
     AnchoredVolumeProfile,
 )
+from src.strategies._core import btc_htf_bias
 
 logger = logging.getLogger(__name__)
 
@@ -754,50 +755,8 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _get_htf_bias(ta: TechnicalAnalysis, min_hist: float = 20.0) -> str:
-        """BTC 3-vote system -- exact copy of BitcoinStrategy._get_higher_tf_bias().
-
-        Vote 1: Trend Sabre direction
-        Vote 2: Price vs Sabre SMA(35)
-        Vote 3: 4H MACD with early_bull / early_bear / recovery signals
-        """
-        sabre   = ta.trend_sabre
-        macd_4h = ta.macd_4h
-        price   = ta.current_price
-        bull = bear = 0
-
-        # Vote 1: Trend Sabre direction
-        if sabre.trend == 1:    bull += 1
-        elif sabre.trend == -1: bear += 1
-
-        # Vote 2: Price vs Sabre MA
-        if price > sabre.ma_value:   bull += 1
-        elif price < sabre.ma_value: bear += 1
-
-        # Vote 3: 4H MACD -- matches live early_bull / early_bear / recovery
-        _early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
-        _early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
-        _recovery   = not macd_4h.above_zero and macd_4h.histogram > 0
-
-        if _early_bear:
-            bear += 1
-        elif macd_4h.above_zero or _early_bull or _recovery:
-            bull += 1
-        else:
-            bear += 1
-
-        if bull >= 2:
-            bias = "BULLISH"
-        elif bear >= 2:
-            bias = "BEARISH"
-        else:
-            return "NEUTRAL"
-
-        # Conviction gate -- matches bitcoin.py _get_higher_tf_bias().
-        # Threshold read from config (min_4h_hist_magnitude); default 20.0.
-        # Near-zero histograms with a 2/3 vote produce coin-flip entries.
-        if abs(macd_4h.histogram) < min_hist:
-            return "NEUTRAL"
-        return bias
+        """BTC 3-vote 4H bias. Delegates to strategies._core (same code live uses)."""
+        return btc_htf_bias(ta, min_hist_magnitude=min_hist).bias
 
     # ==========================================================================
     # HTF bias -- SOL (matches sol_macro.py _get_macro_trend exactly)
