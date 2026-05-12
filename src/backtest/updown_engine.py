@@ -28,8 +28,8 @@ Signal fidelity
 ───────────────
 BTC: mirrors bitcoin.py exactly (HTF 3-vote with early_bull/early_bear/
      recovery, graduated 15m boost, anti-LTF gate, 5m candle momentum).
-SOL: mirrors sol_macro.py (1H EMA trend + 15m EMA alignment + 15m RSI for
-     HTF, SOL-specific LTF weights, 5m MACD with live weights).
+Non-BTC crypto: uses each alt's own 1H/15m/5m indicators as the primary
+     direction source; BTC remains secondary context/follow/correlation input.
      Lag/correlation signals are omitted (require live BTC feed).
      15m IQL + optional stricter 5m SELL gates (min m5_adj + min BTC-alt 1h
      correlation via aligned 1m bars) mirror live config when enabled.
@@ -579,6 +579,8 @@ class UpdownBacktestEngine:
     @staticmethod
     def _before(df: pd.DataFrame, t: pd.Timestamp) -> pd.DataFrame:
         """All rows with open_time strictly BEFORE t -- no look-ahead."""
+        if df is None or df.empty or "open_time" not in df.columns:
+            return pd.DataFrame()
         return df[df["open_time"] < t].copy()
 
     @staticmethod
@@ -1696,7 +1698,7 @@ class UpdownBacktestEngine:
         else:  # SOL
             min_edge = self.min_edge_sol_5m if window_minutes == 5 else self.min_edge_sol_15m
 
-        # BTC uses 4h HTF candles; SOL uses 1h
+        # BTC uses 4h HTF candles; non-BTC crypto uses each alt's 1h HTF.
         htf_key = "4h" if is_btc else "1h"
 
         # Snap start to the nearest window boundary
@@ -1769,7 +1771,9 @@ class UpdownBacktestEngine:
                 if btc_ta is None:
                     current += step_td
                     continue
-                htf_bias = self._get_htf_bias(btc_ta, min_hist=self.min_4h_hist_magnitude)
+                # ETH live strategy is alt-first: ETH 1H/15m context chooses
+                # direction; BTC is retained for follow/quality filters below.
+                htf_bias = self._get_sol_htf_bias(ta, df_15m)
             else:
                 htf_bias = self._get_sol_htf_bias(ta, df_15m)
                 btc_ta = None

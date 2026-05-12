@@ -1205,10 +1205,13 @@ class SolMacroStrategy:
         # LAYER 1: Macro trend (1H)
         # ═══════════════════════════════════════════════
         macro_trend = self._get_macro_trend(ta)
-        primary_htf_bias = btc_htf_bias or macro_trend
+        # Non-BTC strategies are alt-first: the alt HTF establishes direction;
+        # BTC is secondary context/fallback when the alt has no usable bias.
+        primary_htf_bias = macro_trend if macro_trend != "NEUTRAL" else (btc_htf_bias or macro_trend)
 
         logger.info(
-            f"{_alt_label} ${sol_price:,.2f} | BTC_HTF: {primary_htf_bias} | ALT_HTF: {macro_trend} | "
+            f"{_alt_label} ${sol_price:,.2f} | ALT_HTF: {macro_trend} | BTC_HTF: {btc_htf_bias or 'UNAVAILABLE'} | "
+            f"PRIMARY: {primary_htf_bias} | "
             f"1H={mtt.h1_trend} 15m={mtt.m15_trend} 5m={mtt.m5_trend} | "
             f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover} | "
             f"RSI={sol.rsi_14:.0f} | "
@@ -1231,9 +1234,8 @@ class SolMacroStrategy:
             if not has_updown:
                 logger.info(f"{_brand} strategy: BTC+ALT HTF neutral — sitting out")
                 return []
-            # NEUTRAL macro with updown markets: use LTF as primary signal.
-            # Live data: lag=None trades 63% WR outperform lag=value 50% WR.
-            # Allow entry when LTF is confirmed; lag is a SECONDARY boost only.
+            # NEUTRAL alt HTF with updown markets: use alt LTF first.
+            # BTC spike/lag is fallback context only when the alt has no usable HTF side.
             # Track these trades separately via NEUTRAL_MACRO tag in reason_parts.
             if corr.btc_spike_detected:
                 # BTC spike but alt hasn't moved → trade the catch-up direction
@@ -1275,7 +1277,7 @@ class SolMacroStrategy:
                     return []
                 logger.info(f"{_brand}: Macro NEUTRAL, no lag — using {_alt_label} 1H bias: {allowed_side}")
         else:
-            # BULLISH or BEARISH macro — BTC 4H is primary, alt HTF is secondary
+            # BULLISH or BEARISH alt macro — alt HTF is primary; BTC is secondary.
             allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
             side_source = "primary_htf"
             if primary_htf_bias == "BULLISH":
@@ -1424,8 +1426,9 @@ class SolMacroStrategy:
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
             reason_parts = [
-                f"BTC_HTF={primary_htf_bias}",
                 f"ALT_HTF={macro_trend}",
+                f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'}",
+                f"PRIMARY_HTF={primary_htf_bias}",
                 f"side={allowed_side}",
             ]
             dead_zone_would_block = False
@@ -2125,7 +2128,7 @@ class SolMacroStrategy:
                         f"BTC spike: {corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)\n"
                         f"{_alt_label} macro leg: {corr.lag_opportunity} dir={corr.opportunity_direction} mag={corr.opportunity_magnitude:+.2f}%\n\n"
                         f"=== MACRO (1H) — {macro_trend} ===\n"
-                        f"BTC 4H bias: {primary_htf_bias}\n"
+                        f"Primary alt HTF bias: {primary_htf_bias}\n"
                         f"EMA: 9=${sol.ema_9:,.2f} 21=${sol.ema_21:,.2f} 50=${sol.ema_50:,.2f}\n"
                         f"RSI: {sol.rsi_14:.1f}\n\n"
                         f"=== 15m CONFIRMATION ===\n"
@@ -2333,7 +2336,8 @@ class SolMacroStrategy:
                     f"Oracle={sol.chainlink_network or 'n/a'} "
                     f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} "
                     f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
-                    f"BTC_HTF={primary_htf_bias} | ALT_HTF={macro_trend} | "
+                    f"ALT_HTF={macro_trend} | BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} | "
+                    f"PRIMARY_HTF={primary_htf_bias} | "
                     f"Quant edge={edge:.4f} required>={effective_min_edge:.4f}\n"
                     f"BTC ${corr.btc_price:,.2f} corr1h={corr.correlation_1h:.3f} "
                     f"macro_opp={corr.lag_opportunity} mag={corr.opportunity_magnitude:+.2f}%\n"
@@ -2535,7 +2539,8 @@ class SolMacroStrategy:
                         f"basis_bps={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
                         f"freshness_sec={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}\n"
                         f"Components={composite.components}\n"
-                        f"BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
+                        f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} "
+                        f"PRIMARY_HTF={primary_htf_bias} "
                         f"LTF_strength={ltf_strength:.2f}\n\n"
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
@@ -2812,7 +2817,7 @@ class SolMacroStrategy:
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
             f"{_brand} SCAN_DIAG side={allowed_side} source={side_source if 'side_source' in locals() else 'neutral_macro'} "
-            f"BTC_HTF={primary_htf_bias} ALT_HTF={macro_trend} "
+            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} PRIMARY_HTF={primary_htf_bias} "
             f"alt_1H_trend={mtt.h1_trend} enforce_alt_1h={self.enforce_alt_1h_alignment} "
             f"skip_15m={skip_15m_reason!s} markets={len(sol_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"
@@ -2825,7 +2830,8 @@ class SolMacroStrategy:
             "btc_1h_regime_gates_enabled": bool(
                 self._btc_1h_regime_gates.get("enabled", False)
             ),
-            "btc_htf_bias": primary_htf_bias,
+            "btc_htf_bias": btc_htf_bias,
+            "primary_htf_bias": primary_htf_bias,
             "alt_htf_bias": macro_trend,
             "allowed_side": allowed_side,
             "action_counts": dict(sorted(action_counts.items())),

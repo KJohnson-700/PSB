@@ -1,11 +1,8 @@
 """
-ETH Macro Strategy — BTC-follow execution for ETH up/down markets.
+ETH Macro Strategy.
 
-Design:
-- BTC 4H decides regime.
-- BTC 1H confirms continuation quality.
-- BTC short-window momentum triggers the follow setup.
-- ETH 5m/15m momentum only confirms follow-through.
+ETH is its own alt leg: ETH spot/HTF/oracle data drives primary direction.
+BTC is secondary context/follow-quality input only.
 """
 import logging
 import time
@@ -330,14 +327,13 @@ class ETHMacroStrategy(SolMacroStrategy):
 
     def _resolve_market_side(self, base_side: str, btc_htf_bias: str, market_yes_price: float) -> tuple[str, str]:
         # Modes:
-        # - btc: legacy behavior (BTC HTF decides side)
-        # - hybrid: strong market-side override only when 15m + 4h proxy both agree
+        # - btc: legacy label; live side remains the alt-derived base side.
+        # - hybrid: alt-derived base side remains primary; market/BTC only annotate strength.
         # - signal_first: test mode where 15m market signal can set side directly
         if self.direction_source == "btc":
-            return base_side, "btc_bias"
+            return base_side, "alt_1h_legacy_btc_mode"
 
         signal_15m = float(market_yes_price)
-        signal_4h = self._btc_htf_proxy_signal(btc_htf_bias)
 
         if self.direction_source == "signal_first":
             # Market 15m signal can set side, but require BTC HTF agreement (or NEUTRAL)
@@ -348,17 +344,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 return "SHORT", "signal_first_short"
             return base_side, "signal_first_fallback"
 
-        if (
-            signal_15m >= self.signal_15m_long_threshold
-            and signal_4h >= self.signal_4h_long_threshold
-        ):
-            return "LONG", "hybrid_strong_long"
-        if (
-            signal_15m <= self.signal_15m_short_threshold
-            and signal_4h <= self.signal_4h_short_threshold
-        ):
-            return "SHORT", "hybrid_strong_short"
-        return base_side, "hybrid_fallback"
+        if base_side == "LONG" and signal_15m >= self.signal_15m_long_threshold:
+            return base_side, "hybrid_alt_long_confirmed"
+        if base_side == "SHORT" and signal_15m <= self.signal_15m_short_threshold:
+            return base_side, "hybrid_alt_short_confirmed"
+        return base_side, "hybrid_alt_first"
 
     async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
         if not self.enabled:
@@ -418,16 +408,33 @@ class ETHMacroStrategy(SolMacroStrategy):
                 float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
             )
 
-        # Align with SolMacroStrategy: BTC 4H NEUTRAL must not idle ETH while up/down markets refresh.
+        # Non-BTC strategies are alt-first: ETH 1H establishes direction; BTC
+        # is secondary context/fallback when ETH has no usable bias.
         skip_btc_follow_1h = False
-        if btc_htf_bias == "NEUTRAL":
-            # SOLBTCCorrelation.sol_trend is multi_tf.h1_trend on the alt leg — for ETH this is ETH 1H bias.
-            alt_1h_trend = corr.sol_trend
+        alt_1h_trend = corr.sol_trend
+        if alt_1h_trend in {"BULLISH", "BEARISH"}:
+            allowed_side = "LONG" if alt_1h_trend == "BULLISH" else "SHORT"
+            skip_btc_follow_1h = True
+            logger.info(
+                "ETH Macro: ETH 1H %s is primary — side %s; BTC HTF %s is secondary",
+                alt_1h_trend,
+                allowed_side,
+                btc_htf_bias,
+            )
+            if alt_1h_trend == "BULLISH":
+                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
+                if _short_override:
+                    allowed_side = "SHORT"
+                    logger.info(
+                        "ETH Macro: bullish ETH 1H SHORT override enabled — %s",
+                        _short_override_reason,
+                    )
+        else:
             if corr.btc_spike_detected:
                 allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
                 skip_btc_follow_1h = True
                 logger.info(
-                    "ETH Macro: BTC HTF NEUTRAL, BTC spike (%+.2f%%) — catch-up side %s",
+                    "ETH Macro: ETH 1H NEUTRAL, BTC spike (%+.2f%%) — fallback catch-up side %s",
                     corr.btc_move_5m_pct,
                     allowed_side,
                 )
@@ -438,75 +445,35 @@ class ETHMacroStrategy(SolMacroStrategy):
                     allowed_side = corr.opportunity_direction
                     skip_btc_follow_1h = True
                     logger.info(
-                        "ETH Macro: BTC HTF NEUTRAL, lag opp mag=%.2f%% — side %s",
+                        "ETH Macro: ETH 1H NEUTRAL, lag opp mag=%.2f%% — fallback side %s",
                         _lag_mag,
                         allowed_side,
                     )
                 else:
-                    allowed_side = (
-                        "LONG"
-                        if alt_1h_trend == "BULLISH"
-                        else "SHORT"
-                        if alt_1h_trend == "BEARISH"
-                        else None
-                    )
-                    if allowed_side is None:
-                        logger.info(
-                            "ETH Macro: BTC HTF NEUTRAL, weak lag, no ETH 1H bias — sitting out"
-                        )
-                        self._record_eth_abort(
-                            "neutral_weak_lag_no_alt_bias",
-                            {"markets_considered": len(eth_markets)},
-                        )
-                        return []
-                    skip_btc_follow_1h = True
                     logger.info(
-                        "ETH Macro: BTC HTF NEUTRAL, weak lag — ETH 1H bias side %s",
-                        allowed_side,
-                    )
-            else:
-                if self.neutral_macro_require_spike_or_lag:
-                    logger.info(
-                        "ETH Macro: BTC HTF NEUTRAL, no BTC spike/lag "
-                        "(neutral_macro_require_spike_or_lag) — sitting out"
+                        "ETH Macro: ETH 1H NEUTRAL, weak lag — sitting out"
                     )
                     self._record_eth_abort(
-                        "neutral_macro_no_catalyst",
+                        "neutral_weak_lag_no_alt_bias",
                         {"markets_considered": len(eth_markets)},
                     )
                     return []
-                allowed_side = (
-                    "LONG"
-                    if alt_1h_trend == "BULLISH"
-                    else "SHORT"
-                    if alt_1h_trend == "BEARISH"
-                    else None
-                )
-                if allowed_side is None:
-                    logger.info(
-                        "ETH Macro: BTC HTF NEUTRAL, no catalyst, no ETH 1H bias — sitting out"
-                    )
-                    self._record_eth_abort(
-                        "neutral_no_alt_bias",
-                        {"markets_considered": len(eth_markets)},
-                    )
-                    return []
-                skip_btc_follow_1h = True
+            elif btc_htf_bias != "NEUTRAL" and not self.neutral_macro_require_spike_or_lag:
+                allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
                 logger.info(
-                    "ETH Macro: BTC HTF NEUTRAL — ETH 1H bias side %s",
+                    "ETH Macro: ETH 1H NEUTRAL — BTC HTF fallback side %s",
                     allowed_side,
                 )
-        else:
-            allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
-            if btc_htf_bias == "BULLISH":
-                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
-                if _short_override:
-                    allowed_side = "SHORT"
-                    skip_btc_follow_1h = True
-                    logger.info(
-                        "ETH Macro: bullish macro SHORT override enabled — %s",
-                        _short_override_reason,
-                    )
+            else:
+                logger.info(
+                    "ETH Macro: ETH 1H NEUTRAL, no BTC spike/lag "
+                    "(neutral_macro_require_spike_or_lag) — sitting out"
+                )
+                self._record_eth_abort(
+                    "neutral_macro_no_catalyst",
+                    {"markets_considered": len(eth_markets)},
+                )
+                return []
 
         if (
             self.btc_follow_1h_required
@@ -696,8 +663,11 @@ class ETHMacroStrategy(SolMacroStrategy):
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             action_counts[action] = action_counts.get(action, 0) + 1
             direction = "UP" if market_allowed_side == "LONG" else "DOWN"
+            primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
             reason_parts = [
+                f"ETH_HTF={alt_1h_trend}",
                 f"BTC_HTF={btc_htf_bias}",
+                f"PRIMARY_HTF={primary_htf_bias}",
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
@@ -767,7 +737,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 if eth_5m_adj < self.eth_follow_5m_min_adj:
                     _bump_skip("eth_5m_weak_confirm")
                     continue
-                est_prob_up = self._apply_primary_htf_bias(est_prob_up, btc_htf_bias, 0.04)
+                est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.04)
                 est_prob_up += btc_impulse if market_allowed_side == "LONG" else -btc_impulse
                 est_prob_up += eth_5m_adj if market_allowed_side == "LONG" else -eth_5m_adj
                 if eth.rsi_14 > 75:
@@ -794,7 +764,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 if eth_15m_adj < self.eth_follow_15m_min_adj:
                     _bump_skip("eth_15m_weak_confirm")
                     continue
-                est_prob_up = self._apply_primary_htf_bias(est_prob_up, btc_htf_bias, 0.08)
+                est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
                 est_prob_up += eth_15m_adj if market_allowed_side == "LONG" else -eth_15m_adj
                 if eth.rsi_14 > 75:
                     est_prob_up -= 0.03
@@ -1204,7 +1174,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 reason=" | ".join(reason_parts),
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code="eth",
-                htf_bias=btc_htf_bias,
+                htf_bias=primary_htf_bias,
                 btc_1h_regime=btc_1h_regime,
                 window_size=_updown_tf,
                 hour_utc=datetime.now(timezone.utc).hour,
