@@ -1,14 +1,15 @@
 """5m candle momentum scoring. Maps m5_direction to a probability adjustment.
 
 Extracted from:
-- BitcoinStrategy 5m updown path (bitcoin.py L1083-L1119)
+- BitcoinStrategy 5m updown path
 - src/backtest/updown_engine._calc_m5_momentum (scoring half only)
 
-NB: the producer (btc_price_service.calc_candle_momentum) emits only
-SPIKE_UP/SPIKE_DOWN/DRIFT_UP/DRIFT_DOWN/empty for m5_direction. The
-LEAN_UP/LEAN_DOWN entries in live BitcoinStrategy are dead code paths
-(LEAN_* is a value of CandleMomentum.momentum_signal, not m5_direction).
-We preserve them here in case a future producer change populates them.
+Producer tiers (btc_price_service.calc_candle_momentum, mirrored in
+updown_engine._replay_candle_momentum and _calc_m5_momentum):
+- |move| > 0.08% -> SPIKE_UP / SPIKE_DOWN
+- |move| > 0.03% -> DRIFT_UP / DRIFT_DOWN
+- |move| > 0.01% -> LEAN_UP  / LEAN_DOWN
+- else           -> empty (treated as NONE)
 """
 
 from __future__ import annotations

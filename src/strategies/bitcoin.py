@@ -1082,9 +1082,8 @@ class BitcoinStrategy:
 
                     # 5m momentum direction — primary LTF signal for 5m markets.
                     # Scoring lives in strategies._core.score_m5_direction.
-                    # NB: producer (btc_price_service) only emits SPIKE/DRIFT for
-                    # m5_direction; the LEAN_* +/-0.01 cases in score_m5_direction
-                    # are dead until/unless the producer changes.
+                    # Tiers from btc_price_service.calc_candle_momentum:
+                    # SPIKE (|move|>0.08%) / DRIFT (>0.03%) / LEAN (>0.01%).
                     m5_dir = mom.m5_direction
                     m5_adj = score_m5_direction(m5_dir, effective_side)
                     m5_reasons = []

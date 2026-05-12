@@ -629,6 +629,7 @@ class UpdownBacktestEngine:
             early_close = float(m5_early.iloc[-1]["close"])
             move_pct = (early_close - candle_open) / candle_open * 100 if candle_open > 0 else 0.0
             result.m5_move_pct = move_pct
+            # Mirrors btc_price_service.calc_candle_momentum m5 tiers.
             if move_pct > 0.08:
                 result.m5_direction = "SPIKE_UP"
             elif move_pct < -0.08:
@@ -637,6 +638,10 @@ class UpdownBacktestEngine:
                 result.m5_direction = "DRIFT_UP"
             elif move_pct < -0.03:
                 result.m5_direction = "DRIFT_DOWN"
+            elif move_pct > 0.01:
+                result.m5_direction = "LEAN_UP"
+            elif move_pct < -0.01:
+                result.m5_direction = "LEAN_DOWN"
 
         return result
 
@@ -1072,11 +1077,14 @@ class UpdownBacktestEngine:
 
         move_pct = (early_close - candle_open) / candle_open * 100
 
-        # Only SPIKE and DRIFT -- live calc_candle_momentum never produces LEAN
+        # Tiers mirror btc_price_service.calc_candle_momentum:
+        # SPIKE > 0.08% | DRIFT > 0.03% | LEAN > 0.01%.
         if   move_pct >  0.08: direction = "SPIKE_UP"
         elif move_pct < -0.08: direction = "SPIKE_DOWN"
         elif move_pct >  0.03: direction = "DRIFT_UP"
         elif move_pct < -0.03: direction = "DRIFT_DOWN"
+        elif move_pct >  0.01: direction = "LEAN_UP"
+        elif move_pct < -0.01: direction = "LEAN_DOWN"
         else:                  direction = "NONE"
 
         return direction, score_m5_direction(direction, allowed_side)

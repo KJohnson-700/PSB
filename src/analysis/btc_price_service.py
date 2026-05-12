@@ -798,6 +798,13 @@ class BTCPriceService:
                 move_pct = (early_close - candle_open) / candle_open * 100
                 result.m5_move_pct = move_pct
 
+                # Tiers (from large to small):
+                #   |move| > 0.08% -> SPIKE  (high-conviction early move)
+                #   |move| > 0.03% -> DRIFT  (clear directional drift)
+                #   |move| > 0.01% -> LEAN   (weak nudge, barely above noise)
+                # BitcoinStrategy maps these to ±0.06 / ±0.04 / ±0.01 respectively.
+                # Prior to 2026-05-12 the LEAN tier was missing here, leaving the
+                # live LEAN_UP/LEAN_DOWN cases in bitcoin.py 5m path dead.
                 if move_pct > 0.08:
                     result.m5_direction = "SPIKE_UP"
                 elif move_pct < -0.08:
@@ -806,6 +813,10 @@ class BTCPriceService:
                     result.m5_direction = "DRIFT_UP"
                 elif move_pct < -0.03:
                     result.m5_direction = "DRIFT_DOWN"
+                elif move_pct > 0.01:
+                    result.m5_direction = "LEAN_UP"
+                elif move_pct < -0.01:
+                    result.m5_direction = "LEAN_DOWN"
 
             # Prediction window: 3-4 minutes into the candle
             result.m5_in_prediction_window = 3.0 <= m5_age_minutes <= 4.0
