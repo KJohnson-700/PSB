@@ -178,6 +178,17 @@ def _market_window_minutes(market: Market) -> int:
     """Candle window minutes from Gamma metadata or question/slug text."""
     return resolved_updown_window_minutes(market)
 
+
+def _ai_window_args(market: Market, is_updown: bool):
+    """Return (window_minutes, window_open_utc) for evaluate_trade_decision logging
+    so backtest replay can match by window. Returns (None, None) on non-updown."""
+    if not is_updown or not market.end_date:
+        return None, None
+    wm = resolved_updown_window_minutes(market)
+    if not wm:
+        return None, None
+    return wm, market.end_date - timedelta(minutes=wm)
+
 PRICE_PATTERNS = [
     re.compile(r'\$\s*([\d,]+(?:\.\d+)?)\s*(?:k|K)', re.IGNORECASE),
     re.compile(r'\$\s*([\d,]+(?:\.\d+)?)', re.IGNORECASE),
@@ -2011,6 +2022,7 @@ class SolMacroStrategy:
                         f"Should we take this {action} trade, or HOLD?\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
+                    _wm, _wo = _ai_window_args(market, is_updown)
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context,
@@ -2022,6 +2034,8 @@ class SolMacroStrategy:
                         quant_confidence=confidence,
                         quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
                         require_shadow_portfolio=False,
+                        window_minutes=_wm,
+                        window_open_utc=_wo,
                     )
                     ai_calls += 1
                     ai_used = True
@@ -2218,6 +2232,7 @@ class SolMacroStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
+                _wm, _wo = _ai_window_args(market, is_updown)
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context2,
@@ -2229,6 +2244,8 @@ class SolMacroStrategy:
                     quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
                     require_shadow_portfolio=False,
+                    window_minutes=_wm,
+                    window_open_utc=_wo,
                 )
                 ai_calls += 1
                 ai_used = True
@@ -2416,6 +2433,7 @@ class SolMacroStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
+                    _wm, _wo = _ai_window_args(market, is_updown)
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context3,
@@ -2427,6 +2445,8 @@ class SolMacroStrategy:
                         quant_confidence=confidence,
                         quant_threshold=effective_min_edge,
                         require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
+                        window_minutes=_wm,
+                        window_open_utc=_wo,
                     )
                     ai_calls += 1
                     ai_used = True

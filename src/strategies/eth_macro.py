@@ -30,7 +30,12 @@ from src.strategies._core import (
 from src.strategies._core import (
     eth_15m_follow_score as _core_eth_15m_follow_score,
 )
-from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
+from src.strategies.sol_macro import (
+    SolMacroSignal,
+    SolMacroStrategy,
+    _ai_window_args,
+    macd_bearish_momentum_ok,
+)
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -861,6 +866,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
+                _wm, _wo = _ai_window_args(market, self._is_updown_market(market))
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context,
@@ -872,6 +878,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                     quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
                     require_shadow_portfolio=False,
+                    window_minutes=_wm,
+                    window_open_utc=_wo,
                 )
                 ai_calls += 1
                 ai_used = True

@@ -1551,6 +1551,11 @@ class BitcoinStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
+                _wm = resolved_updown_window_minutes(market) if is_updown else None
+                _wo = (
+                    market.end_date - timedelta(minutes=_wm)
+                    if (is_updown and _wm and market.end_date) else None
+                )
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context,
@@ -1566,6 +1571,8 @@ class BitcoinStrategy:
                         if _needs_ai_for_low_conf_neutral_15m
                         else False
                     ),
+                    window_minutes=_wm,
+                    window_open_utc=_wo,
                 )
                 ai_calls += 1
                 ai_used = True
@@ -1741,6 +1748,11 @@ class BitcoinStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
+                    _wm2 = resolved_updown_window_minutes(market) if is_updown else None
+                    _wo2 = (
+                        market.end_date - timedelta(minutes=_wm2)
+                        if (is_updown and _wm2 and market.end_date) else None
+                    )
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context,
@@ -1752,6 +1764,8 @@ class BitcoinStrategy:
                         quant_confidence=confidence,
                         quant_threshold=effective_min_edge,
                         require_shadow_portfolio=self.neutral_15m_requires_shadow_portfolio,
+                        window_minutes=_wm2,
+                        window_open_utc=_wo2,
                     )
                     ai_calls += 1
                     ai_used = True
