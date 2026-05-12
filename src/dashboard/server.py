@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-11-alt-move-rename",
+        "dashboard_ui_rev": "2026-05-12-ai-replay-backtest",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1376,6 +1376,36 @@ async def get_usage_records():
     return usage_tracker.get_all_records()
 
 
+# ─── AI CALL LOG STATS ────────────────────────────────────────────
+
+
+@app.get("/api/ai_call_log/stats")
+async def get_ai_call_log_stats():
+    """Surface how many ai_call_log records live has recorded — used by the
+    Backtest tab's AI-replay checkbox to tell operators whether enabling
+    replay will actually have data to match against."""
+    log_dir = DATA_ROOT / "ai_call_log"
+    out = {"dir": str(log_dir.relative_to(PROJECT_ROOT) if log_dir.is_absolute() else log_dir),
+           "records": 0, "days": 0, "first_day": None, "last_day": None}
+    if not log_dir.exists():
+        return out
+    files = sorted(log_dir.glob("*.jsonl"))
+    if not files:
+        return out
+    total = 0
+    for fp in files:
+        try:
+            with fp.open("r", encoding="utf-8") as fh:
+                total += sum(1 for line in fh if line.strip())
+        except OSError:
+            continue
+    out["records"] = total
+    out["days"] = len(files)
+    out["first_day"] = files[0].stem
+    out["last_day"] = files[-1].stem
+    return out
+
+
 # ─── BACKTEST REPORTS ─────────────────────────────────────────────
 
 
@@ -1896,6 +1926,10 @@ async def start_backtest(request: Request):
     symbol = body.get("symbol", "")
     window = str(body.get("window", 15))
     test_start = body.get("test_start", "").strip()
+    # AI replay (Option A): when enabled, the backtest consults
+    # data/ai_call_log/ records and replays the live AI decisions.
+    ai_replay_enabled = bool(body.get("ai_replay", False))
+    ai_replay_strict = bool(body.get("ai_replay_strict", False))
 
     with _backtest_jobs_lock:
         running_n = sum(
@@ -1922,7 +1956,13 @@ async def start_backtest(request: Request):
         ]
         if test_start:
             cmd_args += ["--test-start", test_start]
+        if ai_replay_enabled:
+            cmd_args += ["--ai-replay-from", str(DATA_ROOT / "ai_call_log")]
+            if ai_replay_strict:
+                cmd_args += ["--ai-replay-strict"]
         summary = f"{symbol} {window}m crypto" + (f" test-from={test_start}" if test_start else " [in-sample]")
+        if ai_replay_enabled:
+            summary += " +ai-replay" + ("(strict)" if ai_replay_strict else "")
     else:
         return {
             "status": "error",
