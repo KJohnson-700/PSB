@@ -1011,6 +1011,8 @@ OUTPUT (machine-parseable — follow exactly):
         quant_confidence: float,
         quant_threshold: float,
         require_shadow_portfolio: Optional[bool] = None,
+        window_minutes: Optional[int] = None,
+        window_open_utc: Optional["datetime"] = None,
     ) -> AIDecision:
         """Enforced pre-entry AI decision layer (logs to ai_call_log on each call).
 
@@ -1046,6 +1048,8 @@ OUTPUT (machine-parseable — follow exactly):
                 ai_edge=decision.edge,
                 ai_reason=decision.reason,
                 ai_source=decision.source,
+                window_minutes=window_minutes,
+                window_open_utc=window_open_utc,
             )
         return decision
 

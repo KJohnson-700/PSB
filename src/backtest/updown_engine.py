@@ -53,6 +53,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import pandas as pd
 
+from src.analysis.ai_replay_agent import AIReplayAgent  # noqa: F401 — type-checking only
 from src.analysis.btc_price_service import (
     BTCPriceService,
     TechnicalAnalysis,
@@ -261,9 +262,26 @@ class UpdownBacktestEngine:
     pre-fetched by the caller via OHLCVLoader and passed into ``run()``.
     """
 
-    def __init__(self, config: Dict[str, Any], initial_bankroll: float = 500.0):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        initial_bankroll: float = 500.0,
+        *,
+        ai_replay_agent: Optional["AIReplayAgent"] = None,
+    ):
         self.config           = config
         self.initial_bankroll = initial_bankroll
+        # When provided, the engine consults the replay agent after edge calc
+        # but before commit; not-approved decisions are skipped just like live.
+        # Misses (no record for the window) pass-through unless the operator
+        # sets backtest.ai_replay_strict to require a hit.
+        self.ai_replay_agent  = ai_replay_agent
+        self.ai_replay_strict = bool(
+            config.get("backtest", {}).get("ai_replay_strict", False)
+        )
+        self._ai_replay_skips = 0
+        self._ai_replay_misses = 0
+        self._ai_replay_passes = 0
 
         # Slippage config
         slip_cfg         = config.get("backtest", {}).get("slippage", {})
@@ -1716,6 +1734,31 @@ class UpdownBacktestEngine:
 
             # Determine action (aligned with live: short side buys NO)
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+
+            # AI replay gate (Option A step 3). Only consulted when an agent
+            # was injected; replays the live decision recorded for this window.
+            if self.ai_replay_agent is not None:
+                strat_hint = "bitcoin" if is_btc else strategy_cfg_map.get(symbol, "sol_macro")
+                replay = self.ai_replay_agent.evaluate_sync(
+                    strategy_hint=strat_hint,
+                    quant_action=action,
+                    quant_edge=float(edge),
+                    quant_confidence=float(confidence),
+                    window_minutes=int(window_minutes),
+                    window_open_utc=window_open.isoformat(),
+                )
+                if replay.reason == "replay_miss":
+                    self._ai_replay_misses += 1
+                    if self.ai_replay_strict:
+                        current += step_td
+                        continue
+                    # Non-strict: fall through (current backtest behavior)
+                elif not replay.approved:
+                    self._ai_replay_skips += 1
+                    current += step_td
+                    continue
+                else:
+                    self._ai_replay_passes += 1
 
             # Position size
             size = self._size_position(bankroll, edge)

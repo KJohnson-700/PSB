@@ -18,6 +18,8 @@ Record schema (one JSON object per line):
   "quant_confidence":float
   "quant_threshold": float
   "context_hash":    SHA-256 of (market_question + quant fields) — stable lookup key
+  "window_minutes":  int | null  -- 5/15/30, when known (added 2026-05-12)
+  "window_open_utc": ISO-8601 | null -- start of the up/down window (UTC), when known
   "approved":        bool
   "ai_action":       AIDecision.action
   "ai_confidence":   float
@@ -91,6 +93,8 @@ def append_record(
     ai_edge: Optional[float],
     ai_reason: str,
     ai_source: str,
+    window_minutes: Optional[int] = None,
+    window_open_utc: Optional[datetime] = None,
     log_dir: Optional[Path] = None,
     now: Optional[datetime] = None,
 ) -> None:
@@ -116,6 +120,11 @@ def append_record(
                 quant_action=quant_action,
                 quant_edge=quant_edge,
                 quant_confidence=quant_confidence,
+            ),
+            "window_minutes": int(window_minutes) if window_minutes is not None else None,
+            "window_open_utc": (
+                window_open_utc.astimezone(timezone.utc).isoformat()
+                if window_open_utc is not None else None
             ),
             "approved": bool(approved),
             "ai_action": ai_action,

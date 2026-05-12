@@ -173,6 +173,82 @@ def test_evaluate_replays_rejection(tmp_path):
     assert decision.edge is None
 
 
+def test_window_lookup_hits_via_strategy_action_window(tmp_path):
+    """Backtest's primary path: no market_id, but matches by (strategy, action,
+    window_minutes, window_open[:16])."""
+    now = datetime(2026, 5, 11, 23, 35, tzinfo=timezone.utc)
+    ai_call_log.append_record(
+        log_dir=tmp_path, now=now,
+        window_minutes=5,
+        window_open_utc=now,
+        **_base(market_id="LIVE_MARKET_123"),
+    )
+    agent = AIReplayAgent(tmp_path).load()
+    rec = agent.lookup(
+        market_question="",  # backtest doesn't have this
+        market_id="",       # nor this
+        strategy_hint="bitcoin",
+        quant_action="BUY_YES",
+        quant_edge=0.115, quant_confidence=0.69,
+        window_minutes=5,
+        window_open_utc="2026-05-11T23:35:00+00:00",
+    )
+    assert rec is not None
+    assert agent.stats.hits_by_window == 1
+
+
+def test_window_lookup_minute_granularity(tmp_path):
+    """Window match tolerates sub-minute drift (slices to YYYY-MM-DDTHH:MM)."""
+    now = datetime(2026, 5, 11, 23, 35, 16, tzinfo=timezone.utc)
+    ai_call_log.append_record(
+        log_dir=tmp_path, now=now,
+        window_minutes=5,
+        window_open_utc=now,
+        **_base(market_id="X"),
+    )
+    agent = AIReplayAgent(tmp_path).load()
+    # Backtest asks at 23:35:00 — different second, same minute
+    rec = agent.lookup(
+        market_question="", market_id="",
+        strategy_hint="bitcoin", quant_action="BUY_YES",
+        quant_edge=0.9, quant_confidence=0.9,  # totally different quant
+        window_minutes=5,
+        window_open_utc="2026-05-11T23:35:00+00:00",
+    )
+    assert rec is not None
+    assert agent.stats.hits_by_window == 1
+
+
+def test_evaluate_sync_returns_decision(tmp_path):
+    """The sync facade backtest uses."""
+    now = datetime(2026, 5, 11, 23, 35, tzinfo=timezone.utc)
+    ai_call_log.append_record(
+        log_dir=tmp_path, now=now,
+        window_minutes=5, window_open_utc=now,
+        **_base(approved=True, ai_action="BUY_YES"),
+    )
+    agent = AIReplayAgent(tmp_path).load()
+    decision = agent.evaluate_sync(
+        strategy_hint="bitcoin", quant_action="BUY_YES",
+        quant_edge=0.115, quant_confidence=0.69,
+        window_minutes=5,
+        window_open_utc="2026-05-11T23:35:00+00:00",
+    )
+    assert decision.approved is True
+    assert decision.action == "BUY_YES"
+    assert decision.reason.startswith("replay:")
+
+
+def test_evaluate_sync_miss(tmp_path):
+    agent = AIReplayAgent(tmp_path).load()
+    decision = agent.evaluate_sync(
+        strategy_hint="bitcoin", quant_action="BUY_YES",
+        quant_edge=0.1, quant_confidence=0.6,
+    )
+    assert decision.approved is False
+    assert decision.reason == "replay_miss"
+
+
 def test_load_specific_days_only(tmp_path):
     """`load(days=...)` reads only the specified date files."""
     ai_call_log.append_record(log_dir=tmp_path,

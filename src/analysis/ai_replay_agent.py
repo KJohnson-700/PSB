@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 class ReplayStats:
     lookups: int = 0
     hits_by_hash: int = 0
+    hits_by_window: int = 0
     hits_by_fallback: int = 0
     misses: int = 0
     records_loaded: int = 0
@@ -57,9 +58,15 @@ class ReplayRecord:
     ai_edge: Optional[float]
     ai_reason: str
     ai_source: str
+    window_minutes: Optional[int] = None
+    window_open_utc: Optional[str] = None  # ISO-8601 string, normalized to minute
 
     @classmethod
     def from_json(cls, obj: dict) -> "ReplayRecord":
+        wo = obj.get("window_open_utc")
+        if wo:
+            # Normalize to minute granularity for stable matching across float-second noise
+            wo = wo[:16]  # "YYYY-MM-DDTHH:MM"
         return cls(
             context_hash=obj["context_hash"],
             market_id=obj["market_id"],
@@ -72,6 +79,8 @@ class ReplayRecord:
             ai_edge=obj.get("ai_edge"),
             ai_reason=obj["ai_reason"],
             ai_source=obj["ai_source"],
+            window_minutes=obj.get("window_minutes"),
+            window_open_utc=wo,
         )
 
     def to_decision(self) -> AIDecision:
@@ -92,6 +101,7 @@ class AIReplayAgent:
     def __init__(self, log_dir: Path | str = "data/ai_call_log") -> None:
         self.log_dir = Path(log_dir)
         self._by_hash: Dict[str, ReplayRecord] = {}
+        self._by_window: Dict[Tuple[str, str, int, str], ReplayRecord] = {}
         self._by_fallback: Dict[Tuple[str, str, str], List[ReplayRecord]] = {}
         self.stats = ReplayStats()
 
@@ -131,6 +141,14 @@ class AIReplayAgent:
                     self._by_hash[rec.context_hash] = rec
                     key = (rec.market_id, rec.strategy_hint, rec.quant_action)
                     self._by_fallback.setdefault(key, []).append(rec)
+                    if rec.window_minutes is not None and rec.window_open_utc:
+                        wkey = (
+                            rec.strategy_hint, rec.quant_action,
+                            int(rec.window_minutes), rec.window_open_utc,
+                        )
+                        # Last-writer-wins: replay picks the most recent decision for a
+                        # window (in practice live re-decides only on transient retries).
+                        self._by_window[wkey] = rec
                     self.stats.records_loaded += 1
         return self
 
@@ -143,8 +161,18 @@ class AIReplayAgent:
         quant_action: str,
         quant_edge: float,
         quant_confidence: float,
+        window_minutes: Optional[int] = None,
+        window_open_utc: Optional[str] = None,
     ) -> Optional[ReplayRecord]:
-        """Return the recorded decision for these inputs, or None on miss."""
+        """Return the recorded decision for these inputs, or None on miss.
+
+        Lookup priority:
+        1. Exact context_hash match (live and replay see same market_id + quant)
+        2. Window match: (strategy_hint, quant_action, window_minutes, window_open_utc[:16])
+           — backtest doesn't know the real market_id, so this is the primary
+           replay path for backtests
+        3. Secondary by (market_id, strategy_hint, quant_action)
+        """
         self.stats.lookups += 1
         h = ai_call_log.context_hash(
             market_question=market_question,
@@ -157,14 +185,55 @@ class AIReplayAgent:
         if h in self._by_hash:
             self.stats.hits_by_hash += 1
             return self._by_hash[h]
-        # Secondary lookup: same market/strategy/action, ignore quant float drift.
-        # Pick the most recently appended record (last in list).
+
+        if window_minutes is not None and window_open_utc:
+            wkey = (strategy_hint, quant_action, int(window_minutes), window_open_utc[:16])
+            if wkey in self._by_window:
+                self.stats.hits_by_window += 1
+                return self._by_window[wkey]
+
         fb = self._by_fallback.get((market_id, strategy_hint, quant_action))
         if fb:
             self.stats.hits_by_fallback += 1
             return fb[-1]
         self.stats.misses += 1
         return None
+
+    def evaluate_sync(
+        self,
+        *,
+        market_question: str = "",
+        market_id: str = "",
+        strategy_hint: str,
+        quant_action: str,
+        quant_edge: float,
+        quant_confidence: float,
+        window_minutes: Optional[int] = None,
+        window_open_utc: Optional[str] = None,
+    ) -> AIDecision:
+        """Sync version for callers that don't have an event loop (backtest run loop).
+
+        The async `evaluate_trade_decision` exists only to match the AIAgent
+        interface signature; replay is pure in-memory lookup with no IO, so
+        this sync facade is the right API when there's no asyncio context.
+        """
+        rec = self.lookup(
+            market_question=market_question,
+            market_id=market_id,
+            strategy_hint=strategy_hint,
+            quant_action=quant_action,
+            quant_edge=quant_edge,
+            quant_confidence=quant_confidence,
+            window_minutes=window_minutes,
+            window_open_utc=window_open_utc,
+        )
+        if rec is None:
+            return AIDecision(
+                approved=False, action="SKIP", confidence=0.0,
+                estimated_probability=None, edge=None,
+                reason="replay_miss", source="replay_miss",
+            )
+        return rec.to_decision()
 
     # -- AIAgent.evaluate_trade_decision-compatible facade ---------------------
     def is_available(self) -> bool:
@@ -186,6 +255,8 @@ class AIReplayAgent:
         quant_confidence: float,
         quant_threshold: float,  # unused at replay time
         require_shadow_portfolio: Optional[bool] = None,  # unused
+        window_minutes: Optional[int] = None,
+        window_open_utc: Optional[str] = None,
     ) -> AIDecision:
         rec = self.lookup(
             market_question=market_question,
@@ -194,6 +265,8 @@ class AIReplayAgent:
             quant_action=quant_action,
             quant_edge=quant_edge,
             quant_confidence=quant_confidence,
+            window_minutes=window_minutes,
+            window_open_utc=window_open_utc,
         )
         if rec is None:
             # No record exists for this context. Return a special "miss"
