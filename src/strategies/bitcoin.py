@@ -46,6 +46,8 @@ from src.execution.exposure_manager import ExposureManager, MarketConditions, Ex
 from src.strategies._core import (
     btc_5m_4h_1h_hist_gate,
     btc_5m_htf_boost,
+    btc_15m_htf_boost,
+    btc_15m_timing_bonus,
     btc_htf_bias,
     btc_ltf_strength_15m,
     score_m5_direction,
@@ -414,45 +416,9 @@ class BitcoinStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _check_timing(self, ta: TechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check candle momentum and prediction window.
-
-        Returns: (timing_bonus: float, reasons: list)
-        """
-        mom = ta.candle_momentum
-        bonus = 0.0
-        reasons = []
-
-        # Early-candle spike in allowed direction = strong confirmation
-        if allowed_side == "LONG":
-            if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
-                bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
-                reasons.append(f"15m early {mom.m15_direction} ({mom.m15_move_pct:+.3f}%)")
-            elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                bonus -= 0.05  # Early candle going against us
-                reasons.append(f"15m early AGAINST ({mom.m15_direction})")
-            if mom.m5_direction in ("SPIKE_UP", "DRIFT_UP"):
-                bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
-                reasons.append(f"5m early {mom.m5_direction}")
-        else:  # SHORT
-            if mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
-                reasons.append(f"15m early {mom.m15_direction} ({mom.m15_move_pct:+.3f}%)")
-            elif mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
-                bonus -= 0.05
-                reasons.append(f"15m early AGAINST ({mom.m15_direction})")
-            if mom.m5_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
-                reasons.append(f"5m early {mom.m5_direction}")
-
-        # Prediction window bonus
-        if mom.m15_in_prediction_window:
-            bonus += 0.03
-            reasons.append("15m predict window")
-        if mom.m5_in_prediction_window:
-            bonus += 0.02
-            reasons.append("5m predict window")
-
-        return bonus, reasons
+        """Candle momentum + prediction-window timing bonus. Delegates to strategies._core."""
+        r = btc_15m_timing_bonus(ta.candle_momentum, allowed_side)
+        return r.bonus, r.reasons
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 4: Edge Calculation
@@ -1150,54 +1116,30 @@ class BitcoinStrategy:
 
                 else:
                     # ── FIFTEEN-MINUTE UP/DOWN MARKET PATH ──
-                    # Estimate probability from technical analysis
                     # Base: 0.50 (coin flip) + adjustments from HTF, LTF and timing
                     est_prob_up = 0.50
 
-                    # HTF bias — requires ALL 3 votes (Sabre + price vs MA + 4H MACD).
-                    # 2/3 votes produce near-random win rates that can't cover slippage.
-                    htf_boost = 0.0
-                    _price_above_ma = btc_price > sabre.ma_value
-                    if sabre.trend == 1 and _price_above_ma and macd_4h.above_zero:
-                        htf_boost = 0.08  # All 3 votes bullish — strong signal
-                    elif sabre.trend == -1 and not _price_above_ma and not macd_4h.above_zero:
-                        htf_boost = -0.08  # All 3 votes bearish — strong signal
-                    elif sabre.trend == 1 and macd_4h.above_zero:
-                        htf_boost = 0.03  # 2/3 bull (price below MA) — weak
-                    elif sabre.trend == -1 and not macd_4h.above_zero:
-                        htf_boost = -0.03  # 2/3 bear (price above MA) — weak
-                    # else: mixed votes → no directional boost (htf_boost stays 0.0)
+                    # Graduated 3-vote HTF boost (strategies._core.btc_15m_htf_boost).
+                    # Includes the BULLISH/BEARISH floor so recovery / early_bull
+                    # HTF votes don't get a contradictory boost.
+                    htf_boost = btc_15m_htf_boost(sabre, macd_4h, btc_price, htf_bias)
                     est_prob_up += htf_boost
 
-                    # 4H/1H HISTOGRAM GATE (matches backtest engine)
-                    # BTC 15m: without gate 50.7% WR; with gate 53.4% WR → improved further with anti-LTF.
-                    # Primary: 4H histogram must be building in trade direction.
-                    # Fallback: if 4H is decelerating but 1H is building, allow entry
-                    # (catches local momentum recovery within larger trend structure).
+                    # 4H/1H histogram gate, same helper as 5m path
                     macd_1h = ta.macd_1h
-                    if effective_side == "LONG" and not macd_4h.histogram_rising:
-                        if not macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_15m_long_reject")
-                            logger.info(
-                                f"  BTC [15m] skip '{market.question[:40]}' — "
-                                f"4H falling, 1H also falling — no momentum building for LONG"
-                            )
-                            continue
+                    _gate = btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, effective_side)
+                    if not _gate.allowed:
+                        _bump_skip(_gate.rejection_reason.replace("5m", "15m"))
                         logger.info(
-                            f"  BTC [15m] 1H gate pass '{market.question[:40]}' — "
-                            f"4H falling but 1H rising — local momentum recovery"
+                            f"  BTC [15m] skip '{market.question[:40]}' — "
+                            f"4H {'falling' if effective_side == 'LONG' else 'rising'}, "
+                            f"1H also same direction — no momentum building"
                         )
-                    if effective_side == "SHORT" and macd_4h.histogram_rising:
-                        if macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_15m_short_reject")
-                            logger.info(
-                                f"  BTC [15m] skip '{market.question[:40]}' — "
-                                f"4H rising, 1H also rising — no momentum building for SHORT"
-                            )
-                            continue
+                        continue
+                    if _gate.fallback_used:
                         logger.info(
                             f"  BTC [15m] 1H gate pass '{market.question[:40]}' — "
-                            f"4H rising but 1H falling — local momentum recovery SHORT"
+                            f"4H decelerating but 1H {'rising' if effective_side == 'LONG' else 'falling'} — local momentum recovery"
                         )
 
                     # LTF confirmation adds conviction

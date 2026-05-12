@@ -64,6 +64,8 @@ from src.analysis.btc_price_service import (
 from src.strategies._core import (
     btc_5m_4h_1h_hist_gate,
     btc_5m_htf_boost,
+    btc_15m_htf_boost,
+    btc_15m_timing_bonus,
     btc_htf_bias,
     btc_ltf_strength_15m,
     passes_15m_iql,
@@ -900,69 +902,20 @@ class UpdownBacktestEngine:
         """
         sabre   = ta.trend_sabre
         macd_4h = ta.macd_4h
-        macd_1h = ta.macd_1h
-        mom = ta.candle_momentum
 
         est_prob_up = 0.50
 
-        # Graduated HTF boost -- live uses 3/3 for +/-0.08, 2/3 for +/-0.03
-        _price_above_ma = ta.current_price > sabre.ma_value
-        if sabre.trend == 1 and _price_above_ma and macd_4h.above_zero:
-            htf_boost = 0.08       # All 3 votes bullish
-        elif sabre.trend == -1 and not _price_above_ma and not macd_4h.above_zero:
-            htf_boost = -0.08      # All 3 votes bearish
-        elif sabre.trend == 1 and macd_4h.above_zero:
-            htf_boost = 0.03       # 2/3 bull (price below MA)
-        elif sabre.trend == -1 and not macd_4h.above_zero:
-            htf_boost = -0.03      # 2/3 bear (price above MA)
-        else:
-            htf_boost = 0.0        # Mixed -- no directional boost
-
-        # Ensure boost direction matches the HTF vote.  Recovery/early_bull
-        # windows can produce BULLISH from the 3-vote system while raw
-        # indicators remain mixed (e.g., sabre=-1 + recovery → BULLISH).
-        # Without this floor, those windows get 0 or negative boost and
-        # never generate trades — contradicting the HTF decision.
-        if htf_bias == "BULLISH" and htf_boost < 0.03:
-            htf_boost = 0.03
-        elif htf_bias == "BEARISH" and htf_boost > -0.03:
-            htf_boost = -0.03
-
+        htf_boost = btc_15m_htf_boost(sabre, macd_4h, ta.current_price, htf_bias)
         est_prob_up += htf_boost
 
-        # Histogram gate parity with live bitcoin.py:
-        # allow a 1H local recovery pass when 4H is decelerating against the side.
-        if allowed_side == "LONG" and not macd_4h.histogram_rising:
-            if not macd_1h.histogram_rising:
-                return 0.0, 0.0
-        if allowed_side == "SHORT" and macd_4h.histogram_rising:
-            if macd_1h.histogram_rising:
-                return 0.0, 0.0
+        # 4H histogram gate with 1H momentum-recovery fallback (matches live BTC 15m)
+        if not btc_5m_4h_1h_hist_gate(macd_4h, ta.macd_1h, allowed_side).allowed:
+            return 0.0, 0.0
 
-        # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.20
         est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
-        # Timing bonus parity with live bitcoin.py.
-        timing_bonus = 0.0
-        if allowed_side == "LONG":
-            if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
-                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
-            elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                timing_bonus -= 0.05
-            if mom.m5_direction in ("SPIKE_UP", "DRIFT_UP"):
-                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
-        else:
-            if mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                timing_bonus += 0.08 if "SPIKE" in mom.m15_direction else 0.04
-            elif mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
-                timing_bonus -= 0.05
-            if mom.m5_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                timing_bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
-        if mom.m15_in_prediction_window:
-            timing_bonus += 0.03
-        if mom.m5_in_prediction_window:
-            timing_bonus += 0.02
+        timing_bonus = btc_15m_timing_bonus(ta.candle_momentum, allowed_side).bonus
         est_prob_up += timing_bonus if allowed_side == "LONG" else -timing_bonus
 
         # RSI 4-level (matches live bitcoin.py)

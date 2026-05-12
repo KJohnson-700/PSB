@@ -14,8 +14,14 @@ from .ltf_strength import (
     passes_15m_iql_relaxed_rule,
     sol_ltf_strength_15m,
 )
-from .htf_boost import HistGateResult, btc_5m_4h_1h_hist_gate, btc_5m_htf_boost
+from .htf_boost import (
+    HistGateResult,
+    btc_5m_4h_1h_hist_gate,
+    btc_5m_htf_boost,
+    btc_15m_htf_boost,
+)
 from .m5_momentum import score_m5_direction
+from .timing import TimingBonusResult, btc_15m_timing_bonus
 
 __all__ = [
     "BtcHtfBiasResult",
@@ -29,4 +35,7 @@ __all__ = [
     "HistGateResult",
     "btc_5m_htf_boost",
     "btc_5m_4h_1h_hist_gate",
+    "btc_15m_htf_boost",
+    "TimingBonusResult",
+    "btc_15m_timing_bonus",
 ]

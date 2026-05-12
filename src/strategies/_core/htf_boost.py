@@ -19,6 +19,51 @@ from dataclasses import dataclass
 from src.analysis.btc_price_service import MACDResult, TrendSabreResult
 
 
+def btc_15m_htf_boost(
+    sabre: TrendSabreResult,
+    macd_4h: MACDResult,
+    price: float,
+    htf_bias: str,
+) -> float:
+    """Graduated 3-vote HTF boost for BTC 15m updown markets.
+
+    Vote system (Sabre dir, price vs Sabre MA, 4H MACD above zero):
+      3/3 aligned bull -> +0.08
+      3/3 aligned bear -> -0.08
+      2/3 bull (sabre=1 AND above_zero)   -> +0.03
+      2/3 bear (sabre=-1 AND not above0)  -> -0.03
+      else (mixed)                        ->  0.00
+
+    Floor: if the HTF vote (btc_htf_bias) decided BULLISH via the
+    early_bull / recovery cases (sabre=-1 with hist>0 but below zero,
+    say), the raw vote-system lookup above may return 0 or a wrong-sign
+    value — contradicting the HTF decision. Floor +0.03 / -0.03 so the
+    edge calc respects the HTF vote.
+
+    NB: pre-refactor only the backtest applied this floor; live BTC 15m
+    had a latent inconsistency where a BULLISH-by-recovery vote could
+    receive a negative htf_boost. Floor is now applied in both.
+    """
+    price_above_ma = price > sabre.ma_value
+    if sabre.trend == 1 and price_above_ma and macd_4h.above_zero:
+        htf_boost = 0.08
+    elif sabre.trend == -1 and not price_above_ma and not macd_4h.above_zero:
+        htf_boost = -0.08
+    elif sabre.trend == 1 and macd_4h.above_zero:
+        htf_boost = 0.03
+    elif sabre.trend == -1 and not macd_4h.above_zero:
+        htf_boost = -0.03
+    else:
+        htf_boost = 0.0
+
+    if htf_bias == "BULLISH" and htf_boost < 0.03:
+        htf_boost = 0.03
+    elif htf_bias == "BEARISH" and htf_boost > -0.03:
+        htf_boost = -0.03
+
+    return htf_boost
+
+
 def btc_5m_htf_boost(sabre: TrendSabreResult, macd_4h: MACDResult) -> float:
     """4-branch probability boost based on 4H Sabre trend and MACD position.
 
