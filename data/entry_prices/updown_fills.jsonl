@@ -2153,3 +2153,14 @@
 {"ts": "2026-05-11T22:06:50.839215+00:00", "strategy": "bitcoin", "yes_price": 0.445}
 {"ts": "2026-05-11T22:23:24.018451+00:00", "strategy": "bitcoin", "yes_price": 0.505}
 {"ts": "2026-05-11T22:34:19.924150+00:00", "strategy": "bitcoin", "yes_price": 0.495}
+{"ts": "2026-05-11T23:35:16.066082+00:00", "strategy": "bitcoin", "yes_price": 0.475}
+{"ts": "2026-05-11T23:43:08.544691+00:00", "strategy": "bitcoin", "yes_price": 0.495}
+{"ts": "2026-05-11T23:47:15.299249+00:00", "strategy": "bitcoin", "yes_price": 0.495}
+{"ts": "2026-05-11T23:54:01.606566+00:00", "strategy": "bitcoin", "yes_price": 0.46499999999999997}
+{"ts": "2026-05-12T00:04:59.636924+00:00", "strategy": "xrp_macro", "yes_price": 0.535}
+{"ts": "2026-05-12T06:01:17.983679+00:00", "strategy": "xrp_macro", "yes_price": 0.525}
+{"ts": "2026-05-12T07:03:45.173278+00:00", "strategy": "xrp_macro", "yes_price": 0.525}
+{"ts": "2026-05-12T10:24:57.758773+00:00", "strategy": "sol_macro", "yes_price": 0.52}
+{"ts": "2026-05-12T10:27:15.161522+00:00", "strategy": "xrp_macro", "yes_price": 0.51}
+{"ts": "2026-05-12T11:20:20.889438+00:00", "strategy": "eth_macro", "yes_price": 0.53}
+{"ts": "2026-05-12T11:43:02.097439+00:00", "strategy": "bitcoin", "yes_price": 0.5}

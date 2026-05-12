@@ -610,10 +610,6 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 12.0
-    require_ai_decision_15m_buy_yes: true
-    require_shadow_portfolio_15m_buy_yes: true
-    min_composite_score_15m_buy_yes: 0.70
-    calibration_size_multiplier_15m_buy_yes: 0.35
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency

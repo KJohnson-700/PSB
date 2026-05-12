@@ -332,21 +332,6 @@ class SolMacroStrategy:
         self.low_confidence_min_composite_score = float(
             self.updown_composite_cfg.get("low_confidence_min_score", 0.66)
         )
-        self.min_composite_score_15m_buy_yes = float(
-            self.config.get(
-                "min_composite_score_15m_buy_yes",
-                self.updown_composite_cfg.get("hype_15m_buy_yes_min_score", self.default_min_composite_score),
-            )
-        )
-        self.require_ai_decision_15m_buy_yes = bool(
-            self.config.get("require_ai_decision_15m_buy_yes", False)
-        )
-        self.require_shadow_portfolio_15m_buy_yes = bool(
-            self.config.get("require_shadow_portfolio_15m_buy_yes", False)
-        )
-        self.calibration_size_multiplier_15m_buy_yes = float(
-            self.config.get("calibration_size_multiplier_15m_buy_yes", 1.0)
-        )
         self.degraded_bearish_est_up = float(
             self.config.get("degraded_bearish_est_up", 0.45)
         )
@@ -678,29 +663,19 @@ class SolMacroStrategy:
         )
 
     def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
-        lane_key = str(lane or "default")
-        if lane_key == "15m_buy_yes":
-            floor = self.min_composite_score_15m_buy_yes
-        else:
-            floor = self.default_min_composite_score
+        floor = self.default_min_composite_score
         if quant_confidence is not None and float(quant_confidence) < self.ai_confidence_threshold:
             floor = max(floor, self.low_confidence_min_composite_score)
         return float(floor)
 
     def _requires_ai_for_lane(self, lane: str) -> bool:
-        if lane == "15m_buy_yes":
-            return self.require_ai_decision_15m_buy_yes
         check = getattr(self.ai_agent, "decision_layer_lane_enforced", None)
         return bool(callable(check) and check(self._signal_strategy_name, lane) is True)
 
     def _requires_shadow_for_lane(self, lane: str) -> bool:
-        if lane == "15m_buy_yes":
-            return self.require_shadow_portfolio_15m_buy_yes
         return False
 
     def _size_multiplier_for_lane(self, lane: str) -> float:
-        if lane == "15m_buy_yes":
-            return self.calibration_size_multiplier_15m_buy_yes
         return 1.0
 
     def _score_updown_candidate(
