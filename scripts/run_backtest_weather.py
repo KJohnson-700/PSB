@@ -491,9 +491,15 @@ def run_backtest(
 
 def save_report(results: Dict[str, Any]) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORT_DIR / f"weather_backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    report_path = REPORT_DIR / f"backtest_weather_{ts}.json"
+    payload = {
+        **results,
+        "report_type": "weather",
+        "run_at": datetime.now(timezone.utc).isoformat(),
+    }
     with open(report_path, "w", encoding="utf-8") as fh:
-        json.dump(results, fh, indent=2, default=str)
+        json.dump(payload, fh, indent=2, default=str)
     return report_path
 
 

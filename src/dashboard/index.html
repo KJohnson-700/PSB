@@ -801,10 +801,7 @@
 
       <!-- LEFT: BTC combined -->
       <div class="card" data-aos="fade-up" data-aos-delay="160" id="btc-analysis-panel">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <h2 style="margin-bottom:0;">&#8383; BTC</h2>
-          <div class="status-bar" id="btc-signal-badges"></div>
-        </div>
+        <h2 style="margin-bottom:8px;">&#8383; BTC</h2>
         <div class="status-hero crypto-hero-seven">
           <div class="hero-item"><div class="hero-val" id="btc-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">BTC Price</div></div>
           <div class="hero-item"><div class="hero-val" id="btc-htf-bias">-</div><div class="hero-lbl">4H Bias</div></div>
@@ -892,7 +889,7 @@
 
     </div>
 
-    <!-- ETH + XRP (same lag-style gates as SOL; XRP dump-hedge uses book logic — panels show XRP–BTC context) -->
+    <!-- ETH + XRP macro panels (SOL-style lag gates; XRP–BTC correlation context) -->
     <div class="crypto-grid three">
 
       <div class="card" data-aos="fade-up" data-aos-delay="320" id="eth-analysis-panel">
@@ -1202,14 +1199,6 @@
         </table>
     </div>
 
-    <!-- Session History -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
-        <h2>Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
-        <div id="session-history-body" style="font-size:0.78rem;">
-            <p style="color:var(--text-muted);">Loading sessions...</p>
-        </div>
-    </div>
-
     <!-- Analytics Charts -->
     <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
         <div class="card" data-aos="fade-up">
@@ -1296,6 +1285,17 @@
         </div>
     </div>
 
+    <!-- Past sessions: wide table (same API as Test runs); row click loads session in journal above) -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="session-history-card">
+        <h2 style="margin-bottom:4px;">Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
+        <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
+            Completed and archived paper runs with per-strategy PnL. Click a row to load that session into the Paper Trade Journal (same API as Test runs above).
+        </p>
+        <div id="session-history-body" style="font-size:0.78rem;">
+            <p style="color:var(--text-muted);">Loading sessions...</p>
+        </div>
+    </div>
+
     <!-- AI Usage -->
     <div class="card" data-aos="fade-up" id="ai-usage-panel" style="margin-top:16px;">
         <h2>AI System Usage</h2>
@@ -1313,36 +1313,17 @@
     <div id="view-backtest" style="display:none;">
 
     <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:4px;margin-bottom:14px;">
-        <strong style="color:var(--tm);">While the bot is running:</strong> Use the buttons below — backtests start as a subprocess and do not replace the live process. For one-off CLI runs, use the Commands tab.
+        <strong style="color:var(--tm);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). One-off CLI runs: Commands tab.
     </div>
 
     <!-- Backtest Controls -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <h2>Backtest Controls</h2>
         <div class="controls">
-            <button class="btn-sm btn-purple" id="backtest-start-btn" onclick="startBacktest()">Run Backtest</button>
             <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
-                <option value="">-- Crypto --</option>
-                <option value="BTC-30">BTC 30m</option>
-                <option value="BTC-15">BTC 15m</option>
-                <option value="BTC-5">BTC 5m</option>
-                <option value="SOL-30">SOL 30m</option>
-                <option value="SOL-15">SOL 15m</option>
-                <option value="SOL-5">SOL 5m</option>
-                <option value="ETH-30">ETH 30m</option>
-                <option value="ETH-15">ETH 15m</option>
-                <option value="ETH-5">ETH 5m</option>
-                <option value="HYPE-30">HYPE 30m</option>
-                <option value="HYPE-15">HYPE 15m</option>
-                <option value="HYPE-5">HYPE 5m</option>
-                <option value="XRP-30">XRP 30m</option>
-                <option value="XRP-15">XRP 15m</option>
-                <option value="XRP-5">XRP 5m</option>
+                <option value="">-- Loading scopes from settings… --</option>
             </select>
-            <input type="date" id="crypto-bt-test-start"
-                title="Optional: walk-forward test-start date. Data before this date = TRAIN (tune here). Data from this date = TEST (validate only, never tune on it). Leave blank for in-sample run."
-                style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
-            <button class="btn-sm btn-purple" onclick="startCryptoBacktest()">Run Crypto BT</button>
+            <button class="btn-sm btn-purple" type="button" id="crypto-bt-run-btn" onclick="startCryptoBacktest()">Run Crypto BT</button>
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
     </div>
@@ -2018,11 +1999,11 @@ function switchMainView(which, opts) {
         if (which === 'journal' && typeof loadJournalSessionList === 'function') {
             loadJournalSessionList();
             loadAISummary();
+            loadSessionHistory();
             fetchAll();
         }
         if (which === 'performance') {
             loadLivePerformance();
-            loadSessionHistory();
             setTimeout(function() {
                 if (typeof loadAllocationChart === 'function') loadAllocationChart();
                 if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
@@ -2236,6 +2217,8 @@ async function fetchAll() {
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
     const needUpdownWr = needLive || needPerformance;
+    /** Journal + Performance both show session rollup; summary must be fetched for either. */
+    const needJournalSummary = needJournal || needPerformance;
     let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR;
     try {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR] = await Promise.all([
@@ -2243,7 +2226,7 @@ async function fetchAll() {
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
             needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
-            needJournal ? fetchT('/api/journal/summary') : Promise.resolve(null),
+            needJournalSummary ? fetchT('/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
             fetchT('/api/exposure'),
             needLive ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
@@ -2300,12 +2283,12 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] backtest:', e); }
 
     try {
-        if (needJournal && journalR?.ok) {
+        if (journalR?.ok && needJournalSummary) {
             const j = await journalR.json();
-            if (!window._journalViewSessionId) {
+            if (needJournal && !window._journalViewSessionId) {
                 updateJournal(j);
-                updateSessionSummary(j);
             }
+            updateSessionSummary(j);
         }
     } catch (e) { console.error('[dashboard] journal:', e); }
 
@@ -3057,16 +3040,13 @@ async function startCryptoBacktest() {
     let symbol, window;
     [symbol, window] = val.split('-');
     window = parseInt(window, 10);
-    const testStart = (document.getElementById('crypto-bt-test-start')?.value || '').trim();
-    const btn = document.querySelector('button[onclick="startCryptoBacktest()"]');
+    const btn = document.getElementById('crypto-bt-run-btn');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
-    const splitLabel = testStart ? ` (test from ${testStart})` : ' ⚠ in-sample';
-    status.textContent = `Running ${symbol} ${window}m backtest${splitLabel}…`;
+    status.textContent = `Running ${symbol} ${window}m backtest…`;
     status.style.color = 'var(--yellow)';
     try {
         const body = {symbol, window};
-        if (testStart) body.test_start = testStart;
         const r = await fetch('/api/backtest/start', {
             method: 'POST',
             headers: dashAuthHeaders({'Content-Type': 'application/json'}),
@@ -3103,23 +3083,49 @@ async function startCryptoBacktest() {
     }
 }
 
-async function startBacktest() {
-    const btn = document.getElementById('backtest-start-btn');
-    const status = document.getElementById('process-status-bt');
-    btn.disabled = false;
-    status.textContent = 'Legacy rigorous backtests were removed. Use the crypto backtest controls on this tab.';
-    status.style.color = 'var(--yellow)';
-}
-
 async function loadLivePerformance() {
     // Single source of truth: fetchAll already updates all Performance cards/widgets
     // with per-endpoint guards. Reuse it instead of maintaining a second render path.
     await fetchAll();
     if (_currentMainView() === 'performance') {
-        loadSessionHistory();
         if (typeof loadAllocationChart === 'function') loadAllocationChart();
         if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
     }
+}
+
+/** Populate crypto backtest dropdown from /api/backtest/reports.live_scope (settings.yaml). */
+function rebuildCryptoBacktestSelect(scope) {
+    const sel = document.getElementById('crypto-bt-select');
+    if (!sel) return;
+    const prev = sel.value;
+    const FALLBACK_CRYPTO = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+        strategy_key,
+        symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+        enabled: true,
+    }));
+    const sc = scope && Array.isArray(scope.crypto_strategies) ? scope.crypto_strategies : FALLBACK_CRYPTO;
+    const windows = scope && scope.windows && scope.windows.length ? scope.windows : [5, 15, 30];
+    const enabled = sc.filter(row => row.enabled);
+    sel.innerHTML = '';
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = enabled.length
+        ? '-- Enabled strategies (settings.yaml) --'
+        : '-- No crypto strategies enabled in settings.yaml --';
+    sel.appendChild(opt0);
+    for (const row of enabled) {
+        const sym = row.symbol || '';
+        const sk = row.strategy_key || '';
+        for (let i = windows.length - 1; i >= 0; i--) {
+            const w = windows[i];
+            const o = document.createElement('option');
+            o.value = sym + '-' + w;
+            o.textContent = sym + ' ' + w + 'm  (' + sk + ')';
+            sel.appendChild(o);
+        }
+    }
+    if (prev && Array.from(sel.options).some(opt => opt.value === prev))
+        sel.value = prev;
 }
 
 function updateBacktest(d) {
@@ -3131,6 +3137,7 @@ function updateBacktest(d) {
     // Get the single latest report for a specific symbol+window combo.
     // Accepts both new format (report_type='crypto_updown') and old format (symbol present, no report_type).
     function isCryptoReport(r) {
+        if (r.report_type === 'xrp_dump_hedge_sim' || r.report_type === 'weather') return false;
         return r.report_type === 'crypto_updown' || (r.symbol && r.window_minutes && !r.per_strategy_metrics);
     }
     function latestCryptoReport(sym, win) {
@@ -3147,19 +3154,22 @@ function updateBacktest(d) {
             })[0] || null;
     }
 
-    function cryptoCard(sym, win) {
+    function cryptoCard(sym, win, strategyKey) {
         const r = latestCryptoReport(sym, win);
         const symColor = sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#a78bfa' : '#38bdf8';
-        const header = `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        const keyLine = strategyKey
+            ? `<div style="font-family:IBM Plex Mono,monospace;font-size:0.68rem;color:var(--tm);margin-bottom:6px;font-weight:600;">${strategyKey}</div>`
+            : '';
+        const header = keyLine + `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
             <span style="background:${symColor};color:#000;padding:2px 8px;border-radius:4px;font-weight:700;font-size:0.8rem;">${sym}</span>
-            <span style="font-size:1rem;font-weight:700;">${win}m Windows</span>
+            <span style="font-size:1rem;font-weight:700;">${win}m</span>
         </div>`;
         if (!r) {
             return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
                 ${header}
                 <div style="color:var(--text-muted);font-size:0.82rem;text-align:center;padding:10px 0;">
                     Not yet run<br>
-                    <span style="font-size:0.75rem;">Use "Run Crypto BT" → ${sym} ${win}m</span>
+                    <span style="font-size:0.75rem;">Run Crypto BT · ${sym} ${win}m</span>
                 </div>
             </div>`;
         }
@@ -3219,8 +3229,26 @@ function updateBacktest(d) {
         </div>`;
     }
 
+    rebuildCryptoBacktestSelect(d.live_scope);
+
+    const FALLBACK_SCOPE = {
+        crypto_strategies: ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+            strategy_key,
+            symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+            enabled: true,
+        })),
+        windows: [5, 15, 30],
+        weather_enabled: false,
+    };
+    const scope = d.live_scope && d.live_scope.crypto_strategies ? d.live_scope : FALLBACK_SCOPE;
+    const stratRowsEnabled = scope.crypto_strategies.filter(row => row.enabled);
+    const wins = scope.windows && scope.windows.length ? scope.windows : [5, 15, 30];
+
     // ── Build HTML ───────────────────────────────────────────────────────────
     let html = '';
+    html += `<p style="font-size:0.74rem;color:var(--text-muted);margin:0 0 12px;line-height:1.45;font-family:'IBM Plex Mono',monospace;">
+        Crypto rows = <strong>strategies.*.enabled</strong> in settings.yaml · windows = live 5m / 15m / 30m buckets.
+        Weather only if <strong>strategies.weather.enabled</strong>.</p>`;
     if (latestCompleted) {
         function formatAge(ts) {
             if (!ts) return '';
@@ -3253,50 +3281,47 @@ function updateBacktest(d) {
         </div>`;
     }
 
-    // ── Section 1: Bitcoin Strategy ──────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        Bitcoin Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('BTC', 30)}
-        ${cryptoCard('BTC', 15)}
-        ${cryptoCard('BTC', 5)}
-    </div>`;
+    if (!stratRowsEnabled.length) {
+        html += `<div style="padding:12px;border:1px dashed var(--border);border-radius:6px;color:var(--yellow);font-size:0.82rem;">
+            No crypto strategies enabled in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> — backtest rows mirror nothing from live.<br/>
+            <span style="color:var(--text-muted);font-size:0.75rem;">Enable <code>bitcoin</code> / <code>*_macro</code> entries under <code>strategies</code>.</span></div>`;
+    } else {
+        for (let ri = 0; ri < stratRowsEnabled.length; ri++) {
+            const row = stratRowsEnabled[ri];
+            html += `<h3 style="margin:${ri === 0 ? '0' : '14px'} 0 8px;font-size:0.9rem;letter-spacing:0.03em;color:var(--text-muted);">
+                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">${row.strategy_key}</span>
+                <span style="font-size:0.88em;color:var(--tm);"> · ${row.symbol} up/down</span></h3>`;
+            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
+            for (let i = wins.length - 1; i >= 0; i--) {
+                html += cryptoCard(row.symbol, wins[i], row.strategy_key);
+            }
+            html += `</div>`;
+        }
+    }
 
-    // ── Section 2: SOL Macro Strategy ──────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        SOL Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('SOL', 30)}
-        ${cryptoCard('SOL', 15)}
-        ${cryptoCard('SOL', 5)}
-    </div>`;
-
-    // ── Section 3: ETH Macro Strategy — Updown ─────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        ETH Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('ETH', 30)}
-        ${cryptoCard('ETH', 15)}
-        ${cryptoCard('ETH', 5)}
-    </div>`;
-
-    // ── Section 4: HYPE Macro Strategy — Updown ───────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        HYPE Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('HYPE', 30)}
-        ${cryptoCard('HYPE', 15)}
-        ${cryptoCard('HYPE', 5)}
-    </div>`;
-
-    // ── Section 5: XRP Macro Strategy ───────────────────────────────────────────
-    html += `<h3 style="margin:0 0 8px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">
-        XRP Macro Strategy — Updown</h3>`;
-    html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
-        ${cryptoCard('XRP', 30)}
-        ${cryptoCard('XRP', 15)}
-        ${cryptoCard('XRP', 5)}
-    </div>`;
+    if (scope.weather_enabled) {
+        const weatherReports = allReports.filter(r => r.report_type === 'weather');
+        const sortWx = (a, b) => String(b.run_at || b.filename || '').localeCompare(String(a.run_at || a.filename || ''));
+        const latestWx = weatherReports.sort(sortWx)[0];
+        if (latestWx) {
+            const wlp = Number(latestWx.total_pnl != null ? latestWx.total_pnl : 0);
+            const wr = ((latestWx.win_rate || 0) * 100).toFixed(1);
+            html += `<h3 style="margin:12px 0 8px;font-size:0.9rem;letter-spacing:0.04em;color:var(--text-muted);">
+                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">weather</span>
+                <span style="font-size:0.88em;color:var(--tm);"> · same strategy key as journal</span></h3>`;
+            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
+            html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:220px;flex:1;">
+                <div style="font-weight:700;margin-bottom:6px;"><span class="badge badge-green">weather</span></div>
+                <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:6px;">${(latestWx.run_at||'').replace('T',' ').slice(0,19)}</div>
+                <div style="font-size:0.82rem;line-height:1.5;">
+                    Signals: <strong>${latestWx.signals_generated ?? '—'}</strong> · W/L: <strong>${latestWx.wins ?? 0}/${latestWx.losses ?? 0}</strong><br/>
+                    Win rate: <strong>${wr}%</strong><br/>
+                    Total PnL: <strong style="color:${wlp>=0?'var(--green)':'var(--red)'};">$${wlp.toFixed(2)}</strong>
+                </div>
+            </div>`;
+            html += `</div>`;
+        }
+    }
 
     // ── Section 4: Rigorous multi-strategy ───────────────────────────────────
     const rigorous = allReports.filter(r => r.per_strategy_metrics || r.test_aggregate);
@@ -4415,6 +4440,7 @@ function updateHYPEAnalysis(d) { updateAltLagAnalysis(d, 'hype'); }
 function updateXRPAnalysis(d) { updateAltLagAnalysis(d, 'xrp'); }
 
 function updateExitReasons(d) {
+    const $ = (id) => document.getElementById(id);
     const bar = $('exit-reasons-bar');
     const legend = $('exit-reasons-legend');
     const empty = $('exit-reasons-empty');
@@ -4696,43 +4722,11 @@ async function fetchTradeJourney() {
 }
 
 // ─── CRYPTO SIGNAL STATUS PANEL ───────────────────────────────
-function syncCryptoGateSummaryBar() {
-    const el = document.getElementById('btc-signal-badges');
-    if (!el) return;
-    const rows = [['btc', 'BTC'], ['sol', 'SOL'], ['eth', 'ETH'], ['hype', 'HYPE'], ['xrp', 'XRP']];
-    const parts = [];
-    for (const [pfx, sym] of rows) {
-        const a30 = document.getElementById(pfx + '-30m-status-badge');
-        const a = document.getElementById(pfx + '-15m-status-badge');
-        const b = document.getElementById(pfx + '-5m-status-badge');
-        if (!a30 || !a || !b) continue;
-        const t30 = (a30.textContent || '\u2014').trim();
-        const t15 = (a.textContent || '\u2014').trim();
-        const t5 = (b.textContent || '\u2014').trim();
-        const s30 = t30.length > 22 ? t30.slice(0, 20) + '\u2026' : t30;
-        const s15 = t15.length > 22 ? t15.slice(0, 20) + '\u2026' : t15;
-        const s5 = t5.length > 22 ? t5.slice(0, 20) + '\u2026' : t5;
-        const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-        parts.push(
-            '<span style="display:inline-flex;flex-direction:column;align-items:flex-start;margin:2px 8px 2px 0;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:rgba(4,6,10,0.55);max-width:200px;">' +
-            '<span style="font-weight:700;font-size:0.65rem;color:var(--cyan);">' + sym + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t30) + '">30m ' + s30 + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t15) + '">15m ' + s15 + '</span>' +
-            '<span style="font-size:0.6rem;opacity:0.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px;" title="' + esc(t5) + '">5m ' + s5 + '</span>' +
-            '</span>'
-        );
-    }
-    el.innerHTML = parts.length
-        ? '<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:flex-end;gap:2px;">' + parts.join('') + '</div>'
-        : '';
-}
-
 function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData) {
     const now = new Date().toLocaleTimeString();
     const stampEl = document.getElementById('signal-status-updated');
     if (!btcData && !solData && !ethData && !hypeData && !xrpData && !updownData) {
         if (stampEl) stampEl.textContent = '';
-        syncCryptoGateSummaryBar();
         return;
     }
     if (stampEl) stampEl.textContent = 'updated ' + now;
@@ -5125,7 +5119,6 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
     dashRefreshCryptoLiveTickers();
-    syncCryptoGateSummaryBar();
 }
 
 // ─── STRATEGY ALLOCATION DONUT CHART ─────────────────────────
@@ -5436,6 +5429,7 @@ async function refreshDashboardData() {
         await fetchAll();
         if (typeof loadPnLChart === 'function') await loadPnLChart();
         if (typeof loadJournalSessionList === 'function') await loadJournalSessionList();
+        if (typeof loadSessionHistory === 'function' && _currentMainView() === 'journal') await loadSessionHistory();
         if (st) { st.textContent = 'Dashboard data refreshed.'; st.style.color = 'var(--green)'; setTimeout(() => { if (st.textContent === 'Dashboard data refreshed.') st.textContent = ''; }, 4000); }
     } catch (e) {
         if (st) { st.textContent = 'Refresh failed: ' + e; st.style.color = 'var(--red)'; }
@@ -5450,11 +5444,11 @@ if (_currentMainView() === 'journal') {
     loadPnLChart();
     loadAISummary();
     loadJournalSessionList();
+    loadSessionHistory();
 } else if (_currentMainView() === 'performance') {
     loadAllocationChart();
     loadStrategyPnLChart();
     loadLivePerformance();
-    loadSessionHistory();
 } else if (_currentMainView() === 'backtest') {
     loadBacktestReports();
 }
@@ -5502,10 +5496,10 @@ _registerInterval(() => {
     if (view === 'journal') {
         loadPnLChart();
         loadAISummary();
+        loadSessionHistory();
     } else if (view === 'performance') {
         loadAllocationChart();
         loadStrategyPnLChart();
-        loadSessionHistory();
     }
 }, 30000);
 
@@ -5611,11 +5605,11 @@ async function loadSessionHistory() {
         const sessions = data.sessions || [];
         const historySessions = sessions.filter(s => !s._is_current);
         if (!historySessions.length) {
-            countEl.textContent = '(0 past runs)';
+            if (countEl) countEl.textContent = '(0 past runs)';
             el.innerHTML = '<p style="color:var(--text-muted);">No completed test runs yet.</p>';
             return;
         }
-        countEl.textContent = `(${historySessions.length} past runs)`;
+        if (countEl) countEl.textContent = `(${historySessions.length} past runs)`;
 
         // Table layout
         let html = `<div class="session-history-wrap"><table class="session-history-table">

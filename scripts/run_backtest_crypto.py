@@ -488,6 +488,8 @@ def main() -> int:
         rpath = save_report(result, data_size, test_result=test_result)
         print(f"\nReport saved: {rpath}")
 
+    sep = "=" * 58
+    print(f"\n{sep}\n  CRYPTO BACKTEST COMPLETE ({args.symbol} {args.window}m)\n{sep}\n")
     return 0
 
 
