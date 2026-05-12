@@ -308,14 +308,8 @@ class RiskManager:
     def position_entry_notional(p: Any) -> float:
         """Approximate USD cost at entry for exposure caps (matches evaluate_entry logic)."""
         entry_price = float(getattr(p, "entry_price", 0) or 0)
-        entry_leg = str(getattr(p, "entry_leg", "") or "").upper()
-        outcome = str(getattr(p, "outcome", "") or "").upper()
         sz = float(getattr(p, "size", 0) or 0)
-        if entry_leg == "NO":
-            return sz
-        if outcome == "NO":
-            return sz * entry_price
-        return sz
+        return sz * entry_price
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config  # Pass the full config
@@ -437,17 +431,7 @@ class RiskManager:
             if is_crypto != pos_is_crypto:
                 continue  # skip positions from the other pool
             pos_term, _ = self._get_market_term(pos.end_date)
-            outcome = str(getattr(pos, "outcome", "") or "").upper()
-            entry_price = float(getattr(pos, "entry_price", 0) or 0)
-            entry_leg = str(getattr(pos, "entry_leg", "") or "").upper()
-            # BUY_YES / BUY_NO: size is USD notional. Legacy SELL_YES short: size * YES price.
-            if entry_leg == "NO":
-                cost = pos.size
-            elif outcome == "NO":
-                cost = pos.size * entry_price
-            else:
-                cost = pos.size
-            current_exposure_dict[pos_term] += cost
+            current_exposure_dict[pos_term] += self.position_entry_notional(pos)
 
         category_spent = current_exposure_dict.get(term, 0.0)
 

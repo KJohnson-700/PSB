@@ -1615,8 +1615,11 @@ class PolyBot:
         logging.info(
             f"Executing BITCOIN trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
         )
-        order_size = (final_size / max(0.01, 1.0 - signal.price)) if side == "SELL" and signal.price > 0 else final_size
-        pos_size = final_size / max(0.01, 1.0 - signal.price) if side == "SELL" and signal.price > 0 else final_size
+        if side == "BUY":
+            order_size = final_size / max(0.01, signal.price)
+        else:
+            order_size = final_size / max(0.01, 1.0 - signal.price)
+        pos_size = order_size
 
         order = await self.clob_client.place_order(
             token_id=token_id,
@@ -1789,8 +1792,11 @@ class PolyBot:
         logging.info(
             f"Executing {strat} trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
         )
-        order_size = (final_size / max(0.01, 1.0 - signal.price)) if side == "SELL" and signal.price > 0 else final_size
-        pos_size = final_size / max(0.01, 1.0 - signal.price) if side == "SELL" and signal.price > 0 else final_size
+        if side == "BUY":
+            order_size = final_size / max(0.01, signal.price)
+        else:
+            order_size = final_size / max(0.01, 1.0 - signal.price)
+        pos_size = order_size
 
         order = await self.clob_client.place_order(
             token_id=token_id,
@@ -1953,8 +1959,8 @@ class PolyBot:
             )
             return
 
-        order_size = final_size
-        pos_size = final_size
+        order_size = final_size / max(0.01, signal.price)
+        pos_size = order_size
 
         logging.info(
             f"Executing {strat}: {signal.action} {final_size:.2f} @ {signal.price} "

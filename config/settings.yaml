@@ -968,6 +968,11 @@ exposure:
   # With current multipliers (1.0 / 0.6 / 0.2) and caps above, the effective
   # results are FULL<=15, MODERATE<=10, MINIMAL<=5.
   min_trade_usd: 1.0
+  # Hard post-multiplier floors. Prevent calibration/regime/exposure stacks from
+  # turning an executable trade into dust size.
+  full_min_trade_usd: 10.0
+  moderate_min_trade_usd: 10.0
+  minimal_min_trade_usd: 5.0
 
   # --- Kill switch ---
   loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)
