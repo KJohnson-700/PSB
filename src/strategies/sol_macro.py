@@ -62,7 +62,7 @@ from src.analysis.updown_composite_score import (
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies._core import btc_htf_bias as _core_btc_htf_bias
-from src.strategies._core import sol_ltf_strength_15m
+from src.strategies._core import passes_15m_iql_relaxed_rule, sol_ltf_strength_15m
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.strategies.strategy_ai_context import (
@@ -854,28 +854,19 @@ class SolMacroStrategy:
         return m5_adj >= threshold
 
     def _passes_15m_iql(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> bool:
-        """Indicator Quality Layer (IQL) for 15m entries.
+        """Indicator Quality Layer for 15m entries.
 
-        Reuses `_check_15m_confirmation` so cycle-level LTF strength and IQL agree on
-        the same MACD scoring: if 15m is already "confirmed" (late, strong
-        structure), IQL passes. Otherwise apply the relaxed cross / hist-floor rule
-        used for early entries.
+        Goes through self._check_15m_confirmation (patchable seam used by tests)
+        for the "already confirmed" short-circuit, then falls back to the shared
+        relaxed-rule helper in strategies._core.
         """
         if not self.iql_15m_enabled:
             return True
         confirmed, _, _ = self._check_15m_confirmation(ta, allowed_side)
         if confirmed:
             return True
-        macd_15m = ta.sol.macd_15m
-        hist = float(macd_15m.histogram)
-        if allowed_side == "LONG":
-            return (
-                macd_15m.crossover == "BULLISH_CROSS"
-                or (hist >= self.iql_15m_hist_floor and macd_15m.histogram_rising)
-            )
-        return (
-            macd_15m.crossover == "BEARISH_CROSS"
-            or (hist <= -self.iql_15m_hist_floor and not macd_15m.histogram_rising)
+        return passes_15m_iql_relaxed_rule(
+            ta.sol.macd_15m, allowed_side, self.iql_15m_hist_floor
         )
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 from src.analysis.btc_price_service import MACDResult
 from src.strategies._core import (
     btc_ltf_strength_15m,
+    passes_15m_iql,
     sol_ltf_strength_15m,
 )
 
@@ -135,6 +136,52 @@ def test_sol_backtest_wrapper_matches_core():
     core = sol_ltf_strength_15m(m, "LONG")
     assert bt_conf == core.confirmed
     assert abs(bt_str - core.strength) < 1e-9
+
+
+# ── passes_15m_iql ───────────────────────────────────────────────────────────
+
+def test_iql_passes_when_already_confirmed():
+    # Bull cross + red-to-green + above signal -> SOL strength 0.85, confirmed
+    m = _m(cross="BULLISH_CROSS", hist=3.0, prev_hist=-2.0, rising=True, above_signal=True)
+    assert passes_15m_iql(m, "LONG", hist_floor=0.03) is True
+
+
+def test_iql_relaxed_long_via_hist_floor():
+    # Not confirmed (just rising +0.15) but histogram >= floor with rising -> pass
+    m = _m(hist=0.05, prev_hist=0.02, rising=True, above_signal=False)
+    assert passes_15m_iql(m, "LONG", hist_floor=0.03) is True
+
+
+def test_iql_relaxed_long_via_cross_alone():
+    m = _m(cross="BULLISH_CROSS", hist=-0.01, prev_hist=-0.05, rising=False, above_signal=False)
+    # Bull cross alone in relaxed branch should pass
+    assert passes_15m_iql(m, "LONG", hist_floor=0.03) is True
+
+
+def test_iql_rejects_when_hist_below_floor():
+    m = _m(hist=0.01, prev_hist=0.005, rising=True, above_signal=False)
+    assert passes_15m_iql(m, "LONG", hist_floor=0.03) is False
+
+
+def test_iql_short_mirror():
+    m = _m(cross="BEARISH_CROSS", hist=-0.05, prev_hist=-0.02, rising=False, above_signal=False)
+    assert passes_15m_iql(m, "SHORT", hist_floor=0.03) is True
+
+
+def test_iql_live_backtest_parity():
+    from src.backtest.updown_engine import UpdownBacktestEngine
+
+    cases = [
+        _m(cross="BULLISH_CROSS", hist=3.0, prev_hist=-2.0, rising=True, above_signal=True),
+        _m(hist=0.05, prev_hist=0.02, rising=True, above_signal=False),
+        _m(hist=0.01, prev_hist=0.005, rising=True, above_signal=False),
+        _m(cross="BEARISH_CROSS", hist=-0.05, prev_hist=-0.02, rising=False, above_signal=False),
+    ]
+    for m in cases:
+        for side in ("LONG", "SHORT"):
+            core_r = passes_15m_iql(m, side, hist_floor=0.03)
+            back_r = UpdownBacktestEngine._passes_15m_iql_macd(m, side, 0.03)
+            assert core_r == back_r
 
 
 def test_btc_backtest_now_matches_live_threshold():

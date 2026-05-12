@@ -61,7 +61,12 @@ from src.analysis.btc_price_service import (
     CandleMomentum,
     AnchoredVolumeProfile,
 )
-from src.strategies._core import btc_htf_bias, btc_ltf_strength_15m, sol_ltf_strength_15m
+from src.strategies._core import (
+    btc_htf_bias,
+    btc_ltf_strength_15m,
+    passes_15m_iql,
+    sol_ltf_strength_15m,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -835,18 +840,8 @@ class UpdownBacktestEngine:
 
     @staticmethod
     def _passes_15m_iql_macd(m: MACDResult, allowed_side: str, hist_floor: float) -> bool:
-        """15m Indicator Quality Layer — matches live sol_macro._passes_15m_iql."""
-        confirmed, _ = UpdownBacktestEngine._sol_ltf_strength_m(m, allowed_side)
-        if confirmed:
-            return True
-        hist = float(m.histogram)
-        if allowed_side == "LONG":
-            return m.crossover == "BULLISH_CROSS" or (
-                hist >= hist_floor and m.histogram_rising
-            )
-        return m.crossover == "BEARISH_CROSS" or (
-            hist <= -hist_floor and not m.histogram_rising
-        )
+        """15m Indicator Quality Layer. Delegates to strategies._core."""
+        return passes_15m_iql(m, allowed_side, hist_floor)
 
     @staticmethod
     def _btc_alt_corr_1h_approx(

@@ -73,6 +73,39 @@ def btc_ltf_strength_15m(macd_15m: MACDResult, allowed_side: str) -> LtfStrength
     )
 
 
+def passes_15m_iql_relaxed_rule(
+    macd_15m: MACDResult, allowed_side: str, hist_floor: float
+) -> bool:
+    """Relaxed early-entry rule used when the 15m hasn't reached "confirmed" strength yet.
+
+    Passes when EITHER matching crossover fires, OR histogram is beyond the floor in
+    the matching direction with consistent histogram_rising.
+    """
+    hist = float(macd_15m.histogram)
+    if allowed_side == "LONG":
+        return macd_15m.crossover == "BULLISH_CROSS" or (
+            hist >= hist_floor and macd_15m.histogram_rising
+        )
+    return macd_15m.crossover == "BEARISH_CROSS" or (
+        hist <= -hist_floor and not macd_15m.histogram_rising
+    )
+
+
+def passes_15m_iql(macd_15m: MACDResult, allowed_side: str, hist_floor: float) -> bool:
+    """15m Indicator Quality Layer for alt strategies (full check).
+
+    Passes when EITHER:
+      - sol_ltf_strength_15m says the 15m is "confirmed" (composite >= 0.50), OR
+      - the relaxed early-entry rule passes.
+
+    Extracted from SolMacroStrategy._passes_15m_iql and
+    src/backtest/updown_engine._passes_15m_iql_macd (identical logic).
+    """
+    if sol_ltf_strength_15m(macd_15m, allowed_side).confirmed:
+        return True
+    return passes_15m_iql_relaxed_rule(macd_15m, allowed_side, hist_floor)
+
+
 def sol_ltf_strength_15m(macd_15m: MACDResult, allowed_side: str) -> LtfStrengthResult:
     """SOL-family weights & threshold. Matches SolMacroStrategy._check_15m_confirmation.
     Used by SOL/ETH/XRP/HYPE alt strategies."""
