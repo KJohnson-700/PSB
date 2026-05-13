@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-13 — May 11 exit audit: journal vs YAML (`updown_stop_loss` vs `updown_time_stop`)
+
+**`docs/session_reports/may11_2026_exit_reason_reconciliation.md`:** Reconciles informal audit language with code — **`exit_reason: updown_stop_loss`** maps to **`updown_stop_loss_pct`** (% adverse), **not** **`updown_stop_cents`**. **`updown_time_stop`** maps to late-window cents + **`updown_exit_window_mins`**. Includes **`test_20260511_*`** paper slice (**7** EXIT rows: **4** pct-stop, **3** TP, **0** time-stop in-repo folders).
+
+**`scripts/slice_paper_exits_by_session_prefix.py`:** CLI to aggregate EXIT rows by session dir prefix (exit_reason × window).
+
+**`config/settings.yaml`:** `trading.exit_rules` comments — journal mapping pointer to the doc above.
+
+**`src/analysis/underperformance_audit.py`:** Overall + per-strategy **`recent_buy_yes_stop_loss_loss`** / **`_share_of_negative_pnl`**; hypothesis evidence splits **time_stop $** vs **pct_stop $**; Markdown summary line for % stop share; fix-candidate text names both cohorts.
+
 ## 2026-05-13 — Up/down oracle relax, BUY_NO skip counts, entry timing window rename
 
 **`src/analysis/updown_composite_score.py`:** **`validate_oracle_reference`** — **`stale_basis_relax_max_bps`** (pass when feed `updatedAt` is older than **`max_age_sec`** but \|basis\| within relax cap); **`allow_exchange_when_oracle_missing`** (pass when both Chainlink fields are absent but exchange spot exists). **`src/strategies/sol_macro.py`:** wires new flags from strategy config; on oracle fail **`BUY_NO`** now **`_emit_buy_no_skip`** so diagnostics match **`skip`** logs. Renamed **`_within_ai_decision_window`** → **`_within_entry_timing_window`** (config **`entry_timing_window_*`**, legacy **`ai_entry_window_*`** still read). **`src/strategies/bitcoin.py`**, **`src/strategies/eth_macro.py`:** same timing-window rename. **`config/settings.yaml`:** global **`ai_entry_window_` → `entry_timing_window_`**; **`hype_macro`** **`oracle_stale_basis_relax_max_bps: 45`**; XRP **`entry_price_max_15m_yes_side`** (code also reads legacy **`entry_price_max_15m_buy_yes`**). **Tests:** **`tests/test_updown_composite_score.py`**, **`tests/test_sol_macro.py`**.

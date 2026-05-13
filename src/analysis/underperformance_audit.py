@@ -371,6 +371,13 @@ def build_underperformance_report(
             if r.action == "BUY_YES" and r.exit_reason == "updown_time_stop" and r.pnl < 0
         )
     )
+    overall_recent_buy_yes_stoploss_loss = abs(
+        sum(
+            r.pnl
+            for r in recent_rows
+            if r.action == "BUY_YES" and r.exit_reason == "updown_stop_loss" and r.pnl < 0
+        )
+    )
     overall_recent_buy_yes_exit_damage_loss = abs(
         sum(
             r.pnl
@@ -396,6 +403,13 @@ def build_underperformance_report(
                 r.pnl
                 for r in recent_group
                 if r.action == "BUY_YES" and r.exit_reason == "updown_time_stop" and r.pnl < 0
+            )
+        )
+        stoploss_buy_yes_loss = abs(
+            sum(
+                r.pnl
+                for r in recent_group
+                if r.action == "BUY_YES" and r.exit_reason == "updown_stop_loss" and r.pnl < 0
             )
         )
         exit_damage_buy_yes_loss = abs(
@@ -437,7 +451,8 @@ def build_underperformance_report(
                     "evidence": (
                         f"{strategy} recent BUY_YES updown exit-damage losses were "
                         f"{exit_damage_buy_yes_loss:.2f}, {exit_ratio:.1%} of negative PnL "
-                        f"(time_stop={time_stop_buy_yes_loss:.2f})."
+                        f"(time_stop=${time_stop_buy_yes_loss:.2f}; "
+                        f"pct_stop=${stoploss_buy_yes_loss:.2f})."
                     ),
                 }
             )
@@ -497,7 +512,8 @@ def build_underperformance_report(
         fix_candidates: List[str] = []
         if any(h["cause"] == "exit_path_damage" for h in hypotheses):
             fix_candidates.append(
-                "Replay recent BUY_YES time-stop trades against expiry/relaxed-stop counterfactuals before touching signal gates."
+                "Replay recent BUY_YES exit-damage trades (separate `updown_time_stop` vs "
+                "`updown_stop_loss` cohorts) against expiry/relaxed-stop counterfactuals before touching signal gates."
             )
         if any(h["cause"] == "signal_suppression" for h in hypotheses):
             fix_candidates.append(
@@ -529,6 +545,12 @@ def build_underperformance_report(
                 "edge_buckets": recent_edge_buckets,
                 "buy_yes_time_stop_loss": round(time_stop_buy_yes_loss, 4),
                 "buy_yes_time_stop_loss_share_of_negative_pnl": exit_ratio,
+                "buy_yes_stop_loss_loss": round(stoploss_buy_yes_loss, 4),
+                "buy_yes_stop_loss_loss_share_of_negative_pnl": round(
+                    stoploss_buy_yes_loss / strategy_negative, 4
+                )
+                if strategy_negative
+                else 0.0,
             },
             "buy_no_skip_events": {
                 "count": len(skip_group),
@@ -556,6 +578,12 @@ def build_underperformance_report(
             "recent_buy_yes_time_stop_loss": round(overall_recent_buy_yes_timestop_loss, 4),
             "recent_buy_yes_time_stop_loss_share_of_negative_pnl": round(
                 overall_recent_buy_yes_timestop_loss / recent_total_negative, 4
+            )
+            if recent_total_negative
+            else 0.0,
+            "recent_buy_yes_stop_loss_loss": round(overall_recent_buy_yes_stoploss_loss, 4),
+            "recent_buy_yes_stop_loss_loss_share_of_negative_pnl": round(
+                overall_recent_buy_yes_stoploss_loss / recent_total_negative, 4
             )
             if recent_total_negative
             else 0.0,
@@ -593,6 +621,7 @@ def render_underperformance_markdown(report: Dict[str, Any]) -> str:
         f"- **Recent net PnL:** {overall['recent_net_pnl']:+.2f} across {meta['recent_trade_count']} closes",
         f"- **Recent BUY_YES updown exit-damage loss share:** {overall['recent_buy_yes_exit_damage_loss_share_of_negative_pnl']:.1%}",
         f"- **Recent BUY_YES `updown_time_stop` loss share:** {overall['recent_buy_yes_time_stop_loss_share_of_negative_pnl']:.1%}",
+        f"- **Recent BUY_YES `updown_stop_loss` (% stop) loss share:** {overall['recent_buy_yes_stop_loss_loss_share_of_negative_pnl']:.1%}",
         f"- **Recent `BUY_NO_SKIP` events recorded:** {meta['recent_buy_no_skip_count']}",
         "",
         "## Live Side Mix",

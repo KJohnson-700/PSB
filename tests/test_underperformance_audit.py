@@ -61,6 +61,8 @@ def test_build_underperformance_report_flags_exit_and_suppression():
     assert causes[:2] == ["exit_path_damage", "signal_suppression"]
     assert btc["buy_no_skip_events"]["count"] == 1
     assert report["overall"]["recent_buy_yes_time_stop_loss_share_of_negative_pnl"] == 1.0
+    assert report["overall"]["recent_buy_yes_stop_loss_loss"] == 0.0
+    assert report["overall"]["recent_buy_yes_stop_loss_loss_share_of_negative_pnl"] == 0.0
 
 
 def test_underperformance_report_counts_updown_stop_loss_as_exit_damage():
@@ -84,6 +86,8 @@ def test_underperformance_report_counts_updown_stop_loss_as_exit_damage():
     assert recent_mix["updown_stop_loss_n"] == 1
     assert recent_mix["updown_exit_damage_n"] == 2
     assert report["overall"]["recent_buy_yes_time_stop_loss_share_of_negative_pnl"] == 0.3333
+    assert report["overall"]["recent_buy_yes_stop_loss_loss"] == 2.0
+    assert report["overall"]["recent_buy_yes_stop_loss_loss_share_of_negative_pnl"] == 0.6667
     assert report["overall"]["recent_buy_yes_exit_damage_loss_share_of_negative_pnl"] == 1.0
 
 

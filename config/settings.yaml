@@ -91,15 +91,18 @@ trading:
     take_profit_pct: 0.50        # 2026-05-10: raised 0.15 → 0.50. Updown audit (test_20260509_212625): TP fired at avg +35% but resolved-YES trades returned +124%. Bot exits at ~quarter of available upside; raising captures more of the binary settlement curve. Used for BOTH non-updown and updown markets (code path: live_testing.py `if pnl_pct >= self.take_profit_pct`).
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
     max_hold_hours: 72           # Exit after 72 hours regardless (non-updown markets)
-    # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m and 15m candle markets)
+    # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m / 15m / 30m candle markets)
+    # Journal mapping (see docs/session_reports/may11_2026_exit_reason_reconciliation.md):
+    #   - `updown_stop_loss`  → `updown_stop_loss_pct` (same-position % adverse vs cost basis; anytime in hold).
+    #   - `updown_time_stop`  → `updown_stop_cents` + `updown_exit_window_mins` (+ max_fraction / high-entry override).
     # SOL paper (May 2026): time-stop $ losses (-$3 avg) dominated thin TP wins (+$2.25); outsized
     # stops when price was already adverse before the final minute. Tighter ¢ threshold + slightly
     # earlier window → exit on smaller late drift instead of letting loss widen into the last 90s.
-    updown_stop_cents: 0.03      # Exit if YES moves ≥3¢ against entry (entry = YES) within the window
-    updown_exit_window_mins: 2.25 # Apply adverse check in the last ~2.25m (not only final 1.5m)
+    updown_stop_cents: 0.03      # Late-window cents leg; journals as `updown_time_stop` when adverse within window
+    updown_exit_window_mins: 2.25 # Minutes remaining ≤ effective window (after max_fraction cap) for cents stop
     updown_max_hold_mins: 18.0  # Safety valve for missing end_date; trim from 20m
-    updown_stop_loss_pct: 0.20   # 2026-05-07: same-position %-stop fires anytime in the hold; cuts the time-stop bleed where positions drifted -25 to -40% before the death-window cents stop fired
-    updown_exit_window_max_fraction: 0.5  # 2026-05-10: cap cents-stop window at this fraction of runway-at-entry; prevents late entries (e.g. 3m left) from spending entire hold inside the stop window and firing on benign noise. Set to 1.0 to disable.
+    updown_stop_loss_pct: 0.20   # Journals as `updown_stop_loss` — NOT the 3¢ late-window rule (see live_testing.py)
+    updown_exit_window_max_fraction: 0.5  # Cap cents-stop window at this fraction of runway-at-entry; set 1.0 to disable
     # #5: entry-price-conditional cents stop. Entries ≥ threshold use the tighter stop (less room before YES → 0).
     updown_high_entry_threshold: 0.60
     updown_stop_cents_high_entry: 0.02
