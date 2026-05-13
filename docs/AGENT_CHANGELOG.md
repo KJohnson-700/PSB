@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-05-12 — Dashboard: alt-first crypto hero order + lag labels
+
+**`index.html`:** SOL/ETH/HYPE/XRP **hero rows** put **alt Δ%** before **BTC Δ%**; lag tile labels **SOL–BTC lag**, **ETH–BTC lag**, **HYPE–BTC lag**, **XRP–BTC lag** (matches strategy: alt 1H primary, lag/BTC secondary). HYPE/XRP blurbs updated. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-dashboard-alt-first-crypto-heroes`**.
+
+## 2026-05-12 — Dashboard: crypto + equal-card rows stacked (single column)
+
+**`index.html`:** **`crypto-grid`** and **`equal-card-grid.two`** use **`grid-template-columns: 1fr`** so BTC/SOL/ETH/HYPE/XRP cards stack vertically at full row width; larger gap and **`crypto-grid>.card`** padding. Fullscreen no longer forces a 2-column crypto row; hero tiles use readable min-heights and **`clamp`** font sizes. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-dashboard-crypto-cards-stacked`**.
+
+## 2026-05-12 — Dashboard: reduce Command Center flicker (ticker + badges + metrics)
+
+**`index.html`:** **`dashRefreshCryptoLiveTickers`** removed from per-panel crypto status updates; **one** deferred pass at end of **`fetchAll`** when **`currentView === 'live'`** (double **`requestAnimationFrame`** after layout). **`updateMetrics`** skips rewriting **strategy boxes / table** when a stable numeric fingerprint is unchanged. **`ops-decision-gates`** skips **`innerHTML`** when digest HTML unchanged. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-dashboard-flicker-ticker-coalesce`**.
+
+## 2026-05-12 — Dashboard: crypto gate tiles + strategy metric grid (ticker + scroll)
+
+**`index.html`:** Removed **`overflow:visible`** on **signal gate** cells (was letting columns grow past the grid, misshaping tiles and breaking **`dashApplySlowTickerIfNeeded`** width math). Gate wrappers are **`display:flex; flex-direction:column; min-width:0; overflow:hidden`**. **`[id$="-status-detail"]`** uses **`max-height:7em; overflow-y:auto`** so long gate copy scrolls vertically. **Strategy Performance** boxes use **`.strategy-metric-grid`** (`repeat(6, minmax(0,1fr))` + responsive 3/2 columns) instead of **`auto-fit` / `minmax(120px,1fr)`** for even tiles. **`dashRefreshCryptoLiveTickers`** runs tickers again after **`requestAnimationFrame`** so measurements happen post-layout. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-crypto-cards-ticker-scroll-layout`**.
+
+## 2026-05-12 — Hyperliquid HYPE `fetch_klines_range`: paginate long windows (fix empty 1m)
+
+**`hyperliquid_hype_service.py`:** **`candleSnapshot`** was called once with the full **`[startTime, endTime]`** span (e.g. months of **1m**). Hyperliquid returns at most on the order of **~5000** candles per response; wide requests often came back **`[]`**, so backtests had **no HYPE 1m** and zero trades / crashes downstream. **`fetch_klines_range`** now **chunks** in **`_HL_MAX_CANDLES_PER_RANGE_REQUEST` (4000)** bars per request, advances from the last returned **`open_time`**, concatenates, dedupes, then applies the existing date filter. **`test_market_data_fallbacks`:** first chunk **`endTime`** assertion updated to match pagination.
+
+## 2026-05-12 — `updown_engine`: skip settle when 1m frame missing `open_time`
+
+**`updown_engine.py`:** Crypto updown replay assumed `data["1m"]` always had an **`open_time`** column. **HYPE** runs with no 1m bars (Hyperliquid range empty / partial cache) passed an empty frame and crashed with **`KeyError: 'open_time'`**. Before slicing for exit replay, **continue** the scan step when **`df_1m` is empty or lacks `open_time`** (same as “cannot settle”). Local **`run_backtest_crypto.py --skip-oracle`** matrix can finish; dashboard still lists saved **`backtest_crypto_*.json`** under **`data/backtest/reports/`**.
+
 ## 2026-05-12 — main: strategy refactors, updown/oracle/dashboard, pytest alignment (448 green)
 
 **Bundle:** Removes **`src/strategies/_core/*`**, **`ai_call_log` / `ai_replay_agent`** and their tests; updates **`bitcoin`**, **`eth_macro`**, **`sol_macro`**, **`updown_engine`**, **`ai_agent`**, **`run_backtest_crypto`**, dashboard **markers / STRATS / decision digest**. **`tests`:** **`evaluate_trade_decision`** **`AsyncMock`** + **`AIDecision`** in BTC AI integration; **`test_dashboard_bundle`** matches decision chips (no **HYPE floor** chip), crypto hero CSS selector, **Session fills** on journal vs removed duplicate hero line; **`test_strategies`** weather size **25.0**. **`oracle_loader`:** warn when cache rows exist but requested window has no overlap (see below). **Not committed:** `data/entry_prices/updown_fills.jsonl` (local fill log lines).

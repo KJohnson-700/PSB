@@ -1939,7 +1939,10 @@ class UpdownBacktestEngine:
             slippage_total += slip_cost * size
 
             # Replay live-like exits from 1m data for the window, then settle if needed.
-            df_1m    = data.get("1m", pd.DataFrame())
+            df_1m = data.get("1m", pd.DataFrame())
+            if df_1m.empty or "open_time" not in df_1m.columns:
+                current += step_td
+                continue
             window_df_1m = df_1m[
                 (df_1m["open_time"] >= window_open)
                 & (df_1m["open_time"] < window_close)

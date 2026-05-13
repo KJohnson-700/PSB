@@ -3,7 +3,10 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from src.analysis.btc_price_service import BTCPriceService
-from src.analysis.hyperliquid_hype_service import HyperliquidHypeService
+from src.analysis.hyperliquid_hype_service import (
+    HyperliquidHypeService,
+    _HL_MAX_CANDLES_PER_RANGE_REQUEST,
+)
 from src.analysis.sol_btc_service import SOLBTCService
 
 
@@ -155,6 +158,10 @@ def test_hype_range_request_uses_requested_dates(monkeypatch):
 
     assert payloads
     first = payloads[0]["req"]
-    assert first["startTime"] == int(pd.Timestamp("2026-01-20", tz="UTC").timestamp() * 1000)
-    expected_end = pd.Timestamp("2026-04-21", tz="UTC") - pd.Timedelta(milliseconds=1)
-    assert first["endTime"] == int(expected_end.timestamp() * 1000)
+    start_ms = int(pd.Timestamp("2026-01-20", tz="UTC").timestamp() * 1000)
+    global_end_ms = int(
+        (pd.Timestamp("2026-04-21", tz="UTC") - pd.Timedelta(milliseconds=1)).timestamp() * 1000
+    )
+    assert first["startTime"] == start_ms
+    chunk_span_ms = _HL_MAX_CANDLES_PER_RANGE_REQUEST * 15 * 60 * 1000
+    assert first["endTime"] == min(start_ms + chunk_span_ms - 1, global_end_ms)

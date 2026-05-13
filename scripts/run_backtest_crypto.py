@@ -392,6 +392,11 @@ def main() -> int:
                         help="Plain text output (no Rich)")
     parser.add_argument("--no-save-report", action="store_true",
                         help="Skip saving JSON report (reports are saved by default)")
+    parser.add_argument(
+        "--skip-oracle",
+        action="store_true",
+        help="Do not load Chainlink oracle history (avoids slow RPC backfills; basis filter off).",
+    )
     args = parser.parse_args()
 
     config = load_config()
@@ -423,7 +428,7 @@ def main() -> int:
         sc_block = config.get("strategies", {}).get(sk, {})
         if float(sc_block.get("sell_5m_min_corr", -1.0)) >= 0:
             btc_data = loader.load_all("BTC", args.start, args.end)
-    if args.symbol in {"ETH", "SOL", "XRP", "HYPE"}:
+    if args.symbol in {"ETH", "SOL", "XRP", "HYPE"} and not args.skip_oracle:
         oracle_history = OracleHistoryLoader().load_history(args.symbol, args.start, args.end)
     data_size = {iv: len(df) for iv, df in data.items()}
     if oracle_history is not None and not oracle_history.empty:

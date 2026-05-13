@@ -17,6 +17,35 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-12 — Dashboard Live tab: stacked crypto layout + less poll flicker (UI only)
+
+- **What changed:** Repository dashboard stacks live crypto cards (full-width column), coalesces live ticker refresh, and dedupes some Command Center DOM updates. **No** `bitcoin` strategy code or `config/settings.yaml` changes in the same ship bundle.
+- **Why:** Operator readability and less visual churn on `/` Live view.
+- **Actual outcome:** n/a
+- **Status:** confirmed (display only — see `projects/polymarket-bot/changelog.md` § 2026-05-12 — Dashboard UX).
+
+### 2026-05-12 — Live↔backtest BTC drift fixes (3) + LEAN candle-momentum tier
+
+Refactor of the entry-decision logic in `src/strategies/_core/` unified live and backtest scoring across BTC paths. While extracting, three BTC drift bugs were found and fixed; one undercoded producer tier was added.
+
+- **What changed:**
+  - **Drift fix #1 — BTC 15m LTF threshold:** backtest `_ltf_strength` used `confirmed = s >= 0.35`, live used `>= 0.50`. A pure-bull-cross signal (score 0.40) confirmed in backtest but rejected in live. Both now use 0.50 ([src/strategies/_core/ltf_strength.py:42](src/strategies/_core/ltf_strength.py:42)).
+  - **Drift fix #2 — BTC 5m 4H/1H histogram gate:** backtest `_edge_5m_btc` had a hard 4H reject; live has a 1H momentum-recovery fallback. Backtest was rejecting entries live takes during 4H-decel/1H-build windows. Both now share `btc_5m_4h_1h_hist_gate` ([src/strategies/_core/htf_boost.py:48](src/strategies/_core/htf_boost.py:48)).
+  - **Drift fix #3 — BTC 15m HTF boost floor:** live had no floor on the graduated boost. When HTF=BULLISH was decided via recovery/early-bull votes (sabre=-1 + hist>0 below zero), the raw 3-vote lookup could yield a NEGATIVE htf_boost, contradicting the HTF decision. Backtest had a ±0.03 floor for this; live now applies it too ([src/strategies/_core/htf_boost.py](src/strategies/_core/htf_boost.py)).
+  - **Code-correctness fix — LEAN tier:** `btc_price_service.calc_candle_momentum.m5_direction` only emitted SPIKE/DRIFT/empty, but `BitcoinStrategy`'s 5m path had `LEAN_UP/LEAN_DOWN` handler cases with ±0.01 weights that never fired. Added LEAN tier at `|move| > 0.01%` to producer + backtest replay. Live BTC 5m now gets the ±0.01 weak-nudge it always intended.
+
+- **Why:** `src/backtest/updown_engine.py` was a ~2000-line hand-copy of live strategy logic. Drift between the two hand-copied implementations had accumulated silently — three of these biased backtest WR vs live in different directions, making backtest numbers unreliable as a live predictor.
+
+- **Hypothesis:** BTC backtest results post-fix should track live more closely. Drift fix #1 will lower backtest 15m trade counts (some pure-bull-cross entries no longer confirm). Drift fix #2 will raise backtest 5m trade counts (1H-recovery entries that were dropped now fire). Drift fix #3 changes **live** behavior for BTC 15m: recovery/early-bull HTF=BULLISH windows now produce positive htf_boost instead of zero/negative — should produce more BTC 15m entries during recoveries. LEAN tier change is small (±0.01 adjustment in a sliver of the m5 spectrum).
+
+- **Expected outcome:** Live BTC 15m WR during recovery/early-bull periods should not regress; trade counts should rise slightly during those regimes. Backtest BTC 5m / 15m WR should align with live within statistical noise (rather than the +5%-ish overstatement the LTF threshold gap caused). LEAN tier impact will be invisible in aggregate but observable in journal entries with `5m_mom=LEAN_*`.
+
+- **Actual outcome:** `pending` (need ≥15 closed BTC trades after the live changes #3 and LEAN tier take effect — requires bot restart).
+
+- **Status:** `pending`
+
+- **Verification:** 314 tests pass including new parity tests in `tests/test_strategy_core_*.py` that lock live and backtest wrappers to identical output. Commits: `c62d778`, `3c21d3b`, `1fac82d`, `78b43bd`, `fe586da`, `36cd08d`, `bd40be6`, `be1a916`, `77b0e2a`. Merged to main as `7b7f503`.
+
 ### 2026-05-09 — Enforce composite + AI/shadow approval on BTC neutral 15m
 
 - **What changed:** `bitcoin` 15m `HTF=NEUTRAL` up/down entries now must clear `neutral_15m_min_composite_score=0.68` and direct AI approval before Kelly sizing; `neutral_15m_requires_shadow_portfolio=true` requires the shadow portfolio to match as well. The existing `min_edge_15m_neutral=0.12` and low-confidence AI path remain in place.

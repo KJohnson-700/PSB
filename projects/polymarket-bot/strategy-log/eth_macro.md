@@ -12,6 +12,49 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-12 — Dashboard Live tab: ETH-first KPI row (UI only)
+
+- **What changed:** Crypto **ETH** panel hero order and labels on the dashboard now show **ETH Δ%** before **BTC Δ%** and **ETH–BTC lag** (not “BTC–ETH”), matching the live strategy log line that **ETH 1H is primary** and BTC context is secondary. No `eth_macro` config or Python signal logic changed in this commit.
+- **Why:** Remove operator confusion between UI ordering and code hierarchy.
+- **Hypothesis:** n/a
+- **Expected outcome:** n/a
+- **Actual outcome:** n/a
+- **Status:** confirmed (display only; see repo `projects/polymarket-bot/changelog.md` § 2026-05-12 — Dashboard UX for the full bundle).
+
+### 2026-05-12 — ETH 5m 0.02 MACD>signal tier (zero-trade backtest fix)
+
+- **What changed:** Added a `0.02` `macd_line > signal_line` tier to `eth_5m_macd_score` in `strategies._core`. Tiers were previously `{0.06 bull cross, 0.04 hist>0+rising, 0 else, -0.05 against}`. Now: `{0.06, 0.04, 0.02, -0.05}` (LONG; SHORT mirrors). Affects both live `EthMacroStrategy._eth_5m_macd_score` and backtest `_edge_5m_eth_follow_from_df` since both delegate to the shared `_core` function ([src/strategies/_core/eth_follow.py:84](src/strategies/_core/eth_follow.py:84)).
+
+- **Why:** ETH 5m backtests have been producing **zero trades** since the May 7 era. Config `strategies.eth_macro.eth_follow_5m_min_adj: 0.02` (comment "lowered from 0.04 — easier 5m entry in grindy tape") was a silent no-op: the scorer never emitted a value in `(0, 0.04)`, so lowering the threshold from 0.04 → 0.02 admitted no new entries. Every weak-bullish ETH 5m window (MACD above signal but hist not yet positive-and-rising) was rejected as `eth_5m_adj=0 < min=0.02`. The 0.02 tier now honors the config's clear intent and matches SOL's tier ladder.
+
+- **Hypothesis:** ETH 5m will resume producing trades both live and in backtest. Trades that fire at the new 0.02 tier are by definition the weakest-positive signals; WR will likely be lower than 0.04-tier and 0.06-tier entries, but trade count goes from zero to non-zero, restoring lane participation.
+
+- **Expected outcome:** Fresh ETH 5m backtest reports show non-zero `windows_entered`. Live ETH 5m journal entries will show some `reason_parts` containing `ETH5m MACD>signal`. Watch the next ~15 ETH 5m closed trades; if WR < 45% the 0.02 tier may need to be rejected (status `reverted`) and the config threshold raised instead.
+
+- **Actual outcome:** `pending` (need ≥15 closed ETH 5m trades after restart).
+
+- **Status:** `pending`
+
+- **Verification:** 314 tests pass; new test `tests/test_strategy_core_eth_follow.py::test_eth_5m_macd_above_signal_tier` asserts the 0.02 tier fires correctly. Commit: `b009add`. Merged to main as `7b7f503`.
+
+### 2026-05-12 — Live↔backtest ETH 15m follow scoring parity (drift fix)
+
+- **What changed:** Backtest `_edge_15m_eth_follow` used tier scheme `{0.06 cross, 0.04 hist>0+rising, 0.02 MACD>signal&hist>0, 0 else}`. Live `_eth_15m_follow_score` used `{0.06 cross, 0.05 hist>=min_hist+rising, 0 / -0.05 against}`. Different tiers, different scoring. Both now delegate to `eth_15m_follow_score` in `_core` (using the **live** tier ladder: 0.06/0.05/0/-0.05). Backtest gains the live `-0.05` against penalty and the live `0.05` strong-hist tier; loses the 0.02 weak-MACD tier.
+
+  Other primitives extracted in the same refactor pass: `btc_follow_5m_impulse`, `btc_follow_15m_impulse_ok`, `eth_5m_macd_score`, `eth_15m_follow_score`.
+
+- **Why:** Backtest and live `EthMacroStrategy` had hand-copied scoring tiers that drifted apart. The pre-refactor backtest was both more permissive on weak signals (admitted 0.02-tier entries the live scorer didn't have) and more lenient on counter-trend signals (no -0.05 penalty). Aligning to live's tiers means backtest now mirrors what live's scoring produces.
+
+- **Hypothesis:** ETH 15m backtest trade counts may shift slightly; WR should align with live numbers more closely than before. Direction of trade-count change depends on the regime: more `0.05 strong-hist` entries, fewer `0.02 weak-MACD` ones, and harder rejection of counter-trend.
+
+- **Expected outcome:** Fresh ETH 15m backtest WR within statistical noise of live's same-window cohort.
+
+- **Actual outcome:** `pending` (need ≥15 closed ETH 15m trades to compare backtest vs live).
+
+- **Status:** `pending`
+
+- **Verification:** 314 tests pass. Commits: `ff8a315`, `65cbe56`. Merged to main as `7b7f503`.
+
 ### 2026-05-09 — Oracle-first + composite score gate for ETH up/down
 
 - **What changed:** `eth_macro` inherits the shared oracle-first and composite up/down gate, with `require_oracle_for_updown=true`, `oracle_max_age_sec=180`, and `oracle_max_basis_bps=10.0`.

@@ -82,7 +82,7 @@ def test_command_center_decision_gate_chips_are_atomic():
     assert "oracle ${oracleLanes.slice" not in formatter
     assert "oracleLanes.slice(0, 4).join" not in formatter
     assert "floor default" in formatter
-    assert "BTC floor" in formatter
+    assert "BTC 15m floor" in formatter
     assert "for (const lane of oracleLanes.slice(0, 4))" in formatter
     assert "overflow-wrap:anywhere" in html
 
@@ -98,7 +98,7 @@ def test_crypto_live_panels_wrap_and_slow_ticker_helpers_exist():
     assert "function dashRefreshCryptoLiveTickers()" in html
     assert "function dashApplySlowTickerIfNeeded(el)" in html
     assert "dashRefreshCryptoLiveTickers();" in html
-    assert "padding:14px 14px;min-height:0" in html
+    assert ".crypto-grid.two,.crypto-grid.three{grid-template-columns:1fr}" in html
     assert "dashboard_ui_rev" in server and '"dashboard_ui_rev":' in server
 
 

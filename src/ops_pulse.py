@@ -70,7 +70,8 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
     strategies = cfg.get("strategies") or {}
     ai_cfg = (cfg.get("ai") or {}).get("decision_layer") or {}
     composite = cfg.get("updown_composite") or {}
-    lanes = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+    # Alts first so dashboard/API consumers list macro lanes before BTC-only controls.
+    lanes = ("sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bitcoin")
     oracle_block_keys = {"oracle_missing", "oracle_stale", "oracle_basis_block"}
     control_prefixes = ("ai_decision_",)
     control_keys = {
@@ -152,7 +153,8 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
 
 def _buy_no_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     """Dedicated BUY_NO suppression counters and last sample per strategy."""
-    lanes = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+    # Alts first so dashboard/API consumers list macro lanes before BTC-only controls.
+    lanes = ("sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bitcoin")
     per_lane: Dict[str, Dict[str, int]] = {}
     last_samples: Dict[str, Dict[str, Any]] = {}
     totals: Dict[str, int] = {}

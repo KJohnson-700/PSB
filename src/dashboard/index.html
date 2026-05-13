@@ -28,12 +28,11 @@
         .grid-3cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
         .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
         .full{grid-column:1/-1}
-        .crypto-grid{display:grid;gap:12px;margin-bottom:16px;align-items:stretch}
-        .crypto-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
-        .crypto-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
-        .crypto-grid>.card{height:100%;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-        .equal-card-grid{display:grid;gap:12px;margin-bottom:16px;align-items:stretch;grid-auto-rows:1fr}
-        .equal-card-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .crypto-grid{display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:20px;align-items:stretch}
+        .crypto-grid.two,.crypto-grid.three{grid-template-columns:1fr}
+        .crypto-grid>.card{height:auto;display:flex;flex-direction:column;min-width:0;overflow:hidden;padding:20px 22px}
+        .equal-card-grid{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:16px;align-items:stretch;grid-auto-rows:auto}
+        .equal-card-grid.two{grid-template-columns:1fr}
         .equal-card-grid>.card{height:100%;display:flex;flex-direction:column;min-width:0;overflow:hidden}
 
         /* ── Cards ── */
@@ -99,14 +98,40 @@
             line-height:1.35;
             word-break:break-word;
         }
-        .crypto-grid .signal-gates-grid>div{overflow:visible}
+        /* Gate tiles (inside crypto cards): flex column + clip width for horizontal ticker; scroll long detail */
+        .crypto-grid .signal-gates-grid>div{
+            min-width:0;
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+            align-self:stretch;
+        }
         .crypto-grid .signal-gates-grid [id$="-status-badge"]{
+            display:block;
+            width:100%;
+            min-width:0;
             word-break:break-word;
             overflow-wrap:anywhere;
             line-height:1.25;
         }
-        .crypto-grid .signal-gates-grid [id$="-status-detail"],
+        .crypto-grid .signal-gates-grid [id$="-status-detail"]{
+            display:block;
+            width:100%;
+            min-width:0;
+            flex:1 1 auto;
+            min-height:0;
+            max-height:7em;
+            overflow-y:auto;
+            overflow-x:hidden;
+            -webkit-overflow-scrolling:touch;
+            word-break:break-word;
+            overflow-wrap:anywhere;
+            line-height:1.45;
+        }
         .crypto-grid .signal-gates-grid [id$="-wr"]{
+            display:block;
+            width:100%;
+            min-width:0;
             word-break:break-word;
             overflow-wrap:anywhere;
         }
@@ -130,6 +155,22 @@
         .metric-box:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
         .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.4vw,20px);font-weight:600;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .strategy-metric-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:stretch}
+        .strategy-metric-grid .metric-box{
+            min-height:92px;
+            display:flex;
+            flex-direction:column;
+            justify-content:center;
+            align-items:center;
+            text-align:center;
+        }
+        .strategy-metric-grid .metric-box .value{flex-shrink:0}
+        @media (max-width:1100px){
+            .strategy-metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+        }
+        @media (max-width:520px){
+            .strategy-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+        }
 
         /* ── Badges ── */
         .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
@@ -317,9 +358,8 @@
         [data-aos]{opacity:0;transform:translateY(14px) scale(0.98);transition-property:opacity,transform}
         [data-aos].aos-animate{opacity:1;transform:translateY(0) scale(1)}
 
-        /* crypto panel responsiveness */
+        /* crypto panel responsiveness — cards stay stacked; only inner KPI grids reflow */
         @media (max-width:1280px){
-            .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
             .crypto-hero-six{grid-template-columns:repeat(3,minmax(0,1fr))}
             .crypto-hero-seven{grid-template-columns:repeat(4,minmax(0,1fr))}
             .crypto-meta-four{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -327,7 +367,6 @@
             .crypto-meta-six{grid-template-columns:repeat(3,minmax(0,1fr))}
         }
         @media (max-width:900px){
-            .crypto-grid.two,.crypto-grid.three,.equal-card-grid.two{grid-template-columns:1fr}
             .crypto-hero-six{grid-template-columns:repeat(2,minmax(0,1fr))}
             .crypto-hero-seven{grid-template-columns:repeat(2,minmax(0,1fr))}
             .signal-gates-grid{grid-template-columns:1fr}
@@ -381,8 +420,8 @@
         html.dashboard-fullscreen body{font-size:15px}
         html.dashboard-fullscreen .container{max-width:none;padding:20px 26px 72px}
         html.dashboard-fullscreen .card{padding:20px}
-        html.dashboard-fullscreen .crypto-grid{gap:16px}
-        html.dashboard-fullscreen .crypto-grid.three{grid-template-columns:repeat(2,minmax(0,1fr))}
+        html.dashboard-fullscreen .crypto-grid{gap:22px}
+        html.dashboard-fullscreen .crypto-grid.three{grid-template-columns:1fr}
         html.dashboard-fullscreen .hero-item{padding:18px 20px;min-height:116px}
         html.dashboard-fullscreen .hero-item .hero-val{font-size:clamp(24px,2.2vw,34px);white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
         html.dashboard-fullscreen .hero-item .hero-sub{font-size:12px;white-space:normal;overflow:visible;text-overflow:clip}
@@ -402,13 +441,13 @@
         html.dashboard-fullscreen table{font-size:13px}
         html.dashboard-fullscreen th{font-size:10px}
         html.dashboard-fullscreen td{font-size:12px}
-        /* Crypto KPI rows: fullscreen hero rules above target Command Center density; keep alt/BTC tiles shorter. */
-        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item{padding:14px 14px;min-height:0}
+        html.dashboard-fullscreen .crypto-grid>.card{padding:24px 28px}
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item{padding:16px 18px;min-height:88px}
         html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-val,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-val{
-            font-size:clamp(15px,1.15vw,21px);
-            line-height:1.14;
+            font-size:clamp(18px,1.9vw,32px);
+            line-height:1.12;
         }
-        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-lbl{font-size:9px}
+        html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-lbl{font-size:10px}
 
         /* ── Design handoff (vHTubxNudMcUB1Oe4FhHPA) — additive layer ── */
         @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
@@ -851,9 +890,9 @@
           <div class="hero-item"><div class="hero-val" id="sol-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">SOL Price</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="sol-macro">-</div><div class="hero-lbl">BTC-SOL Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="sol-macro">-</div><div class="hero-lbl">SOL–BTC lag</div></div>
           <div class="hero-item"><div class="hero-val" id="sol-sol-move">-</div><div class="hero-lbl">SOL Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="sol-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
         </div>
         <div class="crypto-meta-five">
           <div>MACD 30m: <span id="sol-macd30m" style="color:var(--text);">-</span></div>
@@ -898,9 +937,9 @@
           <div class="hero-item"><div class="hero-val" id="eth-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">ETH Price</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="eth-macro">-</div><div class="hero-lbl">BTC-ETH Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="eth-macro">-</div><div class="hero-lbl">ETH–BTC lag</div></div>
           <div class="hero-item"><div class="hero-val" id="eth-eth-move">-</div><div class="hero-lbl">ETH Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="eth-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
         </div>
         <div class="crypto-meta-five">
           <div>MACD 30m: <span id="eth-macd30m" style="color:var(--text);">-</span></div>
@@ -936,14 +975,14 @@
 
       <div class="card" data-aos="fade-up" data-aos-delay="400" id="hype-analysis-panel">
         <h2 style="margin-bottom:8px;">HYPE</h2>
-        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">BTC→Hyperliquid HYPE correlation lag. Spot vs BTC momentum context.</p>
+        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">HYPE 1H primary in strategy; HYPE–BTC lag and BTC Δ% are secondary context (Hyperliquid spot).</p>
         <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="hype-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">HYPE Price</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="hype-macro">-</div><div class="hero-lbl">BTC-HYPE Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="hype-macro">-</div><div class="hero-lbl">HYPE–BTC lag</div></div>
           <div class="hero-item"><div class="hero-val" id="hype-hype-move">-</div><div class="hero-lbl">HYPE Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="hype-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
         </div>
         <div class="crypto-meta-five">
           <div>MACD 30m: <span id="hype-macd30m" style="color:var(--text);">-</span></div>
@@ -979,14 +1018,14 @@
 
       <div class="card" data-aos="fade-up" data-aos-delay="480" id="xrp-analysis-panel">
         <h2 style="margin-bottom:8px;">XRP</h2>
-        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">Spot vs BTC (lag view). Dump-hedge entries use book + BTC z-score — see Performance blockers.</p>
+        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">XRP 1H primary; XRP–BTC lag for context. Dump-hedge uses book + BTC z-score — see Performance blockers.</p>
         <div class="status-hero crypto-hero-six">
           <div class="hero-item"><div class="hero-val" id="xrp-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">XRP Price</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
-          <div class="hero-item"><div class="hero-val" id="xrp-macro">-</div><div class="hero-lbl">BTC-XRP Macro</div></div>
-          <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="xrp-macro">-</div><div class="hero-lbl">XRP–BTC lag</div></div>
           <div class="hero-item"><div class="hero-val" id="xrp-xrp-move">-</div><div class="hero-lbl">XRP Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="xrp-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
         </div>
         <div class="crypto-meta-five">
           <div>MACD 30m: <span id="xrp-macd30m" style="color:var(--text);">-</span></div>
@@ -1185,7 +1224,7 @@
     <!-- Strategy Performance -->
     <div class="card" data-aos="fade-up" style="margin-top:16px;margin-bottom:16px;">
         <h2>Strategy Performance</h2>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;" id="strategy-boxes">
+        <div class="strategy-metric-grid" id="strategy-boxes">
             <div class="metric-box"><div class="value">-</div><div class="label">BTC Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">SOL Signals</div></div>
             <div class="metric-box"><div class="value">-</div><div class="label">ETH Signals</div></div>
@@ -2379,6 +2418,15 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] usage records:', e); }
 
     _dashStamp();
+    if (needLive) {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                try {
+                    if (typeof dashRefreshCryptoLiveTickers === 'function') dashRefreshCryptoLiveTickers();
+                } catch (e) {}
+            });
+        });
+    }
 }
 
 function _htmlEscape(v) {
@@ -2395,21 +2443,29 @@ function formatDecisionGateDigest(dg) {
     const lanes = dg.lanes && typeof dg.lanes === 'object' ? dg.lanes : {};
     const blocks = dg.active_blocks && typeof dg.active_blocks === 'object' ? dg.active_blocks : {};
     const enforcedCount = Object.values(lanes).reduce((n, lane) => n + ((lane.enforced_lanes || []).length || 0), 0);
+    const laneOrder = ['sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'bitcoin'];
+    const laneRank = (name) => {
+        const i = laneOrder.indexOf(name);
+        return i === -1 ? 999 : i;
+    };
     const oracleLanes = Object.entries(lanes)
         .filter(([, lane]) => lane?.oracle?.required)
+        .sort((a, b) => laneRank(a[0]) - laneRank(b[0]) || String(a[0]).localeCompare(String(b[0])))
         .map(([name, lane]) => `${name.replace('_macro', '')}≤${lane.oracle.max_basis_bps ?? '?'}bps`);
-    const blockParts = Object.entries(blocks).flatMap(([lane, reasons]) =>
-        Object.entries(reasons || {}).slice(0, 2).map(([reason, count]) => `${lane.replace('_macro', '')}:${reason} ${count}`)
-    );
+    const blockParts = Object.entries(blocks)
+        .sort((a, b) => laneRank(a[0]) - laneRank(b[0]) || String(a[0]).localeCompare(String(b[0])))
+        .flatMap(([lane, reasons]) =>
+            Object.entries(reasons || {}).slice(0, 2).map(([reason, count]) => `${lane.replace('_macro', '')}:${reason} ${count}`)
+        );
     const chips = [
         _gateChip(dg.enabled ? `AI enforced ${enforcedCount}` : 'AI gate off', dg.enabled ? 'ai' : 'warn'),
         _gateChip(dg.hard_skip_if_unavailable ? 'hard-skip on' : 'fallback allowed', dg.hard_skip_if_unavailable ? 'good' : 'warn'),
         _gateChip(`floor default ${floors.default_min_score ?? '?'}`, 'good'),
-        _gateChip(`BTC floor ${floors.btc_neutral_15m_min_score ?? '?'}`, 'good'),
     ];
     if (oracleLanes.length) {
         for (const lane of oracleLanes.slice(0, 4)) chips.push(_gateChip(`oracle ${lane}`, 'good'));
     }
+    chips.push(_gateChip(`BTC 15m floor ${floors.btc_neutral_15m_min_score ?? '?'}`, 'good'));
     if (blockParts.length) chips.push(_gateChip(`blocks ${blockParts.slice(0, 3).join(' · ')}`, 'hot'));
     return `<div class="decision-gate-line">${chips.join('')}</div>`;
 }
@@ -2439,8 +2495,11 @@ function updateCommandCenterDigests(d) {
             const gateEl = document.getElementById('ops-decision-gates');
             if (gateEl) {
                 const html = formatDecisionGateDigest(d.decision_gates);
-                gateEl.innerHTML = html;
-                gateEl.title = d.decision_gates ? JSON.stringify(d.decision_gates) : 'decision_gates: no data yet';
+                if (gateEl.dataset.dashGateHtml !== html) {
+                    gateEl.dataset.dashGateHtml = html;
+                    gateEl.innerHTML = html;
+                    gateEl.title = d.decision_gates ? JSON.stringify(d.decision_gates) : 'decision_gates: no data yet';
+                }
             }
         }
         if ('ai_pipeline' in d) {
@@ -2578,7 +2637,10 @@ function updateStatusBadgesAndKill(d) {
     const aiBadge = ai.ready
         ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
         : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    badges.innerHTML = `${run} <span class="badge ${modeClass}">${mode}</span> ${aiBadge} ${canTrade} ${kill}`;
+    const nextHtml = `${run} <span class="badge ${modeClass}">${mode}</span> ${aiBadge} ${canTrade} ${kill}`;
+    if (badges.dataset.dashBadgesHtml === nextHtml) return;
+    badges.dataset.dashBadgesHtml = nextHtml;
+    badges.innerHTML = nextHtml;
 
     const killBtn = document.getElementById('kill-btn');
     if (killBtn) {
@@ -2710,6 +2772,22 @@ function updateMetrics(d) {
     const boxes = document.getElementById('strategy-boxes');
     const tbody = document.querySelector('#strategy-table tbody');
     if (!boxes || !tbody) return;
+
+    const _metricStrats = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'weather'];
+    const fp = _metricStrats.map(s => {
+        const m = d[s] || {};
+        return [
+            m.signals ?? 0,
+            m.trades || 0,
+            Number(m.open_positions ?? 0),
+            m.total_signals || 0,
+            m.last_cycle || '',
+            m.pnl || 0,
+            m.reports || 0,
+        ].join('|');
+    }).join(';');
+    if (boxes.dataset.dashMetricsFp === fp) return;
+    boxes.dataset.dashMetricsFp = fp;
 
     // Format "X ago" from ISO string
     function _cycleAge(isoStr) {
@@ -4312,7 +4390,6 @@ function updateBTCAnalysis(d) {
             const el = document.getElementById(id);
             if (el) el.innerHTML = '-';
         });
-        dashRefreshCryptoLiveTickers();
         return;
     }
     const p = d.price || 0;
@@ -4339,10 +4416,10 @@ function updateBTCAnalysis(d) {
     document.getElementById('btc-vp-poc').textContent = d.vp_poc ? '$'+d.vp_poc.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
     document.getElementById('btc-vp-vah').textContent = d.vp_vah ? '$'+d.vp_vah.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
     document.getElementById('btc-vp-val').textContent = d.vp_val ? '$'+d.vp_val.toLocaleString(undefined,{maximumFractionDigits:0}) : '-';
-    dashRefreshCryptoLiveTickers();
 }
 
-// ─── SOL / ETH / XRP LIVE ANALYSIS (alt vs BTC, same API shape) ──
+// ─── SOL / ETH / HYPE / XRP LIVE ANALYSIS (same API shape as /api/*/analysis)
+// Strategy: alt 1H macro primary; BTC–alt lag + BTC Δ% are secondary (see eth_macro / sol_macro scan_and_analyze).
 function clearAltLagHero(prefix) {
     const dup = `${prefix}-${prefix}-move`;
     [
@@ -4411,8 +4488,7 @@ function updateAltLagAnalysis(d, prefix) {
         : lagOpp && !lagDirDisp
             ? `<span style="color:var(--green);font-weight:700;">Opp +${(d.lag_magnitude||0).toFixed(2)}%</span>`
             : '<span style="color:var(--text-muted);">None</span>';
-    const btcMv = document.getElementById(prefix + '-btc-move');
-    if (btcMv) btcMv.textContent = triPct(d.btc_move_5m, d.btc_move_15m, d.btc_move_30m);
+    /* Alt spot Δ% first, BTC reference second — matches strategy hierarchy (alt 1H primary, lag/BTC secondary). */
     const altMv = document.getElementById(prefix + '-' + prefix + '-move');
     if (altMv) {
         const code = String(d.alt_asset_code || prefix || 'sol').toLowerCase();
@@ -4421,6 +4497,8 @@ function updateAltLagAnalysis(d, prefix) {
         const a30 = d[`${code}_move_30m`] ?? d.sol_move_30m;
         altMv.textContent = triPct(a5, a15, a30);
     }
+    const btcMv = document.getElementById(prefix + '-btc-move');
+    if (btcMv) btcMv.textContent = triPct(d.btc_move_5m, d.btc_move_15m, d.btc_move_30m);
     const lagMacroHero = document.getElementById(prefix + '-macro');
     if (lagMacroHero) {
         const opp = !!d.lag_opportunity;
@@ -4434,7 +4512,6 @@ function updateAltLagAnalysis(d, prefix) {
             lagMacroHero.textContent = opp ? `Opp ~${mag.toFixed(2)}%` : 'No lag opp';
         }
     }
-    dashRefreshCryptoLiveTickers();
 }
 
 function updateSOLAnalysis(d) { updateAltLagAnalysis(d, 'sol'); }
@@ -5118,7 +5195,6 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
     }
-    dashRefreshCryptoLiveTickers();
 }
 
 // ─── STRATEGY ALLOCATION DONUT CHART ─────────────────────────

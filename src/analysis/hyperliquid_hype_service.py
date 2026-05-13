@@ -18,6 +18,11 @@ from src.utils.http_retry import requests_post_with_retries
 
 logger = logging.getLogger(__name__)
 
+# Hyperliquid ``candleSnapshot`` returns at most ~5000 candles per request; asking for
+# a multi-month 1m window in one shot often yields ``[]`` (see backtest HYPE runs).
+# Paginate in time chunks like Binance/Kraken loaders in ``ohlcv_loader.py``.
+_HL_MAX_CANDLES_PER_RANGE_REQUEST = 4000
+
 
 def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Map ``config['hyperliquid']`` subset to ``HyperliquidHypeService`` keyword args."""
@@ -254,6 +259,12 @@ class HyperliquidHypeService(SOLBTCService):
     ) -> pd.DataFrame:
         """Fetch HYPE klines for a date range (used by backtest OHLCV loader).
 
+        Hyperliquid's ``candleSnapshot`` only returns a limited number of candles per
+        call (commonly capped around 5000). Wide ``startTime``/``endTime`` windows
+        (especially multi-month **1m**) often return an empty list; this method
+        **pages** forward in ``_HL_MAX_CANDLES_PER_RANGE_REQUEST``-bar windows and
+        concatenates, mirroring Binance chunking in ``ohlcv_loader``.
+
         Build the request from the actual requested window so historical backtests
         do not silently drift with wall-clock time.
         """
@@ -284,23 +295,9 @@ class HyperliquidHypeService(SOLBTCService):
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
 
-        payload = {
-            "type": "candleSnapshot",
-            "req": {
-                "coin": self.HYPE_COIN,
-                "interval": hl_interval,
-                "startTime": start_ms,
-                "endTime": end_ms,
-            },
-        }
-
-        def _attempt() -> pd.DataFrame:
-            resp = self._post_candles(payload, timeout=self._range_request_timeout_sec)
-            resp.raise_for_status()
-            rows = resp.json() or []
+        def _parse_rows(rows: Any) -> pd.DataFrame:
             if not isinstance(rows, list) or not rows:
                 return self._empty_klines_df()
-
             parsed = []
             for row in rows:
                 try:
@@ -319,31 +316,79 @@ class HyperliquidHypeService(SOLBTCService):
                     )
                 except Exception:
                     continue
-
             if not parsed:
                 return self._empty_klines_df()
-
             df = pd.DataFrame(parsed).sort_values("open_time").drop_duplicates(subset=["open_time"])
-            df = df.reset_index(drop=True)
-
-            if start_date:
-                start_dt = pd.to_datetime(start_date, utc=True)
-                df = df[df["open_time"] >= start_dt]
-            if end_date:
-                end_dt = pd.to_datetime(end_date, utc=True) + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-                df = df[df["open_time"] <= end_dt]
-
             return df.reset_index(drop=True)
+
+        def _fetch_chunk(chunk_start_ms: int, chunk_end_ms: int) -> pd.DataFrame:
+            payload = {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": self.HYPE_COIN,
+                    "interval": hl_interval,
+                    "startTime": int(chunk_start_ms),
+                    "endTime": int(chunk_end_ms),
+                },
+            }
+            resp = self._post_candles(payload, timeout=self._range_request_timeout_sec)
+            resp.raise_for_status()
+            return _parse_rows(resp.json())
 
         # Range-fetch failure paths intentionally return empty (no cache fallback for
         # backtests — they re-run, unlike live which can't replay a missed candle).
         try:
-            df = _attempt()
-            if not df.empty:
-                return df
-            # One empty-result retry, mirroring live path
-            logger.warning("Hyperliquid HYPE range empty response (%s); retrying once", interval)
-            return _attempt()
+            chunk_span_ms = max(interval_ms, _HL_MAX_CANDLES_PER_RANGE_REQUEST * interval_ms)
+            all_parts: list[pd.DataFrame] = []
+            chunk_start = start_ms
+            max_steps = int((end_ms - start_ms) / interval_ms) + 50
+            steps = 0
+            while chunk_start <= end_ms and steps < max_steps:
+                steps += 1
+                chunk_end = min(chunk_start + chunk_span_ms - 1, end_ms)
+                df_chunk = _fetch_chunk(chunk_start, chunk_end)
+                if df_chunk.empty:
+                    df_chunk = _fetch_chunk(chunk_start, chunk_end)
+                if df_chunk.empty:
+                    logger.warning(
+                        "Hyperliquid HYPE range empty chunk %s/%s ms (%s); stopping pagination",
+                        chunk_start,
+                        chunk_end,
+                        interval,
+                    )
+                    break
+                all_parts.append(df_chunk)
+                try:
+                    last_open = df_chunk["open_time"].iloc[-1]
+                    last_open_ms = int(pd.Timestamp(last_open).timestamp() * 1000)
+                except Exception:
+                    break
+                nxt = last_open_ms + interval_ms
+                if nxt <= chunk_start:
+                    break
+                chunk_start = nxt
+                if last_open_ms >= end_ms - interval_ms:
+                    break
+                time.sleep(0.08)
+
+            if not all_parts:
+                return self._empty_klines_df()
+
+            df = pd.concat(all_parts, ignore_index=True)
+            df = df.drop_duplicates(subset=["open_time"]).sort_values("open_time").reset_index(drop=True)
+
+            if start_date:
+                start_dt_f = pd.to_datetime(start_date, utc=True)
+                df = df[df["open_time"] >= start_dt_f]
+            if end_date:
+                end_dt_f = (
+                    pd.to_datetime(end_date, utc=True)
+                    + pd.Timedelta(days=1)
+                    - pd.Timedelta(milliseconds=1)
+                )
+                df = df[df["open_time"] <= end_dt_f]
+
+            return df.reset_index(drop=True)
         except Exception as e:
             logger.error("Hyperliquid HYPE fetch_klines_range failed (%s): %s", interval, e)
             return self._empty_klines_df()
