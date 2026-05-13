@@ -3305,11 +3305,8 @@ function dashRenderPositionsMasterDetail(positions, prevIdSet) {
         window._dashShowClosedFlash = true;
         window._dashSelectedPositionId = null;
     }
-    if (!window._dashShowClosedFlash && !window._dashSelectedPositionId && list.length) {
-        window._dashSelectedPositionId = list[0].position_id;
-    }
     if (window._dashSelectedPositionId && list.length && !list.some(function(p) { return p.position_id === window._dashSelectedPositionId; })) {
-        window._dashSelectedPositionId = list[0].position_id;
+        window._dashSelectedPositionId = null;
     }
 
     if (!list.length) {

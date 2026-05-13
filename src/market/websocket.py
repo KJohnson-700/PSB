@@ -46,7 +46,8 @@ class OrderBook:
 class WebSocketClient:
     """WebSocket client for Polymarket real-time data"""
 
-    WS_ENDPOINT = "wss://ws-subscriptions-clob.polymarket.com/ws"
+    # Per Polymarket CLOB docs: path is /ws/market (public orderbook), not bare /ws (404).
+    _WS_HOST = "wss://ws-subscriptions-clob.polymarket.com"
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -58,6 +59,21 @@ class WebSocketClient:
         self._reconnect_delay = 1
         self._max_reconnect_delay = 60
         self._session: Optional[aiohttp.ClientSession] = None
+        self._sent_initial_market_subscription = False
+
+    def _clob_ws_cfg(self) -> Dict[str, Any]:
+        return (self.config.get("trading") or {}).get("clob_ws") or {}
+
+    def _ws_url(self) -> str:
+        ws_cfg = self._clob_ws_cfg()
+        explicit = ws_cfg.get("wss_url")
+        if explicit:
+            return str(explicit).rstrip("/")
+        channel = str(ws_cfg.get("book_channel", "market"))
+        return f"{self._WS_HOST}/ws/{channel}"
+
+    def _asset_ids_key(self) -> str:
+        return self._clob_ws_cfg().get("asset_ids_json_key", "assets_ids")
 
     async def connect(self) -> bool:
         """Connect to WebSocket server"""
@@ -65,9 +81,12 @@ class WebSocketClient:
             if self._session and not self._session.closed:
                 await self._session.close()
             self._session = aiohttp.ClientSession()
-            self.ws = await self._session.ws_connect(self.WS_ENDPOINT, heartbeat=30)
+            url = self._ws_url()
+            self.ws = await self._session.ws_connect(url, heartbeat=30)
             self._reconnect_delay = 1
-            logger.info("Connected to Polymarket WebSocket")
+            self._sent_initial_market_subscription = False
+            self.subscriptions.clear()
+            logger.info("Connected to Polymarket WebSocket (%s)", url)
             return True
         except Exception as e:
             logger.error(f"Failed to connect to WebSocket: {e}")
@@ -103,12 +122,16 @@ class WebSocketClient:
             if token_id not in self.order_books:
                 self.order_books[token_id] = OrderBook(token_id=token_id)
 
-        # Send subscription message
-        id_key = (
-            (self.config.get("trading") or {}).get("clob_ws") or {}
-        ).get("asset_ids_json_key", "assets_ids")
-        message: Dict[str, Any] = {"type": "subscribe", "channel": channel}
-        message[id_key] = token_ids
+        # Polymarket market channel: first message uses type "market"; later deltas use operation.
+        id_key = self._asset_ids_key()
+        if channel == "market":
+            if not self._sent_initial_market_subscription:
+                message: Dict[str, Any] = {"type": "market", id_key: token_ids}
+                self._sent_initial_market_subscription = True
+            else:
+                message = {"operation": "subscribe", id_key: token_ids}
+        else:
+            message = {"type": "subscribe", "channel": channel, id_key: token_ids}
 
         await self.ws.send_json(message)
         logger.info(f"Subscribed to {channel} for {len(token_ids)} tokens")
@@ -121,11 +144,11 @@ class WebSocketClient:
         if channel in self.subscriptions:
             self.subscriptions[channel].difference_update(token_ids)
 
-        id_key = (
-            (self.config.get("trading") or {}).get("clob_ws") or {}
-        ).get("asset_ids_json_key", "assets_ids")
-        message = {"type": "unsubscribe", "channel": channel}
-        message[id_key] = token_ids
+        id_key = self._asset_ids_key()
+        if channel == "market":
+            message: Dict[str, Any] = {"operation": "unsubscribe", id_key: token_ids}
+        else:
+            message = {"type": "unsubscribe", "channel": channel, id_key: token_ids}
 
         await self.ws.send_json(message)
 

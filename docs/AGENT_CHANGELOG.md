@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-13 — Polymarket CLOB WebSocket URL + subscribe wire-up
+
+**`src/market/websocket.py`:** Connect to **`wss://ws-subscriptions-clob.polymarket.com/ws/market`** (bare **`/ws`** returns **404**). Initial payload **`{"type":"market","assets_ids":[...]}`**; add/remove uses **`operation` `subscribe` / `unsubscribe`**. Optional override **`trading.clob_ws.wss_url`**. On connect, clear in-memory subscription sets so reconnect resyncs. **`_clob_ws_cfg` / `_asset_ids_key`** helper.
+
+## 2026-05-13 — Dashboard: Active Positions detail default closed
+
+**`index.html`:** **`dashRenderPositionsMasterDetail`** — no longer auto-selects the first open row on load or when positions arrive; detail pane stays on **“Select a row…”** until the operator clicks a row. If the selected id is not in the current filtered list, selection clears instead of jumping to the first row.
+
+**`server.py`:** **`dashboard_ui_rev`:** **`2026-05-13-positions-detail-default-closed`**.
+
 ## 2026-05-13 — May 11 exit audit: journal vs YAML (`updown_stop_loss` vs `updown_time_stop`)
 
 **`docs/session_reports/may11_2026_exit_reason_reconciliation.md`:** Reconciles informal audit language with code — **`exit_reason: updown_stop_loss`** maps to **`updown_stop_loss_pct`** (% adverse), **not** **`updown_stop_cents`**. **`updown_time_stop`** maps to late-window cents + **`updown_exit_window_mins`**. Includes **`test_20260511_*`** paper slice (**7** EXIT rows: **4** pct-stop, **3** TP, **0** time-stop in-repo folders).
