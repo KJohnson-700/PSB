@@ -47,10 +47,11 @@ Checklist (from docs/BACKTEST.md)
 """
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -135,6 +136,9 @@ class UpdownBacktestResult:
     oracle_history_loaded: bool = False
     oracle_history_points: int = 0
     oracle_basis_skips: int = 0
+    total_windows: int = 0
+    run_complete: bool = True
+    elapsed_seconds: float = 0.0
 
     @staticmethod
     def _count_windows_for_range(
@@ -222,7 +226,7 @@ class UpdownBacktestResult:
                 initial_bankroll=self.initial_bankroll,
                 final_bankroll=self.initial_bankroll + pnl,
                 trades=trades,
-                windows_scanned=self._count_windows_for_range(
+                windows_scanned=UpdownBacktestResult._count_windows_for_range(
                     start, end, self.window_size
                 ),
                 windows_entered=len(trades),
@@ -232,6 +236,9 @@ class UpdownBacktestResult:
                 oracle_symbol=self.oracle_symbol,
                 oracle_history_loaded=self.oracle_history_loaded,
                 oracle_history_points=self.oracle_history_points,
+                total_windows=UpdownBacktestResult._count_windows_for_range(start, end, self.window_size),
+                run_complete=self.run_complete,
+                elapsed_seconds=self.elapsed_seconds,
             )
 
         return _build(train_trades, self.start_date, test_start), \
@@ -617,7 +624,32 @@ class UpdownBacktestEngine:
         """All rows with open_time strictly BEFORE t -- no look-ahead."""
         if df is None or df.empty or "open_time" not in df.columns:
             return pd.DataFrame()
-        return df[df["open_time"] < t].copy()
+        target = pd.Timestamp(t)
+        if target.tzinfo is None:
+            target = target.tz_localize("UTC")
+        else:
+            target = target.tz_convert("UTC")
+        if "_open_time_ns" in df.columns:
+            times = df["_open_time_ns"].to_numpy()
+        else:
+            times = pd.to_datetime(df["open_time"], utc=True).astype("int64").to_numpy()
+        idx = int(np.searchsorted(times, target.value, side="left"))
+        return df.iloc[:idx]
+
+    @staticmethod
+    def _prepare_replay_data_frames(data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """Normalize replay frames once so per-window slices can use searchsorted."""
+        out: Dict[str, pd.DataFrame] = {}
+        for iv, df in (data or {}).items():
+            if df is None or df.empty or "open_time" not in df.columns:
+                out[iv] = df
+                continue
+            prepared = df.copy()
+            prepared["open_time"] = pd.to_datetime(prepared["open_time"], utc=True)
+            prepared = prepared.sort_values("open_time").reset_index(drop=True)
+            prepared["_open_time_ns"] = prepared["open_time"].astype("int64")
+            out[iv] = prepared
+        return out
 
     @staticmethod
     def _replay_candle_momentum(
@@ -676,6 +708,8 @@ class UpdownBacktestEngine:
     def _build_ta(
         self, t: pd.Timestamp, data: Dict[str, pd.DataFrame],
         htf_key: str = "4h",
+        *,
+        include_trend_sabre: bool = True,
     ) -> Optional[TechnicalAnalysis]:
         """Reconstruct TechnicalAnalysis for window-open time T.
 
@@ -691,7 +725,9 @@ class UpdownBacktestEngine:
             return None
 
         # -- HTF indicators ----------------------------------------------------
-        sabre   = self._svc.calc_trend_sabre(df_htf)
+        # Trend Sabre is expensive and only used by BTC paths.  Alt-family
+        # ETH/SOL/XRP/HYPE paths use EMA/MACD/RSI, so skip it there.
+        sabre = self._svc.calc_trend_sabre(df_htf) if include_trend_sabre else TrendSabreResult()
         macd_4h = self._svc.calc_macd(df_htf)
 
         rsi_series = BTCPriceService._calc_rsi(df_htf["close"])
@@ -1696,6 +1732,9 @@ class UpdownBacktestEngine:
         symbol: str = "BTC",
         btc_data: Optional[Dict[str, pd.DataFrame]] = None,
         oracle_history: Optional[pd.DataFrame] = None,
+        on_progress: Optional[Callable[[int, int, int, float, pd.Timestamp], None]] = None,
+        progress_interval: int = 1000,
+        max_seconds: Optional[float] = None,
     ) -> UpdownBacktestResult:
         """Run the backtest.
 
@@ -1713,6 +1752,7 @@ class UpdownBacktestEngine:
         is_eth   = symbol == "ETH"
         tz       = timezone.utc
         step_td  = timedelta(minutes=window_minutes)
+        started_at = time.monotonic()
 
         if is_btc:
             self.kelly_fraction = self._kelly_btc
@@ -1763,12 +1803,9 @@ class UpdownBacktestEngine:
         )
         end_ts = pd.Timestamp(e_dt)
 
-        # Ensure open_time is tz-aware UTC in all DataFrames
-        for iv in data:
-            df = data[iv]
-            if not df.empty and df["open_time"].dt.tz is None:
-                data[iv] = df.copy()
-                data[iv]["open_time"] = data[iv]["open_time"].dt.tz_localize("UTC")
+        data = self._prepare_replay_data_frames(data)
+        if btc_data is not None:
+            btc_data = self._prepare_replay_data_frames(btc_data)
 
         bankroll       = self.initial_bankroll
         trades: List[UpdownTrade] = []
@@ -1794,13 +1831,34 @@ class UpdownBacktestEngine:
             oracle_times_ns = oracle_history["updated_at"].astype("int64").to_numpy()
             oracle_prices = oracle_history["price"].astype(float).to_numpy()
 
+        total_windows = UpdownBacktestResult._count_windows_for_range(
+            start_date, end_date, window_minutes
+        )
+        progress_interval = max(1, int(progress_interval or 1000))
+
         while current <= end_ts:
+            if max_seconds and (time.monotonic() - started_at) >= float(max_seconds):
+                logger.warning(
+                    "Backtest max_seconds=%.1f reached at %s after %s/%s windows; returning partial result",
+                    float(max_seconds),
+                    current,
+                    windows_scanned,
+                    total_windows,
+                )
+                break
             window_open  = current
             window_close = current + step_td
             windows_scanned += 1
+            if on_progress and windows_scanned % progress_interval == 0:
+                on_progress(windows_scanned, total_windows, len(trades), bankroll, window_open)
 
             # Build TechnicalAnalysis from data strictly before this window
-            ta = self._build_ta(window_open, data, htf_key)
+            ta = self._build_ta(
+                window_open,
+                data,
+                htf_key,
+                include_trend_sabre=is_btc,
+            )
             if ta is None:
                 current += step_td
                 continue
@@ -1818,7 +1876,12 @@ class UpdownBacktestEngine:
                 if not btc_data:
                     current += step_td
                     continue
-                btc_ta = self._build_ta(window_open, btc_data, "4h")
+                btc_ta = self._build_ta(
+                    window_open,
+                    btc_data,
+                    "4h",
+                    include_trend_sabre=False,
+                )
                 if btc_ta is None:
                     current += step_td
                     continue
@@ -2063,4 +2126,7 @@ class UpdownBacktestEngine:
             oracle_history_loaded=oracle_history_loaded,
             oracle_history_points=oracle_history_points,
             oracle_basis_skips=oracle_basis_skips,
+            total_windows=total_windows,
+            run_complete=windows_scanned >= total_windows,
+            elapsed_seconds=round(time.monotonic() - started_at, 3),
         )

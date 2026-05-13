@@ -247,6 +247,56 @@ def test_eth_buy_no_rsi_penalty_can_be_disabled():
     assert delta == 0.0
 
 
+def test_eth_macro_leg_blocks_short_when_leg_is_positive():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "block_counter_macro_leg_updown": True,
+            "updown_macro_leg_max_for_short": 0.0,
+        }
+    )
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    blocked, reason, threshold = strat._macro_leg_blocks_updown_side("SHORT", 0.12)
+
+    assert blocked is True
+    assert reason == "macro_leg_blocks_short"
+    assert threshold == 0.0
+
+
+def test_eth_macro_leg_allows_short_when_leg_is_negative():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "block_counter_macro_leg_updown": True,
+            "updown_macro_leg_max_for_short": 0.0,
+        }
+    )
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    blocked, reason, _ = strat._macro_leg_blocks_updown_side("SHORT", -0.12)
+
+    assert blocked is False
+    assert reason == ""
+
+
+def test_eth_macro_leg_still_blocks_long_when_leg_below_floor():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "block_counter_macro_leg_updown": True,
+            "updown_macro_leg_min_for_long": 0.0,
+        }
+    )
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    blocked, reason, threshold = strat._macro_leg_blocks_updown_side("LONG", -0.12)
+
+    assert blocked is True
+    assert reason == "macro_leg_blocks_long"
+    assert threshold == 0.0
+
+
 def test_eth_uses_its_own_ai_hold_config():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
     assert strat.ai_hold_veto_ttl_sec == 111

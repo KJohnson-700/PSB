@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -115,6 +116,11 @@ def _print_plain(result: UpdownBacktestResult, data_size: dict,
     print(sep)
     if result.windows_scanned:
         print(f"  Windows scanned  : {result.windows_scanned:,}")
+    if getattr(result, "total_windows", 0):
+        status = "complete" if getattr(result, "run_complete", True) else "partial"
+        print(f"  Run status       : {status} ({result.windows_scanned:,}/{result.total_windows:,} windows)")
+    if getattr(result, "elapsed_seconds", 0.0):
+        print(f"  Replay time      : {result.elapsed_seconds:.1f}s")
     if result.oracle_history_loaded:
         print(
             f"  Oracle replay    : {result.oracle_symbol} "
@@ -170,6 +176,11 @@ def _print_rich(result: UpdownBacktestResult, data_size: dict,
     row("Net PnL",            f"[{colour}]${result.net_pnl:+,.2f}  ({result.total_return_pct:+.1f}%)[/]")
     if result.windows_scanned:
         row("Windows scanned", f"{result.windows_scanned:,}")
+    if getattr(result, "total_windows", 0):
+        status = "complete" if getattr(result, "run_complete", True) else "partial"
+        row("Run status", f"{status} ({result.windows_scanned:,}/{result.total_windows:,})")
+    if getattr(result, "elapsed_seconds", 0.0):
+        row("Replay time", f"{result.elapsed_seconds:.1f}s")
     if result.oracle_history_loaded:
         row(
             "Oracle replay",
@@ -232,6 +243,9 @@ def _result_to_dict(result: UpdownBacktestResult) -> dict:
         "net_pnl":          round(result.net_pnl, 4),
         "total_return_pct": round(result.total_return_pct, 2),
         "windows_scanned":  result.windows_scanned,
+        "total_windows":    result.total_windows,
+        "run_complete":     result.run_complete,
+        "elapsed_seconds":  result.elapsed_seconds,
         "windows_entered":  result.windows_entered,
         "wins":             result.wins,
         "losses":           result.losses,
@@ -399,9 +413,26 @@ def main() -> int:
         help="Do not load Chainlink oracle history (avoids slow RPC backfills; basis filter off).",
     )
     parser.add_argument(
+        "--oracle-fetch",
+        action="store_true",
+        help="Allow slow Chainlink RPC backfill when oracle cache does not cover the requested dates (default: cache-only).",
+    )
+    parser.add_argument(
         "--polymarket-marks",
         action="store_true",
         help="Use PolymarketData 1m YES prices for exit replay (sets backtest.polymarket_marks.enabled; needs POLYMARKETDATA_API_KEY).",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=1000,
+        help="Print replay heartbeat every N windows (default: 1000; 0 disables).",
+    )
+    parser.add_argument(
+        "--max-seconds",
+        type=float,
+        default=0.0,
+        help="Return a partial report if replay exceeds this many seconds (default: 0 = no cap).",
     )
     args = parser.parse_args()
 
@@ -437,7 +468,16 @@ def main() -> int:
         if float(sc_block.get("sell_5m_min_corr", -1.0)) >= 0:
             btc_data = loader.load_all("BTC", args.start, args.end)
     if args.symbol in {"ETH", "SOL", "XRP", "HYPE"} and not args.skip_oracle:
-        oracle_history = OracleHistoryLoader().load_history(args.symbol, args.start, args.end)
+        print(
+            "Loading oracle history "
+            f"({'cache/RPC' if args.oracle_fetch else 'cache-only'}) ..."
+        )
+        oracle_history = OracleHistoryLoader().load_history(
+            args.symbol,
+            args.start,
+            args.end,
+            allow_fetch=args.oracle_fetch,
+        )
     data_size = {iv: len(df) for iv, df in data.items()}
     if oracle_history is not None and not oracle_history.empty:
         data_size["oracle"] = len(oracle_history)
@@ -467,6 +507,23 @@ def main() -> int:
     # -- 2. Run backtest (single pass over full range) ---------------------
     engine = UpdownBacktestEngine(config=config, initial_bankroll=args.bankroll)
     print(f"Running {args.symbol} {args.window}m backtest ...")
+    progress_started = time.monotonic()
+
+    def _progress(current: int, total: int, trades: int, bankroll: float, window_open) -> None:
+        if args.progress_interval <= 0:
+            return
+        elapsed = max(0.001, time.monotonic() - progress_started)
+        rate = current / elapsed
+        remaining = max(0, total - current)
+        eta = remaining / rate if rate > 0 else 0.0
+        print(
+            f"  progress {current:,}/{total:,} windows "
+            f"({current / max(total, 1):.1%}) trades={trades:,} "
+            f"bankroll=${bankroll:,.2f} window={str(window_open)[:16]} "
+            f"rate={rate:.1f}/s eta={eta:.0f}s",
+            flush=True,
+        )
+
     result = engine.run(
         data=data,
         start_date=args.start,
@@ -475,6 +532,9 @@ def main() -> int:
         symbol=args.symbol,
         btc_data=btc_data,
         oracle_history=oracle_history,
+        on_progress=_progress if args.progress_interval > 0 else None,
+        progress_interval=args.progress_interval,
+        max_seconds=args.max_seconds if args.max_seconds > 0 else None,
     )
 
     # -- 3. Split and print results ----------------------------------------

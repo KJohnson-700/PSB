@@ -168,7 +168,7 @@ class TestBacktestETHLoadsBTCContext(unittest.TestCase):
         with patch.object(OHLCVLoader, "load_all", new=fake_load_all), \
              patch.object(mod, "UpdownBacktestEngine", new=FakeEngine), \
              patch.object(mod, "save_report", return_value=Path("dummy.json")):
-            with patch("sys.argv", ["run_backtest_crypto.py", "--symbol", "ETH", "--window", "5", "--start", "2025-01-01", "--end", "2025-01-02"]):
+            with patch("sys.argv", ["run_backtest_crypto.py", "--symbol", "ETH", "--window", "5", "--start", "2025-01-01", "--end", "2025-01-02", "--skip-oracle"]):
                 rc = mod.main()
         self.assertEqual(rc, 0)
         self.assertEqual(captured.get("symbol"), "ETH")
@@ -235,11 +235,12 @@ class TestBacktestETHLoadsBTCContext(unittest.TestCase):
         with patch.object(OHLCVLoader, "load_all", new=fake_load_all), \
              patch.object(mod, "UpdownBacktestEngine", new=FakeEngine), \
              patch.object(mod, "save_report", return_value=Path("dummy.json")), \
-             patch.object(mod.OracleHistoryLoader, "load_history", return_value=oracle_df):
+             patch.object(mod.OracleHistoryLoader, "load_history", return_value=oracle_df) as load_history:
             with patch("sys.argv", ["run_backtest_crypto.py", "--symbol", "ETH", "--window", "5", "--start", "2025-01-01", "--end", "2025-01-02"]):
                 rc = mod.main()
         self.assertEqual(rc, 0)
         self.assertIsNotNone(captured.get("oracle_history"))
+        self.assertEqual(load_history.call_args.kwargs.get("allow_fetch"), False)
 
 
 class TestUpdownBacktestSplit(unittest.TestCase):

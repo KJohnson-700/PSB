@@ -58,12 +58,18 @@ def _build_cmd(symbol: str, cfg: dict) -> list[str]:
         cmd.append("--no-cache")
     if cfg.get("skip_oracle"):
         cmd.append("--skip-oracle")
+    if cfg.get("oracle_fetch"):
+        cmd.append("--oracle-fetch")
     if cfg.get("no_save_report"):
         cmd.append("--no-save-report")
     if cfg.get("no_ui"):
         cmd.append("--no-ui")
     if cfg.get("polymarket_marks"):
         cmd.append("--polymarket-marks")
+    if cfg.get("progress_interval") is not None:
+        cmd += ["--progress-interval", str(cfg["progress_interval"])]
+    if cfg.get("max_seconds"):
+        cmd += ["--max-seconds", str(cfg["max_seconds"])]
     return cmd
 
 
@@ -91,8 +97,20 @@ def main() -> int:
     p.add_argument("--test-start", default=None, metavar="DATE")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--skip-oracle", action="store_true")
+    p.add_argument(
+        "--oracle-fetch",
+        action="store_true",
+        help="Allow slow Chainlink RPC backfill in each child (default children use oracle cache only).",
+    )
     p.add_argument("--no-save-report", action="store_true")
     p.add_argument("--no-ui", action="store_true")
+    p.add_argument("--progress-interval", type=int, default=1000)
+    p.add_argument(
+        "--max-seconds",
+        type=float,
+        default=0.0,
+        help="Forward a per-symbol replay time cap; partial reports still save.",
+    )
     p.add_argument(
         "--parallel",
         type=int,
@@ -118,9 +136,12 @@ def main() -> int:
         "test_start": ns.test_start,
         "no_cache": ns.no_cache,
         "skip_oracle": ns.skip_oracle,
+        "oracle_fetch": ns.oracle_fetch,
         "no_save_report": ns.no_save_report,
         "no_ui": ns.no_ui,
         "polymarket_marks": ns.polymarket_marks,
+        "progress_interval": ns.progress_interval,
+        "max_seconds": ns.max_seconds,
     }
 
     wall0 = time.perf_counter()

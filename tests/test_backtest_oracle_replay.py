@@ -118,7 +118,7 @@ def test_eth_backtest_skips_when_oracle_basis_exceeds_cap():
     with patch.object(
         engine,
         "_build_ta",
-        side_effect=lambda t, dataset, htf_key: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
+        side_effect=lambda t, dataset, htf_key, **_: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
     ), patch.object(engine, "_get_sol_htf_bias", return_value="BULLISH"), patch.object(
         engine, "_eth_follow_1h_ok", return_value=True
     ), patch.object(engine, "_sol_ltf_strength", return_value=(False, 0.0)), patch.object(
@@ -147,7 +147,7 @@ def test_eth_backtest_enters_when_oracle_basis_is_within_cap():
     with patch.object(
         engine,
         "_build_ta",
-        side_effect=lambda t, dataset, htf_key: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
+        side_effect=lambda t, dataset, htf_key, **_: _btc_ta() if dataset is btc_data else _eth_ta(2000.0),
     ), patch.object(engine, "_get_sol_htf_bias", return_value="BULLISH"), patch.object(
         engine, "_eth_follow_1h_ok", return_value=True
     ), patch.object(engine, "_sol_ltf_strength", return_value=(False, 0.0)), patch.object(

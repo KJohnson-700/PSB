@@ -1607,6 +1607,12 @@ class PolyBot:
         except Exception as exc:
             logging.debug("post-trade annotation failed trade=%s: %s", trade_id, exc)
 
+    @staticmethod
+    def _annotation_yes_price(action: str, entry_price: float) -> float:
+        """Return the YES mid expected by post-trade annotation."""
+        price = float(entry_price or 0.5)
+        return 1.0 - price if action == "BUY_NO" else price
+
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
         async with self._execution_lock:
@@ -1770,7 +1776,7 @@ class PolyBot:
                 action=signal.action,
                 edge=float(signal.edge or 0.0),
                 confidence=float(signal.confidence or 0.0),
-                yes_price=float(signal.price or 0.5),
+                yes_price=self._annotation_yes_price(signal.action, signal.price),
             ))
 
             await self.notifier.notify_trade(
@@ -1951,7 +1957,7 @@ class PolyBot:
                 action=signal.action,
                 edge=float(signal.edge or 0.0),
                 confidence=float(signal.confidence or 0.0),
-                yes_price=float(signal.price or 0.5),
+                yes_price=self._annotation_yes_price(signal.action, signal.price),
             ))
 
             await self.notifier.notify_trade(
@@ -2114,7 +2120,7 @@ class PolyBot:
                 action=signal.action,
                 edge=float(signal.gap or 0.0),
                 confidence=float(signal.gap or 0.0),
-                yes_price=float(signal.price or 0.5),
+                yes_price=self._annotation_yes_price(signal.action, signal.price),
             ))
 
             await self.notifier.notify_trade(

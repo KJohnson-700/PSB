@@ -411,8 +411,8 @@ class SolMacroStrategy:
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
 
-    def _buy_no_ltf_override(self, ta: SOLTechnicalAnalysis) -> tuple[bool, str]:
-        """Permit SHORT side in bullish macro only on clear bearish short-window tape."""
+    def _buy_no_ltf_override(self, ta: Any) -> tuple[bool, str]:
+        """Permit SHORT side in bullish macro only on clear bearish short-window alt tape."""
         if not self.buy_no_ltf_override_enabled:
             return False, "disabled"
         sol = ta.sol

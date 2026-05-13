@@ -53,6 +53,22 @@ class ETHMacroStrategy(SolMacroStrategy):
             lag_signal_min_pct=self.lag_signal_min_pct,
         )
 
+    def _macro_leg_blocks_updown_side(
+        self, market_allowed_side: str, lag_magnitude: Optional[float]
+    ) -> tuple[bool, str, float]:
+        """Return whether the journaled macro leg contradicts the intended side."""
+        if lag_magnitude is None:
+            return False, "", 0.0
+        if market_allowed_side == "LONG":
+            floor = float(self.config.get("updown_macro_leg_min_for_long", 0.0))
+            blocked = lag_magnitude < floor
+            return blocked, "macro_leg_blocks_long" if blocked else "", floor
+        if market_allowed_side == "SHORT":
+            ceiling = float(self.config.get("updown_macro_leg_max_for_short", 0.0))
+            blocked = lag_magnitude > ceiling
+            return blocked, "macro_leg_blocks_short" if blocked else "", ceiling
+        return False, "", 0.0
+
     def __init__(
         self,
         config: Dict[str, Any],
@@ -844,17 +860,41 @@ class ETHMacroStrategy(SolMacroStrategy):
             # Block updown when journaled macro_leg disagrees with side (catch-up thesis off).
             if self.block_counter_macro_leg_updown:
                 _lm = self._signal_lag_magnitude(corr)
-                if _lm is not None:
-                    _long_floor = float(
-                        self.config.get("updown_macro_leg_min_for_long", 0.0)
+                _blocked, _macro_skip, _macro_threshold = self._macro_leg_blocks_updown_side(
+                    market_allowed_side, _lm
+                )
+                if _blocked:
+                    _bump_skip(_macro_skip)
+                    if market_allowed_side == "SHORT":
+                        _cmp = ">"
+                        _label = "short_ceiling"
+                    else:
+                        _cmp = "<"
+                        _label = "long_floor"
+                    logger.info(
+                        f"  ETH skip '{market.question[:40]}' — "
+                        f"macro_leg={_lm:+.4f}% {_cmp} {_label}={_macro_threshold:+.4f} (updown)"
                     )
-                    if market_allowed_side == "LONG" and _lm < _long_floor:
-                        _bump_skip("macro_leg_blocks_long")
-                        logger.info(
-                            f"  ETH skip '{market.question[:40]}' — "
-                            f"macro_leg={_lm:+.4f}% < long_floor={_long_floor:+.4f} (updown)"
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason=_macro_skip,
+                                window_size=_updown_tf,
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=effective_min_edge,
+                                rsi=eth.rsi_14,
+                                htf_bias=btc_htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                alt_1h_trend=mtt.h1_trend,
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
                         )
-                        continue
+                    continue
 
             _late_ok, effective_min_edge, _late_reason = self._apply_late_window_guard(
                 mins_left=_eval_left,

@@ -8,6 +8,28 @@
 
 ---
 
+## 2026-05-13 — Crypto backtest reliability: progress, cache-only oracle, faster alt replay
+
+**`src/backtest/updown_engine.py`:** Normalizes OHLCV frames once with `_open_time_ns` so per-window history slices use `searchsorted`/`iloc` instead of boolean-copy scans; skips expensive Trend Sabre reconstruction for alt-family replays where BTC/SOL/ETH/XRP/HYPE paths do not consume it; adds replay `on_progress`, `progress_interval`, `max_seconds`, `total_windows`, `run_complete`, and `elapsed_seconds` metadata.
+
+**`scripts/run_backtest_crypto.py`:** Adds heartbeat output (`--progress-interval`, default **1000**) and bounded partial runs via `--max-seconds`; default oracle mode is now **cache-only** so missing/stale Chainlink cache cannot hang a normal backtest. Use `--oracle-fetch` explicitly for slow RPC backfill; `--skip-oracle` still disables oracle replay entirely.
+
+**`src/backtest/oracle_loader.py`:** `load_history(..., allow_fetch=False)` returns cached slices only and logs coverage misses instead of entering RPC fetch.
+
+**`scripts/run_crypto_backtest_bundle.py`:** Forwards `--progress-interval`, `--max-seconds`, and `--oracle-fetch` to child runs.
+
+**Verification:** ETH 15m `2026-01-20..2026-04-20` default cache-oracle run completed **8,736/8,736** windows in **54.2s** with progress; SOL 5m short-window smoke completed **1,728/1,728** windows in **2.8s**.
+
+## 2026-05-13 — eth_macro BUY_NO audit fixes: symmetric macro-leg block + annotation/test cleanup
+
+**`src/strategies/eth_macro.py`:** `block_counter_macro_leg_updown` now matches the ETH config comment for both sides: LONG blocks when `macro_leg < updown_macro_leg_min_for_long`; SHORT / `BUY_NO` blocks when `macro_leg > updown_macro_leg_max_for_short`. SHORT blocks emit `macro_leg_blocks_short` through normal skip and BUY_NO skip telemetry.
+
+**`config/settings.yaml`:** Added `eth_macro.updown_macro_leg_max_for_short: 0.0`; clarified neutral ETH fallback and disabled per-market 1H alignment comments.
+
+**`src/strategies/sol_macro.py`:** `_buy_no_ltf_override` type hint widened from `SOLTechnicalAnalysis` to `Any` because ETH/HYPE/XRP reuse the shared alt-TA shape.
+
+**Tests:** `tests/test_eth_macro.py` covers SHORT-positive macro-leg blocking and LONG-negative behavior; `tests/test_strategy_execution_drivers.py` covers BUY_NO post-entry annotation receiving true YES mid.
+
 ## 2026-05-13 — Up/down backtest parity: Polymarket-mark integration coverage
 
 **`tests/test_updown_backtest_parity.py`:** Added integration checks that ``UpdownBacktestEngine._settle_updown_with_live_exit_proxy`` prefers supplied Polymarket YES marks over the synthetic underlying proxy and that sparse minute marks still drive exit decisions via ``Series.asof`` near expiry.

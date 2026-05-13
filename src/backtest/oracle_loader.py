@@ -93,7 +93,14 @@ class OracleHistoryLoader:
         network, address = feed
         return OracleFeedSpec(symbol=normalized, network=network, address=address)
 
-    def load_history(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def load_history(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        *,
+        allow_fetch: bool = True,
+    ) -> pd.DataFrame:
         spec = self.resolve_feed(symbol)
         if spec is None:
             return pd.DataFrame(columns=["updated_at", "price", "round_id", "network", "address"])
@@ -108,6 +115,17 @@ class OracleHistoryLoader:
 
         history = self._slice_history(cache, start_ts, end_ts)
         if self._cache_covers(history, start_ts, end_ts):
+            return history
+
+        if not allow_fetch:
+            if history.empty:
+                logger.warning(
+                    "oracle_loader: %s cache does not cover [%s, %s]; skipping RPC backfill "
+                    "because allow_fetch=false",
+                    spec.symbol,
+                    start_ts.isoformat(),
+                    end_ts.isoformat(),
+                )
             return history
 
         if history.empty and not cache.empty:

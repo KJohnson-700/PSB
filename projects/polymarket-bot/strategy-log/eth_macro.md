@@ -12,6 +12,20 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-13 — BUY_NO macro-leg audit fix: block SHORT when macro leg is positive
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `block_counter_macro_leg_updown` now applies symmetrically for ETH up/down entries: LONG blocks when `macro_leg < updown_macro_leg_min_for_long`; SHORT / `BUY_NO` blocks when `macro_leg > updown_macro_leg_max_for_short`. Added `strategies.eth_macro.updown_macro_leg_max_for_short: 0.0` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Also clarified comments around neutral ETH fallback and disabled per-market 1H alignment behavior, and widened the shared `_buy_no_ltf_override` type hint so ETH's alt-TA reuse is explicit.
+
+- **Why:** The audit found spec drift: config said `block_counter_macro_leg_updown` blocked LONG with negative macro leg and SHORT with positive macro leg, but ETH code only enforced the LONG side. That allowed `BUY_NO` candidates through even when the lag/catch-up leg pointed upward.
+
+- **Hypothesis:** ETH `BUY_NO` entries should be cleaner because short/down entries whose macro leg is still positive are filtered before sizing. This may reduce ETH short count but should improve the `BUY_NO` lane's average quality.
+
+- **Expected outcome:** ETH skip telemetry may show `macro_leg_blocks_short`; surviving ETH `BUY_NO` entries should have macro-leg context aligned with DOWN. Watch the next ≥15 closed ETH trades, especially the `BUY_NO` subset.
+
+- **Actual outcome:** `pending` (need ≥15 closed `eth_macro` trades after this change).
+
+- **Status:** `pending`
+
 ### 2026-05-13 — ETH runs without BTC full-analysis dependency; neutral ETH can trade on ETH tape
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.neutral_macro_require_spike_or_lag` was changed to `false` and `strategies.eth_macro.btc_1h_regime_gates.enabled` to `false`. In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `eth_macro` now requires only ETH full analysis to scan; if BTC full analysis is unavailable it continues with BTC HTF treated as `NEUTRAL`, skips BTC 15m/5m hard-gates that depend on missing full-analysis objects, and avoids BTC 1H regime-based min-edge / sizing adjustments. The bullish BUY_NO override bug was also corrected to use the ETH TA object, not an undefined name.

@@ -196,6 +196,22 @@ async def test_sol_style_strategies_execute_buy_no_as_no_leg(strategy_name: str)
 
 
 @pytest.mark.asyncio
+async def test_buy_no_annotation_receives_yes_mid_not_no_entry_price():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot._annotate_entry_async = AsyncMock()
+    sig = _sol_like_signal(action="BUY_NO", strategy_name="sol_macro").model_copy(
+        update={"price": 0.37}
+    )
+
+    await bot._execute_sol_macro_signal_impl(sig)
+
+    annotation_kwargs = bot._annotate_entry_async.call_args.kwargs
+    assert annotation_kwargs["action"] == "BUY_NO"
+    assert annotation_kwargs["yes_price"] == pytest.approx(0.63)
+
+
+@pytest.mark.asyncio
 async def test_execute_bitcoin_impl_sets_side_before_order():
     bot = _bare_polybot()
     _attach_mocks(bot)

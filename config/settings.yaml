@@ -463,8 +463,10 @@ strategies:
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
     min_edge_5m: 0.10             # raised from 0.085 (2026-05-08) — current ETH 5m 33% WR / -$2.23
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11 to recover 15m participation
-    neutral_macro_require_spike_or_lag: false  # ETH 1H NEUTRAL trades on ETH tape; no BTC spike/lag catalyst required
-    block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    neutral_macro_require_spike_or_lag: false  # ETH 1H NEUTRAL may use BTC HTF fallback when no BTC spike/lag exists
+    block_counter_macro_leg_updown: true      # block LONG with macro_leg below floor / SHORT with macro_leg above ceiling
+    updown_macro_leg_min_for_long: 0.0
+    updown_macro_leg_max_for_short: 0.0
     buy_no_ltf_override_enabled: true         # allow SHORT/BUY_NO in bullish macro only when 15m+5m alt tape is bearish
     buy_no_ltf_override_rsi_max: 45.0
     buy_no_ltf_override_max_btc_5m_pct: 0.0
@@ -543,8 +545,7 @@ strategies:
     # Re-audit weekly with scripts/hourly_heatmap.py --suggest; re-promote Tier-B
     # hours only after ≥15 closed trades with WR<0.46 AND avg PnL<-$2.
     blocked_utc_hours_updown: [1, 15, 23]  # Tier A only — re-expand from live heatmap, not backtest alone
-    # Direction gate is now ADAPTIVE via 1H trend in sol_macro.py — no manual flag needed.
-    # When 1H trend is BULLISH, BUY_NO is auto-suppressed; when BEARISH, BUY_YES is.
+    # Per-market 1H alignment gate is disabled below; ETH 1H is handled earlier as primary side source.
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
