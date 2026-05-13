@@ -1487,6 +1487,10 @@
             <button class="btn-sm btn-purple" type="button" id="crypto-bt-run-btn" onclick="startCryptoBacktest()">Run Crypto BT</button>
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
+        <div style="margin-top:10px;">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">Backtest output tail</div>
+            <pre id="backtest-output-tail" style="margin:0;padding:10px;min-height:84px;max-height:220px;overflow:auto;background:rgba(0,0,0,.22);border:1px solid var(--border);border-radius:6px;color:var(--td);font:11px/1.45 'IBM Plex Mono',monospace;white-space:pre-wrap;">No active backtest output.</pre>
+        </div>
     </div>
 
     <!-- Test Results + Live Scan -->
@@ -2394,7 +2398,7 @@ async function fetchAll() {
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
-            needBacktest ? fetchT('/api/backtest/reports') : Promise.resolve(null),
+            needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
             needJournalSummary ? fetchT('/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
             fetchT('/api/exposure'),
@@ -3684,16 +3688,20 @@ async function stopLiveBot() {
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
 }
 
-/** Fetch /api/backtest/reports and repaint cards. After subprocess exit, use retries+gap so new JSON is visible. */
-async function loadBacktestReports(retries, gapMs) {
+/** Fetch /api/backtest/reports and repaint cards. After subprocess exit, use lead+retries+gap so new JSON is on disk and not served from an HTTP cache. */
+async function loadBacktestReports(retries, gapMs, leadMs) {
     const n = (retries == null || retries < 1) ? 1 : retries;
     const gap = gapMs == null ? 0 : gapMs;
+    const lead = leadMs == null ? 0 : leadMs;
+    if (lead > 0) {
+        await new Promise(function(resolve) { setTimeout(resolve, lead); });
+    }
     for (let attempt = 0; attempt < n; attempt++) {
         if (attempt > 0 && gap > 0) {
             await new Promise(function(resolve) { setTimeout(resolve, gap); });
         }
         try {
-            const r = await fetch('/api/backtest/reports');
+            const r = await fetch('/api/backtest/reports?_=' + Date.now() + '&a=' + attempt, { cache: 'no-store' });
             if (r.ok) updateBacktest(await r.json());
         } catch (e) {
             console.error('Failed to load backtest reports:', e);
@@ -3701,11 +3709,19 @@ async function loadBacktestReports(retries, gapMs) {
     }
 }
 
+function renderBacktestOutputTail(lines, fallbackText) {
+    const el = document.getElementById('backtest-output-tail');
+    if (!el) return;
+    const arr = Array.isArray(lines) ? lines.filter(Boolean) : [];
+    el.textContent = arr.length ? arr.join('\n') : (fallbackText || 'No active backtest output.');
+}
+
 function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
     const tick = async () => {
         const s = await fetch('/api/backtest/status?job_id=' + encodeURIComponent(jobId))
             .then(r => r.json()).catch(() => null);
         if (!s) { setTimeout(tick, 4000); return; }
+        renderBacktestOutputTail(s.output || [], `${label}: waiting for subprocess output…`);
         if (s.job_unknown) {
             if (statusEl) {
                 statusEl.textContent = `${label} tracking lost after restart (job ${jobId}) — check reports/logs.`;
@@ -3719,6 +3735,9 @@ function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
             if (failed && statusEl) {
                 statusEl.textContent = `${label} failed (exit ${code}) — check OHLCV/oracle cache, logs, or output tail below. No JSON report on failure.`;
                 statusEl.style.color = 'var(--red)';
+            }
+            if (!failed) {
+                renderBacktestOutputTail(s.output || [], `${label} finished. Latest output shown above.`);
             }
             if (onComplete) onComplete(!failed);
             return;
@@ -3749,6 +3768,7 @@ async function startCryptoBacktest() {
     btn.disabled = true;
     status.textContent = `Running ${symbol} ${window}m backtest…`;
     status.style.color = 'var(--yellow)';
+    renderBacktestOutputTail([], `Launching ${symbol} ${window}m backtest…`);
     try {
         const body = {symbol, window};
         const r = await fetch('/api/backtest/start', {
@@ -3764,6 +3784,7 @@ async function startCryptoBacktest() {
             } catch (_) {}
             status.textContent = `${symbol} ${window}m started (job ${d.job_id}, PID ${d.pid}) — can run alongside live bot`;
             status.style.color = 'var(--green)';
+            renderBacktestOutputTail([], `${symbol} ${window}m started (job ${d.job_id}) — waiting for output…`);
             pollBacktestJobUntilDone(d.job_id, `${symbol} ${window}m`, status, (ok) => {
                 btn.disabled = false;
                 if (ok) {
@@ -3774,18 +3795,20 @@ async function startCryptoBacktest() {
                     localStorage.removeItem('psb_pending_bt_job');
                     localStorage.removeItem('psb_pending_bt_label');
                 } catch (_) {}
-                loadBacktestReports(5, 700);
+                loadBacktestReports(8, 450, 250);
                 loadLivePerformance();
                 if (_currentMainView() === 'backtest') fetchAll();
             });
         } else {
             status.textContent = `Backtest error: ${d.message || d.status}`;
             status.style.color = 'var(--red)';
+            renderBacktestOutputTail([], `Backtest error: ${d.message || d.status}`);
             btn.disabled = false;
         }
     } catch(e) {
         status.textContent = 'Error: ' + e;
         status.style.color = 'var(--red)';
+        renderBacktestOutputTail([], 'Backtest request failed: ' + e);
         btn.disabled = false;
     }
 }
@@ -6182,7 +6205,7 @@ if (_currentMainView() === 'journal') {
             localStorage.removeItem('psb_pending_bt_job');
             localStorage.removeItem('psb_pending_bt_label');
         } catch (_) {}
-        loadBacktestReports(5, 700);
+        loadBacktestReports(8, 450, 250);
         loadLivePerformance();
         if (_currentMainView() === 'backtest') fetchAll();
     });

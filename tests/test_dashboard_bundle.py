@@ -46,6 +46,7 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     body = r.text
     assert "fetchAll" in body and "Command Center" in body
     assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
+    assert 'id="backtest-output-tail"' in body
 
     h = c.get("/health")
     assert h.status_code == 200
@@ -57,6 +58,10 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert snippet.status_code == 200
     assert "text/html" in (snippet.headers.get("content-type") or "")
     assert data.get("dashboard_ui_rev") in snippet.text
+
+    br = c.get("/api/backtest/reports")
+    assert br.status_code == 200
+    assert "no-store" in (br.headers.get("cache-control") or "").lower()
 
 
 def test_dashboard_inline_scripts_parse_cleanly():
@@ -191,6 +196,14 @@ def test_dashboard_crypto_backtest_select_includes_all_bundle():
     html = INDEX.read_text(encoding="utf-8")
     assert "ALL-" in html and "BTC,SOL,ETH,XRP,HYPE bundle" in html
     assert "val.startsWith('ALL-')" in html
+
+
+def test_backtest_tab_renders_output_tail_and_poll_updates_it():
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="backtest-output-tail"' in html
+    assert "function renderBacktestOutputTail(lines, fallbackText)" in html
+    assert "renderBacktestOutputTail(s.output || []" in html
+    assert "Backtest output tail" in html
 
 
 def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):

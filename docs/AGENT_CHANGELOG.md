@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-13 — Crypto backtest/live parity gates + Backtest-tab output tail
+
+**`src/backtest/updown_engine.py`:** Backtest replay now mirrors live entry gating more closely: live-style `KellySizer` sizing before exposure clamps, structured `skip_counts` on `UpdownBacktestResult`, entry-window and timing-window filters during replay, `max_edge_updown` cap support, and ETH no longer hard-requires `btc_data` when `btc_follow_1h_required: false`.
+
+**`tests/test_updown_backtest_parity.py`:** Adds focused regressions for ETH BTC-follow gating, `outside_entry_window` skip accounting, and `edge_above_cap` skip accounting.
+
+**`src/dashboard/index.html`:** Backtest tab now includes a dedicated **Backtest output tail** panel wired to the existing `/api/backtest/status` polling, so subprocess stdout is visible on the tab while jobs run and after completion.
+
+**`tests/test_dashboard_bundle.py`:** Guards the new Backtest-tab output tail DOM and polling hook.
+
 ## 2026-05-13 — Dashboard: fix inline JS brace/IIFE closure; CI parses scripts with node --check
 
 **`src/dashboard/index.html`:** Restores missing `});` / IIFE terminator so `startCryptoBacktest` and boot paths parse as valid JavaScript.

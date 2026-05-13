@@ -48,6 +48,7 @@ Checklist (from docs/BACKTEST.md)
 import json
 import logging
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -56,6 +57,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from src.analysis.kelly_sizer import KellySizer
 from src.analysis.btc_price_service import (
     BTCPriceService,
     TechnicalAnalysis,
@@ -81,12 +83,6 @@ logger = logging.getLogger(__name__)
 _MIN_4H_BARS  = 65   # Sabre SMA(35) + ATR(14) + warmup
 _MIN_15M_BARS = 50   # MACD(26,9) + warmup
 _MIN_5M_BARS  = 40   # 5m MACD warmup
-
-# NOTE: Live applies a max_edge_updown = 0.12 cap, but that filters market
-# mispricing (yes_price hasn't caught up to reality).  In the backtest we
-# assume perfect pricing at YES = 0.50, so edge = pure signal strength.
-# Applying the cap here would incorrectly block valid signals.
-
 
 # ==============================================================================
 # Result data-classes
@@ -136,6 +132,7 @@ class UpdownBacktestResult:
     oracle_history_loaded: bool = False
     oracle_history_points: int = 0
     oracle_basis_skips: int = 0
+    skip_counts: Dict[str, int] = field(default_factory=dict)
     total_windows: int = 0
     run_complete: bool = True
     elapsed_seconds: float = 0.0
@@ -236,6 +233,7 @@ class UpdownBacktestResult:
                 oracle_symbol=self.oracle_symbol,
                 oracle_history_loaded=self.oracle_history_loaded,
                 oracle_history_points=self.oracle_history_points,
+                skip_counts={},
                 total_windows=UpdownBacktestResult._count_windows_for_range(start, end, self.window_size),
                 run_complete=self.run_complete,
                 elapsed_seconds=self.elapsed_seconds,
@@ -370,6 +368,16 @@ class UpdownBacktestEngine:
         self._pm_marks_cache_root = _repo_root / str(
             _pm.get("cache_dir", "data/backtest/polymarket_marks")
         )
+        # Replay evaluates slightly after listing/open, mirroring scan cadence and
+        # latency rather than assuming a perfect at-open decision timestamp.
+        scan_sec = float(config.get("entry_window_align_scan_interval_sec", 0.0) or 0.0)
+        latency_sec = float(config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
+        self._entry_eval_delay_sec = float(
+            bt_cfg.get("entry_eval_delay_sec", scan_sec + latency_sec) or 0.0
+        )
+        self.kelly_sizer = KellySizer(config)
+        self._signal_strategy_name = "bitcoin"
+        self._active_strategy_cfg: Dict[str, Any] = {}
 
     # -- fill price distribution -----------------------------------------------
 
@@ -422,6 +430,73 @@ class UpdownBacktestEngine:
             return float(np.random.choice(self._fill_prices))
         raw = float(np.random.normal(0.50, 0.06))
         return float(np.clip(raw, 0.30, 0.70))
+
+    def _resolve_entry_window_bounds(
+        self, *, tf: str, default_min: float, default_max: float
+    ) -> tuple[float, float]:
+        """Mirror live entry-window bounds, including optional auto-alignment."""
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        cfg = self._active_strategy_cfg or {}
+        win_min = float(cfg.get(f"entry_window_{tf}_min", self.config.get(f"entry_window_{tf}_min", default_min)))
+        win_max = float(cfg.get(f"entry_window_{tf}_max", self.config.get(f"entry_window_{tf}_max", default_max)))
+        if win_min > win_max:
+            win_min, win_max = win_max, win_min
+
+        auto_align = cfg.get("entry_window_auto_align", self.config.get("entry_window_auto_align", False))
+        if not auto_align:
+            return win_min, win_max
+
+        scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
+        if tf == "5m":
+            default_expand = 1.0
+        elif tf == "30m":
+            default_expand = 2.5
+        else:
+            default_expand = 1.5
+        max_expand_min = float(
+            self.config.get("entry_window_auto_align_max_expand_min", default_expand)
+        )
+        jitter_sec = float(self.config.get("entry_window_auto_align_jitter_sec", 15))
+        cadence_half_min = scan_interval_sec / 120.0
+        expansion_min = max(cadence_half_min, max_expand_min) + max(0.0, jitter_sec) / 60.0
+
+        aligned_min = max(0.0, win_min - expansion_min)
+        expanded_upper = win_max + expansion_min
+        hard_cap = float(self.config.get("entry_window_hard_cap_mins_left", 0.0) or 0.0)
+        aligned_max = min(expanded_upper, hard_cap) if hard_cap > 0 else expanded_upper
+        if aligned_max <= aligned_min:
+            return win_min, win_max
+        return aligned_min, aligned_max
+
+    def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        default_min, default_max = presets[tf]
+        cfg = self._active_strategy_cfg or {}
+        win_min = float(
+            cfg.get(
+                f"entry_timing_window_{tf}_min",
+                self.config.get(f"entry_timing_window_{tf}_min", cfg.get(f"ai_entry_window_{tf}_min", default_min)),
+            )
+        )
+        win_max = float(
+            cfg.get(
+                f"entry_timing_window_{tf}_max",
+                self.config.get(f"entry_timing_window_{tf}_max", cfg.get(f"ai_entry_window_{tf}_max", default_max)),
+            )
+        )
+        if win_min > win_max:
+            win_min, win_max = win_max, win_min
+        return win_min, win_max
+
+    def _within_entry_timing_window(self, *, mins_left: float, tf: str) -> bool:
+        win_min, win_max = self._resolve_entry_timing_window_bounds(tf=tf)
+        return win_min <= mins_left <= win_max
+
+    def _evaluation_minutes_left(self, window_minutes: int) -> float:
+        return max(0.0, float(window_minutes) - (self._entry_eval_delay_sec / 60.0))
 
     def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float, float]:
         return resolve_updown_exit_params(self._ude, symbol_to_strategy_name(symbol))
@@ -1681,14 +1756,17 @@ class UpdownBacktestEngine:
     # -- position sizing -------------------------------------------------------
 
     def _size_position(self, bankroll: float, edge: float) -> float:
-        """Approximate live KellySizer.size_from_edge + FULL-tier ExposureManager scaling."""
-        if edge <= 0:
+        """Mirror live KellySizer, then apply the same exposure tier clamp used live."""
+        raw_size = self.kelly_sizer.size_from_edge(
+            self._signal_strategy_name,
+            bankroll=bankroll,
+            edge=edge,
+        )
+        if raw_size <= 0:
             return 0.0
-        raw_size = min(edge * self.kelly_fraction * bankroll, bankroll * 0.05)
-        raw_size = max(1.0, raw_size)
         tier_floor = self.exposure_min_trade_usd
         tier_cap = self.exposure_full_size if self.exposure_full_size > 0 else self.max_size
-        size = min(max(raw_size, tier_floor, self.default_size), tier_cap, self.max_size)
+        size = min(max(raw_size, tier_floor), tier_cap, self.max_size)
         return round(size, 2)
 
     @staticmethod
@@ -1776,6 +1854,12 @@ class UpdownBacktestEngine:
         )
         strategy_cfg_key = strategy_cfg_map.get(symbol, "sol_macro")
         strategy_cfg = self.config.get("strategies", {}).get(strategy_cfg_key, {})
+        self._signal_strategy_name = strategy_cfg_key
+        self._active_strategy_cfg = strategy_cfg
+        skip_counts: Counter[str] = Counter()
+
+        def _bump_skip(reason: str) -> None:
+            skip_counts[reason] += 1
 
         # Symbol-specific min_edge thresholds
         if is_btc:
@@ -1860,6 +1944,7 @@ class UpdownBacktestEngine:
                 include_trend_sabre=is_btc,
             )
             if ta is None:
+                _bump_skip("ta_unavailable")
                 current += step_td
                 continue
 
@@ -1873,18 +1958,22 @@ class UpdownBacktestEngine:
                 htf_bias = self._get_htf_bias(ta, min_hist=self.min_4h_hist_magnitude)
                 btc_ta = ta
             elif is_eth:
-                if not btc_data:
+                if self.eth_btc_follow_1h_required and not btc_data:
+                    _bump_skip("btc_data_unavailable")
                     current += step_td
                     continue
-                btc_ta = self._build_ta(
-                    window_open,
-                    btc_data,
-                    "4h",
-                    include_trend_sabre=False,
-                )
-                if btc_ta is None:
-                    current += step_td
-                    continue
+                btc_ta = None
+                if btc_data:
+                    btc_ta = self._build_ta(
+                        window_open,
+                        btc_data,
+                        "4h",
+                        include_trend_sabre=False,
+                    )
+                    if btc_ta is None and self.eth_btc_follow_1h_required:
+                        _bump_skip("btc_ta_unavailable")
+                        current += step_td
+                        continue
                 # ETH live strategy is alt-first: ETH 1H/15m context chooses
                 # direction; BTC is retained for follow/quality filters below.
                 htf_bias = self._get_sol_htf_bias(ta, df_15m)
@@ -1893,14 +1982,32 @@ class UpdownBacktestEngine:
                 btc_ta = None
 
             if htf_bias == "NEUTRAL":
+                _bump_skip("htf_neutral")
                 current += step_td
                 continue
 
             allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
+            tf_label = "5m" if window_minutes == 5 else "15m"
+            eval_left = self._evaluation_minutes_left(window_minutes)
+            default_min, default_max = ((0.5, 5.0) if window_minutes == 5 else (2.0, 16.0))
+            win_min, win_max = self._resolve_entry_window_bounds(
+                tf=tf_label,
+                default_min=default_min,
+                default_max=default_max,
+            )
+            if eval_left < win_min or eval_left > win_max:
+                _bump_skip("outside_entry_window")
+                current += step_td
+                continue
+            if not self._within_entry_timing_window(mins_left=eval_left, tf=tf_label):
+                _bump_skip("timing_window_closed")
+                current += step_td
+                continue
 
             if is_eth and self.eth_btc_follow_1h_required and not self._eth_follow_1h_ok(
                 btc_ta, allowed_side, float(self.config.get("strategies", {}).get("eth_macro", {}).get("btc_follow_1h_hist_min", 8.0))
             ):
+                _bump_skip("btc_follow_1h")
                 current += step_td
                 continue
 
@@ -1919,6 +2026,7 @@ class UpdownBacktestEngine:
             anti_ltf_gate_enabled = bool(strategy_cfg.get("anti_ltf_gate_enabled", True))
             if require_ltf_confirmation:
                 if not ltf_confirmed:
+                    _bump_skip("ltf_unconfirmed")
                     current += step_td
                     continue
             else:
@@ -1926,6 +2034,7 @@ class UpdownBacktestEngine:
                 # unless the strategy config explicitly enables anti-LTF.
                 skip_confirmed = anti_ltf_gate_enabled and not (is_eth and window_minutes != 5)
                 if ltf_confirmed and skip_confirmed:
+                    _bump_skip("ltf_confirmed")
                     current += step_td
                     continue
 
@@ -1994,6 +2103,7 @@ class UpdownBacktestEngine:
 
             # Min edge filter
             if edge < min_edge:
+                _bump_skip("edge_below_min")
                 current += step_td
                 continue
 
@@ -2004,15 +2114,25 @@ class UpdownBacktestEngine:
                 basis_bps = ((spot_for_basis - oracle_price) / oracle_price) * 10000.0
                 if abs(basis_bps) > float(oracle_max_basis_bps):
                     oracle_basis_skips += 1
+                    _bump_skip("oracle_basis")
                     current += step_td
                     continue
 
             # Determine action (aligned with live: short side buys NO)
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
 
+            max_edge_updown = float(
+                strategy_cfg.get("max_edge_updown", self.config.get("max_edge_updown", 0.0)) or 0.0
+            )
+            if max_edge_updown > 0 and edge > max_edge_updown:
+                _bump_skip("edge_above_cap")
+                current += step_td
+                continue
+
             # Position size
             size = self._size_position(bankroll, edge)
             if size <= 0 or bankroll < size:
+                _bump_skip("size_rejected")
                 current += step_td
                 continue
 
@@ -2020,6 +2140,7 @@ class UpdownBacktestEngine:
             # when available (>=20 recorded), else N(0.50, 0.06) clipped to [0.30, 0.70].
             mid_price = self._sample_entry_price()
             if mid_price < self.entry_price_min or mid_price > self.entry_price_max:
+                _bump_skip("entry_price_band")
                 current += step_td
                 continue
             center_price_band = float(strategy_cfg.get("center_price_band", 0.0) or 0.0)
@@ -2029,6 +2150,7 @@ class UpdownBacktestEngine:
             if center_price_band > 0 and abs(mid_price - 0.50) <= center_price_band:
                 centered_min = max(min_edge, min_edge_when_centered)
                 if edge < centered_min:
+                    _bump_skip("centered_price_edge_below_min")
                     current += step_td
                     continue
             trade_mid = mid_price if action == "BUY_YES" else max(
@@ -2040,6 +2162,7 @@ class UpdownBacktestEngine:
             # Replay live-like exits from 1m data for the window, then settle if needed.
             df_1m = data.get("1m", pd.DataFrame())
             if df_1m.empty or "open_time" not in df_1m.columns:
+                _bump_skip("entry_1m_missing")
                 current += step_td
                 continue
             window_df_1m = df_1m[
@@ -2072,6 +2195,7 @@ class UpdownBacktestEngine:
             )
             if not outcome:
                 # Cannot settle this window (no 1m data) -- skip
+                _bump_skip("unsettled_window")
                 current += step_td
                 continue
 
@@ -2126,6 +2250,7 @@ class UpdownBacktestEngine:
             oracle_history_loaded=oracle_history_loaded,
             oracle_history_points=oracle_history_points,
             oracle_basis_skips=oracle_basis_skips,
+            skip_counts=dict(skip_counts),
             total_windows=total_windows,
             run_complete=windows_scanned >= total_windows,
             elapsed_seconds=round(time.monotonic() - started_at, 3),
