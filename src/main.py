@@ -596,6 +596,8 @@ class PolyBot:
                     end_date=None,
                     strategy=pos_data.get("strategy", "unknown"),
                     entry_leg=infer_entry_leg(pos_data),
+                    token_id_yes=str(pos_data.get("token_id_yes") or ""),
+                    token_id_no=str(pos_data.get("token_id_no") or ""),
                 )
                 # Add directly to dict — do NOT call add_position() as it increments daily_trades
                 self.risk_manager.active_positions[position.position_id] = position
@@ -1013,6 +1015,11 @@ class PolyBot:
                     )
                     strat = getattr(pos, "strategy", "unknown") if pos else "unknown"
                     mq = getattr(pos, "market_question", "N/A") if pos else "N/A"
+                    entry_price_snap = (
+                        float(getattr(pos, "entry_price", 0) or 0) if pos else 0.0
+                    )
+                    _tid = str(exit_decision.position_id or "")
+                    trade_id_tail = _tid[-14:] if _tid else ""
                     em = self._get_exposure_manager_for(strat)
                     em.record_trade(
                         pnl=exit_decision.unrealized_pnl,
@@ -1043,6 +1050,8 @@ class PolyBot:
                             "side": exit_decision.action,
                             "size": exit_decision.size,
                             "market_id": exit_decision.market_id,
+                            "entry_price": entry_price_snap,
+                            "trade_id_tail": trade_id_tail,
                         }
                     )
             except Exception as e:
@@ -1064,7 +1073,14 @@ class PolyBot:
                 "Kill switch active (data/KILL_SWITCH present). Skipping trading cycle."
             )
             log_ops_pulse(self, "main")
-            for st in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"):
+            for st in (
+                "bitcoin",
+                "sol_macro",
+                "eth_macro",
+                "hype_macro",
+                "xrp_macro",
+                "xrp_dump_hedge",
+            ):
                 asyncio.create_task(
                     self.notifier.notify_kill_global(st, "global kill switch")
                 )
@@ -1648,6 +1664,8 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy="bitcoin",
                 entry_leg=_entry_leg,
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
             self.risk_manager.add_position(position)
 
@@ -1665,6 +1683,8 @@ class PolyBot:
                 edge=signal.edge,
                 confidence=signal.confidence,
                 reason=f"btc_{signal.direction} ai={signal.ai_used}",
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
@@ -1825,6 +1845,8 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy=strat,
                 entry_leg=_entry_leg,
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
             self.risk_manager.add_position(position)
 
@@ -1842,6 +1864,8 @@ class PolyBot:
                 edge=signal.edge,
                 confidence=signal.confidence,
                 reason=f"{strat}_{signal.direction} macro_leg={signal.lag_magnitude} side={signal.action} ai={signal.ai_used} | {signal.reason[:120]}",
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
@@ -1994,6 +2018,8 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy=strat,
                 entry_leg=_entry_leg,
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
             self.risk_manager.add_position(position)
 
@@ -2012,6 +2038,8 @@ class PolyBot:
                 confidence=signal.gap,
                 reason=signal.reason
                 or f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
+                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
+                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 extra={
                     "weather_subtype": signal.subtype,
                     "forecast_prob": signal.forecast_prob,

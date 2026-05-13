@@ -341,6 +341,88 @@
         .pnl-pos{color:var(--gr)}
         .pnl-neg{color:var(--re)}
 
+        /* ── Live: master list under Active Positions + detail panel + metric deck ── */
+        .pos-master-list-wrap{margin-bottom:10px}
+        .pos-master{border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.28);min-height:72px;max-height:min(28vh,280px);overflow:auto;min-width:0}
+        .pos-master-row{display:flex;align-items:center;gap:8px;padding:10px 11px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.06);transition:background .15s,border-color .18s;min-width:0}
+        .pos-master-row:last-child{border-bottom:none}
+        .pos-master-row:hover{background:rgba(0,229,255,.06)}
+        .pos-master-row.selected{background:rgba(0,229,255,.10);border-left:3px solid var(--cy);padding-left:8px}
+        .pos-master-row.pos-row-enter{animation:posRowIn .38s ease-out both}
+        .pos-master-flash-exit{animation:posMasterExitFlash .45s ease-out}
+        .pos-master-snippet{font-size:0.72rem;color:var(--td);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .pos-master-meta{font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--tm);white-space:nowrap}
+        .pos-unified-panel{margin-top:0;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.32);overflow:hidden;min-width:0}
+        .pos-unified-panel .pos-detail{padding:14px 16px;min-height:140px;min-width:0;border:none;border-radius:0;background:rgba(0,0,0,.12);transition:opacity .2s}
+        .ops-metric-deck-chip .chip-b .deck-side-long{color:var(--gr);font-weight:600}
+        .ops-metric-deck-chip .chip-b .deck-side-short{color:var(--re);font-weight:600}
+        @keyframes posRowIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes posMasterExitFlash{0%{box-shadow:inset 0 0 0 1px rgba(255,68,102,.5)}100%{box-shadow:inset 0 0 0 0 rgba(255,68,102,0)}}
+        .pos-detail-empty{color:var(--td);font-size:0.82rem;padding:24px 8px;text-align:center}
+        .pos-detail dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:0.8rem;margin-top:10px}
+        .pos-detail dt{color:var(--td);font-family:'IBM Plex Mono',monospace;font-size:0.65rem;text-transform:uppercase;letter-spacing:.08em}
+        .pos-detail dd{color:var(--tx);word-break:break-word}
+        .pos-detail .pos-pm-link{display:inline-block;margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;color:var(--cy)}
+        .pos-deck-filter-hint{font-size:0.68rem;color:rgba(255,255,255,.55);margin-bottom:6px;display:none}
+        .pos-deck-filter-hint.on{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        /* Ops digest ticker — status fields only; marquee when overflow */
+        .ops-digest-ticker{display:none;margin:0 0 10px;border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.2);position:relative}
+        .ops-digest-ticker-viewport{overflow:hidden;padding:7px 12px;min-height:30px}
+        .ops-digest-ticker-track{display:inline-flex;align-items:center;flex-wrap:nowrap;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:0.66rem;color:rgba(246,248,255,.82);letter-spacing:.02em;gap:0}
+        .ops-digest-ticker.ops-digest-marquee .ops-digest-ticker-track{animation:opsDigestMarquee 40s linear infinite}
+        .ops-digest-ticker.ops-digest-marquee:hover .ops-digest-ticker-track{animation-play-state:paused}
+        .ops-digest-cell{padding-right:48px}
+        @keyframes opsDigestMarquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+        .ops-metric-deck-wrap{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);position:relative;transition:opacity .25s}
+        .ops-metric-deck-wrap.ops-metric-deck-stale{opacity:0.52}
+        .ops-metric-deck-wrap.ops-metric-deck-hidden{display:none!important}
+        .ops-metric-deck-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+        .ops-metric-deck-tab{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.08em;text-transform:uppercase;padding:5px 10px;border-radius:3px;border:1px solid var(--border);cursor:pointer;background:rgba(255,255,255,.03);color:var(--td)}
+        .ops-metric-deck-tab.active{border-color:rgba(0,229,255,.45);color:var(--cy);background:rgba(0,229,255,.08)}
+        .ops-metric-deck-row{display:flex;align-items:stretch;gap:10px;min-width:0}
+        .ops-metric-deck-scroll-wrap{position:relative;flex:1;min-width:0}
+        .ops-metric-deck-scroll{overflow:hidden;min-width:0;padding:4px 0 10px;position:relative;scrollbar-width:none;-ms-overflow-style:none}
+        .ops-metric-deck-scroll::-webkit-scrollbar{display:none;height:0;width:0}
+        .ops-metric-deck-marquee-inner{display:flex;flex-direction:row;width:max-content;will-change:transform}
+        .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active{animation:opsDeckMarquee 24s linear infinite}
+        .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active:hover{animation-play-state:paused}
+        .ops-metric-deck-track{display:flex;gap:8px;flex:0 0 auto;padding-right:8px}
+        .ops-metric-deck-chip{
+            flex:0 0 auto;min-width:142px;max-width:min(280px,82vw);padding:8px 12px;border-radius:4px;cursor:default;
+            font-family:'IBM Plex Mono',monospace;font-size:0.7rem;line-height:1.32;text-align:left;
+            background:transparent;border:1px solid rgba(255,255,255,.38);
+            box-shadow:0 0 0 1px rgba(255,255,255,.04),0 0 14px rgba(255,255,255,.08);
+            color:rgba(255,255,255,.92);transition:border-color .16s,box-shadow .16s,background .16s;
+        }
+        .ops-metric-deck-chip:hover{border-color:rgba(255,255,255,.55);box-shadow:0 0 0 1px rgba(255,255,255,.06),0 0 18px rgba(255,255,255,.14)}
+        .ops-metric-deck-chip[data-filter-strategy]{cursor:pointer;border-color:rgba(255,255,255,.5)}
+        .ops-metric-deck-chip[data-filter-strategy]:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.85);box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 20px rgba(255,255,255,.2)}
+        .ops-metric-deck-chip .chip-k{color:var(--cy);font-size:0.58rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:3px;display:block}
+        .ops-metric-deck-chip .chip-b{display:block;word-break:break-word;color:rgba(255,255,255,.9)}
+        .ops-metric-deck-marquee-inner.deck-wrap-static{width:100%;max-width:100%;flex-wrap:wrap;row-gap:8px}
+        .ops-metric-deck-marquee-inner.deck-wrap-static .ops-metric-deck-track{flex-wrap:wrap;width:100%;max-width:100%}
+        @keyframes opsDeckMarquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+        .ops-metric-deck-fade{pointer-events:none;position:absolute;top:0;bottom:10px;width:24px;z-index:1;opacity:0.85}
+        .ops-metric-deck-fade-left{left:0;background:linear-gradient(to right,rgba(0,0,0,.95),transparent)}
+        .ops-metric-deck-fade-right{right:0;background:linear-gradient(to left,rgba(0,0,0,.95),transparent)}
+        .ops-metric-deck-wrap.deck-pulse{animation:deckPulse .55s ease-out}
+        @keyframes deckPulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.2)}100%{box-shadow:0 0 0 10px rgba(255,255,255,0)}}
+        .ops-metric-deck-tail{flex:0 0 auto;align-self:stretch;display:flex;flex-direction:column;justify-content:center;padding:10px 12px;border:1px solid rgba(255,255,255,.22);border-radius:4px;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:0.68rem;min-width:100px;text-align:center;box-shadow:0 0 12px rgba(255,255,255,.08)}
+        .ops-metric-deck-tail .deck-tail-k{font-size:0.58rem;letter-spacing:.1em;text-transform:uppercase;color:var(--cy);margin-bottom:2px}
+        .ops-metric-deck-tail .deck-tail-v{font-size:0.85rem;color:rgba(255,255,255,.92)}
+        .ops-metric-deck-empty{font-size:0.72rem;color:var(--td);padding:12px 8px}
+        @media (max-width:900px){
+            .ops-metric-deck-row{flex-wrap:wrap}
+            .ops-metric-deck-tail{flex:1 1 100%;flex-direction:row;justify-content:space-around;align-items:center;gap:16px}
+        }
+        @media (prefers-reduced-motion:reduce){
+            .pos-master-row.pos-row-enter,.pos-master-flash-exit,.ops-metric-deck-wrap.deck-pulse{animation:none!important}
+            .ops-digest-ticker.ops-digest-marquee .ops-digest-ticker-track{animation:none!important}
+            .ops-digest-ticker .ops-digest-ticker-viewport{overflow:visible}
+            .ops-digest-ticker .ops-digest-ticker-track{white-space:normal;flex-wrap:wrap;transform:none!important}
+            .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active{animation:none!important}
+        }
+
         /* ── Spinner ── */
         .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--cy);border-radius:50%;animation:spin .6s linear infinite}
 
@@ -781,8 +863,35 @@
                 <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9660;</span>
             </div>
             <div id="positions-body-wrap" style="margin-top:6px;">
-                <table><thead><tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Current</th><th>PnL</th><th>Strategy</th></tr></thead>
-                <tbody id="positions-body"></tbody></table>
+                <div class="pos-master-list-wrap">
+                    <div class="pos-master" id="positions-master"></div>
+                </div>
+                <div id="ops-metric-deck-wrap" class="ops-metric-deck-wrap">
+                    <div class="ops-metric-deck-tabs" id="ops-metric-deck-tabs">
+                        <button type="button" class="ops-metric-deck-tab active" data-deck-tab="side">Side</button>
+                        <button type="button" class="ops-metric-deck-tab" data-deck-tab="skips">Skips</button>
+                    </div>
+                    <div class="ops-metric-deck-row">
+                        <div class="ops-metric-deck-scroll-wrap">
+                            <div class="ops-metric-deck-fade ops-metric-deck-fade-left" aria-hidden="true"></div>
+                            <div id="ops-metric-deck-scroll" class="ops-metric-deck-scroll"></div>
+                            <div class="ops-metric-deck-fade ops-metric-deck-fade-right" aria-hidden="true"></div>
+                        </div>
+                        <div id="ops-metric-deck-tail" class="ops-metric-deck-tail"></div>
+                    </div>
+                </div>
+                <div id="pos-deck-filter-hint" class="pos-deck-filter-hint"></div>
+                <div id="ops-digest-ticker" class="ops-digest-ticker" aria-live="polite">
+                    <div class="ops-digest-ticker-viewport">
+                        <div class="ops-digest-ticker-track"></div>
+                    </div>
+                </div>
+                <div class="pos-unified-panel">
+                    <div class="pos-detail" id="positions-detail">
+                        <div class="pos-detail-empty" id="positions-detail-empty">Select a position in the list above, or wait for an open trade.</div>
+                        <div id="positions-detail-body" style="display:none;"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -2721,6 +2830,425 @@ function applySSESnapshot(raw) {
             ai: raw.ai || {},
         });
     }
+    const deckPartial = {};
+    if (raw.side_selection !== undefined) deckPartial.side_selection = raw.side_selection;
+    if (raw.scan_skip_digest !== undefined) deckPartial.scan_skip_digest = raw.scan_skip_digest;
+    if (Object.keys(deckPartial).length) {
+        const merged = Object.assign({}, window._dashLastStatusForDeck || {}, deckPartial);
+        window._dashLastStatusForDeck = merged;
+        updateMetricDeck(merged);
+        dashRenderOpsDigestTicker(merged);
+    }
+}
+
+function dashInitLivePositionsDeck() {
+    const wrap = document.getElementById('ops-metric-deck-wrap');
+    if (!wrap || wrap.dataset.deckBound) return;
+    wrap.dataset.deckBound = '1';
+    wrap.addEventListener('click', function(ev) {
+        const tab = ev.target.closest('.ops-metric-deck-tab');
+        if (tab && tab.dataset.deckTab) {
+            window._dashDeckTab = tab.dataset.deckTab;
+            wrap.querySelectorAll('.ops-metric-deck-tab').forEach(function(t) {
+                t.classList.toggle('active', t.dataset.deckTab === window._dashDeckTab);
+            });
+            updateMetricDeck(window._dashLastStatusForDeck || {});
+        }
+        const chip = ev.target.closest('.ops-metric-deck-chip');
+        if (chip && chip.dataset.filterStrategy) {
+            const st = chip.dataset.filterStrategy;
+            window._dashDeckStrategyFilter = (window._dashDeckStrategyFilter === st) ? null : st;
+            dashRenderPositionsMasterDetail(window._dashLastPositionsArr || [], window._dashPrevPositionIds || new Set());
+        }
+    });
+    const sec = document.getElementById('positions-section');
+    if (!sec || sec.dataset.mdBound) return;
+    sec.dataset.mdBound = '1';
+    sec.addEventListener('click', function(ev) {
+        const row = ev.target.closest('.pos-master-row');
+        if (!row || !row.dataset.positionId) return;
+        window._dashSelectedPositionId = row.dataset.positionId;
+        sec.querySelectorAll('.pos-master-row').forEach(function(r) {
+            r.classList.toggle('selected', r.dataset.positionId === window._dashSelectedPositionId);
+        });
+        dashRenderPositionDetailPane(window._dashLastPositionsArr || []);
+    });
+}
+
+function _deckChipsFromSkips(d) {
+    const sk = d.scan_skip_digest && d.scan_skip_digest.aggregate_top;
+    if (!sk || typeof sk !== 'object') return [];
+    return Object.entries(sk)
+        .sort(function(a, b) { return Number(b[1]) - Number(a[1]); })
+        .slice(0, 14)
+        .map(function(kv) { return { body: kv[0] + ' ×' + kv[1] }; });
+}
+
+function _deckChipsFromSide(ss) {
+    if (!ss || !ss.per_strategy || typeof ss.per_strategy !== 'object') return [];
+    const out = [];
+    Object.keys(ss.per_strategy).forEach(function(lane) {
+        const row = ss.per_strategy[lane] || {};
+        const side = (row.allowed_side != null && row.allowed_side !== '') ? String(row.allowed_side).toUpperCase() : '?';
+        const sig = row.signals != null ? row.signals : '';
+        const sideU = side.toUpperCase();
+        let sideHtml = _htmlEscape(side);
+        if (sideU === 'LONG') {
+            sideHtml = '<span class="deck-side-long">' + _htmlEscape(side) + '</span>';
+        } else if (sideU === 'SHORT') {
+            sideHtml = '<span class="deck-side-short">' + _htmlEscape(side) + '</span>';
+        }
+        const sigPart = (sig !== '' && sig !== null) ? ' · sig ' + _htmlEscape(String(sig)) : '';
+        out.push({
+            body: lane + ' · ' + side + (sig !== '' && sig !== null ? ' · sig ' + sig : ''),
+            bodyHtml: _htmlEscape(lane) + ' · ' + sideHtml + sigPart,
+            strat: lane,
+            title: ss.buy_no_absence_reason || '',
+        });
+    });
+    return out.slice(0, 12);
+}
+
+function _deckHashForPulse(tab, d) {
+    try {
+        if (tab === 'skips') {
+            return 'skips|' + JSON.stringify((d.scan_skip_digest && d.scan_skip_digest.aggregate_top) || null);
+        }
+        return 'side|' + JSON.stringify(d.side_selection || null);
+    } catch (e) {
+        return String(tab) + String(Date.now());
+    }
+}
+
+function dashBuildDeckChipButtons(chips, tab) {
+    return chips.map(function(c) {
+        const fs = (tab === 'side' && c.strat)
+            ? ' data-filter-strategy="' + String(c.strat).replace(/"/g, '&quot;') + '"'
+            : '';
+        const title = c.title ? ' title="' + _htmlEscape(String(c.title)).replace(/"/g, '&quot;') + '"' : '';
+        const label = tab === 'skips' ? 'Skip' : 'Side';
+        const bodyInner = (tab === 'side' && c.bodyHtml) ? c.bodyHtml : _htmlEscape(c.body);
+        return '<button type="button" class="ops-metric-deck-chip"' + fs + title + '><span class="chip-k">' + label + '</span><span class="chip-b">' + bodyInner + '</span></button>';
+    }).join('');
+}
+
+function dashFinalizeMetricDeckLayout(scrollEl) {
+    const wrap = document.getElementById('ops-metric-deck-wrap');
+    if (!scrollEl || !wrap) return;
+    wrap.classList.remove('ops-metric-deck-hidden');
+    const inner = scrollEl.querySelector('.ops-metric-deck-marquee-inner');
+    if (!inner) return;
+    inner.classList.remove('ops-metric-deck-marquee-active', 'deck-wrap-static');
+    while (inner.children.length > 1) {
+        inner.removeChild(inner.lastChild);
+    }
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const track = inner.querySelector('.ops-metric-deck-track');
+    if (!track) return;
+
+    const overflowRow = track.scrollWidth > scrollEl.clientWidth + 2;
+    if (!overflowRow) return;
+
+    if (reduce) {
+        inner.classList.add('deck-wrap-static');
+        requestAnimationFrame(function() {
+            const still = inner.scrollWidth > scrollEl.clientWidth + 2;
+            wrap.classList.toggle('ops-metric-deck-hidden', still);
+        });
+        return;
+    }
+
+    const clone = track.cloneNode(true);
+    clone.setAttribute('aria-hidden', 'true');
+    inner.appendChild(clone);
+    inner.classList.add('ops-metric-deck-marquee-active');
+}
+
+function updateMetricDeck(d) {
+    if (!d || typeof d !== 'object') return;
+    window._dashLastStatusForDeck = Object.assign({}, window._dashLastStatusForDeck || {}, d);
+    const full = window._dashLastStatusForDeck;
+    const wrap = document.getElementById('ops-metric-deck-wrap');
+    const scrollEl = document.getElementById('ops-metric-deck-scroll');
+    const tailEl = document.getElementById('ops-metric-deck-tail');
+    if (!wrap || !scrollEl) return;
+
+    if (window._dashDeckTab === 'gates') window._dashDeckTab = 'side';
+
+    if (typeof d.ts === 'number') {
+        const ageSec = Date.now() / 1000 - d.ts;
+        wrap.classList.toggle('ops-metric-deck-stale', ageSec > 50);
+    } else {
+        wrap.classList.remove('ops-metric-deck-stale');
+    }
+
+    const tab = window._dashDeckTab === 'skips' ? 'skips' : 'side';
+    const h = _deckHashForPulse(tab, full);
+    if (window._dashDeckHash !== h) {
+        window._dashDeckHash = h;
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            wrap.classList.remove('deck-pulse');
+            void wrap.offsetWidth;
+            wrap.classList.add('deck-pulse');
+            setTimeout(function() { wrap.classList.remove('deck-pulse'); }, 650);
+        }
+    }
+
+    let chips = [];
+    if (tab === 'skips') chips = _deckChipsFromSkips(full);
+    else chips = _deckChipsFromSide(full.side_selection);
+
+    if (!chips.length) {
+        scrollEl.innerHTML = '<span class="ops-metric-deck-empty">No data for this view yet.</span>';
+        wrap.classList.remove('ops-metric-deck-hidden');
+    } else {
+        const trackHtml = dashBuildDeckChipButtons(chips, tab);
+        scrollEl.innerHTML = '<div class="ops-metric-deck-marquee-inner" id="ops-metric-deck-marquee-inner">'
+            + '<div class="ops-metric-deck-track">' + trackHtml + '</div></div>';
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                dashFinalizeMetricDeckLayout(scrollEl);
+            });
+        });
+    }
+
+    if (tailEl) {
+        const p = full.portfolio || {};
+        const s = full.session || {};
+        const posArr = Array.isArray(full.positions) ? full.positions : [];
+        const openN = posArr.length || Number(p.total_positions || 0) || 0;
+        let sessionPnlRaw = null;
+        if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
+            sessionPnlRaw = Number(s.total_pnl);
+        } else if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
+            sessionPnlRaw = Number(s.realized_pnl);
+        } else if (p.daily_pnl !== null && p.daily_pnl !== undefined) {
+            sessionPnlRaw = Number(p.daily_pnl);
+        }
+        const pnlTxt = Number.isFinite(sessionPnlRaw)
+            ? ((sessionPnlRaw >= 0 ? '+' : '-') + '$' + Math.abs(sessionPnlRaw).toFixed(2))
+            : '—';
+        const pnlCls = Number.isFinite(sessionPnlRaw) ? (sessionPnlRaw > 0 ? 'pnl-pos' : sessionPnlRaw < 0 ? 'pnl-neg' : '') : '';
+        tailEl.innerHTML = '<span class="deck-tail-k">Open</span><span class="deck-tail-v">' + openN + '</span>'
+            + '<span class="deck-tail-k" style="margin-top:6px;">Session P&amp;L</span><span class="deck-tail-v ' + pnlCls + '">' + pnlTxt + '</span>';
+    }
+}
+
+function _posCountdownHtml(iso) {
+    if (!iso) return '';
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return '';
+    const ms = t - Date.now();
+    if (ms <= 0) return '<dt>Market end</dt><dd>Ended / resolving</dd>';
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    return '<dt>Time to end</dt><dd>' + h + 'h ' + m + 'm</dd>';
+}
+
+function dashAbbrevClobToken(id) {
+    if (!id || typeof id !== 'string') return '';
+    const s = id.trim();
+    if (s.length <= 24) return s;
+    return s.slice(0, 10) + '…' + s.slice(-8);
+}
+
+function dashBuildOpsDigestText(d) {
+    if (!d || typeof d !== 'object') return '';
+    const parts = [];
+    if (d.regime != null && String(d.regime).trim()) parts.push('regime ' + String(d.regime).trim());
+    const posArr = Array.isArray(d.positions) ? d.positions : [];
+    if (posArr.length) parts.push(posArr.length + ' open pos');
+    const ss = d.side_selection;
+    if (ss && ss.per_strategy && typeof ss.per_strategy === 'object') {
+        const keys = Object.keys(ss.per_strategy).slice(0, 8);
+        if (keys.length) {
+            const bits = keys.map(function(l) {
+                const r = ss.per_strategy[l] || {};
+                const side = (r.allowed_side != null && r.allowed_side !== '') ? String(r.allowed_side) : '?';
+                return l + ':' + side;
+            });
+            parts.push('side ' + bits.join(', '));
+        }
+    }
+    const sk = d.scan_skip_digest && d.scan_skip_digest.aggregate_top;
+    if (sk && typeof sk === 'object') {
+        const top = Object.entries(sk).sort(function(a, b) { return Number(b[1]) - Number(a[1]); }).slice(0, 3);
+        if (top.length) {
+            parts.push('skips ' + top.map(function(kv) {
+                return String(kv[0]).slice(0, 48) + '×' + kv[1];
+            }).join(', '));
+        }
+    }
+    const s = d.session || {};
+    if (s.total_pnl != null && s.total_pnl !== '' && Number.isFinite(Number(s.total_pnl))) {
+        const p = Number(s.total_pnl);
+        parts.push('sess PnL ' + (p >= 0 ? '+' : '') + '$' + Math.abs(p).toFixed(2));
+    } else if (s.realized_pnl != null && s.realized_pnl !== '' && Number.isFinite(Number(s.realized_pnl))) {
+        const p = Number(s.realized_pnl);
+        parts.push('realized ' + (p >= 0 ? '+' : '') + '$' + Math.abs(p).toFixed(2));
+    }
+    if (d.kill_switch_active) parts.push('KILL ON');
+    else if (d.can_trade === false && d.can_trade_reason) parts.push(String(d.can_trade_reason).slice(0, 44));
+    return parts.join('  ·  ');
+}
+
+function dashRenderOpsDigestTicker(full) {
+    const wrap = document.getElementById('ops-digest-ticker');
+    const view = wrap && wrap.querySelector('.ops-digest-ticker-viewport');
+    const track = wrap && wrap.querySelector('.ops-digest-ticker-track');
+    if (!wrap || !view || !track) return;
+    const text = dashBuildOpsDigestText(full || {});
+    if (!text) {
+        wrap.style.display = 'none';
+        wrap.removeAttribute('title');
+        wrap.classList.remove('ops-digest-marquee');
+        track.innerHTML = '';
+        return;
+    }
+    wrap.style.display = 'block';
+    wrap.setAttribute('title', text);
+    const esc = _htmlEscape(text);
+    track.innerHTML = '<span class="ops-digest-cell">' + esc + '</span><span class="ops-digest-cell" aria-hidden="true">' + esc + '</span>';
+    wrap.classList.remove('ops-digest-marquee');
+    requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+            const ov = view.clientWidth > 0 && track.scrollWidth > view.clientWidth + 6;
+            const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            wrap.classList.toggle('ops-digest-marquee', !!ov && !reduce);
+        });
+    });
+}
+
+function dashRenderPositionDetailPane(positions) {
+    const emptyEl = document.getElementById('positions-detail-empty');
+    const bodyEl = document.getElementById('positions-detail-body');
+    if (!emptyEl || !bodyEl) return;
+
+    if (window._dashShowClosedFlash) {
+        window._dashShowClosedFlash = false;
+        emptyEl.textContent = 'This position is no longer open (closed or synced off).';
+        emptyEl.style.display = 'block';
+        bodyEl.style.display = 'none';
+        bodyEl.innerHTML = '';
+        return;
+    }
+
+    const sel = window._dashSelectedPositionId;
+    const pos = (positions || []).find(function(p) { return p.position_id === sel; });
+    if (!pos) {
+        emptyEl.textContent = positions && positions.length
+            ? 'Select a row in the list above to inspect a position.'
+            : 'No active positions.';
+        emptyEl.style.display = 'block';
+        bodyEl.style.display = 'none';
+        bodyEl.innerHTML = '';
+        return;
+    }
+    emptyEl.style.display = 'none';
+    bodyEl.style.display = 'block';
+    const pnlCls = (pos.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const mid = (pos.market_id || '').trim();
+    const pmUrl = mid ? ('https://polymarket.com/market/' + encodeURIComponent(mid)) : '';
+    const endRow = _posCountdownHtml(pos.end_date);
+    const legU = String(pos.entry_leg || 'YES').toUpperCase();
+    const heldTok = String(pos.clob_token_id || '').trim()
+        || (legU === 'NO' ? String(pos.token_id_no || '').trim() : String(pos.token_id_yes || '').trim());
+    const tokRow = heldTok
+        ? '<dt>CLOB token</dt><dd style="font-family:\'IBM Plex Mono\',monospace;font-size:0.72rem;" title="'
+            + _htmlEscape(heldTok) + '">' + _htmlEscape(dashAbbrevClobToken(heldTok))
+            + '<span style="color:var(--td);font-size:0.65rem;margin-left:6px;">(held outcome)</span></dd>'
+        : '';
+    bodyEl.innerHTML =
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">' + stratPillHTML(pos.strategy || '?') + '</div>'
+        + '<div style="font-size:0.88rem;color:var(--tx);line-height:1.35;margin-bottom:8px;">' + _htmlEscape(pos.market_question || pos.market_id || '') + '</div>'
+        + '<dl>'
+        + '<dt>Outcome</dt><dd>' + _htmlEscape(pos.outcome || '') + ' · leg ' + _htmlEscape(pos.entry_leg || '') + '</dd>'
+        + tokRow
+        + '<dt>Size</dt><dd>' + (pos.size != null ? Number(pos.size).toFixed(2) : '') + ' @ entry ' + (pos.entry_price != null ? Number(pos.entry_price).toFixed(3) : '') + '</dd>'
+        + '<dt>Mark</dt><dd>' + (pos.current_price != null ? Number(pos.current_price).toFixed(3) : '') + '</dd>'
+        + '<dt>PnL</dt><dd class="' + pnlCls + '">$' + Number(pos.pnl || 0).toFixed(2) + '</dd>'
+        + '<dt>Opened</dt><dd style="font-size:0.75rem;">' + _htmlEscape(pos.opened_at || '') + '</dd>'
+        + endRow
+        + '</dl>'
+        + (pmUrl ? '<a class="pos-pm-link" href="' + pmUrl + '" target="_blank" rel="noopener">Open on Polymarket</a>' : '');
+}
+
+function dashRenderPositionsMasterDetail(positions, prevIdSet) {
+    const master = document.getElementById('positions-master');
+    const posCount = document.getElementById('positions-count');
+    const hint = document.getElementById('pos-deck-filter-hint');
+    if (!master || !posCount) return;
+
+    window._dashLastPositionsArr = positions || [];
+    const prev = prevIdSet || new Set();
+    const currIds = new Set((positions || []).map(function(p) { return p.position_id; }));
+    let removed = false;
+    prev.forEach(function(id) { if (!currIds.has(id)) removed = true; });
+    if (removed) {
+        master.classList.add('pos-master-flash-exit');
+        setTimeout(function() { master.classList.remove('pos-master-flash-exit'); }, 500);
+    }
+
+    const filt = window._dashDeckStrategyFilter;
+    if (hint) {
+        if (filt) {
+            hint.classList.add('on');
+            hint.innerHTML = 'Filtered by strategy <strong>' + _htmlEscape(filt) + '</strong> <button type="button" class="btn-sm" id="pos-deck-filter-clear" style="font-size:10px;padding:2px 8px;">Clear</button>';
+            const clr = document.getElementById('pos-deck-filter-clear');
+            if (clr) clr.addEventListener('click', function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                window._dashDeckStrategyFilter = null;
+                dashRenderPositionsMasterDetail(window._dashLastPositionsArr || [], window._dashPrevPositionIds || new Set());
+            });
+        } else {
+            hint.classList.remove('on');
+            hint.innerHTML = '';
+        }
+    }
+
+    let list = positions || [];
+    if (filt) {
+        list = list.filter(function(p) { return (p.strategy || '') === filt || (p.strategy || '').indexOf(filt) !== -1; });
+    }
+
+    posCount.textContent = (positions || []).length;
+
+    const sel = window._dashSelectedPositionId;
+    if (sel && !currIds.has(sel)) {
+        window._dashShowClosedFlash = true;
+        window._dashSelectedPositionId = null;
+    }
+    if (!window._dashShowClosedFlash && !window._dashSelectedPositionId && list.length) {
+        window._dashSelectedPositionId = list[0].position_id;
+    }
+    if (window._dashSelectedPositionId && list.length && !list.some(function(p) { return p.position_id === window._dashSelectedPositionId; })) {
+        window._dashSelectedPositionId = list[0].position_id;
+    }
+
+    if (!list.length) {
+        master.innerHTML = '<div class="pos-detail-empty" style="padding:16px;">'
+            + ((positions || []).length ? 'No positions match this strategy filter.' : 'No active positions')
+            + '</div>';
+        dashRenderPositionDetailPane(positions || []);
+        return;
+    }
+
+    const added = new Set();
+    ;(positions || []).forEach(function(p) { if (!prev.has(p.position_id)) added.add(p.position_id); });
+
+    master.innerHTML = list.map(function(pos) {
+        const pnlCls = (pos.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+        const isSel = pos.position_id === window._dashSelectedPositionId;
+        const ent = (prev.size > 0 && added.has(pos.position_id)) ? ' pos-row-enter' : '';
+        const snip = (pos.market_question || pos.market_id || '').slice(0, 56);
+        return '<div class="pos-master-row' + (isSel ? ' selected' : '') + ent + '" data-position-id="' + _htmlEscape(pos.position_id) + '">'
+            + stratPillHTML(pos.strategy || '?')
+            + '<span class="pos-master-snippet" title="' + _htmlEscape(pos.market_question || '') + '">' + _htmlEscape(snip) + '</span>'
+            + '<span class="pos-master-meta ' + pnlCls + '">$' + Number(pos.pnl || 0).toFixed(0) + '</span></div>';
+    }).join('');
+
+    dashRenderPositionDetailPane(positions || []);
 }
 
 function updateStatus(d) {
@@ -2728,29 +3256,20 @@ function updateStatus(d) {
     applyHeroMetrics(d);
     updateCommandCenterDigests(d);
 
-    // Positions table — always show real data (logs stay visible when viewing history)
+    window._dashLastStatusForDeck = Object.assign({}, window._dashLastStatusForDeck || {}, d);
+    dashInitLivePositionsDeck();
+    updateMetricDeck(window._dashLastStatusForDeck);
+
     const posSection = document.getElementById('positions-section');
-    const posBody = document.getElementById('positions-body');
     const posCount = document.getElementById('positions-count');
     const positions = d.positions || [];
-    if (positions.length) {
-        posSection.style.display = 'block';
-        posCount.textContent = positions.length;
-        posBody.innerHTML = positions.map(pos => {
-            const pnlCls = (pos.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-            return `<tr>
-                <td title="${(pos.market_question||'').replace(/"/g,'&quot;')}">${(pos.market_question||pos.market_id||'').slice(0,40)}</td>
-                <td>${pos.outcome}</td><td>${pos.size?.toFixed(1) || pos.size} ($${((pos.size||0)*(pos.entry_price||0)).toFixed(2)})</td>
-                <td>${pos.entry_price?.toFixed(3)}</td><td>${(pos.current_price||pos.entry_price)?.toFixed(3)}</td>
-                <td class="${pnlCls}">$${(pos.pnl||0).toFixed(2)}</td>
-                <td>${stratPillHTML(pos.strategy || '?')}</td>
-            </tr>`;
-        }).join('');
-    } else {
-        posSection.style.display = 'block';
-        posCount.textContent = '0';
-        posBody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:12px;">No active positions</td></tr>';
-    }
+    if (posSection) posSection.style.display = 'block';
+    if (posCount) posCount.textContent = positions.length;
+
+    const prev = window._dashPrevPositionIds || new Set();
+    dashRenderPositionsMasterDetail(positions, prev);
+    window._dashPrevPositionIds = new Set(positions.map(function(p) { return p.position_id; }));
+    dashRenderOpsDigestTicker(window._dashLastStatusForDeck || {});
 }
 
 async function toggleKillSwitch() {

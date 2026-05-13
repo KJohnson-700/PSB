@@ -223,6 +223,8 @@ class TradeJournal:
         extra: Dict = None,
         market_end_at: Optional[datetime] = None,
         entry_leg: Optional[str] = None,
+        token_id_yes: Optional[str] = None,
+        token_id_no: Optional[str] = None,
     ):
         """Log a new trade entry."""
         if isinstance(entry_leg, str) and entry_leg.strip().upper() in ("YES", "NO"):
@@ -277,6 +279,12 @@ class TradeJournal:
             "entry_signal": merged_extra,
             "entry_leg": entry_leg,
         }
+        _ty = (token_id_yes or "").strip()
+        _tn = (token_id_no or "").strip()
+        if _ty:
+            self.open_positions[trade_id]["token_id_yes"] = _ty
+        if _tn:
+            self.open_positions[trade_id]["token_id_no"] = _tn
         self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self._summary_cache = None  # invalidate on new entry
         self._save_positions()

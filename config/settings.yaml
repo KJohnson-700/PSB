@@ -904,9 +904,9 @@ notifications:
   telegram_bot_token: ""
   # Telegram chat ID
   telegram_chat_id: ""
-  # Alert on trades
+  # Entry/fill Discord is disabled in code (notify_trade no-op); this flag is legacy / future use.
   alert_on_trade: false
-  # Alert on position exits (defaults to same as alert_on_trade if omitted)
+  # Closed-position exit embeds (notify_exit) when webhook + enabled; defaults to alert_on_trade if omitted
   alert_on_exit: true
   # Startup / periodic status pings (off by default — reduces Discord noise)
   alert_on_status: false

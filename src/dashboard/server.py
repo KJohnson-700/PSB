@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-12-dashboard-alt-first-crypto-heroes",
+        "dashboard_ui_rev": "2026-05-12-ops-digest-ticker",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -830,6 +830,7 @@ async def sse_stream(request: Request):
 
                 ai_pipeline_payload: Dict[str, Any] = {}
                 decision_gates_payload: Dict[str, Any] = {}
+                side_selection_payload: Dict[str, Any] = {}
                 if bot:
                     dry_run = bot.config.get("trading", {}).get("dry_run", True)
                     can_trade, _reason = bot.risk_manager.can_trade()
@@ -838,16 +839,22 @@ async def sse_stream(request: Request):
                     _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
                     ai_payload = compute_ai_status(bot.config, _ai_keys)
                     try:
-                        from src.ops_pulse import _ai_pipeline_digest, _decision_gate_digest
+                        from src.ops_pulse import (
+                            _ai_pipeline_digest,
+                            _decision_gate_digest,
+                            _side_selection_digest,
+                        )
 
                         scan_stats = dict(getattr(bot, "last_ai_scan_stats", {}) or {})
                         ai_pipeline_payload = _ai_pipeline_digest(
                             scan_stats
                         )
                         decision_gates_payload = _decision_gate_digest(bot.config, scan_stats)
+                        side_selection_payload = _side_selection_digest(scan_stats)
                     except Exception:
                         ai_pipeline_payload = {}
                         decision_gates_payload = {}
+                        side_selection_payload = {}
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
                     can_trade = False
@@ -928,6 +935,7 @@ async def sse_stream(request: Request):
                     ) if _btc_analysis_cache and hasattr(_btc_analysis_cache, "current_price") else 0,
                     "ai_pipeline": ai_pipeline_payload,
                     "decision_gates": decision_gates_payload,
+                    "side_selection": side_selection_payload,
                     "ts": int(_time_mod.time()),
                 }
                 yield f"data: {json.dumps(snapshot)}\n\n"
@@ -989,21 +997,32 @@ def _positions_list_from_positions_json(pos_file: Path) -> List[Dict]:
         return []
     out: List[Dict] = []
     for pid, p in raw.items():
-        out.append(
-            {
-                "position_id": pid,
-                "market_id": p.get("market_id", ""),
-                "market_question": (p.get("market_question") or "N/A")[:80],
-                "outcome": p.get("outcome", ""),
-                "entry_leg": p.get("entry_leg", ""),
-                "size": p.get("size", 0),
-                "entry_price": p.get("entry_price", 0),
-                "current_price": p.get("current_price", p.get("entry_price", 0)),
-                "pnl": p.get("pnl", 0.0),
-                "opened_at": p.get("opened_at", ""),
-                "strategy": p.get("strategy", "unknown"),
-            }
-        )
+        row = {
+            "position_id": pid,
+            "market_id": p.get("market_id", ""),
+            "market_question": (p.get("market_question") or "N/A")[:80],
+            "outcome": p.get("outcome", ""),
+            "entry_leg": p.get("entry_leg", ""),
+            "size": p.get("size", 0),
+            "entry_price": p.get("entry_price", 0),
+            "current_price": p.get("current_price", p.get("entry_price", 0)),
+            "pnl": p.get("pnl", 0.0),
+            "opened_at": p.get("opened_at", ""),
+            "strategy": p.get("strategy", "unknown"),
+        }
+        ty = str(p.get("token_id_yes") or "").strip()
+        tn = str(p.get("token_id_no") or "").strip()
+        if ty:
+            row["token_id_yes"] = ty
+        if tn:
+            row["token_id_no"] = tn
+        leg = str(row.get("entry_leg") or "YES").upper()
+        held = tn if leg == "NO" else ty
+        if held:
+            row["clob_token_id"] = held
+        if p.get("end_date"):
+            row["end_date"] = p.get("end_date")
+        out.append(row)
     return out
 
 
@@ -1167,7 +1186,7 @@ async def get_status():
         )
 
         def serialize_position(p):
-            return {
+            row = {
                 "position_id": p.position_id,
                 "market_id": p.market_id,
                 "market_question": (p.market_question or "N/A")[:80],
@@ -1184,6 +1203,22 @@ async def get_status():
                 ),
                 "strategy": getattr(p, "strategy", "unknown"),
             }
+            ty = str(getattr(p, "token_id_yes", "") or "").strip()
+            tn = str(getattr(p, "token_id_no", "") or "").strip()
+            if ty:
+                row["token_id_yes"] = ty
+            if tn:
+                row["token_id_no"] = tn
+            leg = str(row.get("entry_leg") or "YES").upper()
+            held = tn if leg == "NO" else ty
+            if held:
+                row["clob_token_id"] = held
+            ed = getattr(p, "end_date", None)
+            if ed is not None:
+                row["end_date"] = (
+                    ed.isoformat() if hasattr(ed, "isoformat") else str(ed)
+                )
+            return row
 
         positions = [
             serialize_position(p)
@@ -1228,6 +1263,7 @@ async def get_status():
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
             "performance_feedback": public_feedback_status(bot.config),
+            "ts": int(_time_mod.time()),
         }
 
     # ── No bot_instance: read everything from disk ──
@@ -1310,6 +1346,7 @@ async def get_status():
         "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
         "performance_feedback": public_feedback_status(cfg_disk),
+        "ts": int(_time_mod.time()),
     }
 
 

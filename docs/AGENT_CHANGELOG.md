@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-05-12 — Dashboard: ops digest ticker (status-only, under deck hint)
+
+**`index.html`:** **`#ops-digest-ticker`** between deck filter hint and detail panel — builds one line from existing **`/api/status`** / merged deck fields (**regime**, open **positions** count, **side_selection** lanes, top **scan_skip_digest** skips, **session** PnL, kill / **can_trade** reason). **Marquee** when text overflows viewport; **`prefers-reduced-motion`** wraps with no animation. SSE merges **`scan_skip_digest`** when present and refreshes ticker. **`dashboard_ui_rev`:** **`2026-05-12-ops-digest-ticker`**.
+
+## 2026-05-12 — Dashboard: Active Positions master list above deck + detail below
+
+**`index.html`:** Compact **master list** directly under the **Active Positions** heading (above Side/Skips deck); **detail** pane unchanged in **`pos-unified-panel`** below deck + filter hint; row click restores selection → detail. **`dashboard_ui_rev`:** **`2026-05-12-positions-master-above-deck`**.
+
+## 2026-05-12 — Positions: persist CLOB token ids + single-panel layout
+
+**`clob_client.Position`:** optional **`token_id_yes`** / **`token_id_no`** (filled at entry from signals). **`trade_journal.log_entry`:** stores ids on **`open_positions`** for resume. **`main.py`:** bitcoin / SOL–ETH macro / weather execution passes tokens into **`Position`** and **`log_entry`**; journal sync restores them. **`server.py`:** status **`positions`** include **`token_id_yes`**, **`token_id_no`**, and derived **`clob_token_id`** (held leg); disk positions JSON same. Detail pane shows abbreviated **CLOB token** when present. *(Layout: see **Active Positions master list above deck** entry.)*
+
+## 2026-05-12 — Dashboard: metric deck white chrome (deck-only CSS)
+
+**`index.html`:** Ops metric deck chips use **transparent** fills, **white** metric text and **white** border/outline glow; **cyan** kept on **`.chip-k`** (Side / skip labels). **Filter** chips use **white** borders/hover instead of gold. Slightly tighter chip sizing; **`deckPulse`** uses a **white** ring (not cyan). **Tail** tile matches (transparent + soft white edge glow; **`.deck-tail-k`** cyan). **`pos-deck-filter-hint`** muted white (no yellow). **Unchanged:** global **`.g:hover` / `.card:hover`** glow. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-metric-deck-white-chrome`**.
+
+## 2026-05-12 — Discord exit-only: embed URL hardening, main exit payload, kill parity
+
+**`AGENTS.md`:** Discord policy — **`notify_exit`** for closes when enabled; **`notify_trade`** stub; Polymarket link or explicit placeholder when **`market_id`** missing. **`notification_manager.py`:** **`_polymarket_market_url_for_exit`**, exit embed fields (**Market id**, **Trade id**, longer Market text), startup log line clarifies entry/fill disabled in code. **`main.py`:** **`notify_exit`** gains **`entry_price`** / **`trade_id_tail`** from position; global kill Discord loop includes **`xrp_dump_hedge`**. **`config/settings.yaml`:** comments for **`alert_on_trade`** / **`alert_on_exit`**. **`tests/test_notification_manager.py`:** URL helper + embed assertions. *(Vault `projects/polymarket-bot/changelog.md` not present in this workspace copy — infra note here.)*
+
+## 2026-05-12 — Dashboard Live: master–detail positions + ops metric deck rail
+
+**`index.html`:** Command Center **Active Positions** → master list + detail (Polymarket link, optional **end_date** countdown); row **enter** animation; list **exit** flash when a position drops; Side deck chips can **filter** the list. **Metric deck:** tabs Gates / Skips / Side, scroll-snap chips, edge fades, change **pulse**, trailing open + session PnL, **staleness** from **`ts`**, **`prefers-reduced-motion`**. **`server.py`:** **`serialize_position`** + disk positions pass **`end_date`**; **`/api/status`** adds **`ts`**; **`dashboard_ui_rev`:** **`2026-05-12-live-positions-master-detail-deck`**. **`test_dashboard_bundle`:** DOM markers + status **`ts`**.
+
 ## 2026-05-12 — Dashboard: alt-first crypto hero order + lag labels
 
 **`index.html`:** SOL/ETH/HYPE/XRP **hero rows** put **alt Δ%** before **BTC Δ%**; lag tile labels **SOL–BTC lag**, **ETH–BTC lag**, **HYPE–BTC lag**, **XRP–BTC lag** (matches strategy: alt 1H primary, lag/BTC secondary). HYPE/XRP blurbs updated. **`server.py` `dashboard_ui_rev`:** **`2026-05-12-dashboard-alt-first-crypto-heroes`**.

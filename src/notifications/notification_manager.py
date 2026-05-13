@@ -39,6 +39,18 @@ def _strategy_trade_title(strategy: Optional[str]) -> str:
     return STRATEGY_ALERT_TITLE.get(strategy, "Trade")
 
 
+def _polymarket_market_url_for_exit(exit_info: Dict[str, Any]) -> tuple[str, bool]:
+    """
+    Build Polymarket market URL for exit embeds.
+    Returns (display_value, had_market_id). When market_id is missing, returns a
+    safe placeholder (never a bare https://polymarket.com/market/).
+    """
+    mid = str(exit_info.get("market_id") or "").strip()
+    if not mid:
+        return "— (missing market_id — check exit payload)", False
+    return f"https://polymarket.com/market/{mid}", True
+
+
 def _discord_trade_allowed(strategy: Optional[str]) -> bool:
     return bool(strategy and strategy in DISCORD_TRADE_STRATEGIES)
 
@@ -65,9 +77,9 @@ def format_discord_notifications_log_line(root_config: Dict[str, Any]) -> str:
     if not hook:
         return (
             "DISCORD STATUS: no webhook — set notifications.discord_webhook or "
-            "DISCORD_WEBHOOK_URL; exit/kill/error embeds will not send (entry pings are exit-only by code)"
+            "DISCORD_WEBHOOK_URL; exit/kill/error embeds will not send (entry/fill Discord disabled in code)"
         )
-    bits = ["webhook OK", "entry pings off (exit-only policy)"]
+    bits = ["webhook OK", "Discord entry/fill posts disabled in code (exit-only)"]
     bits.append("exit embeds ON" if alert_exit else "exit embeds OFF")
     bits.append("errors ON" if alert_err else "errors OFF")
     return "DISCORD STATUS: " + "; ".join(bits)
@@ -202,26 +214,48 @@ class NotificationManager:
         result_hero = f"{'✅' if win else '❌'} {result_text}  |  {pnl_signed}"
         result_color = 65280 if win else 16711680
 
+        link_value, had_mid = _polymarket_market_url_for_exit(exit_info)
+        if not had_mid:
+            logger.debug(
+                "Discord notify_exit: %s — %s",
+                st_raw,
+                link_value,
+            )
+
+        mid_display = str(exit_info.get("market_id") or "").strip()
+        if len(mid_display) > 48:
+            mid_display = mid_display[:45] + "…"
+
+        trade_tail = str(exit_info.get("trade_id_tail") or "").strip()
+        trade_field = trade_tail or "—"
+
+        qs = str(q)
+        qv = qs[:200] + ("…" if len(qs) > 200 else "")
+        fields = [
+            {"name": "Market", "value": qv, "inline": False},
+            {"name": "Market id", "value": mid_display or "—", "inline": True},
+            {"name": "Trade id", "value": trade_field, "inline": True},
+            {"name": "Outcome", "value": result_hero, "inline": True},
+            {"name": "PnL", "value": f"{pnl_signed}{pnl_pct}", "inline": True},
+            {
+                "name": "Entry→Exit",
+                "value": f"${entry_price:.2f}  →  ${exit_info.get('price', 0):.2f}",
+                "inline": True,
+            },
+            {"name": "Reason", "value": str(reason)[:200], "inline": False},
+            {
+                "name": "Exited",
+                "value": f"{exit_info.get('side', '')} @ ${exit_info.get('price', 0):.2f}",
+                "inline": True,
+            },
+            {"name": "Polymarket", "value": link_value, "inline": False},
+        ]
+
         embed = {
             "title": f"{st} EXIT — {result_hero}",
             "color": result_color,
             "description": f"**{result_text}** on close with PnL **{pnl_signed}{pnl_pct}**",
-            "fields": [
-                {"name": "Market", "value": q[:90], "inline": False},
-                {"name": "Outcome", "value": result_hero, "inline": True},
-                {"name": "PnL", "value": f"{pnl_signed}{pnl_pct}", "inline": True},
-                {
-                    "name": "Entry→Exit",
-                    "value": f"${entry_price:.2f}  →  ${exit_info.get('price', 0):.2f}",
-                    "inline": True,
-                },
-                {"name": "Reason", "value": str(reason)[:200], "inline": False},
-                {
-                    "name": "Exited",
-                    "value": f"{exit_info.get('side', '')} @ ${exit_info.get('price', 0):.2f}",
-                    "inline": True,
-                },
-            ],
+            "fields": fields,
             "footer": {
                 "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"
             },

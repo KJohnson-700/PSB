@@ -44,6 +44,7 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "text/html" in (r.headers.get("content-type") or "")
     body = r.text
     assert "fetchAll" in body and "Command Center" in body
+    assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="ops-metric-deck-scroll"' in body
 
     h = c.get("/health")
     assert h.status_code == 200
@@ -214,7 +215,9 @@ def test_dashboard_status_handles_bootstrap_shim(monkeypatch):
 
     r = TestClient(dashboard_server.app).get("/api/status")
     assert r.status_code == 200
-    assert r.json()["running"] is False
+    data = r.json()
+    assert data["running"] is False
+    assert isinstance(data.get("ts"), int) and data["ts"] > 1700000000
 
 
 def test_resolve_bankroll_snapshot_preserves_real_zero(tmp_path):
