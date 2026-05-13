@@ -149,18 +149,27 @@ def test_min_positive_m5_adj_zero_allows_counter_momentum():
     assert strategy._strong_enough_5m_signal(0.02, "BUY_YES") is True
 
 
-def test_ai_decision_window_uses_configured_remaining_minutes():
+def test_entry_timing_window_uses_configured_remaining_minutes():
     cfg = _make_config()
-    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_min"] = 8.0
-    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_max"] = 13.0
-    cfg["strategies"]["sol_macro"]["ai_entry_window_5m_min"] = 1.5
-    cfg["strategies"]["sol_macro"]["ai_entry_window_5m_max"] = 2.5
+    cfg["strategies"]["sol_macro"]["entry_timing_window_15m_min"] = 8.0
+    cfg["strategies"]["sol_macro"]["entry_timing_window_15m_max"] = 13.0
+    cfg["strategies"]["sol_macro"]["entry_timing_window_5m_min"] = 1.5
+    cfg["strategies"]["sol_macro"]["entry_timing_window_5m_max"] = 2.5
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._within_ai_decision_window(mins_left=10.0, tf="15m") is True
-    assert strategy._within_ai_decision_window(mins_left=14.0, tf="15m") is False
-    assert strategy._within_ai_decision_window(mins_left=2.0, tf="5m") is True
-    assert strategy._within_ai_decision_window(mins_left=3.2, tf="5m") is False
+    assert strategy._within_entry_timing_window(mins_left=10.0, tf="15m") is True
+    assert strategy._within_entry_timing_window(mins_left=14.0, tf="15m") is False
+    assert strategy._within_entry_timing_window(mins_left=2.0, tf="5m") is True
+    assert strategy._within_entry_timing_window(mins_left=3.2, tf="5m") is False
+
+
+def test_entry_timing_window_reads_legacy_ai_entry_keys():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_min"] = 9.0
+    cfg["strategies"]["sol_macro"]["ai_entry_window_15m_max"] = 12.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._within_entry_timing_window(mins_left=10.0, tf="15m") is True
 
 
 def test_sol_late_window_guard_blocks_and_tightens_edge():
@@ -294,6 +303,26 @@ def test_required_updown_oracle_validation_blocks_missing_and_stale_oracle():
     assert stale.reason == "oracle_stale"
 
 
+def test_updown_oracle_stale_relax_passes_when_basis_within_relax_cap():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["require_oracle_for_updown"] = True
+    cfg["strategies"]["sol_macro"]["oracle_max_age_sec"] = 180
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 10.0
+    cfg["strategies"]["sol_macro"]["oracle_stale_basis_relax_max_bps"] = 40.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    now = datetime.now(timezone.utc)
+    relaxed = strategy._validate_updown_oracle(
+        SOLAnalysis(
+            current_price=100.026,
+            chainlink_price=100.0,
+            chainlink_updated_at=now - timedelta(seconds=10_000),
+        ),
+        now=now,
+    )
+    assert relaxed.passed is True
+    assert relaxed.reason == "oracle_stale_basis_relaxed"
+
+
 def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     cfg = _make_config()
     cfg["updown_composite"] = {
@@ -303,7 +332,7 @@ def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
     assert strategy._updown_composite_floor(lane="default") == 0.62
-    assert strategy._updown_composite_floor(lane="15m_buy_yes") == 0.62
+    assert strategy._updown_composite_floor(lane="legacy_lane") == 0.62
     assert strategy._updown_composite_floor(lane="default", quant_confidence=0.55) == 0.66
 
 

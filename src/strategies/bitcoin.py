@@ -306,20 +306,24 @@ class BitcoinStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
-    def _resolve_ai_decision_window_bounds(self, *, tf: str) -> tuple[float, float]:
-        """Return the preferred AI-decision timing window in minutes remaining."""
+    def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
+        """Return the preferred minutes-left band for marginal up/down tie-break timing."""
         if tf not in ("5m", "15m", "30m"):
             tf = "15m"
         presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
         default_min, default_max = presets[tf]
-        win_min = float(self.config.get(f"ai_entry_window_{tf}_min", default_min))
-        win_max = float(self.config.get(f"ai_entry_window_{tf}_max", default_max))
+        new_k = f"entry_timing_window_{tf}_min"
+        leg_k = f"ai_entry_window_{tf}_min"
+        win_min = float(self.config.get(new_k, self.config.get(leg_k, default_min)))
+        new_kx = f"entry_timing_window_{tf}_max"
+        leg_kx = f"ai_entry_window_{tf}_max"
+        win_max = float(self.config.get(new_kx, self.config.get(leg_kx, default_max)))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
         return win_min, win_max
 
-    def _within_ai_decision_window(self, *, mins_left: float, tf: str) -> bool:
-        win_min, win_max = self._resolve_ai_decision_window_bounds(tf=tf)
+    def _within_entry_timing_window(self, *, mins_left: float, tf: str) -> bool:
+        win_min, win_max = self._resolve_entry_timing_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
     def _active_macro_event_name(self, now_utc: datetime) -> Optional[str]:
@@ -1068,7 +1072,7 @@ class BitcoinStrategy:
                         f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
                     )
                     continue
-                _ai_window_open = self._within_ai_decision_window(
+                _timing_window_open = self._within_entry_timing_window(
                     mins_left=_eval_left,
                     tf=_updown_tf,
                 )
@@ -1748,7 +1752,7 @@ class BitcoinStrategy:
                 )
             )
             if (
-                (_ai_updown_5m or (_ai_updown_15m_borderline and _ai_window_open))
+                (_ai_updown_5m or (_ai_updown_15m_borderline and _timing_window_open))
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
@@ -1852,7 +1856,7 @@ class BitcoinStrategy:
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
-                and not _ai_window_open
+                and not _timing_window_open
             ):
                 logger.debug(
                     f"  BTC AI window closed for marginal updown '{market.question[:40]}...' "

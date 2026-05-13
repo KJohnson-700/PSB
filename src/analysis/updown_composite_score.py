@@ -59,9 +59,50 @@ def validate_oracle_reference(
     max_basis_bps: float,
     require_oracle: bool,
     now: Optional[datetime] = None,
+    allow_exchange_when_oracle_missing: bool = False,
+    stale_basis_relax_max_bps: Optional[float] = None,
 ) -> OracleValidation:
-    """Validate oracle freshness and basis against the exchange spot feed."""
-    if oracle_price is None or exchange_spot is None or oracle_updated_at is None:
+    """Validate oracle freshness and basis against the exchange spot feed.
+
+    ``allow_exchange_when_oracle_missing``: when Chainlink fields are absent but
+    ``require_oracle`` is True, still admit up/down if exchange spot exists (basis
+    integrity unknown — use only when ops accepts exchange-only resolution risk).
+
+    ``stale_basis_relax_max_bps``: when the feed on-chain ``updatedAt`` is older than
+    ``max_age_sec`` but spot vs oracle still agrees within this many bps, pass anyway
+    (slow-updating feeds vs tight freshness caps — common on some alt feeds).
+    """
+    def _spot_positive(sp: Optional[float]) -> Optional[float]:
+        if sp is None:
+            return None
+        try:
+            v = float(sp)
+        except (TypeError, ValueError):
+            return None
+        return v if v > 0 else None
+
+    spot_ok = _spot_positive(exchange_spot)
+
+    if oracle_price is None and oracle_updated_at is None:
+        if require_oracle and allow_exchange_when_oracle_missing and spot_ok is not None:
+            return OracleValidation(
+                passed=True,
+                reason="oracle_exchange_only_missing_chainlink",
+                oracle_price=None,
+                exchange_spot=spot_ok,
+                basis_bps=None,
+                freshness_sec=None,
+            )
+        return OracleValidation(
+            passed=not require_oracle,
+            reason="oracle_missing" if require_oracle else "oracle_optional_missing",
+            oracle_price=None,
+            exchange_spot=exchange_spot,
+            basis_bps=None,
+            freshness_sec=None,
+        )
+
+    if oracle_price is None or oracle_updated_at is None or exchange_spot is None:
         return OracleValidation(
             passed=not require_oracle,
             reason="oracle_missing" if require_oracle else "oracle_optional_missing",
@@ -86,6 +127,16 @@ def validate_oracle_reference(
     freshness = _freshness_seconds(oracle_updated_at, now)
     basis = ((spot_f - oracle_f) / oracle_f) * 10000.0
     if freshness > float(max_age_sec):
+        relax_cap = stale_basis_relax_max_bps
+        if relax_cap is not None and abs(basis) <= float(relax_cap):
+            return OracleValidation(
+                passed=True,
+                reason="oracle_stale_basis_relaxed",
+                oracle_price=oracle_f,
+                exchange_spot=spot_f,
+                basis_bps=basis,
+                freshness_sec=freshness,
+            )
         return OracleValidation(
             passed=False,
             reason="oracle_stale",

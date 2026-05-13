@@ -285,7 +285,7 @@ def test_hype_updown_composite_floor_and_lane_helpers_inherit_sol_base():
     assert strategy._updown_composite_floor(lane="default") == 0.62
     assert strategy._updown_composite_floor(lane="marginal") == 0.62
     assert strategy._requires_ai_for_lane("marginal") is True
-    assert strategy._requires_ai_for_lane("15m_buy_yes") is False
+    assert strategy._requires_ai_for_lane("default") is False
     assert strategy._requires_shadow_for_lane("marginal") is False
     assert strategy._size_multiplier_for_lane("marginal") == 1.0
 
@@ -303,7 +303,7 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
     core_5m = [_market("Solana Up or Down - test", slug="sol-updown-5m-test")]
 
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
-    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: core_15m)
+    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: (core_15m, []))
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: core_5m)
     monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_weather_markets", lambda limit=20: [])
@@ -387,7 +387,7 @@ def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypa
     )
 
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
-    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: [])
+    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: ([], []))
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
 

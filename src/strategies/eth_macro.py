@@ -603,7 +603,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             if _eval_left < _win_min or _eval_left > _win_max:
                 _bump_skip("outside_entry_window")
                 continue
-            _ai_window_open = self._within_ai_decision_window(
+            _timing_window_open = self._within_entry_timing_window(
                 mins_left=_eval_left,
                 tf=_updown_tf,
             )
@@ -860,7 +860,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             if (
                 edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
-                and _ai_window_open
+                and _timing_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
@@ -993,7 +993,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
-                and not _ai_window_open
+                and not _timing_window_open
             ):
                 _bump_skip("ai_window_closed")
                 continue

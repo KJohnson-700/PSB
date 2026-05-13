@@ -104,7 +104,11 @@ class WebSocketClient:
                 self.order_books[token_id] = OrderBook(token_id=token_id)
 
         # Send subscription message
-        message = {"type": "subscribe", "channel": channel, "keys": token_ids}
+        id_key = (
+            (self.config.get("trading") or {}).get("clob_ws") or {}
+        ).get("asset_ids_json_key", "assets_ids")
+        message: Dict[str, Any] = {"type": "subscribe", "channel": channel}
+        message[id_key] = token_ids
 
         await self.ws.send_json(message)
         logger.info(f"Subscribed to {channel} for {len(token_ids)} tokens")
@@ -117,7 +121,11 @@ class WebSocketClient:
         if channel in self.subscriptions:
             self.subscriptions[channel].difference_update(token_ids)
 
-        message = {"type": "unsubscribe", "channel": channel, "keys": token_ids}
+        id_key = (
+            (self.config.get("trading") or {}).get("clob_ws") or {}
+        ).get("asset_ids_json_key", "assets_ids")
+        message = {"type": "unsubscribe", "channel": channel}
+        message[id_key] = token_ids
 
         await self.ws.send_json(message)
 
@@ -176,11 +184,11 @@ class WebSocketClient:
 
         # Update bids
         if "bids" in data:
-            book.bids = self._merge_orders(book.bids, data["bids"])
+            book.bids = self._merge_orders(book.bids, data["bids"], bids=True)
 
         # Update asks
         if "asks" in data:
-            book.asks = self._merge_orders(book.asks, data["asks"])
+            book.asks = self._merge_orders(book.asks, data["asks"], bids=False)
 
         book.last_update = asyncio.get_event_loop().time()
 
@@ -207,28 +215,65 @@ class WebSocketClient:
             elif book.asks and price >= book.asks[0]["price"]:
                 book.asks[0]["price"] = price
 
-    def _merge_orders(self, existing: List[Dict], updates: List[Dict]) -> List[Dict]:
-        """Merge order updates into existing orders"""
-        orders = {o["price"]: o["size"] for o in existing}
+    def _merge_orders(
+        self, existing: List[Dict], updates: List[Dict], *, bids: bool
+    ) -> List[Dict]:
+        """Merge L2 deltas. Bids: highest price first. Asks: lowest price first."""
+        orders: Dict[float, float] = {}
+        for o in existing:
+            try:
+                orders[float(o["price"])] = float(o["size"])
+            except (KeyError, TypeError, ValueError):
+                continue
 
         for update in updates:
-            price = update["price"]
-            size = update["size"]
+            try:
+                price = float(update["price"])
+                size = float(update["size"])
+            except (KeyError, TypeError, ValueError):
+                continue
 
             if size == 0:
                 orders.pop(price, None)
             else:
                 orders[price] = size
 
-        # Convert back to sorted list
         result = [{"price": p, "size": s} for p, s in orders.items()]
-        result.sort(key=lambda x: x["price"], reverse=True)  # Descending for bids
-
+        result.sort(key=lambda x: x["price"], reverse=bids)
         return result
 
     def get_order_book(self, token_id: str) -> Optional[OrderBook]:
         """Get current order book for a token"""
         return self.order_books.get(token_id)
+
+    def snapshot_order_book_json(
+        self, token_id: str, max_levels: int = 12
+    ) -> Optional[Dict[str, Any]]:
+        """Serialize cached WS book for dashboard JSON (bids high→low, asks low→high)."""
+        book = self.order_books.get(token_id)
+        if not book:
+            return None
+
+        def _take(levels: List[Dict[str, float]], n: int) -> List[Dict[str, float]]:
+            out: List[Dict[str, float]] = []
+            for row in levels[:n]:
+                try:
+                    out.append(
+                        {
+                            "price": float(row["price"]),
+                            "size": float(row["size"]),
+                        }
+                    )
+                except (KeyError, TypeError, ValueError):
+                    continue
+            return out
+
+        return {
+            "token_id": token_id,
+            "bids": _take(book.bids, max_levels),
+            "asks": _take(book.asks, max_levels),
+            "ws_last_update_mono": book.last_update,
+        }
 
     def get_spread(self, token_id_yes: str, token_id_no: str) -> Optional[float]:
         """Calculate spread between YES and NO tokens"""

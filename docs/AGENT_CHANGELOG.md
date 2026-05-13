@@ -8,6 +8,42 @@
 
 ---
 
+## 2026-05-13 — Up/down oracle relax, BUY_NO skip counts, entry timing window rename
+
+**`src/analysis/updown_composite_score.py`:** **`validate_oracle_reference`** — **`stale_basis_relax_max_bps`** (pass when feed `updatedAt` is older than **`max_age_sec`** but \|basis\| within relax cap); **`allow_exchange_when_oracle_missing`** (pass when both Chainlink fields are absent but exchange spot exists). **`src/strategies/sol_macro.py`:** wires new flags from strategy config; on oracle fail **`BUY_NO`** now **`_emit_buy_no_skip`** so diagnostics match **`skip`** logs. Renamed **`_within_ai_decision_window`** → **`_within_entry_timing_window`** (config **`entry_timing_window_*`**, legacy **`ai_entry_window_*`** still read). **`src/strategies/bitcoin.py`**, **`src/strategies/eth_macro.py`:** same timing-window rename. **`config/settings.yaml`:** global **`ai_entry_window_` → `entry_timing_window_`**; **`hype_macro`** **`oracle_stale_basis_relax_max_bps: 45`**; XRP **`entry_price_max_15m_yes_side`** (code also reads legacy **`entry_price_max_15m_buy_yes`**). **Tests:** **`tests/test_updown_composite_score.py`**, **`tests/test_sol_macro.py`**.
+
+## 2026-05-13 — Entry windows (SOL/HYPE), HYPE AI 15m max, 30m human compact slugs
+
+**`config/settings.yaml`:** **`strategies.sol_macro.entry_window_15m_max`** **18 → 23**; **`strategies.hype_macro.entry_window_15m_max`** **16 → 27**; **`strategies.hype_macro.entry_timing_window_15m_max`** **15 → 25** (marginal up/down tie-break timing vs widened quant entry band). **`polymarket.fetch_updown_30m_human_compact_slugs`** (default **true**) — second slug family for 30m Gamma discovery.
+
+**`scanner.py`:** **`_compact_updown_range_time_et`**, **`_iter_updown_30m_human_compact_slugs`** — ET half-hour slugs like **`bitcoin-up-or-down-may-13-530am-600am-et`** merged with **`{asset}-updown-30m-{unix}`** in **`fetch_updown_30m_markets`** (deduped); post-fetch duration band **20–52** minutes. **`fetch_updown_markets`** returns **`(15m_bucket, ~30m_carry)`** — rows from the **15m slug** responses with **`window_minutes` 26–34** (title-inferred half-hour) are no longer dropped; **`_sync_network_phase`** merges carry into **`updown_30m`** when **`polymarket.updown_30m_merge_from_15m_slug_batch`** is true (default). **`_dedupe_markets_by_id`**. Slugs with **`updown-15m`** and **`window_minutes` None** → **15m bucket**. **Tests:** **`tests/test_scanner_crypto_enhancements.py`**.
+
+**RCA note:** Gamma **`btc-updown-30m-{unix}`** often **`[]`** while **`btc-updown-15m-{unix}`** resolves; compact human slugs match the **`hyperliquid-up-or-down-…-415am-430am-et`** family. **`updown_30m_count`** may stay **0** until Polymarket lists matching events. HYPE skip drivers vary by pulse (**`oracle_stale`** / **`liquidity`** vs **`outside_entry_window`**); rank from multi-cycle **`scan_skip_digest`**, not one ops snapshot. **Bulk Gamma caveat:** see **`docs/GAMMA_UPDOWN_30M_DISCOVERY.md`** (matching both substrings **`updown`** and **`30`** on a slug hits **`5m`** epoch false positives, not **`30m`** markets).
+
+## 2026-05-12 — Dashboard: CLOB order book (WebSocket cache + REST fallback)
+
+**`index.html`:** **`#positions-orderbook-wrap`** in Active Positions **detail** — polls **`GET /api/orderbook`** every **2s** for the held outcome token; shows **websocket** vs **rest** source and top bid/ask rows.
+
+**`server.py`:** **`GET /api/orderbook?token_id=`** — prefers non-empty **WS** snapshot; else **public REST** via **`clob_client.fetch_order_book_snapshot`** (level-0 `get_order_book`). **`dashboard_ui_rev`:** **`2026-05-12-orderbook-ws-api`**.
+
+**`websocket.py`:** Subscribe uses **`trading.clob_ws.asset_ids_json_key`** (default **`assets_ids`**); **`_merge_orders`** bid/ask sort fix; **`snapshot_order_book_json`**.
+
+**`main.py`:** Background **`ws_client.listen()`** + subscription sync for **open-position** YES/NO tokens (`trading.clob_ws`, channel default **`market`**).
+
+**`config/settings.yaml`:** **`trading.clob_ws`**.
+
+## 2026-05-12 — HYPE OHLCV: HL UTC timestamps, 1m bisect pagination, 5m→1m fallback
+
+**`hyperliquid_hype_service.py`:** **`utc=True`** on parsed candle times — fixes range merge/filter **`datetime64` vs `Timestamp`** failures that zeroed 5m/15m fetches. **Smaller 1m chunks**, **`_hl_bisect_fetch_chunk`** on empty snapshots. **`ohlcv_loader.py`:** if HL **1m** missing but **5m** exists — **resample forward-fill 5m→1m**; tz-safe localize. **`run_backtest_crypto.py`:** exit if **HYPE `1m` &lt; 50 bars** with HL retention hint.
+
+## 2026-05-12 — Planned follow-up (superseded): Live dashboard CLOB order book / depth
+
+**Update:** Initial **plan-only** note — **shipped** under **Dashboard: CLOB order book (WebSocket cache + REST fallback)** above.
+
+## 2026-05-12 — Backtest: exit code in `/api/backtest/status`, UI failure line; HYPE min_edge YAML parity
+
+**`server.py`:** **`exit_code`** on finished dashboard-spawned backtest jobs (scoped **`job_id`** + per-job list). **`index.html`:** **`pollBacktestJobUntilDone`** shows red failure when **`exit_code !== 0`** (e.g. HYPE OHLCV empty). **`config/settings.yaml`:** **`backtest.min_edge_hype_5m`** **0.07** to match **`strategies.hype_macro.min_edge_5m`** (was 0.09). **`dashboard_ui_rev`:** **`2026-05-12-bt-exit-hype-minedge`**.
+
 ## 2026-05-12 — Dashboard: ops digest ticker (status-only, under deck hint)
 
 **`index.html`:** **`#ops-digest-ticker`** between deck filter hint and detail panel — builds one line from existing **`/api/status`** / merged deck fields (**regime**, open **positions** count, **side_selection** lanes, top **scan_skip_digest** skips, **session** PnL, kill / **can_trade** reason). **Marquee** when text overflows viewport; **`prefers-reduced-motion`** wraps with no animation. SSE merges **`scan_skip_digest`** when present and refreshes ticker. **`dashboard_ui_rev`:** **`2026-05-12-ops-digest-ticker`**.

@@ -325,6 +325,13 @@ class SolMacroStrategy:
         self.oracle_max_basis_bps = float(
             self.config.get("oracle_max_basis_bps", 10.0)
         )
+        _relax = self.config.get("oracle_stale_basis_relax_max_bps")
+        self.oracle_stale_basis_relax_max_bps = (
+            float(_relax) if _relax is not None else None
+        )
+        self.updown_allow_exchange_when_oracle_missing = bool(
+            self.config.get("updown_allow_exchange_when_oracle_missing", False)
+        )
         self.updown_composite_cfg = dict(self.full_config.get("updown_composite") or {})
         self.default_min_composite_score = float(
             self.updown_composite_cfg.get("default_min_score", 0.62)
@@ -574,20 +581,24 @@ class SolMacroStrategy:
             return win_min, win_max
         return aligned_min, aligned_max
 
-    def _resolve_ai_decision_window_bounds(self, *, tf: str) -> tuple[float, float]:
-        """Return the preferred AI-decision timing window in minutes remaining."""
+    def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
+        """Return the preferred minutes-left band for marginal up/down tie-break timing."""
         if tf not in ("5m", "15m", "30m"):
             tf = "15m"
         presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
         default_min, default_max = presets[tf]
-        win_min = float(self.config.get(f"ai_entry_window_{tf}_min", default_min))
-        win_max = float(self.config.get(f"ai_entry_window_{tf}_max", default_max))
+        new_k = f"entry_timing_window_{tf}_min"
+        leg_k = f"ai_entry_window_{tf}_min"
+        win_min = float(self.config.get(new_k, self.config.get(leg_k, default_min)))
+        new_kx = f"entry_timing_window_{tf}_max"
+        leg_kx = f"ai_entry_window_{tf}_max"
+        win_max = float(self.config.get(new_kx, self.config.get(leg_kx, default_max)))
         if win_min > win_max:
             win_min, win_max = win_max, win_min
         return win_min, win_max
 
-    def _within_ai_decision_window(self, *, mins_left: float, tf: str) -> bool:
-        win_min, win_max = self._resolve_ai_decision_window_bounds(tf=tf)
+    def _within_entry_timing_window(self, *, mins_left: float, tf: str) -> bool:
+        win_min, win_max = self._resolve_entry_timing_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
     def _apply_late_window_guard(
@@ -660,6 +671,8 @@ class SolMacroStrategy:
             max_basis_bps=self.oracle_max_basis_bps,
             require_oracle=self.require_oracle_for_updown,
             now=now,
+            allow_exchange_when_oracle_missing=self.updown_allow_exchange_when_oracle_missing,
+            stale_basis_relax_max_bps=self.oracle_stale_basis_relax_max_bps,
         )
 
     def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
@@ -1474,7 +1487,7 @@ class SolMacroStrategy:
                         f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
                     )
                     continue
-                _ai_window_open = self._within_ai_decision_window(
+                _timing_window_open = self._within_entry_timing_window(
                     mins_left=_eval_left,
                     tf=_updown_tf,
                 )
@@ -1654,6 +1667,25 @@ class SolMacroStrategy:
                 oracle_validation = self._validate_updown_oracle(sol)
                 if not oracle_validation.passed:
                     _bump_skip(oracle_validation.reason)
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason=oracle_validation.reason,
+                                window_size=_updown_tf if is_updown else "15m",
+                                yes_price=yes_price,
+                                edge=0.0,
+                                effective_min_edge=0.0,
+                                rsi=sol.rsi_14,
+                                htf_bias=primary_htf_bias,
+                                signal_reason=" | ".join(reason_parts),
+                                alt_1h_trend=mtt.h1_trend,
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
+                        )
                     logger.info(
                         f"  {self._signal_strategy_name} skip {action} on '{market.question[:40]}' — "
                         f"{oracle_validation.reason} "
@@ -2297,7 +2329,7 @@ class SolMacroStrategy:
                 is_updown
                 and edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
-                and _ai_window_open
+                and _timing_window_open
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
@@ -2388,7 +2420,7 @@ class SolMacroStrategy:
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
-                and not _ai_window_open
+                and not _timing_window_open
             ):
                 _bump_skip("ai_window_closed_marginal_updown")
                 logger.debug(
@@ -2596,7 +2628,10 @@ class SolMacroStrategy:
                 _yp_high = self.entry_price_max
                 if action == "BUY_YES" and _updown_tf != "5m":
                     _yp_high = float(
-                        self.config.get("entry_price_max_15m_buy_yes", _yp_high)
+                        self.config.get(
+                            "entry_price_max_15m_yes_side",
+                            self.config.get("entry_price_max_15m_buy_yes", _yp_high),
+                        )
                     )
                 if action == "BUY_YES":
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high

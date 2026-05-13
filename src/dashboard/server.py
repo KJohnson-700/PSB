@@ -23,7 +23,7 @@ import os
 import asyncio
 import time as _time_mod
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-12-ops-digest-ticker",
+        "dashboard_ui_rev": "2026-05-12-orderbook-ws-api",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1400,6 +1400,44 @@ async def get_ai_health():
     }
 
 
+@app.get("/api/orderbook")
+async def get_orderbook(token_id: str = Query(..., min_length=4)):
+    """L2 order book for a CLOB outcome token.
+
+    Prefers the bot's **WebSocket** cache (``ws_client.snapshot_order_book_json``)
+    when subscribed; falls back to **public REST** ``get_order_book`` via
+    ``clob_client.fetch_order_book_snapshot`` (no trading keys required).
+    """
+    bot = _full_bot_instance()
+    if not bot:
+        raise HTTPException(
+            status_code=503,
+            detail="Bot instance unavailable — start the bot for live WS books.",
+        )
+    tid = (token_id or "").strip()
+    ws_snap = bot.ws_client.snapshot_order_book_json(tid)
+    has_ws_levels = bool(
+        ws_snap and ((ws_snap.get("bids") or []) or (ws_snap.get("asks") or []))
+    )
+    if has_ws_levels:
+        return {"source": "websocket", **ws_snap}
+    cc = getattr(bot, "clob_client", None)
+    if cc:
+        rest = await cc.fetch_order_book_snapshot(tid)
+        if rest and ((rest.get("bids") or []) or (rest.get("asks") or [])):
+            return {"source": "rest", **rest}
+    if ws_snap is not None:
+        return {"source": "websocket", **ws_snap}
+    if cc:
+        rest = await cc.fetch_order_book_snapshot(tid)
+        if rest:
+            return {"source": "rest", **rest}
+    raise HTTPException(
+        status_code=503,
+        detail="Could not load order book for this token.",
+    )
+
+
 # ─── API USAGE ────────────────────────────────────────────────────
 
 
@@ -1759,6 +1797,12 @@ _auto_startup_backtests_started: set[tuple[str, str]] = set()
 _auto_backtest_start_lock = threading.Lock()
 
 
+def _backtest_exit_code(proc: subprocess.Popen) -> Optional[int]:
+    """None while running; integer exit status after the process finishes."""
+    code = proc.poll()
+    return None if code is None else int(code)
+
+
 def _prune_finished_backtest_jobs(max_keep: int = 48) -> None:
     """Drop oldest finished jobs so the map does not grow forever."""
     with _backtest_jobs_lock:
@@ -1924,12 +1968,14 @@ async def get_backtest_status(job_id: Optional[str] = None):
             alive = j.proc.poll() is None
             return {
                 "running": alive,
+                "exit_code": None if alive else _backtest_exit_code(j.proc),
                 "jobs": [
                     {
                         "job_id": job_id,
                         "running": alive,
                         "pid": j.proc.pid,
                         "summary": j.summary,
+                        "exit_code": None if alive else _backtest_exit_code(j.proc),
                     }
                 ],
                 "output": j.output[-50:],
@@ -1946,6 +1992,7 @@ async def get_backtest_status(job_id: Optional[str] = None):
                     "running": alive,
                     "pid": j.proc.pid,
                     "summary": j.summary,
+                    "exit_code": None if alive else _backtest_exit_code(j.proc),
                 }
             )
             if alive:

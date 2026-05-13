@@ -363,6 +363,19 @@
         .pos-detail dt{color:var(--td);font-family:'IBM Plex Mono',monospace;font-size:0.65rem;text-transform:uppercase;letter-spacing:.08em}
         .pos-detail dd{color:var(--tx);word-break:break-word}
         .pos-detail .pos-pm-link{display:inline-block;margin-top:12px;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;color:var(--cy)}
+        .pos-orderbook-wrap{margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08)}
+        .pos-ob-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;font-size:0.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--td)}
+        .pos-ob-src{color:var(--cy);font-size:0.62rem}
+        .pos-ob-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        .pos-ob-side{font-size:0.72rem;font-family:'IBM Plex Mono',monospace}
+        .pos-ob-bids .pos-ob-h{color:#6fcf97}
+        .pos-ob-asks .pos-ob-h{color:#ff6b6b}
+        .pos-ob-h{font-size:0.62rem;text-transform:uppercase;margin-bottom:4px;opacity:.9}
+        .pos-ob-row{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+        .pos-ob-row span:first-child{opacity:.95}
+        .pos-ob-row span:last-child{color:var(--td);font-size:0.68rem}
+        .pos-ob-empty{opacity:.25}
+        .pos-ob-muted{color:var(--td);font-size:0.75rem;padding:8px 0}
         .pos-deck-filter-hint{font-size:0.68rem;color:rgba(255,255,255,.55);margin-bottom:6px;display:none}
         .pos-deck-filter-hint.on{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
         /* Ops digest ticker — status fields only; marquee when overflow */
@@ -3119,6 +3132,75 @@ function dashRenderOpsDigestTicker(full) {
     });
 }
 
+window._dashOrderbookTimer = null;
+window._dashOrderbookToken = null;
+
+function dashStopOrderbookPoll() {
+    if (window._dashOrderbookTimer) {
+        clearInterval(window._dashOrderbookTimer);
+        window._dashOrderbookTimer = null;
+    }
+    window._dashOrderbookToken = null;
+}
+
+function dashRenderOrderbookInto(wrapEl, data) {
+    if (!wrapEl) return;
+    const bids = (data && data.bids) ? data.bids : [];
+    const asks = (data && data.asks) ? data.asks : [];
+    const src = (data && data.source) ? String(data.source) : '?';
+    const n = 8;
+    let html = '<div class="pos-ob-head"><span>Order book</span><span class="pos-ob-src">' + _htmlEscape(src) + '</span></div>';
+    html += '<div class="pos-ob-cols"><div class="pos-ob-side pos-ob-bids"><div class="pos-ob-h">Bid</div>';
+    for (let i = 0; i < n; i++) {
+        const b = bids[i];
+        html += b
+            ? '<div class="pos-ob-row"><span>' + Number(b.price).toFixed(3) + '</span><span>' + Number(b.size).toFixed(1) + '</span></div>'
+            : '<div class="pos-ob-row pos-ob-empty">&nbsp;</div>';
+    }
+    html += '</div><div class="pos-ob-side pos-ob-asks"><div class="pos-ob-h">Ask</div>';
+    for (let i = 0; i < n; i++) {
+        const a = asks[i];
+        html += a
+            ? '<div class="pos-ob-row"><span>' + Number(a.price).toFixed(3) + '</span><span>' + Number(a.size).toFixed(1) + '</span></div>'
+            : '<div class="pos-ob-row pos-ob-empty">&nbsp;</div>';
+    }
+    html += '</div></div>';
+    wrapEl.innerHTML = html;
+}
+
+function dashFetchOrderbook(tokenId) {
+    return fetch('/api/orderbook?token_id=' + encodeURIComponent(tokenId)).then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || String(r.status)); });
+        return r.json();
+    });
+}
+
+function dashScheduleOrderbookPoll(tokenId) {
+    dashStopOrderbookPoll();
+    const wrap = document.getElementById('positions-orderbook-wrap');
+    if (!wrap) return;
+    const tid = String(tokenId || '').trim();
+    if (!tid) {
+        wrap.innerHTML = '<div class="pos-ob-muted">CLOB token missing — cannot load book.</div>';
+        return;
+    }
+    window._dashOrderbookToken = tid;
+    const tick = function() {
+        if (window._dashOrderbookToken !== tid) return;
+        dashFetchOrderbook(tid).then(function(d) {
+            const w = document.getElementById('positions-orderbook-wrap');
+            if (w && window._dashOrderbookToken === tid) dashRenderOrderbookInto(w, d);
+        }).catch(function() {
+            const w = document.getElementById('positions-orderbook-wrap');
+            if (w && window._dashOrderbookToken === tid) {
+                w.innerHTML = '<div class="pos-ob-muted">Book unavailable (start bot or check network).</div>';
+            }
+        });
+    };
+    tick();
+    window._dashOrderbookTimer = setInterval(tick, 2000);
+}
+
 function dashRenderPositionDetailPane(positions) {
     const emptyEl = document.getElementById('positions-detail-empty');
     const bodyEl = document.getElementById('positions-detail-body');
@@ -3126,6 +3208,7 @@ function dashRenderPositionDetailPane(positions) {
 
     if (window._dashShowClosedFlash) {
         window._dashShowClosedFlash = false;
+        dashStopOrderbookPoll();
         emptyEl.textContent = 'This position is no longer open (closed or synced off).';
         emptyEl.style.display = 'block';
         bodyEl.style.display = 'none';
@@ -3136,6 +3219,7 @@ function dashRenderPositionDetailPane(positions) {
     const sel = window._dashSelectedPositionId;
     const pos = (positions || []).find(function(p) { return p.position_id === sel; });
     if (!pos) {
+        dashStopOrderbookPoll();
         emptyEl.textContent = positions && positions.length
             ? 'Select a row in the list above to inspect a position.'
             : 'No active positions.';
@@ -3170,7 +3254,9 @@ function dashRenderPositionDetailPane(positions) {
         + '<dt>Opened</dt><dd style="font-size:0.75rem;">' + _htmlEscape(pos.opened_at || '') + '</dd>'
         + endRow
         + '</dl>'
+        + '<div id="positions-orderbook-wrap" class="pos-orderbook-wrap" aria-live="polite"></div>'
         + (pmUrl ? '<a class="pos-pm-link" href="' + pmUrl + '" target="_blank" rel="noopener">Open on Polymarket</a>' : '');
+    dashScheduleOrderbookPoll(heldTok);
 }
 
 function dashRenderPositionsMasterDetail(positions, prevIdSet) {
@@ -3621,7 +3707,13 @@ function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
             return;
         }
         if (s.running !== true) {
-            if (onComplete) onComplete();
+            const code = s.exit_code;
+            const failed = Number.isFinite(code) && code !== 0;
+            if (failed && statusEl) {
+                statusEl.textContent = `${label} failed (exit ${code}) — HYPE needs Hyperliquid OHLCV + cache; see output tail below or logs. No JSON report on failure.`;
+                statusEl.style.color = 'var(--red)';
+            }
+            if (onComplete) onComplete(!failed);
             return;
         }
         if (statusEl && s?.output?.length) {
@@ -3660,10 +3752,12 @@ async function startCryptoBacktest() {
             } catch (_) {}
             status.textContent = `${symbol} ${window}m started (job ${d.job_id}, PID ${d.pid}) — can run alongside live bot`;
             status.style.color = 'var(--green)';
-            pollBacktestJobUntilDone(d.job_id, `${symbol} ${window}m`, status, () => {
+            pollBacktestJobUntilDone(d.job_id, `${symbol} ${window}m`, status, (ok) => {
                 btn.disabled = false;
-                status.textContent = `${symbol} ${window}m backtest complete (job ${d.job_id}) — reports refreshed`;
-                status.style.color = 'var(--green)';
+                if (ok) {
+                    status.textContent = `${symbol} ${window}m backtest complete (job ${d.job_id}) — reports refreshed`;
+                    status.style.color = 'var(--green)';
+                }
                 try {
                     localStorage.removeItem('psb_pending_bt_job');
                     localStorage.removeItem('psb_pending_bt_label');
@@ -6052,8 +6146,8 @@ if (_currentMainView() === 'journal') {
         status.textContent = `Resuming ${label} tracking (job ${jid})…`;
         status.style.color = 'var(--yellow)';
     }
-    pollBacktestJobUntilDone(jid, label, status, () => {
-        if (status) {
+    pollBacktestJobUntilDone(jid, label, status, (ok) => {
+        if (status && ok) {
             status.textContent = `${label} backtest complete (job ${jid}) — reports refreshed`;
             status.style.color = 'var(--green)';
         }

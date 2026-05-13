@@ -99,8 +99,44 @@ def test_missing_stale_and_bad_basis_oracle_fail_validation() -> None:
     assert bad_basis.reason == "oracle_basis_block"
     assert bad_basis.basis_bps == pytest.approx(20.0)
 
+    relaxed = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.02,
+        oracle_updated_at=datetime.now(timezone.utc) - timedelta(seconds=5000),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+        stale_basis_relax_max_bps=35.0,
+    )
+    assert relaxed.passed is True
+    assert relaxed.reason == "oracle_stale_basis_relaxed"
 
-def test_lane_floors_rank_btc_neutral_and_hype_buy_yes_stricter() -> None:
+    exchange_only = validate_oracle_reference(
+        oracle_price=None,
+        exchange_spot=100.0,
+        oracle_updated_at=None,
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+        allow_exchange_when_oracle_missing=True,
+    )
+    assert exchange_only.passed is True
+    assert exchange_only.reason == "oracle_exchange_only_missing_chainlink"
+
+    stale_wide_basis = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.50,
+        oracle_updated_at=datetime.now(timezone.utc) - timedelta(seconds=5000),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+        stale_basis_relax_max_bps=35.0,
+    )
+    assert stale_wide_basis.passed is False
+    assert stale_wide_basis.reason == "oracle_stale"
+
+
+def test_lane_floors_rank_btc_neutral_and_stricter_floors():
     oracle = validate_oracle_reference(
         oracle_price=100.0,
         exchange_spot=100.01,
@@ -122,9 +158,9 @@ def test_lane_floors_rank_btc_neutral_and_hype_buy_yes_stricter() -> None:
 
     default = score_updown_candidate(**kwargs, floor=0.62)
     btc_neutral = score_updown_candidate(**kwargs, floor=0.68)
-    hype_buy_yes = score_updown_candidate(**kwargs, floor=0.70)
+    strict_floor = score_updown_candidate(**kwargs, floor=0.70)
 
     assert default.passed is True
     assert btc_neutral.floor > default.floor
-    assert hype_buy_yes.floor > btc_neutral.floor
-    assert hype_buy_yes.passed is False
+    assert strict_floor.floor > btc_neutral.floor
+    assert strict_floor.passed is False

@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 # a multi-month 1m window in one shot often yields ``[]`` (see backtest HYPE runs).
 # Paginate in time chunks like Binance/Kraken loaders in ``ohlcv_loader.py``.
 _HL_MAX_CANDLES_PER_RANGE_REQUEST = 4000
+# 1m is far noisier: wide chunks frequently return ``[]`` while smaller windows succeed.
+_HL_MAX_CANDLES_1M_PER_CHUNK = 500
+# Stop bisecting when a segment is this many bars or fewer (still empty → give up).
+_HL_MIN_BARS_TO_BISECT = 48
 
 
 def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -123,6 +127,42 @@ class HyperliquidHypeService(SOLBTCService):
             }
         )
 
+    def _hl_bisect_fetch_chunk(
+        self,
+        fetch_chunk,
+        lo_ms: int,
+        hi_ms: int,
+        interval_ms: int,
+        depth: int = 0,
+    ) -> pd.DataFrame:
+        """Retry empty candleSnapshot responses by splitting the window (HL often returns [] for wide 1m spans)."""
+        df = fetch_chunk(lo_ms, hi_ms)
+        if not df.empty:
+            return df
+        df = fetch_chunk(lo_ms, hi_ms)
+        if not df.empty:
+            return df
+        if hi_ms < lo_ms:
+            return self._empty_klines_df()
+        n_bars = (hi_ms - lo_ms) // interval_ms + 1
+        if n_bars <= _HL_MIN_BARS_TO_BISECT or depth > 16:
+            return self._empty_klines_df()
+        half = max(1, n_bars // 2)
+        left_hi = lo_ms + half * interval_ms - 1
+        right_lo = lo_ms + half * interval_ms
+        if left_hi < lo_ms or right_lo > hi_ms:
+            return self._empty_klines_df()
+        L = self._hl_bisect_fetch_chunk(fetch_chunk, lo_ms, left_hi, interval_ms, depth + 1)
+        R = self._hl_bisect_fetch_chunk(fetch_chunk, right_lo, hi_ms, interval_ms, depth + 1)
+        if L.empty and R.empty:
+            return L
+        if L.empty:
+            return R.reset_index(drop=True)
+        if R.empty:
+            return L.reset_index(drop=True)
+        out = pd.concat([L, R], ignore_index=True)
+        return out.drop_duplicates(subset=["open_time"]).sort_values("open_time").reset_index(drop=True)
+
     def _post_candles(self, payload: dict, *, timeout: float) -> requests.Response:
         # Tuple form: (connect_timeout, read_timeout). Slow DNS/TLS no longer
         # eats into the read budget — connect must succeed within 5s, then we
@@ -215,13 +255,13 @@ class HyperliquidHypeService(SOLBTCService):
                     close_ms = int(row.get("T", open_ms + interval_ms))
                     parsed.append(
                         {
-                            "open_time": pd.to_datetime(open_ms, unit="ms"),
+                            "open_time": pd.to_datetime(open_ms, unit="ms", utc=True),
                             "open": float(row.get("o", 0.0)),
                             "high": float(row.get("h", 0.0)),
                             "low": float(row.get("l", 0.0)),
                             "close": float(row.get("c", 0.0)),
                             "volume": float(row.get("v", 0.0)),
-                            "close_time": pd.to_datetime(close_ms, unit="ms"),
+                            "close_time": pd.to_datetime(close_ms, unit="ms", utc=True),
                         }
                     )
                 except Exception:
@@ -305,13 +345,13 @@ class HyperliquidHypeService(SOLBTCService):
                     close_ms = int(row.get("T", open_ms + interval_ms))
                     parsed.append(
                         {
-                            "open_time": pd.to_datetime(open_ms, unit="ms"),
+                            "open_time": pd.to_datetime(open_ms, unit="ms", utc=True),
                             "open": float(row.get("o", 0.0)),
                             "high": float(row.get("h", 0.0)),
                             "low": float(row.get("l", 0.0)),
                             "close": float(row.get("c", 0.0)),
                             "volume": float(row.get("v", 0.0)),
-                            "close_time": pd.to_datetime(close_ms, unit="ms"),
+                            "close_time": pd.to_datetime(close_ms, unit="ms", utc=True),
                         }
                     )
                 except Exception:
@@ -338,7 +378,12 @@ class HyperliquidHypeService(SOLBTCService):
         # Range-fetch failure paths intentionally return empty (no cache fallback for
         # backtests — they re-run, unlike live which can't replay a missed candle).
         try:
-            chunk_span_ms = max(interval_ms, _HL_MAX_CANDLES_PER_RANGE_REQUEST * interval_ms)
+            max_candles = (
+                _HL_MAX_CANDLES_1M_PER_CHUNK
+                if interval == "1m"
+                else _HL_MAX_CANDLES_PER_RANGE_REQUEST
+            )
+            chunk_span_ms = max(interval_ms, max_candles * interval_ms)
             all_parts: list[pd.DataFrame] = []
             chunk_start = start_ms
             max_steps = int((end_ms - start_ms) / interval_ms) + 50
@@ -346,9 +391,9 @@ class HyperliquidHypeService(SOLBTCService):
             while chunk_start <= end_ms and steps < max_steps:
                 steps += 1
                 chunk_end = min(chunk_start + chunk_span_ms - 1, end_ms)
-                df_chunk = _fetch_chunk(chunk_start, chunk_end)
-                if df_chunk.empty:
-                    df_chunk = _fetch_chunk(chunk_start, chunk_end)
+                df_chunk = self._hl_bisect_fetch_chunk(
+                    _fetch_chunk, chunk_start, chunk_end, interval_ms
+                )
                 if df_chunk.empty:
                     logger.warning(
                         "Hyperliquid HYPE range empty chunk %s/%s ms (%s); stopping pagination",

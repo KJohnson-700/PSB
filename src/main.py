@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Set
 import yaml
 
 # Add src and project root to path
@@ -816,6 +816,52 @@ class PolyBot:
         except Exception as e:
             logging.debug("startup narrators failed: %s", e)
 
+    def _wanted_clob_book_token_ids(self) -> List[str]:
+        """YES/NO CLOB token ids for all open positions (for WS L2 subscribe)."""
+        out: List[str] = []
+        seen: Set[str] = set()
+        for p in self.risk_manager.active_positions.values():
+            for tid in (
+                str(getattr(p, "token_id_yes", "") or "").strip(),
+                str(getattr(p, "token_id_no", "") or "").strip(),
+            ):
+                if tid and tid not in seen:
+                    seen.add(tid)
+                    out.append(tid)
+        return out
+
+    async def _sync_clob_ws_book_subscriptions(self, channel: str) -> None:
+        """Subscribe WS to books for open-position tokens; unsubscribe stale ids."""
+        ws = self.ws_client
+        if ws.ws is None:
+            return
+        want = set(self._wanted_clob_book_token_ids())
+        have = set(ws.subscriptions.get(channel, set()))
+        to_add = [t for t in want - have if t]
+        to_remove = [t for t in have - want if t]
+        if to_add:
+            try:
+                await ws.subscribe(channel, to_add)
+            except Exception as e:
+                logging.debug("clob ws subscribe: %s", e)
+        if to_remove:
+            try:
+                await ws.unsubscribe(channel, to_remove)
+            except Exception as e:
+                logging.debug("clob ws unsubscribe: %s", e)
+
+    async def _clob_ws_subscription_loop(self) -> None:
+        ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
+        channel = str(ws_cfg.get("book_channel", "market"))
+        interval = float(ws_cfg.get("subscribe_interval_sec", 15))
+        await asyncio.sleep(3)
+        while self.running:
+            try:
+                await self._sync_clob_ws_book_subscriptions(channel)
+            except Exception as e:
+                logging.debug("clob ws subscription loop: %s", e)
+            await asyncio.sleep(max(5.0, interval))
+
     async def start(self):
         """Start the trading bot"""
         self.running = True
@@ -829,6 +875,11 @@ class PolyBot:
         # Fire-and-forget: narrate the previous session into the new session dir.
         # Off the trading hot path; never awaited.
         asyncio.create_task(self._run_startup_narrators())
+
+        ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
+        if ws_cfg.get("enabled", True):
+            asyncio.create_task(self.ws_client.listen())
+            asyncio.create_task(self._clob_ws_subscription_loop())
 
         from src.ops_pulse import log_ops_startup
 

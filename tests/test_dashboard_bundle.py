@@ -44,7 +44,7 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "text/html" in (r.headers.get("content-type") or "")
     body = r.text
     assert "fetchAll" in body and "Command Center" in body
-    assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="ops-metric-deck-scroll"' in body
+    assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
 
     h = c.get("/health")
     assert h.status_code == 200
@@ -56,6 +56,17 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert snippet.status_code == 200
     assert "text/html" in (snippet.headers.get("content-type") or "")
     assert data.get("dashboard_ui_rev") in snippet.text
+
+
+def test_api_orderbook_returns_503_without_bot():
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from src.dashboard.server import app
+
+    c = TestClient(app)
+    r = c.get("/api/orderbook", params={"token_id": "12345678901234567890"})
+    assert r.status_code == 503
 
 
 def test_command_center_includes_ai_pipeline_digest_stub():

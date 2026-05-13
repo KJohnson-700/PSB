@@ -444,6 +444,15 @@ def main() -> int:
         )
         return 1
 
+    if args.symbol == "HYPE" and len(data.get("1m", [])) < 50:
+        logger.error(
+            "Not enough HYPE 1m bars for window settlement — Hyperliquid may publish no "
+            "HYPE candles for early calendar ranges (before listing / retention). Try "
+            "recent dates where HL candleSnapshot returns data, or refresh OHLCV cache "
+            "after a successful shorter-range pull."
+        )
+        return 1
+
     total_bars = sum(data_size.values())
     print(f"  Total bars loaded: {total_bars:,}  "
           f"({' | '.join(f'{iv}:{n:,}' for iv, n in data_size.items())})\n")

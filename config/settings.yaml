@@ -23,6 +23,12 @@ polymarket:
   # Bounded fallback for named HYPE/Hyperliquid event slugs not covered by the
   # normal up/down fetch. This no longer crawls the full active event set.
   fetch_hype_alt_markets: true
+  # Extra 30m discovery: Gamma often has no {asset}-updown-30m-{unix} markets; also try compact
+  # ET range slugs (bitcoin-up-or-down-may-13-430am-500am-et) matching the HYPE alt slug family.
+  fetch_updown_30m_human_compact_slugs: true
+  # If true, markets from the *-updown-15m-* slug responses with ~30m window_minutes (title)
+  # are merged into the updown_30m list (Gamma often has no *-updown-30m-* listings).
+  updown_30m_merge_from_15m_slug_batch: true
   fetch_weather_markets: false
   # Gamma REST: retries for transient timeouts / 5xx (slug and list fetches).
   gamma_http_max_retries: 3
@@ -52,6 +58,12 @@ trading:
   cycle_interval_sec: 60
   # Dry run mode (no real trades)
   dry_run: true
+  # CLOB WebSocket: L2 books for **open-position** YES/NO tokens. Dashboard `/api/orderbook` prefers this cache; falls back to public REST.
+  clob_ws:
+    enabled: true
+    book_channel: market
+    subscribe_interval_sec: 15
+    asset_ids_json_key: assets_ids
   # Position sizing (USD per trade). Polymarket: BUY=$, SELL=shares; strategies always compute $.
   # Target band ~$10–$15: Kelly is clamped here; exposure tier caps narrow the band.
   # Still capped by max_exposure_per_trade (% of bankroll) inside PositionSizer.
@@ -193,12 +205,12 @@ strategies:
     # clear this higher edge threshold within the TTL window to override it.
     ai_hold_veto_ttl_sec: 300       # 5 minutes — one full 5m candle window
     min_edge_5m_ai_override: 0.10   # 2x normal min_edge_5m — strong conviction needed to override AI HOLD
-    # Preferred AI-decision timing after some intra-window data has formed.
+    # Preferred minutes-left band for marginal up/down tie-break timing (not an AI gate).
     # Values are minutes remaining until resolution.
-    ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 0.5
-    ai_entry_window_5m_max: 5.0
+    entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.30    # 2026-05-07: calibrated so edge×kf×br lands in tier band — preserves edge differentiation
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
@@ -332,10 +344,10 @@ strategies:
     oracle_max_basis_bps: 10.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 0.5
-    ai_entry_window_5m_max: 5.0
+    entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; SOL
     entry_price_min: 0.42         # widened 2026-05: sideways tape often sits 0.50–0.57 vs old 0.46–0.54 band
     entry_price_max: 0.58
@@ -401,7 +413,7 @@ strategies:
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
     # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
     entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
-    entry_window_15m_max: 18.0    # widened from 16.0 (2026-05-06)
+    entry_window_15m_max: 23.0    # 2026-05-13: 18→23 (ops RCA) — listings often sit well above tight BTC-style caps; ramp still guards thin edge
     # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
@@ -478,10 +490,10 @@ strategies:
     oracle_max_age_sec: 180
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 0.5
-    ai_entry_window_5m_max: 5.0
+    entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; ETH
     calibration_size_multiplier_5m: 0.40  # keep ETH 5m active for calibration, but below normal risk until sample matures
     entry_price_min: 0.42
@@ -610,12 +622,14 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 12.0
+    # Chainlink updatedAt can lag well beyond oracle_max_age_sec while HL spot still tracks price.
+    oracle_stale_basis_relax_max_bps: 45.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
-    ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 0.5
-    ai_entry_window_5m_max: 5.0
+    entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
+    entry_timing_window_15m_max: 25.0  # 2026-05-13: align with widened entry_window_15m_max — avoid timing_window_closed_marginal_updown
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.24    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; HYPE
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -631,7 +645,7 @@ strategies:
     look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
+    entry_window_15m_max: 27.0    # 2026-05-13: 16→27 — HYPE Polymarket 15m windows often list with high mins_left vs BTC/SOL-style caps (ops RCA)
     entry_window_5m_min: 0.0
     entry_window_5m_max: 4.5
     entry_window_auto_align: true
@@ -696,15 +710,15 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
-    ai_entry_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    ai_entry_window_15m_max: 15.0
-    ai_entry_window_5m_min: 0.5
-    ai_entry_window_5m_max: 5.0
+    entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27    # 2026-05-07: calibrated so edge×kf×br stays inside tier band; XRP
     calibration_size_multiplier_5m: 0.30  # keep XRP 5m diagnostic only until it has a positive live cohort
     entry_price_min: 0.42
     entry_price_max: 0.58
-    entry_price_max_15m_buy_yes: 0.55  # Candidate C: tighten rich YES entries only on 15m BUY_YES
+    entry_price_max_15m_yes_side: 0.55  # 15m up/down: cap rich YES entries (legacy key entry_price_max_15m_buy_yes still read)
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
@@ -1020,7 +1034,7 @@ backtest:
   min_edge_xrp_15m:  0.09   # matches strategies.xrp_macro.min_edge (raised 2026-04-24)
   min_edge_xrp_5m:   0.085  # matches strategies.xrp_macro.min_edge_5m (raised 2026-05-08)
   min_edge_hype_15m: 0.09   # matches strategies.hype_macro.min_edge
-  min_edge_hype_5m:  0.09   # matches strategies.hype_macro.min_edge_5m
+  min_edge_hype_5m:  0.07   # matches strategies.hype_macro.min_edge_5m (was 0.09; live floor is 0.07)
 
 # ============================================
 # LEARNING LOOP (journal → stats → proposals; never auto-edits YAML)

@@ -98,6 +98,26 @@ _KRAKEN_INTERVALS: Dict[str, int] = {
 }
 
 
+def _synthesize_hype_1m_from_5m(df5: pd.DataFrame) -> pd.DataFrame:
+    """Build a 1m UTC grid by forward-filling 5m OHLC (HL often omits long-history 1m)."""
+    if df5.empty:
+        return df5
+    df = df5.sort_values("open_time").copy()
+    for col in ("open_time", "close_time"):
+        if df[col].dt.tz is None:
+            df[col] = df[col].dt.tz_localize("UTC")
+        else:
+            df[col] = df[col].dt.tz_convert("UTC")
+    df = df.set_index("open_time")
+    df1 = df[["open", "high", "low", "close", "volume"]].resample("1min").ffill()
+    df1 = df1.dropna(subset=["close"])
+    df1 = df1.reset_index()
+    df1["close_time"] = df1["open_time"] + pd.Timedelta(minutes=1) - pd.Timedelta(milliseconds=1)
+    return df1[
+        ["open_time", "close_time", "open", "high", "low", "close", "volume"]
+    ].reset_index(drop=True)
+
+
 class OHLCVLoader:
     """Downloads and disk-caches historical OHLCV from Binance (no auth required).
 
@@ -363,10 +383,20 @@ class OHLCVLoader:
             logger.info(f"HYPE not on Binance — fetching via Hyperliquid for {symbol}/{interval}")
             svc = _get_hyperliquid_service()
             df = svc.fetch_klines_range(interval=interval, start_date=start_date, end_date=end_date)
+            if df.empty and interval == "1m":
+                logger.warning(
+                    "HYPE 1m empty from Hyperliquid (common outside recent 1m retention); "
+                    "synthesizing 1m from 5m OHLC for backtest settlement"
+                )
+                df5 = self.load(symbol, "5m", start_date, end_date)
+                df = _synthesize_hype_1m_from_5m(df5)
             if not df.empty:
-                # Hyperliquid returns tz-naive; localize to UTC for consistent comparisons
-                df["open_time"] = df["open_time"].dt.tz_localize("UTC")
-                df["close_time"] = df["close_time"].dt.tz_localize("UTC")
+                # HL snapshots use UTC; tolerate naive or aware incoming frames.
+                for col in ("open_time", "close_time"):
+                    if df[col].dt.tz is None:
+                        df[col] = df[col].dt.tz_localize("UTC")
+                    else:
+                        df[col] = df[col].dt.tz_convert("UTC")
                 self._write_cache(symbol, interval, df)
                 mask = (df["open_time"] >= s_dt) & (df["open_time"] <= e_dt)
                 return df[mask].reset_index(drop=True)

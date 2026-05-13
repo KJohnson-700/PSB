@@ -197,6 +197,18 @@ def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
     return diff
 
 
+def _dedupe_markets_by_id(markets: List[Market]) -> List[Market]:
+    seen: set[str] = set()
+    out: List[Market] = []
+    for m in markets:
+        mid = (m.id or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(m)
+    return out
+
+
 def is_crypto_updown_market(market: Market) -> bool:
     """True for crypto up/down candle markets (bitcoin/sol_macro/eth_macro), not price-threshold markets."""
     slug = (market.slug or "").strip()
@@ -549,11 +561,25 @@ class MarketScanner:
                 results.setdefault(name, [])
             pool.shutdown(wait=not timed_out, cancel_futures=True)
 
+        up_pair = results.get("updown", ([], []))
+        if isinstance(up_pair, tuple) and len(up_pair) == 2:
+            updown_15m, updown_30m_carry = up_pair
+        else:
+            updown_15m = up_pair if isinstance(up_pair, list) else []
+            updown_30m_carry = []
+
+        pm = self.config.get("polymarket", {}) or {}
+        if not bool(pm.get("updown_30m_merge_from_15m_slug_batch", True)):
+            updown_30m_carry = []
+
+        up30_slug = results.get("updown_30m", []) or []
+        up30_merged = _dedupe_markets_by_id(list(up30_slug) + list(updown_30m_carry))
+
         return (
             results.get("gamma", []),
-            results.get("updown", []),
+            updown_15m,
             results.get("updown_5m", []),
-            results.get("updown_30m", []),
+            up30_merged,
             results.get("hype_alt", []),
             weather_snapshot,
             look_ahead_15m,
@@ -1028,6 +1054,47 @@ class MarketScanner:
         return slugs
 
     @staticmethod
+    def _compact_updown_range_time_et(when_et: datetime) -> str:
+        """Build a Polymarket-style time token like ``430am`` / ``1030pm`` for *-up-or-down-* slugs."""
+        h = when_et.hour
+        is_pm = h >= 12
+        h12 = h % 12 or 12
+        return f"{h12}{when_et.minute:02d}{'pm' if is_pm else 'am'}"
+
+    @classmethod
+    def _iter_updown_30m_human_compact_slugs(
+        cls, *, look_ahead: int, now_utc: Optional[datetime] = None
+    ) -> List[str]:
+        """Human compact ET range slugs for 30m windows (no year segment).
+
+        Gamma often returns ``[]`` for ``{asset}-updown-30m-{unix}``; Polymarket also lists
+        short-window crypto under ``{asset}-up-or-down-{month}-{day}-{t1}-{t2}-et`` (see
+        ``tests/test_hype_integration.py``). These are merged into the 30m fetch path so
+        ``updown_30m`` can hydrate when that family is live.
+        """
+        ref = now_utc or datetime.now(timezone.utc)
+        now_et = ref.astimezone(_ET)
+        t = now_et.replace(second=0, microsecond=0)
+        minute_floor = (t.minute // 30) * 30
+        slot0 = t.replace(minute=minute_floor)
+        assets = ("bitcoin", "solana", "ethereum", "xrp", "hyperliquid")
+        out: List[str] = []
+        seen: set[str] = set()
+        for offset in range(0, max(0, int(look_ahead)) + 1):
+            start = slot0 + timedelta(minutes=30 * offset)
+            end = start + timedelta(minutes=30)
+            month = start.strftime("%B").lower()
+            day = start.day
+            a = cls._compact_updown_range_time_et(start)
+            b = cls._compact_updown_range_time_et(end)
+            for asset_w in assets:
+                slug = f"{asset_w}-up-or-down-{month}-{day}-{a}-{b}-et"
+                if slug not in seen:
+                    seen.add(slug)
+                    out.append(slug)
+        return out
+
+    @staticmethod
     def _parse_gamma_event_market(gm: Dict[str, Any], slug: str) -> Optional[Market]:
         try:
             outcomes = _coerce_json_list(gm.get("outcomePrices", "[]"))
@@ -1166,30 +1233,56 @@ class MarketScanner:
         markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
         return markets
 
-    def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:
-        """Fetch current + upcoming 15-minute crypto Up/Down markets.
+    def fetch_updown_markets(self, look_ahead: int = 8) -> Tuple[List[Market], List[Market]]:
+        """Fetch crypto Up/Down markets from the ``*-updown-15m-{unix}`` slug family.
 
         Args:
             look_ahead: number of future 15-min windows to fetch (default 8 ≈ 2 hours ahead)
 
         Returns:
-            List of Market objects for tradeable updown windows.
+            ``(fifteen_bucket, thirty_minute_carry)`` — strict 15m windows (10–20 min inferred),
+            plus markets from the **same** slug responses whose title implies ~30 minutes
+            (26–34 min). Gamma often has **no** ``*-updown-30m-*`` listings; those ~30m rows
+            used to be dropped entirely by the 15m-only filter.
         """
-        markets = self._fetch_event_slug_markets(
+        raw = self._fetch_event_slug_markets(
             self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
             timeout_sec=8,
             stats_key="updown_15m",
         )
-        rejected = [m for m in markets if m.window_minutes and not (10 <= m.window_minutes <= 20)]
-        markets = [m for m in markets if m.window_minutes and 10 <= m.window_minutes <= 20]
-        if rejected:
+        fifteen: List[Market] = []
+        carry_30: List[Market] = []
+        skipped_other: List[Market] = []
+        for m in raw:
+            wm = m.window_minutes
+            if wm is None:
+                if "updown-15m" in (m.slug or "").lower():
+                    fifteen.append(m)
+                else:
+                    skipped_other.append(m)
+                continue
+            if 10 <= wm <= 20:
+                fifteen.append(m)
+            elif 26 <= wm <= 34:
+                carry_30.append(m)
+            else:
+                skipped_other.append(m)
+        if skipped_other:
+            durs = sorted(
+                {int(x.window_minutes) for x in skipped_other if x.window_minutes is not None}
+            )
             logger.info(
-                "Skipped %d non-15m updown markets from 15m bucket (durations=%s)",
-                len(rejected),
-                sorted({m.window_minutes for m in rejected}),
+                "Skipped %d updown rows from 15m slug batch (window_minutes not in 15m or ~30m carry bands; durations=%s)",
+                len(skipped_other),
+                durs,
+            )
+        if carry_30:
+            logger.info(
+                "15m slug batch: %d market(s) with ~30m window_minutes → merged into updown_30m path",
+                len(carry_30),
             )
 
-        if markets:
+        if fifteen:
             def _is_eth_mkt(m: Market) -> bool:
                 q = m.question.lower()
                 return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
@@ -1199,14 +1292,14 @@ class MarketScanner:
                 return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
 
             logger.info(
-                f"Fetched {len(markets)} 15m updown markets "
-                f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
-                f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
-                f"ETH: {sum(1 for m in markets if _is_eth_mkt(m))}, "
-                f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
-                f"HYPE: {sum(1 for m in markets if _is_hype_mkt(m))})"
+                f"Fetched {len(fifteen)} 15m updown markets "
+                f"(BTC: {sum(1 for m in fifteen if 'bitcoin' in m.question.lower())}, "
+                f"SOL: {sum(1 for m in fifteen if 'solana' in m.question.lower())}, "
+                f"ETH: {sum(1 for m in fifteen if _is_eth_mkt(m))}, "
+                f"XRP: {sum(1 for m in fifteen if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
+                f"HYPE: {sum(1 for m in fifteen if _is_hype_mkt(m))})"
             )
-        return markets
+        return fifteen, carry_30
 
     def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
         """Fetch current + upcoming 5-minute crypto Up/Down markets.
@@ -1252,14 +1345,33 @@ class MarketScanner:
         return markets
 
     def fetch_updown_30m_markets(self, look_ahead: int = 4) -> List[Market]:
-        """Fetch current + upcoming 30-minute crypto Up/Down markets."""
+        """Fetch current + upcoming 30-minute crypto Up/Down markets.
+
+        Discovery uses explicit ``*-updown-30m-{unix}`` (and optional compact ET slugs).
+        Do **not** infer 30m from bulk Gamma slug substring ``"30"`` — ``*-updown-5m-*``
+        timestamps often contain ``30`` in the epoch digits (false positives). See
+        ``docs/GAMMA_UPDOWN_30M_DISCOVERY.md``.
+        """
+        pm = self.config.get("polymarket", {}) or {}
+        ts_slugs = self._iter_updown_event_slugs(step_minutes=30, look_ahead=look_ahead)
+        extra: List[str] = []
+        if bool(pm.get("fetch_updown_30m_human_compact_slugs", True)):
+            extra = self._iter_updown_30m_human_compact_slugs(look_ahead=look_ahead)
+        ordered: List[str] = []
+        seen_slug: set[str] = set()
+        for s in ts_slugs + extra:
+            if s not in seen_slug:
+                seen_slug.add(s)
+                ordered.append(s)
         markets = self._fetch_event_slug_markets(
-            self._iter_updown_event_slugs(step_minutes=30, look_ahead=look_ahead),
+            ordered,
             timeout_sec=8,
             stats_key="updown_30m",
         )
-        rejected = [m for m in markets if m.window_minutes and not (23 <= m.window_minutes <= 45)]
-        markets = [m for m in markets if m.window_minutes and 23 <= m.window_minutes <= 45]
+        # ~30m candles: allow mild inference drift vs strict 23–45.
+        lo, hi = 20, 52
+        rejected = [m for m in markets if m.window_minutes and not (lo <= m.window_minutes <= hi)]
+        markets = [m for m in markets if m.window_minutes and lo <= m.window_minutes <= hi]
         if rejected:
             logger.info(
                 "Skipped %d non-30m updown markets from 30m bucket (durations=%s)",

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from src.market.scanner import MarketScanner
+from src.market.scanner import Market, MarketScanner
 
 
 def _config() -> dict:
@@ -15,6 +15,24 @@ def _config() -> dict:
             "hype_macro": {"enabled": True},
         },
     }
+
+
+def test_iter_updown_30m_human_compact_slugs_shape():
+    ref = datetime(2026, 5, 13, 9, 44, tzinfo=timezone.utc)
+    slugs = MarketScanner._iter_updown_30m_human_compact_slugs(look_ahead=0, now_utc=ref)
+    assert len(slugs) == 5
+    assert "bitcoin-up-or-down-may-13-530am-600am-et" in slugs
+    assert "hyperliquid-up-or-down-may-13-530am-600am-et" in slugs
+
+
+def test_compact_updown_range_time_et_tokens():
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    t1 = datetime(2026, 4, 20, 4, 15, tzinfo=et)
+    t2 = datetime(2026, 4, 20, 4, 30, tzinfo=et)
+    assert MarketScanner._compact_updown_range_time_et(t1) == "415am"
+    assert MarketScanner._compact_updown_range_time_et(t2) == "430am"
 
 
 def test_parse_gamma_event_market_accepts_array_fields():
@@ -206,3 +224,61 @@ def test_updown_slug_falls_through_to_events_when_markets_empty(monkeypatch):
     assert len(markets) == 1
     assert markets[0].id == "from-event"
     assert closed == ["markets", "events"]
+
+
+def test_fetch_updown_markets_splits_fifteen_and_thirty_carry(monkeypatch):
+    scanner = MarketScanner(_config())
+    end = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    base = dict(
+        description="",
+        volume=0.0,
+        liquidity=0.0,
+        yes_price=0.5,
+        no_price=0.5,
+        spread=0.02,
+        end_date=end,
+        token_id_yes="y",
+        token_id_no="n",
+        group_item_title="",
+    )
+    raw = [
+        Market(id="m15", question="Bitcoin 15m", slug="btc-updown-15m-1", window_minutes=12, **base),
+        Market(id="m30", question="Bitcoin 30m window", slug="btc-updown-15m-2", window_minutes=30, **base),
+        Market(id="m60", question="Long", slug="btc-updown-15m-3", window_minutes=60, **base),
+        Market(id="mnone_bad", question="No wm", slug="foo-bar", window_minutes=None, **base),
+        Market(id="mnone_15slug", question="No wm 15 slug", slug="sol-updown-15m-9", window_minutes=None, **base),
+    ]
+
+    def fake_fetch(slugs, *, timeout_sec=8, limit=None, stats_key=None):  # noqa: ARG001
+        return list(raw)
+
+    monkeypatch.setattr(scanner, "_fetch_event_slug_markets", fake_fetch)
+    fifteen, carry = scanner.fetch_updown_markets(look_ahead=1)
+    assert {m.id for m in fifteen} == {"m15", "mnone_15slug"}
+    assert {m.id for m in carry} == {"m30"}
+    assert "m60" not in {m.id for m in fifteen} | {m.id for m in carry}
+    assert "mnone_bad" not in {m.id for m in fifteen} | {m.id for m in carry}
+
+
+def test_dedupe_markets_by_id():
+    from src.market.scanner import _dedupe_markets_by_id
+
+    end = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    m = Market(
+        id="x",
+        question="q",
+        description="",
+        volume=0.0,
+        liquidity=0.0,
+        yes_price=0.5,
+        no_price=0.5,
+        spread=0.02,
+        end_date=end,
+        token_id_yes="y",
+        token_id_no="n",
+        group_item_title="",
+        slug="s",
+        window_minutes=15,
+    )
+    out = _dedupe_markets_by_id([m, m])
+    assert len(out) == 1 and out[0].id == "x"

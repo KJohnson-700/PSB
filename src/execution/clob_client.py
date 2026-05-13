@@ -91,6 +91,8 @@ class CLOBClient:
         self.pending_orders: Dict[str, Order] = {}
         self.order_history: List[Order] = []
         self._max_order_history = 1000
+        # Level-0 client for public `get_order_book` when no signer/trading keys set.
+        self._readonly_py_client: Optional[Any] = None
 
     def set_credentials(
         self,
@@ -270,6 +272,49 @@ class CLOBClient:
         except Exception as e:
             logger.warning(f"[can_sell_token] check failed for {token_id[:20]} — treating as unsellable: {e}")
             return False
+
+    def _py_client_for_public_reads(self):
+        """Return authenticated client if present, else a level-0 host-only client."""
+        if self.client:
+            return self.client
+        if PyClobClient is None:
+            return None
+        if self._readonly_py_client is None:
+            self._readonly_py_client = PyClobClient(
+                host=self.api_endpoint,
+                chain_id=self.chain_id,
+            )
+        return self._readonly_py_client
+
+    async def fetch_order_book_snapshot(self, token_id: str) -> Optional[Dict[str, Any]]:
+        """Public CLOB GET order book (REST). Works without trading keys."""
+        pc = self._py_client_for_public_reads()
+        if not pc or not token_id:
+            return None
+        try:
+            loop = asyncio.get_event_loop()
+            summary = await loop.run_in_executor(
+                None, lambda: pc.get_order_book(token_id)
+            )
+            bids = [
+                {"price": float(o.price), "size": float(o.size)}
+                for o in (summary.bids or [])
+            ]
+            asks = [
+                {"price": float(o.price), "size": float(o.size)}
+                for o in (summary.asks or [])
+            ]
+            return {
+                "token_id": token_id,
+                "asset_id": getattr(summary, "asset_id", None),
+                "market": getattr(summary, "market", None),
+                "timestamp": getattr(summary, "timestamp", None),
+                "bids": bids,
+                "asks": asks,
+            }
+        except Exception as e:
+            logger.warning("[fetch_order_book_snapshot] %s", e)
+            return None
 
     async def get_positions(self) -> List[Position]:
         if not self.client:
