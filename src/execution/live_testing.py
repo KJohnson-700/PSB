@@ -23,6 +23,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
+from src.execution.updown_exit_shared import (
+    CRYPTO_UPDOWN_STRATEGIES,
+    adverse_for_updown_cents_time_stop,
+    cents_stop_for_entry_price,
+    effective_updown_stop_loss_pct,
+    parse_updown_exit_globals,
+    resolve_updown_exit_params,
+    scaled_exit_window_mins,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,19 +98,10 @@ class PositionExitManager:
         take_profit_pct: 0.15   # exit at +15% unrealized
         stop_loss_pct: 0.30     # exit at -30% unrealized
         max_hold_hours: 72      # exit after 72 hours
-    """
 
-    # Strategies whose positions resolve in minutes (5m/15m updown markets).
-    # Use updown-specific exits instead of the long-horizon generic hold rules.
-    _CRYPTO_UPDOWN_STRATEGIES = frozenset(
-        {
-            "bitcoin",
-            "sol_macro",
-            "eth_macro",
-            "hype_macro",
-            "xrp_macro",
-        }
-    )
+    Crypto up/down exit parameters are parsed via ``parse_updown_exit_globals`` so
+    the same keys apply in ``UpdownBacktestEngine`` (see ``updown_exit_shared``).
+    """
 
     def __init__(self, config: Dict[str, Any]):
         exit_cfg = config.get("trading", {}).get("exit_rules", {}) or {}
@@ -112,68 +113,23 @@ class PositionExitManager:
                 "PositionExitManager exit_rules missing %s; using settings.yaml fallbacks",
                 sorted(missing),
             )
-        self.take_profit_pct = exit_cfg.get("take_profit_pct", 0.15)
+        self._ude = parse_updown_exit_globals(exit_cfg)
+        self.take_profit_pct = self._ude.take_profit_pct
         self.stop_loss_pct = exit_cfg.get("stop_loss_pct", 0.30)
         self.max_hold_hours = exit_cfg.get("max_hold_hours", 72)
-        # Updown-specific exits: price-based stop near expiry
-        self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03))
-        self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0))
-        self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0))
-        self.updown_stop_loss_pct = float(exit_cfg.get("updown_stop_loss_pct", 0.20))
-        # Cap the cents-stop window at this fraction of hold-time-available-at-entry.
-        # Why: late entries (e.g. 3 min left) would otherwise put the cents stop in
-        # effect for the entire hold and cause the time stop to fire on benign noise.
-        # Fraction 0.5 → exit window ≤ half the runway; the rest of the hold is governed
-        # only by the % stop and TP. Set to 1.0 to disable scaling.
-        self.updown_exit_window_max_fraction = float(
-            exit_cfg.get("updown_exit_window_max_fraction", 0.5)
-        )
-        # #5: entry-price-conditional cents stop. Higher entry price = less room before
-        # YES → 0, so use a tighter cents threshold. Disabled if either bound is 0.
-        self.updown_stop_cents_high_entry = float(
-            exit_cfg.get("updown_stop_cents_high_entry", 0.02)
-        )
-        self.updown_high_entry_threshold = float(
-            exit_cfg.get("updown_high_entry_threshold", 0.60)
-        )
-        # #3: in-profit % stop tightening. When unrealized pnl_pct exceeds the trigger,
-        # the effective adverse % stop tightens to lock in gains. Set tighten_to ≥
-        # updown_stop_loss_pct or trigger ≤ 0 to disable.
-        self.updown_in_profit_stop_trigger_pct = float(
-            exit_cfg.get("updown_in_profit_stop_trigger_pct", 0.0)
-        )
-        self.updown_in_profit_stop_tighten_to_pct = float(
-            exit_cfg.get("updown_in_profit_stop_tighten_to_pct", 0.0)
-        )
-        raw_overrides = exit_cfg.get("updown_overrides") or {}
-        self.updown_overrides: Dict[str, Dict[str, float]] = {}
-        if isinstance(raw_overrides, dict):
-            for strategy, override in raw_overrides.items():
-                if not isinstance(override, dict):
-                    continue
-                self.updown_overrides[str(strategy)] = {
-                    "updown_stop_cents": float(override.get("updown_stop_cents", self.updown_stop_cents)),
-                    "updown_exit_window_mins": float(
-                        override.get("updown_exit_window_mins", self.updown_exit_window_mins)
-                    ),
-                    "updown_max_hold_mins": float(override.get("updown_max_hold_mins", self.updown_max_hold_mins)),
-                    "updown_exit_window_max_fraction": float(
-                        override.get(
-                            "updown_exit_window_max_fraction",
-                            self.updown_exit_window_max_fraction,
-                        )
-                    ),
-                }
+        self.updown_stop_cents = self._ude.updown_stop_cents
+        self.updown_exit_window_mins = self._ude.updown_exit_window_mins
+        self.updown_max_hold_mins = self._ude.updown_max_hold_mins
+        self.updown_stop_loss_pct = self._ude.updown_stop_loss_pct
+        self.updown_exit_window_max_fraction = self._ude.updown_exit_window_max_fraction
+        self.updown_stop_cents_high_entry = self._ude.updown_stop_cents_high_entry
+        self.updown_high_entry_threshold = self._ude.updown_high_entry_threshold
+        self.updown_in_profit_stop_trigger_pct = self._ude.updown_in_profit_stop_trigger_pct
+        self.updown_in_profit_stop_tighten_to_pct = self._ude.updown_in_profit_stop_tighten_to_pct
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
-        ov = self.updown_overrides.get(str(strategy_name), {})
-        return (
-            float(ov.get("updown_stop_cents", self.updown_stop_cents)),
-            float(ov.get("updown_exit_window_mins", self.updown_exit_window_mins)),
-            float(ov.get("updown_max_hold_mins", self.updown_max_hold_mins)),
-            float(ov.get("updown_exit_window_max_fraction", self.updown_exit_window_max_fraction)),
-        )
+        return resolve_updown_exit_params(self._ude, strategy_name)
 
     def check_exits(
         self,
@@ -252,7 +208,7 @@ class PositionExitManager:
             # Check exit conditions
             reason = None
             is_updown = (
-                strategy_name in self._CRYPTO_UPDOWN_STRATEGIES
+                strategy_name in CRYPTO_UPDOWN_STRATEGIES
                 and "up or down" in getattr(pos, "market_question", "").lower()
             )
 
@@ -264,23 +220,19 @@ class PositionExitManager:
                     up_exit_window_max_fraction,
                 ) = self._resolve_updown_exit_params(strategy_name)
 
-                # #5: tighter cents stop for high-entry-price positions (less room before YES → 0).
-                if (
-                    self.updown_high_entry_threshold > 0
-                    and self.updown_stop_cents_high_entry > 0
-                    and pos.entry_price >= self.updown_high_entry_threshold
-                ):
-                    up_stop_cents = self.updown_stop_cents_high_entry
+                up_stop_cents = cents_stop_for_entry_price(
+                    up_stop_cents,
+                    pos.entry_price,
+                    high_threshold=self.updown_high_entry_threshold,
+                    high_stop_cents=self.updown_stop_cents_high_entry,
+                )
 
-                # #3: in-profit % stop tightening — lock in gains once unrealized pnl
-                # crosses the trigger. Tighten only if it's actually tighter than the base.
-                effective_stop_loss_pct = self.updown_stop_loss_pct
-                if (
-                    self.updown_in_profit_stop_trigger_pct > 0
-                    and pnl_pct >= self.updown_in_profit_stop_trigger_pct
-                    and 0 < self.updown_in_profit_stop_tighten_to_pct < self.updown_stop_loss_pct
-                ):
-                    effective_stop_loss_pct = self.updown_in_profit_stop_tighten_to_pct
+                effective_stop_loss_pct = effective_updown_stop_loss_pct(
+                    self.updown_stop_loss_pct,
+                    pnl_pct,
+                    in_profit_trigger_pct=self.updown_in_profit_stop_trigger_pct,
+                    tighten_to_pct=self.updown_in_profit_stop_tighten_to_pct,
+                )
 
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
@@ -304,12 +256,8 @@ class PositionExitManager:
                             _end - datetime.now(timezone.utc)
                         ).total_seconds() / 60.0
 
-                    # Late-entry scaling: cap the cents-stop window so it can't exceed
-                    # a configured fraction of the time the market had remaining at entry.
-                    # Without this, a position opened with 3 min left would have the cents
-                    # stop active for its entire life and fire on benign noise.
                     effective_exit_window = up_exit_window_mins
-                    if pos.end_date is not None and up_exit_window_max_fraction < 1.0:
+                    if pos.end_date is not None:
                         _end_e = pos.end_date
                         if _end_e.tzinfo is None:
                             _end_e = _end_e.replace(tzinfo=timezone.utc)
@@ -317,20 +265,24 @@ class PositionExitManager:
                         if opened.tzinfo is None:
                             opened = opened.replace(tzinfo=timezone.utc)
                         mins_at_entry = (_end_e - opened).total_seconds() / 60.0
-                        if mins_at_entry > 0:
-                            cap = mins_at_entry * up_exit_window_max_fraction
-                            effective_exit_window = min(up_exit_window_mins, cap)
+                        effective_exit_window = scaled_exit_window_mins(
+                            up_exit_window_mins,
+                            up_exit_window_max_fraction,
+                            mins_at_entry,
+                        )
 
                     if mins_remaining is not None and mins_remaining < 0:
                         # Market already past expiry but still open — exit immediately.
                         reason = "updown_expired"
                     elif mins_remaining is not None and mins_remaining <= effective_exit_window:
-                        if entry_leg == "NO":
-                            adverse = current_no_price <= pos.entry_price - up_stop_cents
-                        elif pos.outcome == "NO":
-                            adverse = current_yes_price >= pos.entry_price + up_stop_cents
-                        else:
-                            adverse = current_yes_price <= pos.entry_price - up_stop_cents
+                        adverse = adverse_for_updown_cents_time_stop(
+                            entry_leg=entry_leg,
+                            outcome=pos.outcome,
+                            current_yes=current_yes_price,
+                            current_no=current_no_price,
+                            entry_price=pos.entry_price,
+                            up_stop_cents=up_stop_cents,
+                        )
                         if adverse:
                             reason = "updown_time_stop"
                     elif mins_remaining is None and hours_held >= up_max_hold_mins / 60.0:

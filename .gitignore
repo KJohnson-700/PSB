@@ -34,6 +34,7 @@ data/paper_trades_archive/
 data/live_scans/
 data/coach/
 data/backtest/reports/*.json
+data/backtest/polymarket_marks/*.parquet
 
 # IDE / local agents
 .cursor/

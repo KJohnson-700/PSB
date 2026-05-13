@@ -4,6 +4,19 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-13 — Backtest/live parity: shared updown exits, Polymarket YES marks, bundle runner, dashboard hooks
+
+- **What changed**
+  - **`src/execution/updown_exit_shared.py`, `src/execution/live_testing.py`, `src/backtest/updown_engine.py`:** Crypto up/down exit parameters now parse through one shared helper so live and backtest use the same take-profit, adverse-% stop, high-entry cents stop, scaled late-window stop, and in-profit tightening semantics.
+  - **`src/backtest/updown_polymarket_marks.py`, `config/settings.yaml`, `scripts/run_backtest_crypto.py`:** Added optional PolymarketData YES 1m mark replay for backtest exits (`backtest.polymarket_marks.enabled` / `--polymarket-marks`) with parquet cache under `data/backtest/polymarket_marks/`.
+  - **`scripts/run_crypto_backtest_bundle.py`, `src/dashboard/server.py`, `src/dashboard/index.html`:** Dashboard crypto backtests now support `ALL` bundle runs, propagate `--polymarket-marks` from config, and retry `/api/backtest/reports` refresh after job completion so new JSON files appear without manual reload.
+  - **`src/backtest/ohlcv_loader.py`:** HYPE backtest OHLCV prefers Binance USDM `HYPEUSDT` before Hyperliquid fallback.
+  - **Tests:** Added loader/cache coverage in `tests/test_updown_polymarket_slug.py`, shared-exit coverage in `tests/test_updown_exit_shared.py`, and integration coverage in `tests/test_updown_backtest_parity.py` proving Polymarket YES marks can override the synthetic proxy and that sparse marks still affect exits through `Series.asof()`.
+
+- **Why:** Recent review identified live/backtest drift in crypto up/down exits and weak test coverage around the optional Polymarket YES mark path. The dashboard also needed a first-class multi-symbol backtest flow.
+
+- **Verification:** `pytest tests/test_updown_backtest_parity.py tests/test_updown_exit_shared.py tests/test_updown_polymarket_slug.py tests/test_live_exit_overrides.py tests/test_dashboard_bundle.py tests/test_market_data_fallbacks.py -q` green locally.
+
 ## 2026-05-12 — Dashboard UX, ops digest lane order, HYPE klines pagination, updown replay guard
 
 - **What changed**

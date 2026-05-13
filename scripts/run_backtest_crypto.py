@@ -34,7 +34,8 @@ What it does NOT model
 ----------------------
   * Early-candle momentum bonuses (would require intra-window 1m look-ahead)
   * Real LLM calls — never used; this script is quant-only (live bot uses AIAgent only when ai.live_inferencing is true)
-  * Actual Polymarket YES prices (assumes 0.50; real prices are close to this)
+  * Actual Polymarket YES path during the window unless ``--polymarket-marks`` and
+    ``POLYMARKETDATA_API_KEY`` are set (see ``backtest.polymarket_marks`` in settings.yaml)
   * Live liquidity filter (applied in live strategy, not here)
 """
 import argparse
@@ -397,9 +398,16 @@ def main() -> int:
         action="store_true",
         help="Do not load Chainlink oracle history (avoids slow RPC backfills; basis filter off).",
     )
+    parser.add_argument(
+        "--polymarket-marks",
+        action="store_true",
+        help="Use PolymarketData 1m YES prices for exit replay (sets backtest.polymarket_marks.enabled; needs POLYMARKETDATA_API_KEY).",
+    )
     args = parser.parse_args()
 
     config = load_config()
+    if args.polymarket_marks:
+        config.setdefault("backtest", {}).setdefault("polymarket_marks", {})["enabled"] = True
     strat_key_for_corr = {"SOL": "sol_macro", "XRP": "xrp_macro", "HYPE": "hype_macro"}
 
     # -- 0. Warn loudly when no test split is requested --------------------
@@ -446,10 +454,9 @@ def main() -> int:
 
     if args.symbol == "HYPE" and len(data.get("1m", [])) < 50:
         logger.error(
-            "Not enough HYPE 1m bars for window settlement — Hyperliquid may publish no "
-            "HYPE candles for early calendar ranges (before listing / retention). Try "
-            "recent dates where HL candleSnapshot returns data, or refresh OHLCV cache "
-            "after a successful shorter-range pull."
+            "Not enough HYPE 1m bars for window settlement — try a range where Binance "
+            "HYPEUSDT futures or Hyperliquid publishes 1m (or rely on 5m-synth path). "
+            "Widen dates or refresh OHLCV cache."
         )
         return 1
 

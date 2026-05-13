@@ -2,6 +2,9 @@
 Historical OHLCV loader for crypto (BTC, SOL, ETH, XRP, HYPE) from Binance public API
 with Kraken fallback for symbols that Binance geo-blocks (e.g. XRP in certain regions).
 
+HYPE uses Binance **USDM perpetual** (HYPEUSDT) when available, then Hyperliquid
+candleSnapshot for gaps or pre-listing ranges.
+
 Downloads, chunks large date ranges, and caches results to Parquet so
 subsequent runs only fetch what's missing.  No API key required.
 
@@ -17,8 +20,8 @@ Usage
     xrp = loader.load_all("XRP", "2025-01-01", "2025-02-01")
     # xrp["1h"], xrp["15m"], xrp["5m"], xrp["1m"] — fetched from Kraken if Binance 451s
     hype = loader.load_all("HYPE", "2026-01-20", "2026-04-20")
-    # hype["1h"], hype["15m"], hype["5m"], hype["1m"] — fetched from Hyperliquid directly
-    # (HYPEUSDT is not listed on Binance, routed through HyperliquidHypeService)
+    # hype["1h"], hype["15m"], hype["5m"], hype["1m"] — Binance USDM perpetual HYPEUSDT first,
+    # then Hyperliquid candleSnapshot if futures returns no rows (pre-listing window, outage).
 """
 import logging
 import time
@@ -55,6 +58,7 @@ def _get_hyperliquid_service():
     return HyperliquidHypeService(**hl_map)
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_FUTURES_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines"
 KRAKEN_OHLC_URL = "https://api.kraken.com/0/public/OHLC"
 _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "backtest" / "ohlcv"
 
@@ -87,7 +91,8 @@ _KRAKEN_PAIR_MAP: Dict[str, str] = {
     "SOLUSDT":  "SOLUSD",
 }
 
-# Symbols not listed on Binance — routed to alternative sources
+# HYPE: Binance **USDM perpetual** (HYPEUSDT) is tried before Hyperliquid OHLCV snapshot.
+_HYPE_BINANCE_FUTURES_SYMBOL = "HYPEUSDT"
 _HYPERLIQUID_SYMBOLS = {"HYPE"}
 _BINANCE_FALLBACK_SYMBOLS = {"XRP"}
 
@@ -200,9 +205,16 @@ class OHLCVLoader:
     # ── Binance fetch ──────────────────────────────────────────────────────
 
     def _fetch_binance(
-        self, symbol: str, interval: str, start_ms: int, end_ms: int
+        self,
+        symbol: str,
+        interval: str,
+        start_ms: int,
+        end_ms: int,
+        *,
+        futures: bool = False,
     ) -> pd.DataFrame:
-        """Fetch OHLCV from Binance, chunking into 1000-bar requests."""
+        """Fetch OHLCV from Binance spot or USDM futures, chunking into 1000-bar requests."""
+        url = BINANCE_FUTURES_KLINES_URL if futures else BINANCE_KLINES_URL
         step_ms  = _INTERVAL_MS.get(interval, 60_000)
         all_rows = []
         cur_ms   = start_ms
@@ -213,7 +225,7 @@ class OHLCVLoader:
             for attempt in range(3):
                 try:
                     r = requests.get(
-                        BINANCE_KLINES_URL,
+                        url,
                         params={
                             "symbol":    symbol,
                             "interval":  interval,
@@ -228,7 +240,8 @@ class OHLCVLoader:
                     break
                 except Exception as exc:
                     if attempt == 2:
-                        logger.warning(f"Binance {symbol}/{interval} failed: {exc}")
+                        mkt = "futures" if futures else "spot"
+                        logger.warning(f"Binance {mkt} {symbol}/{interval} failed: {exc}")
                     else:
                         time.sleep(1.5)
 
@@ -240,7 +253,8 @@ class OHLCVLoader:
             time.sleep(0.08)   # ~12.5 req/s — well within 1200/min limit
 
         if not all_rows:
-            logger.warning(f"Binance returned no data for {symbol}/{interval}")
+            mkt = "futures" if futures else "spot"
+            logger.warning(f"Binance {mkt} returned no data for {symbol}/{interval}")
             return pd.DataFrame()
 
         df = pd.DataFrame(all_rows, columns=_OHLCV_COLS)
@@ -249,7 +263,8 @@ class OHLCVLoader:
         df["open_time"]  = pd.to_datetime(df["open_time"],  unit="ms", utc=True)
         df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
         df = df[["open_time", "close_time", "open", "high", "low", "close", "volume"]].copy()
-        logger.info(f"Binance: fetched {len(df)} {symbol}/{interval} bars")
+        mkt = "futures" if futures else "spot"
+        logger.info(f"Binance {mkt}: fetched {len(df)} {symbol}/{interval} bars")
         return df
 
     def _binance_blocked(self, symbol: str, interval: str, start_ms: int) -> bool:
@@ -362,8 +377,8 @@ class OHLCVLoader:
 
         Data source priority:
           1. Disk cache (Parquet)
-          2. Hyperliquid (HYPE only — not on Binance)
-          3. Binance public API
+          2. HYPE: Binance USDM perpetual (HYPEUSDT), then Hyperliquid snapshot
+          3. Binance spot public API (non-HYPE)
           4. Kraken public API (fallback if Binance returns 451 geo-block)
         """
         tz   = timezone.utc
@@ -378,20 +393,29 @@ class OHLCVLoader:
         if cached is not None:
             return cached
 
-        # HYPE is not on Binance — route through HyperliquidHypeService
+        # HYPE: Binance USDM perpetual first (stable long-history klines), then Hyperliquid.
         if symbol in _HYPERLIQUID_SYMBOLS:
-            logger.info(f"HYPE not on Binance — fetching via Hyperliquid for {symbol}/{interval}")
-            svc = _get_hyperliquid_service()
-            df = svc.fetch_klines_range(interval=interval, start_date=start_date, end_date=end_date)
+            df = self._fetch_binance(
+                _HYPE_BINANCE_FUTURES_SYMBOL, interval, s_ms, e_ms, futures=True
+            )
+            if df.empty:
+                logger.info(
+                    "HYPE: no Binance futures bars in range — fetching via Hyperliquid "
+                    f"for {symbol}/{interval}"
+                )
+                svc = _get_hyperliquid_service()
+                df = svc.fetch_klines_range(
+                    interval=interval, start_date=start_date, end_date=end_date
+                )
             if df.empty and interval == "1m":
                 logger.warning(
-                    "HYPE 1m empty from Hyperliquid (common outside recent 1m retention); "
+                    "HYPE 1m empty after Binance+HL (HL often omits long-history 1m); "
                     "synthesizing 1m from 5m OHLC for backtest settlement"
                 )
                 df5 = self.load(symbol, "5m", start_date, end_date)
                 df = _synthesize_hype_1m_from_5m(df5)
             if not df.empty:
-                # HL snapshots use UTC; tolerate naive or aware incoming frames.
+                # HL / Binance use UTC; tolerate naive or aware incoming frames.
                 for col in ("open_time", "close_time"):
                     if df[col].dt.tz is None:
                         df[col] = df[col].dt.tz_localize("UTC")
@@ -423,7 +447,7 @@ class OHLCVLoader:
         SOL  → 1m, 5m, 15m, 1h
         ETH  → 1m, 5m, 15m, 1h  (same HTF structure as SOL in UpdownBacktestEngine)
         XRP  → 1m, 5m, 15m, 1h  (fetched from Kraken if Binance geo-blocks XRPUSDT)
-        HYPE → 1m, 5m, 15m, 1h  (fetched from Hyperliquid — not on Binance)
+        HYPE → 1m, 5m, 15m, 1h  (Binance USDM HYPEUSDT, then Hyperliquid if needed)
         """
         if symbol == "BTC":
             intervals = ["1m", "5m", "15m", "4h"]

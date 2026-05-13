@@ -254,6 +254,103 @@ def test_updown_live_exit_proxy_can_take_profit_before_settlement():
     assert pnl > 0
 
 
+def test_updown_live_exit_proxy_prefers_polymarket_yes_marks_over_proxy():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0] * len(ts),
+        }
+    )
+    pm_yes = pd.Series(
+        [0.50, 0.80, 0.80, 0.80, 0.80],
+        index=ts,
+        dtype="float64",
+    )
+
+    pnl_pm, outcome_pm, exit_price_pm, _, _, exit_reason_pm = (
+        engine._settle_updown_with_live_exit_proxy(
+            df_1m=df,
+            window_open=ts[0],
+            window_close=ts[0] + pd.Timedelta(minutes=15),
+            action="BUY_YES",
+            entry_price=0.50,
+            size=50.0,
+            asset_open=100.0,
+            fill_price=0.50,
+            symbol="BTC",
+            window_minutes=15,
+            pm_yes=pm_yes,
+        )
+    )
+    pnl_proxy, outcome_proxy, exit_price_proxy, _, _, exit_reason_proxy = (
+        engine._settle_updown_with_live_exit_proxy(
+            df_1m=df,
+            window_open=ts[0],
+            window_close=ts[0] + pd.Timedelta(minutes=15),
+            action="BUY_YES",
+            entry_price=0.50,
+            size=50.0,
+            asset_open=100.0,
+            fill_price=0.50,
+            symbol="BTC",
+            window_minutes=15,
+            pm_yes=None,
+        )
+    )
+
+    assert exit_reason_pm == "take_profit"
+    assert outcome_pm == "WIN"
+    assert exit_price_pm > 0.50
+    assert pnl_pm > 0
+
+    assert exit_reason_proxy == "unsettled"
+    assert outcome_proxy == ""
+    assert exit_price_proxy == 0.0
+    assert pnl_proxy == 0.0
+
+
+def test_updown_live_exit_proxy_uses_asof_marks_for_missing_minutes():
+    cfg = _config()
+    cfg["trading"]["exit_rules"]["take_profit_pct"] = 0.90
+    cfg["trading"]["exit_rules"]["updown_stop_loss_pct"] = 0.80
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0] * len(ts),
+        }
+    )
+    pm_yes_gap = pd.Series(
+        [0.50, 0.44],
+        index=[ts[0], ts[3]],
+        dtype="float64",
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=5),
+        action="BUY_YES",
+        entry_price=0.50,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.50,
+        symbol="BTC",
+        window_minutes=5,
+        pm_yes=pm_yes_gap,
+    )
+
+    assert exit_reason == "updown_time_stop"
+    assert outcome == "LOSS"
+    assert exit_price < 0.50
+    assert pnl < 0
+
+
 def test_updown_live_exit_proxy_falls_back_to_settlement_without_time_stop():
     cfg = _config()
     cfg["trading"]["exit_rules"]["take_profit_pct"] = 0.90

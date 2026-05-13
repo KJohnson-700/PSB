@@ -8,6 +8,68 @@
 
 ---
 
+## 2026-05-13 — Up/down backtest parity: Polymarket-mark integration coverage
+
+**`tests/test_updown_backtest_parity.py`:** Added integration checks that ``UpdownBacktestEngine._settle_updown_with_live_exit_proxy`` prefers supplied Polymarket YES marks over the synthetic underlying proxy and that sparse minute marks still drive exit decisions via ``Series.asof`` near expiry.
+
+## 2026-05-13 — Polymarket marks tests: fetch + parquet cache behavior
+
+**`tests/test_updown_polymarket_slug.py`:** Covers `_yes_series_from_prices_df` (dedupe, sort, clip, empty/malformed), no API key (no fetch), cache hit (skips fetch), sparse cache → fetch, sparse fetch → no file, successful fetch → parquet write, corrupt cache → fetch, fetch exception → None. Mocks `PolymarketDataLoader` on `updown_polymarket_marks` module.
+
+## 2026-05-13 — eth_macro: ETH-primary gates + optional BTC full analysis
+
+**`config/settings.yaml`:** `eth_macro.neutral_macro_require_spike_or_lag: false`; `eth_macro.btc_1h_regime_gates.enabled: false`.
+
+**`src/strategies/eth_macro.py`:** Require only ETH `get_full_analysis` to start a scan; if BTC full analysis is missing, use neutral BTC HTF placeholder, skip BTC 15m/5m impulse hard-gates (ETH leg + correlation path), and avoid regime sizing/min_edge without `btc_ta`. NEUTRAL+BTC HTF fallback uses explicit `BULLISH`/`BEARISH` only (not `!= NEUTRAL`).
+
+**`tests/test_eth_macro.py`:** `test_eth_scan_eth_only_when_btc_full_analysis_unavailable`.
+
+## 2026-05-13 — HYPE OHLCV: Binance USDM first, Hyperliquid fallback; dash report refresh retries
+
+**`src/backtest/ohlcv_loader.py`:** For HYPE, try **Binance futures** ``HYPEUSDT`` klines (``fapi``) before Hyperliquid; same cache keys under ``data/backtest/ohlcv/HYPE_*.parquet``.
+
+**`src/dashboard/index.html`:** ``loadBacktestReports(retries, gapMs)`` — after crypto backtest job completes (including resume), **5** polls at **700ms** gap plus ``fetchAll()`` when the Backtest tab is active so new ``backtest_*.json`` files show on cards.
+
+**`src/analysis/sol_btc_service.py`:** Comment on HYPE oracle — Arbitrum Chainlink only in this repo; Pyth not integrated.
+
+## 2026-05-13 — Dashboard crypto backtest: ALL bundle + Polymarket marks from settings
+
+**`src/dashboard/server.py`:** ``POST /api/backtest/start`` accepts ``symbol: ALL`` (runs ``scripts/run_crypto_backtest_bundle.py``); optional ``start``, ``end``, ``parallel`` in JSON; when ``backtest.polymarket_marks.enabled`` in ``config/settings.yaml``, appends ``--polymarket-marks`` to single-symbol and bundle commands.
+
+**`scripts/run_crypto_backtest_bundle.py`:** ``--polymarket-marks`` forwarded to each child ``run_backtest_crypto.py``.
+
+**`src/dashboard/index.html`:** Crypto backtest dropdown adds **ALL {w}m (bundle)** rows; client sends ``symbol: ALL``.
+
+**`tests/test_dashboard_bundle.py`:** HTML guard + bundle start smoke test.
+
+## 2026-05-13 — Polymarket YES 1m marks for crypto up/down backtest (option A)
+
+**`src/backtest/updown_polymarket_marks.py`:** Unix slug parity with scanner (``{asset}-updown-{5m|15m|30m}-{UTC_aligned_epoch}``); PolymarketData 1m YES fetch + parquet cache under ``data/backtest/polymarket_marks/``; requires ``POLYMARKETDATA_API_KEY``.
+
+**`src/backtest/updown_engine.py`:** Per-window load; ``_settle_updown_with_live_exit_proxy`` uses ``Series.asof`` on PM YES when present, else underlying proxy.
+
+**`config/settings.yaml`:** ``backtest.polymarket_marks`` (default ``enabled: false``).
+
+**`scripts/run_backtest_crypto.py`:** ``--polymarket-marks`` flips config flag.
+
+**`.gitignore`:** ignore cached ``*.parquet`` for those marks.
+
+**`tests/test_updown_polymarket_slug.py`:** Slug alignment + disabled loader.
+
+## 2026-05-13 — Shared crypto up/down exit config + backtest proxy aligned to live rules
+
+**`src/execution/updown_exit_shared.py`:** Single parser for ``trading.exit_rules`` up/down fields (including ``updown_exit_window_max_fraction`` in overrides), ``CRYPTO_UPDOWN_STRATEGIES``, and pure helpers: scaled exit window, high-entry cents stop, in-profit % stop tighten, adverse time-stop branches (incl. short YES). Docstring states CLOB vs synthetic-mark limitation.
+
+**`src/execution/live_testing.py`:** ``PositionExitManager`` delegates to shared parser/helpers (behavior unchanged for existing tests).
+
+**`src/backtest/updown_engine.py`:** Loads same globals; ``_settle_updown_with_live_exit_proxy`` applies high-entry cents, in-profit % stop, scaled near-expiry window, and ``adverse_for_updown_cents_time_stop`` (long YES / long NO). Module docstring updated.
+
+**`tests/test_updown_exit_shared.py`:** Coverage for parser and helpers.
+
+## 2026-05-13 — Dashboard: Active Positions section starts collapsed
+
+**`index.html`:** **`positionsCollapsed`** default **true**; **`positions-body-wrap`** **`display:none`** and chevron **▶** on load. **`server.py`:** **`dashboard_ui_rev`:** **`2026-05-13-positions-section-default-collapsed`**.
+
 ## 2026-05-13 — Polymarket CLOB WebSocket URL + subscribe wire-up
 
 **`src/market/websocket.py`:** Connect to **`wss://ws-subscriptions-clob.polymarket.com/ws/market`** (bare **`/ws`** returns **404**). Initial payload **`{"type":"market","assets_ids":[...]}`**; add/remove uses **`operation` `subscribe` / `unsubscribe`**. Optional override **`trading.clob_ws.wss_url`**. On connect, clear in-memory subscription sets so reconnect resyncs. **`_clob_ws_cfg` / `_asset_ids_key`** helper.

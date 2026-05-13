@@ -119,7 +119,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         )
 
     def _eth_stf_bypass_when_macro_agrees(
-        self, btc_htf_bias: str, market_allowed_side: str
+        self, btc_htf_bias: Optional[str], market_allowed_side: str
     ) -> bool:
         """True when BULLISH+LONG or BEARISH+SHORT — STF BTC follow can still fail in grindy tape."""
         if not self.btc_follow_stf_bypass_when_macro_agrees:
@@ -363,13 +363,23 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         eth_ta = self.sol_service.get_full_analysis()
         btc_ta = self.btc_service.get_full_analysis()
-        if not eth_ta or not btc_ta:
-            logger.warning("ETH Macro strategy: BTC or ETH analysis unavailable")
+        if not eth_ta:
+            logger.warning("ETH Macro strategy: ETH analysis unavailable")
             self._record_eth_abort(
                 "analysis_unavailable",
                 {"markets_considered": len(eth_markets)},
             )
             return []
+
+        btc_full_ok = btc_ta is not None
+        if btc_ta:
+            btc_htf_bias = self._get_btc_htf_bias(btc_ta)
+        else:
+            btc_htf_bias = "NEUTRAL"
+            logger.warning(
+                "ETH Macro: BTC full analysis unavailable — continuing on ETH leg "
+                "(correlation/BTC klines from alt service may still inform calc_correlation)"
+            )
 
         conditions = self.conditions_from_ta(eth_ta)
         exp_tier, exp_multiplier, _exp_max_size, exp_reason = self.exposure_manager.get_exposure(conditions)
@@ -382,7 +392,6 @@ class ETHMacroStrategy(SolMacroStrategy):
             return []
 
         corr = eth_ta.correlation
-        btc_htf_bias = self._get_btc_htf_bias(btc_ta)
         _ovr = (self.config.get("btc_htf_bias_dry_run_override") or "").strip().upper()
         if _ovr in {"BULLISH", "BEARISH", "NEUTRAL"}:
             if self.full_config.get("trading", {}).get("dry_run", True):
@@ -397,7 +406,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     _ovr,
                 )
         btc_1h_regime = "BULL"
-        if self._btc_1h_regime_gates.get("enabled", False):
+        if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
             btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
             logger.info(
                 "ETH Macro BTC 1H regime: %s | min_edge×%.2f size×%.2f | spot=%.0f SMA20=%.0f",
@@ -422,7 +431,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 btc_htf_bias,
             )
             if alt_1h_trend == "BULLISH":
-                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
+                _short_override, _short_override_reason = self._buy_no_ltf_override(eth_ta)
                 if _short_override:
                     allowed_side = "SHORT"
                     logger.info(
@@ -458,7 +467,10 @@ class ETHMacroStrategy(SolMacroStrategy):
                         {"markets_considered": len(eth_markets)},
                     )
                     return []
-            elif btc_htf_bias != "NEUTRAL" and not self.neutral_macro_require_spike_or_lag:
+            elif (
+                btc_htf_bias in ("BULLISH", "BEARISH")
+                and not self.neutral_macro_require_spike_or_lag
+            ):
                 allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
                 logger.info(
                     "ETH Macro: ETH 1H NEUTRAL — BTC HTF fallback side %s",
@@ -476,7 +488,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 return []
 
         if (
-            self.btc_follow_1h_required
+            btc_ta
+            and self.btc_follow_1h_required
             and not skip_btc_follow_1h
             and not self._btc_follow_1h_ok(btc_ta, allowed_side)
         ):
@@ -496,15 +509,22 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         eth = eth_ta.sol
         eth_price = eth.current_price
-        btc_mom = btc_ta.candle_momentum
+        btc_mom = btc_ta.candle_momentum if btc_ta else CandleMomentum()
         mtt = eth_ta.multi_tf
 
-        logger.info(
-            f"ETH ${eth_price:,.2f} | BTC_HTF={btc_htf_bias} | BTC1H hist={btc_ta.macd_1h.histogram:+.2f} "
-            f"BTC15m={btc_ta.macd_15m.histogram:+.3f} BTC5m={btc_mom.m5_direction}({btc_mom.m5_move_pct:+.3f}%) "
-            f"| ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
-            f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
-        )
+        if btc_ta:
+            logger.info(
+                f"ETH ${eth_price:,.2f} | BTC_HTF={btc_htf_bias} | BTC1H hist={btc_ta.macd_1h.histogram:+.2f} "
+                f"BTC15m={btc_ta.macd_15m.histogram:+.3f} BTC5m={btc_mom.m5_direction}({btc_mom.m5_move_pct:+.3f}%) "
+                f"| ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
+                f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
+            )
+        else:
+            logger.info(
+                f"ETH ${eth_price:,.2f} | BTC_HTF=UNAVAILABLE | "
+                f"ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
+                f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
+            )
 
         signals: List[SolMacroSignal] = []
         ai_calls = 0
@@ -722,7 +742,10 @@ class ETHMacroStrategy(SolMacroStrategy):
                     btc_mom, market_allowed_side
                 )
                 _impulse_gate_ok = btc_impulse > 0
-                if (
+                if not btc_full_ok:
+                    _impulse_gate_ok = True
+                    btc_reasons.append("btc_full_analysis_unavailable_eth_leg_only")
+                elif (
                     self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side)
                     and not _impulse_gate_ok
                 ):
@@ -747,7 +770,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(eth_5m_adj) * 2.0))
                 reason_parts.extend(["UPDOWN_5m", *btc_reasons, *eth_reasons])
             else:
-                if not self._btc_follow_15m_impulse_ok(btc_ta, market_allowed_side):
+                if btc_full_ok and not self._btc_follow_15m_impulse_ok(
+                    btc_ta, market_allowed_side
+                ):
                     if self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side):
                         pass
                     elif (
@@ -799,7 +824,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     float(getattr(self, "hard_min_edge", 0.0) or 0.0),
                     _min_edge_buy_no,
                 )
-            if self._btc_1h_regime_gates.get("enabled", False):
+            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
             # Far from expiry → more time-stop risk; require extra min_edge.
@@ -851,7 +876,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
             _ai_override_bar = float(self.min_edge_5m_ai_override)
-            if self._btc_1h_regime_gates.get("enabled", False):
+            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 _ai_override_bar *= self._regime_min_edge_mult(btc_1h_regime)
             if _hold_age < self.ai_hold_veto_ttl_sec and edge < _ai_override_bar:
                 _bump_skip("ai_hold_veto")
@@ -867,6 +892,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and ai_calls < self.max_ai_calls_per_scan
             ):
                 _window = _updown_tf
+                if btc_ta:
+                    _btc_ai_block = (
+                        f"BTC 1H hist={btc_ta.macd_1h.histogram:+.2f} rising={btc_ta.macd_1h.histogram_rising}\n"
+                        f"BTC 15m hist={btc_ta.macd_15m.histogram:+.3f} cross={btc_ta.macd_15m.crossover}\n"
+                        f"BTC 5m={btc_mom.m5_direction} ({btc_mom.m5_move_pct:+.3f}%)\n"
+                    )
+                else:
+                    _btc_ai_block = (
+                        "BTC full analysis unavailable (ETH-only cycle).\n"
+                        f"BTC moves from correlation path: 5m={corr.btc_move_5m_pct:+.3f}% "
+                        f"15m={corr.btc_move_15m_pct:+.3f}%\n"
+                    )
                 ai_context = (
                     f"{market.description}\n\n"
                     f"=== ETH BTC-FOLLOW CONTEXT ({_window}) ===\n"
@@ -874,9 +911,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     f"BTC_HTF={btc_htf_bias} | side={market_allowed_side}({side_source}) | Quant edge={edge:.4f} "
                     f"(threshold={effective_min_edge:.4f})\n"
                     f"Minutes left={_mins_left:.1f}\n\n"
-                    f"BTC 1H hist={btc_ta.macd_1h.histogram:+.2f} rising={btc_ta.macd_1h.histogram_rising}\n"
-                    f"BTC 15m hist={btc_ta.macd_15m.histogram:+.3f} cross={btc_ta.macd_15m.crossover}\n"
-                    f"BTC 5m={btc_mom.m5_direction} ({btc_mom.m5_move_pct:+.3f}%)\n"
+                    f"{_btc_ai_block}"
                     f"ETH 15m hist={eth.macd_15m.histogram:+.3f} cross={eth.macd_15m.crossover}\n"
                     f"ETH 5m hist={eth.macd_5m.histogram:+.3f} cross={eth.macd_5m.crossover}\n"
                     f"ETH RSI={eth.rsi_14:.1f} | ETH 1H trend={mtt.h1_trend}\n"
@@ -1109,7 +1144,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, edge
             )
-            if self._btc_1h_regime_gates.get("enabled", False):
+            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
@@ -1154,6 +1189,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
             if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
                 reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
+            _btc_spot_for_signal = (
+                float(btc_ta.current_price)
+                if btc_ta
+                else float(getattr(corr, "btc_price", 0.0) or 0.0)
+            )
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
@@ -1168,7 +1208,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 direction=direction,
                 sol_threshold=None,
                 sol_current=round(eth_price, 2),
-                btc_current=round(btc_ta.current_price, 2),
+                btc_current=round(_btc_spot_for_signal, 2),
                 lag_magnitude=None,
                 ai_used=ai_used,
                 reason=" | ".join(reason_parts),

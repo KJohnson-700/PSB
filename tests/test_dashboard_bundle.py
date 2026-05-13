@@ -167,6 +167,12 @@ def test_dashboard_contains_operator_toggle_buttons():
     assert "Dead zones:" in html
 
 
+def test_dashboard_crypto_backtest_select_includes_all_bundle():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "ALL-" in html and "BTC,SOL,ETH,XRP,HYPE bundle" in html
+    assert "val.startsWith('ALL-')" in html
+
+
 def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
     from src.dashboard import server as dashboard_server
 
@@ -205,6 +211,41 @@ def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
     assert second[0]["status"] == "skipped"
     assert second[0]["reason"] == "startup_dedupe"
     assert started == ["SOL 5m crypto [auto-on-startup:test_session]"]
+
+
+def test_backtest_start_all_bundle_invokes_bundle_script(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    captured: list[list[str]] = []
+
+    def _fake_start(cmd_args, summary):
+        captured.append(list(cmd_args))
+        return {"status": "started", "job_id": "jb1", "pid": 999, "summary": summary}
+
+    monkeypatch.setattr(dashboard_server, "_start_backtest_job", _fake_start)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    cfg = tmp_path / "settings.yaml"
+    cfg.write_text(
+        "backtest:\n  polymarket_marks:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", cfg)
+
+    client = TestClient(dashboard_server.app)
+    r = client.post(
+        "/api/backtest/start",
+        json={"symbol": "ALL", "window": 15},
+        headers={"X-API-Key": "test-key"},
+    )
+    assert r.status_code == 200
+    assert r.json().get("status") == "started"
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert "run_crypto_backtest_bundle.py" in cmd[1]
+    assert "--window" in cmd and "15" in cmd
+    assert "--polymarket-marks" in cmd
 
 
 def test_dashboard_status_handles_bootstrap_shim(monkeypatch):

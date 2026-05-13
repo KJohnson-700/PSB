@@ -5,8 +5,9 @@ the live strategies.
 
 Architecture
 ────────────
-1.  Caller pre-fetches all required OHLCV via OHLCVLoader and passes the
-    dict to ``run()``.  No live API calls happen inside the engine.
+1.  Caller pre-fetches OHLCV via OHLCVLoader. Optional Polymarket YES 1m marks
+    (``backtest.polymarket_marks`` + ``POLYMARKETDATA_API_KEY``) are loaded per
+    window when enabled; otherwise only OHLCV is used.
 2.  Engine walks time in 15m (or 5m) steps over [start_date, end_date].
 3.  At each window-open timestamp T, OHLCV is sliced to data BEFORE T
     (strict no look-ahead).
@@ -20,8 +21,9 @@ Architecture
     data/entry_prices/updown_fills.jsonl (recorded by TradeJournal at live fills).
     Falls back to N(0.50, 0.06) clipped to [0.30, 0.70] when <20 recorded prices.
     Previous hardcoded 0.50 inflated WR by 15-21% vs live results.
-7.  Exit handling: approximate live crypto up/down near-expiry adverse-stop
-    behavior from 1m replay bars. Falls back to settlement when no stop fires.
+7.  Exit handling: optional **Polymarket YES 1m** marks (``backtest.polymarket_marks`` +
+    ``POLYMARKETDATA_API_KEY``) for exit replay; else shared exit rules on the
+    synthetic underlying proxy (see ``updown_exit_shared`` / ``updown_polymarket_marks``).
 8.  Ruin cap enforced: ``bankroll = max(0, bankroll + pnl)``.
 
 Signal fidelity
@@ -41,7 +43,7 @@ Checklist (from docs/BACKTEST.md)
 [x] Resolution settlement applied (actual OHLCV direction)
 [x] Universe pinned (exact date range + symbol logged in result)
 [x] Timestamp alignment: all slices use open_time < T (strict)
-[x] Exit strategy: approximate live up/down time-stop, else settlement
+[x] Exit strategy: Polymarket YES 1m (optional) or synthetic proxy + shared exit rules
 """
 import json
 import logging
@@ -60,6 +62,16 @@ from src.analysis.btc_price_service import (
     TrendSabreResult,
     CandleMomentum,
     AnchoredVolumeProfile,
+)
+from src.backtest.updown_polymarket_marks import try_load_yes_series_for_window
+from src.execution.updown_exit_shared import (
+    adverse_for_updown_cents_time_stop,
+    cents_stop_for_entry_price,
+    effective_updown_stop_loss_pct,
+    parse_updown_exit_globals,
+    resolve_updown_exit_params,
+    scaled_exit_window_mins,
+    symbol_to_strategy_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -304,28 +316,12 @@ class UpdownBacktestEngine:
         self.default_size  = trade_cfg.get("default_position_size", 10.0)
         self.max_size      = trade_cfg.get("max_position_size", 15.0)
         exit_cfg = trade_cfg.get("exit_rules", {})
-        self.take_profit_pct = float(exit_cfg.get("take_profit_pct", 0.15) or 0.15)
-        self.updown_stop_loss_pct = float(exit_cfg.get("updown_stop_loss_pct", 0.20) or 0.20)
-        self.updown_stop_cents = float(exit_cfg.get("updown_stop_cents", 0.03) or 0.03)
-        self.updown_exit_window_mins = float(exit_cfg.get("updown_exit_window_mins", 2.0) or 2.0)
-        self.updown_max_hold_mins = float(exit_cfg.get("updown_max_hold_mins", 20.0) or 20.0)
-        raw_updown_overrides = exit_cfg.get("updown_overrides") or {}
-        self._updown_exit_overrides: Dict[str, Dict[str, float]] = {}
-        if isinstance(raw_updown_overrides, dict):
-            for strategy_name, override in raw_updown_overrides.items():
-                if not isinstance(override, dict):
-                    continue
-                self._updown_exit_overrides[str(strategy_name)] = {
-                    "updown_stop_cents": float(
-                        override.get("updown_stop_cents", self.updown_stop_cents)
-                    ),
-                    "updown_exit_window_mins": float(
-                        override.get("updown_exit_window_mins", self.updown_exit_window_mins)
-                    ),
-                    "updown_max_hold_mins": float(
-                        override.get("updown_max_hold_mins", self.updown_max_hold_mins)
-                    ),
-                }
+        self._ude = parse_updown_exit_globals(exit_cfg)
+        self.take_profit_pct = self._ude.take_profit_pct
+        self.updown_stop_loss_pct = self._ude.updown_stop_loss_pct
+        self.updown_stop_cents = self._ude.updown_stop_cents
+        self.updown_exit_window_mins = self._ude.updown_exit_window_mins
+        self.updown_max_hold_mins = self._ude.updown_max_hold_mins
         exposure_cfg = config.get("exposure", {})
         self.exposure_min_trade_usd = float(exposure_cfg.get("min_trade_usd", 0.0) or 0.0)
         self.exposure_full_size = float(exposure_cfg.get("full_size", self.max_size) or self.max_size)
@@ -360,6 +356,13 @@ class UpdownBacktestEngine:
         # Load empirical fill-price distribution from live sessions.
         # Falls back to N(0.50, 0.06) when fewer than 20 recorded prices exist.
         self._fill_prices: Optional[np.ndarray] = self._load_fill_prices()
+
+        _pm = config.get("backtest", {}).get("polymarket_marks", {}) or {}
+        self._pm_marks_enabled = bool(_pm.get("enabled", False))
+        _repo_root = Path(__file__).resolve().parent.parent.parent
+        self._pm_marks_cache_root = _repo_root / str(
+            _pm.get("cache_dir", "data/backtest/polymarket_marks")
+        )
 
     # -- fill price distribution -----------------------------------------------
 
@@ -413,20 +416,8 @@ class UpdownBacktestEngine:
         raw = float(np.random.normal(0.50, 0.06))
         return float(np.clip(raw, 0.30, 0.70))
 
-    def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float]:
-        strategy_name = {
-            "BTC": "bitcoin",
-            "SOL": "sol_macro",
-            "ETH": "eth_macro",
-            "XRP": "xrp_macro",
-            "HYPE": "hype_macro",
-        }.get(symbol.upper(), "sol_macro")
-        ov = self._updown_exit_overrides.get(strategy_name, {})
-        return (
-            float(ov.get("updown_stop_cents", self.updown_stop_cents)),
-            float(ov.get("updown_exit_window_mins", self.updown_exit_window_mins)),
-            float(ov.get("updown_max_hold_mins", self.updown_max_hold_mins)),
-        )
+    def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float, float]:
+        return resolve_updown_exit_params(self._ude, symbol_to_strategy_name(symbol))
 
     @staticmethod
     def _proxy_yes_price_from_underlying(
@@ -461,8 +452,12 @@ class UpdownBacktestEngine:
         fill_price: float,
         symbol: str,
         window_minutes: int,
+        pm_yes: Optional[pd.Series] = None,
     ) -> Tuple[float, str, float, float, float, str]:
-        """Approximate live time-stop exits from 1m replay bars.
+        """Approximate live crypto up/down exits from 1m replay bars.
+
+        When ``pm_yes`` is set (PolymarketData 1m YES series), uses it for
+        mark-to-market; otherwise ``_proxy_yes_price_from_underlying``.
 
         Returns:
             pnl, outcome, exit_price_token, asset_open_px, asset_close_px, exit_reason
@@ -475,8 +470,22 @@ class UpdownBacktestEngine:
             return 0.0, "", 0.0, asset_open, asset_open, "unsettled"
 
         asset_close = float(w.iloc[-1]["close"])
-        up_stop_cents, up_exit_window_mins, _ = self._resolve_updown_exit_params(symbol)
-        entry_leg_price = fill_price
+        (
+            up_stop_cents_resolved,
+            up_exit_window_mins,
+            _max_hold,
+            up_exit_window_max_fraction,
+        ) = self._resolve_updown_exit_params(symbol)
+
+        up_stop_cents = cents_stop_for_entry_price(
+            up_stop_cents_resolved,
+            fill_price,
+            high_threshold=self._ude.updown_high_entry_threshold,
+            high_stop_cents=self._ude.updown_stop_cents_high_entry,
+        )
+
+        mins_at_entry = float(window_minutes)
+        entry_leg = "NO" if action == "BUY_NO" else "YES"
 
         for _, row in w.iterrows():
             current_asset = float(row["close"])
@@ -486,9 +495,28 @@ class UpdownBacktestEngine:
                 asset_current=current_asset,
                 window_minutes=window_minutes,
             )
+            if pm_yes is not None and len(pm_yes) > 0:
+                trow = pd.Timestamp(row["open_time"])
+                if trow.tzinfo is None:
+                    trow = trow.tz_localize("UTC")
+                else:
+                    trow = trow.tz_convert("UTC")
+                try:
+                    q = pm_yes.asof(trow)
+                except (KeyError, ValueError, TypeError):
+                    q = float("nan")
+                if q is not None and pd.notna(q):
+                    current_yes = float(max(0.01, min(0.99, float(q))))
             current_no = 1.0 - current_yes
             current_token = current_yes if action == "BUY_YES" else current_no
             pnl_pct = (current_token - fill_price) / fill_price if fill_price > 0 else 0.0
+
+            effective_sl = effective_updown_stop_loss_pct(
+                self._ude.updown_stop_loss_pct,
+                pnl_pct,
+                in_profit_trigger_pct=self._ude.updown_in_profit_stop_trigger_pct,
+                tighten_to_pct=self._ude.updown_in_profit_stop_tighten_to_pct,
+            )
 
             if pnl_pct >= self.take_profit_pct:
                 exit_fill, _ = self._simulate_fill(current_token, "SELL")
@@ -503,7 +531,7 @@ class UpdownBacktestEngine:
                     "take_profit",
                 )
 
-            if self.updown_stop_loss_pct > 0 and pnl_pct <= -self.updown_stop_loss_pct:
+            if effective_sl > 0 and pnl_pct <= -effective_sl:
                 exit_fill, _ = self._simulate_fill(current_token, "SELL")
                 exit_fill = max(0.01, min(0.99, exit_fill))
                 pnl = (exit_fill - fill_price) * size
@@ -516,14 +544,22 @@ class UpdownBacktestEngine:
                     "updown_stop_loss",
                 )
 
-            if mins_remaining <= up_exit_window_mins:
-                adverse = (
-                    current_yes <= entry_price - up_stop_cents
-                    if action == "BUY_YES"
-                    else current_no <= entry_leg_price - up_stop_cents
+            effective_window = scaled_exit_window_mins(
+                up_exit_window_mins,
+                up_exit_window_max_fraction,
+                mins_at_entry,
+            )
+            if mins_remaining <= effective_window:
+                adverse = adverse_for_updown_cents_time_stop(
+                    entry_leg=entry_leg,
+                    outcome="YES",
+                    current_yes=current_yes,
+                    current_no=current_no,
+                    entry_price=fill_price,
+                    up_stop_cents=up_stop_cents,
                 )
                 if adverse:
-                    exit_fill, exit_slip = self._simulate_fill(current_token, "SELL")
+                    exit_fill, _ = self._simulate_fill(current_token, "SELL")
                     exit_fill = max(0.01, min(0.99, exit_fill))
                     pnl = (exit_fill - fill_price) * size
                     return (
@@ -1948,6 +1984,14 @@ class UpdownBacktestEngine:
                 & (df_1m["open_time"] < window_close)
             ].copy()
             asset_open_px = float(window_df_1m.iloc[0]["open"]) if not window_df_1m.empty else 0.0
+            pm_yes = try_load_yes_series_for_window(
+                symbol=symbol,
+                window_open=window_open,
+                window_close=window_close,
+                window_minutes=window_minutes,
+                cache_root=self._pm_marks_cache_root,
+                enabled=self._pm_marks_enabled,
+            )
             pnl, outcome, exit_price, asset_open, asset_close, exit_reason = (
                 self._settle_updown_with_live_exit_proxy(
                     df_1m=df_1m,
@@ -1960,6 +2004,7 @@ class UpdownBacktestEngine:
                     fill_price=fill_price,
                     symbol=symbol,
                     window_minutes=window_minutes,
+                    pm_yes=pm_yes,
                 )
             )
             if not outcome:

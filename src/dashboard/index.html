@@ -873,9 +873,9 @@
         <div id="positions-section" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="togglePositions()">
                 <h3 style="margin-bottom:0;">Active Positions <span id="positions-count" class="badge badge-blue" style="margin-left:6px;font-size:0.7rem;">0</span></h3>
-                <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9660;</span>
+                <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9654;</span>
             </div>
-            <div id="positions-body-wrap" style="margin-top:6px;">
+            <div id="positions-body-wrap" style="margin-top:6px;display:none;">
                 <div class="pos-master-list-wrap">
                     <div class="pos-master" id="positions-master"></div>
                 </div>
@@ -2250,7 +2250,7 @@ function copyDashboardCmd(btn) {
 let currentScanData = null;
 let currentScanFilter = 'all';
 let currentJournalTab = 'positions';
-let positionsCollapsed = false;
+let positionsCollapsed = true;
 let lastStatusData = null;
 window._dashSessionId = null; // tracks active session; chart reset fires when this changes
 window._journalViewSessionId = null; // when set, journal API calls scope to this session id
@@ -3684,11 +3684,21 @@ async function stopLiveBot() {
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
 }
 
-async function loadBacktestReports() {
-    try {
-        const r = await fetch('/api/backtest/reports');
-        if (r.ok) updateBacktest(await r.json());
-    } catch(e) { console.error('Failed to load backtest reports:', e); }
+/** Fetch /api/backtest/reports and repaint cards. After subprocess exit, use retries+gap so new JSON is visible. */
+async function loadBacktestReports(retries, gapMs) {
+    const n = (retries == null || retries < 1) ? 1 : retries;
+    const gap = gapMs == null ? 0 : gapMs;
+    for (let attempt = 0; attempt < n; attempt++) {
+        if (attempt > 0 && gap > 0) {
+            await new Promise(function(resolve) { setTimeout(resolve, gap); });
+        }
+        try {
+            const r = await fetch('/api/backtest/reports');
+            if (r.ok) updateBacktest(await r.json());
+        } catch (e) {
+            console.error('Failed to load backtest reports:', e);
+        }
+    }
 }
 
 function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
@@ -3707,7 +3717,7 @@ function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
             const code = s.exit_code;
             const failed = Number.isFinite(code) && code !== 0;
             if (failed && statusEl) {
-                statusEl.textContent = `${label} failed (exit ${code}) — HYPE needs Hyperliquid OHLCV + cache; see output tail below or logs. No JSON report on failure.`;
+                statusEl.textContent = `${label} failed (exit ${code}) — check OHLCV/oracle cache, logs, or output tail below. No JSON report on failure.`;
                 statusEl.style.color = 'var(--red)';
             }
             if (onComplete) onComplete(!failed);
@@ -3727,8 +3737,13 @@ async function startCryptoBacktest() {
     const val = sel.value;
     if (!val) { alert('Select a crypto backtest first (BTC 15m, SOL 5m, etc.)'); return; }
     let symbol, window;
-    [symbol, window] = val.split('-');
-    window = parseInt(window, 10);
+    if (val.startsWith('ALL-')) {
+        symbol = 'ALL';
+        window = parseInt(val.slice(4), 10);
+    } else {
+        [symbol, window] = val.split('-');
+        window = parseInt(window, 10);
+    }
     const btn = document.getElementById('crypto-bt-run-btn');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
@@ -3759,9 +3774,9 @@ async function startCryptoBacktest() {
                     localStorage.removeItem('psb_pending_bt_job');
                     localStorage.removeItem('psb_pending_bt_label');
                 } catch (_) {}
-                loadBacktestReports();
+                loadBacktestReports(5, 700);
                 loadLivePerformance();
-            });
+                if (_currentMainView() === 'backtest') fetchAll();
         } else {
             status.textContent = `Backtest error: ${d.message || d.status}`;
             status.style.color = 'var(--red)';
@@ -3812,6 +3827,20 @@ function rebuildCryptoBacktestSelect(scope) {
             const o = document.createElement('option');
             o.value = sym + '-' + w;
             o.textContent = sym + ' ' + w + 'm  (' + sk + ')';
+            sel.appendChild(o);
+        }
+    }
+    if (windows.length) {
+        const sep = document.createElement('option');
+        sep.disabled = true;
+        sep.value = '';
+        sep.textContent = '— All symbols (same window) —';
+        sel.appendChild(sep);
+        for (let i = windows.length - 1; i >= 0; i--) {
+            const w = windows[i];
+            const o = document.createElement('option');
+            o.value = 'ALL-' + w;
+            o.textContent = 'ALL ' + w + 'm  (BTC,SOL,ETH,XRP,HYPE bundle)';
             sel.appendChild(o);
         }
     }
@@ -6152,10 +6181,9 @@ if (_currentMainView() === 'journal') {
             localStorage.removeItem('psb_pending_bt_job');
             localStorage.removeItem('psb_pending_bt_label');
         } catch (_) {}
-        loadBacktestReports();
+        loadBacktestReports(5, 700);
         loadLivePerformance();
-    });
-})();
+        if (_currentMainView() === 'backtest') fetchAll();
 
 window._dashIntervals = window._dashIntervals || [];
 function _registerInterval(fn, ms) {

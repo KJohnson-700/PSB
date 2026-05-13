@@ -71,6 +71,9 @@ ORACLE_FEEDS = {
     "ETHUSDT": ("polygon", CHAINLINK_ETH_USD),
     "SOLUSDT": ("polygon", CHAINLINK_SOL_USD),
     "XRPUSDT": ("polygon", CHAINLINK_XRP_USD),
+    # HYPE: no Chainlink HYPE/USD on Polygon in this stack — Arbitrum feed only.
+    # Pyth Hermes / other publishers are not wired in oracle_loader yet; adding them
+    # would be a separate integration (history API + timestamp alignment with CL rounds).
     "HYPEUSDT": ("arbitrum", CHAINLINK_HYPE_USD),
 }
 

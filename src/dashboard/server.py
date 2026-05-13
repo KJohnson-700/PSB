@@ -392,7 +392,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-13-positions-detail-default-closed",
+        "dashboard_ui_rev": "2026-05-13-positions-section-default-collapsed",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -2042,7 +2042,46 @@ async def start_backtest(request: Request):
                 ),
             }
 
-    if symbol in CRYPTO_BACKTEST_SYMBOLS:
+    cfg_disk: Dict[str, Any] = {}
+    try:
+        if CONFIG_PATH.is_file():
+            with open(CONFIG_PATH, encoding="utf-8") as cf:
+                cfg_disk = yaml.safe_load(cf) or {}
+    except Exception:
+        cfg_disk = {}
+    pm_marks = bool(
+        (cfg_disk.get("backtest") or {}).get("polymarket_marks", {}).get("enabled")
+    )
+
+    sym_u = str(symbol).strip().upper()
+    if sym_u == "ALL":
+        bundle_script = PROJECT_ROOT / "scripts" / "run_crypto_backtest_bundle.py"
+        if not bundle_script.exists():
+            return {"status": "error", "message": f"{bundle_script} not found"}
+        try:
+            w_int = int(window)
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "Invalid window for bundle"}
+        if w_int not in (5, 15, 30):
+            return {"status": "error", "message": "Bundle window must be 5, 15, or 30"}
+        cmd_args = [sys.executable, str(bundle_script), "--window", str(w_int)]
+        start_d = str(body.get("start", "") or "").strip()
+        end_d = str(body.get("end", "") or "").strip()
+        if start_d:
+            cmd_args += ["--start", start_d]
+        if end_d:
+            cmd_args += ["--end", end_d]
+        if test_start:
+            cmd_args += ["--test-start", test_start]
+        par = body.get("parallel")
+        if isinstance(par, int) and par > 1:
+            cmd_args += ["--parallel", str(min(par, 5))]
+        if pm_marks:
+            cmd_args.append("--polymarket-marks")
+        summary = f"ALL {w_int}m crypto bundle" + (
+            f" test-from={test_start}" if test_start else " [in-sample]"
+        )
+    elif symbol in CRYPTO_BACKTEST_SYMBOLS:
         script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
         if not script.exists():
             return {"status": "error", "message": f"{script} not found"}
@@ -2054,13 +2093,17 @@ async def start_backtest(request: Request):
         ]
         if test_start:
             cmd_args += ["--test-start", test_start]
-        summary = f"{symbol} {window}m crypto" + (f" test-from={test_start}" if test_start else " [in-sample]")
+        if pm_marks:
+            cmd_args.append("--polymarket-marks")
+        summary = f"{symbol} {window}m crypto" + (
+            f" test-from={test_start}" if test_start else " [in-sample]"
+        )
     else:
         return {
             "status": "error",
             "message": (
                 "Legacy fade/arbitrage/neh backtests were removed. "
-                "Use the crypto backtest controls for BTC, SOL, ETH, HYPE, or XRP."
+                "Use the crypto backtest controls for BTC, SOL, ETH, HYPE, XRP, or ALL bundle."
             ),
         }
 

@@ -12,6 +12,20 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-13 — ETH runs without BTC full-analysis dependency; neutral ETH can trade on ETH tape
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `strategies.eth_macro.neutral_macro_require_spike_or_lag` was changed to `false` and `strategies.eth_macro.btc_1h_regime_gates.enabled` to `false`. In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `eth_macro` now requires only ETH full analysis to scan; if BTC full analysis is unavailable it continues with BTC HTF treated as `NEUTRAL`, skips BTC 15m/5m hard-gates that depend on missing full-analysis objects, and avoids BTC 1H regime-based min-edge / sizing adjustments. The bullish BUY_NO override bug was also corrected to use the ETH TA object, not an undefined name.
+
+- **Why:** ETH was being starved or aborted by BTC-side dependencies even when the ETH leg itself was present, and a NameError existed on one BUY_NO override branch. This change makes ETH genuinely ETH-primary instead of “ETH unless BTC analysis is missing”.
+
+- **Hypothesis:** ETH should emit more candidates in neutral ETH 1H conditions and avoid silent full-scan aborts when BTC full analysis is unavailable. Trade quality still depends on the remaining ETH-side follow, edge, price-band, and correlation gates.
+
+- **Expected outcome:** Fewer `analysis_unavailable` and BTC-follow aborts for ETH-only failure cycles; more ETH participation in neutral ETH tape. The lane should no longer crash on the BUY_NO LTF override branch.
+
+- **Actual outcome:** `pending` (need ≥15 closed `eth_macro` trades after this change).
+
+- **Status:** `pending`
+
 ### 2026-05-12 — Dashboard Live tab: ETH-first KPI row (UI only)
 
 - **What changed:** Crypto **ETH** panel hero order and labels on the dashboard now show **ETH Δ%** before **BTC Δ%** and **ETH–BTC lag** (not “BTC–ETH”), matching the live strategy log line that **ETH 1H is primary** and BTC context is secondary. No `eth_macro` config or Python signal logic changed in this commit.
