@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-13 — Dashboard: fix inline JS brace/IIFE closure; CI parses scripts with node --check
+
+**`src/dashboard/index.html`:** Restores missing `});` / IIFE terminator so `startCryptoBacktest` and boot paths parse as valid JavaScript.
+
+**`tests/test_dashboard_bundle.py`:** Adds `test_dashboard_inline_scripts_parse_cleanly` — runs `node --check` on each inline `<script>` body.
+
 ## 2026-05-13 — Crypto backtest reliability: progress, cache-only oracle, faster alt replay
 
 **`src/backtest/updown_engine.py`:** Normalizes OHLCV frames once with `_open_time_ns` so per-window history slices use `searchsorted`/`iloc` instead of boolean-copy scans; skips expensive Trend Sabre reconstruction for alt-family replays where BTC/SOL/ETH/XRP/HYPE paths do not consume it; adds replay `on_progress`, `progress_interval`, `max_seconds`, `total_windows`, `run_complete`, and `elapsed_seconds` metadata.

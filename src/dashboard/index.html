@@ -3777,6 +3777,7 @@ async function startCryptoBacktest() {
                 loadBacktestReports(5, 700);
                 loadLivePerformance();
                 if (_currentMainView() === 'backtest') fetchAll();
+            });
         } else {
             status.textContent = `Backtest error: ${d.message || d.status}`;
             status.style.color = 'var(--red)';
@@ -6184,6 +6185,8 @@ if (_currentMainView() === 'journal') {
         loadBacktestReports(5, 700);
         loadLivePerformance();
         if (_currentMainView() === 'backtest') fetchAll();
+    });
+})();
 
 window._dashIntervals = window._dashIntervals || [];
 function _registerInterval(fn, ms) {

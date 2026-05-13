@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,25 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert snippet.status_code == 200
     assert "text/html" in (snippet.headers.get("content-type") or "")
     assert data.get("dashboard_ui_rev") in snippet.text
+
+
+def test_dashboard_inline_scripts_parse_cleanly():
+    html = INDEX.read_text(encoding="utf-8")
+    scripts = re.findall(r"<script[^>]*>([\s\S]*?)</script>", html)
+    assert scripts, "expected inline dashboard scripts"
+
+    for idx, script in enumerate(scripts):
+        result = subprocess.run(
+            ["node", "--check"],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"dashboard inline script {idx} has a JS syntax error:\n"
+            f"{result.stderr or result.stdout}"
+        )
 
 
 def test_api_orderbook_returns_503_without_bot():
