@@ -8,6 +8,34 @@
 
 ---
 
+## 2026-05-13 — Terminal PolyBot startup/shutdown ASCII banners
+
+**`src/terminal_banners.py`:** New helpers `framed_lines`, `resolve_dashboard_display_url`, `print_startup_banner`, `print_shutdown_banner` (ASCII box, dashboard URL aligned with `start_dashboard` rules).
+
+**`src/main.py`:** Prints startup banner after `set_api_keys`; records `bot._terminal_shutdown_sig` in SIGINT/SIGTERM handler and after dashboard-only interrupt; prints shutdown banner on stderr after `bot.shutdown()` in the main `finally` and on the dashboard-only return path.
+
+**`start.py`:** Removed duplicate pre-`main()` box so the canonical banner prints once from `main()`.
+
+**`tests/test_terminal_banners.py`:** Width and URL resolution regressions.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_terminal_banners.py tests/test_dashboard_bundle.py -q` → **30 passed**.
+
+## 2026-05-13 — Dashboard: ORACLE shutdown splash for Stop, richer start splash, Commands shutdown blurb
+
+**`src/dashboard/index.html`:** `DashPrivacy` gains `mode-shutdown` (amber lane, `bootShutdownLog`, dismiss button + Escape), optional `show(mode, { banner, detail })`, longer `bootLog` for load paths, larger loading/shutdown title + phase detail line. Command Center **Stop** / **Start Live Test** show the overlay when motion is allowed; tab transitions pass explicit banner/detail. Commands tab: larger **Start commands** heading + intro paragraph; new **Shutdown, cancel, and stop** card (no duplicate CLI rows).
+
+**`src/dashboard/server.py`:** Bumped `dashboard_ui_rev`.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_dashboard_bundle.py -q` → **24 passed**.
+
+## 2026-05-13 — Alt config test: remove BTC 1H regime scaling on non-BTC lanes, restore HYPE 1H alignment
+
+**`config/settings.yaml`:** Disabled `btc_1h_regime_gates.enabled` for `sol_macro`, `eth_macro`, `hype_macro`, and `xrp_macro` so BTC 1H `RANGE/BEAR` no longer tighten `min_edge` or reduce size on those non-BTC lanes during the next dashboard validation pass.
+
+**`config/settings.yaml`:** Restored `hype_macro.enforce_alt_1h_alignment: true` so HYPE follows the same bearish-1H `BUY_YES` suppression posture as the other alt lanes while leaving the existing diagnostic `BUY_NO` path intact.
+
+**Verification:** Config change only. No backtests run in-agent; operator will run dashboard backtests after this change.
+
 ## 2026-05-13 — ETH live simplification: restore shared alt-first gating posture
 
 **`config/settings.yaml`:** Tightened `eth_macro` back toward the shared alt-macro posture: `neutral_macro_require_spike_or_lag: true`, `enforce_alt_1h_alignment: true`, `direction_source: btc` (alt-first / no per-market side override), disabled the permissive BTC-follow bypasses (`btc_follow_stf_bypass_if_1h_ok`, `btc_follow_15m_allow_macd_grind`, `btc_follow_stf_bypass_when_macro_agrees`, `btc_follow_1h_allow_floor_without_rising`), and re-enabled `btc_1h_regime_gates` so ETH min-edge/size tighten in BTC RANGE/BEAR regimes like the other alt lanes.

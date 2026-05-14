@@ -52,6 +52,7 @@ from src.notifications.notification_manager import (
     format_discord_notifications_log_line,
 )
 from src.env_bootstrap import load_project_dotenv
+from src.terminal_banners import print_shutdown_banner, print_startup_banner
 
 # Kill switch: if this file exists, the bot will not place new trades (paper or live).
 KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITCH"
@@ -2493,6 +2494,12 @@ async def main():
 
     bot.set_api_keys(api_keys=api_keys)
 
+    print_startup_banner(
+        config=bot.config,
+        dry_run=bool(bot.config.get("trading", {}).get("dry_run", True)),
+        session_id=getattr(bot.journal, "session_id", None),
+    )
+
     from src.ai_status import compute_ai_status, format_ai_log_line
 
     _ai_st = compute_ai_status(bot.config, bot.ai_agent.api_keys)
@@ -2526,11 +2533,14 @@ async def main():
             while True:
                 await asyncio.sleep(30)
         except (KeyboardInterrupt, asyncio.CancelledError):
-            pass
+            bot._terminal_shutdown_sig = signal.SIGINT
         await bot.shutdown()
+        if getattr(bot, "_terminal_shutdown_sig", None) is not None:
+            print_shutdown_banner(bot._terminal_shutdown_sig)
         return
 
     def signal_handler(sig, frame):
+        bot._terminal_shutdown_sig = sig
         logging.info("Received shutdown signal — cancelling tasks...")
         bot.stop()
         # Cancel all running asyncio tasks so sleeping loops wake up immediately
@@ -2554,7 +2564,12 @@ async def main():
     except asyncio.CancelledError:
         pass
     finally:
-        await bot.shutdown()
+        try:
+            await bot.shutdown()
+        finally:
+            sig = getattr(bot, "_terminal_shutdown_sig", None)
+            if sig is not None:
+                print_shutdown_banner(sig)
 
 
 if __name__ == "__main__":

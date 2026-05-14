@@ -28,16 +28,6 @@ _flags = sys.argv[1:]
 if not any(f in _flags for f in ("--paper", "--live", "--dashboard-only")):
     sys.argv.append("--paper")
 
-print("""
-+----------------------------------------------+
-|          PolyBot -- Starting Up              |
-+----------------------------------------------+
-|  Dashboard  ->  http://127.0.0.1:8081        |
-|  Browser opens automatically when ready      |
-|  Press  Ctrl+C  to stop                      |
-+----------------------------------------------+
-""")
-
 from src.main import main  # noqa: E402
 
 asyncio.run(main())
