@@ -145,6 +145,18 @@ def _ohlcv_fixture() -> dict:
     }
 
 
+def _with_recent_1m_move(data: dict, start_close: float, end_close: float) -> dict:
+    out = {k: v.copy() for k, v in data.items()}
+    n = len(out["1m"])
+    closes = pd.Series(
+        [start_close + (end_close - start_close) * i / max(n - 1, 1) for i in range(n)],
+        dtype="float64",
+    )
+    out["1m"]["open"] = closes.shift(1).fillna(start_close)
+    out["1m"]["close"] = closes
+    return out
+
+
 def test_sol_ltf_confirmation_threshold_matches_live_anti_signal_gate():
     ta = TechnicalAnalysis(
         current_price=100.0,
@@ -412,7 +424,7 @@ def test_eth_backtest_respects_btc_follow_1h_required_flag():
 
     ta = TechnicalAnalysis(current_price=100.0)
     engine._build_ta = lambda *args, **kwargs: ta
-    engine._get_sol_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._alt_1h_trend_from_df = lambda *args, **kwargs: "BULLISH"
     engine._sol_ltf_strength = lambda *args, **kwargs: (False, 0.0)
     engine._edge_15m_eth_follow = lambda *args, **kwargs: (0.10, 0.6)
     engine._sample_entry_price = lambda: 0.50
@@ -436,6 +448,153 @@ def test_eth_backtest_respects_btc_follow_1h_required_flag():
 
     assert result.windows_entered > 0
     assert result.skip_counts.get("btc_data_unavailable", 0) == 0
+
+
+def test_sol_backtest_uses_btc_spike_fallback_when_alt_htf_is_neutral():
+    cfg = _config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "entry_timing_window_15m_min": 2.0,
+            "entry_timing_window_15m_max": 15.0,
+            "neutral_macro_require_spike_or_lag": False,
+        }
+    )
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_sol_htf_bias = lambda *args, **kwargs: "NEUTRAL"
+    engine._alt_1h_trend_from_df = lambda *args, **kwargs: "NEUTRAL"
+    engine._sol_ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m_sol = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        btc_data=_with_recent_1m_move(_ohlcv_fixture(), 100.0, 101.2),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=15,
+        symbol="SOL",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("htf_neutral", 0) == 0
+
+
+def test_sol_backtest_buy_no_override_can_flip_bullish_macro_short():
+    cfg = _config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "buy_no_ltf_override_enabled": True,
+            "entry_timing_window_15m_min": 2.0,
+            "entry_timing_window_15m_max": 15.0,
+        }
+    )
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_sol_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._sol_ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._buy_no_ltf_override_replay = lambda *args, **kwargs: (True, "bearish_ltf_override")
+    engine._edge_15m_sol = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=15,
+        symbol="SOL",
+    )
+
+    assert result.windows_entered > 0
+    assert result.trades[0].action == "BUY_NO"
+    assert result.trades[0].htf_bias == "BULLISH"
+
+
+def test_eth_backtest_can_use_btc_htf_fallback_when_eth_1h_is_neutral():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"] = {
+        "btc_follow_1h_required": False,
+        "neutral_macro_require_spike_or_lag": False,
+        "direction_source": "btc",
+        "entry_price_min": 0.46,
+        "entry_price_max": 0.54,
+        "entry_timing_window_15m_min": 2.0,
+        "entry_timing_window_15m_max": 15.0,
+    }
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._alt_1h_trend_from_df = lambda *args, **kwargs: "NEUTRAL"
+    engine._sol_ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m_eth_follow = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        btc_data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=15,
+        symbol="ETH",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("htf_neutral", 0) == 0
+
+
+def test_hype_backtest_applies_hard_min_edge_floor_after_edge_calc():
+    cfg = _config()
+    cfg["strategies"]["hype_macro"] = {
+        "hard_min_edge": 0.09,
+        "entry_price_min": 0.46,
+        "entry_price_max": 0.54,
+        "entry_timing_window_15m_min": 2.0,
+        "entry_timing_window_15m_max": 15.0,
+    }
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_sol_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._sol_ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m_sol = lambda *args, **kwargs: (0.08, 0.6)
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=15,
+        symbol="HYPE",
+    )
+
+    assert result.windows_entered == 0
+    assert result.skip_counts.get("hard_min_edge", 0) > 0
 
 
 def test_backtest_counts_outside_entry_window_skips():
@@ -484,6 +643,104 @@ def test_backtest_counts_edge_above_cap_skips():
 
     assert result.windows_entered == 0
     assert result.skip_counts.get("edge_above_cap", 0) > 0
+
+
+def test_30m_backtest_uses_30m_entry_window_not_15m_window():
+    cfg = _config()
+    cfg["entry_window_15m_min"] = 2.0
+    cfg["entry_window_15m_max"] = 16.0
+    cfg["entry_window_30m_min"] = 16.0
+    cfg["entry_window_30m_max"] = 30.0
+    cfg["entry_window_auto_align"] = False
+    cfg["strategies"]["bitcoin"]["entry_timing_window_30m_min"] = 16.0
+    cfg["strategies"]["bitcoin"]["entry_timing_window_30m_max"] = 30.0
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=30,
+        symbol="BTC",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("outside_entry_window", 0) == 0
+
+
+def test_btc_30m_default_entry_window_allows_entries_without_explicit_30m_config():
+    cfg = _config()
+    cfg["entry_window_auto_align"] = False
+    cfg["entry_window_align_scan_interval_sec"] = 60
+    cfg["entry_window_latency_buffer_sec"] = 12
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=30,
+        symbol="BTC",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("outside_entry_window", 0) == 0
+
+
+def test_eth_edge_15m_fallback_allows_missing_btc_context_when_follow_not_required():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    eth_ta = TechnicalAnalysis(
+        current_price=100.0,
+        macd_15m=MACDResult(
+            macd_line=0.2,
+            signal_line=0.1,
+            histogram=0.04,
+            prev_histogram=0.02,
+            crossover="BULLISH_CROSS",
+            histogram_rising=True,
+            above_zero=True,
+        ),
+        rsi_14=55.0,
+    )
+
+    edge, confidence = engine._edge_15m_eth_follow(
+        eth_ta,
+        btc_ta=None,
+        allowed_side="LONG",
+        min_eth_adj=0.04,
+        min_btc_hist=0.03,
+    )
+
+    assert edge > 0.0
+    assert confidence >= 0.55
 
 
 def test_btc_15m_edge_uses_1h_recovery_and_timing_bonus():

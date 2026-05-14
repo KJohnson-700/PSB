@@ -105,9 +105,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             self.config.get("btc_follow_1h_recovery_hist_floor", 80.0)
         )
         self.btc_follow_1h_allow_floor_without_rising = bool(
-            self.config.get("btc_follow_1h_allow_floor_without_rising", True)
+            self.config.get("btc_follow_1h_allow_floor_without_rising", False)
         )
-        self.direction_source = str(self.config.get("direction_source", "hybrid")).strip().lower()
+        self.direction_source = str(self.config.get("direction_source", "btc")).strip().lower()
         if self.direction_source not in {"btc", "hybrid", "signal_first"}:
             self.direction_source = "btc"
         self.signal_15m_long_threshold = float(self.config.get("signal_15m_long_threshold", 0.55))

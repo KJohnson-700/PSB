@@ -460,7 +460,7 @@ def main() -> int:
     data = loader.load_all(args.symbol, args.start, args.end)
     btc_data = None
     oracle_history = None
-    if args.symbol == "ETH":
+    if args.symbol in {"ETH", "SOL", "XRP", "HYPE"}:
         btc_data = loader.load_all("BTC", args.start, args.end)
     elif args.symbol in strat_key_for_corr:
         sk = strat_key_for_corr[args.symbol]

@@ -8,6 +8,24 @@
 
 ---
 
+## 2026-05-13 — ETH live simplification: restore shared alt-first gating posture
+
+**`config/settings.yaml`:** Tightened `eth_macro` back toward the shared alt-macro posture: `neutral_macro_require_spike_or_lag: true`, `enforce_alt_1h_alignment: true`, `direction_source: btc` (alt-first / no per-market side override), disabled the permissive BTC-follow bypasses (`btc_follow_stf_bypass_if_1h_ok`, `btc_follow_15m_allow_macd_grind`, `btc_follow_stf_bypass_when_macro_agrees`, `btc_follow_1h_allow_floor_without_rising`), and re-enabled `btc_1h_regime_gates` so ETH min-edge/size tighten in BTC RANGE/BEAR regimes like the other alt lanes.
+
+**`src/strategies/eth_macro.py`:** Updated class defaults to match the stricter live posture so missing YAML keys no longer silently fall back to permissive ETH behavior (`direction_source` now defaults to `btc`; `btc_follow_1h_allow_floor_without_rising` now defaults to `false`).
+
+**Verification:** `.venv/bin/python -m pytest tests/test_eth_macro.py tests/test_updown_backtest_parity.py -q` → **51 passed**.
+
+## 2026-05-13 — Alt macro replay parity: neutral fallback tree, ETH fallback, HYPE hard-edge
+
+**`src/backtest/updown_engine.py`:** Replay now resolves alt direction with live-style fallback branches instead of `NEUTRAL -> skip` for every non-BTC window. SOL/XRP/HYPE replay can now use BTC-spike, lag, and alt-1H fallback branches when macro HTF is neutral; ETH replay now uses alt-1H-primary direction with BTC-spike / lag / BTC-HTF fallback behavior closer to `eth_macro`, plus replay-side BUY_NO override support and a corrected SOL-family HTF vote that reads 1H candles directly instead of relying only on `ta.ema_*`.
+
+**`src/backtest/updown_engine.py`:** HYPE replay now applies a post-edge hard floor compatible with live `hype_macro` behavior, including drift feedback and BTC 1H regime min-edge scaling when configured.
+
+**`scripts/run_backtest_crypto.py`:** BTC OHLCV is now loaded for all alt macro backtests (`ETH`, `SOL`, `XRP`, `HYPE`) so replay can actually exercise BTC-secondary parity branches instead of starving them of context unless a 5m correlation gate was enabled.
+
+**`tests/test_updown_backtest_parity.py`:** Adds regressions for SOL neutral BTC-spike fallback, SOL BUY_NO override parity, ETH BTC-HTF fallback when ETH 1H is neutral, and HYPE hard-min-edge enforcement.
+
 ## 2026-05-13 — Crypto backtest/live parity gates + Backtest-tab output tail
 
 **`src/backtest/updown_engine.py`:** Backtest replay now mirrors live entry gating more closely: live-style `KellySizer` sizing before exposure clamps, structured `skip_counts` on `UpdownBacktestResult`, entry-window and timing-window filters during replay, `max_edge_updown` cap support, and ETH no longer hard-requires `btc_data` when `btc_follow_1h_required: false`.

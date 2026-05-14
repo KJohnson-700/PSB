@@ -67,6 +67,7 @@ from src.analysis.btc_price_service import (
     AnchoredVolumeProfile,
 )
 from src.backtest.updown_polymarket_marks import try_load_yes_series_for_window
+from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.execution.updown_exit_shared import (
     adverse_for_updown_cents_time_stop,
     cents_stop_for_entry_price,
@@ -246,6 +247,20 @@ class UpdownBacktestResult:
 # ==============================================================================
 # Engine
 # ==============================================================================
+
+
+@dataclass
+class ReplayDirectionDecision:
+    """Replay-time direction decision for alt macro strategies."""
+
+    alt_htf_bias: str = "NEUTRAL"
+    primary_htf_bias: str = "NEUTRAL"
+    allowed_side: Optional[str] = None
+    side_source: str = ""
+    skip_reason: str = ""
+    lag_magnitude: Optional[float] = None
+    skip_btc_follow_1h: bool = False
+
 
 class UpdownBacktestEngine:
     """Replays Bitcoin or alt-coin (SOL / ETH) updown strategy on historical OHLCV.
@@ -953,18 +968,25 @@ class UpdownBacktestEngine:
     # ==========================================================================
 
     def _get_sol_htf_bias(
-        self, ta: TechnicalAnalysis, df_15m: pd.DataFrame,
+        self,
+        ta: TechnicalAnalysis,
+        df_15m: pd.DataFrame,
+        df_1h: Optional[pd.DataFrame] = None,
     ) -> str:
-        """SOL 3-vote system -- matches sol_macro._get_macro_trend().
+        """SOL-family 3-vote system matching sol_macro._get_macro_trend().
 
-        Vote 1: 1H trend (approximated from 1H EMA cross, since ta is built on 1H)
+        Vote 1: 1H trend from replayed 1H candles when available
         Vote 2: 15m EMA alignment (ema_9 > ema_21 > ema_50)
         Vote 3: 15m RSI zone (>55 bull, <45 bear)
         """
         bull = bear = 0
 
-        # Vote 1: 1H trend -- ta.ema_9 / ema_21 are computed on 1H data for SOL
-        if ta.ema_9 > ta.ema_21:
+        h1_trend = self._alt_1h_trend_from_df(df_1h)
+        if h1_trend == "BULLISH":
+            bull += 1
+        elif h1_trend == "BEARISH":
+            bear += 1
+        elif ta.ema_9 > ta.ema_21:
             bull += 1
         elif ta.ema_9 < ta.ema_21:
             bear += 1
@@ -990,6 +1012,294 @@ class UpdownBacktestEngine:
         if bull >= 2: return "BULLISH"
         if bear >= 2: return "BEARISH"
         return "NEUTRAL"
+
+    @staticmethod
+    def _alt_1h_trend_from_df(df_1h: Optional[pd.DataFrame]) -> str:
+        """Approximate live alt 1H trend from replay candles."""
+        if df_1h is None or len(df_1h) < 21:
+            return "NEUTRAL"
+        close_1h = df_1h["close"]
+        price = float(close_1h.iloc[-1])
+        ema_9 = float(BTCPriceService._calc_ema(close_1h, 9).iloc[-1])
+        ema_21 = float(BTCPriceService._calc_ema(close_1h, 21).iloc[-1])
+        ema_50 = (
+            float(BTCPriceService._calc_ema(close_1h, 50).iloc[-1])
+            if len(df_1h) >= 50
+            else 0.0
+        )
+        rsi = float(BTCPriceService._calc_rsi(close_1h, 14).iloc[-1])
+
+        bullish_score = 0
+        if price > ema_9:
+            bullish_score += 1
+        if ema_9 > ema_21:
+            bullish_score += 1
+        if ema_50 > 0 and ema_21 > ema_50:
+            bullish_score += 1
+        if rsi > 55:
+            bullish_score += 1
+        elif rsi < 45:
+            bullish_score -= 1
+
+        if bullish_score >= 3:
+            return "BULLISH"
+        if bullish_score <= -1 or (bullish_score == 0 and rsi < 45):
+            bearish_count = 0
+            if price < ema_9:
+                bearish_count += 1
+            if ema_9 < ema_21:
+                bearish_count += 1
+            if ema_50 > 0 and ema_21 < ema_50:
+                bearish_count += 1
+            if rsi < 45:
+                bearish_count += 1
+            if bearish_count >= 2:
+                return "BEARISH"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _macd_bearish_momentum_ok(m: Optional[MACDResult]) -> bool:
+        if m is None:
+            return False
+        if m.crossover == "BEARISH_CROSS":
+            return True
+        if (not m.histogram_rising) and float(m.histogram) < 0:
+            return True
+        return float(m.macd_line) < float(m.signal_line) and float(m.histogram) <= 0
+
+    @staticmethod
+    def _side_from_bias(bias: Optional[str]) -> Optional[str]:
+        if bias == "BULLISH":
+            return "LONG"
+        if bias == "BEARISH":
+            return "SHORT"
+        return None
+
+    @staticmethod
+    def _recent_move_pct(
+        df_1m: Optional[pd.DataFrame],
+        window_open: pd.Timestamp,
+        minutes: int,
+    ) -> float:
+        if df_1m is None or df_1m.empty or minutes <= 0:
+            return 0.0
+        start = window_open - pd.Timedelta(minutes=minutes)
+        bars = df_1m[(df_1m["open_time"] >= start) & (df_1m["open_time"] < window_open)]
+        if bars.empty:
+            return 0.0
+        open_px = float(bars.iloc[0]["open"])
+        close_px = float(bars.iloc[-1]["close"])
+        if open_px <= 0:
+            return 0.0
+        return ((close_px - open_px) / open_px) * 100.0
+
+    @staticmethod
+    def _eth_signal_15m_proxy(df_15m: pd.DataFrame) -> float:
+        if df_15m is None or df_15m.empty:
+            return 0.50
+        bar = df_15m.iloc[-1]
+        return UpdownBacktestEngine._proxy_yes_price_from_underlying(
+            float(bar["open"]),
+            float(bar["close"]),
+            15,
+        )
+
+    @staticmethod
+    def _resolve_eth_market_side(
+        base_side: str,
+        btc_htf_bias: Optional[str],
+        market_yes_price: float,
+        strategy_cfg: Dict[str, Any],
+    ) -> tuple[str, str]:
+        direction_source = str(strategy_cfg.get("direction_source", "hybrid")).strip().lower()
+        if direction_source not in {"btc", "hybrid", "signal_first"}:
+            direction_source = "btc"
+        if direction_source == "btc":
+            return base_side, "alt_1h_legacy_btc_mode"
+
+        signal_15m_long_threshold = float(strategy_cfg.get("signal_15m_long_threshold", 0.55))
+        signal_15m_short_threshold = float(strategy_cfg.get("signal_15m_short_threshold", 0.45))
+
+        if direction_source == "signal_first":
+            if market_yes_price >= signal_15m_long_threshold and btc_htf_bias != "BEARISH":
+                return "LONG", "signal_first_long"
+            if market_yes_price <= signal_15m_short_threshold and btc_htf_bias != "BULLISH":
+                return "SHORT", "signal_first_short"
+            return base_side, "signal_first_fallback"
+
+        if base_side == "LONG" and market_yes_price >= signal_15m_long_threshold:
+            return base_side, "hybrid_alt_long_confirmed"
+        if base_side == "SHORT" and market_yes_price <= signal_15m_short_threshold:
+            return base_side, "hybrid_alt_short_confirmed"
+        return base_side, "hybrid_alt_first"
+
+    @staticmethod
+    def _btc_1h_regime_min_edge_mult(
+        strategy_cfg: Dict[str, Any],
+        btc_ta: Optional[TechnicalAnalysis],
+    ) -> float:
+        if btc_ta is None:
+            return 1.0
+        gates = dict(strategy_cfg.get("btc_1h_regime_gates") or {})
+        if not gates.get("enabled", False):
+            return 1.0
+        sma = float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0)
+        price = float(getattr(btc_ta, "btc_1h_close", 0.0) or getattr(btc_ta, "current_price", 0.0) or 0.0)
+        if price <= 0 or sma <= 0:
+            regime = "RANGE"
+        else:
+            band = float(gates.get("range_band_pct", 0.0012))
+            dist_pct = (price - sma) / sma
+            if abs(dist_pct) <= band:
+                regime = "RANGE"
+            else:
+                regime = "BULL" if dist_pct > band else "BEAR"
+        mults = dict(gates.get("min_edge_mult") or {})
+        defaults = {"BULL": 1.0, "RANGE": 1.25, "BEAR": 1.40}
+        return float(mults.get(regime, defaults.get(regime, 1.0)))
+
+    def _buy_no_ltf_override_replay(
+        self,
+        ta: TechnicalAnalysis,
+        df_5m: pd.DataFrame,
+        btc_1m: Optional[pd.DataFrame],
+        window_open: pd.Timestamp,
+        strategy_cfg: Dict[str, Any],
+    ) -> tuple[bool, str]:
+        if not bool(strategy_cfg.get("buy_no_ltf_override_enabled", False)):
+            return False, "disabled"
+        if len(df_5m) < _MIN_5M_BARS:
+            return False, "5m_insufficient"
+        bearish_15m = self._macd_bearish_momentum_ok(ta.macd_15m)
+        bearish_5m = self._macd_bearish_momentum_ok(self._svc.calc_macd(df_5m))
+        rsi_max = float(strategy_cfg.get("buy_no_ltf_override_rsi_max", 45.0))
+        rsi_ok = float(ta.rsi_14 or 50.0) <= rsi_max
+        btc_cap = float(strategy_cfg.get("buy_no_ltf_override_max_btc_5m_pct", 0.0))
+        btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
+        btc_ok = btc_move_5m_pct <= btc_cap
+        if bearish_15m and bearish_5m and rsi_ok and btc_ok:
+            return True, "bearish_ltf_override"
+        return False, "no_override"
+
+    def _resolve_alt_replay_direction(
+        self,
+        *,
+        symbol: str,
+        ta: TechnicalAnalysis,
+        df_1h: pd.DataFrame,
+        df_15m: pd.DataFrame,
+        df_5m: pd.DataFrame,
+        alt_1m: pd.DataFrame,
+        btc_ta: Optional[TechnicalAnalysis],
+        btc_data: Optional[Dict[str, pd.DataFrame]],
+        window_open: pd.Timestamp,
+        strategy_cfg: Dict[str, Any],
+    ) -> ReplayDirectionDecision:
+        decision = ReplayDirectionDecision()
+        btc_htf_bias = None
+        if btc_ta is not None:
+            btc_htf_bias = self._get_htf_bias(
+                btc_ta,
+                min_hist=float(
+                    self.config.get("strategies", {}).get("bitcoin", {}).get("min_4h_hist_magnitude", 20.0)
+                ),
+            )
+
+        btc_1m = None if not btc_data else btc_data.get("1m")
+        alt_1h_trend = self._alt_1h_trend_from_df(df_1h)
+        macro_trend = self._get_sol_htf_bias(ta, df_15m, df_1h)
+        decision.alt_htf_bias = alt_1h_trend if symbol == "ETH" else macro_trend
+
+        btc_move_5m = self._recent_move_pct(btc_1m, window_open, 5)
+        btc_move_15m = self._recent_move_pct(btc_1m, window_open, 15)
+        alt_move_5m = self._recent_move_pct(alt_1m, window_open, 5)
+        alt_move_15m = self._recent_move_pct(alt_1m, window_open, 15)
+        spike_5m_floor = float(strategy_cfg.get("btc_spike_floor_pct_5m", 0.3))
+        spike_15m_floor = float(strategy_cfg.get("btc_spike_floor_pct_15m", 0.8))
+        lag_min = float(strategy_cfg.get("lag_signal_min_pct", 0.2))
+        neutral_requires_catalyst = bool(strategy_cfg.get("neutral_macro_require_spike_or_lag", False))
+
+        btc_spike_detected = abs(btc_move_5m) >= spike_5m_floor or abs(btc_move_15m) >= spike_15m_floor
+        btc_move_for_lag = btc_move_15m if abs(btc_move_15m) >= abs(btc_move_5m) else btc_move_5m
+        alt_move_for_lag = alt_move_15m if abs(btc_move_15m) >= abs(btc_move_5m) else alt_move_5m
+        lag_raw = abs(btc_move_for_lag) - abs(alt_move_for_lag)
+        lag_direction = "LONG" if btc_move_for_lag > 0 else "SHORT" if btc_move_for_lag < 0 else None
+        lag_opportunity = lag_direction is not None and lag_raw >= lag_min
+        decision.lag_magnitude = btc_move_for_lag - alt_move_for_lag
+
+        if symbol == "ETH":
+            if alt_1h_trend in {"BULLISH", "BEARISH"}:
+                decision.allowed_side = self._side_from_bias(alt_1h_trend)
+                decision.primary_htf_bias = alt_1h_trend
+                decision.side_source = "alt_1h_primary"
+                decision.skip_btc_follow_1h = True
+                if alt_1h_trend == "BULLISH":
+                    override, _ = self._buy_no_ltf_override_replay(
+                        ta, df_5m, btc_1m, window_open, strategy_cfg
+                    )
+                    if override:
+                        decision.allowed_side = "SHORT"
+                        decision.side_source = "bearish_ltf_override"
+            else:
+                if btc_spike_detected:
+                    decision.allowed_side = "LONG" if btc_move_5m > 0 else "SHORT"
+                    decision.side_source = "btc_spike"
+                    decision.skip_btc_follow_1h = True
+                elif lag_opportunity and lag_direction is not None:
+                    decision.allowed_side = lag_direction
+                    decision.side_source = "lag_fallback"
+                    decision.skip_btc_follow_1h = True
+                elif btc_htf_bias in {"BULLISH", "BEARISH"} and not neutral_requires_catalyst:
+                    decision.allowed_side = self._side_from_bias(btc_htf_bias)
+                    decision.side_source = "btc_htf_fallback"
+                else:
+                    decision.skip_reason = (
+                        "neutral_macro_no_catalyst" if neutral_requires_catalyst else "htf_neutral"
+                    )
+                    return decision
+                decision.primary_htf_bias = "NEUTRAL"
+
+            market_side, market_source = self._resolve_eth_market_side(
+                decision.allowed_side,
+                btc_htf_bias,
+                self._eth_signal_15m_proxy(df_15m),
+                strategy_cfg,
+            )
+            decision.allowed_side = market_side
+            decision.side_source = market_source
+            return decision
+
+        primary_htf_bias = macro_trend if macro_trend != "NEUTRAL" else (btc_htf_bias or macro_trend)
+        decision.primary_htf_bias = primary_htf_bias
+        if primary_htf_bias in {"BULLISH", "BEARISH"}:
+            decision.allowed_side = self._side_from_bias(primary_htf_bias)
+            decision.side_source = "primary_htf"
+            if primary_htf_bias == "BULLISH":
+                override, _ = self._buy_no_ltf_override_replay(
+                    ta, df_5m, btc_1m, window_open, strategy_cfg
+                )
+                if override:
+                    decision.allowed_side = "SHORT"
+                    decision.side_source = "bearish_ltf_override"
+            return decision
+
+        if btc_spike_detected:
+            decision.allowed_side = "LONG" if btc_move_5m > 0 else "SHORT"
+            decision.side_source = "btc_spike"
+            return decision
+        if lag_opportunity and lag_direction is not None:
+            decision.allowed_side = lag_direction
+            decision.side_source = "lag_fallback"
+            return decision
+        if neutral_requires_catalyst:
+            decision.skip_reason = "neutral_macro_no_catalyst"
+            return decision
+        decision.allowed_side = self._side_from_bias(alt_1h_trend)
+        if decision.allowed_side is None:
+            decision.skip_reason = "neutral_no_alt_bias"
+            return decision
+        decision.side_source = "alt_1h_fallback"
+        return decision
 
     # ==========================================================================
     # LTF strength -- BTC (matches bitcoin.py _check_lower_tf_confirmation)
@@ -1621,14 +1931,18 @@ class UpdownBacktestEngine:
     def _edge_5m_eth_follow_from_df(
         self,
         eth_ta: TechnicalAnalysis,
-        btc_ta: TechnicalAnalysis,
+        btc_ta: Optional[TechnicalAnalysis],
         allowed_side: str,
         df_5m: pd.DataFrame,
         min_eth_adj: float,
         require_btc_impulse: bool,
     ) -> Tuple[float, float]:
         est_prob_up = 0.50 + (0.04 if allowed_side == "LONG" else -0.04)
-        btc_impulse = self._eth_follow_btc_5m_impulse(btc_ta, allowed_side)
+        btc_impulse = (
+            self._eth_follow_btc_5m_impulse(btc_ta, allowed_side)
+            if btc_ta is not None
+            else 0.0
+        )
         if require_btc_impulse and btc_impulse <= 0:
             return 0.0, 0.0
 
@@ -1666,7 +1980,7 @@ class UpdownBacktestEngine:
     def _edge_15m_eth_follow(
         self,
         eth_ta: TechnicalAnalysis,
-        btc_ta: TechnicalAnalysis,
+        btc_ta: Optional[TechnicalAnalysis],
         allowed_side: str,
         min_eth_adj: float,
         min_btc_hist: float,
@@ -1678,7 +1992,9 @@ class UpdownBacktestEngine:
             eth_ta.macd_15m, allowed_side, iql_hist_floor
         ):
             return 0.0, 0.0
-        if not self._eth_follow_btc_15m_impulse_ok(btc_ta, allowed_side, min_btc_hist):
+        if btc_ta is not None and not self._eth_follow_btc_15m_impulse_ok(
+            btc_ta, allowed_side, min_btc_hist
+        ):
             return 0.0, 0.0
         macd_15m = eth_ta.macd_15m
         if allowed_side == "LONG":
@@ -1948,8 +2264,11 @@ class UpdownBacktestEngine:
                 current += step_td
                 continue
 
-            # Also get 15m slice (needed for SOL/ETH alt HTF bias and potential future use)
+            # Also get recent alt slices used by replay-side direction resolution.
+            df_1h = self._before(data["1h"], window_open) if "1h" in data else pd.DataFrame()
             df_15m = self._before(data["15m"], window_open)
+            df_5m = self._before(data["5m"], window_open)
+            df_1m_full = data.get("1m", pd.DataFrame())
 
             # ==================================================================
             # Layer 1: HTF bias (symbol-specific)
@@ -1957,11 +2276,7 @@ class UpdownBacktestEngine:
             if is_btc:
                 htf_bias = self._get_htf_bias(ta, min_hist=self.min_4h_hist_magnitude)
                 btc_ta = ta
-            elif is_eth:
-                if self.eth_btc_follow_1h_required and not btc_data:
-                    _bump_skip("btc_data_unavailable")
-                    current += step_td
-                    continue
+            else:
                 btc_ta = None
                 if btc_data:
                     btc_ta = self._build_ta(
@@ -1970,26 +2285,76 @@ class UpdownBacktestEngine:
                         "4h",
                         include_trend_sabre=False,
                     )
-                    if btc_ta is None and self.eth_btc_follow_1h_required:
-                        _bump_skip("btc_ta_unavailable")
-                        current += step_td
-                        continue
-                # ETH live strategy is alt-first: ETH 1H/15m context chooses
-                # direction; BTC is retained for follow/quality filters below.
-                htf_bias = self._get_sol_htf_bias(ta, df_15m)
+            if is_eth:
+                if self.eth_btc_follow_1h_required and not btc_data:
+                    _bump_skip("btc_data_unavailable")
+                    current += step_td
+                    continue
+                if btc_data and btc_ta is None and self.eth_btc_follow_1h_required:
+                    _bump_skip("btc_ta_unavailable")
+                    current += step_td
+                    continue
+                direction = self._resolve_alt_replay_direction(
+                    symbol=symbol,
+                    ta=ta,
+                    df_1h=df_1h,
+                    df_15m=df_15m,
+                    df_5m=df_5m,
+                    alt_1m=df_1m_full,
+                    btc_ta=btc_ta,
+                    btc_data=btc_data,
+                    window_open=window_open,
+                    strategy_cfg=strategy_cfg,
+                )
+                if not direction.allowed_side:
+                    _bump_skip(direction.skip_reason or "htf_neutral")
+                    current += step_td
+                    continue
+                htf_bias = direction.primary_htf_bias
+                allowed_side = direction.allowed_side
             else:
-                htf_bias = self._get_sol_htf_bias(ta, df_15m)
-                btc_ta = None
+                direction = self._resolve_alt_replay_direction(
+                    symbol=symbol,
+                    ta=ta,
+                    df_1h=df_1h,
+                    df_15m=df_15m,
+                    df_5m=df_5m,
+                    alt_1m=df_1m_full,
+                    btc_ta=btc_ta,
+                    btc_data=btc_data,
+                    window_open=window_open,
+                    strategy_cfg=strategy_cfg,
+                )
+                if not direction.allowed_side:
+                    _bump_skip(direction.skip_reason or "htf_neutral")
+                    current += step_td
+                    continue
+                htf_bias = direction.primary_htf_bias
+                allowed_side = direction.allowed_side
 
-            if htf_bias == "NEUTRAL":
+            if is_btc and htf_bias == "NEUTRAL":
                 _bump_skip("htf_neutral")
                 current += step_td
                 continue
 
-            allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
-            tf_label = "5m" if window_minutes == 5 else "15m"
+            if is_btc:
+                allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
+            if window_minutes == 5:
+                tf_label = "5m"
+            elif window_minutes == 30:
+                tf_label = "30m"
+            else:
+                tf_label = "15m"
             eval_left = self._evaluation_minutes_left(window_minutes)
-            default_min, default_max = ((0.5, 5.0) if window_minutes == 5 else (2.0, 16.0))
+            if window_minutes == 5:
+                default_min, default_max = (0.5, 5.0)
+            elif window_minutes == 30:
+                if is_btc:
+                    default_min, default_max = (25.0, 29.0)
+                else:
+                    default_min, default_max = (26.0, 28.66)
+            else:
+                default_min, default_max = (2.0, 16.0)
             win_min, win_max = self._resolve_entry_window_bounds(
                 tf=tf_label,
                 default_min=default_min,
@@ -1999,13 +2364,25 @@ class UpdownBacktestEngine:
                 _bump_skip("outside_entry_window")
                 current += step_td
                 continue
-            if not self._within_entry_timing_window(mins_left=eval_left, tf=tf_label):
+            timing_window_open = self._within_entry_timing_window(
+                mins_left=eval_left,
+                tf=tf_label,
+            )
+            # Live strategies compute a preferred timing band for 30m markets, but do not
+            # hard-reject the entire 30m lane on that signal alone. Keep the strict gate
+            # for 5m/15m parity where live skip telemetry showed it mattered most.
+            if window_minutes in (5, 15) and not timing_window_open:
                 _bump_skip("timing_window_closed")
                 current += step_td
                 continue
 
-            if is_eth and self.eth_btc_follow_1h_required and not self._eth_follow_1h_ok(
+            if (
+                is_eth
+                and self.eth_btc_follow_1h_required
+                and not direction.skip_btc_follow_1h
+                and not self._eth_follow_1h_ok(
                 btc_ta, allowed_side, float(self.config.get("strategies", {}).get("eth_macro", {}).get("btc_follow_1h_hist_min", 8.0))
+                )
             ):
                 _bump_skip("btc_follow_1h")
                 current += step_td
@@ -2042,8 +2419,6 @@ class UpdownBacktestEngine:
             # Layer 3: Edge estimation (symbol + timeframe specific)
             # ==================================================================
             if window_minutes == 5:
-                df_5m = self._before(data["5m"], window_open)
-                df_1m_full = data.get("1m", pd.DataFrame())
                 if is_eth:
                     eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
                     edge, confidence = self._edge_5m_eth_follow_from_df(
@@ -2101,9 +2476,18 @@ class UpdownBacktestEngine:
                         iql_hist_floor=float(sc_macro.get("iql_15m_hist_floor", 0.03)),
                     )
 
+            effective_min_edge = min_edge
+            if symbol == "HYPE":
+                hard_min_edge = max(0.05, float(strategy_cfg.get("hard_min_edge", 0.05)))
+                hard_min_edge *= self._btc_1h_regime_min_edge_mult(strategy_cfg, btc_ta)
+                hard_min_edge *= get_drift_min_edge_mult("hype_macro", self.config)
+                effective_min_edge = max(effective_min_edge, hard_min_edge)
+
             # Min edge filter
-            if edge < min_edge:
+            if edge < effective_min_edge:
                 _bump_skip("edge_below_min")
+                if symbol == "HYPE" and effective_min_edge > min_edge:
+                    _bump_skip("hard_min_edge")
                 current += step_td
                 continue
 
