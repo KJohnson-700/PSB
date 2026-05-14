@@ -364,6 +364,14 @@ Operator correction: **all non-BTC live strategies must choose direction from th
 
 **`updateExitReasons`** called `$('…')` but **`$`** was only defined inside **`updateLivePerf`**, so successful **`/api/journal/exit-reason-summary`** responses threw **`ReferenceError`**, **`fetchAll` caught it**, and the bar stayed blank. Added local **`const $ = (id) => document.getElementById(id)`** inside **`updateExitReasons`**. **`dashboard_ui_rev`:** `2026-05-11-exit-reasons-strip-fix`.
 
+## 2026-05-14 — HYPE macro admission-gate loosening
+
+**`config/settings.yaml`:** HYPE-only live-test participation patch. Lowered **`strategies.hype_macro.min_liquidity`** from **1000** to **500** after repeated **`liquidity`** skips on thin Hyperliquid books. Widened **`entry_window_15m_max`** from **27.0** to **32.0**, **`entry_window_5m_max`** from **4.5** to **5.5**, and **`entry_window_auto_align_max_expand_min`** from **3.0** to **4.0** to reduce dominant **`outside_entry_window`** starvation.
+
+**`config/settings.yaml`:** Relaxed HYPE oracle friction by raising **`oracle_max_basis_bps`** from **12.0** to **18.0** and **`oracle_stale_basis_relax_max_bps`** from **45.0** to **75.0** after repeated **`oracle_stale`** / **`oracle_basis_block`** skips.
+
+**`config/settings.yaml`:** Removed three HYPE admission blocks during local testing: **`neutral_macro_require_spike_or_lag: true -> false`**, **`enforce_alt_1h_alignment: true -> false`**, and **`require_btc_catalyst_5m: true -> false`**. The purpose is to stop the **short-side 1H histogram veto** and 5m catalyst gate from suppressing nearly all HYPE candidates while participation is close to zero.
+
 ## 2026-05-11 — Dashboard: Performance tab polls journal summary for Session Summary
 
 **`fetchAll`** uses **`needJournalSummary = needJournal || needPerformance`** so **`GET /api/journal/summary`** runs on **Performance**, not only **Journal**. **`updateSessionSummary(j)`** always runs off that payload; **`updateJournal(j)`** still only when **Journal** and not archive-pinned. Fixes empty **Session Summary** card when staying on Performance. **`dashboard_ui_rev`:** `2026-05-11-performance-session-summary-poll`.

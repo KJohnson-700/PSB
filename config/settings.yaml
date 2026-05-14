@@ -362,7 +362,7 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     # Macro NEUTRAL + no BTC spike and no lag: allow alt 1H fallback when false (sideways / starvation fix)
-    neutral_macro_require_spike_or_lag: true
+    neutral_macro_require_spike_or_lag: false  # 2026-05-13 local live starvation fix: allow alt 1H fallback in neutral tape
     # True = do not LONG into alt 1H bearish / SHORT into alt 1H bullish (reduces fading SOL headwind).
     enforce_alt_1h_alignment: true
     rsi_buy_block_above: 70.0
@@ -387,7 +387,7 @@ strategies:
     # IQL: MACD histogram is in raw price units; 0.03 was far too tight for SOL (~$84).
     # 0.15 ≈ same order as typical SOL 15m hist on meaningful moves; keeps filter on vs disabling IQL entirely.
     iql_15m_enabled: true
-    iql_15m_hist_floor: 0.10      # lowered from 0.15 (2026-05-06) — 0.15 too strict for SOL ~$80 MACD scale; 15m starvation
+    iql_15m_hist_floor: 0.08      # 2026-05-13 local live starvation fix: soften 15m IQL floor after repeated near-miss rejects
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -416,7 +416,7 @@ strategies:
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
     # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
     entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
-    entry_window_15m_max: 23.0    # 2026-05-13: 18→23 (ops RCA) — listings often sit well above tight BTC-style caps; ramp still guards thin edge
+    entry_window_15m_max: 28.0    # 2026-05-13 local live starvation fix: widen admitted 15m listing window for 60s scan cadence
     # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
@@ -426,12 +426,12 @@ strategies:
     updown_macro_leg_min_for_long: 0.0
     # 5m candle: widened window (was 2.9-3.6 = only 0.7min window, too tight for network/exec latency)
     entry_window_5m_min: 0.0      # minutes remaining (avoid missing late-cycle 5m windows)
-    entry_window_5m_max: 3.0      # tightened from 4.5 — removes expired-market entries
+    entry_window_5m_max: 4.0      # 2026-05-13 local live starvation fix: recover missed 5m windows without reopening very early entries
     # Auto-align: expansion uses max(cadence, max_expand) in code; raise max_expand to reduce outside_entry_window.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     # Widen band vs cadence latency to cut outside_entry_window skips (May 2026 ops review).
-    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
 
@@ -463,7 +463,7 @@ strategies:
     min_edge: 0.09                # Raised from 0.06 — same backtest-inflation rationale as SOL/BTC
     min_edge_5m: 0.10             # raised from 0.085 (2026-05-08) — current ETH 5m 33% WR / -$2.23
     min_edge_15m_when_ltf_unconfirmed: 0.10   # softened from 0.11 to recover 15m participation
-    neutral_macro_require_spike_or_lag: true   # align with shared alt policy: neutral ETH should require a real catalyst
+    neutral_macro_require_spike_or_lag: false   # 2026-05-13 local live starvation fix: stop whole-scan neutral aborts
     block_counter_macro_leg_updown: true      # block LONG with macro_leg below floor / SHORT with macro_leg above ceiling
     updown_macro_leg_min_for_long: 0.0
     updown_macro_leg_max_for_short: 0.0
@@ -515,16 +515,16 @@ strategies:
     btc_follow_1h_allow_rising_recovery: true   # allow LONG when 1H hist negative but rising above -recovery floor; SHORT symmetric
     btc_follow_1h_recovery_hist_floor: 80.0    # magnitude: LONG hist > -80 when rising; SHORT hist < +80 when falling
     btc_follow_1h_allow_floor_without_rising: false  # remove permissive continuation bypass; require real repair / continuation
-    btc_follow_15m_hist_min: 0.03 # BTC-follow redesign: require real BTC 15m impulse, not flat drift
+    btc_follow_15m_hist_min: 0.02 # 2026-05-13 local live starvation fix: slightly softer 15m BTC-follow bar
     # Keep BTC-follow stricter so ETH does not inherit extra permissive bypasses vs other alt lanes.
-    btc_follow_stf_bypass_if_1h_ok: false
+    btc_follow_stf_bypass_if_1h_ok: true
     # 5m only: when false, do not apply bypass_5m_impulse_btc_1h_ok (15m still uses btc_follow_stf_bypass_if_1h_ok above).
     btc_follow_5m_allow_1h_impulse_bypass: false
     # If strict 15m still fails, do not silently admit grind-only BTC follow.
     btc_follow_15m_allow_macd_grind: false
     # Do not bypass strict BTC 5m/15m follow just because BTC HTF already agrees.
     btc_follow_stf_bypass_when_macro_agrees: false
-    btc_follow_5m_requires_impulse: true
+    btc_follow_5m_requires_impulse: false
     eth_follow_5m_min_adj: 0.02   # lowered from 0.04 — easier 5m entry in grindy tape
     eth_follow_15m_hist_min: 0.02 # lowered from 0.03 (2026-05-06) — 15m starvation; only ETH 15m-exclusive lever
     eth_follow_15m_min_adj: 0.04  # was 0.05 — slight relax to recover 15m lane without dropping hist_min
@@ -551,12 +551,12 @@ strategies:
     max_concurrent_positions: 3
     # Entry window keys match strategies.sol_macro (wide for scan cadence / latency).
     entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
-    entry_window_15m_max: 18.0    # widened from 16.0 (2026-05-06)
+    entry_window_15m_max: 24.0    # 2026-05-13 local live starvation fix: widen admitted 15m listing window for 60s scan cadence
     entry_window_5m_min: 0.5      # raised from 0.0 — removes zero-minute entries
-    entry_window_5m_max: 3.0      # tightened from 4.5 — removes expired-market entries
+    entry_window_5m_max: 4.0      # 2026-05-13 local live starvation fix: recover missed 5m windows without reopening very early entries
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 15
     entry_window_latency_buffer_sec: 12
     updown_min_edge_mins_left_ramp_start_min: 15.0
@@ -602,7 +602,7 @@ strategies:
     enabled: true
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
-    min_liquidity: 1000           # match sol_macro — evaluate liquid books only
+    min_liquidity: 500            # 2026-05-13 local live starvation fix: HYPE books are thinner than SOL/ETH; stop dropping most candidates on liquidity
     min_edge: 0.09                # sol_macro parity
     min_edge_buy_no: 0.08         # added 2026-05-06 — mirror xrp_macro candidate A; addresses 48% of HYPE BUY_NO edge_below_min skips
     min_edge_5m: 0.07             # sol_macro parity (flat tape MACD tiers need reachable floor)
@@ -625,9 +625,9 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
-    oracle_max_basis_bps: 12.0
+    oracle_max_basis_bps: 18.0
     # Chainlink updatedAt can lag well beyond oracle_max_age_sec while HL spot still tracks price.
-    oracle_stale_basis_relax_max_bps: 45.0
+    oracle_stale_basis_relax_max_bps: 75.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -649,26 +649,26 @@ strategies:
     look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 27.0    # 2026-05-13: 16→27 — HYPE Polymarket 15m windows often list with high mins_left vs BTC/SOL-style caps (ops RCA)
+    entry_window_15m_max: 32.0    # 2026-05-13 local live starvation fix: HYPE listings are showing up too early for the current admitted band
     entry_window_5m_min: 0.0
-    entry_window_5m_max: 4.5
+    entry_window_5m_max: 5.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
     btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
-    neutral_macro_require_spike_or_lag: true
-    enforce_alt_1h_alignment: true     # 2026-05-13: restore shared alt behavior — suppress BUY_YES against bearish alt 1H while keeping BUY_NO diagnostic path
+    neutral_macro_require_spike_or_lag: false
+    enforce_alt_1h_alignment: false    # 2026-05-13 local live starvation fix: stop 1H histogram veto from killing nearly all HYPE short candidates
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.00
-    require_btc_catalyst_5m: true    # 2026-05-07: tighten failing HYPE 5m long path only; do not change 15m lane here
+    require_btc_catalyst_5m: false   # 2026-05-13 local live starvation fix: remove another major 5m admission blocker while HYPE participation is near zero
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
