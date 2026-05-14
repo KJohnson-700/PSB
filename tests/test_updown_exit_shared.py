@@ -6,7 +6,10 @@ from src.execution.updown_exit_shared import (
     adverse_for_updown_cents_time_stop,
     cents_stop_for_entry_price,
     effective_updown_stop_loss_pct,
+    infer_updown_window_size,
     parse_updown_exit_globals,
+    resolve_updown_exit_params_for_position,
+    resolve_updown_lane,
     resolve_updown_exit_params,
     scaled_exit_window_mins,
     symbol_to_strategy_name,
@@ -91,3 +94,68 @@ def test_adverse_time_stop_long_yes_and_no():
         entry_price=0.50,
         up_stop_cents=0.03,
     )
+
+
+def test_resolve_updown_lane_maps_buy_no_and_legacy_short_yes_to_down():
+    assert resolve_updown_lane(entry_leg="NO", outcome="NO") == "down"
+    assert resolve_updown_lane(entry_leg="YES", outcome="NO") == "down"
+    assert resolve_updown_lane(entry_leg="YES", outcome="YES") == "up"
+
+
+def test_window_lane_override_precedence_beats_strategy_lane_and_global_lane():
+    g = parse_updown_exit_globals(
+        {
+            "updown_stop_loss_pct": 0.20,
+            "updown_lane_overrides": {
+                "down": {"updown_stop_loss_pct": 0.19},
+            },
+            "updown_overrides": {
+                "eth_macro": {
+                    "updown_stop_loss_pct": 0.18,
+                    "lane_overrides": {
+                        "down": {"updown_stop_loss_pct": 0.17},
+                    },
+                    "window_lane_overrides": {
+                        "5m": {
+                            "down": {"updown_stop_loss_pct": 0.14},
+                        }
+                    },
+                }
+            },
+        }
+    )
+    params = resolve_updown_exit_params_for_position(
+        g,
+        strategy_name="eth_macro",
+        window_size="5m",
+        entry_leg="NO",
+        outcome="NO",
+    )
+    assert params.updown_stop_loss_pct == pytest.approx(0.14)
+
+
+def test_strategy_level_override_used_when_no_lane_specific_override():
+    g = parse_updown_exit_globals(
+        {
+            "updown_stop_cents": 0.03,
+            "updown_overrides": {
+                "eth_macro": {"updown_stop_cents": 0.02},
+            },
+        }
+    )
+    params = resolve_updown_exit_params_for_position(
+        g,
+        strategy_name="eth_macro",
+        window_size="15m",
+        entry_leg="YES",
+        outcome="YES",
+    )
+    assert params.updown_stop_cents == pytest.approx(0.02)
+
+
+def test_infer_window_size_from_runway_for_legacy_positions():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    assert infer_updown_window_size("", opened_at=now, end_date=now + timedelta(minutes=5)) == "5m"
+    assert infer_updown_window_size("", opened_at=now, end_date=now + timedelta(minutes=15)) == "15m"

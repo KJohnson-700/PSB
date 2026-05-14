@@ -167,3 +167,26 @@ def test_buy_no_skip_event_is_persisted(tmp_path: Path, monkeypatch) -> None:
     assert event["reason"] == "edge_below_min"
     assert event["extra"]["effective_min_edge"] == 0.09
     assert event["extra"]["alt_1h_trend"] == "BULLISH"
+
+
+def test_open_position_window_size_persists_and_resumes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    session_id = "20260514_000001"
+    journal = TradeJournal(session_id=session_id, resume_latest=False)
+    journal.log_entry(
+        trade_id="t1",
+        market_id="eth-updown-1",
+        market_question="Ethereum Up or Down - test",
+        strategy="eth_macro",
+        action="BUY_NO",
+        side="BUY",
+        outcome="NO",
+        size=10.0,
+        entry_price=0.51,
+        bankroll=1000.0,
+        extra={"window_size": "5m"},
+    )
+    assert journal.get_open_positions()[0]["window_size"] == "5m"
+
+    resumed = TradeJournal(session_id=session_id, resume_latest=True)
+    assert resumed.get_open_positions()[0]["window_size"] == "5m"

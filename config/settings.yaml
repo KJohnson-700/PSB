@@ -115,9 +115,95 @@ trading:
       eth_macro:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
+        window_lane_overrides:
+          5m:
+            down:
+              updown_stop_loss_pct: 0.14
+              updown_stop_cents: 0.015
+              updown_exit_window_mins: 1.5
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.56
+              updown_stop_cents_high_entry: 0.01
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
+          15m:
+            down:
+              updown_stop_loss_pct: 0.16
+              updown_stop_cents: 0.02
+              updown_exit_window_mins: 2.5
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.58
+              updown_stop_cents_high_entry: 0.015
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.10
+      sol_macro:
+        window_lane_overrides:
+          5m:
+            down:
+              updown_stop_loss_pct: 0.15
+              updown_stop_cents: 0.015
+              updown_exit_window_mins: 1.5
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.56
+              updown_stop_cents_high_entry: 0.01
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
+          15m:
+            down:
+              updown_stop_loss_pct: 0.17
+              updown_stop_cents: 0.02
+              updown_exit_window_mins: 2.25
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.58
+              updown_stop_cents_high_entry: 0.015
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.10
+      hype_macro:
+        window_lane_overrides:
+          5m:
+            down:
+              updown_stop_loss_pct: 0.15
+              updown_stop_cents: 0.015
+              updown_exit_window_mins: 1.5
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.56
+              updown_stop_cents_high_entry: 0.01
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
+          15m:
+            down:
+              updown_stop_loss_pct: 0.17
+              updown_stop_cents: 0.02
+              updown_exit_window_mins: 2.25
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.58
+              updown_stop_cents_high_entry: 0.015
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.10
       xrp_macro:
         updown_stop_cents: 0.03      # reverted from 0.04 (candidate B, 2026-05-06) — time_stop bleed -$28.47/9 trades
         updown_exit_window_mins: 2.25 # reverted from 1.5 (candidate B, 2026-05-06) — back to global parity
+        window_lane_overrides:
+          5m:
+            down:
+              updown_stop_loss_pct: 0.15
+              updown_stop_cents: 0.015
+              updown_exit_window_mins: 1.5
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.56
+              updown_stop_cents_high_entry: 0.01
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
+          15m:
+            down:
+              updown_stop_loss_pct: 0.17
+              updown_stop_cents: 0.02
+              updown_exit_window_mins: 2.25
+              updown_exit_window_max_fraction: 0.45
+              updown_high_entry_threshold: 0.58
+              updown_stop_cents_high_entry: 0.015
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.10
 
 data_collection:
   weather:
@@ -211,9 +297,9 @@ strategies:
     # Preferred minutes-left band for marginal up/down tie-break timing (not an AI gate).
     # Values are minutes remaining until resolution.
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
-    entry_timing_window_15m_max: 15.0
+    entry_timing_window_15m_max: 18.0
     entry_timing_window_5m_min: 0.5
-    entry_timing_window_5m_max: 5.0
+    entry_timing_window_5m_max: 5.5
     kelly_fraction: 0.30    # 2026-05-07: calibrated so edge×kf×br lands in tier band — preserves edge differentiation
     entry_price_min: 0.10           # For directional threshold markets (wide range intentional)
     entry_price_max: 0.90
@@ -224,13 +310,13 @@ strategies:
     # Up/down entry timing window (minutes until resolution); edge/price gates still apply.
     # Note: listings often appear with mins_left > 15 before the quoted candle — entry_window_15m_max must reflect that.
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
+    entry_window_15m_max: 19.0
     entry_window_5m_min: 0.5      # tight 5m windows; fire earlier in candle
-    entry_window_5m_max: 5.0
+    entry_window_5m_max: 5.5
     # Auto-align entry windows to scan cadence to avoid repeated "outside_entry_window" misses.
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
-    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 10
     # Shave seconds off mins_left before band check (sync + strategy evaluation latency).
     entry_window_latency_buffer_sec: 12
@@ -265,7 +351,7 @@ strategies:
     # BTC regime shifts. Re-enable when 4H MACD crosses bearish and price rolls over.
     disable_buy_no_counter_trend: true
     # Require stronger edge for BUY_NO entries (short in a bull/mixed market needs conviction).
-    min_edge_buy_no: 0.11
+    min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
     macro_event_guard_after_min: 30

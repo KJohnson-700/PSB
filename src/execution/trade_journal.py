@@ -236,6 +236,7 @@ class TradeJournal:
         entry_leg = entry_leg_resolved
         merged_extra = enrich_entry_extra(extra, market_end_at=market_end_at)
         merged_extra["entry_leg"] = entry_leg
+        window_size = str(merged_extra.get("window_size") or "")
         entry = JournalEntry(
             timestamp=datetime.now(timezone.utc).isoformat(),
             event="ENTRY",
@@ -278,7 +279,10 @@ class TradeJournal:
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
             "entry_leg": entry_leg,
+            "window_size": window_size,
         }
+        if market_end_at is not None:
+            self.open_positions[trade_id]["market_end_at"] = str(market_end_at)
         _ty = (token_id_yes or "").strip()
         _tn = (token_id_no or "").strip()
         if _ty:

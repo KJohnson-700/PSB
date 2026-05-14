@@ -249,6 +249,49 @@ def test_updown_live_exit_proxy_can_stop_loss_before_expiry_window():
     assert pnl < 0
 
 
+def test_updown_live_exit_proxy_uses_down_lane_window_override_for_buy_no():
+    cfg = _config()
+    cfg["trading"]["exit_rules"]["updown_stop_loss_pct"] = 0.30
+    cfg["trading"]["exit_rules"]["updown_overrides"] = {
+        "eth_macro": {
+            "window_lane_overrides": {
+                "5m": {
+                    "down": {
+                        "updown_stop_loss_pct": 0.14,
+                    }
+                }
+            }
+        }
+    }
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0, 100.05, 100.10, 100.12, 100.15],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=5),
+        action="BUY_NO",
+        entry_price=0.50,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.50,
+        symbol="ETH",
+        window_minutes=5,
+    )
+
+    assert exit_reason == "updown_stop_loss"
+    assert outcome == "LOSS"
+    assert exit_price < 0.50
+    assert pnl < 0
+
+
 def test_updown_live_exit_proxy_can_take_profit_before_settlement():
     engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
     ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")

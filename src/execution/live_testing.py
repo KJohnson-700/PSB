@@ -30,6 +30,7 @@ from src.execution.updown_exit_shared import (
     effective_updown_stop_loss_pct,
     parse_updown_exit_globals,
     resolve_updown_exit_params,
+    resolve_updown_exit_params_for_position,
     scaled_exit_window_mins,
 )
 
@@ -213,25 +214,28 @@ class PositionExitManager:
             )
 
             if is_updown:
-                (
-                    up_stop_cents,
-                    up_exit_window_mins,
-                    up_max_hold_mins,
-                    up_exit_window_max_fraction,
-                ) = self._resolve_updown_exit_params(strategy_name)
+                resolved = resolve_updown_exit_params_for_position(
+                    self._ude,
+                    strategy_name=strategy_name,
+                    window_size=getattr(pos, "window_size", ""),
+                    entry_leg=entry_leg,
+                    outcome=pos.outcome,
+                    opened_at=pos.opened_at,
+                    end_date=pos.end_date,
+                )
 
                 up_stop_cents = cents_stop_for_entry_price(
-                    up_stop_cents,
+                    resolved.updown_stop_cents,
                     pos.entry_price,
-                    high_threshold=self.updown_high_entry_threshold,
-                    high_stop_cents=self.updown_stop_cents_high_entry,
+                    high_threshold=resolved.updown_high_entry_threshold,
+                    high_stop_cents=resolved.updown_stop_cents_high_entry,
                 )
 
                 effective_stop_loss_pct = effective_updown_stop_loss_pct(
-                    self.updown_stop_loss_pct,
+                    resolved.updown_stop_loss_pct,
                     pnl_pct,
-                    in_profit_trigger_pct=self.updown_in_profit_stop_trigger_pct,
-                    tighten_to_pct=self.updown_in_profit_stop_tighten_to_pct,
+                    in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
+                    tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
                 )
 
                 # TP: exit early when price spikes strongly in our favour rather than
@@ -256,7 +260,7 @@ class PositionExitManager:
                             _end - datetime.now(timezone.utc)
                         ).total_seconds() / 60.0
 
-                    effective_exit_window = up_exit_window_mins
+                    effective_exit_window = resolved.updown_exit_window_mins
                     if pos.end_date is not None:
                         _end_e = pos.end_date
                         if _end_e.tzinfo is None:
@@ -266,8 +270,8 @@ class PositionExitManager:
                             opened = opened.replace(tzinfo=timezone.utc)
                         mins_at_entry = (_end_e - opened).total_seconds() / 60.0
                         effective_exit_window = scaled_exit_window_mins(
-                            up_exit_window_mins,
-                            up_exit_window_max_fraction,
+                            resolved.updown_exit_window_mins,
+                            resolved.updown_exit_window_max_fraction,
                             mins_at_entry,
                         )
 
@@ -285,7 +289,7 @@ class PositionExitManager:
                         )
                         if adverse:
                             reason = "updown_time_stop"
-                    elif mins_remaining is None and hours_held >= up_max_hold_mins / 60.0:
+                    elif mins_remaining is None and hours_held >= resolved.updown_max_hold_mins / 60.0:
                         # Safety valve for journal-reloaded positions that have no
                         # end_date: if still open after updown_max_hold_mins, exit.
                         reason = "updown_time_limit"

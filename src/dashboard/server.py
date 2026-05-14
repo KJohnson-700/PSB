@@ -3835,7 +3835,7 @@ class ConfigUpdates(BaseModel):
                 _validate_section_keys(
                     exit_rules,
                     "trading.exit_rules",
-                    {"updown_stop_loss_pct"},
+                    {"updown_stop_loss_pct", "updown_lane_overrides", "updown_overrides"},
                 )
                 _validate_numeric_range(
                     exit_rules,
@@ -3844,6 +3844,7 @@ class ConfigUpdates(BaseModel):
                     ge=0,
                     le=1,
                 )
+                _validate_updown_override_patch(exit_rules)
             if self.trading.get("dry_run") is False:
                 raise ValueError("trading.dry_run cannot be disabled via dashboard config")
             _validate_numeric_range(self.trading, "trading", "default_position_size", gt=0)
@@ -3964,6 +3965,69 @@ def _validate_numeric_range(
         raise ValueError(f"{section_name}.{key} must be >= {ge}")
     if le is not None and not value <= le:
         raise ValueError(f"{section_name}.{key} must be <= {le}")
+
+
+def _validate_updown_override_patch(exit_rules: Dict[str, Any]) -> None:
+    def _validate_override_map(section: Dict[str, Any], section_name: str) -> None:
+        _validate_section_keys(
+            section,
+            section_name,
+            {
+                "updown_stop_loss_pct",
+                "updown_stop_cents",
+                "updown_exit_window_mins",
+                "updown_max_hold_mins",
+                "updown_exit_window_max_fraction",
+                "updown_stop_cents_high_entry",
+                "updown_high_entry_threshold",
+                "updown_in_profit_stop_trigger_pct",
+                "updown_in_profit_stop_tighten_to_pct",
+                "lane_overrides",
+                "window_lane_overrides",
+            },
+        )
+        for key in (
+            "updown_stop_loss_pct",
+            "updown_stop_cents",
+            "updown_exit_window_mins",
+            "updown_max_hold_mins",
+            "updown_exit_window_max_fraction",
+            "updown_stop_cents_high_entry",
+            "updown_high_entry_threshold",
+            "updown_in_profit_stop_trigger_pct",
+            "updown_in_profit_stop_tighten_to_pct",
+        ):
+            _validate_numeric_range(section, section_name, key, ge=0, le=1 if key.endswith("_pct") or key.endswith("_fraction") else None)
+        lane_overrides = section.get("lane_overrides") or {}
+        if lane_overrides:
+            _validate_section_keys(lane_overrides, f"{section_name}.lane_overrides", {"up", "down"})
+            for lane, lane_cfg in lane_overrides.items():
+                _validate_override_map(lane_cfg, f"{section_name}.lane_overrides.{lane}")
+        window_lane_overrides = section.get("window_lane_overrides") or {}
+        if window_lane_overrides:
+            if not isinstance(window_lane_overrides, dict):
+                raise ValueError(f"{section_name}.window_lane_overrides must be an object")
+            for window, window_cfg in window_lane_overrides.items():
+                if str(window) not in {"5m", "15m", "30m"}:
+                    raise ValueError(f"{section_name}.window_lane_overrides.{window} must be one of 5m, 15m, 30m")
+                _validate_section_keys(window_cfg, f"{section_name}.window_lane_overrides.{window}", {"up", "down"})
+                for lane, lane_cfg in window_cfg.items():
+                    _validate_override_map(
+                        lane_cfg,
+                        f"{section_name}.window_lane_overrides.{window}.{lane}",
+                    )
+
+    lane_overrides = exit_rules.get("updown_lane_overrides") or {}
+    if lane_overrides:
+        _validate_section_keys(lane_overrides, "trading.exit_rules.updown_lane_overrides", {"up", "down"})
+        for lane, lane_cfg in lane_overrides.items():
+            _validate_override_map(lane_cfg, f"trading.exit_rules.updown_lane_overrides.{lane}")
+    strategy_overrides = exit_rules.get("updown_overrides") or {}
+    if strategy_overrides:
+        if not isinstance(strategy_overrides, dict):
+            raise ValueError("trading.exit_rules.updown_overrides must be an object")
+        for strategy, strategy_cfg in strategy_overrides.items():
+            _validate_override_map(strategy_cfg, f"trading.exit_rules.updown_overrides.{strategy}")
 
 
 @app.post("/api/config")

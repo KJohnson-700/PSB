@@ -40,6 +40,52 @@ def test_updown_override_resolution_for_eth_and_xrp_macro():
     assert xrp == (0.04, 1.5, 18.0, 0.5)
 
 
+def test_down_lane_5m_window_override_is_used_for_eth_macro():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_stop_cents": 0.03,
+                "updown_exit_window_mins": 2.25,
+                "updown_overrides": {
+                    "eth_macro": {
+                        "window_lane_overrides": {
+                            "5m": {
+                                "down": {
+                                    "updown_stop_loss_pct": 0.14,
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Ethereum Up or Down - test",
+        outcome="NO",
+        strategy="eth_macro",
+        size=10.0,
+        entry_price=0.50,
+        current_price=0.50,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=2),
+        end_date=now + timedelta(minutes=3),
+        entry_leg="NO",
+        window_size="5m",
+    )
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.58}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+    assert len(exits) == 1
+    assert exits[0].reason == "updown_stop_loss"
+
+
 def test_updown_percentage_stop_loss_fires_before_expiry_window():
     cfg = {
         "trading": {
@@ -244,3 +290,46 @@ def test_in_profit_stop_tightens_when_threshold_crossed():
     # Current implementation gates on current pnl_pct, not peak — so at -10% pnl,
     # the trigger (+5%) is not met, tightening does not apply, and 20% base does not fire.
     assert exits == []
+
+
+def test_legacy_position_without_window_size_falls_back_to_inferred_runway():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_cents": 0.03,
+                "updown_exit_window_mins": 2.25,
+                "updown_overrides": {
+                    "sol_macro": {
+                        "window_lane_overrides": {
+                            "5m": {
+                                "down": {
+                                    "updown_stop_cents": 0.015,
+                                    "updown_exit_window_mins": 1.5,
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Solana Up or Down - test",
+        outcome="NO",
+        strategy="sol_macro",
+        size=10.0,
+        entry_price=0.50,
+        opened_at=now - timedelta(minutes=4),
+        end_date=now + timedelta(minutes=1),
+        entry_leg="NO",
+    )
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.52}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+    assert len(exits) == 1
+    assert exits[0].reason == "updown_time_stop"

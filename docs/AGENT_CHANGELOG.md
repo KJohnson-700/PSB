@@ -8,6 +8,34 @@
 
 ---
 
+## 2026-05-14 — Up/down exits: lane + window overrides for ETH/SOL/HYPE/XRP bearish lanes
+
+**`src/execution/updown_exit_shared.py`:** Added lane-aware/window-aware up/down exit resolution with explicit precedence: strategy+window+lane → strategy+lane → global lane → existing globals. Shared helpers now classify `up` vs `down` exposure (`BUY_NO` and legacy short-YES map to `down`) and infer `5m` / `15m` / `30m` from stored `window_size` or exact entry runway for legacy open positions.
+
+**`src/execution/live_testing.py`:** Live exit checks now resolve adverse `% stop`, late-window cents stop, high-entry tightening, and in-profit tightening through the shared lane/window resolver while preserving exit order (`take_profit` → `updown_stop_loss` → `updown_time_stop` → expiry/time-limit).
+
+**`src/backtest/updown_engine.py`:** Backtest live-exit proxy now uses the same lane/window-aware resolver as live so ETH/SOL bearish replay stays aligned with production semantics.
+
+**`src/execution/clob_client.py`, `src/main.py`, `src/execution/trade_journal.py`:** `Position` now persists `window_size`; entry execution writes it onto live positions and journal open-position state, and restart sync restores it for exit evaluation.
+
+**`config/settings.yaml`:** Added initial ETH/SOL/HYPE/XRP `window_lane_overrides` for bearish (`down`) `5m` and `15m` up/down exits. ETH keeps its existing base per-strategy override and adds tighter bearish thresholds; SOL/HYPE/XRP add bearish window-specific overrides without changing bullish behavior. BTC was intentionally left on shared defaults because the shipped lane/window plumbing does not change BTC behavior unless explicit overrides are added.
+
+**Tests:** Added shared exit precedence/lane tests, live ETH/SOL bearish stop/time-stop regressions, journal `window_size` persistence coverage, backtest parity coverage for `BUY_NO` down-lane overrides, and dashboard config round-trip coverage for nested `window_lane_overrides`.
+
+**Deferred until more test data:** No lane-specific `take_profit_pct`, no BTC bearish override block yet, no side-specific exit ordering changes, and no lane-specific global defaults beyond per-strategy tuning. Those remain candidates only if the next lane-level paper data still shows `updown_stop_loss` / `updown_time_stop` concentration after this pass.
+
+---
+
+## 2026-05-14 — BTC admission loosen: wider windows + lower BUY_NO extra edge floor
+
+**`config/settings.yaml`:** BTC-only admission loosening after local paper session `test_20260514_000030` showed `cumulative_signal_counts.bitcoin = 0` with skip mix dominated by `outside_entry_window`, plus a few `price_too_far_from_50_50` and short histogram rejects. Widened `entry_window_15m_max` **16.0 → 19.0**, `entry_window_5m_max` **5.0 → 5.5**, `entry_timing_window_15m_max` **15.0 → 18.0**, `entry_timing_window_5m_max` **5.0 → 5.5**, increased `entry_window_auto_align_max_expand_min` **3.0 → 4.0**, and lowered BTC `min_edge_buy_no` **0.11 → 0.09**.
+
+**Why this scope only:** The current BTC starvation evidence was admission-side, not exit-side. No BTC exit overrides were added here, and no short histogram gate code was changed yet.
+
+**Deferred until more test data:** If BTC still fails to participate after the widened windows, the next candidate tweak is code-side relaxation of the bearish histogram rejects (`hist_gate_15m_short_reject`, `hist_gate_5m_short_reject`) or a configurable bypass, not more exit changes.
+
+---
+
 ## 2026-05-13 — Dashboard: backtest HUD heat ramp, marquee brand colors, stronger card/button glow
 
 **`src/dashboard/index.html`:** Backtest HUD uses multi-accent frame (red / purple / cyan / green) instead of cyan-only; live run title uses gradient clip; **% display** `clamp(3.25rem, 12vw, 5.5rem)` with determinate **red→orange→green** via `_btHeatFromPct` + `_btApplyDeterminateHeat` on the number, fill bar, and track border; indeterminate bar uses full-spectrum gradient with **slide + hue-shift** animations; spawn/wait uses `bt-hud-pct-wait` cycle. Cards, metric boxes, hero tiles, and buttons get **stronger default + hover glow** (purple/cyan/green mix). Backtest tab notice uses purple/green tint.

@@ -69,6 +69,7 @@ class Position:
     strategy: str = "unknown"
     # YES = entry_price quotes YES token (BUY_YES, SELL_YES). NO = BUY_NO (NO token).
     entry_leg: str = "YES"
+    window_size: str = ""
     # CLOB outcome token ids (from market clobTokenIds); used for book/mid by token and dashboard.
     token_id_yes: str = ""
     token_id_no: str = ""
@@ -341,6 +342,7 @@ class CLOBClient:
                     else None,
                     strategy=p.get("strategy", "unknown"),
                     entry_leg=p.get("entry_leg", "YES"),
+                    window_size=str(p.get("window_size") or ""),
                     token_id_yes=str(p.get("token_id_yes") or ""),
                     token_id_no=str(p.get("token_id_no") or ""),
                 )

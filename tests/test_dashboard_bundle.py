@@ -403,6 +403,46 @@ def test_config_post_accepts_updown_stop_loss_pct_with_auth(monkeypatch, tmp_pat
     assert "updown_stop_loss_pct: 0.18" in config_path.read_text(encoding="utf-8")
 
 
+def test_config_post_preserves_nested_window_lane_overrides(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        "trading:\n  exit_rules:\n    updown_overrides:\n      eth_macro: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/config",
+        headers={"X-API-Key": "test-key"},
+        json={
+            "trading": {
+                "exit_rules": {
+                    "updown_overrides": {
+                        "eth_macro": {
+                            "window_lane_overrides": {
+                                "5m": {
+                                    "down": {
+                                        "updown_stop_loss_pct": 0.14,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    assert r.status_code == 200
+    text = config_path.read_text(encoding="utf-8")
+    assert "window_lane_overrides" in text
+    assert "updown_stop_loss_pct: 0.14" in text
+
+
 def test_exit_reason_summary_groups_current_journal(monkeypatch):
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient

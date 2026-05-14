@@ -73,9 +73,8 @@ from src.execution.updown_exit_shared import (
     cents_stop_for_entry_price,
     effective_updown_stop_loss_pct,
     parse_updown_exit_globals,
-    resolve_updown_exit_params,
+    resolve_updown_exit_params_for_position,
     scaled_exit_window_mins,
-    symbol_to_strategy_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -526,9 +525,6 @@ class UpdownBacktestEngine:
     def _evaluation_minutes_left(self, window_minutes: int) -> float:
         return max(0.0, float(window_minutes) - (self._entry_eval_delay_sec / 60.0))
 
-    def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float, float]:
-        return resolve_updown_exit_params(self._ude, symbol_to_strategy_name(symbol))
-
     def _yes_mid_at_window_open(
         self,
         *,
@@ -627,18 +623,28 @@ class UpdownBacktestEngine:
             return 0.0, "", 0.0, asset_open, asset_open, "unsettled"
 
         asset_close = float(w.iloc[-1]["close"])
-        (
-            up_stop_cents_resolved,
-            up_exit_window_mins,
-            _max_hold,
-            up_exit_window_max_fraction,
-        ) = self._resolve_updown_exit_params(symbol)
+        strategy_name = {
+            "BTC": "bitcoin",
+            "SOL": "sol_macro",
+            "ETH": "eth_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }.get(str(symbol).upper(), "sol_macro")
+        resolved = resolve_updown_exit_params_for_position(
+            self._ude,
+            strategy_name=strategy_name,
+            window_size=f"{int(window_minutes)}m",
+            entry_leg="NO" if action == "BUY_NO" else "YES",
+            outcome="NO" if action == "BUY_NO" else "YES",
+            opened_at=window_open.to_pydatetime() if hasattr(window_open, "to_pydatetime") else None,
+            end_date=window_close.to_pydatetime() if hasattr(window_close, "to_pydatetime") else None,
+        )
 
         up_stop_cents = cents_stop_for_entry_price(
-            up_stop_cents_resolved,
+            resolved.updown_stop_cents,
             fill_price,
-            high_threshold=self._ude.updown_high_entry_threshold,
-            high_stop_cents=self._ude.updown_stop_cents_high_entry,
+            high_threshold=resolved.updown_high_entry_threshold,
+            high_stop_cents=resolved.updown_stop_cents_high_entry,
         )
 
         mins_at_entry = float(window_minutes)
@@ -669,10 +675,10 @@ class UpdownBacktestEngine:
             pnl_pct = (current_token - fill_price) / fill_price if fill_price > 0 else 0.0
 
             effective_sl = effective_updown_stop_loss_pct(
-                self._ude.updown_stop_loss_pct,
+                resolved.updown_stop_loss_pct,
                 pnl_pct,
-                in_profit_trigger_pct=self._ude.updown_in_profit_stop_trigger_pct,
-                tighten_to_pct=self._ude.updown_in_profit_stop_tighten_to_pct,
+                in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
+                tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
             )
 
             if pnl_pct >= self.take_profit_pct:
@@ -702,8 +708,8 @@ class UpdownBacktestEngine:
                 )
 
             effective_window = scaled_exit_window_mins(
-                up_exit_window_mins,
-                up_exit_window_max_fraction,
+                resolved.updown_exit_window_mins,
+                resolved.updown_exit_window_max_fraction,
                 mins_at_entry,
             )
             if mins_remaining <= effective_window:

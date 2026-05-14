@@ -582,6 +582,13 @@ class PolyBot:
                         opened_at = datetime.fromisoformat(pos_data["opened_at"])
                     except (ValueError, TypeError):
                         pass
+                end_date = None
+                raw_end = pos_data.get("market_end_at") or (pos_data.get("entry_signal") or {}).get("market_end_at")
+                if raw_end:
+                    try:
+                        end_date = datetime.fromisoformat(str(raw_end))
+                    except (ValueError, TypeError):
+                        end_date = None
                 position = Position(
                     position_id=pos_data["trade_id"],
                     market_id=pos_data["market_id"],
@@ -594,9 +601,14 @@ class PolyBot:
                     ),
                     pnl=pos_data.get("pnl", 0),
                     opened_at=opened_at,
-                    end_date=None,
+                    end_date=end_date,
                     strategy=pos_data.get("strategy", "unknown"),
                     entry_leg=infer_entry_leg(pos_data),
+                    window_size=str(
+                        pos_data.get("window_size")
+                        or (pos_data.get("entry_signal") or {}).get("window_size")
+                        or ""
+                    ),
                     token_id_yes=str(pos_data.get("token_id_yes") or ""),
                     token_id_no=str(pos_data.get("token_id_no") or ""),
                 )
@@ -1722,6 +1734,7 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy="bitcoin",
                 entry_leg=_entry_leg,
+                window_size=str(getattr(signal, "window_size", "") or ""),
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
@@ -1903,6 +1916,7 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy=strat,
                 entry_leg=_entry_leg,
+                window_size=str(getattr(signal, "window_size", "") or ""),
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
@@ -2076,6 +2090,7 @@ class PolyBot:
                 end_date=signal.end_date,
                 strategy=strat,
                 entry_leg=_entry_leg,
+                window_size=str(getattr(signal, "window_size", "") or ""),
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
             )
