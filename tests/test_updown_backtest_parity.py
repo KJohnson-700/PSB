@@ -177,6 +177,52 @@ def test_sol_ltf_confirmation_threshold_matches_live_anti_signal_gate():
     assert confirmed is False
 
 
+def test_sol_backtest_15m_long_allows_positive_but_falling_1h_histogram():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        macd_4h=MACDResult(
+            histogram=0.02,
+            prev_histogram=0.05,
+            histogram_rising=False,
+            above_zero=True,
+        ),
+        rsi_14=50.0,
+    )
+
+    edge, confidence = engine._edge_15m_sol(
+        ta,
+        "LONG",
+        ltf_strength=0.35,
+    )
+
+    assert edge > 0.0
+    assert confidence > 0.0
+
+
+def test_sol_backtest_15m_short_allows_positive_but_falling_1h_histogram():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        macd_4h=MACDResult(
+            histogram=0.02,
+            prev_histogram=0.05,
+            histogram_rising=False,
+            above_zero=True,
+        ),
+        rsi_14=50.0,
+    )
+
+    edge, confidence = engine._edge_15m_sol(
+        ta,
+        "SHORT",
+        ltf_strength=0.35,
+    )
+
+    assert edge > 0.0
+    assert confidence > 0.0
+
+
 def test_updown_yes_price_proxy_moves_with_underlying_direction():
     engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
 

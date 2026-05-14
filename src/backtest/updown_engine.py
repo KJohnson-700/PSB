@@ -1633,9 +1633,16 @@ class UpdownBacktestEngine:
         else:
             est_prob_up -= 0.07
 
-        # 1H histogram hard gate (matches live sol_macro)
-        if allowed_side == "LONG"  and not macd_1h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_1h.histogram_rising: return 0.0, 0.0
+        # 1H histogram gate (matches current live sol_macro behavior).
+        # Keep participation unchanged relative to live:
+        # LONG passes on rising histogram or positive histogram;
+        # SHORT passes on flat/down histogram or negative histogram.
+        h1_bull_ok = macd_1h.histogram_rising or macd_1h.histogram > 0
+        h1_bear_ok = (not macd_1h.histogram_rising) or macd_1h.histogram < 0
+        if allowed_side == "LONG" and not h1_bull_ok:
+            return 0.0, 0.0
+        if allowed_side == "SHORT" and not h1_bear_ok:
+            return 0.0, 0.0
 
         # LTF adj (anti-LTF gate already applied in run())
         ltf_adj = ltf_strength * 0.22

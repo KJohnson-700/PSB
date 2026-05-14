@@ -10,9 +10,9 @@ Exposure Tiers:
   FULL     → preserves Kelly target sizing, capped by config `exposure.full_size`
   MODERATE → reduced sizing via tier multiplier, capped by `moderate_size`
   MINIMAL  → heavily reduced sizing via tier multiplier, capped by `minimal_size`
-  PAUSED   → kill switch active — 3+ consecutive losses or flat conditions
+  PAUSED   → lane pause active — 3+ consecutive losses or flat conditions
 
-Kill Switch:
+Loss-Streak Lane Pause:
   - 3 consecutive losses → pause for N cycles (test) or until manual restart (live)
   - Flat/sideways market with no volume → pause until conditions improve
   - Two resume modes for live: auto-resume when conditions return, or manual only
@@ -97,7 +97,7 @@ class ExposureManager:
         }
         self.tier_floors = self._resolve_tier_floors(exposure_config)
 
-        # --- Kill switch config ---
+        # --- Loss-streak lane pause config ---
         self.loss_kill_switch_enabled = exposure_config.get('loss_kill_switch_enabled', True)
         self.max_consecutive_losses = exposure_config.get('max_consecutive_losses', 3)
         self.pause_cycles = exposure_config.get('pause_cycles', 2)  # Test mode: pause N cycles
@@ -172,7 +172,7 @@ class ExposureManager:
         """
         self._last_conditions = conditions
 
-        # --- Check kill switch first ---
+        # --- Check lane pause first ---
         if self._manual_pause:
             return ExposureTier.PAUSED, 0.0, 0.0, "Manual pause — restart bot to resume"
 
@@ -278,7 +278,7 @@ class ExposureManager:
 
         # Loss streak penalty
         if self._consecutive_losses >= 2:
-            score -= 2  # Approaching kill switch, reduce
+            score -= 2  # Approaching lane pause threshold, reduce
 
         # Tier assignment
         if score >= 5:
@@ -332,7 +332,7 @@ class ExposureManager:
     # ──────────────────────────────────────────────────────────────
 
     def record_trade(self, pnl: float, strategy: str = "", market_id: str = ""):
-        """Record a completed trade result. Triggers kill switch if needed."""
+        """Record a completed trade result. Triggers lane pause if needed."""
         result = TradeResult(
             timestamp=datetime.now(),
             pnl=pnl,
@@ -355,14 +355,14 @@ class ExposureManager:
                     f"{self._consecutive_losses} consecutive losses"
                 )
             elif not self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
-                logger.info(f"Exposure: Kill switch disabled (testing) — would pause at {self._consecutive_losses} losses")
+                logger.info(f"Exposure: Loss-streak lane pause disabled — would pause at {self._consecutive_losses} losses")
         else:
             if self._consecutive_losses > 0:
                 logger.info(f"Exposure: Win recorded ({pnl:+.2f}), resetting loss streak")
             self._consecutive_losses = 0
 
     def _trigger_pause(self, reason: str):
-        """Activate the kill switch."""
+        """Activate the loss-streak lane pause."""
         self._paused = True
         self._pause_reason = reason
         self._pause_start = datetime.now()
@@ -370,12 +370,12 @@ class ExposureManager:
 
         if self.is_paper:
             logger.warning(
-                f"KILL SWITCH: {reason} — pausing for {self.pause_cycles} cycles"
+                f"LOSS-STREAK LANE PAUSE: {reason} — pausing for {self.pause_cycles} cycles"
             )
         else:
             mode_desc = "auto-resume" if self.resume_mode == PauseResumeMode.AUTO else "manual restart"
             logger.warning(
-                f"KILL SWITCH: {reason} — paused until {mode_desc}"
+                f"LOSS-STREAK LANE PAUSE: {reason} — paused until {mode_desc}"
             )
 
         if self._notifications is not None:
@@ -403,7 +403,7 @@ class ExposureManager:
                 pass
 
     def _unpause(self, reason: str):
-        """Deactivate the kill switch."""
+        """Deactivate the loss-streak lane pause."""
         self._paused = False
         self._pause_reason = ""
         self._cycles_since_pause = 0

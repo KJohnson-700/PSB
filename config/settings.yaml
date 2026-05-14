@@ -1072,8 +1072,8 @@ exposure:
   moderate_min_trade_usd: 10.0
   minimal_min_trade_usd: 5.0
 
-  # --- Kill switch ---
-  loss_kill_switch_enabled: true  # 3 consecutive losses in a lane → pause that lane (paper: auto-resume after pause_cycles)
+  # --- Loss-streak lane pause ---
+  loss_kill_switch_enabled: false  # data-gathering mode: keep 3-loss lane pause OFF unless explicitly re-enabled
   max_consecutive_losses: 3   # 3 losses in a row = pause (only if kill switch enabled)
   pause_cycles: 2             # Test mode: pause for 2 trading cycles then check
   max_pause_cycles: 4         # Force-resume after this many paused cycles even if chop keeps trend_strength low

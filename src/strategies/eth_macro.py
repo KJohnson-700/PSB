@@ -1261,6 +1261,26 @@ class ETHMacroStrategy(SolMacroStrategy):
                 est_prob=round(est_prob_up, 4),
                 rsi=round(eth.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
+                side_source=side_source,
+                oracle_basis_bps=(
+                    round(float(eth.oracle_basis_bps), 2)
+                    if eth.oracle_basis_bps is not None
+                    else None
+                ),
+                indicator_snapshot={
+                    "alt_1h_histogram": round(float(eth.macd_1h.histogram or 0.0), 4),
+                    "alt_1h_histogram_rising": bool(eth.macd_1h.histogram_rising),
+                    "alt_15m_histogram": round(float(eth.macd_15m.histogram or 0.0), 4),
+                    "alt_15m_histogram_rising": bool(eth.macd_15m.histogram_rising),
+                    "alt_5m_histogram": round(float(eth.macd_5m.histogram or 0.0), 4),
+                    "alt_5m_histogram_rising": bool(eth.macd_5m.histogram_rising),
+                    "btc_1h_histogram": round(float(btc_ta.macd_1h.histogram or 0.0), 4)
+                    if btc_ta
+                    else None,
+                    "btc_1h_histogram_rising": bool(btc_ta.macd_1h.histogram_rising)
+                    if btc_ta
+                    else None,
+                },
             )
             signals.append(signal)
 

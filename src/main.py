@@ -54,7 +54,7 @@ from src.notifications.notification_manager import (
 from src.env_bootstrap import load_project_dotenv
 from src.terminal_banners import print_shutdown_banner, print_startup_banner
 
-# Kill switch: if this file exists, the bot will not place new trades (paper or live).
+# Manual global stop: if this file exists, the bot will not place new trades (paper or live).
 KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITCH"
 
 
@@ -393,7 +393,8 @@ class PolyBot:
         logging.warning(
             "EXPOSURE per-lane: loss_kill_switch_enabled=%s max_consecutive_losses=%s pause_cycles=%s "
             "(btc/sol/eth/xrp/weather each have separate streaks). "
-            "If a stale image is running, set EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true in the environment and restart.",
+            "This is the loss-streak lane pause, not the manual global stop. "
+            "If a stale image is running, set EXPOSURE_LOSS_KILL_SWITCH_ENABLED=false in the environment and restart.",
             em0.loss_kill_switch_enabled,
             em0.max_consecutive_losses,
             em0.pause_cycles,
@@ -403,7 +404,7 @@ class PolyBot:
         """Apply exposure toggles from env before ExposureManager construction.
 
         Docker bakes ``config/settings.yaml`` at **build** time. Without a redeploy,
-        production can still have ``loss_kill_switch_enabled: false`` even after Git
+        production can still have an old ``loss_kill_switch_enabled`` value even after Git
         changes. Environment variables override at **process start**:
 
         - ``EXPOSURE_LOSS_KILL_SWITCH_ENABLED=true`` (or 1/yes/on) → force ON
@@ -1054,7 +1055,7 @@ class PolyBot:
         self.journal.take_snapshot(self.bankroll)
 
     def _kill_switch_active(self) -> bool:
-        """Return True if the kill switch file exists (do not place new trades)."""
+        """Return True if the manual global stop file exists (do not place new trades)."""
         return KILL_SWITCH_FILE.exists()
 
     async def _handle_exit_decision(self, exit_decision: ExitDecision) -> None:
@@ -1134,7 +1135,7 @@ class PolyBot:
 
         if self._kill_switch_active():
             logging.warning(
-                "Kill switch active (data/KILL_SWITCH present). Skipping trading cycle."
+                "Manual global stop active (data/KILL_SWITCH present). Skipping trading cycle."
             )
             log_ops_pulse(self, "main")
             for st in (
@@ -1146,7 +1147,7 @@ class PolyBot:
                 "xrp_dump_hedge",
             ):
                 asyncio.create_task(
-                    self.notifier.notify_kill_global(st, "global kill switch")
+                    self.notifier.notify_kill_global(st, "manual global stop")
                 )
             return
 
@@ -1772,7 +1773,12 @@ class PolyBot:
                     "btc_price": signal.btc_current,
                     "edge": signal.edge,
                     "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
+                    "raw_est_prob": signal.est_prob,
                     "rsi": signal.rsi,
+                    "side_source": getattr(signal, "side_source", None),
+                    "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
+                    "probability_model": "indicator_score_v1",
                     # Learning context: direction, threshold, and full signal reason
                     # so exit records can explain why a trade was entered.
                     "direction": signal.direction,
@@ -1955,8 +1961,13 @@ class PolyBot:
                     "lag_magnitude": signal.lag_magnitude,
                     "edge": signal.edge,
                     "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
+                    "raw_est_prob": signal.est_prob,
                     "rsi": signal.rsi,
                     "corr_1h": signal.corr_1h,
+                    "side_source": getattr(signal, "side_source", None),
+                    "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
+                    "probability_model": "indicator_score_v1",
                     # Learning context: direction and full signal reason
                     "direction": signal.direction,
                     "signal_reason": signal.reason,
@@ -2387,15 +2398,15 @@ def _parse_run_args():
         KILL_SWITCH_FILE.parent.mkdir(parents=True, exist_ok=True)
         KILL_SWITCH_FILE.touch()
         print(
-            "Kill switch enabled: data/KILL_SWITCH created. Bot will not place new trades until you run with --resume-trading."
+            "Manual global stop enabled: data/KILL_SWITCH created. Bot will not place new trades until you run with --resume-trading."
         )
         return None, False
     if "--resume-trading" in argv:
         if KILL_SWITCH_FILE.exists():
             KILL_SWITCH_FILE.unlink()
-            print("Kill switch removed. Trading can resume.")
+            print("Manual global stop removed. Trading can resume.")
         else:
-            print("Kill switch file was not present. No change.")
+            print("Manual global stop file was not present. No change.")
         return None, False
 
     live = "--live" in argv

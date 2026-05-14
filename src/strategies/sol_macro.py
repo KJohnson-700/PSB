@@ -131,6 +131,12 @@ class SolMacroSignal(BaseModel):
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
     rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
     corr_1h: Optional[float] = Field(None, description="BTC–alt 1h correlation at entry (SOL/ETH/HYPE/XRP)")
+    side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
+    oracle_basis_bps: Optional[float] = Field(None, description="Oracle basis at entry when applicable")
+    indicator_snapshot: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Compact indicator state persisted for calibration and forensics",
+    )
     reason: str = Field(default="", description="Why this signal was generated")
     strategy_name: str = Field(default="sol_macro", description="Journal/risk strategy key")
     alt_asset_code: str = Field(
@@ -2781,6 +2787,22 @@ class SolMacroStrategy:
                 est_prob=round(estimated_prob, 4),
                 rsi=round(sol.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
+                side_source=side_source if "side_source" in locals() else "neutral_macro",
+                oracle_basis_bps=(
+                    round(float(sol.oracle_basis_bps), 2)
+                    if sol.oracle_basis_bps is not None
+                    else None
+                ),
+                indicator_snapshot={
+                    "alt_1h_histogram": round(float(sol.macd_1h.histogram or 0.0), 4),
+                    "alt_1h_histogram_rising": bool(sol.macd_1h.histogram_rising),
+                    "alt_15m_histogram": round(float(sol.macd_15m.histogram or 0.0), 4),
+                    "alt_15m_histogram_rising": bool(sol.macd_15m.histogram_rising),
+                    "alt_5m_histogram": round(float(sol.macd_5m.histogram or 0.0), 4),
+                    "alt_5m_histogram_rising": bool(sol.macd_5m.histogram_rising),
+                    "btc_move_5m_pct": round(float(corr.btc_move_5m_pct or 0.0), 4),
+                    "btc_move_15m_pct": round(float(corr.btc_move_15m_pct or 0.0), 4),
+                },
             )
             if (
                 is_updown

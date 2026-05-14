@@ -1795,7 +1795,7 @@
                     <div class="cfg-field"><label>Minimal ($)</label><input type="number" id="cfg-exposure-minimal_size" step="0.5" value="8.0"></div>
                     <div class="cfg-field"><label>Max Losses</label><input type="number" id="cfg-exposure-max_consecutive_losses" step="1" value="3"></div>
                     <div class="cfg-field"><label>Pause Cycles</label><input type="number" id="cfg-exposure-pause_cycles" step="1" value="2"></div>
-                    <div class="cfg-field" style="grid-column:1/-1;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="cfg-exposure-loss_kill_switch_enabled"> 3-loss streak pauses that lane (exposure kill switch)</label></div>
+                    <div class="cfg-field" style="grid-column:1/-1;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="cfg-exposure-loss_kill_switch_enabled"> 3-loss streak pauses that lane (loss-streak lane pause)</label></div>
                 </div>
             </div>
             <div class="cfg-save-row">
@@ -3660,14 +3660,14 @@ function updateStatus(d) {
 }
 
 async function toggleKillSwitch() {
-    // Toggle the kill switch file
+    // Toggle the manual global stop file.
     try {
         const r = await fetch('/api/status');
         const d = await r.json();
         const action = d.kill_switch_active ? 'disable' : 'enable';
-        if (confirm(`Are you sure you want to ${action} the kill switch?`)) {
+        if (confirm(`Are you sure you want to ${action} the manual stop?`)) {
             // We'll just alert - actual file toggle would need a server endpoint
-            alert(`Kill switch ${action} requested. Use terminal: ${action === 'enable' ? 'touch' : 'rm'} data/KILL_SWITCH`);
+            alert(`Manual stop ${action} requested. Use terminal: ${action === 'enable' ? 'touch' : 'rm'} data/KILL_SWITCH`);
         }
     } catch(e) { console.error(e); }
 }

@@ -263,20 +263,20 @@ class NotificationManager:
 
         return await self.send_discord(None, embed)
 
-    async def notify_kill_global(self, strategy: str, reason: str = "global kill switch") -> bool:
-        """Notify when global kill switch halts a strategy."""
+    async def notify_kill_global(self, strategy: str, reason: str = "manual global stop") -> bool:
+        """Notify when the manual global stop halts a strategy."""
         if not self.enabled or not self.discord_webhook:
             return False
         st = _strategy_trade_title(strategy)
         embed = {
-            "title": f"⛔ {st} — KILLED",
+            "title": f"⛔ {st} — MANUAL STOP",
             "color": 16711680,
             "fields": [
                 {"name": "Strategy", "value": st, "inline": True},
                 {"name": "Trigger", "value": reason, "inline": True},
                 {
                     "name": "Action",
-                    "value": "all trades suspended for this lane",
+                    "value": "all new trades suspended until the manual global stop is cleared",
                     "inline": False,
                 },
             ],
@@ -298,7 +298,7 @@ class NotificationManager:
                 {"name": "Lane", "value": lane_upper, "inline": True},
                 {"name": "Streak", "value": f"{streak} consecutive losses", "inline": True},
                 {"name": "Reason", "value": reason, "inline": True},
-                {"name": "Status", "value": "paused (kill switch)", "inline": False},
+                {"name": "Status", "value": "paused (loss streak)", "inline": False},
             ],
             "footer": {
                 "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"

@@ -1179,7 +1179,7 @@ async def get_status():
         can_trade, can_trade_reason = bot.risk_manager.can_trade()
         if kill_switch_active:
             can_trade = False
-            can_trade_reason = "Kill switch active (data/KILL_SWITCH)"
+            can_trade_reason = "Manual global stop active (data/KILL_SWITCH)"
 
         bankroll = getattr(bot, "bankroll", 0.0)
         portfolio = (

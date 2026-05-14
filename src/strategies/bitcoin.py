@@ -76,6 +76,12 @@ class BitcoinSignal(BaseModel):
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
     rsi: Optional[float] = Field(None, description="BTC RSI-14 at entry")
+    side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
+    oracle_basis_bps: Optional[float] = Field(None, description="Oracle basis at entry when applicable")
+    indicator_snapshot: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Compact indicator state persisted for calibration and forensics",
+    )
 
 
 # Patterns to detect Bitcoin price markets
@@ -1112,7 +1118,7 @@ class BitcoinStrategy:
                     effective_side = "SHORT"
                 action_counts[action] = action_counts.get(action, 0) + 1
 
-                # ── BUY_YES kill switch ──
+                # ── BUY_YES manual disable ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
                 # Downside leg uses BUY_NO on the NO token.
                 # Config-driven so it can be re-enabled if market regime changes.
@@ -2140,6 +2146,17 @@ class BitcoinStrategy:
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=_signal_est_prob,
                 rsi=round(ta.rsi_14, 1),
+                side_source="btc_htf_bias",
+                oracle_basis_bps=None,
+                indicator_snapshot={
+                    "btc_4h_histogram": round(float(macd_4h.histogram or 0.0), 4),
+                    "btc_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                    "btc_1h_histogram": round(float(ta.macd_1h.histogram or 0.0), 4),
+                    "btc_1h_histogram_rising": bool(ta.macd_1h.histogram_rising),
+                    "btc_15m_histogram": round(float(ta.macd_15m.histogram or 0.0), 4),
+                    "btc_15m_histogram_rising": bool(ta.macd_15m.histogram_rising),
+                    "sabre_trend": int(ta.trend_sabre.trend or 0),
+                },
             )
             if (
                 is_updown
