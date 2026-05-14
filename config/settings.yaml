@@ -443,7 +443,7 @@ strategies:
     btc_min_4h_hist_magnitude: 20.0
     # BTC 1H close vs SMA(20): BULL / RANGE / BEAR — scale min_edge (tighter) + Kelly size in chop / bear tape.
     btc_1h_regime_gates:
-      enabled: true
+      enabled: false   # 2026-05-13: disable BTC regime scaling for SOL while re-evaluating alt-first BUY_NO admissions
       range_band_pct: 0.0012
       min_edge_mult:
         BULL: 1.0
@@ -584,7 +584,7 @@ strategies:
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
-      enabled: true    # align with other alt lanes: tighten min_edge/size in BTC RANGE/BEAR regimes
+      enabled: false   # 2026-05-13: disable BTC regime scaling for ETH while re-evaluating alt-first BUY_NO admissions
       range_band_pct: 0.0012
       min_edge_mult:
         BULL: 1.0
@@ -661,7 +661,7 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
-    enforce_alt_1h_alignment: false    # 2026-05-05: staged rollback — HYPE first (per attribution playbook); was true 2026-05-04
+    enforce_alt_1h_alignment: true     # 2026-05-13: restore shared alt behavior — suppress BUY_YES against bearish alt 1H while keeping BUY_NO diagnostic path
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
@@ -684,7 +684,7 @@ strategies:
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
-      enabled: true
+      enabled: false   # 2026-05-13: disable BTC regime scaling for HYPE while re-evaluating alt-first BUY_NO admissions
       range_band_pct: 0.0012
       min_edge_mult:
         BULL: 1.0
@@ -777,7 +777,7 @@ strategies:
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
-      enabled: true
+      enabled: false   # 2026-05-13: disable BTC regime scaling for XRP while re-evaluating alt-first BUY_NO admissions
       range_band_pct: 0.0012
       min_edge_mult:
         BULL: 1.0

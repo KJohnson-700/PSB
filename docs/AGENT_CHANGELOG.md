@@ -8,6 +8,44 @@
 
 ---
 
+## 2026-05-13 — Dashboard: backtest HUD heat ramp, marquee brand colors, stronger card/button glow
+
+**`src/dashboard/index.html`:** Backtest HUD uses multi-accent frame (red / purple / cyan / green) instead of cyan-only; live run title uses gradient clip; **% display** `clamp(3.25rem, 12vw, 5.5rem)` with determinate **red→orange→green** via `_btHeatFromPct` + `_btApplyDeterminateHeat` on the number, fill bar, and track border; indeterminate bar uses full-spectrum gradient with **slide + hue-shift** animations; spawn/wait uses `bt-hud-pct-wait` cycle. Cards, metric boxes, hero tiles, and buttons get **stronger default + hover glow** (purple/cyan/green mix). Backtest tab notice uses purple/green tint.
+
+**`src/dashboard/server.py`:** `dashboard_ui_rev` → `2026-05-13-bt-hud-heat-glow-v2`.
+
+---
+
+## 2026-05-13 — Crypto up/down backtest: edge vs market YES (parity with live)
+
+**`src/backtest/updown_engine.py`:** Per-window Polymarket YES series (or OHLCV proxy) is resolved once as `yes_mid_market` and passed into `_edge_15m`, `_edge_15m_sol`, `_edge_15m_eth_follow`, `_edge_5m` / `_edge_5m_btc` / `_edge_5m_sol`, and `_edge_5m_eth_follow_from_df`. Edge is `est_prob_up - yes_price` for LONG (BUY_YES) and `yes_price - est_prob_up` for SHORT (BUY_NO), matching live `bitcoin` / `sol_macro` / `eth_macro` semantics so `max_edge_updown` / `edge_above_cap` and downstream sizing align with observed YES mids. Added `_yes_mid_at_window_open`; reuse loaded `pm_yes` for exit replay (no second fetch).
+
+**Verification:** `.venv/bin/python -m pytest tests/test_updown_backtest_parity.py tests/test_backtest_oracle_replay.py -q` → **34 passed**.
+
+---
+
+## 2026-05-13 — Dashboard: 1.5× type ramp (fullscreen + Commands)
+
+**`src/dashboard/index.html`:** Fullscreen `h2`/`h3` at **27px / 30px** (1.5× over compact 18px / 20px). `.cmd-ref h3` **27px**; fullscreen hero + metric clamps and `#view-commands .cmd-ref-lead` use **1.5vw** fluid step (replacing ~2.2–1.9vw).
+
+**`src/dashboard/server.py`:** `dashboard_ui_rev` → `2026-05-13-dashboard-type-ramp-1p5x`.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_dashboard_bundle.py::test_dashboard_index_serves_and_health_has_ui_rev -q` → **passed**.
+
+---
+
+## 2026-05-13 — Dashboard: Commands tab type scale correction
+
+**`src/dashboard/index.html`:** Reverted blind 2× on Commands hero `h2`; added `.cmd-ref-lead` with `clamp(1.05rem,2.2vw,1.38rem)` and set `#view-commands h3` to compact `11px` so the reference doc tab stays dense. **`src/dashboard/server.py`:** `dashboard_ui_rev` bump.
+
+## 2026-05-13 — Dashboard: 2× font size for cyan card titles (h2/h3)
+
+**`src/dashboard/index.html`:** Doubled `.sh`/`h2`, `h3`, cfg/commands overrides, fullscreen overrides, collapsible `[+]` affordance, and inline Commands / Session AI review headings. Slightly tightened letter-spacing on the smallest uppercase titles so doubled size stays readable.
+
+## 2026-05-13 — Active Positions marquees: no DOM reset on unchanged data, pixel shift, deck glow
+
+**`src/dashboard/index.html`:** Ops metric deck + ops digest ticker skip rebuilding when status text unchanged; `translate3d` + per-element CSS vars for loop distance and duration; debounced `resize` remeasure; metric deck chips get slightly stronger cyan/white box-shadow.
+
 ## 2026-05-14 — Backtest tab: mission HUD + server-side crypto progress parse
 
 **`src/dashboard/backtest_progress_parse.py`:** Parses last `progress x/y windows (z%)` line from captured subprocess stdout.

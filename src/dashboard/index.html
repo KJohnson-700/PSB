@@ -40,19 +40,23 @@
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
             border:1px solid var(--border);border-radius:4px;
             transition:border-color .18s,box-shadow .18s;
+            box-shadow:0 0 28px rgba(0,0,0,.4),0 0 1px rgba(255,255,255,.05),0 0 20px rgba(176,96,255,.06);
         }
-        .g:hover,.card:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
+        .g:hover,.card:hover{
+            border-color:rgba(176,96,255,.38);
+            box-shadow:0 0 22px rgba(0,229,255,.22),0 0 42px rgba(176,96,255,.18),0 0 64px rgba(0,255,136,.1),0 0 1px rgba(255,255,255,.08);
+        }
         .card{padding:16px;min-width:0;overflow:hidden}
 
         /* ── Section header ── */
         .sh,h2{
-            font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.2em;color:var(--cy);
+            font-family:'IBM Plex Mono',monospace;font-size:18px;letter-spacing:.14em;color:var(--cy);
             text-transform:uppercase;display:flex;align-items:center;gap:8px;padding:10px 0 7px;
             margin:0;
         }
         .sh::after,h2::after{content:'';flex:1;height:1px;background:linear-gradient(to right,rgba(0,229,255,.2),transparent)}
         h1{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.06em;color:var(--tx)}
-        h3{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:var(--cy);text-transform:uppercase;margin:10px 0 6px}
+        h3{font-family:'IBM Plex Mono',monospace;font-size:20px;letter-spacing:.08em;color:var(--cy);text-transform:uppercase;margin:10px 0 6px}
         .subtitle{color:var(--td);font-size:11px;margin-bottom:10px}
 
         /* ── Status hero / KPI grid ── */
@@ -61,8 +65,9 @@
         .hero-item{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
             border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;
+            box-shadow:0 0 22px rgba(0,0,0,.35),0 0 18px rgba(0,229,255,.05);
         }
-        .hero-item:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
+        .hero-item:hover{border-color:rgba(0,229,255,.32);box-shadow:0 0 24px rgba(0,229,255,.2),0 0 48px rgba(176,96,255,.12),0 0 56px rgba(0,255,136,.08)}
         .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.6vw,22px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px;min-width:0;overflow:hidden;text-overflow:ellipsis}
         .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -151,8 +156,8 @@
         .session-history-table td{overflow:hidden;text-overflow:ellipsis}
 
         /* ── Metric boxes ── */
-        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden}
-        .metric-box:hover{border-color:var(--bx);box-shadow:0 0 16px rgba(255,255,255,.12)}
+        .metric-box{background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:4px;padding:12px;text-align:center;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;box-shadow:0 0 20px rgba(0,0,0,.38),0 0 16px rgba(176,96,255,.06)}
+        .metric-box:hover{border-color:rgba(0,255,136,.28);box-shadow:0 0 22px rgba(0,255,136,.16),0 0 40px rgba(0,229,255,.12),0 0 52px rgba(176,96,255,.1)}
         .metric-box .value{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.4vw,20px);font-weight:600;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .metric-box .label{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);margin-top:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .strategy-metric-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:stretch}
@@ -185,10 +190,15 @@
         button,.abtn{
             font-family:'IBM Plex Mono',monospace;font-size:11px;padding:5px 11px;border-radius:3px;
             border:1px solid rgba(255,255,255,.15);cursor:pointer;
-            transition:transform .12s,box-shadow .12s,filter .12s;letter-spacing:.04em;
+            transition:transform .12s,box-shadow .12s,filter .12s,border-color .12s;letter-spacing:.04em;
             user-select:none;background:rgba(255,255,255,.04);color:var(--tm);
+            box-shadow:0 0 12px rgba(0,0,0,.35);
         }
-        button:hover,.abtn:hover{transform:scale(1.04);filter:brightness(1.2)}
+        button:hover,.abtn:hover{
+            transform:scale(1.04);filter:brightness(1.15);
+            box-shadow:0 0 18px rgba(0,229,255,.28),0 0 32px rgba(176,96,255,.2),0 0 44px rgba(0,255,136,.12);
+            border-color:rgba(255,255,255,.22);
+        }
         button:active,.abtn:active{transform:scale(.96)}
         button:disabled{opacity:.3;cursor:not-allowed;transform:none;filter:none}
         .btn-sm{padding:4px 10px;font-size:11px}
@@ -279,7 +289,7 @@
         /* ── Config panel ── */
         .cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
         .cfg-group{background:rgba(0,0,0,.5);border:1px solid var(--border);border-radius:4px;padding:12px}
-        .cfg-group h3{color:var(--cy);font-size:9px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.12em}
+        .cfg-group h3{color:var(--cy);font-size:18px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.1em}
         .cfg-group h3::after{display:none}
         .cfg-field{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
         .cfg-field:last-child{margin-bottom:0}
@@ -314,28 +324,105 @@
         }
         .backtest-output-tail::-webkit-scrollbar{display:none;height:0;width:0}
 
-        /* ── Backtest HUD (techno / mission status) ── */
-        .bt-hud{position:relative;overflow:hidden;margin-bottom:14px;padding:14px 16px 16px;border:1px solid rgba(0,229,255,.28);border-radius:6px;background:linear-gradient(165deg,rgba(0,229,255,.07) 0%,rgba(0,0,0,.55) 42%,rgba(176,96,255,.06) 100%);box-shadow:0 0 24px rgba(0,229,255,.08),inset 0 0 0 1px rgba(255,255,255,.04)}
+        /* ── Backtest HUD (multi-accent heat + mission status) ── */
+        .bt-hud{
+            position:relative;overflow:hidden;margin-bottom:14px;padding:16px 18px 18px;border-radius:8px;
+            border:1px solid rgba(255,255,255,.12);
+            background:linear-gradient(155deg,rgba(255,68,102,.06) 0%,rgba(0,0,0,.58) 28%,rgba(176,96,255,.08) 62%,rgba(0,255,136,.05) 100%);
+            box-shadow:
+                0 0 36px rgba(176,96,255,.14),
+                0 0 52px rgba(0,229,255,.1),
+                0 0 72px rgba(0,255,136,.07),
+                inset 0 0 0 1px rgba(255,255,255,.06);
+            transition:box-shadow .25s ease,border-color .25s ease;
+        }
+        .bt-hud.bt-hud-live{
+            border-color:rgba(255,215,0,.22);
+            box-shadow:
+                0 0 40px rgba(255,68,102,.12),
+                0 0 56px rgba(176,96,255,.16),
+                0 0 72px rgba(0,229,255,.12),
+                0 0 88px rgba(0,255,136,.1),
+                inset 0 0 0 1px rgba(255,255,255,.07);
+        }
         .bt-hud-scan{pointer-events:none;position:absolute;inset:0;opacity:.35;background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.2) 3px,transparent 4px);mix-blend-mode:multiply;z-index:0}
         .bt-hud-head,.bt-hud-job,.bt-hud-pct-row,.bt-hud-track,.bt-hud-footer{position:relative;z-index:1}
         .bt-hud-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px}
-        .bt-hud-title{font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--cy);text-shadow:0 0 12px rgba(0,229,255,.4)}
-        .bt-hud-chip{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.16em;padding:4px 10px;border:1px solid rgba(176,96,255,.45);color:var(--pu);background:rgba(176,96,255,.1);border-radius:3px}
-        .bt-hud-job{font-family:'IBM Plex Mono',monospace;font-size:clamp(12px,1.35vw,14px);color:var(--td);letter-spacing:.04em;margin-bottom:6px;line-height:1.35}
-        .bt-hud-pct-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:4px 0 12px}
-        .bt-hud-pct{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,5.5vw,3.25rem);font-weight:700;line-height:1;color:var(--cy);text-shadow:0 0 20px rgba(0,229,255,.35);letter-spacing:.04em}
-        .bt-hud-pct.bt-hud-pct-warn{color:var(--ye)}
-        .bt-hud-pct.bt-hud-pct-bad{color:var(--re);text-shadow:0 0 16px rgba(255,68,102,.35)}
-        .bt-hud-pct.bt-hud-pct-ok{color:var(--gr);text-shadow:0 0 14px rgba(0,255,136,.3)}
-        .bt-hud-win{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tm);letter-spacing:.06em;max-width:min(100%,420px)}
-        .bt-hud-track{height:16px;border-radius:3px;background:rgba(0,0,0,.45);border:1px solid rgba(0,229,255,.2);overflow:hidden;position:relative}
-        .bt-hud-fill{height:100%;width:0%;border-radius:2px;background:linear-gradient(90deg,rgba(0,229,255,.25),var(--cy));box-shadow:0 0 14px rgba(0,229,255,.45);transition:width .35s ease;margin-left:0}
-        .bt-hud-track.bt-hud-indet .bt-hud-fill{width:26%!important;transition:none;background:linear-gradient(90deg,rgba(0,229,255,.2),var(--cy),rgba(176,96,255,.35));animation:btHudMarq 1.15s linear infinite}
-        @keyframes btHudMarq{0%{margin-left:0}100%{margin-left:74%}}
-        .bt-hud-track.bt-hud-indet{overflow:hidden}
-        .bt-hud-footer{margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--td);letter-spacing:.05em;opacity:.9}
+        .bt-hud-title{
+            font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.15vw,13px);font-weight:700;letter-spacing:.2em;text-transform:uppercase;
+            color:var(--tm);text-shadow:0 0 14px rgba(176,96,255,.25);
+        }
+        .bt-hud.bt-hud-live .bt-hud-title{
+            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
+            -webkit-background-clip:text;background-clip:text;color:transparent;
+            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
+        }
+        .bt-hud-chip{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.16em;padding:4px 10px;border:1px solid rgba(176,96,255,.45);color:var(--pu);background:rgba(176,96,255,.12);border-radius:3px;box-shadow:0 0 14px rgba(176,96,255,.2)}
+        .bt-hud-job{font-family:'IBM Plex Mono',monospace;font-size:clamp(12px,1.35vw,14px);color:var(--td);letter-spacing:.04em;margin-bottom:8px;line-height:1.35}
+        .bt-hud-pct-row{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin:6px 0 14px}
+        .bt-hud-pct{
+            font-family:'IBM Plex Mono',monospace;
+            font-size:clamp(3.25rem,12vw,5.5rem);
+            font-weight:800;line-height:0.95;letter-spacing:-.02em;
+            min-height:1em;color:var(--re);
+            text-shadow:0 0 32px rgba(255,68,102,.45),0 0 64px rgba(255,68,102,.2);
+            transition:color .2s ease,text-shadow .2s ease;
+        }
+        .bt-hud-pct.bt-hud-pct-warn{color:var(--ye);text-shadow:0 0 28px rgba(255,215,0,.4),0 0 52px rgba(255,215,0,.15)}
+        .bt-hud-pct.bt-hud-pct-bad{color:var(--re);text-shadow:0 0 36px rgba(255,68,102,.55),0 0 72px rgba(255,68,102,.2)}
+        .bt-hud-pct.bt-hud-pct-ok{color:var(--gr);text-shadow:0 0 32px rgba(0,255,136,.45),0 0 64px rgba(0,255,136,.22)}
+        @keyframes btHudPctWait{
+            0%,100%{color:var(--pu);text-shadow:0 0 28px rgba(176,96,255,.5),0 0 56px rgba(176,96,255,.18)}
+            33%{color:var(--ye);text-shadow:0 0 32px rgba(255,215,0,.45),0 0 60px rgba(255,180,40,.12)}
+            66%{color:var(--cy);text-shadow:0 0 28px rgba(0,229,255,.4),0 0 52px rgba(0,229,255,.12)}
+        }
+        .bt-hud-pct.bt-hud-pct-wait{animation:btHudPctWait 2.2s ease-in-out infinite}
+        .bt-hud-pct.bt-hud-pct-idle{
+            font-size:clamp(2.25rem,8vw,3.75rem);font-weight:700;
+            color:var(--td);text-shadow:none;letter-spacing:.04em;
+        }
         @media (prefers-reduced-motion:reduce){
-            .bt-hud-track.bt-hud-indet .bt-hud-fill{animation:none;width:40%!important;margin-left:18%!important}
+            .bt-hud-pct.bt-hud-pct-wait{animation:none;color:var(--pu)}
+        }
+        .bt-hud-win{font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.1vw,13px);color:var(--tm);letter-spacing:.06em;max-width:min(100%,440px);padding-bottom:4px;line-height:1.35}
+        .bt-hud-track{
+            height:20px;border-radius:4px;background:rgba(0,0,0,.5);
+            border:1px solid rgba(255,255,255,.12);overflow:hidden;position:relative;
+            box-shadow:inset 0 0 12px rgba(0,0,0,.45),0 0 16px rgba(0,0,0,.25);
+            transition:border-color .25s ease,box-shadow .25s ease;
+        }
+        .bt-hud-fill{
+            height:100%;width:0%;border-radius:3px;
+            background:linear-gradient(90deg,rgba(255,68,102,.75),rgba(255,160,40,.95));
+            box-shadow:0 0 22px rgba(255,100,80,.45),inset 0 1px 0 rgba(255,255,255,.22);
+            transition:width .35s ease,background .25s ease,box-shadow .25s ease;
+            margin-left:0;
+        }
+        .bt-hud-track.bt-hud-indet .bt-hud-fill{
+            width:38%!important;min-width:120px;transition:none;margin-left:0;
+            background:linear-gradient(90deg,
+                rgba(255,68,102,.95) 0%,
+                rgba(255,165,40,.95) 18%,
+                rgba(255,215,0,.95) 36%,
+                rgba(176,96,255,.92) 54%,
+                rgba(0,229,255,.92) 72%,
+                rgba(0,255,136,.95) 100%);
+            background-size:240% 100%;
+            box-shadow:0 0 26px rgba(255,215,0,.35),0 0 48px rgba(176,96,255,.25),inset 0 1px 0 rgba(255,255,255,.25);
+            animation:btHudMarqSlide 1.25s linear infinite,btHudMarqHue 2.4s linear infinite;
+        }
+        @keyframes btHudMarqSlide{
+            0%{margin-left:-8%}
+            100%{margin-left:72%}
+        }
+        @keyframes btHudMarqHue{
+            0%{background-position:0% 50%;filter:hue-rotate(0deg) saturate(1.05)}
+            100%{background-position:100% 50%;filter:hue-rotate(18deg) saturate(1.12)}
+        }
+        .bt-hud-track.bt-hud-indet{overflow:hidden}
+        .bt-hud-footer{margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--td);letter-spacing:.05em;opacity:.92}
+        @media (prefers-reduced-motion:reduce){
+            .bt-hud-track.bt-hud-indet .bt-hud-fill{animation:none;width:42%!important;margin-left:20%!important;filter:none}
         }
 
         /* ── Test dots ── */
@@ -364,7 +451,7 @@
         #tradingview_btc{width:100%;height:100%;min-height:0}
 
         /* ── Commands ref ── */
-        .cmd-ref h3{font-size:12px;color:var(--cy);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.06em}
+        .cmd-ref h3{font-size:27px;color:var(--cy);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.05em}
         .cmd-ref h3:first-child{margin-top:0}
         .cmd-ref h3::after{display:none}
         .cmd-ref .cmd-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;flex-wrap:wrap}
@@ -374,7 +461,7 @@
 
         /* ── Collapsible ── */
         .collapsible{cursor:pointer;user-select:none}
-        .collapsible h2::after{content:' [+]';background:none;height:auto;width:auto;flex:0 0 auto;font-size:10px;color:var(--td);letter-spacing:normal;font-weight:400}
+        .collapsible h2::after{content:' [+]';background:none;height:auto;width:auto;flex:0 0 auto;font-size:20px;color:var(--td);letter-spacing:normal;font-weight:400}
         .collapsible.open h2::after{content:' [-]'}
         .collapsible .collapse-body{display:none}
         .collapsible.open .collapse-body{display:block}
@@ -424,10 +511,13 @@
         .ops-digest-ticker{display:none;margin:0 0 10px;border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.2);position:relative}
         .ops-digest-ticker-viewport{overflow:hidden;padding:7px 12px;min-height:30px}
         .ops-digest-ticker-track{display:inline-flex;align-items:center;flex-wrap:nowrap;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:0.66rem;color:rgba(246,248,255,.82);letter-spacing:.02em;gap:0}
-        .ops-digest-ticker.ops-digest-marquee .ops-digest-ticker-track{animation:opsDigestMarquee 40s linear infinite}
+        .ops-digest-ticker.ops-digest-marquee .ops-digest-ticker-track{
+            animation:opsDigestMarquee var(--ops-digest-duration,40s) linear infinite;
+            backface-visibility:hidden;
+        }
         .ops-digest-ticker.ops-digest-marquee:hover .ops-digest-ticker-track{animation-play-state:paused}
         .ops-digest-cell{padding-right:48px}
-        @keyframes opsDigestMarquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+        @keyframes opsDigestMarquee{0%{transform:translate3d(0,0,0)}100%{transform:translate3d(var(--ops-digest-shift,-50%),0,0)}}
         .ops-metric-deck-wrap{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);position:relative;transition:opacity .25s}
         .ops-metric-deck-wrap.ops-metric-deck-stale{opacity:0.52}
         .ops-metric-deck-wrap.ops-metric-deck-hidden{display:none!important}
@@ -439,24 +529,27 @@
         .ops-metric-deck-scroll{overflow:hidden;min-width:0;padding:4px 0 10px;position:relative;scrollbar-width:none;-ms-overflow-style:none}
         .ops-metric-deck-scroll::-webkit-scrollbar{display:none;height:0;width:0}
         .ops-metric-deck-marquee-inner{display:flex;flex-direction:row;width:max-content;will-change:transform}
-        .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active{animation:opsDeckMarquee 24s linear infinite}
+        .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active{
+            animation:opsDeckMarquee var(--ops-deck-duration,24s) linear infinite;
+            backface-visibility:hidden;
+        }
         .ops-metric-deck-marquee-inner.ops-metric-deck-marquee-active:hover{animation-play-state:paused}
         .ops-metric-deck-track{display:flex;gap:8px;flex:0 0 auto;padding-right:8px}
         .ops-metric-deck-chip{
             flex:0 0 auto;min-width:142px;max-width:min(280px,82vw);padding:8px 12px;border-radius:4px;cursor:default;
             font-family:'IBM Plex Mono',monospace;font-size:0.7rem;line-height:1.32;text-align:left;
             background:transparent;border:1px solid rgba(255,255,255,.38);
-            box-shadow:0 0 0 1px rgba(255,255,255,.04),0 0 14px rgba(255,255,255,.08);
+            box-shadow:0 0 0 1px rgba(255,255,255,.05),0 0 16px rgba(0,229,255,.06),0 0 18px rgba(255,255,255,.1);
             color:rgba(255,255,255,.92);transition:border-color .16s,box-shadow .16s,background .16s;
         }
-        .ops-metric-deck-chip:hover{border-color:rgba(255,255,255,.55);box-shadow:0 0 0 1px rgba(255,255,255,.06),0 0 18px rgba(255,255,255,.14)}
+        .ops-metric-deck-chip:hover{border-color:rgba(255,255,255,.55);box-shadow:0 0 0 1px rgba(255,255,255,.07),0 0 20px rgba(0,229,255,.1),0 0 22px rgba(255,255,255,.16)}
         .ops-metric-deck-chip[data-filter-strategy]{cursor:pointer;border-color:rgba(255,255,255,.5)}
         .ops-metric-deck-chip[data-filter-strategy]:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.85);box-shadow:0 0 0 1px rgba(255,255,255,.08),0 0 20px rgba(255,255,255,.2)}
         .ops-metric-deck-chip .chip-k{color:var(--cy);font-size:0.58rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:3px;display:block}
         .ops-metric-deck-chip .chip-b{display:block;word-break:break-word;color:rgba(255,255,255,.9)}
         .ops-metric-deck-marquee-inner.deck-wrap-static{width:100%;max-width:100%;flex-wrap:wrap;row-gap:8px}
         .ops-metric-deck-marquee-inner.deck-wrap-static .ops-metric-deck-track{flex-wrap:wrap;width:100%;max-width:100%}
-        @keyframes opsDeckMarquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+        @keyframes opsDeckMarquee{0%{transform:translate3d(0,0,0)}100%{transform:translate3d(var(--ops-deck-shift,-50%),0,0)}}
         .ops-metric-deck-fade{pointer-events:none;position:absolute;top:0;bottom:10px;width:24px;z-index:1;opacity:0.85}
         .ops-metric-deck-fade-left{left:0;background:linear-gradient(to right,rgba(0,0,0,.95),transparent)}
         .ops-metric-deck-fade-right{right:0;background:linear-gradient(to left,rgba(0,0,0,.95),transparent)}
@@ -560,7 +653,7 @@
         html.dashboard-fullscreen .crypto-grid{gap:22px}
         html.dashboard-fullscreen .crypto-grid.three{grid-template-columns:1fr}
         html.dashboard-fullscreen .hero-item{padding:18px 20px;min-height:116px}
-        html.dashboard-fullscreen .hero-item .hero-val{font-size:clamp(24px,2.2vw,34px);white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
+        html.dashboard-fullscreen .hero-item .hero-val{font-size:clamp(24px,1.5vw,34px);white-space:normal;overflow:visible;text-overflow:clip;line-height:1.15}
         html.dashboard-fullscreen .hero-item .hero-sub{font-size:12px;white-space:normal;overflow:visible;text-overflow:clip}
         html.dashboard-fullscreen .hero-item .hero-lbl{font-size:11px}
         html.dashboard-fullscreen .crypto-hero-six,html.dashboard-fullscreen .crypto-hero-seven{gap:12px}
@@ -568,10 +661,11 @@
         html.dashboard-fullscreen .crypto-meta-four>div,html.dashboard-fullscreen .crypto-meta-five>div,html.dashboard-fullscreen .crypto-meta-six>div{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
         html.dashboard-fullscreen .card p{font-size:0.82rem;line-height:1.55}
         html.dashboard-fullscreen .metric-box{padding:16px}
-        html.dashboard-fullscreen .metric-box .value{font-size:clamp(20px,1.8vw,28px);white-space:normal;overflow:visible;text-overflow:clip}
+        html.dashboard-fullscreen .metric-box .value{font-size:clamp(20px,1.5vw,28px);white-space:normal;overflow:visible;text-overflow:clip}
         html.dashboard-fullscreen .metric-box .label{font-size:10px}
-        html.dashboard-fullscreen h2{font-size:11px}
-        html.dashboard-fullscreen h3{font-size:12px}
+        /* Type ramp: 1.5× over compact .sh/h2 (18px) and h3 (20px) for fullscreen readability */
+        html.dashboard-fullscreen h2{font-size:27px}
+        html.dashboard-fullscreen h3{font-size:30px}
         html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:none;white-space:normal;line-height:1.45}
         html.dashboard-fullscreen .signal-row{font-size:13px}
         html.dashboard-fullscreen .signal-gates-grid>div{padding:12px}
@@ -581,7 +675,7 @@
         html.dashboard-fullscreen .crypto-grid>.card{padding:24px 28px}
         html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item{padding:16px 18px;min-height:88px}
         html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-val,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-val{
-            font-size:clamp(18px,1.9vw,32px);
+            font-size:clamp(18px,1.5vw,32px);
             line-height:1.12;
         }
         html.dashboard-fullscreen .crypto-grid .crypto-hero-six .hero-item .hero-lbl,html.dashboard-fullscreen .crypto-grid .crypto-hero-seven .hero-item .hero-lbl{font-size:10px}
@@ -682,8 +776,9 @@
         #view-commands .cmd-row{background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.07);border-radius:3px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
         #view-commands .cmd-row pre{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--cy);margin:0;flex:1;background:transparent;padding:0;border:0;white-space:pre-wrap;word-break:break-all}
         #view-commands .cmd-row .btn-sm{order:2;flex-shrink:0}
-        #view-commands h3{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--cy);text-transform:uppercase;letter-spacing:.1em;margin:14px 0 4px}
+        #view-commands h3{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--cy);text-transform:uppercase;letter-spacing:.1em;margin:14px 0 4px}
         #view-commands .cmd-note{font-size:11px;color:var(--td);line-height:1.6;margin:4px 0 8px}
+        #view-commands .cmd-ref-lead{font-size:clamp(1.05rem,1.5vw,1.38rem);line-height:1.25;letter-spacing:.06em;margin:0 0 10px}
 
         /* Color-coded strategy filter chips above BTC chart (replaces plain checkboxes) */
         .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s,transform .1s;user-select:none;line-height:1.2}
@@ -1237,7 +1332,7 @@
     <dialog id="ai-review-dialog" class="ai-review-modal">
       <div style="padding:16px 18px 18px;">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
-          <h2 style="margin:0;font-size:0.95rem;font-weight:600;">Session AI review</h2>
+          <h2 style="margin:0;font-size:1.9rem;font-weight:600;">Session AI review</h2>
           <button type="button" class="btn-sm" onclick="closeAIReviewDialog()">Close</button>
         </div>
         <div id="ai-review-dialog-meta" style="font-size:0.7rem;color:var(--text-muted);margin-bottom:10px;"></div>
@@ -1467,7 +1562,7 @@
         </div>
         <!-- PnL chart (simple canvas) -->
         <div id="journal-chart-section" style="margin-top:12px;display:none;">
-            <h3 style="color:var(--cyan);font-size:0.78rem;text-transform:uppercase;margin-bottom:6px;">Portfolio value (snapshots)</h3>
+            <h3 style="color:var(--cyan);font-size:1.56rem;text-transform:uppercase;margin-bottom:6px;">Portfolio value (snapshots)</h3>
             <canvas id="pnl-chart" height="120" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></canvas>
         </div>
     </div>
@@ -1524,8 +1619,8 @@
          ═══════════════════════════════════════════════════════ -->
     <div id="view-backtest" style="display:none;">
 
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:rgba(0,229,255,.03);border:1px solid rgba(0,229,255,.08);border-radius:4px;margin-bottom:14px;">
-        <strong style="color:var(--tm);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). One-off CLI runs: Commands tab.
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:linear-gradient(135deg,rgba(176,96,255,.07),rgba(0,255,136,.04));border:1px solid rgba(176,96,255,.2);border-radius:6px;margin-bottom:14px;box-shadow:0 0 20px rgba(176,96,255,.08),inset 0 0 0 1px rgba(255,255,255,.04);">
+        <strong style="color:var(--ye);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). Cards read <strong>this server’s</strong> <span style="font-family:IBM Plex Mono,monospace;">data/backtest/reports/</span> — CLI bundle output on your laptop does not appear on a hosted dashboard unless that disk is shared. After a <strong>local</strong> <span style="font-family:IBM Plex Mono,monospace;">run_crypto_backtest_bundle.py</span> run, use header <strong>Refresh</strong> or revisit this tab so cards refetch (this page does not watch the folder continuously).
     </div>
 
     <div id="bt-hud" class="bt-hud" role="region" aria-label="Backtest run status">
@@ -1728,7 +1823,7 @@
     </div>
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
-        <h2 style="margin-bottom:10px;font-size:1.38rem;line-height:1.25;">Start commands</h2>
+        <h2 class="cmd-ref-lead">Start commands</h2>
         <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Use these when you are <strong>not</strong> relying on the Command Center <strong>Start Live Test</strong> button (for example SSH into a server, local terminal only, or CI). The web UI button runs the same entrypoint class as <code>start.py</code> but keeps logs attached to the dashboard process.</p>
         <p class="cmd-note">Run from the <strong>project root</strong> (folder that contains <code>src/</code> and <code>config/</code>). On Windows, use <code>py</code> instead of <code>python</code> if needed.</p>
         <p class="cmd-note">Web UI: <code>http://127.0.0.1:8081</code> — port is <code>config/settings.yaml</code> → <code>dashboard.dashboard_port</code>.</p>
@@ -1794,7 +1889,7 @@
     </div>
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
-        <h2 style="margin-bottom:10px;font-size:1.38rem;line-height:1.25;">Shutdown, cancel, and stop</h2>
+        <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
         <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop</strong> calls <code>POST /api/live/stop</code> and opens the ORACLE <strong>shutdown</strong> splash (amber header lane, cancel-themed boot log) — the same treatment family as <strong>Start Live Test</strong>, which uses the cyan <strong>loading</strong> lane.</p>
         <h3>Foreground terminal</h3>
         <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
@@ -2378,8 +2473,17 @@ window.addEventListener('resize', scheduleDashboardRelayout);
 window.addEventListener('orientationchange', scheduleDashboardRelayout);
 window.addEventListener('pageshow', scheduleDashboardRelayout);
 document.addEventListener('fullscreenchange', scheduleDashboardRelayout);
+let _btReportsVisibilityTimer = null;
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) scheduleDashboardRelayout();
+    if (document.hidden || _currentMainView() !== 'backtest') return;
+    if (_btReportsVisibilityTimer) clearTimeout(_btReportsVisibilityTimer);
+    _btReportsVisibilityTimer = setTimeout(function() {
+        _btReportsVisibilityTimer = null;
+        if (!document.hidden && _currentMainView() === 'backtest' && typeof loadBacktestReports === 'function') {
+            loadBacktestReports(1, 0, 0);
+        }
+    }, 450);
 });
 if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
     window.visualViewport.addEventListener('resize', scheduleDashboardRelayout);
@@ -3007,6 +3111,19 @@ function dashInitLivePositionsDeck() {
     const wrap = document.getElementById('ops-metric-deck-wrap');
     if (!wrap || wrap.dataset.deckBound) return;
     wrap.dataset.deckBound = '1';
+    if (!window._dashActivePosResizeBound) {
+        window._dashActivePosResizeBound = '1';
+        var _dashResizeT = null;
+        window.addEventListener('resize', function() {
+            if (_dashResizeT) clearTimeout(_dashResizeT);
+            _dashResizeT = setTimeout(function() {
+                _dashResizeT = null;
+                var sc = document.getElementById('ops-metric-deck-scroll');
+                if (sc) dashFinalizeMetricDeckLayout(sc);
+                dashRenderOpsDigestTicker(window._dashLastStatusForDeck || {});
+            }, 160);
+        }, { passive: true });
+    }
     wrap.addEventListener('click', function(ev) {
         const tab = ev.target.closest('.ops-metric-deck-tab');
         if (tab && tab.dataset.deckTab) {
@@ -3100,6 +3217,8 @@ function dashFinalizeMetricDeckLayout(scrollEl) {
     wrap.classList.remove('ops-metric-deck-hidden');
     const inner = scrollEl.querySelector('.ops-metric-deck-marquee-inner');
     if (!inner) return;
+    inner.style.removeProperty('--ops-deck-shift');
+    inner.style.removeProperty('--ops-deck-duration');
     inner.classList.remove('ops-metric-deck-marquee-active', 'deck-wrap-static');
     while (inner.children.length > 1) {
         inner.removeChild(inner.lastChild);
@@ -3123,6 +3242,12 @@ function dashFinalizeMetricDeckLayout(scrollEl) {
     const clone = track.cloneNode(true);
     clone.setAttribute('aria-hidden', 'true');
     inner.appendChild(clone);
+    const segW = track.scrollWidth;
+    if (segW > 0) {
+        inner.style.setProperty('--ops-deck-shift', (-segW) + 'px');
+        const dur = Math.max(14, Math.min(78, segW / 26));
+        inner.style.setProperty('--ops-deck-duration', dur + 's');
+    }
     inner.classList.add('ops-metric-deck-marquee-active');
 }
 
@@ -3161,17 +3286,26 @@ function updateMetricDeck(d) {
     else chips = _deckChipsFromSide(full.side_selection);
 
     if (!chips.length) {
+        window._dashDeckContentKeyRendered = '';
         scrollEl.innerHTML = '<span class="ops-metric-deck-empty">No data for this view yet.</span>';
         wrap.classList.remove('ops-metric-deck-hidden');
     } else {
-        const trackHtml = dashBuildDeckChipButtons(chips, tab);
-        scrollEl.innerHTML = '<div class="ops-metric-deck-marquee-inner" id="ops-metric-deck-marquee-inner">'
-            + '<div class="ops-metric-deck-track">' + trackHtml + '</div></div>';
-        requestAnimationFrame(function() {
+        const deckContentKey = tab + '\0' + h;
+        const existingInner = scrollEl.querySelector('.ops-metric-deck-marquee-inner');
+        const canReuse = window._dashDeckContentKeyRendered === deckContentKey
+            && existingInner
+            && existingInner.querySelector('.ops-metric-deck-track');
+        if (!canReuse) {
+            window._dashDeckContentKeyRendered = deckContentKey;
+            const trackHtml = dashBuildDeckChipButtons(chips, tab);
+            scrollEl.innerHTML = '<div class="ops-metric-deck-marquee-inner" id="ops-metric-deck-marquee-inner">'
+                + '<div class="ops-metric-deck-track">' + trackHtml + '</div></div>';
             requestAnimationFrame(function() {
-                dashFinalizeMetricDeckLayout(scrollEl);
+                requestAnimationFrame(function() {
+                    dashFinalizeMetricDeckLayout(scrollEl);
+                });
             });
-        });
+        }
     }
 
     if (tailEl) {
@@ -3264,18 +3398,39 @@ function dashRenderOpsDigestTicker(full) {
         wrap.style.display = 'none';
         wrap.removeAttribute('title');
         wrap.classList.remove('ops-digest-marquee');
+        wrap.dataset.dashDigestText = '';
         track.innerHTML = '';
+        track.style.removeProperty('--ops-digest-shift');
+        track.style.removeProperty('--ops-digest-duration');
         return;
     }
     wrap.style.display = 'block';
     wrap.setAttribute('title', text);
     const esc = _htmlEscape(text);
-    track.innerHTML = '<span class="ops-digest-cell">' + esc + '</span><span class="ops-digest-cell" aria-hidden="true">' + esc + '</span>';
-    wrap.classList.remove('ops-digest-marquee');
+    const digestKey = text;
+    const sameText = wrap.dataset.dashDigestText === digestKey;
+    wrap.dataset.dashDigestText = digestKey;
+    if (!sameText) {
+        track.style.removeProperty('--ops-digest-shift');
+        track.style.removeProperty('--ops-digest-duration');
+        track.innerHTML = '<span class="ops-digest-cell">' + esc + '</span><span class="ops-digest-cell" aria-hidden="true">' + esc + '</span>';
+        wrap.classList.remove('ops-digest-marquee');
+    }
     requestAnimationFrame(function() {
         requestAnimationFrame(function() {
             const ov = view.clientWidth > 0 && track.scrollWidth > view.clientWidth + 6;
             const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (ov && !reduce) {
+                var half = track.scrollWidth / 2;
+                if (half > 0) {
+                    track.style.setProperty('--ops-digest-shift', (-half) + 'px');
+                    var dur = Math.max(16, Math.min(88, half / 30));
+                    track.style.setProperty('--ops-digest-duration', dur + 's');
+                }
+            } else {
+                track.style.removeProperty('--ops-digest-shift');
+                track.style.removeProperty('--ops-digest-duration');
+            }
             wrap.classList.toggle('ops-digest-marquee', !!ov && !reduce);
         });
     });
@@ -3894,6 +4049,60 @@ function _btHudEls() {
     };
 }
 
+function _btSetHudLive(h, on) {
+    if (h && h.root) h.root.classList.toggle('bt-hud-live', !!on);
+}
+
+function _btClearInlineHeat(h) {
+    if (!h) return;
+    if (h.pct) {
+        h.pct.style.color = '';
+        h.pct.style.textShadow = '';
+    }
+    if (h.fill) {
+        h.fill.style.background = '';
+        h.fill.style.boxShadow = '';
+    }
+    if (h.track) {
+        h.track.style.borderColor = '';
+        h.track.style.boxShadow = '';
+    }
+}
+
+function _btHeatFromPct(p) {
+    p = Math.max(0, Math.min(100, Number(p) || 0));
+    var h, s, l;
+    if (p <= 50) {
+        var t = p / 50;
+        h = 358 + (32 - 358) * t;
+        s = 100;
+        l = 62 - 10 * t;
+    } else {
+        var t2 = (p - 50) / 50;
+        h = 32 + (142 - 32) * t2;
+        s = 100;
+        l = 52 + 6 * t2;
+    }
+    return { h: h, s: s, l: l };
+}
+
+function _btApplyDeterminateHeat(h, pct) {
+    if (!h || !h.pct || !h.fill) return;
+    var o = _btHeatFromPct(pct);
+    var c = 'hsl(' + o.h + ',' + o.s + '%,' + o.l + '%)';
+    var g = '0 0 40px hsla(' + o.h + ',' + o.s + '%,' + o.l + '%,.52), 0 0 88px hsla(' + o.h + ',' + o.s + '%,' + o.l + '%,.2)';
+    h.pct.style.color = c;
+    h.pct.style.textShadow = g;
+    var hDark = Math.max(0, o.h - 22);
+    var lHi = Math.min(66, o.l + 8);
+    h.fill.style.background = 'linear-gradient(90deg,hsla(' + hDark + ',' + o.s + '%,36%,.9),hsla(' + o.h + ',' + o.s + '%,' + lHi + '%,1))';
+    h.fill.style.boxShadow = '0 0 30px hsla(' + o.h + ',' + o.s + '%,48%,.58), inset 0 1px 0 rgba(255,255,255,.3)';
+    if (h.track) {
+        h.track.style.borderColor = 'hsla(' + o.h + ',' + Math.min(92, o.s) + '%,44%,.42)';
+        h.track.style.boxShadow = 'inset 0 0 16px rgba(0,0,0,.52), 0 0 28px hsla(' + o.h + ',' + o.s + '%,46%,.22)';
+    }
+}
+
 function inferBtPhase(lines, running, exitCode) {
     const arr = Array.isArray(lines) ? lines : [];
     const text = arr.join('\n');
@@ -3915,6 +4124,8 @@ function updateBacktestHud(s, label, jobId) {
     const running = !!(s && s.running);
     const exitCode = s && s.exit_code != null ? s.exit_code : null;
     if (s && s.job_unknown) {
+        _btSetHudLive(h, false);
+        _btClearInlineHeat(h);
         h.title.textContent = 'BACKTEST // SIGNAL LOST';
         h.phase.textContent = 'HALT';
         h.job.textContent = (label || 'job') + ' // job no longer registered (dashboard restart?)';
@@ -3922,7 +4133,11 @@ function updateBacktestHud(s, label, jobId) {
         h.pct.className = 'bt-hud-pct bt-hud-pct-warn';
         h.win.textContent = '';
         h.track.classList.remove('bt-hud-indet');
-        if (h.fill) { h.fill.style.width = '0%'; h.fill.style.marginLeft = '0'; h.fill.style.animation = 'none'; }
+        if (h.fill) {
+            h.fill.style.animation = '';
+            h.fill.style.marginLeft = '0';
+            h.fill.style.width = '0%';
+        }
         h.footer.textContent = 're-run from Backtest tab if the subprocess is still on disk';
         return;
     }
@@ -3935,7 +4150,8 @@ function updateBacktestHud(s, label, jobId) {
     const summ = (job.summary || '').trim();
     const phase = inferBtPhase(lines, running, exitCode);
     if (running) {
-        h.title.textContent = 'BACKTEST // REPLAY';
+        _btSetHudLive(h, true);
+        h.title.textContent = 'BACKTEST // STATUS';
         h.phase.textContent = phase;
         const jid = jobId || job.job_id || '—';
         let jline = (label || summ || 'crypto backtest') + '  //  job ' + jid + '  //  pid ' + pid;
@@ -3947,25 +4163,33 @@ function updateBacktestHud(s, label, jobId) {
         if (pctVal != null && typeof pctVal === 'number') {
             h.pct.textContent = pctVal.toFixed(1) + '%';
             h.pct.className = 'bt-hud-pct';
+            _btApplyDeterminateHeat(h, pctVal);
             h.win.textContent = (cur != null && tot != null) ? ('windows ' + cur.toLocaleString() + ' / ' + tot.toLocaleString()) : '';
             h.track.classList.remove('bt-hud-indet');
             if (h.fill) {
-                h.fill.style.animation = 'none';
+                h.fill.style.animation = '';
                 h.fill.style.marginLeft = '0';
                 h.fill.style.width = Math.min(100, Math.max(0, pctVal)) + '%';
             }
         } else {
+            _btClearInlineHeat(h);
             h.pct.textContent = '···';
-            h.pct.className = 'bt-hud-pct';
+            h.pct.className = 'bt-hud-pct bt-hud-pct-wait';
             h.win.textContent = phase === 'LOAD' ? 'loading OHLCV / oracle — first % on progress interval' : 'awaiting heartbeat lines from subprocess';
             h.track.classList.add('bt-hud-indet');
-            if (h.fill) { h.fill.style.width = ''; }
+            if (h.fill) {
+                h.fill.style.width = '';
+                h.fill.style.marginLeft = '';
+                h.fill.style.animation = '';
+            }
         }
         h.footer.textContent = lines.length ? String(lines[lines.length - 1]).slice(0, 140) : 'subprocess live — mirror below';
         return;
     }
     const failed = Number.isFinite(exitCode) && exitCode !== 0;
+    _btSetHudLive(h, false);
     if (failed) {
+        _btClearInlineHeat(h);
         h.title.textContent = 'BACKTEST // ABORT';
         h.phase.textContent = 'FAIL';
         h.pct.textContent = 'ERR';
@@ -3974,16 +4198,19 @@ function updateBacktestHud(s, label, jobId) {
         h.title.textContent = 'BACKTEST // COMPLETE';
         h.phase.textContent = phase === 'DONE' ? 'DONE' : 'STOP';
         const pdone = job.progress_pct;
+        var pFin = 100;
         if (pdone != null && pdone >= 99.5) {
             h.pct.textContent = '100%';
-            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+            pFin = 100;
         } else if (pdone != null) {
             h.pct.textContent = pdone.toFixed(1) + '%';
-            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+            pFin = pdone;
         } else {
             h.pct.textContent = 'OK';
-            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+            pFin = 100;
         }
+        h.pct.className = 'bt-hud-pct';
+        _btApplyDeterminateHeat(h, pFin);
     }
     const jid2 = jobId || job.job_id || '—';
     h.job.textContent = (label || summ || 'crypto') + '  //  job ' + jid2 + '  //  exit ' + (exitCode != null ? exitCode : '—');
@@ -3991,7 +4218,7 @@ function updateBacktestHud(s, label, jobId) {
         ? ('windows ' + job.progress_current.toLocaleString() + ' / ' + job.progress_total.toLocaleString()) : '';
     h.track.classList.remove('bt-hud-indet');
     if (h.fill) {
-        h.fill.style.animation = 'none';
+        h.fill.style.animation = '';
         h.fill.style.marginLeft = '0';
         h.fill.style.width = failed ? '0%' : (job.progress_pct != null ? Math.min(100, job.progress_pct) + '%' : '100%');
     }
@@ -4001,28 +4228,32 @@ function updateBacktestHud(s, label, jobId) {
 function updateBacktestHudStandby() {
     const h = _btHudEls();
     if (!h.root) return;
+    _btSetHudLive(h, false);
+    _btClearInlineHeat(h);
     h.title.textContent = 'BACKTEST // STANDBY';
     h.phase.textContent = 'IDLE';
     h.job.textContent = '— // select scope + Run Crypto BT';
     h.pct.textContent = '—';
-    h.pct.className = 'bt-hud-pct';
+    h.pct.className = 'bt-hud-pct bt-hud-pct-idle';
     h.win.textContent = '';
     h.track.classList.remove('bt-hud-indet');
-    if (h.fill) { h.fill.style.animation = 'none'; h.fill.style.marginLeft = '0'; h.fill.style.width = '0%'; }
+    if (h.fill) { h.fill.style.animation = ''; h.fill.style.marginLeft = '0'; h.fill.style.width = '0%'; }
     h.footer.textContent = 'replay % parsed from stdout (progress x/y windows)';
 }
 
 function updateBacktestHudStarting(label, jobId, pid) {
     const h = _btHudEls();
     if (!h.root) return;
+    _btSetHudLive(h, true);
+    _btClearInlineHeat(h);
     h.title.textContent = 'BACKTEST // SPAWN';
     h.phase.textContent = 'ARM';
     h.job.textContent = (label || 'crypto') + '  //  job ' + (jobId || '—') + '  //  pid ' + (pid != null ? pid : '—');
     h.pct.textContent = '…';
-    h.pct.className = 'bt-hud-pct';
+    h.pct.className = 'bt-hud-pct bt-hud-pct-wait';
     h.win.textContent = 'subprocess forked — waiting for first log lines';
     h.track.classList.add('bt-hud-indet');
-    if (h.fill) { h.fill.style.width = ''; }
+    if (h.fill) { h.fill.style.width = ''; h.fill.style.marginLeft = ''; h.fill.style.animation = ''; }
     h.footer.textContent = 'POST /api/backtest/start';
 }
 

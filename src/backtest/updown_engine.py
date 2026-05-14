@@ -103,7 +103,7 @@ class UpdownTrade:
     entry_price:   float         # Mid YES before slip (reference for both legs)
     fill_price:    float         # After slip: YES fill for BUY_YES, NO fill for BUY_NO
     size:          float         # $ notional
-    edge:          float         # Estimated edge vs 0.50
+    edge:          float         # Entry edge vs market YES (est_prob_up - yes for LONG)
     confidence:    float
     outcome:       Optional[str] = None   # "WIN" | "LOSS"
     exit_price:    float = 0.0
@@ -510,11 +510,71 @@ class UpdownBacktestEngine:
         win_min, win_max = self._resolve_entry_timing_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
+    def _entry_timing_window_is_configured(
+        self, *, tf: str, strategy_cfg: Dict[str, Any]
+    ) -> bool:
+        if tf not in ("5m", "15m", "30m"):
+            tf = "15m"
+        keys = (
+            f"entry_timing_window_{tf}_min",
+            f"entry_timing_window_{tf}_max",
+            f"ai_entry_window_{tf}_min",
+            f"ai_entry_window_{tf}_max",
+        )
+        return any(k in strategy_cfg or k in self.config for k in keys)
+
     def _evaluation_minutes_left(self, window_minutes: int) -> float:
         return max(0.0, float(window_minutes) - (self._entry_eval_delay_sec / 60.0))
 
     def _resolve_updown_exit_params(self, symbol: str) -> Tuple[float, float, float, float]:
         return resolve_updown_exit_params(self._ude, symbol_to_strategy_name(symbol))
+
+    def _yes_mid_at_window_open(
+        self,
+        *,
+        window_open: pd.Timestamp,
+        window_close: pd.Timestamp,
+        window_minutes: int,
+        df_1m: pd.DataFrame,
+        pm_yes: Optional[pd.Series],
+    ) -> float:
+        """YES mid at entry evaluation: Polymarket 1m marks if present, else OHLCV proxy.
+
+        Matches live semantics for edge = est_prob_up - yes (LONG) / yes - est_prob_up (SHORT).
+        """
+        if df_1m is None or df_1m.empty or "open_time" not in df_1m.columns:
+            asset_open = 0.0
+            first_close = 0.0
+        else:
+            window_df = df_1m[
+                (df_1m["open_time"] >= window_open) & (df_1m["open_time"] < window_close)
+            ]
+            if window_df.empty or "open" not in window_df.columns:
+                asset_open = 0.0
+                first_close = 0.0
+            else:
+                asset_open = float(window_df.iloc[0]["open"])
+                first_close = float(window_df.iloc[0]["close"])
+
+        t0 = pd.Timestamp(window_open)
+        if t0.tzinfo is None:
+            t0 = t0.tz_localize("UTC")
+        else:
+            t0 = t0.tz_convert("UTC")
+
+        if pm_yes is not None and len(pm_yes) > 0:
+            try:
+                q = pm_yes.asof(t0)
+            except (KeyError, ValueError, TypeError):
+                q = float("nan")
+            if q is not None and pd.notna(q):
+                return float(max(0.01, min(0.99, float(q))))
+
+        if asset_open > 0 and first_close > 0:
+            return self._proxy_yes_price_from_underlying(
+                asset_open, first_close, window_minutes
+            )
+        return 0.50
 
     @staticmethod
     def _proxy_yes_price_from_underlying(
@@ -1133,6 +1193,20 @@ class UpdownBacktestEngine:
             return base_side, "hybrid_alt_short_confirmed"
         return base_side, "hybrid_alt_first"
 
+    def _btc_htf_bias_or_neutral(
+        self,
+        btc_ta: Optional[TechnicalAnalysis],
+        *,
+        min_hist: float,
+    ) -> Optional[str]:
+        """Unit tests may stub partial BTC TA objects; replay should degrade, not crash."""
+        if btc_ta is None:
+            return None
+        required = ("trend_sabre", "macd_4h", "current_price")
+        if any(not hasattr(btc_ta, attr) for attr in required):
+            return "NEUTRAL"
+        return self._get_htf_bias(btc_ta, min_hist=min_hist)
+
     @staticmethod
     def _btc_1h_regime_min_edge_mult(
         strategy_cfg: Dict[str, Any],
@@ -1196,14 +1270,12 @@ class UpdownBacktestEngine:
         strategy_cfg: Dict[str, Any],
     ) -> ReplayDirectionDecision:
         decision = ReplayDirectionDecision()
-        btc_htf_bias = None
-        if btc_ta is not None:
-            btc_htf_bias = self._get_htf_bias(
-                btc_ta,
-                min_hist=float(
-                    self.config.get("strategies", {}).get("bitcoin", {}).get("min_4h_hist_magnitude", 20.0)
-                ),
-            )
+        btc_htf_bias = self._btc_htf_bias_or_neutral(
+            btc_ta,
+            min_hist=float(
+                self.config.get("strategies", {}).get("bitcoin", {}).get("min_4h_hist_magnitude", 20.0)
+            ),
+        )
 
         btc_1m = None if not btc_data else btc_data.get("1m")
         alt_1h_trend = self._alt_1h_trend_from_df(df_1h)
@@ -1241,7 +1313,12 @@ class UpdownBacktestEngine:
                         decision.allowed_side = "SHORT"
                         decision.side_source = "bearish_ltf_override"
             else:
-                if btc_spike_detected:
+                if macro_trend in {"BULLISH", "BEARISH"}:
+                    decision.allowed_side = self._side_from_bias(macro_trend)
+                    decision.primary_htf_bias = macro_trend
+                    decision.side_source = "eth_macro_trend_fallback"
+                    decision.skip_btc_follow_1h = True
+                elif btc_spike_detected:
                     decision.allowed_side = "LONG" if btc_move_5m > 0 else "SHORT"
                     decision.side_source = "btc_spike"
                     decision.skip_btc_follow_1h = True
@@ -1257,7 +1334,8 @@ class UpdownBacktestEngine:
                         "neutral_macro_no_catalyst" if neutral_requires_catalyst else "htf_neutral"
                     )
                     return decision
-                decision.primary_htf_bias = "NEUTRAL"
+                if not decision.primary_htf_bias:
+                    decision.primary_htf_bias = "NEUTRAL"
 
             market_side, market_source = self._resolve_eth_market_side(
                 decision.allowed_side,
@@ -1411,8 +1489,12 @@ class UpdownBacktestEngine:
     # ==========================================================================
 
     def _edge_15m(
-        self, ta: TechnicalAnalysis, allowed_side: str, ltf_strength: float,
+        self,
+        ta: TechnicalAnalysis,
+        allowed_side: str,
+        ltf_strength: float,
         htf_bias: str = "NEUTRAL",
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         """BTC 15m edge -- graduated HTF boost (allows 2/3 votes), matches live.
 
@@ -1504,7 +1586,10 @@ class UpdownBacktestEngine:
                 est_prob_up += 0.02 if sabre.tension > 0 else -0.02
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
         return edge, confidence
 
@@ -1520,6 +1605,7 @@ class UpdownBacktestEngine:
         *,
         iql_enabled: bool = False,
         iql_hist_floor: float = 0.03,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         """SOL 15m edge -- macro boost +/-0.07, LTF*0.22, 1H histogram gate.
 
@@ -1554,7 +1640,10 @@ class UpdownBacktestEngine:
         elif ta.rsi_14 < 25: est_prob_up += 0.03
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         # Confidence: matches live = min(0.85, 0.50 + ltf_strength * 0.22 + lag_conf + timing*0.5)
         # lag_conf and timing = 0 in backtest
         confidence = min(0.85, 0.50 + ltf_strength * 0.22)
@@ -1636,6 +1725,7 @@ class UpdownBacktestEngine:
         df_1m: pd.DataFrame = None,
         window_open: pd.Timestamp = None,
         corr_1h: Optional[float] = None,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         """Estimate edge for a 5m updown window.
 
@@ -1645,7 +1735,9 @@ class UpdownBacktestEngine:
         macd_htf = ta.macd_4h   # 4H for BTC, 1H for SOL (built from htf_key data)
 
         if symbol == "BTC":
-            return self._edge_5m_btc(ta, allowed_side, df_1m, window_open, macd_htf)
+            return self._edge_5m_btc(
+                ta, allowed_side, df_1m, window_open, macd_htf, yes_price=yes_price
+            )
         elif symbol == "ETH":
             min_buy = self.min_positive_m5_adj_eth_5m
             min_sell = self.min_positive_m5_adj_eth_5m_sell
@@ -1659,6 +1751,7 @@ class UpdownBacktestEngine:
                 min_sell=min_sell,
                 sell_5m_min_corr=corr_min,
                 corr_1h=corr_1h,
+                yes_price=yes_price,
             )
         elif symbol == "XRP":
             min_buy = self.min_positive_m5_adj_xrp_5m
@@ -1673,6 +1766,7 @@ class UpdownBacktestEngine:
                 min_sell=min_sell,
                 sell_5m_min_corr=corr_min,
                 corr_1h=corr_1h,
+                yes_price=yes_price,
             )
         elif symbol == "HYPE":
             min_buy = self.min_positive_m5_adj_hype_5m
@@ -1687,6 +1781,7 @@ class UpdownBacktestEngine:
                 min_sell=min_sell,
                 sell_5m_min_corr=corr_min,
                 corr_1h=corr_1h,
+                yes_price=yes_price,
             )
         else:
             min_buy = self.min_positive_m5_adj_sol_5m
@@ -1701,6 +1796,7 @@ class UpdownBacktestEngine:
                 min_sell=min_sell,
                 sell_5m_min_corr=corr_min,
                 corr_1h=corr_1h,
+                yes_price=yes_price,
             )
 
     def _edge_5m_btc(
@@ -1710,6 +1806,8 @@ class UpdownBacktestEngine:
         df_1m: pd.DataFrame,
         window_open: pd.Timestamp,
         macd_4h: MACDResult,
+        *,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         """BTC 5m path -- matches bitcoin.py 5m updown exactly."""
         sabre = ta.trend_sabre
@@ -1746,7 +1844,10 @@ class UpdownBacktestEngine:
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         # Confidence: matches live = max(0.45, min(0.85, 0.50 + |htf_boost|*2.5 + |m5_adj|*1.5))
         confidence = max(0.45, min(0.85, 0.50 + abs(htf_boost) * 2.5 + abs(m5_adj) * 1.5))
         return edge, confidence
@@ -1762,6 +1863,7 @@ class UpdownBacktestEngine:
         min_sell: Optional[float] = None,
         sell_5m_min_corr: float = -1.0,
         corr_1h: Optional[float] = None,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         """SOL-style 5m path -- matches sol_macro.py 5m updown.
 
@@ -1848,7 +1950,10 @@ class UpdownBacktestEngine:
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
 
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         # Confidence: matches live = max(0.50, min(0.85, 0.50 + |m5_adj|*2.5 + lag_conf + timing*0.3))
         # lag_conf and timing = 0 in backtest
         confidence = max(0.50, min(0.85, 0.50 + abs(m5_adj) * 2.5))
@@ -1936,6 +2041,8 @@ class UpdownBacktestEngine:
         df_5m: pd.DataFrame,
         min_eth_adj: float,
         require_btc_impulse: bool,
+        *,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         est_prob_up = 0.50 + (0.04 if allowed_side == "LONG" else -0.04)
         btc_impulse = (
@@ -1973,7 +2080,10 @@ class UpdownBacktestEngine:
         elif eth_ta.rsi_14 < 25:
             est_prob_up += 0.02
         est_prob_up = max(0.10, min(0.90, est_prob_up))
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(m5_adj) * 2.0))
         return edge, confidence
 
@@ -1987,6 +2097,7 @@ class UpdownBacktestEngine:
         *,
         iql_enabled: bool = False,
         iql_hist_floor: float = 0.03,
+        yes_price: float = 0.50,
     ) -> Tuple[float, float]:
         if iql_enabled and not UpdownBacktestEngine._passes_15m_iql_macd(
             eth_ta.macd_15m, allowed_side, iql_hist_floor
@@ -2024,7 +2135,10 @@ class UpdownBacktestEngine:
         elif eth_ta.rsi_14 < 25:
             est_prob_up += 0.03
         est_prob_up = max(0.10, min(0.90, est_prob_up))
-        edge = (est_prob_up - 0.50) if allowed_side == "LONG" else ((1.0 - est_prob_up) - 0.50)
+        if allowed_side == "LONG":
+            edge = est_prob_up - yes_price
+        else:
+            edge = yes_price - est_prob_up
         confidence = max(0.55, min(0.85, 0.50 + abs(eth_adj) * 2.2))
         return edge, confidence
 
@@ -2312,7 +2426,7 @@ class UpdownBacktestEngine:
                     continue
                 htf_bias = direction.primary_htf_bias
                 allowed_side = direction.allowed_side
-            else:
+            elif not is_btc:
                 direction = self._resolve_alt_replay_direction(
                     symbol=symbol,
                     ta=ta,
@@ -2371,7 +2485,13 @@ class UpdownBacktestEngine:
             # Live strategies compute a preferred timing band for 30m markets, but do not
             # hard-reject the entire 30m lane on that signal alone. Keep the strict gate
             # for 5m/15m parity where live skip telemetry showed it mattered most.
-            if window_minutes in (5, 15) and not timing_window_open:
+            if (
+                window_minutes in (5, 15)
+                and self._entry_timing_window_is_configured(
+                    tf=tf_label, strategy_cfg=strategy_cfg
+                )
+                and not timing_window_open
+            ):
                 _bump_skip("timing_window_closed")
                 current += step_td
                 continue
@@ -2415,6 +2535,22 @@ class UpdownBacktestEngine:
                     current += step_td
                     continue
 
+            pm_yes = try_load_yes_series_for_window(
+                symbol=symbol,
+                window_open=window_open,
+                window_close=window_close,
+                window_minutes=window_minutes,
+                cache_root=self._pm_marks_cache_root,
+                enabled=self._pm_marks_enabled,
+            )
+            yes_mid_market = self._yes_mid_at_window_open(
+                window_open=window_open,
+                window_close=window_close,
+                window_minutes=window_minutes,
+                df_1m=df_1m_full,
+                pm_yes=pm_yes,
+            )
+
             # ==================================================================
             # Layer 3: Edge estimation (symbol + timeframe specific)
             # ==================================================================
@@ -2428,6 +2564,7 @@ class UpdownBacktestEngine:
                         df_5m,
                         float(eth_cfg.get("eth_follow_5m_min_adj", 0.04)),
                         bool(eth_cfg.get("btc_follow_5m_requires_impulse", True)),
+                        yes_price=yes_mid_market,
                     )
                 else:
                     corr_1h = None
@@ -2450,10 +2587,13 @@ class UpdownBacktestEngine:
                         df_1m=df_1m_full,
                         window_open=window_open,
                         corr_1h=corr_1h,
+                        yes_price=yes_mid_market,
                     )
             else:
                 if is_btc:
-                    edge, confidence = self._edge_15m(ta, allowed_side, ltf_str, htf_bias)
+                    edge, confidence = self._edge_15m(
+                        ta, allowed_side, ltf_str, htf_bias, yes_mid_market
+                    )
                 elif is_eth:
                     eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
                     edge, confidence = self._edge_15m_eth_follow(
@@ -2464,6 +2604,7 @@ class UpdownBacktestEngine:
                         float(eth_cfg.get("btc_follow_15m_hist_min", 0.03)),
                         iql_enabled=bool(eth_cfg.get("iql_15m_enabled", False)),
                         iql_hist_floor=float(eth_cfg.get("iql_15m_hist_floor", 0.03)),
+                        yes_price=yes_mid_market,
                     )
                 else:
                     strat_macro = strategy_cfg_map.get(symbol, "sol_macro")
@@ -2474,6 +2615,7 @@ class UpdownBacktestEngine:
                         ltf_str,
                         iql_enabled=bool(sc_macro.get("iql_15m_enabled", False)),
                         iql_hist_floor=float(sc_macro.get("iql_15m_hist_floor", 0.03)),
+                        yes_price=yes_mid_market,
                     )
 
             effective_min_edge = min_edge
@@ -2554,14 +2696,6 @@ class UpdownBacktestEngine:
                 & (df_1m["open_time"] < window_close)
             ].copy()
             asset_open_px = float(window_df_1m.iloc[0]["open"]) if not window_df_1m.empty else 0.0
-            pm_yes = try_load_yes_series_for_window(
-                symbol=symbol,
-                window_open=window_open,
-                window_close=window_close,
-                window_minutes=window_minutes,
-                cache_root=self._pm_marks_cache_root,
-                enabled=self._pm_marks_enabled,
-            )
             pnl, outcome, exit_price, asset_open, asset_close, exit_reason = (
                 self._settle_updown_with_live_exit_proxy(
                     df_1m=df_1m,

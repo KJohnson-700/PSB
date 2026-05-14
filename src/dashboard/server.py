@@ -393,7 +393,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-14-backtest-tab-hud",
+        "dashboard_ui_rev": "2026-05-13-bt-hud-title-status",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
