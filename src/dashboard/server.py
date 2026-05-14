@@ -24,7 +24,7 @@ import asyncio
 import time as _time_mod
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -48,6 +48,7 @@ from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
 from src.execution.backtest_expectations import load_backtest_expectations
 from src.execution.performance_feedback import public_feedback_status
+from src.dashboard.backtest_progress_parse import parse_crypto_progress_from_lines
 
 # Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
 load_project_dotenv(project_root_from_here(), quiet=True)
@@ -392,7 +393,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-13-positions-section-default-collapsed",
+        "dashboard_ui_rev": "2026-05-14-backtest-tab-hud",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1494,12 +1495,15 @@ async def get_backtest_reports():
         cfg_disk = {}
     live_scope = _live_backtest_scope_from_config(cfg_disk)
     if not report_dir.exists():
-        return {
-            "reports": [],
-            "latest": None,
-            "latest_completed": None,
-            "live_scope": live_scope,
-        }
+        return JSONResponse(
+            content={
+                "reports": [],
+                "latest": None,
+                "latest_completed": None,
+                "live_scope": live_scope,
+            },
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
     files = sorted(
         report_dir.glob("backtest_*.json"),
         key=lambda p: p.stat().st_mtime,
@@ -1577,12 +1581,16 @@ async def get_backtest_reports():
         data.pop("results", None)
         data.pop("stress_scenarios", None)
         reports.append(data)
-    return {
+    payload = {
         "reports": reports,
         "latest": reports[0] if reports else None,
         "latest_completed": latest_completed,
         "live_scope": live_scope,
     }
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 # ─── LIVE PERFORMANCE ──────────────────────────────────────────────
@@ -1955,6 +1963,20 @@ def _maybe_start_auto_backtests(phase: str) -> List[Dict[str, Any]]:
 @app.get("/api/backtest/status")
 async def get_backtest_status(job_id: Optional[str] = None):
     """Backtest status. Optional job_id scopes to one job; else lists all jobs."""
+
+    def _job_dict(j: BacktestJob, jid: str, alive: bool) -> Dict[str, Any]:
+        prog = parse_crypto_progress_from_lines(j.output)
+        return {
+            "job_id": jid,
+            "running": alive,
+            "pid": j.proc.pid,
+            "summary": j.summary,
+            "exit_code": None if alive else _backtest_exit_code(j.proc),
+            "progress_pct": prog["progress_pct"],
+            "progress_current": prog["progress_current"],
+            "progress_total": prog["progress_total"],
+        }
+
     with _backtest_jobs_lock:
         if job_id:
             if job_id not in _backtest_jobs:
@@ -1969,15 +1991,7 @@ async def get_backtest_status(job_id: Optional[str] = None):
             return {
                 "running": alive,
                 "exit_code": None if alive else _backtest_exit_code(j.proc),
-                "jobs": [
-                    {
-                        "job_id": job_id,
-                        "running": alive,
-                        "pid": j.proc.pid,
-                        "summary": j.summary,
-                        "exit_code": None if alive else _backtest_exit_code(j.proc),
-                    }
-                ],
+                "jobs": [_job_dict(j, job_id, alive)],
                 "output": j.output[-50:],
             }
         jobs_payload: List[Dict[str, Any]] = []
@@ -1986,15 +2000,7 @@ async def get_backtest_status(job_id: Optional[str] = None):
         for jid, j in _backtest_jobs.items():
             alive = j.proc.poll() is None
             any_running = any_running or alive
-            jobs_payload.append(
-                {
-                    "job_id": jid,
-                    "running": alive,
-                    "pid": j.proc.pid,
-                    "summary": j.summary,
-                    "exit_code": None if alive else _backtest_exit_code(j.proc),
-                }
-            )
+            jobs_payload.append(_job_dict(j, jid, alive))
             if alive:
                 merged_out.extend(j.output[-15:])
         return {

@@ -47,6 +47,7 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "fetchAll" in body and "Command Center" in body
     assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
     assert 'id="backtest-output-tail"' in body
+    assert 'id="bt-hud"' in body
 
     h = c.get("/health")
     assert h.status_code == 200
@@ -201,8 +202,11 @@ def test_dashboard_crypto_backtest_select_includes_all_bundle():
 def test_backtest_tab_renders_output_tail_and_poll_updates_it():
     html = INDEX.read_text(encoding="utf-8")
     assert 'id="backtest-output-tail"' in html
+    assert '.backtest-output-tail{' in html
     assert "function renderBacktestOutputTail(lines, fallbackText)" in html
+    assert "el.scrollTop = el.scrollHeight;" in html
     assert "renderBacktestOutputTail(s.output || []" in html
+    assert "partial per-symbol reports may still be on the cards below" in html
     assert "Backtest output tail" in html
 
 

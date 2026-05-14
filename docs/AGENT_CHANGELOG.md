@@ -8,6 +8,18 @@
 
 ---
 
+## 2026-05-14 — Backtest tab: mission HUD + server-side crypto progress parse
+
+**`src/dashboard/backtest_progress_parse.py`:** Parses last `progress x/y windows (z%)` line from captured subprocess stdout.
+
+**`src/dashboard/server.py`:** `GET /api/backtest/status` job objects include `progress_pct`, `progress_current`, `progress_total`; bumped `dashboard_ui_rev`.
+
+**`src/dashboard/index.html`:** `#bt-hud` panel (tokens, scan, determinate/indeterminate bar); `updateBacktestHud` / `Standby` / `Starting`; wired into `pollBacktestJobUntilDone`, `startCryptoBacktest` (fixed missing `{ symbol, window }` request body), and `resumePendingBacktestTracking`.
+
+**`tests/test_backtest_progress_parse.py`**, **`tests/test_dashboard_bundle.py`:** Parser golden cases; bundle asserts `id="bt-hud"` on `/`.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_backtest_progress_parse.py tests/test_dashboard_bundle.py -q` → **27 passed**.
+
 ## 2026-05-13 — Terminal PolyBot startup/shutdown ASCII banners
 
 **`src/terminal_banners.py`:** New helpers `framed_lines`, `resolve_dashboard_display_url`, `print_startup_banner`, `print_shutdown_banner` (ASCII box, dashboard URL aligned with `start_dashboard` rules).

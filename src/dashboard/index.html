@@ -295,6 +295,48 @@
         .scrollbox::-webkit-scrollbar{width:3px}
         .scrollbox::-webkit-scrollbar-track{background:transparent}
         .scrollbox::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+        .backtest-output-tail{
+            margin:0;
+            padding:10px 12px;
+            min-height:84px;
+            max-height:220px;
+            overflow:auto;
+            background:linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,.012));
+            border:1px solid var(--border);
+            border-radius:6px;
+            color:var(--td);
+            font:11px/1.45 'IBM Plex Mono',monospace;
+            white-space:pre-wrap;
+            word-break:break-word;
+            scrollbar-width:none;
+            -ms-overflow-style:none;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.025);
+        }
+        .backtest-output-tail::-webkit-scrollbar{display:none;height:0;width:0}
+
+        /* ── Backtest HUD (techno / mission status) ── */
+        .bt-hud{position:relative;overflow:hidden;margin-bottom:14px;padding:14px 16px 16px;border:1px solid rgba(0,229,255,.28);border-radius:6px;background:linear-gradient(165deg,rgba(0,229,255,.07) 0%,rgba(0,0,0,.55) 42%,rgba(176,96,255,.06) 100%);box-shadow:0 0 24px rgba(0,229,255,.08),inset 0 0 0 1px rgba(255,255,255,.04)}
+        .bt-hud-scan{pointer-events:none;position:absolute;inset:0;opacity:.35;background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.2) 3px,transparent 4px);mix-blend-mode:multiply;z-index:0}
+        .bt-hud-head,.bt-hud-job,.bt-hud-pct-row,.bt-hud-track,.bt-hud-footer{position:relative;z-index:1}
+        .bt-hud-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+        .bt-hud-title{font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.1vw,13px);font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--cy);text-shadow:0 0 12px rgba(0,229,255,.4)}
+        .bt-hud-chip{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.16em;padding:4px 10px;border:1px solid rgba(176,96,255,.45);color:var(--pu);background:rgba(176,96,255,.1);border-radius:3px}
+        .bt-hud-job{font-family:'IBM Plex Mono',monospace;font-size:clamp(12px,1.35vw,14px);color:var(--td);letter-spacing:.04em;margin-bottom:6px;line-height:1.35}
+        .bt-hud-pct-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:4px 0 12px}
+        .bt-hud-pct{font-family:'IBM Plex Mono',monospace;font-size:clamp(2rem,5.5vw,3.25rem);font-weight:700;line-height:1;color:var(--cy);text-shadow:0 0 20px rgba(0,229,255,.35);letter-spacing:.04em}
+        .bt-hud-pct.bt-hud-pct-warn{color:var(--ye)}
+        .bt-hud-pct.bt-hud-pct-bad{color:var(--re);text-shadow:0 0 16px rgba(255,68,102,.35)}
+        .bt-hud-pct.bt-hud-pct-ok{color:var(--gr);text-shadow:0 0 14px rgba(0,255,136,.3)}
+        .bt-hud-win{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tm);letter-spacing:.06em;max-width:min(100%,420px)}
+        .bt-hud-track{height:16px;border-radius:3px;background:rgba(0,0,0,.45);border:1px solid rgba(0,229,255,.2);overflow:hidden;position:relative}
+        .bt-hud-fill{height:100%;width:0%;border-radius:2px;background:linear-gradient(90deg,rgba(0,229,255,.25),var(--cy));box-shadow:0 0 14px rgba(0,229,255,.45);transition:width .35s ease;margin-left:0}
+        .bt-hud-track.bt-hud-indet .bt-hud-fill{width:26%!important;transition:none;background:linear-gradient(90deg,rgba(0,229,255,.2),var(--cy),rgba(176,96,255,.35));animation:btHudMarq 1.15s linear infinite}
+        @keyframes btHudMarq{0%{margin-left:0}100%{margin-left:74%}}
+        .bt-hud-track.bt-hud-indet{overflow:hidden}
+        .bt-hud-footer{margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--td);letter-spacing:.05em;opacity:.9}
+        @media (prefers-reduced-motion:reduce){
+            .bt-hud-track.bt-hud-indet .bt-hud-fill{animation:none;width:40%!important;margin-left:18%!important}
+        }
 
         /* ── Test dots ── */
         .test-item{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px}
@@ -687,6 +729,11 @@
         .po .po-htxt.bl{bottom:32px;left:72px;color:var(--gr)}.po .po-htxt.br{bottom:32px;right:72px;text-align:right;color:var(--ye)}
         .po .po-stage{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;gap:24px;padding:0 32px}
         .po .po-pre{display:flex;gap:14px;align-items:center;font-size:11px;letter-spacing:.3em;text-transform:uppercase;opacity:0;animation:poFade .4s ease .15s forwards}
+        .po.mode-loading .po-pre{font-size:clamp(12px,1.55vw,16px);letter-spacing:.24em;flex-wrap:wrap;justify-content:center;max-width:min(96vw,720px);text-align:center}
+        .po .po-phase-detail{display:none;width:100%;max-width:min(92vw,680px);margin:4px auto 0;padding:0 12px;font-family:'IBM Plex Mono',monospace;font-size:clamp(12px,1.45vw,16px);line-height:1.55;letter-spacing:.04em;text-transform:none;font-weight:500;color:var(--cy);text-align:center;text-shadow:0 0 12px rgba(0,229,255,.35);opacity:0;animation:poFade .45s ease .28s forwards}
+        .po.mode-loading .po-phase-detail,.po.mode-shutdown .po-phase-detail{display:block}
+        .po.mode-shutdown .po-phase-detail{color:var(--ye);text-shadow:0 0 12px rgba(255,215,0,.35)}
+        .po.mode-shutdown .po-pre .a{color:var(--ye);text-shadow:0 0 10px var(--ye)}
         .po .po-pre .a{color:var(--gr);text-shadow:0 0 6px var(--gr)}
         .po .po-pre .b{color:var(--cy);text-shadow:0 0 6px var(--cy)}
         .po .po-pre .c{color:var(--pu);text-shadow:0 0 6px var(--pu)}
@@ -698,6 +745,7 @@
         .po .po-title{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:clamp(56px,11vw,148px);line-height:.95;letter-spacing:.04em;margin:0;
             background:linear-gradient(96deg,var(--cy) 0%,#7dd3ff 25%,var(--pu) 55%,#ff6b9d 80%,var(--ye) 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;
             filter:drop-shadow(0 0 10px rgba(0,229,255,.5)) drop-shadow(0 0 24px rgba(176,96,255,.32));position:relative;user-select:none;white-space:nowrap}
+        .po.mode-loading .po-title,.po.mode-shutdown .po-title{font-size:clamp(60px,12vw,168px)}
         .po .po-title.glx::before,.po .po-title.glx::after{content:attr(data-text);position:absolute;top:0;left:0;width:100%;height:100%;mix-blend-mode:screen}
         .po .po-title.glx::before{-webkit-text-fill-color:var(--re);color:var(--re);background:none;transform:translate(2px,0);animation:poGlxA 1.6s steps(1) infinite;text-shadow:0 0 6px var(--re)}
         .po .po-title.glx::after{-webkit-text-fill-color:var(--gr);color:var(--gr);background:none;transform:translate(-2px,0);animation:poGlxB 1.4s steps(1) infinite;text-shadow:0 0 6px var(--gr)}
@@ -741,6 +789,8 @@
         .po .po-close{position:absolute;bottom:32px;left:50%;transform:translateX(-50%);z-index:60;background:linear-gradient(90deg,rgba(0,229,255,.08),rgba(176,96,255,.08));border:1px solid var(--cy);color:var(--cy);font-family:inherit;font-size:11px;letter-spacing:.2em;text-transform:uppercase;padding:10px 22px;cursor:pointer;opacity:0;animation:poFade .4s ease 2s forwards;transition:all .15s;text-shadow:0 0 8px currentColor;box-shadow:0 0 14px rgba(0,229,255,.25),inset 0 0 14px rgba(176,96,255,.1)}
         .po .po-close:hover{background:var(--cy);color:#000;text-shadow:none;box-shadow:0 0 24px var(--cy)}
         .po.mode-loading .po-close{display:none}
+        .po.mode-shutdown .po-close{display:block;border-color:rgba(255,215,0,.55);color:var(--ye);animation:poFade .35s ease 1.1s forwards;box-shadow:0 0 18px rgba(255,215,0,.22),inset 0 0 12px rgba(255,215,0,.08)}
+        .po.mode-shutdown .po-close:hover{background:var(--ye);color:#000}
         @media (prefers-reduced-motion:reduce){
             .po.po-visible{animation:none}
             .brand-cur,.po .po-cur,.po .po-dot,.po .po-seg.s1::before{animation:none!important}
@@ -781,6 +831,7 @@
             <span class="po-sep">//</span>
             <span class="d">oracle-04</span>
         </div>
+        <div class="po-phase-detail" id="po-phase-detail" aria-live="polite"></div>
         <div class="po-title-wrap">
             <span class="po-bk l"></span>
             <h1 class="po-title" id="po-title-el" data-text="ORACLE AI"></h1>
@@ -1477,6 +1528,21 @@
         <strong style="color:var(--tm);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). One-off CLI runs: Commands tab.
     </div>
 
+    <div id="bt-hud" class="bt-hud" role="region" aria-label="Backtest run status">
+        <div class="bt-hud-scan" aria-hidden="true"></div>
+        <div class="bt-hud-head">
+            <span id="bt-hud-title" class="bt-hud-title">BACKTEST // STANDBY</span>
+            <span id="bt-hud-phase" class="bt-hud-chip">IDLE</span>
+        </div>
+        <div id="bt-hud-job" class="bt-hud-job">— // select scope + run</div>
+        <div class="bt-hud-pct-row">
+            <span id="bt-hud-pct" class="bt-hud-pct">—</span>
+            <span id="bt-hud-win" class="bt-hud-win"></span>
+        </div>
+        <div id="bt-hud-track" class="bt-hud-track"><div id="bt-hud-fill" class="bt-hud-fill"></div></div>
+        <div id="bt-hud-footer" class="bt-hud-footer"></div>
+    </div>
+
     <!-- Backtest Controls -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
         <h2>Backtest Controls</h2>
@@ -1489,7 +1555,7 @@
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div style="margin-top:10px;">
             <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">Backtest output tail</div>
-            <pre id="backtest-output-tail" style="margin:0;padding:10px;min-height:84px;max-height:220px;overflow:auto;background:rgba(0,0,0,.22);border:1px solid var(--border);border-radius:6px;color:var(--td);font:11px/1.45 'IBM Plex Mono',monospace;white-space:pre-wrap;">No active backtest output.</pre>
+            <pre id="backtest-output-tail" class="backtest-output-tail">No active backtest output.</pre>
         </div>
     </div>
 
@@ -1662,7 +1728,8 @@
     </div>
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
-        <h2 style="margin-bottom:8px;">Start commands</h2>
+        <h2 style="margin-bottom:10px;font-size:1.38rem;line-height:1.25;">Start commands</h2>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Use these when you are <strong>not</strong> relying on the Command Center <strong>Start Live Test</strong> button (for example SSH into a server, local terminal only, or CI). The web UI button runs the same entrypoint class as <code>start.py</code> but keeps logs attached to the dashboard process.</p>
         <p class="cmd-note">Run from the <strong>project root</strong> (folder that contains <code>src/</code> and <code>config/</code>). On Windows, use <code>py</code> instead of <code>python</code> if needed.</p>
         <p class="cmd-note">Web UI: <code>http://127.0.0.1:8081</code> — port is <code>config/settings.yaml</code> → <code>dashboard.dashboard_port</code>.</p>
 
@@ -1724,6 +1791,15 @@
             <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python -m pytest tests/ -q">Copy</button>
             <pre>python -m pytest tests/ -q</pre>
         </div>
+    </div>
+
+    <div class="card cmd-ref" style="margin-bottom:16px;">
+        <h2 style="margin-bottom:10px;font-size:1.38rem;line-height:1.25;">Shutdown, cancel, and stop</h2>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop</strong> calls <code>POST /api/live/stop</code> and opens the ORACLE <strong>shutdown</strong> splash (amber header lane, cancel-themed boot log) — the same treatment family as <strong>Start Live Test</strong>, which uses the cyan <strong>loading</strong> lane.</p>
+        <h3>Foreground terminal</h3>
+        <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
+        <h3>Emergency halt and resume</h3>
+        <p class="cmd-note">CLI copy-paste lives in <strong>Kill switch &amp; resume</strong> under <strong>Start commands</strong> above: <code>--emergency-stop</code> and <code>--resume-trading</code>.</p>
     </div>
     </div><!-- /view-commands -->
 
@@ -1963,10 +2039,22 @@ var DashPrivacy = (function() {
         if (!log) return;
         log.innerHTML = '';
         var lines = [
-            ['ok', 'oracle.boot.seq.start'], ['ok', 'mount /dev/oracle'], ['ok', 'kernel.load 4.21'],
-            ['warn', 'sandbox.expand'], ['ok', 'rsa.handshake'], ['ok', 'cipher xchacha20'],
-            ['warn', 'trace.deny .92'], ['ok', 'mesh.attach n04'], ['ok', 'shard sync 100%'],
-            ['err', 'noise floor +3'], ['ok', 'identity verify'], ['ok', 'vault sealed']
+            ['ok', 'oracle.boot.seq.start · seq=2'],
+            ['ok', 'manifest.verify dashboard_bundle + inline rev'],
+            ['ok', 'mount /dev/oracle rw'],
+            ['ok', 'kernel.load 4.21 (dashboard host)'],
+            ['warn', 'sandbox.expand polymarket_scan'],
+            ['ok', 'rsa.handshake dashboard_mutators'],
+            ['ok', 'cipher xchacha20 · telemetry channel'],
+            ['warn', 'trace.deny .92'],
+            ['ok', 'mesh.attach n04'],
+            ['ok', 'shard sync 100%'],
+            ['ok', 'journal.hydrate paths + mtime guards'],
+            ['ok', 'risk.prewarm counters (daily_trades)'],
+            ['err', 'noise floor +3 (benign)'],
+            ['ok', 'identity verify'],
+            ['ok', 'vault sealed'],
+            ['ok', 'oracle.handoff.ready · continue below']
         ];
         lines.forEach(function(l, i) {
             logTimeouts.push(setTimeout(function() {
@@ -1974,7 +2062,32 @@ var DashPrivacy = (function() {
                 row.className = 'row ' + l[0];
                 row.textContent = l[1];
                 log.appendChild(row);
-            }, 200 + i * 120));
+            }, 200 + i * 105));
+        });
+    }
+
+    function bootShutdownLog() {
+        var log = document.getElementById('po-boot-log');
+        if (!log) return;
+        log.innerHTML = '';
+        var lines = [
+            ['warn', 'operator.cancel · live.stop'],
+            ['ok', 'stream.drain inflight REST (best-effort)'],
+            ['ok', 'polymarket.ws detach + scanner idle'],
+            ['ok', 'risk.flush positions.json snapshot'],
+            ['warn', 'journal.checkpoint · entries.jsonl'],
+            ['ok', 'subprocess.sigterm · grace window'],
+            ['ok', 'orchestrator.down · uvicorn child'],
+            ['ok', 'vault.flush'],
+            ['ok', 'oracle.boot.seq.end · standby']
+        ];
+        lines.forEach(function(l, i) {
+            logTimeouts.push(setTimeout(function() {
+                var row = document.createElement('div');
+                row.className = 'row ' + l[0];
+                row.textContent = l[1];
+                log.appendChild(row);
+            }, 170 + i * 100));
         });
     }
 
@@ -2022,22 +2135,46 @@ var DashPrivacy = (function() {
         intervals.push(setInterval(utcClock, 1000));
     }
 
-    function setMode(mode) {
+    function setMode(mode, opts) {
+        opts = opts || {};
         var o = document.getElementById('dash-privacy-overlay');
         if (!o) return;
-        o.classList.remove('mode-privacy', 'mode-loading');
-        o.classList.add(mode === 'loading' ? 'mode-loading' : 'mode-privacy');
+        o.classList.remove('mode-privacy', 'mode-loading', 'mode-shutdown');
+        if (mode === 'loading') o.classList.add('mode-loading');
+        else if (mode === 'shutdown') o.classList.add('mode-shutdown');
+        else o.classList.add('mode-privacy');
         var preA = document.getElementById('po-pre-a');
         var segLock = document.getElementById('po-seg-lock');
         var segFoot = document.getElementById('po-seg-foot');
         var btn = document.getElementById('po-close-btn');
-        if (preA) preA.textContent = mode === 'loading' ? 'ORACLE · INITIALIZING' : 'ORACLE · SESSION LOCKED';
-        if (segLock) segLock.textContent = mode === 'loading' ? 'LIVE' : 'LOCKED';
-        if (segFoot) segFoot.textContent = mode === 'loading' ? 'ORACLE READY' : 'ORACLE RUNTIME';
-        if (btn) btn.textContent = mode === 'loading' ? '▶ continue ORACLE [esc]' : '▶ unlock ORACLE [esc]';
+        var detail = document.getElementById('po-phase-detail');
+        if (mode === 'loading') {
+            if (preA) preA.textContent = (opts.banner && String(opts.banner).trim()) || 'ORACLE · INITIALIZING';
+            if (segLock) segLock.textContent = 'LIVE';
+            if (segFoot) segFoot.textContent = 'ORACLE READY';
+            if (btn) btn.textContent = '▶ continue ORACLE [esc]';
+            if (detail) {
+                detail.textContent = opts.detail || 'Rebinding dashboard views, cache keys, and live telemetry hooks…';
+            }
+        } else if (mode === 'shutdown') {
+            if (preA) preA.textContent = (opts.banner && String(opts.banner).trim()) || 'ORACLE · SHUTDOWN';
+            if (segLock) segLock.textContent = 'HALT';
+            if (segFoot) segFoot.textContent = 'SUBPROCESS DOWN';
+            if (btn) btn.textContent = '▶ dismiss [esc]';
+            if (detail) {
+                detail.textContent = opts.detail || 'Stopping dashboard-spawned live bot: HTTP stop, graceful SIGTERM, then hard kill if needed. Session files stay on disk; refresh Command Center after dismiss.';
+            }
+        } else {
+            if (preA) preA.textContent = 'ORACLE · SESSION LOCKED';
+            if (segLock) segLock.textContent = 'LOCKED';
+            if (segFoot) segFoot.textContent = 'ORACLE RUNTIME';
+            if (btn) btn.textContent = '▶ unlock ORACLE [esc]';
+            if (detail) detail.textContent = '';
+        }
     }
 
-    function show(mode) {
+    function show(mode, opts) {
+        opts = opts || {};
         mode = mode || 'privacy';
         var overlay = document.getElementById('dash-privacy-overlay');
         if (!overlay) return;
@@ -2045,7 +2182,7 @@ var DashPrivacy = (function() {
         overlay.removeAttribute('hidden');
         overlay.classList.add('po-visible');
         overlay.setAttribute('aria-hidden', 'false');
-        setMode(mode);
+        setMode(mode, opts);
         syncVersionFromHeader();
         tryHealthBuild();
         var titleEl = document.getElementById('po-title-el');
@@ -2055,7 +2192,8 @@ var DashPrivacy = (function() {
             for (var j = 0; j < FINAL.length; j++) blocks += (FINAL[j] === ' ' ? ' ' : '█');
             titleEl.innerHTML = blocks + '<span class="po-cur"></span>';
         }
-        bootLog();
+        if (mode === 'shutdown') bootShutdownLog();
+        else bootLog();
         startTelemetry();
         startMatrix();
         startScramble(titleEl);
@@ -2068,12 +2206,19 @@ var DashPrivacy = (function() {
         o.classList.remove('po-visible');
         o.setAttribute('aria-hidden', 'true');
         o.setAttribute('hidden', '');
+        o.classList.remove('mode-loading', 'mode-shutdown');
+        o.classList.add('mode-privacy');
         var titleEl = document.getElementById('po-title-el');
         if (titleEl) titleEl.classList.remove('glx');
+        var detail = document.getElementById('po-phase-detail');
+        if (detail) detail.textContent = '';
     }
 
     function showTabTransition(applySwitch) {
-        show('loading');
+        show('loading', {
+            banner: 'ORACLE · VIEW TRANSITION',
+            detail: 'Hiding the current tab, refreshing layout hooks, and attaching the next surface to the same dashboard poll loop…'
+        });
         setTimeout(function() {
             applySwitch();
             setTimeout(hide, 120);
@@ -2088,7 +2233,7 @@ var DashPrivacy = (function() {
         document.addEventListener('keydown', function(e) {
             if (e.key !== 'Escape') return;
             var o = document.getElementById('dash-privacy-overlay');
-            if (o && o.classList.contains('po-visible') && o.classList.contains('mode-privacy')) hide();
+            if (o && o.classList.contains('po-visible') && (o.classList.contains('mode-privacy') || o.classList.contains('mode-shutdown'))) hide();
         });
     }
 
@@ -3651,10 +3796,22 @@ async function runTests() {
     btn.disabled = false;
 }
 
+function dashPrivacyMotionOk() {
+    return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
 async function startLiveBot() {
     const btn = document.getElementById('live-start-btn');
     const stopBtn = document.getElementById('live-stop-btn');
     const status = document.getElementById('process-status');
+    let showedOverlay = false;
+    if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
+        DashPrivacy.show('loading', {
+            banner: 'ORACLE · LIVE SUBPROCESS START',
+            detail: 'POST /api/live/start from this dashboard host: spawn main.py (paper) with repo root on PYTHONPATH. After the splash dismisses, confirm PID and green status in Command Center; check local logs or container logs if the child exits immediately.'
+        });
+        showedOverlay = true;
+    }
     btn.disabled = true;
     try {
         const r = await fetch('/api/live/start', {method:'POST', headers: dashAuthHeaders()});
@@ -3672,12 +3829,23 @@ async function startLiveBot() {
             btn.disabled = false;
         }
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; btn.disabled=false; }
+    finally {
+        if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 480);
+    }
 }
 
 async function stopLiveBot() {
     const btn = document.getElementById('live-stop-btn');
     const startBtn = document.getElementById('live-start-btn');
     const status = document.getElementById('process-status');
+    let showedOverlay = false;
+    if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
+        DashPrivacy.show('shutdown', {
+            banner: 'ORACLE · LIVE CANCEL / STOP',
+            detail: 'POST /api/live/stop: graceful teardown of the dashboard-spawned bot child (SIGTERM, short wait, SIGKILL if needed). In-flight orders depend on your exchange client; disk journals flush on process exit. Command Center updates when the handler returns.'
+        });
+        showedOverlay = true;
+    }
     btn.disabled = true;
     try {
         const r = await fetch('/api/live/stop', {method:'POST', headers: dashAuthHeaders()});
@@ -3686,6 +3854,9 @@ async function stopLiveBot() {
         status.style.color = d.status === 'stopped' ? 'var(--green)' : 'var(--yellow)';
         startBtn.disabled = false;
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
+    finally {
+        if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);
+    }
 }
 
 /** Fetch /api/backtest/reports and repaint cards. After subprocess exit, use lead+retries+gap so new JSON is on disk and not served from an HTTP cache. */
@@ -3709,19 +3880,174 @@ async function loadBacktestReports(retries, gapMs, leadMs) {
     }
 }
 
+function _btHudEls() {
+    return {
+        root: document.getElementById('bt-hud'),
+        title: document.getElementById('bt-hud-title'),
+        phase: document.getElementById('bt-hud-phase'),
+        job: document.getElementById('bt-hud-job'),
+        pct: document.getElementById('bt-hud-pct'),
+        win: document.getElementById('bt-hud-win'),
+        track: document.getElementById('bt-hud-track'),
+        fill: document.getElementById('bt-hud-fill'),
+        footer: document.getElementById('bt-hud-footer')
+    };
+}
+
+function inferBtPhase(lines, running, exitCode) {
+    const arr = Array.isArray(lines) ? lines : [];
+    const text = arr.join('\n');
+    if (!running) {
+        if (exitCode != null && exitCode !== 0) return 'HALT';
+        if (/CRYPTO BACKTEST COMPLETE|Report saved/i.test(text)) return 'DONE';
+        return 'STOP';
+    }
+    if (/progress\s+[\d,]+\/[\d,]+\s+windows/i.test(text)) return 'REPLAY';
+    if (/Loading\s+\w+\s+OHLCV/i.test(text) || /Loading oracle/i.test(text)) return 'LOAD';
+    if (/Running\s+\w+\s+\d+m\s+backtest/i.test(text)) return 'ARM';
+    return 'RUN';
+}
+
+function updateBacktestHud(s, label, jobId) {
+    const h = _btHudEls();
+    if (!h.root || !h.title) return;
+    const lines = (s && s.output) ? s.output : [];
+    const running = !!(s && s.running);
+    const exitCode = s && s.exit_code != null ? s.exit_code : null;
+    if (s && s.job_unknown) {
+        h.title.textContent = 'BACKTEST // SIGNAL LOST';
+        h.phase.textContent = 'HALT';
+        h.job.textContent = (label || 'job') + ' // job no longer registered (dashboard restart?)';
+        h.pct.textContent = '—';
+        h.pct.className = 'bt-hud-pct bt-hud-pct-warn';
+        h.win.textContent = '';
+        h.track.classList.remove('bt-hud-indet');
+        if (h.fill) { h.fill.style.width = '0%'; h.fill.style.marginLeft = '0'; h.fill.style.animation = 'none'; }
+        h.footer.textContent = 're-run from Backtest tab if the subprocess is still on disk';
+        return;
+    }
+    let job = (s && s.jobs && s.jobs[0]) ? s.jobs[0] : {};
+    if (jobId && s && s.jobs && s.jobs.length) {
+        const found = s.jobs.find(function(x) { return x.job_id === jobId; });
+        if (found) job = found;
+    }
+    const pid = job.pid != null ? String(job.pid) : '—';
+    const summ = (job.summary || '').trim();
+    const phase = inferBtPhase(lines, running, exitCode);
+    if (running) {
+        h.title.textContent = 'BACKTEST // REPLAY';
+        h.phase.textContent = phase;
+        const jid = jobId || job.job_id || '—';
+        let jline = (label || summ || 'crypto backtest') + '  //  job ' + jid + '  //  pid ' + pid;
+        if (summ) jline += '\n» ' + summ;
+        h.job.textContent = jline;
+        const pctVal = job.progress_pct;
+        const cur = job.progress_current;
+        const tot = job.progress_total;
+        if (pctVal != null && typeof pctVal === 'number') {
+            h.pct.textContent = pctVal.toFixed(1) + '%';
+            h.pct.className = 'bt-hud-pct';
+            h.win.textContent = (cur != null && tot != null) ? ('windows ' + cur.toLocaleString() + ' / ' + tot.toLocaleString()) : '';
+            h.track.classList.remove('bt-hud-indet');
+            if (h.fill) {
+                h.fill.style.animation = 'none';
+                h.fill.style.marginLeft = '0';
+                h.fill.style.width = Math.min(100, Math.max(0, pctVal)) + '%';
+            }
+        } else {
+            h.pct.textContent = '···';
+            h.pct.className = 'bt-hud-pct';
+            h.win.textContent = phase === 'LOAD' ? 'loading OHLCV / oracle — first % on progress interval' : 'awaiting heartbeat lines from subprocess';
+            h.track.classList.add('bt-hud-indet');
+            if (h.fill) { h.fill.style.width = ''; }
+        }
+        h.footer.textContent = lines.length ? String(lines[lines.length - 1]).slice(0, 140) : 'subprocess live — mirror below';
+        return;
+    }
+    const failed = Number.isFinite(exitCode) && exitCode !== 0;
+    if (failed) {
+        h.title.textContent = 'BACKTEST // ABORT';
+        h.phase.textContent = 'FAIL';
+        h.pct.textContent = 'ERR';
+        h.pct.className = 'bt-hud-pct bt-hud-pct-bad';
+    } else {
+        h.title.textContent = 'BACKTEST // COMPLETE';
+        h.phase.textContent = phase === 'DONE' ? 'DONE' : 'STOP';
+        const pdone = job.progress_pct;
+        if (pdone != null && pdone >= 99.5) {
+            h.pct.textContent = '100%';
+            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+        } else if (pdone != null) {
+            h.pct.textContent = pdone.toFixed(1) + '%';
+            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+        } else {
+            h.pct.textContent = 'OK';
+            h.pct.className = 'bt-hud-pct bt-hud-pct-ok';
+        }
+    }
+    const jid2 = jobId || job.job_id || '—';
+    h.job.textContent = (label || summ || 'crypto') + '  //  job ' + jid2 + '  //  exit ' + (exitCode != null ? exitCode : '—');
+    h.win.textContent = (job.progress_current != null && job.progress_total != null)
+        ? ('windows ' + job.progress_current.toLocaleString() + ' / ' + job.progress_total.toLocaleString()) : '';
+    h.track.classList.remove('bt-hud-indet');
+    if (h.fill) {
+        h.fill.style.animation = 'none';
+        h.fill.style.marginLeft = '0';
+        h.fill.style.width = failed ? '0%' : (job.progress_pct != null ? Math.min(100, job.progress_pct) + '%' : '100%');
+    }
+    h.footer.textContent = failed ? 'check output tail for failing child in ALL bundle' : 'reports on disk — cards below refresh';
+}
+
+function updateBacktestHudStandby() {
+    const h = _btHudEls();
+    if (!h.root) return;
+    h.title.textContent = 'BACKTEST // STANDBY';
+    h.phase.textContent = 'IDLE';
+    h.job.textContent = '— // select scope + Run Crypto BT';
+    h.pct.textContent = '—';
+    h.pct.className = 'bt-hud-pct';
+    h.win.textContent = '';
+    h.track.classList.remove('bt-hud-indet');
+    if (h.fill) { h.fill.style.animation = 'none'; h.fill.style.marginLeft = '0'; h.fill.style.width = '0%'; }
+    h.footer.textContent = 'replay % parsed from stdout (progress x/y windows)';
+}
+
+function updateBacktestHudStarting(label, jobId, pid) {
+    const h = _btHudEls();
+    if (!h.root) return;
+    h.title.textContent = 'BACKTEST // SPAWN';
+    h.phase.textContent = 'ARM';
+    h.job.textContent = (label || 'crypto') + '  //  job ' + (jobId || '—') + '  //  pid ' + (pid != null ? pid : '—');
+    h.pct.textContent = '…';
+    h.pct.className = 'bt-hud-pct';
+    h.win.textContent = 'subprocess forked — waiting for first log lines';
+    h.track.classList.add('bt-hud-indet');
+    if (h.fill) { h.fill.style.width = ''; }
+    h.footer.textContent = 'POST /api/backtest/start';
+}
+
 function renderBacktestOutputTail(lines, fallbackText) {
     const el = document.getElementById('backtest-output-tail');
     if (!el) return;
     const arr = Array.isArray(lines) ? lines.filter(Boolean) : [];
     el.textContent = arr.length ? arr.join('\n') : (fallbackText || 'No active backtest output.');
+    const lineCount = Math.max(4, Math.min(12, (el.textContent.match(/\n/g) || []).length + 1));
+    el.style.height = `${Math.max(84, Math.min(220, 18 + lineCount * 16))}px`;
+    el.scrollTop = el.scrollHeight;
 }
 
 function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
+    let refreshEvery = 0;
     const tick = async () => {
         const s = await fetch('/api/backtest/status?job_id=' + encodeURIComponent(jobId))
             .then(r => r.json()).catch(() => null);
         if (!s) { setTimeout(tick, 4000); return; }
+        updateBacktestHud(s, label, jobId);
         renderBacktestOutputTail(s.output || [], `${label}: waiting for subprocess output…`);
+        refreshEvery += 1;
+        if (_currentMainView() === 'backtest' && refreshEvery % 2 === 1) {
+            loadBacktestReports(1, 0, 0);
+        }
         if (s.job_unknown) {
             if (statusEl) {
                 statusEl.textContent = `${label} tracking lost after restart (job ${jobId}) — check reports/logs.`;
@@ -3733,7 +4059,7 @@ function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
             const code = s.exit_code;
             const failed = Number.isFinite(code) && code !== 0;
             if (failed && statusEl) {
-                statusEl.textContent = `${label} failed (exit ${code}) — check OHLCV/oracle cache, logs, or output tail below. No JSON report on failure.`;
+                statusEl.textContent = `${label} failed (exit ${code}) — partial per-symbol reports may still be on the cards below; check output tail for the failing child.`;
                 statusEl.style.color = 'var(--red)';
             }
             if (!failed) {
@@ -3763,6 +4089,7 @@ async function startCryptoBacktest() {
         [symbol, window] = val.split('-');
         window = parseInt(window, 10);
     }
+    const body = { symbol, window };
     const btn = document.getElementById('crypto-bt-run-btn');
     const status = document.getElementById('process-status-bt');
     btn.disabled = true;
@@ -3770,7 +4097,6 @@ async function startCryptoBacktest() {
     status.style.color = 'var(--yellow)';
     renderBacktestOutputTail([], `Launching ${symbol} ${window}m backtest…`);
     try {
-        const body = {symbol, window};
         const r = await fetch('/api/backtest/start', {
             method: 'POST',
             headers: dashAuthHeaders({'Content-Type': 'application/json'}),
@@ -3785,6 +4111,7 @@ async function startCryptoBacktest() {
             status.textContent = `${symbol} ${window}m started (job ${d.job_id}, PID ${d.pid}) — can run alongside live bot`;
             status.style.color = 'var(--green)';
             renderBacktestOutputTail([], `${symbol} ${window}m started (job ${d.job_id}) — waiting for output…`);
+            updateBacktestHudStarting(`${symbol} ${window}m`, d.job_id, d.pid);
             pollBacktestJobUntilDone(d.job_id, `${symbol} ${window}m`, status, (ok) => {
                 btn.disabled = false;
                 if (ok) {
@@ -3803,12 +4130,14 @@ async function startCryptoBacktest() {
             status.textContent = `Backtest error: ${d.message || d.status}`;
             status.style.color = 'var(--red)';
             renderBacktestOutputTail([], `Backtest error: ${d.message || d.status}`);
+            updateBacktestHudStandby();
             btn.disabled = false;
         }
     } catch(e) {
         status.textContent = 'Error: ' + e;
         status.style.color = 'var(--red)';
         renderBacktestOutputTail([], 'Backtest request failed: ' + e);
+        updateBacktestHudStandby();
         btn.disabled = false;
     }
 }
@@ -6196,6 +6525,7 @@ if (_currentMainView() === 'journal') {
         status.textContent = `Resuming ${label} tracking (job ${jid})…`;
         status.style.color = 'var(--yellow)';
     }
+    updateBacktestHudStarting(label, jid, '');
     pollBacktestJobUntilDone(jid, label, status, (ok) => {
         if (status && ok) {
             status.textContent = `${label} backtest complete (job ${jid}) — reports refreshed`;
