@@ -8,6 +8,22 @@
 
 ---
 
+## 2026-05-15 — Lane calibration (shadow), calibration log, BTC HTF vote diagnostics
+
+**`src/analysis/calibration_log.py`, `src/analysis/lane_calibration.py`, `tools/calibration_report.py`:** Phase 0 append-only calibration trade log (`data/calibration/trades.jsonl`) and Phase 6 per-lane EWMA/Beta posteriors (`data/calibration/lane_posteriors.json`). **`lane_calibration.shadow_mode: true`** in config — posteriors update on close but **`calibrate()`** does not change live entries until a follow-up PR flips shadow off and wires entry-side correction.
+
+**`src/main.py`:** Builds **`LaneCalibrator`** at startup; on each live exit appends calibration rows and records posterior snapshots; resolution settlements also call **`kelly_sizer.record_outcome`** with detected window.
+
+**`src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`:** **`_get_btc_htf_bias_details()`** exposes sabre / price-vs-MA / MACD votes, raw vs final bias, and 4H histogram conviction in logs, entry reasons, and indicator snapshots.
+
+**`config/settings.yaml`:** **`lane_calibration`** block (`enabled`, `shadow_mode`).
+
+**Tests:** `test_calibration_log.py`, `test_lane_calibration.py`, `test_dashboard_updown_breakdown.py`, dashboard bundle overlay tests, live config Kelly resolution test.
+
+**Not committed (runtime data):** `data/entry_prices/updown_fills.jsonl`, `data/lane_state_audit.jsonl`.
+
+---
+
 ## 2026-05-15 — Dashboard: neon strategy palette + BTC live chart saturation
 
 **`src/dashboard/index.html`:** Replaced pastel strategy hues with operator neon palette on **`window.STRATS`** (single source for pills, journal, scan rows, metric boxes, canvas charts): **bitcoin** `#1f8bff`, **sol_lag / sol_macro** `#b14dff`, **eth_lag / eth_macro** `#00e5ff`, **hype_lag / hype_macro** `#ff6a00`, **xrp_lag / xrp_macro** `#ffe000`. **BTC trade overlay** (`_BTC_TRADE_OVERLAY_PALETTE`) now uses the same saturated fills with stronger glow alphas (0.78) instead of washed `#ffca5a` / `#8fb0ff` pastels. **MACD histogram** weak bars use **`#00897b` / `#c62828`** instead of **`#b2dfdb` / `#ffcdd2`**. Up/down symbol color fallback routes through **`stratHex`** macro keys.

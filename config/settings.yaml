@@ -234,6 +234,18 @@ lane_management:
   #   "eth_macro|5m|down|bearish__bearish__bull|override": paused
 
 # ============================================
+# LANE CALIBRATION (Phase 6 — probability correction)
+# ============================================
+# Per-lane EWMA alpha + Beta-Bernoulli posterior built from closed-trade
+# outcomes. In shadow mode the posteriors update on each close but the
+# strategy-side ``calibrate()`` call (wired in the flip-to-live PR) returns the
+# raw probability unchanged, so live behavior is identical. Posteriors persist
+# to ``data/calibration/lane_posteriors.json``.
+lane_calibration:
+  enabled: true
+  shadow_mode: true   # set to false (and ship the calibrate() entry-wiring PR) to activate corrections
+
+# ============================================
 # STRATEGY THRESHOLDS
 # ============================================
 # Entry spec: docs/STRATEGY_ENTRY_SPEC.md

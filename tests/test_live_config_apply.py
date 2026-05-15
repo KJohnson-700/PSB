@@ -1,5 +1,6 @@
 """Tests for live dashboard config updates on a running bot."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 from src.main import PolyBot
@@ -116,3 +117,35 @@ def test_apply_realized_pnl_to_bankroll_floors_at_zero():
     assert bot.bankroll == 0.0
     bot.risk_manager.update_pnl.assert_called_once_with(-10.0)
     assert bot.risk_manager.bankroll == 0.0
+
+
+def test_run_resolution_check_records_kelly_outcome_for_settled_trade():
+    bot = PolyBot.__new__(PolyBot)
+    bot.bankroll = 100.0
+    bot.risk_manager = MagicMock()
+    bot.journal = MagicMock()
+    bot.ctf_redeemer = None
+    bot._apply_realized_pnl_to_bankroll = MagicMock(return_value=104.0)
+    bot.kelly_sizer = MagicMock()
+
+    exposure_manager = MagicMock()
+    bot._get_exposure_manager_for = MagicMock(return_value=exposure_manager)
+
+    settled = [
+        {
+            "strategy": "bitcoin",
+            "market_id": "m1",
+            "market_question": "Bitcoin Up or Down - April 21, 1:30AM-1:35AM ET",
+            "pnl": 4.0,
+        }
+    ]
+    bot.resolution_tracker = MagicMock()
+    bot.resolution_tracker.check_and_settle = MagicMock(return_value=settled)
+    bot.resolution_tracker.check_price_updates = MagicMock(return_value=0)
+
+    asyncio.run(bot._run_resolution_check())
+
+    exposure_manager.record_trade.assert_called_once_with(
+        pnl=4.0, strategy="bitcoin", market_id="m1"
+    )
+    bot.kelly_sizer.record_outcome.assert_called_once_with("bitcoin", True, "5m")

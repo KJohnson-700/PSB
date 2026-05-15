@@ -388,8 +388,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             return []
 
         btc_full_ok = btc_ta is not None
+        btc_htf_details = None
         if btc_ta:
-            btc_htf_bias = self._get_btc_htf_bias(btc_ta)
+            btc_htf_details = self._get_btc_htf_bias_details(btc_ta)
+            btc_htf_bias = str(btc_htf_details["bias"])
         else:
             btc_htf_bias = "NEUTRAL"
             logger.warning(
@@ -530,7 +532,12 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         if btc_ta:
             logger.info(
-                f"ETH ${eth_price:,.2f} | BTC_HTF={btc_htf_bias} | BTC1H hist={btc_ta.macd_1h.histogram:+.2f} "
+                f"ETH ${eth_price:,.2f} | BTC_HTF={btc_htf_bias} raw={btc_htf_details['raw_bias'] if btc_htf_details else '?'} "
+                f"votes[s={btc_htf_details['sabre_vote'] if btc_htf_details else '?'} "
+                f"p={btc_htf_details['price_vs_ma_vote'] if btc_htf_details else '?'} "
+                f"m={btc_htf_details['macd_vote'] if btc_htf_details else '?'}:{btc_htf_details['macd_state'] if btc_htf_details else '?'}] "
+                f"BTC4H hist={btc_htf_details['macd_4h_histogram']:+.1f} "
+                f"BTC1H hist={btc_ta.macd_1h.histogram:+.2f} "
                 f"BTC15m={btc_ta.macd_15m.histogram:+.3f} BTC5m={btc_mom.m5_direction}({btc_mom.m5_move_pct:+.3f}%) "
                 f"| ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
                 f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
@@ -707,6 +714,23 @@ class ETHMacroStrategy(SolMacroStrategy):
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
+            if btc_htf_details:
+                reason_parts.append(
+                    "BTC4H_votes="
+                    f"sabre:{btc_htf_details['sabre_vote']},"
+                    f"price_ma:{btc_htf_details['price_vs_ma_vote']},"
+                    f"macd:{btc_htf_details['macd_vote']}:{btc_htf_details['macd_state']},"
+                    f"raw:{btc_htf_details['raw_bias']},"
+                    f"final:{btc_htf_details['bias']}"
+                )
+                reason_parts.append(
+                    "BTC4H_ctx="
+                    f"spot:{btc_htf_details['btc_price']:.0f},"
+                    f"ma:{btc_htf_details['sabre_ma']:.0f},"
+                    f"hist:{btc_htf_details['macd_4h_histogram']:+.1f}/"
+                    f"{btc_htf_details['min_hist']:.1f},"
+                    f"rising:{btc_htf_details['macd_4h_histogram_rising']}"
+                )
 
             if self.enforce_alt_1h_alignment:
                 if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
@@ -1268,6 +1292,27 @@ class ETHMacroStrategy(SolMacroStrategy):
                     else None
                 ),
                 indicator_snapshot={
+                    "btc_4h_bias": btc_htf_details["bias"] if btc_htf_details else None,
+                    "btc_4h_raw_bias": btc_htf_details["raw_bias"] if btc_htf_details else None,
+                    "btc_4h_sabre_vote": btc_htf_details["sabre_vote"] if btc_htf_details else None,
+                    "btc_4h_price_vs_ma_vote": (
+                        btc_htf_details["price_vs_ma_vote"] if btc_htf_details else None
+                    ),
+                    "btc_4h_macd_vote": btc_htf_details["macd_vote"] if btc_htf_details else None,
+                    "btc_4h_macd_state": btc_htf_details["macd_state"] if btc_htf_details else None,
+                    "btc_4h_histogram": (
+                        round(float(btc_htf_details["macd_4h_histogram"]), 4)
+                        if btc_htf_details
+                        else None
+                    ),
+                    "btc_4h_histogram_rising": (
+                        bool(btc_htf_details["macd_4h_histogram_rising"])
+                        if btc_htf_details
+                        else None
+                    ),
+                    "btc_4h_hist_conviction_ok": (
+                        bool(btc_htf_details["hist_conviction_ok"]) if btc_htf_details else None
+                    ),
                     "alt_1h_histogram": round(float(eth.macd_1h.histogram or 0.0), 4),
                     "alt_1h_histogram_rising": bool(eth.macd_1h.histogram_rising),
                     "alt_15m_histogram": round(float(eth.macd_15m.histogram or 0.0), 4),
@@ -1303,6 +1348,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 self._btc_1h_regime_gates.get("enabled", False)
             ),
             "btc_htf_bias": btc_htf_bias,
+            "btc_htf_vote_details": dict(btc_htf_details) if btc_htf_details else None,
             "allowed_side": allowed_side,
             "direction_source": self.direction_source,
             "action_counts": dict(sorted(action_counts.items())),

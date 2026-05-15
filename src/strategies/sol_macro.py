@@ -789,54 +789,96 @@ class SolMacroStrategy:
             return "BEARISH"
         return "NEUTRAL"
 
-    def _get_btc_htf_bias(self, ta: TechnicalAnalysis) -> str:
-        """Use BTC 4H structure as the primary macro gate for alt strategies."""
+    def _get_btc_htf_bias_details(self, ta: TechnicalAnalysis) -> Dict[str, Any]:
+        """Return BTC 4H bias plus vote-level diagnostics for entry logging."""
         sabre = ta.trend_sabre
         macd_4h = ta.macd_4h
         price = ta.current_price
 
         bull_votes = 0
         bear_votes = 0
+        sabre_vote = "NEUTRAL"
+        price_vs_ma_vote = "NEUTRAL"
+        macd_vote = "NEUTRAL"
+        macd_state = "neutral"
 
         if sabre.trend == 1:
             bull_votes += 1
+            sabre_vote = "BULLISH"
         elif sabre.trend == -1:
             bear_votes += 1
+            sabre_vote = "BEARISH"
 
         if price > sabre.ma_value:
             bull_votes += 1
+            price_vs_ma_vote = "BULLISH"
         elif price < sabre.ma_value:
             bear_votes += 1
+            price_vs_ma_vote = "BEARISH"
 
         early_bull = macd_4h.crossover == "BULLISH_CROSS" and macd_4h.histogram_rising
         early_bear = macd_4h.crossover == "BEARISH_CROSS" and not macd_4h.histogram_rising
         recovery = not macd_4h.above_zero and macd_4h.histogram > 0
         if early_bear:
             bear_votes += 1
+            macd_vote = "BEARISH"
+            macd_state = "early_bear"
         elif macd_4h.above_zero or early_bull or recovery:
             bull_votes += 1
+            macd_vote = "BULLISH"
+            if early_bull:
+                macd_state = "early_bull"
+            elif recovery:
+                macd_state = "recovery"
+            elif macd_4h.above_zero:
+                macd_state = "above_zero"
         else:
             bear_votes += 1
+            macd_vote = "BEARISH"
+            macd_state = "below_zero"
 
         if bull_votes >= 2:
-            bias = "BULLISH"
+            raw_bias = "BULLISH"
         elif bear_votes >= 2:
-            bias = "BEARISH"
+            raw_bias = "BEARISH"
         else:
-            return "NEUTRAL"
+            raw_bias = "NEUTRAL"
 
         min_hist = float(self.config.get("btc_min_4h_hist_magnitude", 20.0))
-        if abs(macd_4h.histogram) < min_hist:
+        hist_ok = abs(macd_4h.histogram) >= min_hist
+        final_bias = raw_bias
+        if raw_bias != "NEUTRAL" and not hist_ok:
             logger.info(
                 "BTC HTF: %s by vote but 4H MACD hist=%+.1f below conviction threshold (%s) "
                 "— downgrading to NEUTRAL",
-                bias,
+                raw_bias,
                 macd_4h.histogram,
                 min_hist,
             )
-            return "NEUTRAL"
+            final_bias = "NEUTRAL"
 
-        return bias
+        return {
+            "bias": final_bias,
+            "raw_bias": raw_bias,
+            "bull_votes": bull_votes,
+            "bear_votes": bear_votes,
+            "sabre_vote": sabre_vote,
+            "price_vs_ma_vote": price_vs_ma_vote,
+            "macd_vote": macd_vote,
+            "macd_state": macd_state,
+            "btc_price": float(price or 0.0),
+            "sabre_ma": float(getattr(sabre, "ma_value", 0.0) or 0.0),
+            "macd_4h_histogram": float(getattr(macd_4h, "histogram", 0.0) or 0.0),
+            "macd_4h_histogram_rising": bool(getattr(macd_4h, "histogram_rising", False)),
+            "macd_4h_above_zero": bool(getattr(macd_4h, "above_zero", False)),
+            "macd_4h_crossover": str(getattr(macd_4h, "crossover", "") or ""),
+            "min_hist": min_hist,
+            "hist_conviction_ok": hist_ok,
+        }
+
+    def _get_btc_htf_bias(self, ta: TechnicalAnalysis) -> str:
+        """Use BTC 4H structure as the primary macro gate for alt strategies."""
+        return str(self._get_btc_htf_bias_details(ta)["bias"])
 
     def _apply_primary_htf_bias(
         self, est_prob_up: float, primary_htf_bias: str, weight: float
@@ -1164,8 +1206,22 @@ class SolMacroStrategy:
         btc_ta = self.btc_service.get_full_analysis()
         btc_1h_regime = "BULL"
         if btc_ta:
-            btc_htf_bias = self._get_btc_htf_bias(btc_ta)
-            logger.info(f"BTC HTF: {btc_htf_bias} | BTC ${btc_ta.current_price:,.0f}")
+            btc_htf_details = self._get_btc_htf_bias_details(btc_ta)
+            btc_htf_bias = str(btc_htf_details["bias"])
+            logger.info(
+                "BTC HTF: %s raw=%s votes(sabre=%s price_vs_ma=%s macd=%s:%s) "
+                "hist=%+.1f rising=%s spot=%.0f ma=%.0f",
+                btc_htf_bias,
+                btc_htf_details["raw_bias"],
+                btc_htf_details["sabre_vote"],
+                btc_htf_details["price_vs_ma_vote"],
+                btc_htf_details["macd_vote"],
+                btc_htf_details["macd_state"],
+                btc_htf_details["macd_4h_histogram"],
+                btc_htf_details["macd_4h_histogram_rising"],
+                btc_htf_details["btc_price"],
+                btc_htf_details["sabre_ma"],
+            )
             if self._btc_1h_regime_gates.get("enabled", False):
                 btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
                 logger.info(

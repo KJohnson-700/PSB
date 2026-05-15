@@ -101,6 +101,27 @@ def test_command_center_includes_ai_pipeline_digest_stub():
     assert "function updateCommandCenterDigests" in html
 
 
+def test_exposure_tile_labels_consecutive_losses_explicitly():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "Consec Losses" in html
+    assert "live streak" in html
+
+
+def test_btc_chart_uses_glow_overlay_for_trade_markers():
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="btc-trade-overlay"' in html
+    assert "#btc-trade-overlay{position:absolute;inset:0;" in html
+    assert "const _BTC_TRADE_OVERLAY_PALETTE = {" in html
+    assert "function _drawBTCTradeOverlayMarker(ctx, x, y, point)" in html
+    assert "function _drawBTCTradeOverlay()" in html
+    assert "_btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => { _queueBTCTradeOverlayDraw(); });" in html
+    assert "_setBTCTradeOverlayData(overlayPoints, _candles || []);" in html
+    assert "_btcCandleSeries.setMarkers((sabreMarkers || []).slice(-80));" in html
+    assert "const isWin = point.outcome === 'win';" in html
+    assert "ctx.arc(x, y, size, 0, Math.PI * 2);" in html
+    assert "ctx.quadraticCurveTo(x + half, y - half, x + half, y - half + corner);" in html
+
+
 def test_command_center_decision_gates_do_not_trap_scroll():
     html = INDEX.read_text(encoding="utf-8")
     m = re.search(r"\.ops-mini-body\s*\{([^}]+)\}", html)

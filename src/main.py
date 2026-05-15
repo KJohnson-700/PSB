@@ -48,6 +48,11 @@ from src.analysis.journal_learning import (
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.lane_manager import LaneManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
+from src.analysis.calibration_log import (
+    append_calibration_record,
+    build_record_from_closed_trade,
+)
+from src.analysis.lane_calibration import LaneCalibrator
 from src.notifications.notification_manager import (
     NotificationManager,
     merge_discord_webhook_from_env,
@@ -186,6 +191,7 @@ class PolyBot:
         # Load configuration
         self.config = self._load_config(config_path)
         self.lane_manager = LaneManager(self.config)
+        self.lane_calibrator = self._build_lane_calibrator()
         self._apply_exposure_env_overrides()
 
         # Initialize components
@@ -453,6 +459,20 @@ class PolyBot:
         elif raw in ("0", "false", "no", "off"):
             self.config.setdefault("exposure", {})["loss_kill_switch_enabled"] = False
 
+    def _build_lane_calibrator(self) -> LaneCalibrator:
+        """Construct the per-lane probability calibrator.
+
+        Defaults to shadow mode so production behavior is unchanged until the
+        operator explicitly flips ``lane_calibration.shadow_mode: false``.
+        """
+        cal_cfg = (self.config.get("lane_calibration") or {})
+        shadow = bool(cal_cfg.get("shadow_mode", True))
+        try:
+            return LaneCalibrator(shadow_mode=shadow)
+        except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
+            logging.warning("lane_calibration init failed: %s", exc)
+            return LaneCalibrator(shadow_mode=True)
+
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
         """Load configuration from YAML file"""
         if config_path is None:
@@ -481,6 +501,16 @@ class PolyBot:
 
         deep_merge_config(self.config, updates)
         self.lane_manager = LaneManager(self.config)
+        # Refresh calibrator's shadow-mode flag if config touched it; posteriors stay.
+        if updates.get("lane_calibration"):
+            prev = getattr(self, "lane_calibrator", None)
+            shadow = bool(
+                (self.config.get("lane_calibration") or {}).get("shadow_mode", True)
+            )
+            if prev is not None:
+                prev.shadow_mode = shadow
+            else:
+                self.lane_calibrator = self._build_lane_calibrator()
         merge_discord_webhook_from_env(self.config)
         self.notifier.reload_from_config(self.config)
         self._rebuild_runtime_config_dependents()
@@ -1048,13 +1078,16 @@ class PolyBot:
             total_pnl = sum(s["pnl"] for s in settled)
             self._apply_realized_pnl_to_bankroll(total_pnl)
 
-            # Route each settlement to the correct exposure manager
+            # Route each settlement to the same lane/performance trackers used by live exits.
             for s in settled:
                 strat = s.get("strategy", "")
                 em = self._get_exposure_manager_for(strat)
                 em.record_trade(
                     pnl=s["pnl"], strategy=strat, market_id=s.get("market_id", "")
                 )
+                mq = str(s.get("market_question") or "")
+                window = _detect_window_from_question(mq)
+                self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
 
             crypto_settled = [
                 s
@@ -1139,6 +1172,56 @@ class PolyBot:
                         bankroll=self.bankroll,
                         reason=exit_decision.reason,
                     )
+                    # Phase 0 calibration log + Phase 6 posterior update — best-effort,
+                    # never raises. Locate the just-closed trade by id (defensive vs
+                    # the latest append in case concurrent exits land out of order
+                    # despite the execution lock).
+                    try:
+                        closed_row = next(
+                            (
+                                t
+                                for t in reversed(self.journal.closed_trades)
+                                if t.get("trade_id") == exit_decision.position_id
+                            ),
+                            None,
+                        )
+                        if closed_row is not None:
+                            record = build_record_from_closed_trade(
+                                closed_row, session_id=self.journal.session_id
+                            )
+                            # Phase 6 shadow: update per-lane posteriors. The
+                            # ``record()`` call runs even in shadow mode; only
+                            # ``calibrate()`` is gated. Snapshot returned data
+                            # populates the calibration-log row's telemetry.
+                            cal = getattr(self, "lane_calibrator", None)
+                            if cal is not None:
+                                try:
+                                    snap = cal.record(
+                                        lane_id=record.get("lane_id") or "",
+                                        stated_est_prob=record.get("stated_est_prob"),
+                                        realized_pct=record.get("realized_pct") or 0.0,
+                                        win=bool(record.get("win")),
+                                    )
+                                    record["posterior_n"] = snap.get("n")
+                                    record["posterior_mean"] = round(
+                                        snap.get("beta_mean") or 0.0, 6
+                                    )
+                                    record["alpha_used"] = round(
+                                        snap.get("alpha") or 1.0, 6
+                                    )
+                                    record["alpha_raw"] = (
+                                        round(snap["alpha_raw"], 6)
+                                        if snap.get("alpha_raw") is not None
+                                        else None
+                                    )
+                                    record["shadow_mode"] = bool(cal.shadow_mode)
+                                except Exception as _pe:  # noqa: BLE001
+                                    logging.warning(
+                                        "lane_calibrator.record skipped: %s", _pe
+                                    )
+                            append_calibration_record(record)
+                    except Exception as _cal_exc:  # noqa: BLE001 — telemetry only
+                        logging.warning("calibration_log skipped: %s", _cal_exc)
                     if exit_decision.position_id in self.risk_manager.active_positions:
                         del self.risk_manager.active_positions[
                             exit_decision.position_id
