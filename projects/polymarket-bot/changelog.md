@@ -4,6 +4,20 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-14 — Lane-management control system: lane IDs, execution gating, dashboard controls, recommendations, audit trail
+
+- **What changed**
+  - **Lane identity + journal wiring:** Added [src/analysis/lane_identity.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_identity.py) and wired `lane_id`, side/regime/family fields, and promotion state through [src/main.py](/Users/mainfolder/Documents/psb-main%201/src/main.py) and [src/execution/trade_journal.py](/Users/mainfolder/Documents/psb-main%201/src/execution/trade_journal.py) so entries, exits, and skip-style rows can be attributed to stable execution lanes.
+  - **Lane calibration report:** Upgraded [scripts/journal_lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/scripts/journal_lane_calibration.py) to group by `lane_id` when available and report expectancy, realized return on notional, edge-realized gap, average confidence, and AI-touched trade counts.
+  - **Config-backed lane gating:** Added [src/analysis/lane_manager.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_manager.py) plus `lane_management` config in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). The bot now supports per-lane `paper`, `live`, and `paused` states with exact and prefix matches, enforced before order placement.
+  - **Dashboard lane operations:** [src/dashboard/server.py](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py) now exposes `/api/journal/lane-health`, `/api/journal/lane-states`, `POST /api/lane-state`, and `/api/lane-state-history`. [src/dashboard/index.html](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html) added a Lane Health panel with current state, recommended state, inline state-change controls, one-click apply-rec, recent state-change history, and a `Ready only` filter for escalation review.
+  - **Recommendation + escalation layer:** Lane assessments now compute recommended state, advisory auto-pause candidate status, confirmation windows, candidate aging, and ready/live escalation warnings. Dashboard warnings persist to `data/lane_candidate_status.json`, and ignored ready-live warnings append audit rows to `data/lane_state_audit.jsonl`.
+  - **Tests:** Added [tests/test_lane_manager.py](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_manager.py) and extended [tests/test_dashboard_bundle.py](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py), [tests/test_journal_lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/tests/test_journal_lane_calibration.py), and [tests/test_trade_journal_resumable.py](/Users/mainfolder/Documents/psb-main%201/tests/test_trade_journal_resumable.py) for lane identity, persistence, recommendation logic, dashboard APIs, and audit behavior.
+
+- **Why:** The bot needed a lane-level control plane instead of strategy-wide heuristics so weak YES/NO slices could be isolated, papered, paused, and reviewed independently. This bundle turns lane metrics into operational controls with visibility and auditability, without introducing automatic demotions yet.
+
+- **Verification:** `.venv/bin/python -m pytest tests/test_lane_manager.py tests/test_dashboard_bundle.py tests/test_journal_lane_calibration.py tests/test_trade_journal_resumable.py -q` and `.venv/bin/python -m py_compile src/analysis/lane_identity.py src/analysis/lane_manager.py src/dashboard/server.py src/main.py` green locally.
+
 ## 2026-05-13 — Backtest/live parity: shared updown exits, Polymarket YES marks, bundle runner, dashboard hooks
 
 - **What changed**

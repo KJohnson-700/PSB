@@ -185,6 +185,23 @@
         .badge-blue,.bdg.live{background:rgba(0,229,255,.07);border-color:rgba(0,229,255,.35);color:var(--cy)}
         .badge-purple,.bdg.ai{background:rgba(176,96,255,.1);border-color:var(--pu);color:var(--pu)}
         .bdg.ct{background:rgba(0,255,136,.07);border-color:rgba(0,255,136,.35);color:var(--gr)}
+        .badge-muted{background:rgba(255,255,255,.03);border-color:rgba(255,255,255,.10);color:var(--tm)}
+        .badge-alert-flash{
+            animation:dashAlertPulse .9s ease-in-out infinite;
+            box-shadow:0 0 12px rgba(255,68,102,.24),0 0 22px rgba(255,68,102,.18);
+        }
+        @keyframes dashAlertPulse{
+            0%,100%{background:rgba(255,68,102,.10);border-color:var(--re);color:var(--re)}
+            50%{background:rgba(255,68,102,.28);border-color:#ff8aa0;color:#fff2f5}
+        }
+        .badge-warn-flash{
+            animation:dashWarnPulse .9s ease-in-out infinite;
+            box-shadow:0 0 12px rgba(255,215,0,.20),0 0 22px rgba(255,215,0,.14);
+        }
+        @keyframes dashWarnPulse{
+            0%,100%{background:rgba(255,215,0,.10);border-color:var(--ye);color:var(--ye)}
+            50%{background:rgba(255,215,0,.24);border-color:#ffe57a;color:#fff9d6}
+        }
 
         /* ── Buttons ── */
         button,.abtn{
@@ -994,7 +1011,6 @@
             <button class="abtn ag" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="abtn ar" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
             <button class="abtn ab" onclick="runTests()">Run Unit Tests</button>
-            <button class="abtn ak" onclick="toggleKillSwitch()" id="kill-btn">Kill Switch</button>
             <button class="abtn ap" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
             <button class="abtn ap" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
             <button class="abtn ac" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
@@ -1576,6 +1592,30 @@
         <div id="ai-summary-meta" style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;"></div>
     </div>
 
+    <div class="card" data-aos="fade-up" id="lane-health-card" style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div>
+                <h2 style="margin:0;">Lane Health</h2>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">Lane states + recent closed-trade expectancy by lane.</div>
+            </div>
+            <div id="lane-health-meta" style="font-size:0.68rem;color:var(--text-muted);"></div>
+        </div>
+        <div id="lane-states-summary" style="font-size:0.76rem;margin-bottom:10px;"></div>
+        <div id="lane-health-filters" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
+            <button type="button" class="btn-sm" id="lane-filter-all" onclick="setLaneHealthFilter('all')">All lanes</button>
+            <button type="button" class="btn-sm" id="lane-filter-ready" onclick="setLaneHealthFilter('ready_only')">Ready only</button>
+        </div>
+        <div id="lane-health-body" class="scrollbox" style="max-height:280px;">
+            <p style="color:var(--text-muted);">Waiting for lane data...</p>
+        </div>
+        <div style="margin-top:10px;">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:6px;">Recent lane changes</div>
+            <div id="lane-history-body" class="scrollbox" style="max-height:120px;">
+                <p style="color:var(--text-muted);">Waiting for lane change history...</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Test runs: pick a session to review (summary + tabs + chart scope to that run) -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="journal-runs-card">
         <h2 style="margin-bottom:4px;">Test runs</h2>
@@ -2011,26 +2051,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!enabled) btn.classList.add('off');
         paintStratChip(btn);
     });
-}, { once: true });
-
-function killFlash() {
-    var el = document.createElement('div');
-    el.className = 'kill-flash';
-    document.body.appendChild(el);
-    setTimeout(function() { el.remove(); }, 900);
-}
-
-// Hook the existing kill switch button: shake + radial vignette before its click handler runs.
-document.addEventListener('DOMContentLoaded', function() {
-    var killBtn = document.getElementById('kill-btn');
-    if (killBtn) {
-        killBtn.classList.add('abtn', 'ak');
-        killBtn.addEventListener('click', function(e) {
-            killBtn.classList.add('shake');
-            setTimeout(function() { killBtn.classList.remove('shake'); }, 300);
-            killFlash();
-        }, true); // capture phase: runs before existing onclick
-    }
 }, { once: true });
 
 /** Privacy overlay + tab-transition splash (Claude Design Dashboard.html handoff) */
@@ -2641,9 +2661,9 @@ async function fetchAll() {
     const needUpdownWr = needLive || needPerformance;
     /** Journal + Performance both show session rollup; summary must be fetched for either. */
     const needJournalSummary = needJournal || needPerformance;
-    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR;
+    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, laneHealthR, laneStatesR, laneHistoryR;
     try {
-        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR] = await Promise.all([
+        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
@@ -2663,6 +2683,9 @@ async function fetchAll() {
             needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
+            needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
+            needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
+            needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
         ]);
     } catch (e) {
         console.error('[dashboard] fetch batch:', e);
@@ -2717,6 +2740,17 @@ async function fetchAll() {
     try {
         if (needJournal && journalTradesR?.ok) updateRecentTrades(await journalTradesR.json());
     } catch (e) { console.error('[dashboard] journal trades:', e); }
+
+    try {
+        if (needJournal) {
+            const health = laneHealthR?.ok ? await laneHealthR.json() : null;
+            const states = laneStatesR?.ok ? await laneStatesR.json() : null;
+            window._lastLaneHealthData = { health, states };
+            updateLaneHealth(health, states);
+            const history = laneHistoryR?.ok ? await laneHistoryR.json() : null;
+            updateLaneHistory(history);
+        }
+    } catch (e) { console.error('[dashboard] lane health:', e); }
 
     try {
         if (exposureR?.ok) {
@@ -3002,26 +3036,26 @@ function updateStatusBadgesAndKill(d) {
     if (!d || typeof d !== 'object') return;
     const badges = document.getElementById('status-badges');
     if (!badges) return;
-    const mode = d.dry_run ? 'Paper' : 'Live';
-    const modeClass = d.dry_run ? 'badge-yellow' : 'badge-green';
     let run = d.running ? '<span class="badge badge-green">Running</span>' : '<span class="badge badge-red">Stopped</span>';
-    const kill = d.kill_switch_active ? '<span class="badge badge-red">KILL SWITCH ON</span>' : '';
+    const paperBadge = d.dry_run
+        ? '<span class="badge badge-yellow badge-warn-flash" title="Paper mode is active.">PAPER</span>'
+        : '<span class="badge badge-muted" title="Paper mode is inactive.">PAPER</span>';
+    const lossPauseTitle = d.loss_pause_active
+        ? `Loss-streak lane pause active. Check Exposure Manager. Paused lanes: ${((d.loss_pause_lanes || []).join(', ') || 'unknown')}`
+        : 'No loss-streak lane pause is currently active.';
+    const lossPauseBadge = d.loss_pause_active
+        ? `<span class="badge badge-red badge-alert-flash" title="${String(lossPauseTitle).replace(/"/g, '&quot;')}">LOSS PAUSE</span>`
+        : '<span class="badge badge-muted" title="No loss-streak lane pause is currently active.">LOSS PAUSE</span>';
     const canTrade = d.can_trade ? '<span class="badge badge-green">Can Trade</span>' : `<span class="badge badge-red">Blocked</span>`;
     const ai = d.ai || {};
     const aiTip = String(ai.reason || '').replace(/"/g, '&quot;').replace(/</g, '');
     const aiBadge = ai.ready
         ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
         : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    const nextHtml = `${run} <span class="badge ${modeClass}">${mode}</span> ${aiBadge} ${canTrade} ${kill}`;
+    const nextHtml = `${run} ${paperBadge} ${lossPauseBadge} ${aiBadge} ${canTrade}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
-
-    const killBtn = document.getElementById('kill-btn');
-    if (killBtn) {
-        killBtn.textContent = d.kill_switch_active ? 'Disable Kill Switch' : 'Kill Switch';
-        killBtn.style.background = d.kill_switch_active ? 'var(--green)' : 'var(--red)';
-    }
 }
 
 /** Map flat SSE snapshot from server.py to the shape applyHeroMetrics expects. */
@@ -3092,6 +3126,8 @@ function applySSESnapshot(raw) {
             dry_run: raw.dry_run,
             running: raw.running,
             kill_switch_active: raw.kill_switch_active,
+            loss_pause_active: raw.loss_pause_active,
+            loss_pause_lanes: raw.loss_pause_lanes,
             can_trade: raw.can_trade,
             ai: raw.ai || {},
         });
@@ -3997,7 +4033,7 @@ async function stopLiveBot() {
     if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
         DashPrivacy.show('shutdown', {
             banner: 'ORACLE · LIVE CANCEL / STOP',
-            detail: 'POST /api/live/stop: graceful teardown of the dashboard-spawned bot child (SIGTERM, short wait, SIGKILL if needed). In-flight orders depend on your exchange client; disk journals flush on process exit. Command Center updates when the handler returns.'
+            detail: 'POST /api/live/stop: arm the manual global stop and then tear down the dashboard-spawned bot child (SIGTERM, short wait, SIGKILL if needed). Check Exposure Manager and clear the manual stop before resuming trading.'
         });
         showedOverlay = true;
     }
@@ -4005,8 +4041,16 @@ async function stopLiveBot() {
     try {
         const r = await fetch('/api/live/stop', {method:'POST', headers: dashAuthHeaders()});
         const d = await r.json();
-        status.textContent = `Live bot ${d.status}`;
-        status.style.color = d.status === 'stopped' ? 'var(--green)' : 'var(--yellow)';
+        if (d.status === 'stopped' || d.status === 'killed') {
+            status.textContent = 'Manual stop enabled; live bot halted';
+            status.style.color = 'var(--yellow)';
+        } else if (d.status === 'manual_stop_enabled') {
+            status.textContent = 'Manual stop enabled';
+            status.style.color = 'var(--yellow)';
+        } else {
+            status.textContent = `Live bot ${d.status}`;
+            status.style.color = d.status === 'error' ? 'var(--red)' : 'var(--yellow)';
+        }
         startBtn.disabled = false;
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
     finally {
@@ -4850,6 +4894,173 @@ function updateJournal(d) {
 
     // Load current tab data
     loadJournalTab(currentJournalTab);
+}
+
+function updateLaneHealth(health, states) {
+    const body = document.getElementById('lane-health-body');
+    const meta = document.getElementById('lane-health-meta');
+    const summary = document.getElementById('lane-states-summary');
+    const filterAllBtn = document.getElementById('lane-filter-all');
+    const filterReadyBtn = document.getElementById('lane-filter-ready');
+    if (!body || !meta || !summary) return;
+    const lanes = Array.isArray(health && health.lanes) ? health.lanes : [];
+    const stateRows = Array.isArray(states && states.lanes) ? states.lanes : [];
+    const stateMap = Object.fromEntries(stateRows.map(r => [r.lane_id, r]));
+    const readyCount = lanes.filter(l => !!(l.auto_pause_confirmed || (stateMap[l.lane_id] && stateMap[l.lane_id].auto_pause_confirmed))).length;
+    meta.textContent = `${lanes.length} lane${lanes.length === 1 ? '' : 's'} with closed-trade data`;
+    if (!states) {
+        summary.innerHTML = '<span style="color:var(--text-muted);">Lane state data unavailable.</span>';
+    } else {
+        const enabled = !!states.enabled;
+        const dryRun = !!states.dry_run;
+        summary.innerHTML =
+            `<span class="badge ${enabled ? 'badge-green' : 'badge-muted'}">lane mgmt ${enabled ? 'on' : 'off'}</span> ` +
+            `<span class="badge ${dryRun ? 'badge-yellow' : 'badge-muted'}">${dryRun ? 'paper mode' : 'live mode'}</span> ` +
+            `<span class="badge ${readyCount ? 'badge-red' : 'badge-muted'}">${readyCount} ready</span> ` +
+            `<span style="color:var(--text-muted);margin-left:6px;">default=${_htmlEscape(states.default_state || 'paper')} · rules=${Number(states.configured_rules || 0)}</span>`;
+    }
+    if (filterAllBtn) filterAllBtn.disabled = window._laneHealthFilter === 'all';
+    if (filterReadyBtn) filterReadyBtn.disabled = window._laneHealthFilter === 'ready_only';
+    if (!lanes.length) {
+        body.innerHTML = '<p style="color:var(--text-muted);">No lane-level closed trades yet.</p>';
+        return;
+    }
+    const filteredLanes = lanes.filter(l => {
+        if (window._laneHealthFilter === 'ready_only') {
+            return !!(l.auto_pause_confirmed || (stateMap[l.lane_id] && stateMap[l.lane_id].auto_pause_confirmed));
+        }
+        return true;
+    });
+    if (!filteredLanes.length) {
+        body.innerHTML = '<p style="color:var(--text-muted);">No lanes match the current filter.</p>';
+        return;
+    }
+    const rows = filteredLanes.slice().sort((a, b) => {
+        const strat = String(a.strategy || '').localeCompare(String(b.strategy || ''));
+        if (strat) return strat;
+        return String(a.lane_id || '').localeCompare(String(b.lane_id || ''));
+    });
+    body.innerHTML = '<table><thead><tr><th>Lane</th><th>State</th><th>Recommend</th><th>Reviewed</th><th>Trades</th><th>WR</th><th>Exp</th><th>Gap</th><th>Top exit</th></tr></thead><tbody>' +
+        rows.map(l => {
+            const s = stateMap[l.lane_id] || null;
+            const eff = String((s && s.effective_state) || l.state_at_entry || 'unknown');
+            const stateCls = eff === 'live' ? 'badge-green' : eff === 'paused' ? 'badge-red' : eff === 'paper' ? 'badge-yellow' : 'badge-muted';
+            const rec = String((l.recommended_state || (s && s.recommended_state) || 'paper'));
+            const recCls = rec === 'live' ? 'badge-green' : rec === 'paused' ? 'badge-red' : rec === 'paper' ? 'badge-yellow' : 'badge-muted';
+            const recReasons = (l.recommendation_reasons || (s && s.recommendation_reasons) || []);
+            const autoPauseCandidate = !!(l.auto_pause_candidate || (s && s.auto_pause_candidate));
+            const autoPauseConfirmed = !!(l.auto_pause_confirmed || (s && s.auto_pause_confirmed));
+            const autoPauseRemaining = Number((l.auto_pause_confirmation_remaining ?? (s && s.auto_pause_confirmation_remaining) ?? 0));
+            const autoPauseReason = String((l.auto_pause_reason || (s && s.auto_pause_reason) || ''));
+            const autoPauseStatus = String((l.auto_pause_status || (s && s.auto_pause_status) || ''));
+            const autoPauseFirstSeenAt = String((l.auto_pause_first_seen_at || (s && s.auto_pause_first_seen_at) || ''));
+            const autoPauseAgeMinutes = Number((l.auto_pause_age_minutes ?? (s && s.auto_pause_age_minutes) ?? NaN));
+            const metaRow = (s && s.state_meta) || {};
+            const reviewedAt = String(metaRow.reviewed_at || metaRow.updated_at || '');
+            const reviewedVia = String(metaRow.updated_via || '');
+            const exp = Number(l.expectancy || 0);
+            const gap = Number(l.edge_realized_gap || 0);
+            const wr = Number(l.win_rate || 0);
+            const laneTitle = `${l.lane_id}\nstate=${eff}${s && s.matched_rule ? `\nrule=${s.matched_rule}` : ''}`;
+            const laneEnc = encodeURIComponent(String(l.lane_id || ''));
+            return `<tr>
+                <td title="${_htmlEscape(laneTitle)}" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                    <div style="font-weight:600;">${_htmlEscape(l.strategy || '?')} · ${_htmlEscape(l.lane_window || '?')} · ${_htmlEscape(l.lane_side || '?')}</div>
+                    <div style="font-size:0.68rem;color:var(--text-muted);">${_htmlEscape(l.entry_family || 'standard')} · ${_htmlEscape(l.lane_regime || 'unclassified')}</div>
+                </td>
+                <td>
+                    <div><span class="badge ${stateCls}">${_htmlEscape(eff.toUpperCase())}</span></div>
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
+                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'live')">Live</button>
+                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'paper')">Paper</button>
+                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'paused')">Pause</button>
+                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'default')">Default</button>
+                    </div>
+                </td>
+                <td title="${_htmlEscape(recReasons.join(' | '))}">
+                    <div><span class="badge ${recCls}">${_htmlEscape(rec.toUpperCase())}</span></div>
+                    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_htmlEscape(recReasons[0] || '—')}</div>
+                    ${autoPauseCandidate ? `<div style="margin-top:4px;"><span class="badge ${autoPauseConfirmed ? 'badge-red' : 'badge-yellow'}">${autoPauseConfirmed ? 'AUTO-PAUSE READY' : 'AUTO-PAUSE WATCH'}</span></div>` : ''}
+                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(autoPauseReason)}">${_htmlEscape(autoPauseConfirmed ? 'confirmation window met' : `${autoPauseRemaining} trade${autoPauseRemaining === 1 ? '' : 's'} until confirmation`)}</div>` : ''}
+                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(autoPauseFirstSeenAt || '')}">${_htmlEscape(autoPauseFirstSeenAt ? `since ${autoPauseFirstSeenAt.replace('T', ' ').replace('Z', ' UTC')}` : 'candidate just detected')}</div>` : ''}
+                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_htmlEscape(Number.isFinite(autoPauseAgeMinutes) ? `${autoPauseAgeMinutes}m active · ${autoPauseStatus || 'watch'}` : (autoPauseStatus || 'watch'))}</div>` : ''}
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
+                        <button type="button" class="btn-sm" ${rec === eff ? 'disabled' : ''} onclick="applyLaneRecommendation(decodeURIComponent('${laneEnc}'),'${_htmlEscape(rec)}')">Apply rec</button>
+                    </div>
+                </td>
+                <td title="${_htmlEscape(reviewedAt ? `${reviewedAt}${reviewedVia ? ` via ${reviewedVia}` : ''}` : 'Not reviewed yet')}">
+                    <div style="font-size:0.72rem;">${_htmlEscape(reviewedAt ? reviewedAt.replace('T', ' ').replace('Z', ' UTC') : '—')}</div>
+                    <div style="font-size:0.68rem;color:var(--text-muted);">${_htmlEscape(reviewedVia || 'not reviewed')}</div>
+                </td>
+                <td>${Number(l.trades || 0)}</td>
+                <td style="color:${wr >= 0.5 ? 'var(--green)' : 'var(--red)'}">${(wr * 100).toFixed(1)}%</td>
+                <td style="color:${exp >= 0 ? 'var(--green)' : 'var(--red)'}">${exp >= 0 ? '+' : ''}$${Math.abs(exp).toFixed(2)}</td>
+                <td style="color:${gap <= 0.04 ? 'var(--green)' : 'var(--yellow)'}">${gap >= 0 ? '+' : ''}${gap.toFixed(3)}</td>
+                <td style="font-size:0.72rem;color:var(--text-muted);">${_htmlEscape(String(l.top_exit_reason || '—'))}</td>
+            </tr>`;
+        }).join('') + '</tbody></table>';
+}
+
+function setLaneHealthFilter(mode) {
+    window._laneHealthFilter = mode === 'ready_only' ? 'ready_only' : 'all';
+    if (window._lastLaneHealthData) {
+        updateLaneHealth(window._lastLaneHealthData.health, window._lastLaneHealthData.states);
+    }
+}
+
+function updateLaneHistory(history) {
+    const body = document.getElementById('lane-history-body');
+    if (!body) return;
+    const items = Array.isArray(history && history.items) ? history.items : [];
+    if (!items.length) {
+        body.innerHTML = '<p style="color:var(--text-muted);">No lane state changes recorded yet.</p>';
+        return;
+    }
+    body.innerHTML = items.map(item => {
+        const when = String(item.timestamp || '').replace('T', ' ').replace('Z', ' UTC');
+        const lane = String(item.lane_id || 'unknown');
+        const requested = String(item.requested_state || 'unknown');
+        const effective = String(item.effective_state || requested);
+        const previous = String(item.previous_state || 'unknown');
+        const source = String(item.source || 'unknown');
+        const note = String(item.note || '');
+        const badgeCls = effective === 'live' ? 'badge-green' : effective === 'paused' ? 'badge-red' : effective === 'paper' ? 'badge-yellow' : 'badge-muted';
+        return `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:0.72rem;">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
+                <div style="font-weight:600;max-width:72%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(lane)}">${_htmlEscape(lane)}</div>
+                <div><span class="badge ${badgeCls}">${_htmlEscape(effective.toUpperCase())}</span></div>
+            </div>
+            <div style="color:var(--text-muted);margin-top:4px;">${_htmlEscape(when || 'unknown time')} · ${_htmlEscape(source)} · ${_htmlEscape(previous)} → ${_htmlEscape(requested)}</div>
+            <div style="color:var(--text-muted);margin-top:2px;">${_htmlEscape(note || 'no note')}</div>
+        </div>`;
+    }).join('');
+}
+
+async function setLaneState(laneId, state) {
+    return _setLaneStateInternal(laneId, state, 'dashboard_manual', '');
+}
+
+async function applyLaneRecommendation(laneId, state) {
+    return _setLaneStateInternal(laneId, state, 'dashboard_recommendation', 'applied recommended lane state');
+}
+
+async function _setLaneStateInternal(laneId, state, source, note) {
+    if (!laneId || !state) return;
+    try {
+        const r = await _mutatingFetch('/api/lane-state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lane_id: laneId, state, source, note }),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+            alert(`Lane state update failed: ${d.detail || JSON.stringify(d)}`);
+            return;
+        }
+        await fetchAll();
+    } catch (e) {
+        alert('Lane state update failed: ' + e);
+    }
 }
 
 async function settleArchivedPositions() {

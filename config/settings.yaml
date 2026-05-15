@@ -211,6 +211,28 @@ data_collection:
     interval_sec: 300
     path: "data/market_prices/weather_prices.jsonl"
 
+lane_management:
+  enabled: false
+  default_state: paper
+  states: {}
+  state_meta: {}
+  recommendations:
+    min_live_trades: 15
+    min_live_win_rate: 0.54
+    min_live_expectancy: 0.0
+    max_live_gap: 0.04
+    min_pause_trades: 8
+    max_pause_win_rate: 0.40
+    max_pause_expectancy: -0.5
+    min_pause_gap: 0.08
+    auto_pause_confirmation_trades: 3
+  # Exact lane IDs take priority; prefix matches are allowed for broader policies.
+  # Example:
+  # states:
+  #   "bitcoin|5m|up": live
+  #   "bitcoin|5m|down": paper
+  #   "eth_macro|5m|down|bearish__bearish__bull|override": paused
+
 # ============================================
 # STRATEGY THRESHOLDS
 # ============================================

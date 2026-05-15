@@ -43,6 +43,7 @@ import uuid
 
 from src.analysis.usage_tracker import usage_tracker
 from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
+from src.analysis.lane_manager import LaneManager
 from src.config_merge import deep_merge_config as _deep_merge
 from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
@@ -155,6 +156,312 @@ def _extract_ai_summary_text(payload: Any) -> str:
     return ""
 
 
+def _lane_meta_from_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
+    extra = dict(trade.get("entry_signal") or {})
+    for key in ("lane_id", "lane_side", "lane_window", "lane_regime", "entry_family", "promotion_state"):
+        if key not in extra and key in trade:
+            extra[key] = trade.get(key)
+    return extra
+
+
+def _iter_lane_entries(journal: Any, limit: int = 5000) -> List[Dict[str, Any]]:
+    if not journal:
+        return []
+    try:
+        return list(journal.get_all_entries(limit) or [])
+    except Exception:
+        return []
+
+
+def _load_yaml_config() -> Dict[str, Any]:
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+def _append_jsonl_record(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=True) + "\n")
+
+
+def _read_jsonl_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
+    if limit <= 0 or not path.exists():
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        return rows[-limit:]
+    except Exception:
+        return []
+
+
+def _read_json_object(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_json_object(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=True, sort_keys=True, indent=2)
+
+
+def _parse_utc_timestamp(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _sync_lane_candidate_status(lanes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    store = _read_json_object(LANE_CANDIDATE_STATUS_PATH)
+    statuses = dict(store.get("lanes") or {})
+    now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    changed = False
+
+    for lane in lanes:
+        lane_id = str(lane.get("lane_id") or "").strip()
+        if not lane_id:
+            continue
+        prev = dict(statuses.get(lane_id) or {})
+        next_row = dict(prev)
+        active = bool(lane.get("auto_pause_candidate"))
+        if active:
+            next_row["active"] = True
+            next_row["status"] = "ready" if bool(lane.get("auto_pause_confirmed")) else "watch"
+            next_row["first_seen_at"] = str(prev.get("first_seen_at") or now)
+            next_row["last_seen_at"] = now
+            next_row["reason"] = str(lane.get("auto_pause_reason") or "")
+            next_row["confirmation_remaining"] = int(lane.get("auto_pause_confirmation_remaining") or 0)
+            if (
+                next_row["status"] == "ready"
+                and str(lane.get("effective_state") or "") == "live"
+                and str(prev.get("status") or "") != "ready"
+            ):
+                next_row["last_ready_live_warning_at"] = now
+                _append_jsonl_record(
+                    LANE_STATE_AUDIT_LOG,
+                    {
+                        "timestamp": now,
+                        "event_type": "ready_live_warning",
+                        "lane_id": lane_id,
+                        "requested_state": "live",
+                        "effective_state": "live",
+                        "previous_state": str(prev.get("status") or "watch"),
+                        "source": "auto_pause_ready_live",
+                        "note": "lane reached auto-pause ready while still live",
+                    },
+                )
+        elif prev.get("active"):
+            next_row["active"] = False
+            next_row["status"] = "cleared"
+            next_row["last_cleared_at"] = now
+            next_row["reason"] = ""
+            next_row["confirmation_remaining"] = 0
+        if next_row != prev:
+            statuses[lane_id] = next_row
+            changed = True
+
+    if changed:
+        _write_json_object(
+            LANE_CANDIDATE_STATUS_PATH,
+            {"updated_at": now, "lanes": statuses},
+        )
+    return statuses
+
+
+def _build_lane_health(journal: Any) -> Dict[str, Any]:
+    cfg = dict(getattr(_full_bot_instance(), "config", None) or {})
+    if not cfg:
+        cfg = _load_yaml_config()
+    manager = LaneManager(cfg)
+    try:
+        closed = list(journal.get_closed_trades() if journal else [])
+    except Exception:
+        closed = []
+    per_lane: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {
+            "trades": 0,
+            "wins": 0,
+            "pnl": 0.0,
+            "sum_edge": 0.0,
+            "sum_confidence": 0.0,
+            "sum_realized_return": 0.0,
+            "returns_n": 0,
+            "ai_trades": 0,
+            "exit_reasons": defaultdict(int),
+            "strategy": "unknown",
+            "lane_state_at_entry": "unknown",
+            "lane_side": "unknown",
+            "lane_window": "unknown",
+            "lane_regime": "unclassified",
+            "entry_family": "standard",
+        }
+    )
+
+    for trade in closed:
+        meta = _lane_meta_from_trade(trade)
+        lane_id = str(meta.get("lane_id") or "").strip()
+        if not lane_id:
+            continue
+        row = per_lane[lane_id]
+        pnl = float(trade.get("pnl") or 0.0)
+        edge = float(trade.get("edge") or 0.0)
+        conf = float(trade.get("confidence") or 0.0)
+        size = float(trade.get("size") or 0.0)
+        reason = str(trade.get("exit_reason") or trade.get("reason") or "unknown")
+        row["trades"] += 1
+        row["wins"] += 1 if pnl > 0 else 0
+        row["pnl"] += pnl
+        row["sum_edge"] += edge
+        row["sum_confidence"] += conf
+        if size > 0:
+            row["sum_realized_return"] += pnl / size
+            row["returns_n"] += 1
+        row["ai_trades"] += 1 if bool(meta.get("ai_used", False)) else 0
+        row["exit_reasons"][reason] += 1
+        row["strategy"] = str(trade.get("strategy") or row["strategy"])
+        row["lane_state_at_entry"] = str(meta.get("promotion_state") or row["lane_state_at_entry"])
+        row["lane_side"] = str(meta.get("lane_side") or row["lane_side"])
+        row["lane_window"] = str(meta.get("lane_window") or meta.get("window_size") or row["lane_window"])
+        row["lane_regime"] = str(meta.get("lane_regime") or row["lane_regime"])
+        row["entry_family"] = str(meta.get("entry_family") or row["entry_family"])
+
+    lanes: List[Dict[str, Any]] = []
+    for lane_id, row in sorted(per_lane.items()):
+        trades = int(row["trades"])
+        avg_edge = (row["sum_edge"] / trades) if trades else 0.0
+        avg_conf = (row["sum_confidence"] / trades) if trades else 0.0
+        avg_ret = (row["sum_realized_return"] / row["returns_n"]) if row["returns_n"] else 0.0
+        lanes.append(
+            {
+                "lane_id": lane_id,
+                "strategy": row["strategy"],
+                "state_at_entry": row["lane_state_at_entry"],
+                "lane_side": row["lane_side"],
+                "lane_window": row["lane_window"],
+                "lane_regime": row["lane_regime"],
+                "entry_family": row["entry_family"],
+                "trades": trades,
+                "win_rate": round((row["wins"] / trades), 4) if trades else 0.0,
+                "pnl": round(float(row["pnl"]), 4),
+                "expectancy": round(float(row["pnl"]) / trades, 4) if trades else 0.0,
+                "avg_edge": round(avg_edge, 4),
+                "avg_confidence": round(avg_conf, 4),
+                "avg_realized_return_on_notional": round(avg_ret, 4),
+                "edge_realized_gap": round(avg_edge - avg_ret, 4) if row["returns_n"] else 0.0,
+                "ai_trades": int(row["ai_trades"]),
+                "top_exit_reason": max(row["exit_reasons"], key=row["exit_reasons"].get) if row["exit_reasons"] else None,
+                "exit_reasons": dict(sorted(row["exit_reasons"].items())),
+            }
+        )
+    for lane in lanes:
+        assessment = manager.assess_lane(str(lane.get("lane_id") or ""), lane)
+        lane["recommended_state"] = assessment["recommended_state"]
+        lane["recommendation_reasons"] = assessment["recommendation_reasons"]
+        lane["effective_state"] = assessment["effective_state"]
+        lane["matched_rule"] = assessment["matched_rule"]
+        lane["auto_pause_candidate"] = assessment["auto_pause_candidate"]
+        lane["auto_pause_confirmed"] = assessment["auto_pause_confirmed"]
+        lane["auto_pause_confirmation_remaining"] = assessment["auto_pause_confirmation_remaining"]
+        lane["auto_pause_reason"] = assessment["auto_pause_reason"]
+    candidate_statuses = _sync_lane_candidate_status(lanes)
+    now_dt = datetime.utcnow().replace(tzinfo=None)
+    for lane in lanes:
+        lane_id = str(lane.get("lane_id") or "").strip()
+        status_row = dict(candidate_statuses.get(lane_id) or {})
+        first_seen_at = str(status_row.get("first_seen_at") or "")
+        first_seen_dt = _parse_utc_timestamp(first_seen_at)
+        age_minutes = None
+        if bool(status_row.get("active")) and first_seen_dt is not None:
+            age_minutes = max(0, int((now_dt - first_seen_dt.replace(tzinfo=None)).total_seconds() // 60))
+        lane["auto_pause_status"] = str(status_row.get("status") or "")
+        lane["auto_pause_first_seen_at"] = first_seen_at or None
+        lane["auto_pause_last_seen_at"] = str(status_row.get("last_seen_at") or "") or None
+        lane["auto_pause_last_cleared_at"] = str(status_row.get("last_cleared_at") or "") or None
+        lane["auto_pause_last_ready_live_warning_at"] = str(status_row.get("last_ready_live_warning_at") or "") or None
+        lane["auto_pause_age_minutes"] = age_minutes
+    return {"lanes": lanes, "total": len(lanes)}
+
+
+def _build_lane_states(journal: Any) -> Dict[str, Any]:
+    cfg = dict(getattr(_full_bot_instance(), "config", None) or {})
+    if not cfg:
+        cfg = _load_yaml_config()
+    manager = LaneManager(cfg)
+    dry_run = bool((cfg.get("trading") or {}).get("dry_run", True))
+    observed: Dict[str, Dict[str, Any]] = {}
+    for entry in _iter_lane_entries(journal, 5000):
+        extra = dict(entry.get("extra") or {})
+        lane_id = str(extra.get("lane_id") or "").strip()
+        if not lane_id:
+            continue
+        if lane_id not in observed:
+            state, matched_key = manager.get_lane_state(lane_id)
+            meta, meta_rule = manager.get_lane_meta(lane_id)
+            allowed, reason, effective_state, matched_exec = manager.can_execute(lane_id, dry_run=dry_run)
+            observed[lane_id] = {
+                "lane_id": lane_id,
+                "configured_state": state,
+                "matched_rule": matched_key or matched_exec or "",
+                "effective_state": effective_state,
+                "executable_now": bool(allowed),
+                "execution_reason": reason,
+                "recommended_state": None,
+                "recommendation_reasons": [],
+                "strategy": str(entry.get("strategy") or "unknown"),
+                "lane_side": str(extra.get("lane_side") or "unknown"),
+                "lane_window": str(extra.get("lane_window") or extra.get("window_size") or "unknown"),
+                "state_meta": meta,
+                "meta_rule": meta_rule,
+            }
+    configured_only = []
+    configured_lane_keys = sorted(set(manager.states.keys()) | set(manager.state_meta.keys()))
+    for key in configured_lane_keys:
+        if key in observed:
+            continue
+        meta, meta_rule = manager.get_lane_meta(key)
+        allowed, reason, effective_state, matched_exec = manager.can_execute(key, dry_run=dry_run)
+        configured_only.append(
+            {
+                "lane_id": key,
+                "configured_state": manager.states.get(key, manager.default_state),
+                "matched_rule": key or matched_exec or "",
+                "effective_state": effective_state,
+                "executable_now": bool(allowed),
+                "execution_reason": reason,
+                "recommended_state": None,
+                "recommendation_reasons": [],
+                "strategy": key.split("|", 1)[0] if "|" in key else "unknown",
+                "lane_side": key.split("|")[2] if key.count("|") >= 2 else "unknown",
+                "lane_window": key.split("|")[1] if key.count("|") >= 1 else "unknown",
+                "state_meta": meta,
+                "meta_rule": meta_rule,
+            }
+        )
+    return {
+        "enabled": bool(manager.enabled),
+        "default_state": manager.default_state,
+        "dry_run": dry_run,
+        "lanes": sorted(observed.values(), key=lambda x: (x["strategy"], x["lane_id"])) + configured_only,
+        "configured_rules": len(manager.states),
+    }
+
+
 # ── Background BTC analysis cache ─────────────────────────────────────────────
 # get_full_analysis() takes ~9s (4 Binance fetches). Run it in a background
 # thread every 60s and serve the cached result instantly so HTTP never blocks.
@@ -253,6 +560,8 @@ logger = logging.getLogger(__name__)
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "settings.yaml"
+LANE_STATE_AUDIT_LOG = DATA_ROOT / "lane_state_audit.jsonl"
+LANE_CANDIDATE_STATUS_PATH = DATA_ROOT / "lane_candidate_status.json"
 
 ACTIVE_STRATEGY_NAMES = (
     "bitcoin",
@@ -1236,11 +1545,15 @@ async def get_status():
             _ops = build_ops_snapshot(bot, "status")
         except Exception:
             _ops = {}
+        _loss_pause = _loss_streak_pause_summary()
         return {
             "running": getattr(bot, "running", False),
             "mode": "paper" if dry_run else "live",
             "dry_run": dry_run,
             "kill_switch_active": kill_switch_active,
+            "loss_pause_active": _loss_pause.get("active", False),
+            "loss_pause_count": _loss_pause.get("count", 0),
+            "loss_pause_lanes": _loss_pause.get("lanes", []),
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
             "bankroll": bankroll,
@@ -1326,6 +1639,9 @@ async def get_status():
         "mode": "paper" if dry_run else "live",
         "dry_run": dry_run,
         "kill_switch_active": kill_switch_active,
+        "loss_pause_active": False,
+        "loss_pause_count": 0,
+        "loss_pause_lanes": [],
         "can_trade": False,
         "can_trade_reason": "Bot not running",
         "bankroll": bankroll_payload.get("bankroll"),
@@ -1764,25 +2080,32 @@ async def start_live_bot(request: Request):
 
 @app.post("/api/live/stop")
 async def stop_live_bot(request: Request):
-    """Stop the live bot subprocess."""
+    """Arm the manual global stop and stop the live bot subprocess if running."""
     global _bot_process
     _check_auth(request)
 
+    kill_switch_file = DATA_ROOT / "KILL_SWITCH"
+    kill_switch_file.parent.mkdir(parents=True, exist_ok=True)
+    kill_switch_file.touch()
+
     if _bot_process is None:
-        return {"status": "not_running"}
+        logger.info("Manual global stop enabled (no live subprocess was running)")
+        return {"status": "manual_stop_enabled", "kill_switch_active": True}
 
     try:
         _bot_process.terminate()
         _bot_process.wait(timeout=10)
-        logger.info("Live bot stopped")
+        logger.info("Live bot stopped and manual global stop enabled")
         _bot_process = None
-        return {"status": "stopped"}
+        return {"status": "stopped", "kill_switch_active": True}
     except subprocess.TimeoutExpired:
         _bot_process.kill()
         _bot_process = None
-        return {"status": "killed"}
+        logger.warning("Live bot killed after timeout; manual global stop remains enabled")
+        return {"status": "killed", "kill_switch_active": True}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        logger.error("Failed to stop live bot cleanly after enabling manual global stop: %s", e)
+        return {"status": "error", "message": str(e), "kill_switch_active": True}
 
 
 # ─── BACKTEST MANAGEMENT ──────────────────────────────────────────────
@@ -3089,6 +3412,51 @@ async def get_journal_entries(limit: int = 100, session_id: Optional[str] = None
     return {"entries": j.get_all_entries(limit) if j else []}
 
 
+@app.get("/api/journal/lane-health")
+async def get_journal_lane_health(session_id: Optional[str] = None):
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not j:
+        return {"lanes": [], "total": 0}
+    return _build_lane_health(j)
+
+
+@app.get("/api/journal/lane-states")
+async def get_journal_lane_states(session_id: Optional[str] = None):
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    states = _build_lane_states(j)
+    health = _build_lane_health(j) if j else {"lanes": []}
+    rec_map = {
+        str(item.get("lane_id") or ""): item
+        for item in (health.get("lanes") or [])
+    }
+    for row in states.get("lanes", []):
+        rec = rec_map.get(str(row.get("lane_id") or ""))
+        row["recommended_state"] = rec.get("recommended_state") if rec else None
+        row["recommendation_reasons"] = rec.get("recommendation_reasons", []) if rec else []
+        row["auto_pause_candidate"] = bool(rec.get("auto_pause_candidate")) if rec else False
+        row["auto_pause_confirmed"] = bool(rec.get("auto_pause_confirmed")) if rec else False
+        row["auto_pause_confirmation_remaining"] = int(rec.get("auto_pause_confirmation_remaining", 0)) if rec else 0
+        row["auto_pause_reason"] = rec.get("auto_pause_reason", "") if rec else ""
+        row["auto_pause_status"] = rec.get("auto_pause_status", "") if rec else ""
+        row["auto_pause_first_seen_at"] = rec.get("auto_pause_first_seen_at") if rec else None
+        row["auto_pause_last_seen_at"] = rec.get("auto_pause_last_seen_at") if rec else None
+        row["auto_pause_last_cleared_at"] = rec.get("auto_pause_last_cleared_at") if rec else None
+        row["auto_pause_last_ready_live_warning_at"] = rec.get("auto_pause_last_ready_live_warning_at") if rec else None
+        row["auto_pause_age_minutes"] = rec.get("auto_pause_age_minutes") if rec else None
+    return states
+
+
+@app.get("/api/lane-state-history")
+async def get_lane_state_history(limit: int = 20):
+    rows = _read_jsonl_tail(LANE_STATE_AUDIT_LOG, max(1, min(int(limit), 100)))
+    rows.reverse()
+    return {"items": rows, "total": len(rows)}
+
+
 @app.get("/api/journal/snapshots")
 async def get_journal_snapshots(limit: int = 500, session_id: Optional[str] = None):
     j = _journal_for_query(session_id) if session_id else _get_journal()
@@ -3336,6 +3704,28 @@ def _all_exposure_managers():
             seen.add(id(mgr))
             managers.append(mgr)
     return managers
+
+
+def _loss_streak_pause_summary() -> Dict[str, Any]:
+    """Return whether any exposure manager is paused by consecutive losses."""
+    paused_lanes: List[str] = []
+    for mgr in _all_exposure_managers():
+        try:
+            st = mgr.get_status()
+        except Exception:
+            continue
+        if not bool(st.get("paused")):
+            continue
+        reason = str(st.get("pause_reason") or "")
+        if "consecutive losses" not in reason.lower():
+            continue
+        lane_name = str(getattr(mgr, "lane_name", "") or "").lower()
+        paused_lanes.append(lane_name or "unknown")
+    return {
+        "active": bool(paused_lanes),
+        "count": len(paused_lanes),
+        "lanes": paused_lanes,
+    }
 
 
 EXPOSURE_LANE_TO_ATTR = {
@@ -3807,6 +4197,7 @@ class ConfigUpdates(BaseModel):
     trading: Optional[Dict[str, Any]] = None
     exposure: Optional[Dict[str, Any]] = None
     backtest: Optional[Dict[str, Any]] = None
+    lane_management: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def validate_config_patch(self) -> "ConfigUpdates":
@@ -3865,6 +4256,28 @@ class ConfigUpdates(BaseModel):
             _validate_numeric_range(self.backtest, "backtest", "take_profit_pct", ge=0, le=1)
             _validate_numeric_range(self.backtest, "backtest", "stop_loss_pct", ge=0, le=1)
             _validate_numeric_range(self.backtest, "backtest", "max_hold_hours", gt=0)
+
+        if self.lane_management is not None:
+            _validate_section_keys(
+                self.lane_management,
+                "lane_management",
+                {"enabled", "default_state", "states"},
+            )
+            _validate_bool_fields(self.lane_management, "lane_management", {"enabled"})
+            default_state = self.lane_management.get("default_state")
+            if default_state is not None and str(default_state).strip().lower() not in {"paper", "live", "paused"}:
+                raise ValueError("lane_management.default_state must be paper, live, or paused")
+            states = self.lane_management.get("states")
+            if states is not None:
+                if not isinstance(states, dict):
+                    raise ValueError("lane_management.states must be an object")
+                for lane_key, state in states.items():
+                    if not str(lane_key).strip():
+                        raise ValueError("lane_management.states keys must be non-empty")
+                    if str(state).strip().lower() not in {"paper", "live", "paused"}:
+                        raise ValueError(
+                            f"lane_management.states.{lane_key} must be paper, live, or paused"
+                        )
 
         if self.exposure is not None:
             _validate_section_keys(
@@ -4081,6 +4494,114 @@ class TradeRequest(BaseModel):
     side: str = Field(..., description="buy or sell")
     size: float = Field(..., gt=0)
     price: float = Field(..., ge=0.01, le=0.99)
+
+
+class LaneStateUpdateRequest(BaseModel):
+    lane_id: str = Field(..., min_length=1)
+    state: str = Field(..., min_length=1)
+    source: str = Field("dashboard_manual", min_length=1)
+    note: Optional[str] = None
+
+
+def _normalize_lane_state_value(value: str) -> str:
+    state = str(value or "").strip().lower()
+    if state not in {"paper", "live", "paused", "default"}:
+        raise ValueError("state must be one of: paper, live, paused, default")
+    return state
+
+
+@app.post("/api/lane-state")
+async def update_lane_state(request: Request):
+    _check_auth(request)
+    try:
+        payload = LaneStateUpdateRequest.model_validate(await request.json())
+        lane_id = str(payload.lane_id).strip()
+        state = _normalize_lane_state_value(payload.state)
+        source = str(payload.source or "dashboard_manual").strip() or "dashboard_manual"
+        note = str(payload.note or "").strip()
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=json.loads(e.json()))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not CONFIG_PATH.exists():
+        raise HTTPException(status_code=404, detail="settings.yaml not found")
+
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        lane_cfg = config.setdefault("lane_management", {})
+        lane_cfg.setdefault("default_state", "paper")
+        states = lane_cfg.setdefault("states", {})
+        state_meta = lane_cfg.setdefault("state_meta", {})
+        if not isinstance(states, dict):
+            raise ValueError("lane_management.states must be an object")
+        if not isinstance(state_meta, dict):
+            raise ValueError("lane_management.state_meta must be an object")
+        updated_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        if state == "default":
+            states.pop(lane_id, None)
+        else:
+            lane_cfg["enabled"] = True
+            states[lane_id] = state
+        previous_meta = dict(state_meta.get(lane_id) or {})
+        previous_state = previous_meta.get("last_effective_state", states.get(lane_id, lane_cfg.get("default_state", "paper")))
+        next_meta = {
+            **previous_meta,
+            "updated_at": updated_at,
+            "updated_via": source,
+            "reviewed_at": updated_at,
+            "review_note": note,
+            "last_requested_state": state,
+            "last_effective_state": states.get(lane_id, lane_cfg.get("default_state", "paper")),
+        }
+        state_meta[lane_id] = next_meta
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        audit_row = {
+            "timestamp": updated_at,
+            "lane_id": lane_id,
+            "requested_state": state,
+            "effective_state": states.get(lane_id, lane_cfg.get("default_state", "paper")),
+            "previous_state": previous_state,
+            "source": source,
+            "note": note,
+        }
+        _append_jsonl_record(LANE_STATE_AUDIT_LOG, audit_row)
+
+        updates = {
+            "lane_management": {
+                "enabled": bool(lane_cfg.get("enabled", False)),
+                "default_state": str(lane_cfg.get("default_state") or "paper"),
+                "states": dict(states),
+                "state_meta": dict(state_meta),
+            }
+        }
+        live_apply_ok = True
+        live_apply_error = None
+        bot = _full_bot_instance()
+        if bot is not None:
+            try:
+                bot.apply_config_updates(updates)
+            except Exception as e:
+                logger.error("Live lane state apply failed: %s", e, exc_info=True)
+                live_apply_ok = False
+                live_apply_error = str(e)
+        return {
+            "status": "saved",
+            "lane_id": lane_id,
+            "state": state,
+            "effective_state": states.get(lane_id, lane_cfg.get("default_state", "paper")),
+            "state_meta": next_meta,
+            "audit_row": audit_row,
+            "live_apply": live_apply_ok,
+            **({"live_apply_error": live_apply_error} if live_apply_error else {}),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Lane state save error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/trade")

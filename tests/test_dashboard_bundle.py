@@ -474,3 +474,285 @@ def test_exit_reason_summary_groups_current_journal(monkeypatch):
         "losses": 2,
         "pnl": -3.0,
     }
+
+
+def test_lane_health_endpoint_groups_closed_trades(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class FakeJournal:
+        session_id = "test_session"
+        session_dir = None
+
+        def get_closed_trades(self):
+            return [
+                {
+                    "strategy": "bitcoin",
+                    "pnl": 2.0,
+                    "edge": 0.1,
+                    "confidence": 0.6,
+                    "size": 10.0,
+                    "exit_reason": "take_profit",
+                    "entry_signal": {
+                        "lane_id": "bitcoin|5m|up|bullish|drift",
+                        "lane_side": "up",
+                        "lane_window": "5m",
+                        "lane_regime": "bullish",
+                        "entry_family": "drift",
+                        "promotion_state": "live",
+                    },
+                },
+                {
+                    "strategy": "bitcoin",
+                    "pnl": -1.0,
+                    "edge": 0.08,
+                    "confidence": 0.55,
+                    "size": 10.0,
+                    "exit_reason": "updown_stop_loss",
+                    "entry_signal": {
+                        "lane_id": "bitcoin|5m|up|bullish|drift",
+                        "lane_side": "up",
+                        "lane_window": "5m",
+                        "lane_regime": "bullish",
+                        "entry_family": "drift",
+                        "promotion_state": "live",
+                    },
+                },
+            ]
+
+    monkeypatch.setattr(dashboard_server, "LANE_CANDIDATE_STATUS_PATH", tmp_path / "lane_candidate_status_health.json")
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: FakeJournal())
+    r = TestClient(dashboard_server.app).get("/api/journal/lane-health")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    lane = data["lanes"][0]
+    assert lane["lane_id"] == "bitcoin|5m|up|bullish|drift"
+    assert lane["trades"] == 2
+    assert lane["top_exit_reason"] == "take_profit"
+    assert lane["recommended_state"] in {"paper", "live", "paused"}
+    assert "auto_pause_candidate" in lane
+    assert "auto_pause_first_seen_at" in lane
+
+
+def test_lane_states_endpoint_returns_configured_and_observed(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class FakeJournal:
+        session_id = "test_session"
+        session_dir = None
+
+        def get_closed_trades(self):
+            base_trade = {
+                "strategy": "bitcoin",
+                "pnl": -1.0,
+                "edge": 0.08,
+                "confidence": 0.55,
+                "size": 10.0,
+                "exit_reason": "updown_stop_loss",
+                "entry_signal": {
+                    "lane_id": "bitcoin|5m|down|bearish|drift",
+                    "lane_side": "down",
+                    "lane_window": "5m",
+                    "lane_regime": "bearish",
+                    "entry_family": "drift",
+                    "promotion_state": "live",
+                },
+            }
+            return [dict(base_trade) for _ in range(9)]
+
+        def get_all_entries(self, limit=5000):
+            return [
+                {
+                    "event": "ENTRY",
+                    "strategy": "bitcoin",
+                    "extra": {
+                        "lane_id": "bitcoin|5m|down|bearish|drift",
+                        "lane_side": "down",
+                        "lane_window": "5m",
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(dashboard_server, "LANE_CANDIDATE_STATUS_PATH", tmp_path / "lane_candidate_status_states.json")
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: FakeJournal())
+    monkeypatch.setattr(
+        dashboard_server,
+        "_load_yaml_config",
+        lambda: {
+            "trading": {"dry_run": True},
+            "lane_management": {
+                "enabled": True,
+                "default_state": "paper",
+                "states": {
+                    "bitcoin|5m|down": "live",
+                    "eth_macro|15m|up": "live",
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+    r = TestClient(dashboard_server.app).get("/api/journal/lane-states")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["enabled"] is True
+    lane_ids = [row["lane_id"] for row in data["lanes"]]
+    assert "bitcoin|5m|down|bearish|drift" in lane_ids
+    assert "eth_macro|15m|up" in lane_ids
+    observed = next(row for row in data["lanes"] if row["lane_id"] == "bitcoin|5m|down|bearish|drift")
+    assert "recommended_state" in observed
+    assert "state_meta" in observed
+    assert "auto_pause_candidate" in observed
+    assert observed["auto_pause_first_seen_at"]
+    assert observed["auto_pause_status"] in {"watch", "ready"}
+
+
+def test_lane_state_update_endpoint_persists_rule(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    audit_path = tmp_path / "lane_state_audit.jsonl"
+    config_path.write_text(
+        "trading:\n  dry_run: true\nlane_management:\n  enabled: false\n  default_state: paper\n  states: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "LANE_STATE_AUDIT_LOG", audit_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/lane-state",
+        headers={"X-API-Key": "test-key"},
+        json={"lane_id": "bitcoin|5m|down", "state": "paused", "source": "dashboard_recommendation", "note": "apply rec"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "saved"
+    text = config_path.read_text(encoding="utf-8")
+    assert "bitcoin|5m|down: paused" in text
+    assert "state_meta:" in text
+    assert "updated_via: dashboard_recommendation" in text
+    assert data["state_meta"]["review_note"] == "apply rec"
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert '"lane_id":"bitcoin|5m|down"' in audit_text
+    assert '"source":"dashboard_recommendation"' in audit_text
+
+
+def test_lane_state_update_endpoint_default_removes_rule(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        "trading:\n  dry_run: true\nlane_management:\n  enabled: true\n  default_state: paper\n  states:\n    bitcoin|5m|down: paused\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/lane-state",
+        headers={"X-API-Key": "test-key"},
+        json={"lane_id": "bitcoin|5m|down", "state": "default"},
+    )
+    assert r.status_code == 200
+    text = config_path.read_text(encoding="utf-8")
+    assert "bitcoin|5m|down: paused" not in text
+
+
+def test_lane_state_history_endpoint_returns_recent_rows(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    audit_path = tmp_path / "lane_state_audit.jsonl"
+    audit_path.write_text(
+        '{"timestamp":"2026-05-14T10:00:00Z","lane_id":"bitcoin|5m|down","requested_state":"paused","effective_state":"paused","previous_state":"paper","source":"dashboard_manual","note":"manual pause"}\n'
+        '{"timestamp":"2026-05-14T11:00:00Z","lane_id":"eth_macro|15m|up","requested_state":"live","effective_state":"live","previous_state":"paper","source":"dashboard_recommendation","note":"apply rec"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "LANE_STATE_AUDIT_LOG", audit_path)
+    r = TestClient(dashboard_server.app).get("/api/lane-state-history?limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 2
+    assert data["items"][0]["lane_id"] == "eth_macro|15m|up"
+    assert data["items"][1]["lane_id"] == "bitcoin|5m|down"
+
+
+def test_lane_health_ready_live_warning_appends_audit_row(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class FakeJournal:
+        session_id = "test_session"
+        session_dir = None
+
+        def get_closed_trades(self):
+            base_trade = {
+                "strategy": "bitcoin",
+                "pnl": -1.0,
+                "edge": 0.08,
+                "confidence": 0.55,
+                "size": 10.0,
+                "exit_reason": "updown_stop_loss",
+                "entry_signal": {
+                    "lane_id": "bitcoin|5m|down|bearish|drift",
+                    "lane_side": "down",
+                    "lane_window": "5m",
+                    "lane_regime": "bearish",
+                    "entry_family": "drift",
+                    "promotion_state": "live",
+                },
+            }
+            return [dict(base_trade) for _ in range(11)]
+
+    candidate_path = tmp_path / "lane_candidate_status.json"
+    audit_path = tmp_path / "lane_state_audit.jsonl"
+    monkeypatch.setattr(dashboard_server, "LANE_CANDIDATE_STATUS_PATH", candidate_path)
+    monkeypatch.setattr(dashboard_server, "LANE_STATE_AUDIT_LOG", audit_path)
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: FakeJournal())
+    monkeypatch.setattr(
+        dashboard_server,
+        "_load_yaml_config",
+        lambda: {
+            "lane_management": {
+                "enabled": True,
+                "default_state": "paper",
+                "states": {"bitcoin|5m|down": "live"},
+            }
+        },
+    )
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+    r = TestClient(dashboard_server.app).get("/api/journal/lane-health")
+    assert r.status_code == 200
+    audit_text = audit_path.read_text(encoding="utf-8")
+    assert '"event_type":"ready_live_warning"' in audit_text
+    assert '"source":"auto_pause_ready_live"' in audit_text
+
+
+def test_dashboard_contains_lane_state_controls():
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="lane-health-card"' in html
+    assert 'id="lane-history-body"' in html
+    assert 'id="lane-filter-ready"' in html
+    assert "function setLaneState(laneId, state)" in html
+    assert "function setLaneHealthFilter(mode)" in html
+    assert "function applyLaneRecommendation(laneId, state)" in html
+    assert "function updateLaneHistory(history)" in html
+    assert "/api/lane-state" in html
+    assert "/api/lane-state-history" in html
+    assert "Ready only" in html
+    assert "AUTO-PAUSE WATCH" in html
+    assert "candidate just detected" in html
+    assert "Recommend" in html
+    assert "Reviewed" in html

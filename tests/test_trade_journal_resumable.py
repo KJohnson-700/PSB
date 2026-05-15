@@ -169,6 +169,60 @@ def test_buy_no_skip_event_is_persisted(tmp_path: Path, monkeypatch) -> None:
     assert event["extra"]["alt_1h_trend"] == "BULLISH"
 
 
+def test_lane_metadata_persists_on_entry_and_exit(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260514_lane_meta", resume_latest=False)
+    journal.log_entry(
+        trade_id="lane-1",
+        market_id="btc-updown-1",
+        market_question="Bitcoin Up or Down - test",
+        strategy="bitcoin",
+        action="BUY_NO",
+        side="BUY",
+        outcome="NO",
+        size=10.0,
+        entry_price=0.49,
+        bankroll=1000.0,
+        extra={
+            "window_size": "5m",
+            "lane_id": "bitcoin|5m|down|bearish|drift",
+            "lane_side": "down",
+            "lane_window": "5m",
+            "lane_regime": "bearish",
+            "entry_family": "drift",
+            "promotion_state": "paper",
+        },
+    )
+    journal.log_exit("lane-1", exit_price=0.55, bankroll=1001.0, reason="test_exit")
+    entries = journal.get_all_entries(limit=10)
+    entry = next(item for item in entries if item["event"] == "ENTRY")
+    exit_row = next(item for item in entries if item["event"] == "EXIT")
+    assert entry["extra"]["lane_id"] == "bitcoin|5m|down|bearish|drift"
+    assert exit_row["extra"]["lane_id"] == "bitcoin|5m|down|bearish|drift"
+    assert exit_row["extra"]["promotion_state"] == "paper"
+
+
+def test_skip_extra_persists_lane_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260514_skip_lane_meta", resume_latest=False)
+    journal.log_skip(
+        "btc-updown-2",
+        "Bitcoin Up or Down - skip test",
+        "bitcoin",
+        "lane_paused",
+        1000.0,
+        extra={
+            "lane_id": "bitcoin|5m|down|bearish|drift",
+            "promotion_state": "paused",
+            "skip_reason": "lane_paused",
+        },
+    )
+    entries = journal.get_all_entries(limit=10)
+    skip = next(item for item in entries if item["event"] == "SKIP")
+    assert skip["extra"]["lane_id"] == "bitcoin|5m|down|bearish|drift"
+    assert skip["extra"]["promotion_state"] == "paused"
+
+
 def test_open_position_window_size_persists_and_resumes(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
     session_id = "20260514_000001"

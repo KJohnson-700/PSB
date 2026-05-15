@@ -462,6 +462,7 @@ class TradeJournal:
         strategy: str,
         reason: str,
         bankroll: float,
+        extra: Optional[Dict[str, Any]] = None,
     ):
         """Log a trade that was considered but skipped (risk check, etc.)."""
         entry = JournalEntry(
@@ -480,6 +481,7 @@ class TradeJournal:
             pnl=0,
             bankroll=bankroll,
             reason=reason,
+            extra=dict(extra or {}),
         )
         self._append_entry(entry)
 

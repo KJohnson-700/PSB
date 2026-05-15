@@ -45,6 +45,8 @@ from src.analysis.journal_learning import (
     run_learning_cycle,
     log_learning_summary_to_logger,
 )
+from src.analysis.lane_identity import build_lane_metadata
+from src.analysis.lane_manager import LaneManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
 from src.notifications.notification_manager import (
     NotificationManager,
@@ -183,6 +185,7 @@ class PolyBot:
     def __init__(self, config_path: str = None):
         # Load configuration
         self.config = self._load_config(config_path)
+        self.lane_manager = LaneManager(self.config)
         self._apply_exposure_env_overrides()
 
         # Initialize components
@@ -275,6 +278,23 @@ class PolyBot:
             bankroll: float,
             metadata: Optional[Dict[str, Any]] = None,
         ) -> None:
+            payload = dict(metadata or {})
+            payload.update(
+                build_lane_metadata(
+                    strategy=strategy,
+                    window_size=payload.get("window_size"),
+                    action=action,
+                    direction=payload.get("direction"),
+                    side_source=payload.get("side_source"),
+                    ai_used=bool(payload.get("ai_used", False)),
+                    reason=payload.get("reason"),
+                    signal_reason=payload.get("signal_reason"),
+                    htf_bias=payload.get("htf_bias"),
+                    primary_htf_bias=payload.get("primary_htf_bias"),
+                    alt_htf_bias=payload.get("alt_htf_bias"),
+                    btc_1h_regime=payload.get("btc_1h_regime"),
+                )
+            )
             self.journal.log_dead_zone_skip(
                 market_id=market.id,
                 market_question=market.question,
@@ -284,7 +304,7 @@ class PolyBot:
                 blocked_hours=blocked_hours,
                 bankroll=bankroll,
                 edge=edge,
-                extra=metadata,
+                extra=payload,
             )
 
         def _buy_no_skip_callback(
@@ -295,21 +315,38 @@ class PolyBot:
             payload: Dict[str, Any],
         ) -> None:
             skip_reason = str(payload.get("skip_reason") or "unknown")
+            lane_payload = dict(payload)
+            lane_payload.update(
+                build_lane_metadata(
+                    strategy=strategy,
+                    window_size=lane_payload.get("window_size"),
+                    action="BUY_NO",
+                    direction=lane_payload.get("direction", "DOWN"),
+                    side_source=lane_payload.get("side_source"),
+                    ai_used=bool(lane_payload.get("ai_used", False)),
+                    reason=skip_reason,
+                    signal_reason=lane_payload.get("signal_reason"),
+                    htf_bias=lane_payload.get("htf_bias"),
+                    primary_htf_bias=lane_payload.get("primary_htf_bias"),
+                    alt_htf_bias=lane_payload.get("alt_1h_trend"),
+                    btc_1h_regime=lane_payload.get("btc_1h_regime"),
+                )
+            )
             self.journal.log_buy_no_skip(
                 market_id=market.id,
                 market_question=market.question,
                 strategy=strategy,
                 bankroll=bankroll,
                 skip_reason=skip_reason,
-                window_size=str(payload.get("window_size") or ""),
-                yes_price=float(payload.get("yes_price", 0.0) or 0.0),
-                edge=float(payload.get("edge", 0.0) or 0.0),
-                effective_min_edge=float(payload.get("effective_min_edge", 0.0) or 0.0),
-                rsi=float(payload.get("rsi", 0.0) or 0.0),
-                htf_bias=str(payload.get("htf_bias") or ""),
-                signal_reason=str(payload.get("signal_reason") or ""),
-                alt_1h_trend=payload.get("alt_1h_trend"),
-                extra=payload,
+                window_size=str(lane_payload.get("window_size") or ""),
+                yes_price=float(lane_payload.get("yes_price", 0.0) or 0.0),
+                edge=float(lane_payload.get("edge", 0.0) or 0.0),
+                effective_min_edge=float(lane_payload.get("effective_min_edge", 0.0) or 0.0),
+                rsi=float(lane_payload.get("rsi", 0.0) or 0.0),
+                htf_bias=str(lane_payload.get("htf_bias") or ""),
+                signal_reason=str(lane_payload.get("signal_reason") or ""),
+                alt_1h_trend=lane_payload.get("alt_1h_trend"),
+                extra=lane_payload,
             )
 
         self._dead_zone_skip_callback = _dead_zone_skip_callback
@@ -443,6 +480,7 @@ class PolyBot:
         from src.config_merge import deep_merge_config
 
         deep_merge_config(self.config, updates)
+        self.lane_manager = LaneManager(self.config)
         merge_discord_webhook_from_env(self.config)
         self.notifier.reload_from_config(self.config)
         self._rebuild_runtime_config_dependents()
@@ -1627,6 +1665,65 @@ class PolyBot:
         price = float(entry_price or 0.5)
         return 1.0 - price if action == "BUY_NO" else price
 
+    def _lane_skip_extra(
+        self,
+        *,
+        lane_meta: Dict[str, Any],
+        signal_reason: Optional[str] = None,
+        skip_reason: Optional[str] = None,
+        dry_run: Optional[bool] = None,
+        matched_rule: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload = dict(lane_meta or {})
+        if signal_reason:
+            payload["signal_reason"] = signal_reason
+        if skip_reason:
+            payload["skip_reason"] = skip_reason
+        if dry_run is not None:
+            payload["dry_run"] = bool(dry_run)
+        if matched_rule:
+            payload["lane_rule_match"] = matched_rule
+        return payload
+
+    def _check_lane_execution(
+        self,
+        *,
+        strategy: str,
+        signal_reason: str,
+        lane_meta: Dict[str, Any],
+        market_id: str,
+        market_question: str,
+    ) -> bool:
+        lane_id = str(lane_meta.get("lane_id") or "").strip()
+        dry_run = bool(self.config.get("trading", {}).get("dry_run", True))
+        allowed, reason, state, matched_key = self.lane_manager.can_execute(lane_id, dry_run=dry_run)
+        lane_meta["promotion_state"] = state
+        if allowed:
+            return True
+        self.journal.log_skip(
+            market_id,
+            market_question,
+            strategy,
+            reason,
+            self.bankroll,
+            extra=self._lane_skip_extra(
+                lane_meta=lane_meta,
+                signal_reason=signal_reason,
+                skip_reason=reason,
+                dry_run=dry_run,
+                matched_rule=matched_key,
+            ),
+        )
+        logging.warning(
+            "%s lane execution blocked: %s lane=%s state=%s match=%s",
+            strategy,
+            reason,
+            lane_id or "unknown",
+            state,
+            matched_key or "<default>",
+        )
+        return False
+
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
         async with self._execution_lock:
@@ -1634,6 +1731,28 @@ class PolyBot:
 
     async def _execute_bitcoin_signal_impl(self, signal: BitcoinSignal):
         """Bitcoin entry (holds _execution_lock via caller)."""
+        _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
+        _entry_reason = f"btc_{signal.direction} ai={signal.ai_used}"
+        lane_meta = build_lane_metadata(
+            strategy="bitcoin",
+            window_size=signal.window_size,
+            action=signal.action,
+            direction=signal.direction,
+            entry_leg=_entry_leg,
+            side_source=getattr(signal, "side_source", None),
+            ai_used=bool(signal.ai_used),
+            reason=_entry_reason,
+            signal_reason=signal.reason,
+            htf_bias=signal.htf_bias,
+        )
+        if not self._check_lane_execution(
+            strategy="bitcoin",
+            signal_reason=signal.reason,
+            lane_meta=lane_meta,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+        ):
+            return
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
         if not can_trade:
             logging.warning(f"Bitcoin trade risk check failed: {reason}")
@@ -1643,6 +1762,11 @@ class PolyBot:
                 "bitcoin",
                 reason,
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=reason,
+                ),
             )
             return
 
@@ -1662,6 +1786,11 @@ class PolyBot:
                 "bitcoin",
                 f"term_risk: {reason}",
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=f"term_risk: {reason}",
+                ),
             )
             return
 
@@ -1696,6 +1825,11 @@ class PolyBot:
                 "bitcoin",
                 "unsellable_token",
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason="unsellable_token",
+                ),
             )
             return
 
@@ -1721,7 +1855,6 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
-            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -1754,7 +1887,7 @@ class PolyBot:
                 bankroll=self.bankroll,
                 edge=signal.edge,
                 confidence=signal.confidence,
-                reason=f"btc_{signal.direction} ai={signal.ai_used}",
+                reason=_entry_reason,
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 extra={
@@ -1784,6 +1917,7 @@ class PolyBot:
                     "direction": signal.direction,
                     "btc_threshold": signal.btc_threshold,
                     "signal_reason": signal.reason,
+                    **lane_meta,
                 },
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
@@ -1819,6 +1953,33 @@ class PolyBot:
     async def _execute_sol_macro_signal_impl(self, signal: SolMacroSignal):
         """SOL/ETH macro entry (holds _execution_lock via caller)."""
         strat = signal.strategy_name
+        _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
+        _entry_reason = (
+            f"{strat}_{signal.direction} macro_leg={signal.lag_magnitude} "
+            f"side={signal.action} ai={signal.ai_used}"
+        )
+        lane_meta = build_lane_metadata(
+            strategy=strat,
+            window_size=signal.window_size,
+            action=signal.action,
+            direction=signal.direction,
+            entry_leg=_entry_leg,
+            side_source=getattr(signal, "side_source", None),
+            ai_used=bool(signal.ai_used),
+            reason=_entry_reason,
+            signal_reason=signal.reason,
+            htf_bias=signal.htf_bias,
+            alt_htf_bias=signal.htf_bias,
+            btc_1h_regime=signal.btc_1h_regime,
+        )
+        if not self._check_lane_execution(
+            strategy=strat,
+            signal_reason=signal.reason,
+            lane_meta=lane_meta,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+        ):
+            return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
         if not can_trade:
             logging.warning(f"{strat} trade risk check failed: {reason}")
@@ -1828,6 +1989,11 @@ class PolyBot:
                 strat,
                 reason,
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=reason,
+                ),
             )
             return
 
@@ -1847,6 +2013,11 @@ class PolyBot:
                 strat,
                 f"term_risk: {reason}",
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=f"term_risk: {reason}",
+                ),
             )
             return
 
@@ -1883,6 +2054,11 @@ class PolyBot:
                 strat,
                 "unsellable_token",
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason="unsellable_token",
+                ),
             )
             return
 
@@ -1908,7 +2084,7 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
-            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
+            _entry_reason = f"{_entry_reason} | {signal.reason[:120]}"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -1941,7 +2117,7 @@ class PolyBot:
                 bankroll=self.bankroll,
                 edge=signal.edge,
                 confidence=signal.confidence,
-                reason=f"{strat}_{signal.direction} macro_leg={signal.lag_magnitude} side={signal.action} ai={signal.ai_used} | {signal.reason[:120]}",
+                reason=_entry_reason,
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 extra={
@@ -1971,6 +2147,7 @@ class PolyBot:
                     # Learning context: direction and full signal reason
                     "direction": signal.direction,
                     "signal_reason": signal.reason,
+                    **lane_meta,
                 },
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
