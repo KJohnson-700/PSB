@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
+from src.analysis.rejected_candidate_log import log_rejected_candidate
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
@@ -1209,6 +1210,17 @@ class BitcoinStrategy:
                     if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
                             _bump_skip("hist_gate_5m_long_reject")
+                            log_rejected_candidate(
+                                strategy="bitcoin", window="5m", side="LONG", action=action,
+                                reason="hist_gate_5m_long_reject", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                context={
+                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
+                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
+                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                },
+                            )
                             logger.info(
                                 f"  BTC [5m] skip '{market.question[:40]}' — "
                                 f"4H falling, 1H also falling — no momentum building for LONG"
@@ -1221,6 +1233,17 @@ class BitcoinStrategy:
                     if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
                             _bump_skip("hist_gate_5m_short_reject")
+                            log_rejected_candidate(
+                                strategy="bitcoin", window="5m", side="SHORT", action=action,
+                                reason="hist_gate_5m_short_reject", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                context={
+                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
+                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
+                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                },
+                            )
                             logger.info(
                                 f"  BTC [5m] skip '{market.question[:40]}' — "
                                 f"4H rising, 1H also rising — no momentum building for SHORT"
@@ -1365,6 +1388,17 @@ class BitcoinStrategy:
                     if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
                             _bump_skip("hist_gate_15m_long_reject")
+                            log_rejected_candidate(
+                                strategy="bitcoin", window="15m", side="LONG", action=action,
+                                reason="hist_gate_15m_long_reject", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                context={
+                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
+                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
+                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                },
+                            )
                             logger.info(
                                 f"  BTC [15m] skip '{market.question[:40]}' — "
                                 f"4H falling, 1H also falling — no momentum building for LONG"
@@ -1377,6 +1411,17 @@ class BitcoinStrategy:
                     if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
                             _bump_skip("hist_gate_15m_short_reject")
+                            log_rejected_candidate(
+                                strategy="bitcoin", window="15m", side="SHORT", action=action,
+                                reason="hist_gate_15m_short_reject", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                context={
+                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
+                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
+                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                },
+                            )
                             logger.info(
                                 f"  BTC [15m] skip '{market.question[:40]}' — "
                                 f"4H rising, 1H also rising — no momentum building for SHORT"
