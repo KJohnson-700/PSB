@@ -22,6 +22,8 @@
 
 **Not committed (runtime data):** `data/entry_prices/updown_fills.jsonl`, `data/lane_state_audit.jsonl`.
 
+**Next step (deferred, not yet shipped) — Phase 6 flip-to-live wiring.** Once 1–2 paper sessions have populated `data/calibration/lane_posteriors.json` and `python tools/calibration_report.py` shows posteriors converging to sane values (expected from prior 53-trade analysis: ETH 5m down `α ≈ 4`, HYPE 15m up `α ≈ 2.6`, SOL 5m `α` at low clamp), ship a follow-up PR that (a) flips `lane_calibration.shadow_mode: false`, and (b) wires `LaneCalibrator.calibrate(lane_id, est_prob_up)` immediately before each strategy's `est_prob_up = max(0.10, min(0.90, est_prob_up))` clamp: `src/strategies/bitcoin.py:1272` and `:1397`, `src/strategies/eth_macro.py:851`, `src/strategies/sol_macro.py:1906` and `:2044` (SOL covers XRP/HYPE via inheritance). Lane_id at each site can be built JIT via `src.analysis.lane_identity.build_lane_metadata(...)` using the in-loop `strategy / window_size / action / htf_bias / btc_1h_regime / side_source` already in scope. Plan file with full spec: `~/.claude/plans/why-the-fuck-are-warm-flask.md`. Vault log: `Hermes Second Brain/projects/psb/logs/2026-05-15-lane-calibration-shadow.md`.
+
 ---
 
 ## 2026-05-15 — Dashboard: neon strategy palette + BTC live chart saturation
