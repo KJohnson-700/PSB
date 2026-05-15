@@ -419,22 +419,14 @@
             width:38%!important;min-width:120px;transition:none;margin-left:0;
             background:linear-gradient(90deg,
                 rgba(255,68,102,.95) 0%,
-                rgba(255,165,40,.95) 18%,
-                rgba(255,215,0,.95) 36%,
-                rgba(176,96,255,.92) 54%,
-                rgba(0,229,255,.92) 72%,
+                rgba(255,215,0,.95) 50%,
                 rgba(0,255,136,.95) 100%);
-            background-size:240% 100%;
-            box-shadow:0 0 26px rgba(255,215,0,.35),0 0 48px rgba(176,96,255,.25),inset 0 1px 0 rgba(255,255,255,.25);
-            animation:btHudMarqSlide 1.25s linear infinite,btHudMarqHue 2.4s linear infinite;
+            box-shadow:0 0 24px rgba(255,180,80,.4),inset 0 1px 0 rgba(255,255,255,.25);
+            animation:btHudMarqSlide 1.6s ease-in-out infinite;
         }
         @keyframes btHudMarqSlide{
             0%{margin-left:-8%}
             100%{margin-left:72%}
-        }
-        @keyframes btHudMarqHue{
-            0%{background-position:0% 50%;filter:hue-rotate(0deg) saturate(1.05)}
-            100%{background-position:100% 50%;filter:hue-rotate(18deg) saturate(1.12)}
         }
         .bt-hud-track.bt-hud-indet{overflow:hidden}
         .bt-hud-footer{margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--td);letter-spacing:.05em;opacity:.92}
@@ -466,6 +458,7 @@
         #btc-chart-section{margin-bottom:12px}
         #btc-chart-wrap{position:relative;border-radius:4px;overflow:hidden;background:transparent;width:100%;height:min(520px,max(280px,45dvh))}
         #tradingview_btc{width:100%;height:100%;min-height:0}
+        #btc-trade-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
 
         /* ── Commands ref ── */
         .cmd-ref h3{font-size:27px;color:var(--cy);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.05em}
@@ -733,12 +726,38 @@
         .sp{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;border:1px solid;transition:filter .12s,transform .12s;cursor:default}
         .sp:hover{filter:brightness(1.35);transform:scale(1.04)}
 
-        /* Status badges (Running / Paper / AI On / Can Trade) */
+        /* Status badges (LIVE/OFF marquee, Paper, Live mode, AI On) */
         .bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
         .bdg.run{background:rgba(0,255,136,.1);border-color:var(--gr);color:var(--gr);animation:glow 2.4s ease-in-out infinite}
-        .bdg.paper{background:rgba(255,215,0,.1);border-color:var(--ye);color:var(--ye)}
-        .bdg.ai{background:rgba(176,96,255,.1);border-color:var(--pu);color:var(--pu)}
+        .bdg.paper{background:rgba(255,215,0,.1);border-color:var(--ye);color:var(--ye);animation:pulsePaper 1.7s ease-in-out infinite;text-shadow:0 0 4px rgba(255,215,0,.5)}
+        .bdg.live-mode{background:rgba(255,68,102,.1);border-color:var(--re);color:var(--re);animation:pulseLive 1.4s ease-in-out infinite;text-shadow:0 0 4px rgba(255,68,102,.55);display:inline-flex;align-items:center}
+        .bdg.live-mode::before{content:'';display:inline-block;width:5px;height:5px;background:var(--re);border-radius:50%;margin-right:6px;box-shadow:0 0 6px var(--re);animation:pulseLiveDot 1s ease-in-out infinite}
+        .bdg.paper.dim,.bdg.live-mode.dim{opacity:.35;animation:none;text-shadow:none;box-shadow:none}
+        .bdg.live-mode.dim::before{animation:none;background:var(--tm);box-shadow:none}
+        .bdg.ai{background:rgba(176,96,255,.1);border-color:var(--pu);color:var(--pu);animation:pulseAi 2.6s ease-in-out infinite}
         .bdg.ct{background:rgba(0,255,136,.07);border-color:rgba(0,255,136,.35);color:var(--gr)}
+        @keyframes pulsePaper{0%,100%{box-shadow:0 0 4px rgba(255,215,0,.25),inset 0 0 4px rgba(255,215,0,.06);text-shadow:0 0 4px rgba(255,215,0,.45)}50%{box-shadow:0 0 18px rgba(255,215,0,.7),inset 0 0 10px rgba(255,215,0,.22);text-shadow:0 0 9px rgba(255,215,0,.95)}}
+        @keyframes pulseLive{0%,100%{box-shadow:0 0 4px rgba(255,68,102,.3),inset 0 0 4px rgba(255,68,102,.08);text-shadow:0 0 5px rgba(255,68,102,.55)}50%{box-shadow:0 0 22px rgba(255,68,102,.85),inset 0 0 12px rgba(255,68,102,.3);text-shadow:0 0 11px rgba(255,68,102,1)}}
+        @keyframes pulseLiveDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.7)}}
+        @keyframes pulseAi{0%,100%{box-shadow:0 0 4px rgba(176,96,255,.25)}50%{box-shadow:0 0 14px rgba(176,96,255,.55)}}
+        /* Bot status marquee badge (LIVE / OFF scrolling) */
+        .bdg-mq{display:inline-flex;align-items:center;height:18px;width:104px;overflow:hidden;border:1px solid;border-radius:3px;padding:0;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.14em;position:relative;background:rgba(0,0,0,.5);vertical-align:middle}
+        .bdg-mq.run{color:var(--gr);border-color:var(--gr);box-shadow:0 0 10px rgba(0,255,136,.5),inset 0 0 10px rgba(0,255,136,.15);animation:pulseRun 1.5s ease-in-out infinite}
+        .bdg-mq.off{color:var(--re);border-color:var(--re);box-shadow:0 0 10px rgba(255,68,102,.55),inset 0 0 10px rgba(255,68,102,.18);animation:pulseOff 1.3s ease-in-out infinite}
+        .bdg-mq.paper-on{color:var(--ye);border-color:var(--ye);animation:pulsePaperMq 1.5s ease-in-out infinite}
+        .bdg-mq.paper-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
+        .bdg-mq .mq-track{display:inline-block;white-space:nowrap;padding-left:100%;animation:mqScroll 5.6s linear infinite;text-shadow:0 0 6px currentColor}
+        .bdg-mq.off .mq-track{animation-duration:5.6s}
+        .bdg-mq.paper-on .mq-track{animation-duration:5.0s}
+        .bdg-mq.paper-off .mq-track{animation-duration:7.0s;text-shadow:none}
+        @keyframes pulsePaperMq{
+            0%,100%{box-shadow:0 0 6px rgba(255,215,0,.45),inset 0 0 8px rgba(255,215,0,.15)}
+            50%{box-shadow:0 0 22px rgba(255,215,0,.95),inset 0 0 14px rgba(255,215,0,.35)}
+        }
+        .bdg-mq .mq-track span{padding:0 14px}
+        @keyframes mqScroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
+        @keyframes pulseRun{0%,100%{box-shadow:0 0 6px rgba(0,255,136,.4),inset 0 0 8px rgba(0,255,136,.12)}50%{box-shadow:0 0 22px rgba(0,255,136,.95),inset 0 0 14px rgba(0,255,136,.35)}}
+        @keyframes pulseOff{0%,100%{box-shadow:0 0 6px rgba(255,68,102,.4),inset 0 0 8px rgba(255,68,102,.14)}50%{box-shadow:0 0 24px rgba(255,68,102,1),inset 0 0 16px rgba(255,68,102,.4)}}
 
         /* Trade bubbles for BTC chart overlay */
         .bbl-layer{position:absolute;inset:0;pointer-events:none;z-index:5}
@@ -798,10 +817,25 @@
         #view-commands .cmd-ref-lead{font-size:clamp(1.05rem,1.5vw,1.38rem);line-height:1.25;letter-spacing:.06em;margin:0 0 10px}
 
         /* Color-coded strategy filter chips above BTC chart (replaces plain checkboxes) */
-        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s,transform .1s;user-select:none;line-height:1.2}
-        .strat-cf:hover{filter:brightness(1.25);transform:scale(1.05)}
-        .strat-cf:active{transform:scale(.95)}
-        .strat-cf.off{opacity:.35;filter:grayscale(.4)}
+        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s;user-select:none;line-height:1.2;position:relative;animation:stratCfChase 4.8s ease-in-out infinite}
+        .strat-cf:hover{filter:brightness(1.25)}
+        .strat-cf:active{filter:brightness(.85)}
+        .strat-cf.off{opacity:.35;filter:grayscale(.4);animation:none}
+        #btc-toggle-btc-trades {animation-delay:.20s}
+        #btc-toggle-sol-trades {animation-delay:1.00s}
+        #btc-toggle-eth-trades {animation-delay:1.80s}
+        #btc-toggle-xrp-trades {animation-delay:2.60s}
+        #btc-toggle-hype-trades{animation-delay:3.40s}
+        @keyframes stratCfChase{
+            0%   {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
+            3%   {transform:scale(1.10);box-shadow:0 0 14px currentColor,0 0 28px currentColor; text-shadow:0 0 9px currentColor}
+            10%  {transform:scale(1.05);box-shadow:0 0 10px currentColor,0 0 18px currentColor; text-shadow:0 0 6px currentColor}
+            18%  {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
+            100% {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
+        }
+        @media (prefers-reduced-motion:reduce){
+            .strat-cf{animation:none}
+        }
 
         /* Tab content slide-in */
         .tab-content-active{animation:tabIn .18s ease both}
@@ -1093,6 +1127,7 @@
         </div>
         <div id="btc-chart-wrap">
             <div id="tradingview_btc"></div>
+            <canvas id="btc-trade-overlay" aria-hidden="true"></canvas>
         </div>
         <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
     </div>
@@ -1956,16 +1991,16 @@ const UNKNOWN_EXIT_REASON_COLOR = '#34495e';
 
 // ── Canonical strategy colors (single source for pills, chart markers, journal, scan rows, BT cards, canvas charts) ──
 window.STRATS = {
-    bitcoin: '#f59e0b',
-    sol_lag: '#a855f7',
-    eth_lag: '#627eea',
-    hype_lag: '#f97316',
-    xrp_lag: '#38bdf8',
+    bitcoin: '#1f8bff',
+    sol_lag: '#b14dff',
+    eth_lag: '#00e5ff',
+    hype_lag: '#ff6a00',
+    xrp_lag: '#ffe000',
     weather: '#10b981',
-    sol_macro: '#a855f7',
-    eth_macro: '#627eea',
-    hype_macro: '#f97316',
-    xrp_macro: '#38bdf8',
+    sol_macro: '#b14dff',
+    eth_macro: '#00e5ff',
+    hype_macro: '#ff6a00',
+    xrp_macro: '#ffe000',
     consensus: '#22d3ee',
     unknown: '#64748b',
 };
@@ -3036,23 +3071,30 @@ function updateStatusBadgesAndKill(d) {
     if (!d || typeof d !== 'object') return;
     const badges = document.getElementById('status-badges');
     if (!badges) return;
-    let run = d.running ? '<span class="badge badge-green">Running</span>' : '<span class="badge badge-red">Stopped</span>';
-    const paperBadge = d.dry_run
-        ? '<span class="badge badge-yellow badge-warn-flash" title="Paper mode is active.">PAPER</span>'
-        : '<span class="badge badge-muted" title="Paper mode is inactive.">PAPER</span>';
+    const paperOn = !!d.dry_run;
+    const liveExec = !!d.running && !paperOn;
+    const liveLabel = liveExec ? 'LIVE ON' : 'LIVE OFF';
+    const liveCls = liveExec ? 'run' : 'off';
+    const liveTitle = liveExec
+        ? 'Live execution mode — real orders'
+        : (d.running ? 'Bot is running in paper mode (no live execution)' : 'Bot is stopped');
+    const run = `<span class="bdg-mq ${liveCls}" title="${liveTitle}"><span class="mq-track"><span>${liveLabel}</span><span>${liveLabel}</span><span>${liveLabel}</span><span>${liveLabel}</span></span></span>`;
+    const paperLabel = paperOn ? 'PAPER ON' : 'PAPER OFF';
+    const paperCls = paperOn ? 'paper-on' : 'paper-off';
+    const paperTitle = paperOn ? 'Paper mode is active.' : 'Paper mode is inactive.';
+    const paperBadge = `<span class="bdg-mq ${paperCls}" title="${paperTitle}"><span class="mq-track"><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span></span></span>`;
     const lossPauseTitle = d.loss_pause_active
         ? `Loss-streak lane pause active. Check Exposure Manager. Paused lanes: ${((d.loss_pause_lanes || []).join(', ') || 'unknown')}`
         : 'No loss-streak lane pause is currently active.';
     const lossPauseBadge = d.loss_pause_active
         ? `<span class="badge badge-red badge-alert-flash" title="${String(lossPauseTitle).replace(/"/g, '&quot;')}">LOSS PAUSE</span>`
         : '<span class="badge badge-muted" title="No loss-streak lane pause is currently active.">LOSS PAUSE</span>';
-    const canTrade = d.can_trade ? '<span class="badge badge-green">Can Trade</span>' : `<span class="badge badge-red">Blocked</span>`;
     const ai = d.ai || {};
     const aiTip = String(ai.reason || '').replace(/"/g, '&quot;').replace(/</g, '');
     const aiBadge = ai.ready
         ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
         : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    const nextHtml = `${run} ${paperBadge} ${lossPauseBadge} ${aiBadge} ${canTrade}`;
+    const nextHtml = `${run} ${paperBadge} ${lossPauseBadge} ${aiBadge}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
@@ -4241,20 +4283,9 @@ function updateBacktestHud(s, label, jobId) {
     } else {
         h.title.textContent = 'BACKTEST // COMPLETE';
         h.phase.textContent = phase === 'DONE' ? 'DONE' : 'STOP';
-        const pdone = job.progress_pct;
-        var pFin = 100;
-        if (pdone != null && pdone >= 99.5) {
-            h.pct.textContent = '100%';
-            pFin = 100;
-        } else if (pdone != null) {
-            h.pct.textContent = pdone.toFixed(1) + '%';
-            pFin = pdone;
-        } else {
-            h.pct.textContent = 'OK';
-            pFin = 100;
-        }
+        h.pct.textContent = '100%';
         h.pct.className = 'bt-hud-pct';
-        _btApplyDeterminateHeat(h, pFin);
+        _btApplyDeterminateHeat(h, 100);
     }
     const jid2 = jobId || job.job_id || '—';
     h.job.textContent = (label || summ || 'crypto') + '  //  job ' + jid2 + '  //  exit ' + (exitCode != null ? exitCode : '—');
@@ -4264,7 +4295,7 @@ function updateBacktestHud(s, label, jobId) {
     if (h.fill) {
         h.fill.style.animation = '';
         h.fill.style.marginLeft = '0';
-        h.fill.style.width = failed ? '0%' : (job.progress_pct != null ? Math.min(100, job.progress_pct) + '%' : '100%');
+        h.fill.style.width = failed ? '0%' : '100%';
     }
     h.footer.textContent = failed ? 'check output tail for failing child in ALL bundle' : 'reports on disk — cards below refresh';
 }
@@ -4504,8 +4535,8 @@ function updateBacktest(d) {
 
     function cryptoCard(sym, win, strategyKey) {
         const r = latestCryptoReport(sym, win);
-        const symColor = stratHex(strategyKey) || (
-            sym === 'BTC' ? '#f59e0b' : sym === 'ETH' ? '#627eea' : sym === 'SOL' ? '#a855f7' : sym === 'HYPE' ? '#f97316' : '#38bdf8'
+        const symColor = stratHex(strategyKey) || stratHex(
+            sym === 'BTC' ? 'bitcoin' : sym === 'ETH' ? 'eth_macro' : sym === 'SOL' ? 'sol_macro' : sym === 'HYPE' ? 'hype_macro' : sym === 'XRP' ? 'xrp_macro' : 'unknown'
         );
         const keyLine = strategyKey
             ? `<div style="font-family:IBM Plex Mono,monospace;font-size:0.68rem;color:var(--tm);margin-bottom:6px;font-weight:600;">${strategyKey}</div>`
@@ -5625,12 +5656,12 @@ function updateExposure(d) {
         const losses = m.consecutive_losses || 0;
         const paused = !!m.paused;
         const reason = m.pause_reason || (paused ? 'manual' : '');
-        const cons = losses >= 2 ? '<br><span style="color:var(--re);font-size:9px;">consecutive</span>' : '';
+        const cons = losses >= 2 ? '<br><span style="color:var(--re);font-size:9px;">live streak</span>' : '';
         return `<div class="exp" style="animation-delay:${0.04+i*0.05}s">
             <div class="exp-nm">${m.label}</div>
             <div class="exp-tier ${tierClass(tier)}">${tier}</div>
             <div class="exp-mul" style="color:${tierMulColor(tier)}">x${(m.multiplier ?? 0).toFixed(1)}</div>
-            <div class="exp-info">Max $${(m.max_size ?? 0).toFixed(2)}<br>Losses <span class="lv">${losses}</span>${cons}</div>
+            <div class="exp-info">Max $${(m.max_size ?? 0).toFixed(2)}<br>Consec Losses <span class="lv">${losses}</span>${cons}</div>
             <div class="exp-btns">
                 <button type="button" class="ebtn ep" onclick="pauseExposureLane('${lane}')">Pause</button>
                 <button type="button" class="ebtn er" onclick="resumeExposureLane('${lane}')">Resume</button>
@@ -6141,10 +6172,14 @@ function updateUpdownBreakdown(ud) {
             const color = v.win_rate >= 0.60 ? 'var(--green)' : v.win_rate >= 0.50 ? 'var(--text)' : 'var(--red)';
             const flag  = v.win_rate >= 0.60 ? '✅' : v.win_rate >= 0.50 ? '⚠️' : '🔴';
             const pnlColor = v.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+            const flat = (typeof v.flat === 'number') ? v.flat : 0;
+            const flatHtml = flat > 0
+                ? ` <span style="color:var(--text-muted);">/ ${flat}F</span>`
+                : '';
             return `<div style="margin-bottom:5px;">
                 <span style="color:var(--text-muted);min-width:130px;display:inline-block;">${cat}</span>
                 <span style="color:${color};font-weight:700;">${flag} ${wr}%</span>
-                <span style="color:var(--text-muted);margin-left:6px;">${v.wins}W / ${v.losses}L</span>
+                <span style="color:var(--text-muted);margin-left:6px;">${v.wins}W / ${v.losses}L${flatHtml}</span>
                 <span style="color:${pnlColor};margin-left:6px;">$${v.pnl >= 0 ? '+' : ''}${v.pnl.toFixed(2)}</span>
             </div>`;
         }).join('');
@@ -7210,6 +7245,11 @@ let _btcPriceLines = [];   // track S/R lines so we can remove/re-add
 let _btcChartInterval = '15m';
 let _btcChartResizeObserver = null;
 let _btcChartWindowResizeHandler = null;
+let _btcTradeOverlayCanvas = null;
+let _btcTradeOverlayCtx = null;
+let _btcTradeOverlayPoints = [];
+let _btcTradeOverlayCandles = [];
+let _btcTradeOverlayRaf = null;
 let _btcChartDisplay = {
     ema: false,
     macd: false,
@@ -7246,12 +7286,36 @@ function _applyBTCChartVisibility() {
     }
 }
 
+const _BTC_TRADE_OVERLAY_PALETTE = {
+    bitcoin:  { fill: '#1f8bff', glow: 'rgba(31, 139, 255, 0.78)' },
+    sol_macro:{ fill: '#b14dff', glow: 'rgba(177, 77, 255, 0.78)' },
+    eth_macro:{ fill: '#00e5ff', glow: 'rgba(0, 229, 255, 0.78)' },
+    xrp_macro:{ fill: '#ffe000', glow: 'rgba(255, 224, 0, 0.78)' },
+    hype_macro:{ fill: '#ff6a00', glow: 'rgba(255, 106, 0, 0.78)' },
+    unknown:  { fill: '#64748b', glow: 'rgba(100, 116, 139, 0.55)' },
+};
+
+function _btcTradeOverlayPalette(strategy) {
+    const key = String(strategy || '').trim();
+    return _BTC_TRADE_OVERLAY_PALETTE[key] || _BTC_TRADE_OVERLAY_PALETTE.unknown;
+}
+
+function _queueBTCTradeOverlayDraw() {
+    if (_btcTradeOverlayRaf !== null) return;
+    _btcTradeOverlayRaf = requestAnimationFrame(() => {
+        _btcTradeOverlayRaf = null;
+        _drawBTCTradeOverlay();
+    });
+}
+
 function toggleBTCSeries(seriesName, enabled) {
     _btcChartDisplay[seriesName] = !!enabled;
     _applyBTCChartVisibility();
     if (seriesName === 'levels' || seriesName === 'macd') {
         loadBTCChart();
+        return;
     }
+    _queueBTCTradeOverlayDraw();
 }
 
 function _calcEMA(data, period) {
@@ -7283,8 +7347,8 @@ function _calcMACD(data, fast=12, slow=26, sig=9) {
         const h = parseFloat((m - esg).toFixed(2));
         const rising = h > prevH;
         let color;
-        if (h >= 0) color = rising ? '#26a69a' : '#b2dfdb';
-        else        color = rising ? '#ffcdd2' : '#ff5252';
+        if (h >= 0) color = rising ? '#00e676' : '#00897b';
+        else        color = rising ? '#ff5252' : '#c62828';
         macdL.push({ time: c.time, value: parseFloat(m.toFixed(2)) });
         sigL.push({ time: c.time, value: parseFloat(esg.toFixed(2)) });
         hist.push({ time: c.time, value: h, color });
@@ -7481,11 +7545,41 @@ function _syncBTCChartLayout() {
     if (!_btcChart || !container) return;
     const b = _btcChartMeasureBox(container);
     _btcChart.applyOptions({ width: b.w, height: b.h });
+    _syncBTCTradeOverlaySize();
+    _queueBTCTradeOverlayDraw();
+}
+
+function _syncBTCTradeOverlaySize() {
+    const canvas = _btcTradeOverlayCanvas || document.getElementById('btc-trade-overlay');
+    const container = document.getElementById('tradingview_btc');
+    if (!canvas || !container) return;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const width = Math.max(1, Math.round(container.clientWidth));
+    const height = Math.max(1, Math.round(container.clientHeight));
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+    }
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    const ctx = _btcTradeOverlayCtx || canvas.getContext('2d');
+    if (!ctx) return;
+    _btcTradeOverlayCanvas = canvas;
+    _btcTradeOverlayCtx = ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function _setBTCTradeOverlayData(points, candles) {
+    _btcTradeOverlayPoints = Array.isArray(points) ? points.slice(-220) : [];
+    _btcTradeOverlayCandles = Array.isArray(candles) ? candles.slice() : [];
+    _queueBTCTradeOverlayDraw();
 }
 
 function initBTCChart() {
     const container = document.getElementById('tradingview_btc');
     const wrap = document.getElementById('btc-chart-wrap');
+    _btcTradeOverlayCanvas = document.getElementById('btc-trade-overlay');
+    _btcTradeOverlayCtx = _btcTradeOverlayCanvas ? _btcTradeOverlayCanvas.getContext('2d') : null;
     if (!container || typeof LightweightCharts === 'undefined') return;
 
     if (_btcChartResizeObserver) {
@@ -7531,6 +7625,8 @@ function initBTCChart() {
     // RSI removed — not needed
 
     _applyBTCChartVisibility();
+    _syncBTCTradeOverlaySize();
+    _btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => { _queueBTCTradeOverlayDraw(); });
 
     if (wrap && typeof ResizeObserver !== 'undefined') {
         _btcChartResizeObserver = new ResizeObserver(() => { _syncBTCChartLayout(); });
@@ -7629,47 +7725,113 @@ function _shadeStratHex(hex, t) {
 }
 
 function _tradeMarkersFromPoints(points, strategy) {
-    // Strategy colors: STRATS includes both design keys (sol_lag) and runtime ids (sol_macro)
-    const stratKey = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',xrp_macro:'XRP',hype_macro:'HYPE',weather:'WX'};
-    const stratColor = stratHex(strategy);
-    const colorIn = _shadeStratHex(stratColor, -0.36);
-    const colorOut = _shadeStratHex(stratColor, 0.34);
-    const key = stratKey[strategy] || (strategy || '?').slice(0, 3).toUpperCase();
-    // Entry = darker hue, exit = lighter hue (same asset color). Win vs loss: circle/square + bar position + signed PnL text.
     return (points || [])
         .filter((p) => p.strategy === strategy)
         .slice(-120)
         .flatMap((p) => {
-            const pnl = p.pnl || 0;
-            const sign = pnl >= 0 ? '+' : '';
-            const txt = key + ' ' + sign + pnl.toFixed(2);
-            const pos = pnl >= 0 ? 'belowBar' : 'aboveBar';
-            const shape = pnl >= 0 ? 'circle' : 'square';
-            const hasExit =
-                p.closed_at != null &&
-                p.closed_at !== p.time &&
-                Number.isFinite(Number(p.closed_at));
-            const entryMarker = {
-                time: p.time,
-                position: pos,
-                shape: shape,
-                color: colorIn,
-                text: hasExit ? txt + ' ·in' : txt,
-            };
-            if (!hasExit) {
-                return [entryMarker];
-            }
-            return [
-                entryMarker,
-                {
-                    time: p.closed_at,
-                    position: pos,
-                    shape: shape,
-                    color: colorOut,
-                    text: txt + ' ·out',
-                },
-            ];
+            const closedAt = Number(p.closed_at);
+            if (!Number.isFinite(closedAt) || closedAt === Number(p.time)) return [];
+            const pnl = Number(p.pnl || 0);
+            return [{
+                time: closedAt,
+                strategy,
+                outcome: pnl >= 0 ? 'win' : 'loss',
+                pnl,
+            }];
         });
+}
+
+function _findNearestBTCCandle(ts) {
+    const candles = _btcTradeOverlayCandles || [];
+    if (!candles.length || !Number.isFinite(ts)) return null;
+    let lo = 0;
+    let hi = candles.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const mt = Number(candles[mid].time || 0);
+        if (mt === ts) return candles[mid];
+        if (mt < ts) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    const prev = hi >= 0 ? candles[hi] : null;
+    const next = lo < candles.length ? candles[lo] : null;
+    if (!prev) return next;
+    if (!next) return prev;
+    return Math.abs(Number(prev.time || 0) - ts) <= Math.abs(Number(next.time || 0) - ts) ? prev : next;
+}
+
+function _drawBTCTradeOverlayMarker(ctx, x, y, point) {
+    const palette = _btcTradeOverlayPalette(point.strategy);
+    const isWin = point.outcome === 'win';
+    const size = isWin ? 5.8 : 6.4;
+    const glowRadius = isWin ? 16 : 18;
+    ctx.save();
+    ctx.shadowBlur = glowRadius;
+    ctx.shadowColor = palette.glow;
+    ctx.fillStyle = palette.fill;
+    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
+    ctx.lineWidth = 1.15;
+    if (isWin) {
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    } else {
+        const half = size;
+        const corner = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(x - half + corner, y - half);
+        ctx.lineTo(x + half - corner, y - half);
+        ctx.quadraticCurveTo(x + half, y - half, x + half, y - half + corner);
+        ctx.lineTo(x + half, y + half - corner);
+        ctx.quadraticCurveTo(x + half, y + half, x + half - corner, y + half);
+        ctx.lineTo(x - half + corner, y + half);
+        ctx.quadraticCurveTo(x - half, y + half, x - half, y + half - corner);
+        ctx.lineTo(x - half, y - half + corner);
+        ctx.quadraticCurveTo(x - half, y - half, x - half + corner, y - half);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function _drawBTCTradeOverlay() {
+    const canvas = _btcTradeOverlayCanvas || document.getElementById('btc-trade-overlay');
+    const ctx = _btcTradeOverlayCtx || (canvas ? canvas.getContext('2d') : null);
+    const container = document.getElementById('tradingview_btc');
+    if (!canvas || !ctx || !container || !_btcChart || !_btcCandleSeries) return;
+    _btcTradeOverlayCanvas = canvas;
+    _btcTradeOverlayCtx = ctx;
+    _syncBTCTradeOverlaySize();
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    ctx.clearRect(0, 0, width, height);
+    const points = _btcTradeOverlayPoints || [];
+    if (!points.length || !_btcTradeOverlayCandles.length) return;
+    for (const point of points) {
+        const laneFlag = ({
+            bitcoin: 'btcTrades',
+            sol_macro: 'solTrades',
+            eth_macro: 'ethTrades',
+            xrp_macro: 'xrpTrades',
+            hype_macro: 'hypeTrades',
+        })[String(point.strategy || '').trim()];
+        if (laneFlag && !_btcChartDisplay[laneFlag]) continue;
+        const candle = _findNearestBTCCandle(Number(point.time));
+        if (!candle) continue;
+        const anchorTime = Number(candle.time || point.time);
+        const x = _btcChart.timeScale().timeToCoordinate(anchorTime);
+        if (!Number.isFinite(x) || x < -24 || x > width + 24) continue;
+        const anchorPrice = point.outcome === 'win'
+            ? Number(candle.low ?? candle.close ?? candle.high)
+            : Number(candle.high ?? candle.close ?? candle.low);
+        const yBase = _btcCandleSeries.priceToCoordinate(anchorPrice);
+        if (!Number.isFinite(yBase)) continue;
+        const y = point.outcome === 'win' ? yBase + 13 : yBase - 13;
+        if (!Number.isFinite(y) || y < -30 || y > height + 30) continue;
+        _drawBTCTradeOverlayMarker(ctx, x, y, point);
+    }
 }
 
 function _sanitizeCandlesForChart(candles) {
@@ -7735,17 +7897,18 @@ async function loadBTCChart() {
         const watchlist = wr?.ok ? (await wr.json()).watchlist || [] : [];
         const hasAnalysis = d && !d.error;
 
-        // ── Combined markers on the existing BTC chart ──
+        // ── Native markers on the existing BTC chart ──
         if (_btcCandleSeries) {
-            let markers = [];
-            // Sabre flip markers removed (sabre lines removed)
-            if (_btcChartDisplay.btcTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'bitcoin'));
-            if (_btcChartDisplay.solTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'sol_macro'));
-            if (_btcChartDisplay.ethTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'eth_macro'));
-            if (_btcChartDisplay.xrpTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'xrp_macro'));
-            if (_btcChartDisplay.hypeTrades) markers = _mergeMarkers(markers, _tradeMarkersFromPoints(tradePoints, 'hype_macro'));
-            _btcCandleSeries.setMarkers(markers.slice(-220));
+            _btcCandleSeries.setMarkers((sabreMarkers || []).slice(-80));
         }
+        const overlayPoints = []
+            .concat(_tradeMarkersFromPoints(tradePoints, 'bitcoin'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'sol_macro'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'eth_macro'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'xrp_macro'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'hype_macro'))
+            .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+        _setBTCTradeOverlayData(overlayPoints, _candles || []);
 
         // ── Draw S/R, VP, and next BTC trigger lines on the existing chart ──
         if (_btcCandleSeries && hasAnalysis) {

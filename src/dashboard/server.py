@@ -702,7 +702,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-13-bt-hud-title-status",
+        "dashboard_ui_rev": "2026-05-15-strategy-neon-chart-palette",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -3238,8 +3238,12 @@ async def get_updown_breakdown():
     j = _get_journal()
     closed = j.get_closed_trades() if j else []
 
-    old_stats: dict = _dd(lambda: {"wins": 0, "losses": 0, "pnl": 0.0})
-    new_stats: dict = _dd(lambda: {"wins": 0, "losses": 0, "pnl": 0.0})
+    # Flat trades (|pnl| <= 0.01, including exact break-even resolutions) get
+    # their own bucket but still count toward `trades` so the denominator
+    # matches `len(closed)` for the rendered category. Win-rate stays honest:
+    # a binary that resolved flat is not a win.
+    old_stats: dict = _dd(lambda: {"wins": 0, "losses": 0, "flat": 0, "pnl": 0.0})
+    new_stats: dict = _dd(lambda: {"wins": 0, "losses": 0, "flat": 0, "pnl": 0.0})
 
     for t in closed:
         pnl = float(t.get("pnl") or 0.0)
@@ -3254,16 +3258,21 @@ async def get_updown_breakdown():
             bucket[cat]["wins"] += 1
         elif pnl < -0.01:
             bucket[cat]["losses"] += 1
+        else:
+            bucket[cat]["flat"] += 1
         bucket[cat]["pnl"] += pnl
 
     def _fmt(d):
         out = {}
         for cat, v in d.items():
-            n = v["wins"] + v["losses"]
+            wins = v.get("wins", 0)
+            losses = v.get("losses", 0)
+            flat = v.get("flat", 0)
+            n = wins + losses + flat
             out[cat] = {
-                "wins": v["wins"], "losses": v["losses"],
+                "wins": wins, "losses": losses, "flat": flat,
                 "trades": n,
-                "win_rate": round(v["wins"] / n, 4) if n > 0 else 0.0,
+                "win_rate": round(wins / n, 4) if n > 0 else 0.0,
                 "pnl": round(v["pnl"], 2),
             }
         return out

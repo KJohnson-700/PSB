@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-15 — Dashboard: neon strategy palette + BTC live chart saturation
+
+**`src/dashboard/index.html`:** Replaced pastel strategy hues with operator neon palette on **`window.STRATS`** (single source for pills, journal, scan rows, metric boxes, canvas charts): **bitcoin** `#1f8bff`, **sol_lag / sol_macro** `#b14dff`, **eth_lag / eth_macro** `#00e5ff`, **hype_lag / hype_macro** `#ff6a00`, **xrp_lag / xrp_macro** `#ffe000`. **BTC trade overlay** (`_BTC_TRADE_OVERLAY_PALETTE`) now uses the same saturated fills with stronger glow alphas (0.78) instead of washed `#ffca5a` / `#8fb0ff` pastels. **MACD histogram** weak bars use **`#00897b` / `#c62828`** instead of **`#b2dfdb` / `#ffcdd2`**. Up/down symbol color fallback routes through **`stratHex`** macro keys.
+
+**`src/dashboard/server.py`:** **`dashboard_ui_rev`** → **`2026-05-15-strategy-neon-chart-palette`**.
+
+**Vault:** `Hermes Second Brain/projects/psb/notes/2026-05-15-strategy-neon-chart-palette.md`.
+
+---
+
 ## 2026-05-14 — Up/down exits: lane + window overrides for ETH/SOL/HYPE/XRP bearish lanes
 
 **`src/execution/updown_exit_shared.py`:** Added lane-aware/window-aware up/down exit resolution with explicit precedence: strategy+window+lane → strategy+lane → global lane → existing globals. Shared helpers now classify `up` vs `down` exposure (`BUY_NO` and legacy short-YES map to `down`) and infer `5m` / `15m` / `30m` from stored `window_size` or exact entry runway for legacy open positions.
@@ -449,6 +459,14 @@ Work landed on `main` the same calendar day; individual commits below are the au
 | `d2299f7` | Tighten BTC neutral 15m entries. |
 | `b417971` | Shadow calibration and exit replay tooling. |
 | `c46e4f4` | Buy-no status diagnostics. |
+
+---
+
+## 2026-05-14 — BTC HTF observability
+
+| Commit | Summary |
+|--------|---------|
+| `uncommitted` | Added vote-level BTC 4H bias diagnostics (`sabre`, `price_vs_ma`, `macd` state, raw vs final bias, histogram conviction) to shared strategy helpers and threaded them into `eth_macro` entry reasons, indicator snapshots, and scan stats. |
 
 ---
 
