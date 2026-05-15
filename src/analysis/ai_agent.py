@@ -1680,6 +1680,7 @@ OUTPUT (machine-parseable — follow exactly):
                     logger.error(f"Unknown provider type '{provider_type}' in provider chain. Skipping.")
                     continue
 
+                attempt_started = time.perf_counter()
                 analysis_result = await analysis_function(
                     user_prompt,
                     market_id,
@@ -1688,11 +1689,13 @@ OUTPUT (machine-parseable — follow exactly):
                     provider_config,
                     current_yes_price,
                 )
+                elapsed_ms = int((time.perf_counter() - attempt_started) * 1000)
 
                 if analysis_result:
                     logger.info(
                         f"AI analysis OK: {provider_name} -> {market_id} "
-                        f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f}"
+                        f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f} "
+                        f"elapsed_ms={elapsed_ms}"
                     )
                     self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint, ttl=cache_ttl)
                     self._log_marginal_analysis(
@@ -1704,7 +1707,10 @@ OUTPUT (machine-parseable — follow exactly):
 
             except Exception as e:
                 provider_errors.append(f"{provider_name}={type(e).__name__}: {e}")
-                logger.warning(f"Provider '{provider_name}' failed: {e}. Falling back to next provider.")
+                elapsed_ms = int((time.perf_counter() - attempt_started) * 1000)
+                logger.warning(
+                    f"Provider '{provider_name}' failed after {elapsed_ms}ms: {e}. Falling back to next provider."
+                )
                 continue
 
         if self.provider_chain:

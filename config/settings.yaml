@@ -56,6 +56,9 @@ hyperliquid:
 trading:
   # Single trading loop: scan, exits, crypto strategies, resolution (seconds). Was 300s main + 120s crypto; now one cadence.
   cycle_interval_sec: 60
+  # If one cycle runs longer than `cycle_interval_sec`, wait this many seconds before
+  # starting the next cycle. This avoids zero-sleep hammering without skipping a full slot.
+  overrun_recovery_sleep_sec: 5
   # Dry run mode (no real trades)
   dry_run: true
   # CLOB WebSocket: L2 books for **open-position** YES/NO tokens. Dashboard `/api/orderbook` prefers this cache; falls back to public REST.
@@ -321,6 +324,10 @@ strategies:
     ai_confidence_threshold: 0.60
     # Cap LLM calls per scan cycle (marginal / no-threshold / updown assist).
     max_ai_calls_per_scan: 12
+    # Bound BTC AI wall time so one slow provider call cannot consume most of a 60s cycle.
+    ai_call_timeout_sec: 15
+    # Disable LLM assists on BTC 5m markets; keep AI available for 15m paths.
+    use_ai_updown_5m: false
     # Second-stage LLM on updown when edge is below min but in marginal band (see STRATEGY_ENTRY_SPEC).
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03

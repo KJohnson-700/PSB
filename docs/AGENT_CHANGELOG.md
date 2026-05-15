@@ -474,6 +474,15 @@ Work landed on `main` the same calendar day; individual commits below are the au
 | `1281189` | Require AI for low-confidence BTC neutral entries. |
 | `d2299f7` | Tighten BTC neutral 15m entries. |
 | `b417971` | Shadow calibration and exit replay tooling. |
+## 2026-05-15 — Unified loop overrun recovery
+
+| Commit | Summary |
+|--------|---------|
+| `uncommitted` | Replaced zero-sleep overrun behavior in `src/main.py` with a bounded recovery pause (`trading.overrun_recovery_sleep_sec`, default 5s) so slow cycles do not hammer immediately and do not skip a full extra cadence slot. |
+| `uncommitted` | Added per-strategy scan timing logs plus AI elapsed-ms logging, then bounded BTC AI calls to 15s and disabled BTC 5m AI assists by default so slow LLM calls do not dominate the unified 60s trading cycle. |
+
+---
+
 | `c46e4f4` | Buy-no status diagnostics. |
 
 ---

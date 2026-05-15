@@ -27,6 +27,7 @@ LAYER 4: EDGE CALCULATION
   ► Technical adjustments from RSI, S/R proximity, tension
   ► AI called ONLY when edge is marginal AND technicals conflict at the lower TF level
 """
+import asyncio
 import logging
 import re
 import time
@@ -167,6 +168,8 @@ class BitcoinStrategy:
         )
         self.ai_confidence_threshold = self.config.get('ai_confidence_threshold', 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
+        self.ai_call_timeout_sec = float(self.config.get("ai_call_timeout_sec", 15.0) or 15.0)
+        self.use_ai_updown_5m = bool(self.config.get("use_ai_updown_5m", False))
         self.kelly_fraction = self.config.get('kelly_fraction', 0.15)
         self.entry_price_min = self.config.get('entry_price_min', 0.15)
         self.entry_price_max = self.config.get('entry_price_max', 0.85)
@@ -244,6 +247,38 @@ class BitcoinStrategy:
                 )
         except Exception:
             pass
+
+    async def _analyze_market_with_timeout(self, **kwargs):
+        """Bound BTC AI latency so one LLM call cannot dominate a scan cycle."""
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.analyze_market(**kwargs),
+                timeout=self.ai_call_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "BTC: analyze_market timeout for market %s after %.1fs",
+                market_id,
+                self.ai_call_timeout_sec,
+            )
+            return None
+
+    async def _evaluate_trade_decision_with_timeout(self, **kwargs):
+        """Bound BTC AI decision latency on 5m/15m updown assists."""
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.evaluate_trade_decision(**kwargs),
+                timeout=self.ai_call_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "BTC: evaluate_trade_decision timeout for market %s after %.1fs",
+                market_id,
+                self.ai_call_timeout_sec,
+            )
+            return None
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -1517,7 +1552,7 @@ class BitcoinStrategy:
                             f"Give your independent assessment — BUY_YES, BUY_NO, or HOLD.\n"
                             f"\n=== MARKET ===\n{format_market_metadata(market)}"
                         )
-                        ai_analysis = await self.ai_agent.analyze_market(
+                        ai_analysis = await self._analyze_market_with_timeout(
                             market_question=market.question,
                             market_description=ai_context,
                             current_yes_price=yes_price,
@@ -1622,7 +1657,7 @@ class BitcoinStrategy:
                         f"assessment for this market? Reply BUY_YES, BUY_NO, or HOLD.\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
-                    ai_analysis = await self.ai_agent.analyze_market(
+                    ai_analysis = await self._analyze_market_with_timeout(
                         market_question=market.question,
                         market_description=ai_context,
                         current_yes_price=yes_price,
@@ -1743,9 +1778,10 @@ class BitcoinStrategy:
                 and confidence < self.neutral_15m_min_quant_confidence
             )
 
-            # Updown AI assist: 5m entries always call AI when available (mandatory AI path).
-            # 15m entries use AI only on borderline edge or low-conf neutral HTF setups.
-            _ai_updown_5m = is_updown and is_5m
+            # Updown AI assist: 5m is optional and disabled by default because LLM
+            # latency can consume most of a 60s unified cycle. 15m keeps AI for
+            # borderline edge or low-confidence neutral HTF setups.
+            _ai_updown_5m = is_updown and is_5m and self.use_ai_updown_5m
             _ai_updown_15m_borderline = (
                 is_updown
                 and _updown_tf != "5m"
@@ -1780,7 +1816,7 @@ class BitcoinStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                ai_decision = await self.ai_agent.evaluate_trade_decision(
+                ai_decision = await self._evaluate_trade_decision_with_timeout(
                     market_question=market.question,
                     market_description=ai_context,
                     current_yes_price=yes_price,
@@ -1798,6 +1834,10 @@ class BitcoinStrategy:
                 )
                 ai_calls += 1
                 ai_used = True
+
+                if ai_decision is None:
+                    _bump_skip("ai_decision_timeout")
+                    continue
 
                 if ai_decision.shadow_result is not None:
                     shadow_pipeline_calls += 1
@@ -1970,7 +2010,7 @@ class BitcoinStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
-                    ai_decision = await self.ai_agent.evaluate_trade_decision(
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
                         market_question=market.question,
                         market_description=ai_context,
                         current_yes_price=yes_price,
@@ -1984,6 +2024,9 @@ class BitcoinStrategy:
                     )
                     ai_calls += 1
                     ai_used = True
+                    if ai_decision is None:
+                        _bump_skip("ai_decision_timeout")
+                        continue
                     if ai_decision.shadow_result is not None:
                         shadow_pipeline_calls += 1
                         if ai_decision.shadow_result.get("ok"):

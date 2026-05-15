@@ -65,6 +65,42 @@ from src.terminal_banners import print_shutdown_banner, print_startup_banner
 KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITCH"
 
 
+def _compute_trading_cycle_sleep(
+    scan_interval_sec: float,
+    elapsed_sec: float,
+    overrun_recovery_sleep_sec: Optional[float] = None,
+) -> float:
+    """Return the sleep budget after one unified trading cycle.
+
+    Normal case: preserve the configured cycle interval.
+    Overrun case: insert a short bounded recovery pause instead of either
+    chaining the next cycle immediately or skipping a full extra interval.
+    """
+    interval = max(0.0, float(scan_interval_sec))
+    elapsed = max(0.0, float(elapsed_sec))
+    if elapsed < interval:
+        return interval - elapsed
+    if overrun_recovery_sleep_sec is None:
+        overrun_recovery_sleep_sec = min(5.0, max(1.0, interval * 0.1))
+    return max(0.0, min(float(overrun_recovery_sleep_sec), interval))
+
+
+async def _time_strategy_scan(
+    strategy_name: str,
+    scan_coro,
+) -> tuple[str, Any, int, bool]:
+    """Measure one strategy scan wall time without changing its behavior."""
+    started = time.perf_counter()
+    try:
+        result = await scan_coro
+        ok = True
+    except Exception as exc:
+        result = exc
+        ok = False
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return strategy_name, result, elapsed_ms, ok
+
+
 def _detect_window_from_question(question: str) -> str:
     """Infer 5m / 15m / 30m window from Polymarket question time range.
 
@@ -420,6 +456,15 @@ class PolyBot:
                 self.bankroll = _initial_bankroll
         _cint = self.config.get("trading", {}).get("cycle_interval_sec", 120)
         self.scan_interval = max(30, int(_cint))  # single unified loop: scan + crypto + exits
+        _recovery_sleep = (
+            self.config.get("trading", {}).get("overrun_recovery_sleep_sec")
+        )
+        if _recovery_sleep is None:
+            self.overrun_recovery_sleep_sec = min(
+                5.0, max(1.0, float(self.scan_interval) * 0.1)
+            )
+        else:
+            self.overrun_recovery_sleep_sec = max(0.0, float(_recovery_sleep))
 
         # Sync open positions AFTER bankroll is known so risk manager has correct baseline
         self._sync_journal_to_risk_manager()
@@ -995,12 +1040,17 @@ class PolyBot:
                 cycle_started = time.monotonic()
                 await self._unified_cycle()
                 elapsed = time.monotonic() - cycle_started
-                sleep_for = max(0.0, self.scan_interval - elapsed)
+                sleep_for = _compute_trading_cycle_sleep(
+                    self.scan_interval,
+                    elapsed,
+                    self.overrun_recovery_sleep_sec,
+                )
                 if elapsed > self.scan_interval:
                     logging.warning(
-                        "Trading cycle overran configured interval: elapsed=%.1fs interval=%ss",
+                        "Trading cycle overran configured interval: elapsed=%.1fs interval=%ss recovery_sleep=%.1fs",
                         elapsed,
                         self.scan_interval,
+                        sleep_for,
                     )
                 await asyncio.sleep(sleep_for)
             except Exception as e:
@@ -1380,45 +1430,92 @@ class PolyBot:
         self.bitcoin_strategy._open_positions_snapshot = open_positions_snapshot
         self.sol_macro_strategy._open_positions_snapshot = open_positions_snapshot
 
-        strategy_tasks: list[tuple[str, Any]] = [
-            ("bitcoin", self.bitcoin_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
-            ("sol_macro", self.sol_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll)),
+        strategy_tasks: list[Any] = [
+            _time_strategy_scan(
+                "bitcoin",
+                self.bitcoin_strategy.scan_and_analyze(
+                    markets=short_horizon,
+                    bankroll=self.bankroll,
+                ),
+            ),
+            _time_strategy_scan(
+                "sol_macro",
+                self.sol_macro_strategy.scan_and_analyze(
+                    markets=short_horizon,
+                    bankroll=self.bankroll,
+                ),
+            ),
         ]
 
         eth_macro_cfg = self.config.get("strategies", {}).get("eth_macro", {})
         if eth_macro_cfg.get("enabled", False):
             self.eth_macro_strategy._open_positions_snapshot = open_positions_snapshot
             strategy_tasks.append(
-                ("eth_macro", self.eth_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+                _time_strategy_scan(
+                    "eth_macro",
+                    self.eth_macro_strategy.scan_and_analyze(
+                        markets=short_horizon,
+                        bankroll=self.bankroll,
+                    ),
+                )
             )
 
         hype_macro_cfg = self.config.get("strategies", {}).get("hype_macro", {})
         if hype_macro_cfg.get("enabled", False):
             self.hype_macro_strategy._open_positions_snapshot = open_positions_snapshot
             strategy_tasks.append(
-                ("hype_macro", self.hype_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+                _time_strategy_scan(
+                    "hype_macro",
+                    self.hype_macro_strategy.scan_and_analyze(
+                        markets=short_horizon,
+                        bankroll=self.bankroll,
+                    ),
+                )
             )
 
         xrp_cfg = self.config.get("strategies", {}).get("xrp_macro", {})
         if xrp_cfg.get("enabled", False) and self.xrp_macro_strategy:
             self.xrp_macro_strategy._open_positions_snapshot = open_positions_snapshot
             strategy_tasks.append(
-                ("xrp_macro", self.xrp_macro_strategy.scan_and_analyze(markets=short_horizon, bankroll=self.bankroll))
+                _time_strategy_scan(
+                    "xrp_macro",
+                    self.xrp_macro_strategy.scan_and_analyze(
+                        markets=short_horizon,
+                        bankroll=self.bankroll,
+                    ),
+                )
             )
 
         scan_started = time.perf_counter()
         scan_results = await asyncio.gather(
-            *(task for _, task in strategy_tasks),
+            *strategy_tasks,
             return_exceptions=True,
         )
+        strategy_signals: dict[str, Any] = {}
+        strategy_scan_timings_ms: dict[str, int] = {}
+        strategy_errors: dict[str, Exception] = {}
+        for result in scan_results:
+            if isinstance(result, Exception):
+                strategy_errors[f"task_{len(strategy_errors) + 1}"] = result
+                continue
+            name, payload, elapsed_ms, ok = result
+            strategy_scan_timings_ms[name] = elapsed_ms
+            if ok:
+                strategy_signals[name] = payload
+            else:
+                strategy_signals[name] = payload
+                strategy_errors[name] = payload
         logging.info(
-            "[TRADING] Crypto parallel scan phase complete in %dms (%d strategies)",
+            "[TRADING] Crypto parallel scan phase complete in %dms (%d strategies) timings_ms=%s",
             int((time.perf_counter() - scan_started) * 1000),
             len(strategy_tasks),
+            strategy_scan_timings_ms,
         )
-        strategy_signals = {
-            name: result for (name, _), result in zip(strategy_tasks, scan_results)
-        }
+        if strategy_errors:
+            logging.warning(
+                "[TRADING] Strategy scan task errors encountered: %s",
+                {name: type(err).__name__ for name, err in strategy_errors.items()},
+            )
 
         try:
             btc_signals = strategy_signals.get("bitcoin", [])
