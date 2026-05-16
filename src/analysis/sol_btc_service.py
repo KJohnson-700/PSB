@@ -617,6 +617,17 @@ class SOLBTCService:
     # SOL Indicators (EMAs, RSI, ATR, MACD)
     # ──────────────────────────────────────────────────────────────────
 
+    def _oracle_reference_spot(self, fallback: float) -> Optional[float]:
+        """Spot price used in the Chainlink oracle-basis comparison.
+
+        Default: kline-derived ``current_price`` (Binance for SOL/ETH/XRP — the
+        same venue Chainlink's spot feed aggregates from, so basis is tight).
+        Subclasses override when the kline venue and the Chainlink-referenced
+        spot venue diverge (HYPE: Binance USDM perp vs Chainlink Arbitrum which
+        tracks Hyperliquid native spot).
+        """
+        return fallback
+
     def calc_sol_indicators(self) -> SOLAnalysis:
         """Calculate all SOL technical indicators.
 
@@ -679,9 +690,10 @@ class SOLBTCService:
             current_price, ema_9, ema_21, ema_50, rsi_14
         )
         cl_price, cl_updated, cl_network = self.get_chainlink_price_for_symbol(self.alt_symbol)
+        oracle_spot = self._oracle_reference_spot(current_price)
         basis_bps = None
-        if cl_price and cl_price > 0:
-            basis_bps = ((current_price - cl_price) / cl_price) * 10000.0
+        if cl_price and cl_price > 0 and oracle_spot:
+            basis_bps = ((float(oracle_spot) - cl_price) / cl_price) * 10000.0
 
         return SOLAnalysis(
             current_price=current_price,

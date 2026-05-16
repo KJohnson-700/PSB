@@ -216,6 +216,40 @@ class HyperliquidHypeService(SOLBTCService):
         )
         return df.copy()
 
+    def _oracle_reference_spot(self, fallback: float) -> Optional[float]:
+        """Use Hyperliquid native mid for the Chainlink oracle-basis comparison.
+
+        Klines / current_price come from Binance USDM HYPEUSDT (deep, fast), but
+        the Chainlink Arbitrum HYPE feed references Hyperliquid native spot —
+        comparing Binance-USDM to Chainlink-Arbitrum produces ~20-30 bps of
+        venue dispersion that isn't a real oracle staleness signal. Pulling the
+        HL mid here makes the basis gate measure what it was designed to:
+        oracle-vs-source-of-truth divergence.
+
+        ``allMids`` returns one float per coin; cheap (~1 KB) and 30s-cached.
+        Falls back to the Binance kline ``fallback`` if HL is unreachable.
+        """
+        now = time.time()
+        cached = getattr(self, "_hl_mid_cache", None)
+        if cached and (now - cached[0]) < 30.0:
+            return cached[1]
+        try:
+            resp = self._post_candles(
+                {"type": "allMids"},
+                timeout=self._request_timeout_sec,
+            )
+            resp.raise_for_status()
+            mids = resp.json() or {}
+            raw = mids.get(self.HYPE_COIN)
+            if raw is None:
+                return fallback
+            mid = float(raw)
+            self._hl_mid_cache = (now, mid)
+            return mid
+        except Exception as e:
+            logger.info("Hyperliquid allMids unavailable (%s); using Binance kline for basis", e)
+            return fallback
+
     def _fetch_binance_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
         """Primary live source: Binance USDM perpetual ``HYPEUSDT`` klines.
 
