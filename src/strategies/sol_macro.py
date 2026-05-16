@@ -1774,14 +1774,8 @@ class SolMacroStrategy:
                         )
                         continue
 
-                # ── Adaptive direction gate ──
-                # Instead of manual disable_sell_yes / disable_buy_yes, use the asset's
-                # own 1H trend to suppress counter-trend trades. This replaces the static
-                # config flags with a dynamic check:
-                #   - 1H trend BULLISH  → suppress short / BUY_NO (don't short in an uptrend)
-                #   - 1H trend BEARISH  → suppress BUY_YES  (don't long in a downtrend)
-                #   - 1H trend NEUTRAL  → allow both sides
-                # The mtt (MultiTimeframeTrend) object is already fetched once per cycle.
+                # Alt 1H context is diagnostic-only here. Keep logging the disagreement so
+                # scans remain explainable, but do not block either side on this signal.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
                 if self.enforce_alt_1h_alignment:
                     if action == "BUY_NO" and _h1_trend == "BULLISH":
@@ -1791,12 +1785,11 @@ class SolMacroStrategy:
                             f"alt 1H BULLISH retained as diagnostic only"
                         )
                     if action == "BUY_YES" and _h1_trend == "BEARISH":
-                        _bump_skip("buy_yes_suppressed_bearish_1h")
+                        reason_parts.append("buy_yes_against_alt_1h_bearish")
                         logger.info(
-                            f"  {self._signal_strategy_name} skip BUY_YES on '{market.question[:40]}' — "
-                            f"1H trend BEARISH, suppressing counter-trend long"
+                            f"  {self._signal_strategy_name} allow BUY_YES on '{market.question[:40]}' — "
+                            f"alt 1H BEARISH retained as diagnostic only"
                         )
-                        continue
                 _rsi_hard_block, _rsi_soft_delta = self._resolve_rsi_gate(action, sol.rsi_14)
                 if _rsi_hard_block:
                     _bump_skip("rsi_hard_blocked")
@@ -1894,29 +1887,26 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
-                    # Relaxed from strict "histogram_rising" to "histogram in trade direction
-                    # OR rising". Original gate required acceleration — too strict, blocked
-                    # entries for hours during valid trending conditions where histogram was
-                    # positive but decelerating (e.g. hist=+0.10, prev=+0.16).
+                    # 1H histogram context remains diagnostic-only. Preserve the signal in
+                    # logs, but do not block entry on it.
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
-                            _bump_skip("histogram_1h_blocks_long_5m")
+                            reason_parts.append("histogram_1h_against_long_5m")
                             logger.info(
-                                f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
+                                f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
+                                f"1H histogram negative/falling retained as diagnostic only "
+                                f"(hist={_macd_1h.histogram:.4f})"
                             )
-                            continue
                         if allowed_side == "SHORT" and not _h1_bear_ok:
-                            _bump_skip("histogram_1h_blocks_short_5m")
+                            reason_parts.append("histogram_1h_against_short_5m")
                             logger.info(
-                                f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                                f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
+                                f"1H histogram positive/rising retained as diagnostic only "
+                                f"(hist={_macd_1h.histogram:.4f})"
                             )
-                            continue
 
                     # BTC catalyst gate: require spike or lag in 5m markets to avoid flat-market guesses
                     _require_catalyst_5m = bool(self.config.get("require_btc_catalyst_5m", False))
@@ -2090,29 +2080,26 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H HISTOGRAM GATE (matches backtest engine htf_key="1h" for SOL)
-                    # SOL 15m: without gate ~51% WR; with gate ~59.3% WR.
-                    # Relaxed: allow when histogram is in trade direction (positive for
-                    # LONG) even if decelerating, not just when accelerating. Blocks only
-                    # when histogram is actively against the trade direction.
+                    # 1H histogram context remains diagnostic-only. Preserve the signal in
+                    # logs, but do not block entry on it.
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
-                            _bump_skip("histogram_1h_blocks_long_15m")
+                            reason_parts.append("histogram_1h_against_long_15m")
                             logger.info(
-                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                                f"1H histogram negative and falling (hist={_macd_1h.histogram:.4f})"
+                                f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
+                                f"1H histogram negative/falling retained as diagnostic only "
+                                f"(hist={_macd_1h.histogram:.4f})"
                             )
-                            continue
                         if allowed_side == "SHORT" and not _h1_bear_ok:
-                            _bump_skip("histogram_1h_blocks_short_15m")
+                            reason_parts.append("histogram_1h_against_short_15m")
                             logger.info(
-                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
-                                f"1H histogram positive and rising (hist={_macd_1h.histogram:.4f})"
+                                f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
+                                f"1H histogram positive/rising retained as diagnostic only "
+                                f"(hist={_macd_1h.histogram:.4f})"
                             )
-                            continue
 
                     # When no LTF confirmation, require a BTC catalyst to avoid pure macro-guess entries
                     if ltf_strength == 0.0:

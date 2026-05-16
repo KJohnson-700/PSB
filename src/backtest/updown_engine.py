@@ -58,6 +58,7 @@ import numpy as np
 import pandas as pd
 
 from src.analysis.kelly_sizer import KellySizer
+from src.analysis.lane_entry_policy import resolve_lane_entry_policy
 from src.analysis.btc_price_service import (
     BTCPriceService,
     TechnicalAnalysis,
@@ -525,6 +526,85 @@ class UpdownBacktestEngine:
     def _evaluation_minutes_left(self, window_minutes: int) -> float:
         return max(0.0, float(window_minutes) - (self._entry_eval_delay_sec / 60.0))
 
+    def _legacy_lane_entry_policy_for_replay(
+        self,
+        *,
+        symbol: str,
+        strategy_cfg: Dict[str, Any],
+        window_minutes: int,
+        action: str,
+        min_edge: float,
+    ) -> Dict[str, Any]:
+        tf_label = f"{int(window_minutes)}m"
+        if window_minutes == 5:
+            default_min, default_max = (0.5, 5.0)
+        elif window_minutes == 30:
+            default_min, default_max = ((25.0, 29.0) if symbol == "BTC" else (26.0, 28.66))
+        else:
+            default_min, default_max = (2.0, 16.0)
+        win_min, win_max = self._resolve_entry_window_bounds(
+            tf=tf_label,
+            default_min=default_min,
+            default_max=default_max,
+        )
+        entry_price_min, entry_price_max = self._entry_bands.get(symbol, (0.0, 1.0))
+        if symbol != "BTC" and action == "BUY_YES" and window_minutes != 5:
+            entry_price_max = float(
+                strategy_cfg.get(
+                    "entry_price_max_15m_yes_side",
+                    strategy_cfg.get("entry_price_max_15m_buy_yes", entry_price_max),
+                )
+            )
+        size_multiplier = 1.0
+        if window_minutes == 5:
+            size_multiplier = float(
+                strategy_cfg.get("calibration_size_multiplier_5m", 1.0) or 1.0
+            )
+        policy_min_edge = float(min_edge)
+        if action == "BUY_NO":
+            policy_min_edge = max(
+                policy_min_edge,
+                float(strategy_cfg.get("min_edge_buy_no", 0.0) or 0.0),
+            )
+        return {
+            "enabled": True,
+            "min_edge": policy_min_edge,
+            "hard_min_edge": float(strategy_cfg.get("hard_min_edge", 0.0) or 0.0),
+            "ai_override_min_edge": float(
+                strategy_cfg.get("min_edge_5m_ai_override", 0.0) or 0.0
+            ),
+            "entry_price_min": float(entry_price_min),
+            "entry_price_max": float(entry_price_max),
+            "entry_window_min": float(win_min),
+            "entry_window_max": float(win_max),
+            "size_multiplier": float(size_multiplier),
+        }
+
+    def _resolve_replay_lane_entry_policy(
+        self,
+        *,
+        symbol: str,
+        strategy_name: str,
+        strategy_cfg: Dict[str, Any],
+        window_minutes: int,
+        action: str,
+        min_edge: float,
+    ):
+        side = "up" if action == "BUY_YES" else "down"
+        return resolve_lane_entry_policy(
+            strategy_name=strategy_name,
+            window_size=f"{int(window_minutes)}m",
+            side=side,
+            full_config=self.config,
+            legacy_policy=self._legacy_lane_entry_policy_for_replay(
+                symbol=symbol,
+                strategy_cfg=strategy_cfg,
+                window_minutes=window_minutes,
+                action=action,
+                min_edge=min_edge,
+            ),
+        )
+
     def _yes_mid_at_window_open(
         self,
         *,
@@ -681,7 +761,7 @@ class UpdownBacktestEngine:
                 tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
             )
 
-            if pnl_pct >= self.take_profit_pct:
+            if pnl_pct >= resolved.take_profit_pct:
                 exit_fill, _ = self._simulate_fill(current_token, "SELL")
                 exit_fill = max(0.01, min(0.99, exit_fill))
                 pnl = (exit_fill - fill_price) * size
@@ -2292,9 +2372,6 @@ class UpdownBacktestEngine:
             "XRP": "xrp_macro",
             "HYPE": "hype_macro",
         }
-        self.entry_price_min, self.entry_price_max = self._entry_bands.get(
-            symbol, (0.0, 1.0)
-        )
         strategy_cfg_key = strategy_cfg_map.get(symbol, "sol_macro")
         strategy_cfg = self.config.get("strategies", {}).get(strategy_cfg_key, {})
         self._signal_strategy_name = strategy_cfg_key
@@ -2473,24 +2550,6 @@ class UpdownBacktestEngine:
             else:
                 tf_label = "15m"
             eval_left = self._evaluation_minutes_left(window_minutes)
-            if window_minutes == 5:
-                default_min, default_max = (0.5, 5.0)
-            elif window_minutes == 30:
-                if is_btc:
-                    default_min, default_max = (25.0, 29.0)
-                else:
-                    default_min, default_max = (26.0, 28.66)
-            else:
-                default_min, default_max = (2.0, 16.0)
-            win_min, win_max = self._resolve_entry_window_bounds(
-                tf=tf_label,
-                default_min=default_min,
-                default_max=default_max,
-            )
-            if eval_left < win_min or eval_left > win_max:
-                _bump_skip("outside_entry_window")
-                current += step_td
-                continue
             timing_window_open = self._within_entry_timing_window(
                 mins_left=eval_left,
                 tf=tf_label,
@@ -2631,7 +2690,25 @@ class UpdownBacktestEngine:
                         yes_price=yes_mid_market,
                     )
 
-            effective_min_edge = min_edge
+            # Determine action (aligned with live: short side buys NO)
+            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+            lane_policy = self._resolve_replay_lane_entry_policy(
+                symbol=symbol,
+                strategy_name=strategy_cfg_key,
+                strategy_cfg=strategy_cfg,
+                window_minutes=window_minutes,
+                action=action,
+                min_edge=min_edge,
+            )
+            if not lane_policy.enabled:
+                _bump_skip("lane_disabled")
+                current += step_td
+                continue
+            if eval_left < lane_policy.entry_window_min or eval_left > lane_policy.entry_window_max:
+                _bump_skip("outside_entry_window")
+                current += step_td
+                continue
+            effective_min_edge = max(lane_policy.min_edge, lane_policy.hard_min_edge)
             if symbol == "HYPE":
                 hard_min_edge = max(0.05, float(strategy_cfg.get("hard_min_edge", 0.05)))
                 hard_min_edge *= self._btc_1h_regime_min_edge_mult(strategy_cfg, btc_ta)
@@ -2657,9 +2734,6 @@ class UpdownBacktestEngine:
                     current += step_td
                     continue
 
-            # Determine action (aligned with live: short side buys NO)
-            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
-
             max_edge_updown = float(
                 strategy_cfg.get("max_edge_updown", self.config.get("max_edge_updown", 0.0)) or 0.0
             )
@@ -2669,25 +2743,33 @@ class UpdownBacktestEngine:
                 continue
 
             # Position size
-            size = self._size_position(bankroll, edge)
+            size = self._size_position(bankroll, edge) * max(0.0, lane_policy.size_multiplier)
             if size <= 0 or bankroll < size:
                 _bump_skip("size_rejected")
                 current += step_td
                 continue
+            size = round(size, 2)
 
             # Fill at realistic mid-price: use empirical distribution from live fills
             # when available (>=20 recorded), else N(0.50, 0.06) clipped to [0.30, 0.70].
             mid_price = self._sample_entry_price()
-            if mid_price < self.entry_price_min or mid_price > self.entry_price_max:
+            if action == "BUY_YES":
+                entry_price_bad = (
+                    yes_mid_market < lane_policy.entry_price_min
+                    or yes_mid_market > lane_policy.entry_price_max
+                )
+            else:
+                entry_price_bad = yes_mid_market < lane_policy.entry_price_min
+            if entry_price_bad:
                 _bump_skip("entry_price_band")
                 current += step_td
                 continue
             center_price_band = float(strategy_cfg.get("center_price_band", 0.0) or 0.0)
             min_edge_when_centered = float(
-                strategy_cfg.get("min_edge_when_centered", min_edge)
+                strategy_cfg.get("min_edge_when_centered", effective_min_edge)
             )
-            if center_price_band > 0 and abs(mid_price - 0.50) <= center_price_band:
-                centered_min = max(min_edge, min_edge_when_centered)
+            if center_price_band > 0 and abs(yes_mid_market - 0.50) <= center_price_band:
+                centered_min = max(effective_min_edge, min_edge_when_centered)
                 if edge < centered_min:
                     _bump_skip("centered_price_edge_below_min")
                     current += step_td

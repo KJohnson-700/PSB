@@ -86,6 +86,50 @@ def test_down_lane_5m_window_override_is_used_for_eth_macro():
     assert exits[0].reason == "updown_stop_loss"
 
 
+def test_updown_take_profit_uses_lane_window_override():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.50,
+                "updown_overrides": {
+                    "eth_macro": {
+                        "window_lane_overrides": {
+                            "5m": {
+                                "down": {
+                                    "take_profit_pct": 0.10,
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Ethereum Up or Down - test",
+        outcome="NO",
+        strategy="eth_macro",
+        size=10.0,
+        entry_price=0.50,
+        current_price=0.50,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=2),
+        end_date=now + timedelta(minutes=3),
+        entry_leg="NO",
+        window_size="5m",
+    )
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.42}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+    assert len(exits) == 1
+    assert exits[0].reason == "take_profit"
+
+
 def test_updown_percentage_stop_loss_fires_before_expiry_window():
     cfg = {
         "trading": {

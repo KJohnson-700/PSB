@@ -368,6 +368,49 @@ def test_updown_live_exit_proxy_can_take_profit_before_settlement():
     assert pnl > 0
 
 
+def test_updown_live_exit_proxy_uses_lane_take_profit_override():
+    cfg = _config()
+    cfg["trading"]["exit_rules"]["take_profit_pct"] = 0.99
+    cfg["trading"]["exit_rules"]["updown_overrides"] = {
+        "eth_macro": {
+            "window_lane_overrides": {
+                "5m": {
+                    "down": {
+                        "take_profit_pct": 0.10,
+                    }
+                }
+            }
+        }
+    }
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0] * len(ts),
+            "close": [100.0, 99.0, 98.0, 97.0, 96.0],
+        }
+    )
+
+    pnl, outcome, exit_price, _, _, exit_reason = engine._settle_updown_with_live_exit_proxy(
+        df_1m=df,
+        window_open=ts[0],
+        window_close=ts[0] + pd.Timedelta(minutes=5),
+        action="BUY_NO",
+        entry_price=0.50,
+        size=50.0,
+        asset_open=100.0,
+        fill_price=0.50,
+        symbol="ETH",
+        window_minutes=5,
+    )
+
+    assert exit_reason == "take_profit"
+    assert outcome == "WIN"
+    assert exit_price > 0.50
+    assert pnl > 0
+
+
 def test_updown_live_exit_proxy_prefers_polymarket_yes_marks_over_proxy():
     engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
     ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
@@ -708,6 +751,49 @@ def test_backtest_counts_outside_entry_window_skips():
 
     assert result.windows_entered == 0
     assert result.skip_counts.get("outside_entry_window", 0) > 0
+
+
+def test_backtest_entry_band_uses_lane_policy_yes_mid_not_sampled_fill():
+    cfg = _config()
+    cfg["strategies"]["bitcoin"]["entry_policy"] = {
+        "window_side_overrides": {
+            "15m": {
+                "up": {
+                    "entry_price_min": 0.46,
+                    "entry_price_max": 0.54,
+                    "entry_window_min": 2.0,
+                    "entry_window_max": 15.0,
+                }
+            }
+        }
+    }
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.70
+    engine._yes_mid_at_window_open = lambda **kwargs: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=15,
+        symbol="BTC",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("entry_price_band", 0) == 0
 
 
 def test_backtest_counts_edge_above_cap_skips():

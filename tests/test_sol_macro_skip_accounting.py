@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 SOL_MACRO = REPO / "src" / "strategies" / "sol_macro.py"
+ETH_MACRO = REPO / "src" / "strategies" / "eth_macro.py"
 
 
 def test_updown_market_loop_early_continues_are_counted() -> None:
@@ -16,10 +17,6 @@ def test_updown_market_loop_early_continues_are_counted() -> None:
         "lane_entry_window",
         "btc_min_move_dollars",
         "price_too_far_from_even",
-        "histogram_1h_blocks_long_5m",
-        "histogram_1h_blocks_short_5m",
-        "histogram_1h_blocks_long_15m",
-        "histogram_1h_blocks_short_15m",
         "low_corr_suppressed",
         "lane_min_edge",
         "lane_price_band",
@@ -43,6 +40,17 @@ def test_buy_no_is_not_hard_suppressed_by_bullish_alt_1h() -> None:
     assert "buy_no_against_alt_1h_bullish" in source
 
 
-def test_buy_yes_is_still_hard_suppressed_against_bearish_alt_1h() -> None:
+def test_alt_1h_alignment_is_diagnostic_only_in_sol_macro() -> None:
     source = SOL_MACRO.read_text(encoding="utf-8")
-    assert '_bump_skip("buy_yes_suppressed_bearish_1h")' in source
+    assert '_bump_skip("buy_yes_suppressed_bearish_1h")' not in source
+    assert '_bump_skip("histogram_1h_blocks_long_5m")' not in source
+    assert '_bump_skip("histogram_1h_blocks_short_5m")' not in source
+    assert '_bump_skip("histogram_1h_blocks_long_15m")' not in source
+    assert '_bump_skip("histogram_1h_blocks_short_15m")' not in source
+    assert "buy_yes_against_alt_1h_bearish" in source
+
+
+def test_alt_1h_alignment_is_diagnostic_only_in_eth_macro() -> None:
+    source = ETH_MACRO.read_text(encoding="utf-8")
+    assert '_bump_skip("eth_1h_bearish")' not in source
+    assert "buy_yes_against_alt_1h_bearish" in source

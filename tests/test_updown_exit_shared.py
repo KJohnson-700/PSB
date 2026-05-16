@@ -106,18 +106,20 @@ def test_window_lane_override_precedence_beats_strategy_lane_and_global_lane():
     g = parse_updown_exit_globals(
         {
             "updown_stop_loss_pct": 0.20,
+            "take_profit_pct": 0.15,
             "updown_lane_overrides": {
-                "down": {"updown_stop_loss_pct": 0.19},
+                "down": {"updown_stop_loss_pct": 0.19, "take_profit_pct": 0.18},
             },
             "updown_overrides": {
                 "eth_macro": {
                     "updown_stop_loss_pct": 0.18,
+                    "take_profit_pct": 0.20,
                     "lane_overrides": {
-                        "down": {"updown_stop_loss_pct": 0.17},
+                        "down": {"updown_stop_loss_pct": 0.17, "take_profit_pct": 0.22},
                     },
                     "window_lane_overrides": {
                         "5m": {
-                            "down": {"updown_stop_loss_pct": 0.14},
+                            "down": {"updown_stop_loss_pct": 0.14, "take_profit_pct": 0.25},
                         }
                     },
                 }
@@ -132,6 +134,7 @@ def test_window_lane_override_precedence_beats_strategy_lane_and_global_lane():
         outcome="NO",
     )
     assert params.updown_stop_loss_pct == pytest.approx(0.14)
+    assert params.take_profit_pct == pytest.approx(0.25)
 
 
 def test_strategy_level_override_used_when_no_lane_specific_override():

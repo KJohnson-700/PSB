@@ -726,8 +726,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                         f"ETH 1H BULLISH retained as diagnostic only"
                     )
                 if action == "BUY_YES" and mtt.h1_trend == "BEARISH":
-                    _bump_skip("eth_1h_bearish")
-                    continue
+                    reason_parts.append("buy_yes_against_alt_1h_bearish")
+                    logger.info(
+                        f"  ETH allow BUY_YES on '{market.question[:40]}' — "
+                        f"ETH 1H BEARISH retained as diagnostic only"
+                    )
             _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, eth.rsi_14)
             if _rsi_hard_block:
                 _bump_skip("rsi_hard_blocked")

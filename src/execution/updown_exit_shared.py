@@ -56,6 +56,7 @@ class UpdownExitGlobals:
 
 @dataclass(frozen=True)
 class UpdownResolvedExitParams:
+    take_profit_pct: float
     updown_stop_loss_pct: float
     updown_stop_cents: float
     updown_exit_window_mins: float
@@ -69,6 +70,7 @@ class UpdownResolvedExitParams:
 
 _UPDOWN_EXIT_PARAM_KEYS = frozenset(
     {
+        "take_profit_pct",
         "updown_stop_loss_pct",
         "updown_stop_cents",
         "updown_exit_window_mins",
@@ -213,6 +215,7 @@ def resolve_updown_exit_params_for_position(
     resolved_window = infer_updown_window_size(window_size, opened_at=opened_at, end_date=end_date)
     strategy_cfg = g.updown_overrides.get(str(strategy_name), {})
     params: Dict[str, float] = {
+        "take_profit_pct": g.take_profit_pct,
         "updown_stop_loss_pct": g.updown_stop_loss_pct,
         "updown_stop_cents": g.updown_stop_cents,
         "updown_exit_window_mins": g.updown_exit_window_mins,
@@ -234,6 +237,7 @@ def resolve_updown_exit_params_for_position(
         if isinstance(window_cfg, dict):
             params.update(window_cfg.get(lane, {}))
     return UpdownResolvedExitParams(
+        take_profit_pct=float(params["take_profit_pct"]),
         updown_stop_loss_pct=float(params["updown_stop_loss_pct"]),
         updown_stop_cents=float(params["updown_stop_cents"]),
         updown_exit_window_mins=float(params["updown_exit_window_mins"]),

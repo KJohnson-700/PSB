@@ -240,7 +240,7 @@ class PositionExitManager:
 
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
-                if pnl_pct >= self.take_profit_pct:
+                if pnl_pct >= resolved.take_profit_pct:
                     reason = "take_profit"
                 elif effective_stop_loss_pct > 0 and pnl_pct <= -effective_stop_loss_pct:
                     # Same-position percentage stop: cuts adverse drift early instead of
