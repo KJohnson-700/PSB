@@ -518,6 +518,36 @@ class PolyBot:
             logging.warning("lane_calibration init failed: %s", exc)
             return LaneCalibrator(shadow_mode=True)
 
+    def _validate_lane_calibration_runtime(self) -> None:
+        """Fail fast if calibration mode and strategy wiring disagree."""
+        cal_cfg = (self.config.get("lane_calibration") or {})
+        if not bool(cal_cfg.get("enabled", False)):
+            return
+        cal = getattr(self, "lane_calibrator", None)
+        if cal is None:
+            raise RuntimeError("lane_calibration enabled but lane_calibrator is missing")
+        required = (
+            ("bitcoin", getattr(self, "bitcoin_strategy", None)),
+            ("sol_macro", getattr(self, "sol_macro_strategy", None)),
+            ("eth_macro", getattr(self, "eth_macro_strategy", None)),
+            ("hype_macro", getattr(self, "hype_macro_strategy", None)),
+            ("xrp_macro", getattr(self, "xrp_macro_strategy", None)),
+        )
+        missing = [
+            name for name, strategy in required
+            if strategy is None or getattr(strategy, "lane_calibrator", None) is not cal
+        ]
+        if missing:
+            raise RuntimeError(
+                "lane_calibration wiring incomplete for strategies: "
+                + ", ".join(missing)
+            )
+        logging.info(
+            "Lane calibration ready: mode=%s strategies=%s",
+            "SHADOW" if bool(cal.shadow_mode) else "LIVE",
+            ",".join(name for name, _ in required),
+        )
+
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
         """Load configuration from YAML file"""
         if config_path is None:
@@ -633,6 +663,7 @@ class PolyBot:
             self.xrp_macro_strategy,
         ):
             strategy.lane_calibrator = self.lane_calibrator
+        self._validate_lane_calibration_runtime()
         self.weather_strategy = WeatherStrategy(
             self.config,
             self.position_sizer,
@@ -2098,6 +2129,7 @@ class PolyBot:
                     "rsi": signal.rsi,
                     "side_source": getattr(signal, "side_source", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "entry_policy": getattr(signal, "entry_policy", None),
                     "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
                     "probability_model": "indicator_score_v1",
                     # Learning context: direction, threshold, and full signal reason
@@ -2330,6 +2362,7 @@ class PolyBot:
                     "corr_1h": signal.corr_1h,
                     "side_source": getattr(signal, "side_source", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "entry_policy": getattr(signal, "entry_policy", None),
                     "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
                     "probability_model": "indicator_score_v1",
                     # Learning context: direction and full signal reason

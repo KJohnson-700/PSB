@@ -74,6 +74,7 @@ def _sol_like_signal(*, action: str, strategy_name: str = "hype_macro") -> SolMa
         reason="execution driver test",
         est_prob=0.42,
         raw_est_prob=0.47,
+        entry_policy={"side": "up", "window_size": "15m", "min_edge": 0.1},
     )
 
 
@@ -93,6 +94,7 @@ def _bitcoin_signal(*, action: str = "BUY_YES") -> BitcoinSignal:
         htf_bias="BULLISH",
         est_prob=0.42,
         raw_est_prob=0.47,
+        entry_policy={"side": "up", "window_size": "15m", "min_edge": 0.1},
     )
 
 
@@ -217,6 +219,18 @@ async def test_buy_no_annotation_receives_yes_mid_not_no_entry_price():
     annotation_kwargs = bot._annotate_entry_async.call_args.kwargs
     assert annotation_kwargs["action"] == "BUY_NO"
     assert annotation_kwargs["yes_price"] == pytest.approx(0.63)
+
+
+@pytest.mark.asyncio
+async def test_strategy_execution_logs_entry_policy_metadata_for_macro_signals():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _sol_like_signal(action="BUY_NO", strategy_name="sol_macro")
+
+    await bot._execute_sol_macro_signal_impl(sig)
+
+    journal_kwargs = bot.journal.log_entry.call_args.kwargs
+    assert journal_kwargs["extra"]["entry_policy"] == sig.entry_policy
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,24 @@
 
 ---
 
+## 2026-05-16 — Lane-specific entry policy for BTC/SOL/ETH/HYPE/XRP macro lanes
+
+**`src/analysis/lane_entry_policy.py`:** Added a shared lane-entry resolver parallel to the existing exit resolver. Entry policy now resolves by **`strategy + window + side`** with precedence **global defaults → strategy entry policy → strategy `window_side_overrides`**, and returns typed fields for `enabled`, `min_edge`, `hard_min_edge`, `ai_override_min_edge`, `entry_price_min`, `entry_price_max`, `entry_window_min`, `entry_window_max`, and `size_multiplier`.
+
+**`src/strategies/bitcoin.py`, `src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`:** Replaced scattered strategy-specific entry threshold reads with the shared lane policy path. Entry admission now uses the resolved lane for both paper and live decisions, with explicit skip reasons for `lane_disabled`, `lane_min_edge`, `lane_entry_window`, `lane_price_band`, and `lane_size_too_small`. `eth_macro`, `hype_macro`, and `xrp_macro` inherit the shared SOL-family lane policy flow.
+
+**`src/main.py`:** Journal/open-position extras now persist the resolved `entry_policy` metadata used at admission so lane-level post-trade audits can see the exact thresholds and multipliers applied. This file also retains the same config-application path for live strategy instances; no separate paper-only admission logic was introduced.
+
+**`config/settings.yaml`:** Added explicit `entry_policy` blocks for **`bitcoin`**, **`sol_macro`**, **`eth_macro`**, **`hype_macro`**, and **`xrp_macro`**, including `window_side_overrides` for `5m` / `15m` / `30m` where those lanes trade. Legacy strategy-level keys remain readable as compatibility fallback, but new lane-policy keys take precedence.
+
+**Tests:** Added `tests/test_lane_entry_policy.py` for resolver precedence and fallback coverage, updated execution-driver and SOL skip-accounting coverage for lane skip reasons / journal metadata, and kept existing live-config / exit-policy regression coverage green.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_lane_entry_policy.py tests/test_strategy_execution_drivers.py tests/test_live_config_apply.py tests/test_updown_exit_shared.py tests/test_eth_macro.py tests/test_sol_macro.py tests/test_updown_backtest_parity.py tests/test_sol_macro_skip_accounting.py -q` and `.venv/bin/python -m pytest tests/test_bitcoin.py tests/test_bitcoin_scenarios.py tests/test_strategy_enabled_defaults.py -q` both passed before ship.
+
+**Not committed (runtime data):** `data/entry_prices/updown_fills.jsonl`, `data/calibration/`, `data/lane_state_audit.jsonl`.
+
+---
+
 ## 2026-05-15 — Lane calibration (shadow), calibration log, BTC HTF vote diagnostics
 
 **`src/analysis/calibration_log.py`, `src/analysis/lane_calibration.py`, `tools/calibration_report.py`:** Phase 0 append-only calibration trade log (`data/calibration/trades.jsonl`) and Phase 6 per-lane EWMA/Beta posteriors (`data/calibration/lane_posteriors.json`). **`lane_calibration.shadow_mode: true`** in config — posteriors update on close but **`calibrate()`** does not change live entries until a follow-up PR flips shadow off and wires entry-side correction.

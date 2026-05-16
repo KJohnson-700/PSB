@@ -44,6 +44,11 @@ from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
+from src.analysis.lane_entry_policy import (
+    entry_policy_to_dict,
+    resolve_entry_policy_side,
+    resolve_lane_entry_policy,
+)
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.strategies.strategy_ai_context import (
@@ -88,6 +93,10 @@ class BitcoinSignal(BaseModel):
     indicator_snapshot: Optional[Dict[str, Any]] = Field(
         None,
         description="Compact indicator state persisted for calibration and forensics",
+    )
+    entry_policy: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Resolved lane-specific entry policy used for this signal",
     )
 
 
@@ -383,6 +392,65 @@ class BitcoinStrategy:
         if aligned_max <= aligned_min:
             return win_min, win_max
         return aligned_min, aligned_max
+
+    def _default_entry_window_bounds(self, tf: str) -> tuple[float, float]:
+        if tf == "5m":
+            return self._resolve_entry_window_bounds(
+                tf="5m",
+                default_min=2.5,
+                default_max=4.5,
+            )
+        if tf == "30m":
+            return self._resolve_entry_window_bounds(
+                tf="30m",
+                default_min=25.0,
+                default_max=29.0,
+            )
+        return self._resolve_entry_window_bounds(
+            tf="15m",
+            default_min=12.5,
+            default_max=14.5,
+        )
+
+    def _legacy_entry_policy(
+        self,
+        *,
+        window_size: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        min_edge = self.min_edge_5m if window_size == "5m" else self.min_edge
+        min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
+        if action == "BUY_NO" and min_edge_buy_no > 0:
+            min_edge = min_edge_buy_no
+        win_min, win_max = self._default_entry_window_bounds(window_size)
+        return {
+            "enabled": True,
+            "min_edge": float(min_edge),
+            "hard_min_edge": 0.0,
+            "ai_override_min_edge": float(self.min_edge_5m_ai_override),
+            "entry_price_min": float(self.config.get("entry_price_min_updown", 0.46)),
+            "entry_price_max": float(self.config.get("entry_price_max_updown", 0.54)),
+            "entry_window_min": float(win_min),
+            "entry_window_max": float(win_max),
+            "size_multiplier": 1.0,
+        }
+
+    def _resolve_lane_entry_policy(
+        self,
+        *,
+        window_size: str,
+        action: str,
+        direction: str,
+    ):
+        side = resolve_entry_policy_side(direction=direction, action=action)
+        policy = resolve_lane_entry_policy(
+            strategy_name=self._signal_strategy_name,
+            window_size=window_size,
+            side=side,
+            full_config=self.full_config,
+            legacy_policy=self._legacy_entry_policy(window_size=window_size, action=action),
+        )
+        return side, policy
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
@@ -1122,34 +1190,7 @@ class BitcoinStrategy:
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
                 _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-                if _updown_tf == "5m":
-                    # 5m candles: enter near candle open. Optionally auto-align to scan cadence.
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="5m",
-                        default_min=2.5,
-                        default_max=4.5,
-                    )
-                elif _updown_tf == "30m":
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="30m",
-                        default_min=25.0,
-                        default_max=29.0,
-                    )
-                else:
-                    # 15m candles: enter near candle open. Optionally auto-align to scan cadence.
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="15m",
-                        default_min=12.5,
-                        default_max=14.5,
-                    )
                 _sample("mins_left", _mins_left)
-                if _eval_left < _win_min or _eval_left > _win_max:
-                    _bump_skip("outside_entry_window")
-                    logger.debug(
-                        f"  BTC skip '{market.question[:40]}' — "
-                        f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
-                    )
-                    continue
                 _timing_window_open = self._within_entry_timing_window(
                     mins_left=_eval_left,
                     tf=_updown_tf,
@@ -1832,14 +1873,40 @@ class BitcoinStrategy:
                             )
 
             # ── Final filters ──
-            effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
-            # BUY_NO floor: min_edge_buy_no, when set, REPLACES the base floor for BUY_NO
-            # (was previously max-clamped, silently inert when set below base). For BTC the
-            # explicit value 0.11 still acts as a stricter requirement than base 0.10.
-            # Downstream layers (NEUTRAL HTF, regime mult, late-window) still raise via max().
-            _min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
-            if action == "BUY_NO" and _min_edge_buy_no > 0:
-                effective_min_edge = _min_edge_buy_no
+            lane_side, lane_policy = self._resolve_lane_entry_policy(
+                window_size=_updown_tf if is_updown else "15m",
+                action=action,
+                direction=direction,
+            )
+            entry_policy_meta = entry_policy_to_dict(
+                lane_policy,
+                strategy_name=self._signal_strategy_name,
+                window_size=_updown_tf if is_updown else "15m",
+                side=lane_side,
+            )
+            if is_updown and not lane_policy.enabled:
+                _bump_skip("lane_disabled")
+                logger.info(
+                    "  BTC skip '%s' %s — lane disabled side=%s window=%s",
+                    market.question[:45],
+                    action,
+                    lane_side,
+                    _updown_tf,
+                )
+                continue
+            if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
+                _bump_skip("lane_entry_window")
+                logger.debug(
+                    "  BTC skip '%s' — %.1fm left (eval %.2f), lane=%s needs %.2f–%.2fm",
+                    market.question[:40],
+                    _mins_left,
+                    _eval_left,
+                    lane_side,
+                    lane_policy.entry_window_min,
+                    lane_policy.entry_window_max,
+                )
+                continue
+            effective_min_edge = max(lane_policy.min_edge, lane_policy.hard_min_edge)
             # NEUTRAL HTF: no confirmed bias — demand stronger edge for updown leans.
             # Applies to both 5m and 15m: the 5m path has zero backtest coverage under NEUTRAL
             # (all 1735 trades in Apr-2026 BTC 5m backtest were BULLISH/BEARISH only).
@@ -1869,11 +1936,15 @@ class BitcoinStrategy:
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
             if _hold_age < self.ai_hold_veto_ttl_sec:
-                if edge < self.min_edge_5m_ai_override:
+                _lane_ai_override = max(
+                    lane_policy.ai_override_min_edge,
+                    lane_policy.min_edge,
+                )
+                if edge < _lane_ai_override:
                     _bump_skip("ai_hold_veto_active")
                     logger.info(
                         f"  BTC ai-hold veto '{market.question[:45]}' "
-                        f"— edge={edge:.4f} < override={self.min_edge_5m_ai_override:.4f} "
+                        f"— edge={edge:.4f} < override={_lane_ai_override:.4f} "
                         f"(AI said HOLD {_hold_age:.0f}s ago)"
                     )
                     continue
@@ -2032,11 +2103,11 @@ class BitcoinStrategy:
                 pass
             _sample("edge", edge)
             if edge < effective_min_edge:
-                _bump_skip("edge_below_min")
+                _bump_skip("lane_min_edge")
                 if action == "BUY_NO":
                     _record_buy_no_skip(
                         market=market,
-                        skip_reason="edge_below_min",
+                        skip_reason="lane_min_edge",
                         yes_price=yes_price,
                         edge=edge,
                         effective_min_edge=effective_min_edge,
@@ -2194,8 +2265,8 @@ class BitcoinStrategy:
                 #   BUY_YES at yes_price < 0.46: market is already bearish → no momentum edge
                 #   BUY_NO at yes_price > 0.54: allow (cheap NO when YES is rich)
                 #   BUY_YES at yes_price > 0.54 and BUY_NO at yes_price < 0.46: consensus extremes
-                _up_min = self.config.get("entry_price_min_updown", 0.46)
-                _up_max = self.config.get("entry_price_max_updown", 0.54)
+                _up_min = lane_policy.entry_price_min
+                _up_max = lane_policy.entry_price_max
                 _updown_band_bad = (
                     (yes_price < _up_min or yes_price > _up_max)
                     if action == "BUY_YES"
@@ -2206,11 +2277,11 @@ class BitcoinStrategy:
                     )
                 )
                 if _updown_band_bad:
-                    _bump_skip("entry_price_out_of_range_updown")
+                    _bump_skip("lane_price_band")
                     if action == "BUY_NO":
                         _record_buy_no_skip(
                             market=market,
-                            skip_reason="entry_price_out_of_range_updown",
+                            skip_reason="lane_price_band",
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,
@@ -2241,14 +2312,17 @@ class BitcoinStrategy:
                 _bump_skip("kelly_nonpositive")
                 continue
 
+            if lane_policy.size_multiplier > 0:
+                raw_size *= lane_policy.size_multiplier
+
             # Apply dynamic exposure scaling
             size = self.exposure_manager.scale_size(raw_size)
             if size <= 0:
-                _bump_skip("scaled_size_nonpositive")
+                _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
                     _record_buy_no_skip(
                         market=market,
-                        skip_reason="scaled_size_nonpositive",
+                        skip_reason="lane_size_too_small",
                         yes_price=yes_price,
                         edge=edge,
                         effective_min_edge=effective_min_edge,
@@ -2258,6 +2332,8 @@ class BitcoinStrategy:
                         window_size=_updown_tf if is_updown else "threshold",
                     )
                 continue
+            if lane_policy.size_multiplier > 0 and lane_policy.size_multiplier < 0.999:
+                reason_parts.append(f"lane_size={lane_policy.size_multiplier:.2f}x")
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
 
             if action == "BUY_YES":
@@ -2301,6 +2377,7 @@ class BitcoinStrategy:
                 rsi=round(ta.rsi_14, 1),
                 side_source="btc_htf_bias",
                 oracle_basis_bps=None,
+                entry_policy=entry_policy_meta,
                 indicator_snapshot={
                     "btc_4h_histogram": round(float(macd_4h.histogram or 0.0), 4),
                     "btc_4h_histogram_rising": bool(macd_4h.histogram_rising),

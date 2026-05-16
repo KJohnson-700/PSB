@@ -18,6 +18,7 @@ from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
+from src.analysis.lane_entry_policy import entry_policy_to_dict
 from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
@@ -630,22 +631,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
             _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-            if _updown_tf == "5m":
-                _win_min, _win_max = self._resolve_entry_window_bounds(
-                    tf="5m", default_min=2.75, default_max=3.75
-                )
-            elif _updown_tf == "30m":
-                _win_min, _win_max = self._resolve_entry_window_bounds(
-                    tf="30m", default_min=26.0, default_max=28.66
-                )
-            else:
-                _win_min, _win_max = self._resolve_entry_window_bounds(
-                    tf="15m", default_min=13.0, default_max=14.33
-                )
             _sample("mins_left", _mins_left)
-            if _eval_left < _win_min or _eval_left > _win_max:
-                _bump_skip("outside_entry_window")
-                continue
             _timing_window_open = self._within_entry_timing_window(
                 mins_left=_eval_left,
                 tf=_updown_tf,
@@ -865,16 +851,28 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("nonpositive_edge")
                 continue
 
-            effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
-            # BUY_NO floor: per-strategy override replaces base (previously not applied at
-            # all in eth_macro — the YAML setting `min_edge_buy_no: 0.08` was silently
-            # ignored here despite being honored — buggy — in sol/hype/xrp).
-            _min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
-            if action == "BUY_NO" and _min_edge_buy_no > 0:
-                effective_min_edge = max(
-                    float(getattr(self, "hard_min_edge", 0.0) or 0.0),
-                    _min_edge_buy_no,
-                )
+            lane_side, lane_policy = self._resolve_lane_entry_policy(
+                window_size=_updown_tf,
+                action=action,
+                direction=direction,
+            )
+            entry_policy_meta = entry_policy_to_dict(
+                lane_policy,
+                strategy_name=self._signal_strategy_name,
+                window_size=_updown_tf,
+                side=lane_side,
+            )
+            effective_min_edge = max(
+                lane_policy.min_edge,
+                float(getattr(self, "hard_min_edge", 0.0) or 0.0),
+                lane_policy.hard_min_edge,
+            )
+            if not lane_policy.enabled:
+                _bump_skip("lane_disabled")
+                continue
+            if _eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max:
+                _bump_skip("lane_entry_window")
+                continue
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
@@ -950,9 +948,7 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
-            _ai_override_bar = float(self.min_edge_5m_ai_override)
-            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
-                _ai_override_bar *= self._regime_min_edge_mult(btc_1h_regime)
+            _ai_override_bar = max(lane_policy.ai_override_min_edge, lane_policy.min_edge)
             if _hold_age < self.ai_hold_veto_ttl_sec and edge < _ai_override_bar:
                 _bump_skip("ai_hold_veto")
                 continue
@@ -1113,12 +1109,12 @@ class ETHMacroStrategy(SolMacroStrategy):
             if edge < effective_min_edge:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
-                _bump_skip("edge_below_min")
+                _bump_skip("lane_min_edge")
                 if action == "BUY_NO":
                     _skip_reason = (
                         "edge_after_penalty_below_threshold"
                         if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge
-                        else "edge_below_min"
+                        else "lane_min_edge"
                     )
                     self._emit_buy_no_skip(
                         market=market,
@@ -1158,22 +1154,22 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             if action == "BUY_YES":
                 _entry_price_bad = (
-                    yes_price < self.entry_price_min
-                    or yes_price > self.entry_price_max
+                    yes_price < lane_policy.entry_price_min
+                    or yes_price > lane_policy.entry_price_max
                 )
             else:
                 # BUY_NO: allow rich-YES / cheap-NO setups above max YES;
                 # still reject overly bearish YES where NO is already expensive.
-                _entry_price_bad = yes_price < self.entry_price_min
+                _entry_price_bad = yes_price < lane_policy.entry_price_min
             if _entry_price_bad:
-                _bump_skip("entry_price_band")
+                _bump_skip("lane_price_band")
                 if action == "BUY_NO":
                     self._emit_buy_no_skip(
                         market=market,
                         bankroll=bankroll,
                         payload=self._make_buy_no_skip_payload(
                             market=market,
-                            skip_reason="entry_price_band",
+                            skip_reason="lane_price_band",
                             window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
@@ -1223,20 +1219,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
-            if self.tuning_size_multiplier > 0:
-                raw_size *= self.tuning_size_multiplier
-            if is_5m and self.calibration_size_multiplier_5m > 0:
-                raw_size *= self.calibration_size_multiplier_5m
+            if lane_policy.size_multiplier > 0:
+                raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
-                _bump_skip("size_too_small")
+                _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
                     self._emit_buy_no_skip(
                         market=market,
                         bankroll=bankroll,
                         payload=self._make_buy_no_skip_payload(
                             market=market,
-                            skip_reason="size_too_small",
+                            skip_reason="lane_size_too_small",
                             window_size=_updown_tf,
                             yes_price=yes_price,
                             edge=edge,
@@ -1260,10 +1254,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 f"oracle_basis={eth.oracle_basis_bps:+.1f}bps" if eth.oracle_basis_bps is not None else "",
                 f"exp={exp_tier.value}(x{exp_multiplier:.1f})",
             ])
-            if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
-                reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
-            if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
-                reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
+            if lane_policy.size_multiplier > 0 and lane_policy.size_multiplier < 0.999:
+                reason_parts.append(f"lane_size={lane_policy.size_multiplier:.2f}x")
             _btc_spot_for_signal = (
                 float(btc_ta.current_price)
                 if btc_ta
@@ -1291,6 +1283,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 alt_asset_code="eth",
                 htf_bias=primary_htf_bias,
                 btc_1h_regime=btc_1h_regime,
+                entry_policy=entry_policy_meta,
                 window_size=_updown_tf,
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(estimated_prob, 4),

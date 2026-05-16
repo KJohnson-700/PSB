@@ -73,6 +73,7 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     bot.event_exposure_manager = _weather_em
     bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
+    bot.lane_calibrator = object()
 
     bot.apply_config_updates(
         {
@@ -104,6 +105,11 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.event_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.notifier.reloaded_with is bot.config
+    assert bot.bitcoin_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.sol_macro_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.eth_macro_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.hype_macro_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.xrp_macro_strategy.lane_calibrator is bot.lane_calibrator
 
 
 def test_apply_realized_pnl_to_bankroll_floors_at_zero():

@@ -248,6 +248,13 @@ lane_calibration:
   enabled: true
   shadow_mode: true   # set to false (and ship the calibrate() entry-wiring PR) to activate corrections
 
+entry_policy:
+  defaults:
+    enabled: true
+    hard_min_edge: 0.0
+    ai_override_min_edge: 0.0
+    size_multiplier: 1.0
+
 # ============================================
 # STRATEGY THRESHOLDS
 # ============================================
@@ -361,6 +368,57 @@ strategies:
     entry_window_auto_align_jitter_sec: 10
     # Shave seconds off mins_left before band check (sync + strategy evaluation latency).
     entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.0
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.08
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 0.5
+            entry_window_max: 5.5
+          down:
+            min_edge: 0.09
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 0.5
+            entry_window_max: 5.5
+        15m:
+          up:
+            min_edge: 0.10
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 19.0
+          down:
+            min_edge: 0.09
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 19.0
+        30m:
+          up:
+            min_edge: 0.10
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 25.0
+            entry_window_max: 29.0
+          down:
+            min_edge: 0.09
+            ai_override_min_edge: 0.10
+            entry_price_min: 0.45
+            entry_price_max: 0.55
+            entry_window_min: 25.0
+            entry_window_max: 29.0
     # Price zones where AI is skipped (edge is obvious)
     clear_edge_low: 0.20
     clear_edge_high: 0.80
@@ -561,6 +619,52 @@ strategies:
     entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.07
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 4.0
+          down:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 4.0
+        15m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 1.0
+            entry_window_max: 28.0
+          down:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 1.0
+            entry_window_max: 28.0
+        30m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
+          down:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
 
     # ── BTC minimum dollar move required before entering ──
     # BTC must have moved at least this many dollars in the relevant window.
@@ -686,6 +790,54 @@ strategies:
     entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 15
     entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.0
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.10
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.5
+            entry_window_max: 4.0
+            size_multiplier: 0.40
+          down:
+            min_edge: 0.10
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.5
+            entry_window_max: 4.0
+            size_multiplier: 0.40
+        15m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 1.0
+            entry_window_max: 24.0
+          down:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 1.0
+            entry_window_max: 24.0
+        30m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
+          down:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -784,6 +936,52 @@ strategies:
     entry_window_auto_align_max_expand_min: 4.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.07
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.07
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 5.5
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 5.5
+        15m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 2.0
+            entry_window_max: 32.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 2.0
+            entry_window_max: 32.0
+        30m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 26.0
+            entry_window_max: 28.66
     btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
@@ -900,6 +1098,54 @@ strategies:
     entry_window_auto_align_max_expand_min: 3.0
     entry_window_auto_align_jitter_sec: 10
     entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.0
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+        15m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+        30m:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 26.0
+            entry_window_max: 28.66
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 26.0
+            entry_window_max: 28.66
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0

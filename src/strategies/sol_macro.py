@@ -59,6 +59,11 @@ from src.analysis.updown_composite_score import (
     score_updown_candidate,
     validate_oracle_reference,
 )
+from src.analysis.lane_entry_policy import (
+    entry_policy_to_dict,
+    resolve_entry_policy_side,
+    resolve_lane_entry_policy,
+)
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
@@ -141,6 +146,10 @@ class SolMacroSignal(BaseModel):
     indicator_snapshot: Optional[Dict[str, Any]] = Field(
         None,
         description="Compact indicator state persisted for calibration and forensics",
+    )
+    entry_policy: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Resolved lane-specific entry policy used for this signal",
     )
     reason: str = Field(default="", description="Why this signal was generated")
     strategy_name: str = Field(default="sol_macro", description="Journal/risk strategy key")
@@ -592,6 +601,85 @@ class SolMacroStrategy:
         if aligned_max <= aligned_min:
             return win_min, win_max
         return aligned_min, aligned_max
+
+    def _default_entry_window_bounds(self, tf: str) -> tuple[float, float]:
+        if tf == "5m":
+            return self._resolve_entry_window_bounds(
+                tf="5m",
+                default_min=2.75,
+                default_max=3.75,
+            )
+        if tf == "30m":
+            return self._resolve_entry_window_bounds(
+                tf="30m",
+                default_min=26.0,
+                default_max=28.66,
+            )
+        return self._resolve_entry_window_bounds(
+            tf="15m",
+            default_min=13.0,
+            default_max=14.33,
+        )
+
+    def _legacy_entry_policy(
+        self,
+        *,
+        window_size: str,
+        action: str,
+        direction: str,
+    ) -> Dict[str, Any]:
+        min_edge = self.min_edge_5m if window_size == "5m" else self.min_edge
+        min_edge = max(min_edge, self.hard_min_edge)
+        if action == "BUY_NO" and self.min_edge_buy_no > 0:
+            min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
+        win_min, win_max = self._default_entry_window_bounds(window_size)
+        size_multiplier = float(self.tuning_size_multiplier)
+        if window_size == "5m" and self.calibration_size_multiplier_5m > 0:
+            size_multiplier *= float(self.calibration_size_multiplier_5m)
+        thesis_side = resolve_entry_policy_side(direction=direction, action=action)
+        lane_mult = self._size_multiplier_for_lane(thesis_side)
+        if lane_mult > 0:
+            size_multiplier *= lane_mult
+        entry_price_max = float(self.entry_price_max)
+        if action == "BUY_YES" and window_size != "5m":
+            entry_price_max = float(
+                self.config.get(
+                    "entry_price_max_15m_yes_side",
+                    self.config.get("entry_price_max_15m_buy_yes", entry_price_max),
+                )
+            )
+        return {
+            "enabled": True,
+            "min_edge": float(min_edge),
+            "hard_min_edge": float(self.hard_min_edge),
+            "ai_override_min_edge": float(self.min_edge_5m_ai_override),
+            "entry_price_min": float(self.entry_price_min),
+            "entry_price_max": float(entry_price_max),
+            "entry_window_min": float(win_min),
+            "entry_window_max": float(win_max),
+            "size_multiplier": float(size_multiplier),
+        }
+
+    def _resolve_lane_entry_policy(
+        self,
+        *,
+        window_size: str,
+        action: str,
+        direction: str,
+    ):
+        side = resolve_entry_policy_side(direction=direction, action=action)
+        policy = resolve_lane_entry_policy(
+            strategy_name=self._signal_strategy_name,
+            window_size=window_size,
+            side=side,
+            full_config=self.full_config,
+            legacy_policy=self._legacy_entry_policy(
+                window_size=window_size,
+                action=action,
+                direction=direction,
+            ),
+        )
+        return side, policy
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
@@ -1563,32 +1651,7 @@ class SolMacroStrategy:
                 )
                 _mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
                 _eval_left = max(0.0, _mins_left - _latency_sec / 60.0)
-                if _updown_tf == "5m":
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="5m",
-                        default_min=2.75,
-                        default_max=3.75,
-                    )
-                elif _updown_tf == "30m":
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="30m",
-                        default_min=26.0,
-                        default_max=28.66,
-                    )
-                else:
-                    _win_min, _win_max = self._resolve_entry_window_bounds(
-                        tf="15m",
-                        default_min=13.0,
-                        default_max=14.33,
-                    )
                 _sample("mins_left", _mins_left)
-                if _eval_left < _win_min or _eval_left > _win_max:
-                    _bump_skip("outside_entry_window")
-                    logger.debug(
-                        f"  {_brand} skip '{market.question[:40]}' — "
-                        f"{_mins_left:.1f}m left (eval {_eval_left:.2f}), need {_win_min}–{_win_max}m window"
-                    )
-                    continue
                 _timing_window_open = self._within_entry_timing_window(
                     mins_left=_eval_left,
                     tf=_updown_tf,
@@ -2236,10 +2299,19 @@ class SolMacroStrategy:
                 _hold_ts = self._ai_hold_cache.get(market.id, 0)
                 _hold_age = time.time() - _hold_ts
                 if _hold_age < self.ai_hold_veto_ttl_sec:
-                    if edge < _regime_ai_override:
+                    _hold_lane_side, _hold_lane_policy = self._resolve_lane_entry_policy(
+                        window_size=_updown_tf if is_updown else "15m",
+                        action=action,
+                        direction=direction,
+                    )
+                    _lane_ai_override = max(
+                        _hold_lane_policy.ai_override_min_edge,
+                        _hold_lane_policy.min_edge,
+                    )
+                    if edge < _lane_ai_override:
                         logger.info(
                             f"  {self._signal_strategy_name} ai-hold veto '{market.question[:45]}' — "
-                            f"edge={edge:.4f} < override={_regime_ai_override:.4f} "
+                            f"edge={edge:.4f} < override={_lane_ai_override:.4f} "
                             f"(AI said HOLD {_hold_age:.0f}s ago)"
                         )
                         continue
@@ -2392,16 +2464,41 @@ class SolMacroStrategy:
                             )
 
             # ── Final filters (both paths) ──
-            effective_min_edge = self.min_edge_5m if is_5m else self.min_edge
-            effective_min_edge = max(effective_min_edge, self.hard_min_edge)
-            # BUY_NO floor: min_edge_buy_no, when set, REPLACES the base floor for BUY_NO
-            # (instead of only being allowed to raise it). Lets per-strategy YAML overrides
-            # loosen BUY_NO admissions when the short side has been historically profitable
-            # (e.g. xrp/hype/eth at 0.08 vs base 0.09). Bitcoin's 0.11 still works the same
-            # way (raises above 0.10). Downstream layers (regime mult, LTF unconfirmed,
-            # NEUTRAL HTF, late-window add-on) still raise this further via max().
-            if action == "BUY_NO" and self.min_edge_buy_no > 0:
-                effective_min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
+            lane_side, lane_policy = self._resolve_lane_entry_policy(
+                window_size=_updown_tf if is_updown else "15m",
+                action=action,
+                direction=direction,
+            )
+            entry_policy_meta = entry_policy_to_dict(
+                lane_policy,
+                strategy_name=self._signal_strategy_name,
+                window_size=_updown_tf if is_updown else "15m",
+                side=lane_side,
+            )
+            effective_min_edge = max(lane_policy.min_edge, lane_policy.hard_min_edge)
+            if is_updown and not lane_policy.enabled:
+                _bump_skip("lane_disabled")
+                logger.info(
+                    "  %s skip '%s...' — lane disabled side=%s window=%s",
+                    self._signal_strategy_name,
+                    market.question[:40],
+                    lane_side,
+                    _updown_tf,
+                )
+                continue
+            if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
+                _bump_skip("lane_entry_window")
+                logger.debug(
+                    "  %s skip '%s...' — %.1fm left (eval %.2f), lane=%s needs %.2f–%.2fm",
+                    self._signal_strategy_name,
+                    market.question[:40],
+                    _mins_left,
+                    _eval_left,
+                    lane_side,
+                    lane_policy.entry_window_min,
+                    lane_policy.entry_window_max,
+                )
+                continue
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and _updown_tf != "5m":
                 effective_min_edge = max(
@@ -2583,12 +2680,12 @@ class SolMacroStrategy:
             if edge < effective_min_edge:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
-                _bump_skip("edge_below_min")
+                _bump_skip("lane_min_edge")
                 if action == "BUY_NO":
                     _skip_reason = (
                         "edge_after_penalty_below_threshold"
                         if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge
-                        else "edge_below_min"
+                        else "lane_min_edge"
                     )
                     self._emit_buy_no_skip(
                         market=market,
@@ -2770,15 +2867,8 @@ class SolMacroStrategy:
             #   market YES in [0.46, 0.54] → 72% WR  (sweet spot)
             #   market YES < 0.46 or > 0.54 → ~30% WR (market consensus fighting signal)
             if is_updown:
-                _yp_low = self.entry_price_min
-                _yp_high = self.entry_price_max
-                if action == "BUY_YES" and _updown_tf != "5m":
-                    _yp_high = float(
-                        self.config.get(
-                            "entry_price_max_15m_yes_side",
-                            self.config.get("entry_price_max_15m_buy_yes", _yp_high),
-                        )
-                    )
+                _yp_low = lane_policy.entry_price_min
+                _yp_high = lane_policy.entry_price_max
                 if action == "BUY_YES":
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 elif action == "BUY_NO":
@@ -2786,14 +2876,14 @@ class SolMacroStrategy:
                 else:
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 if _updown_band_bad:
-                    _bump_skip("entry_price_band_updown")
+                    _bump_skip("lane_price_band")
                     if action == "BUY_NO":
                         self._emit_buy_no_skip(
                             market=market,
                             bankroll=bankroll,
                             payload=self._make_buy_no_skip_payload(
                                 market=market,
-                                skip_reason="entry_price_band_updown",
+                                skip_reason="lane_price_band",
                                 window_size=_updown_tf if is_updown else "15m",
                                 yes_price=yes_price,
                                 edge=edge,
@@ -2857,24 +2947,18 @@ class SolMacroStrategy:
                 raw_size *= self._regime_size_mult(btc_1h_regime)
             if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
                 raw_size *= self.degraded_correlation_size_multiplier
-            if self.tuning_size_multiplier > 0:
-                raw_size *= self.tuning_size_multiplier
-            if is_5m and self.calibration_size_multiplier_5m > 0:
-                raw_size *= self.calibration_size_multiplier_5m
-            if is_updown:
-                _lane_mult = self._size_multiplier_for_lane(_updown_lane)
-                if _lane_mult > 0:
-                    raw_size *= _lane_mult
+            if lane_policy.size_multiplier > 0:
+                raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
-                _bump_skip("size_too_small")
+                _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
                     self._emit_buy_no_skip(
                         market=market,
                         bankroll=bankroll,
                         payload=self._make_buy_no_skip_payload(
                             market=market,
-                            skip_reason="size_too_small",
+                            skip_reason="lane_size_too_small",
                             window_size=_updown_tf if is_updown else "threshold",
                             yes_price=yes_price,
                             edge=edge,
@@ -2889,14 +2973,8 @@ class SolMacroStrategy:
                     )
                 continue
             reason_parts.append(f"exp={exp_tier.value}(x{exp_multiplier:.1f})")
-            if self.tuning_size_multiplier > 0 and self.tuning_size_multiplier < 0.999:
-                reason_parts.append(f"tune_size={self.tuning_size_multiplier:.2f}x")
-            if is_5m and self.calibration_size_multiplier_5m > 0 and self.calibration_size_multiplier_5m < 0.999:
-                reason_parts.append(f"cal5m_size={self.calibration_size_multiplier_5m:.2f}x")
-            if is_updown:
-                _lane_mult = self._size_multiplier_for_lane(_updown_lane)
-                if _lane_mult > 0 and _lane_mult < 0.999:
-                    reason_parts.append(f"{_updown_lane}_size={_lane_mult:.2f}x")
+            if lane_policy.size_multiplier > 0 and lane_policy.size_multiplier < 0.999:
+                reason_parts.append(f"lane_size={lane_policy.size_multiplier:.2f}x")
 
             reason_str = " | ".join(r for r in reason_parts if r)
 
@@ -2934,6 +3012,7 @@ class SolMacroStrategy:
                     if sol.oracle_basis_bps is not None
                     else None
                 ),
+                entry_policy=entry_policy_meta,
                 indicator_snapshot={
                     "alt_1h_histogram": round(float(sol.macd_1h.histogram or 0.0), 4),
                     "alt_1h_histogram_rising": bool(sol.macd_1h.histogram_rising),
