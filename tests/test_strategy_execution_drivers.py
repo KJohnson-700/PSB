@@ -51,6 +51,10 @@ def _attach_mocks(bot: PolyBot) -> None:
     order = MagicMock()
     order.order_id = "ord_exec_driver_test"
     bot.clob_client.place_order = AsyncMock(return_value=order)
+    bot.lane_manager = MagicMock()
+    bot.lane_manager.can_execute = MagicMock(
+        side_effect=lambda lane_id, *, dry_run: (True, "", "active", lane_id)
+    )
 
 
 def _sol_like_signal(*, action: str, strategy_name: str = "hype_macro") -> SolMacroSignal:

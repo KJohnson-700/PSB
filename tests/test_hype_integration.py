@@ -485,6 +485,13 @@ def test_hyperliquid_hype_service_parses_candle_snapshot(monkeypatch):
         _fake_post,
     )
     svc = HyperliquidHypeService()
+    # Binance USDM is now the primary live source; force fallthrough to verify
+    # this test still exercises the Hyperliquid parsing path it was written for.
+    monkeypatch.setattr(
+        svc,
+        "_fetch_binance_hype_klines",
+        lambda interval, limit: svc._empty_klines_df(),
+    )
     df = svc.fetch_klines("HYPEUSDT", interval="5m", limit=2)
     assert len(df) == 2
     assert float(df["close"].iloc[-1]) == 1.22

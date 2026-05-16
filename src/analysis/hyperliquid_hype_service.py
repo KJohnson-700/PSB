@@ -27,6 +27,14 @@ _HL_MAX_CANDLES_1M_PER_CHUNK = 500
 # Stop bisecting when a segment is this many bars or fewer (still empty → give up).
 _HL_MIN_BARS_TO_BISECT = 48
 
+# Binance USDM perpetual is the primary live HYPE spot source; Hyperliquid is fallback.
+# Matches backtest path in ``src/backtest/ohlcv_loader.py`` so live and backtest see the
+# same spot reference (incl. oracle basis vs Chainlink). HL only carries this lane during
+# Binance outages / pre-listing windows / geo-block.
+_BINANCE_FUTURES_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines"
+_BINANCE_HYPE_FUTURES_SYMBOL = "HYPEUSDT"
+_BINANCE_LIVE_INTERVALS = {"1m", "5m", "15m", "30m", "1h", "4h", "1d"}
+
 
 def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Map ``config['hyperliquid']`` subset to ``HyperliquidHypeService`` keyword args."""
@@ -208,17 +216,67 @@ class HyperliquidHypeService(SOLBTCService):
         )
         return df.copy()
 
-    def _fetch_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
-        """Fetch HYPE candles from Hyperliquid (for live non-backtest use).
+    def _fetch_binance_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
+        """Primary live source: Binance USDM perpetual ``HYPEUSDT`` klines.
 
-        Behavior on failure:
-          - Transient network errors / 408 / 425 / 429 / 5xx already retried by
-            ``requests_post_with_retries`` (per ``max_retries``).
-          - Non-list / empty response retried once (Hyperliquid occasionally
-            returns ``[]`` mid-update).
-          - Final failure falls back to the last good cached frame if it's
-            fresh enough (``stale_on_error_max_age_sec``); else empty.
+        Returns empty frame on any failure (caller falls through to Hyperliquid).
+        Single-shot request — live ``limit`` is bounded (caller passes ≤500) so no
+        chunking needed here; backtest range pagination lives in ``ohlcv_loader``.
         """
+        if interval not in _BINANCE_LIVE_INTERVALS:
+            return self._empty_klines_df()
+        params = {
+            "symbol": _BINANCE_HYPE_FUTURES_SYMBOL,
+            "interval": interval,
+            "limit": int(max(1, min(1000, limit))),
+        }
+        try:
+            resp = self._http_session.get(
+                _BINANCE_FUTURES_KLINES_URL,
+                params=params,
+                timeout=(self._connect_timeout_sec, self._request_timeout_sec),
+            )
+            resp.raise_for_status()
+            rows = resp.json() or []
+        except Exception as e:
+            logger.info("Binance USDM HYPE %s unavailable (%s); falling back to Hyperliquid", interval, e)
+            return self._empty_klines_df()
+        if not isinstance(rows, list) or not rows:
+            return self._empty_klines_df()
+        parsed = []
+        for row in rows:
+            try:
+                parsed.append(
+                    {
+                        "open_time": pd.to_datetime(int(row[0]), unit="ms", utc=True),
+                        "open": float(row[1]),
+                        "high": float(row[2]),
+                        "low": float(row[3]),
+                        "close": float(row[4]),
+                        "volume": float(row[5]),
+                        "close_time": pd.to_datetime(int(row[6]), unit="ms", utc=True),
+                    }
+                )
+            except Exception:
+                continue
+        if not parsed:
+            return self._empty_klines_df()
+        df = pd.DataFrame(parsed).sort_values("open_time").drop_duplicates(subset=["open_time"])
+        return df.tail(limit).reset_index(drop=True)
+
+    def _fetch_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
+        """Fetch HYPE candles, Binance USDM first then Hyperliquid fallback.
+
+        Behavior:
+          - Try Binance futures ``HYPEUSDT`` first (parity with backtest loader).
+          - On empty/error, fall through to Hyperliquid ``candleSnapshot``.
+          - Hyperliquid path retains existing retry + stale-cache fallback.
+        """
+        binance_df = self._fetch_binance_hype_klines(interval=interval, limit=limit)
+        if not binance_df.empty:
+            cache_key = f"hype_{interval}_{limit}"
+            self._hype_last_good[cache_key] = (time.time(), binance_df)
+            return binance_df
         mapped = self._INTERVAL_MAP.get(interval)
         if not mapped:
             logger.warning(f"Hyperliquid HYPE unsupported interval: {interval}")

@@ -1744,6 +1744,21 @@ class SolMacroStrategy:
                                 htf_bias=primary_htf_bias,
                                 signal_reason=" | ".join(reason_parts),
                                 alt_1h_trend=mtt.h1_trend,
+                                extra={
+                                    "oracle_basis_bps": (
+                                        round(float(oracle_validation.basis_bps), 2)
+                                        if oracle_validation.basis_bps is not None
+                                        else None
+                                    ),
+                                    "oracle_freshness_sec": (
+                                        round(float(oracle_validation.freshness_sec), 1)
+                                        if oracle_validation.freshness_sec is not None
+                                        else None
+                                    ),
+                                    "oracle_max_basis_bps": float(
+                                        self.config.get("oracle_max_basis_bps", 0.0) or 0.0
+                                    ),
+                                },
                             ),
                             counts=buy_no_skip_counts,
                             last_sample=last_buy_no_skip_sample,
