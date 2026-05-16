@@ -73,6 +73,7 @@ from src.analysis.btc_1h_regime import (
     DEFAULT_MIN_EDGE_MULT,
     DEFAULT_SIZE_MULT,
 )
+from src.analysis.lane_identity import build_lane_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,10 @@ class SolMacroSignal(BaseModel):
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
+    raw_est_prob: Optional[float] = Field(
+        None,
+        description="Uncalibrated estimated prob of YES before any lane correction",
+    )
     rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
     corr_1h: Optional[float] = Field(None, description="BTC–alt 1h correlation at entry (SOL/ETH/HYPE/XRP)")
     side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
@@ -203,6 +208,7 @@ class SolMacroStrategy:
         self._signal_strategy_name = "sol_macro"
         self.dead_zone_skip_callback = None
         self.buy_no_skip_callback = None
+        self.lane_calibrator = None
         self._apply_strategy_config(rebuild_service=True)
 
         # AI-hold soft veto: cache market IDs where AI recently said HOLD so the
@@ -945,6 +951,40 @@ class SolMacroStrategy:
             macd_15m.crossover == "BEARISH_CROSS"
             or (hist <= -self.iql_15m_hist_floor and not macd_15m.histogram_rising)
         )
+
+    def _calibrate_est_prob(
+        self,
+        raw_est_prob: float,
+        *,
+        action: str,
+        direction: str,
+        window_size: str,
+        side_source: str,
+        signal_reason: str,
+        htf_bias: Optional[str],
+        btc_1h_regime: Optional[str],
+    ) -> float:
+        cal = getattr(self, "lane_calibrator", None)
+        if cal is None:
+            return raw_est_prob
+        lane_meta = build_lane_metadata(
+            strategy=self._signal_strategy_name,
+            window_size=window_size,
+            action=action,
+            direction=direction,
+            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+            side_source=side_source,
+            ai_used=False,
+            reason=signal_reason,
+            signal_reason=signal_reason,
+            htf_bias=htf_bias,
+            alt_htf_bias=htf_bias,
+            btc_1h_regime=btc_1h_regime,
+        )
+        lane_id = str(lane_meta.get("lane_id") or "").strip()
+        if not lane_id:
+            return raw_est_prob
+        return float(cal.calibrate(lane_id, raw_est_prob))
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
         """Optional hard gate for assets whose BTC-lag thesis breaks when decoupled."""
@@ -1919,11 +1959,22 @@ class SolMacroStrategy:
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
+                    raw_est_prob = est_prob_up
+                    estimated_prob = self._calibrate_est_prob(
+                        raw_est_prob,
+                        action=action,
+                        direction=direction,
+                        window_size=_updown_tf,
+                        side_source=side_source if "side_source" in locals() else "neutral_macro",
+                        signal_reason=" | ".join(r for r in reason_parts if r),
+                        htf_bias=primary_htf_bias,
+                        btc_1h_regime=btc_1h_regime if btc_ta else None,
+                    )
 
                     if action == "BUY_YES":
-                        edge = est_prob_up - yes_price
+                        edge = estimated_prob - yes_price
                     else:
-                        edge = (1.0 - est_prob_up) - (1.0 - yes_price)
+                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
                     # Confidence: 5m MACD momentum + RSI alignment + correlation strength
                     _rsi_conf_5m = 0.03 if (
                         (action == "BUY_YES" and sol.rsi_14 < 40) or
@@ -1939,7 +1990,7 @@ class SolMacroStrategy:
                         "UPDOWN_5m",
                         f"{_spot_key}=${sol_price:,.2f}",
                         f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
-                        f"est_up={est_prob_up:.3f}",
+                        f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"5m_MACD={'+' if macd_5m.macd_line > macd_5m.signal_line else '-'}{abs(macd_5m.histogram):.3f}",
                         f"corr={corr.correlation_1h:.2f}",
@@ -1950,10 +2001,8 @@ class SolMacroStrategy:
                     logger.debug(
                         f"  [5m] {_alt_label} updown '{market.question[:45]}' "
                         f"macro={macro_trend} m5_adj={m5_adj:+.2f} "
-                        f"est_up={est_prob_up:.3f} edge={edge:.4f}"
+                        f"est_up={estimated_prob:.3f} edge={edge:.4f}"
                     )
-
-                    estimated_prob = est_prob_up
 
                 else:
                     # ── FIFTEEN-MINUTE UP/DOWN MARKET PATH ──
@@ -2057,11 +2106,22 @@ class SolMacroStrategy:
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
+                    raw_est_prob = est_prob_up
+                    estimated_prob = self._calibrate_est_prob(
+                        raw_est_prob,
+                        action=action,
+                        direction=direction,
+                        window_size=_updown_tf,
+                        side_source=side_source if "side_source" in locals() else "neutral_macro",
+                        signal_reason=" | ".join(r for r in reason_parts if r),
+                        htf_bias=primary_htf_bias,
+                        btc_1h_regime=btc_1h_regime if btc_ta else None,
+                    )
 
                     if action == "BUY_YES":
-                        edge = est_prob_up - yes_price
+                        edge = estimated_prob - yes_price
                     else:
-                        edge = (1.0 - est_prob_up) - (1.0 - yes_price)
+                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * 0.22 + abs(timing_bonus) * 0.5)
 
@@ -2069,7 +2129,7 @@ class SolMacroStrategy:
                         "UPDOWN_15m",
                         f"{_spot_key}=${sol_price:,.2f}",
                         f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
-                        f"est_up={est_prob_up:.3f}",
+                        f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"corr={corr.correlation_1h:.2f}",
                         f"RSI={sol.rsi_14:.0f}",
@@ -2077,8 +2137,6 @@ class SolMacroStrategy:
                     reason_parts.extend(ltf_reasons)
                     if timing_reasons:
                         reason_parts.extend(timing_reasons)
-
-                    estimated_prob = est_prob_up
 
             else:
                 # ── TRADITIONAL THRESHOLD MARKETS ──
@@ -2141,6 +2199,17 @@ class SolMacroStrategy:
                 if _rsi_soft_delta != 0.0:
                     estimated_prob += _rsi_soft_delta
                 estimated_prob = max(0.10, min(0.90, estimated_prob))
+                raw_est_prob = estimated_prob
+                estimated_prob = self._calibrate_est_prob(
+                    raw_est_prob,
+                    action=action,
+                    direction=direction,
+                    window_size="15m",
+                    side_source=side_source if "side_source" in locals() else "neutral_macro",
+                    signal_reason=" | ".join(r for r in reason_parts if r),
+                    htf_bias=primary_htf_bias,
+                    btc_1h_regime=btc_1h_regime if btc_ta else None,
+                )
 
                 if action == "BUY_YES":
                     edge = estimated_prob - yes_price
@@ -2856,6 +2925,7 @@ class SolMacroStrategy:
                 window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=round(estimated_prob, 4),
+                raw_est_prob=round(raw_est_prob, 4),
                 rsi=round(sol.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
                 side_source=side_source if "side_source" in locals() else "neutral_macro",

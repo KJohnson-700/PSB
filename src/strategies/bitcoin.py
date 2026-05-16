@@ -51,6 +51,7 @@ from src.strategies.strategy_ai_context import (
     format_market_metadata,
 )
 from src.execution.performance_feedback import get_drift_min_edge_mult
+from src.analysis.lane_identity import build_lane_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,10 @@ class BitcoinSignal(BaseModel):
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
+    raw_est_prob: Optional[float] = Field(
+        None,
+        description="Uncalibrated estimated prob of YES before any lane correction",
+    )
     rsi: Optional[float] = Field(None, description="BTC RSI-14 at entry")
     side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
     oracle_basis_bps: Optional[float] = Field(None, description="Oracle basis at entry when applicable")
@@ -135,6 +140,7 @@ class BitcoinStrategy:
         self._signal_strategy_name = "bitcoin"
         self.dead_zone_skip_callback = None
         self.buy_no_skip_callback = None
+        self.lane_calibrator = None
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
 
@@ -195,6 +201,36 @@ class BitcoinStrategy:
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
+
+    def _calibrate_est_prob(
+        self,
+        raw_est_prob: float,
+        *,
+        action: str,
+        direction: str,
+        window_size: str,
+        signal_reason: str,
+        htf_bias: Optional[str],
+    ) -> float:
+        cal = getattr(self, "lane_calibrator", None)
+        if cal is None:
+            return raw_est_prob
+        lane_meta = build_lane_metadata(
+            strategy="bitcoin",
+            window_size=window_size,
+            action=action,
+            direction=direction,
+            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+            side_source="btc_htf_bias",
+            ai_used=False,
+            reason=signal_reason,
+            signal_reason=signal_reason,
+            htf_bias=htf_bias,
+        )
+        lane_id = str(lane_meta.get("lane_id") or "").strip()
+        if not lane_id:
+            return raw_est_prob
+        return float(cal.calibrate(lane_id, raw_est_prob))
 
     def _score_neutral_15m_candidate(
         self,
@@ -1328,11 +1364,20 @@ class BitcoinStrategy:
                     # If we reach here, 4H histogram is already aligned — no extra soft boost needed.
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
+                    raw_est_prob = est_prob_up
+                    estimated_prob = self._calibrate_est_prob(
+                        raw_est_prob,
+                        action=action,
+                        direction=direction,
+                        window_size=_updown_tf,
+                        signal_reason=" | ".join(r for r in reason_parts if r),
+                        htf_bias=htf_bias,
+                    )
 
                     if action == "BUY_YES":
-                        edge = est_prob_up - yes_price
+                        edge = estimated_prob - yes_price
                     else:
-                        edge = (1.0 - est_prob_up) - (1.0 - yes_price)
+                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
                     # Confidence: HTF boost weight doubled (macro direction matters more for
                     # 5m timing) + m5 momentum strength.  Floor at 0.45 so weak signals
                     # don't produce unrealistically low confidence values.
@@ -1342,7 +1387,7 @@ class BitcoinStrategy:
                         "[5m]",
                         "UPDOWN_5m",
                         f"btc=${btc_price:,.0f}",
-                        f"est_up={est_prob_up:.3f}",
+                        f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"4H_MACD={'+'if macd_4h.above_zero else '-'}{abs(macd_4h.histogram):.0f}",
                         f"5m_mom={m5_dir}({mom.m5_move_pct:+.3f}%)",
@@ -1355,7 +1400,7 @@ class BitcoinStrategy:
                     logger.debug(
                         f"  [5m] BTC updown '{market.question[:45]}' "
                         f"htf={htf_boost:+.2f} m5_adj={m5_adj:+.2f} "
-                        f"est_up={est_prob_up:.3f} edge={edge:.4f}"
+                        f"est_up={estimated_prob:.3f} edge={edge:.4f}"
                     )
 
                 else:
@@ -1475,18 +1520,27 @@ class BitcoinStrategy:
                         reason_parts.append(f"VP_POC=${vp.poc_price:,.0f}")
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
+                    raw_est_prob = est_prob_up
+                    estimated_prob = self._calibrate_est_prob(
+                        raw_est_prob,
+                        action=action,
+                        direction=direction,
+                        window_size=_updown_tf,
+                        signal_reason=" | ".join(r for r in reason_parts if r),
+                        htf_bias=htf_bias,
+                    )
 
                     if action == "BUY_YES":
-                        edge = est_prob_up - yes_price
+                        edge = estimated_prob - yes_price
                     else:
-                        edge = (1.0 - est_prob_up) - (1.0 - yes_price)
+                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
 
                     confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
 
                     reason_parts.extend([
                         "UPDOWN_15m",
                         f"btc=${btc_price:,.0f}",
-                        f"est_up={est_prob_up:.3f}",
+                        f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"4H_MACD={'+'if macd_4h.above_zero else '-'}{abs(macd_4h.histogram):.0f}",
                         f"15m_MACD={'+' if macd_15m.macd_line > macd_15m.signal_line else '-'}{abs(macd_15m.histogram):.1f}",
@@ -1530,6 +1584,15 @@ class BitcoinStrategy:
                         btc_price, threshold, direction, ta,
                         days_to_resolution, ltf_strength, timing_bonus,
                         regime=btc_1h_regime,
+                    )
+                    raw_est_prob = estimated_prob
+                    estimated_prob = self._calibrate_est_prob(
+                        raw_est_prob,
+                        action=action,
+                        direction=direction,
+                        window_size="15m",
+                        signal_reason=" | ".join(r for r in reason_parts if r),
+                        htf_bias=htf_bias,
                     )
 
                     if action == "BUY_YES":
@@ -2212,6 +2275,7 @@ class BitcoinStrategy:
                 (edge + yes_price) if action == "BUY_YES" else (yes_price - edge),
                 4,
             )
+            _signal_raw_est_prob = round(float(raw_est_prob), 4)
 
             signal = BitcoinSignal(
                 market_id=market.id,
@@ -2233,6 +2297,7 @@ class BitcoinStrategy:
                 window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=_signal_est_prob,
+                raw_est_prob=_signal_raw_est_prob,
                 rsi=round(ta.rsi_14, 1),
                 side_source="btc_htf_bias",
                 oracle_basis_bps=None,

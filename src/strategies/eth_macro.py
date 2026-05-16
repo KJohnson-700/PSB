@@ -849,7 +849,18 @@ class ETHMacroStrategy(SolMacroStrategy):
             if rsi_soft_delta != 0.0:
                 est_prob_up += rsi_soft_delta
             est_prob_up = max(0.10, min(0.90, est_prob_up))
-            edge = est_prob_up - yes_price if action == "BUY_YES" else yes_price - est_prob_up
+            raw_est_prob = est_prob_up
+            estimated_prob = self._calibrate_est_prob(
+                raw_est_prob,
+                action=action,
+                direction=direction,
+                window_size=_updown_tf,
+                side_source=side_source,
+                signal_reason=" | ".join(r for r in reason_parts if r),
+                htf_bias=primary_htf_bias,
+                btc_1h_regime=btc_1h_regime if btc_ta else None,
+            )
+            edge = estimated_prob - yes_price if action == "BUY_YES" else yes_price - estimated_prob
             if edge <= 0:
                 _bump_skip("nonpositive_edge")
                 continue
@@ -1282,7 +1293,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 btc_1h_regime=btc_1h_regime,
                 window_size=_updown_tf,
                 hour_utc=datetime.now(timezone.utc).hour,
-                est_prob=round(est_prob_up, 4),
+                est_prob=round(estimated_prob, 4),
+                raw_est_prob=round(raw_est_prob, 4),
                 rsi=round(eth.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
                 side_source=side_source,

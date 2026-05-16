@@ -72,6 +72,8 @@ def _sol_like_signal(*, action: str, strategy_name: str = "hype_macro") -> SolMa
         direction="UP",
         strategy_name=strategy_name,
         reason="execution driver test",
+        est_prob=0.42,
+        raw_est_prob=0.47,
     )
 
 
@@ -89,6 +91,8 @@ def _bitcoin_signal(*, action: str = "BUY_YES") -> BitcoinSignal:
         end_date=datetime.now(timezone.utc) + timedelta(hours=1),
         direction="UP",
         htf_bias="BULLISH",
+        est_prob=0.42,
+        raw_est_prob=0.47,
     )
 
 
@@ -232,6 +236,20 @@ async def test_execute_bitcoin_impl_buy_no_order_outcome():
     sig = _bitcoin_signal(action="BUY_NO")
     await bot._execute_bitcoin_signal_impl(sig)
     _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="bitcoin")
+    extra = bot.journal.log_entry.call_args.kwargs["extra"]
+    assert extra["raw_est_prob"] == pytest.approx(0.47)
+    assert extra["est_prob"] == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
+async def test_execute_sol_macro_impl_preserves_raw_and_calibrated_probabilities():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _sol_like_signal(action="BUY_NO", strategy_name="sol_macro")
+    await bot._execute_sol_macro_signal_impl(sig)
+    extra = bot.journal.log_entry.call_args.kwargs["extra"]
+    assert extra["raw_est_prob"] == pytest.approx(0.47)
+    assert extra["est_prob"] == pytest.approx(0.42)
 
 
 @pytest.mark.asyncio

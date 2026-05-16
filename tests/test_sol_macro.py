@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 
 from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
+from src.analysis.lane_calibration import LaneCalibrator
 from src.analysis.sol_btc_service import (
     SOLBTCService,
     SOLTechnicalAnalysis,
@@ -138,6 +139,36 @@ def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
     assert strategy._strong_enough_5m_signal(0.06, "BUY_YES") is True
     assert strategy._strong_enough_5m_signal(0.04, "BUY_YES") is True
     assert strategy._strong_enough_5m_signal(0.02, "BUY_YES") is False
+
+
+def test_sol_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
+    cfg = _make_config()
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    strategy.lane_calibrator = LaneCalibrator(
+        path=tmp_path / "lane_posteriors.json",
+        shadow_mode=False,
+    )
+    lane_id = "sol_macro|5m|down|bearish__bearish__bull|standard"
+    for _ in range(20):
+        strategy.lane_calibrator.record(
+            lane_id,
+            stated_est_prob=0.43,
+            realized_pct=-0.30,
+            win=False,
+        )
+
+    calibrated = strategy._calibrate_est_prob(
+        0.43,
+        action="BUY_NO",
+        direction="DOWN",
+        window_size="5m",
+        side_source="primary_htf",
+        signal_reason="UPDOWN_5m | standard",
+        htf_bias="BEARISH",
+        btc_1h_regime="BULL",
+    )
+
+    assert calibrated < 0.43
 
 
 def test_min_positive_m5_adj_zero_allows_counter_momentum():

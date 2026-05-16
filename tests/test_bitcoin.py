@@ -28,6 +28,7 @@ from src.analysis.btc_price_service import (
 )
 from src.strategies.bitcoin import BitcoinStrategy, BitcoinSignal
 from src.execution.exposure_manager import ExposureManager, ExposureTier
+from src.analysis.lane_calibration import LaneCalibrator
 
 from tests.async_helpers import run_async
 
@@ -288,6 +289,37 @@ class TestBitcoinLTFConfirmation:
             ta, "LONG"
         )
         assert confirmed is False
+
+
+def test_bitcoin_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
+    strat = BitcoinStrategy(
+        _make_config(),
+        MagicMock(),
+        PositionSizer(kelly_fraction=0.25, max_position_pct=0.05),
+    )
+    strat.lane_calibrator = LaneCalibrator(
+        path=tmp_path / "lane_posteriors.json",
+        shadow_mode=False,
+    )
+    lane_id = "bitcoin|5m|down|bearish|drift"
+    for _ in range(20):
+        strat.lane_calibrator.record(
+            lane_id,
+            stated_est_prob=0.43,
+            realized_pct=-0.25,
+            win=False,
+        )
+
+    calibrated = strat._calibrate_est_prob(
+        0.43,
+        action="BUY_NO",
+        direction="DOWN",
+        window_size="5m",
+        signal_reason="5m DRIFT_DOWN | 5m predict window",
+        htf_bias="BEARISH",
+    )
+
+    assert calibrated < 0.43
 
     def test_short_confirmed_by_bear_cross(self):
         """Bearish MACD cross confirms SHORT."""

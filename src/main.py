@@ -625,6 +625,14 @@ class PolyBot:
             self.kelly_sizer,
             exposure_manager=self.xrp_exposure_manager,
         )
+        for strategy in (
+            self.bitcoin_strategy,
+            self.sol_macro_strategy,
+            self.eth_macro_strategy,
+            self.hype_macro_strategy,
+            self.xrp_macro_strategy,
+        ):
+            strategy.lane_calibrator = self.lane_calibrator
         self.weather_strategy = WeatherStrategy(
             self.config,
             self.position_sizer,
@@ -2086,7 +2094,7 @@ class PolyBot:
                     "btc_price": signal.btc_current,
                     "edge": signal.edge,
                     "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
-                    "raw_est_prob": signal.est_prob,
+                    "raw_est_prob": getattr(signal, "raw_est_prob", signal.est_prob),
                     "rsi": signal.rsi,
                     "side_source": getattr(signal, "side_source", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
@@ -2317,7 +2325,7 @@ class PolyBot:
                     "lag_magnitude": signal.lag_magnitude,
                     "edge": signal.edge,
                     "est_prob": signal.est_prob,   # prob of YES at entry; key for edge validation
-                    "raw_est_prob": signal.est_prob,
+                    "raw_est_prob": getattr(signal, "raw_est_prob", signal.est_prob),
                     "rsi": signal.rsi,
                     "corr_1h": signal.corr_1h,
                     "side_source": getattr(signal, "side_source", None),
