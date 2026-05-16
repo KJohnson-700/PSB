@@ -58,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 from src.analysis.kelly_sizer import KellySizer
-from src.analysis.lane_entry_policy import resolve_lane_entry_policy
+from src.analysis.lane_entry_policy import LaneEntryPolicy, resolve_lane_entry_policy
 from src.analysis.btc_price_service import (
     BTCPriceService,
     TechnicalAnalysis,
@@ -383,13 +383,8 @@ class UpdownBacktestEngine:
         self._pm_marks_cache_root = _repo_root / str(
             _pm.get("cache_dir", "data/backtest/polymarket_marks")
         )
-        # Replay evaluates slightly after listing/open, mirroring scan cadence and
-        # latency rather than assuming a perfect at-open decision timestamp.
-        scan_sec = float(config.get("entry_window_align_scan_interval_sec", 0.0) or 0.0)
-        latency_sec = float(config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
-        self._entry_eval_delay_sec = float(
-            bt_cfg.get("entry_eval_delay_sec", scan_sec + latency_sec) or 0.0
-        )
+        # Default delay; per-run ``run()`` overwrites from active strategy block.
+        self._entry_eval_delay_sec = float(bt_cfg.get("entry_eval_delay_sec", 0.0) or 0.0)
         self.kelly_sizer = KellySizer(config)
         self._signal_strategy_name = "bitcoin"
         self._active_strategy_cfg: Dict[str, Any] = {}
@@ -523,8 +518,74 @@ class UpdownBacktestEngine:
         )
         return any(k in strategy_cfg or k in self.config for k in keys)
 
+    @staticmethod
+    def _resolve_entry_eval_delay_sec(
+        config: Dict[str, Any], strategy_cfg: Dict[str, Any]
+    ) -> float:
+        """Scan cadence + latency buffer (live parity), preferring strategy block keys."""
+        bt_cfg = config.get("backtest", {}) or {}
+        override = bt_cfg.get("entry_eval_delay_sec")
+        if override is not None:
+            return float(override)
+        scan_sec = float(
+            strategy_cfg.get("entry_window_align_scan_interval_sec", 0.0) or 0.0
+        )
+        latency_sec = float(
+            strategy_cfg.get("entry_window_latency_buffer_sec", 0.0) or 0.0
+        )
+        if scan_sec <= 0 and latency_sec <= 0:
+            scan_sec = float(
+                config.get("entry_window_align_scan_interval_sec", 0.0) or 0.0
+            )
+            latency_sec = float(
+                config.get("entry_window_latency_buffer_sec", 0.0) or 0.0
+            )
+        return scan_sec + latency_sec
+
+    def _evaluation_minutes_left_at_open(
+        self, window_minutes: int, strategy_cfg: Optional[Dict[str, Any]] = None
+    ) -> float:
+        cfg = strategy_cfg if strategy_cfg is not None else (self._active_strategy_cfg or {})
+        delay = self._resolve_entry_eval_delay_sec(self.config, cfg)
+        return max(0.0, float(window_minutes) - (delay / 60.0))
+
     def _evaluation_minutes_left(self, window_minutes: int) -> float:
-        return max(0.0, float(window_minutes) - (self._entry_eval_delay_sec / 60.0))
+        return self._evaluation_minutes_left_at_open(window_minutes)
+
+    def _replay_eval_minutes_left(
+        self,
+        *,
+        window_minutes: int,
+        lane_policy: LaneEntryPolicy,
+        strategy_cfg: Dict[str, Any],
+    ) -> float:
+        """Minutes left at replay entry decision — inside lane band when open is too early.
+
+        Live scans repeatedly while ``mins_left`` moves down; a one-shot check at window
+        open (~30m left on a 30m market) misses bands like 25–29m and yields zero entries.
+        """
+        open_eval = self._evaluation_minutes_left_at_open(window_minutes, strategy_cfg)
+        win_min = float(lane_policy.entry_window_min)
+        win_max = float(lane_policy.entry_window_max)
+        if win_max <= win_min or win_max <= 0:
+            return open_eval
+        if win_min <= open_eval <= win_max:
+            return open_eval
+        scan_sec = float(
+            strategy_cfg.get("entry_window_align_scan_interval_sec", 0.0) or 0.0
+        )
+        if scan_sec <= 0:
+            scan_sec = float(
+                self.config.get("entry_window_align_scan_interval_sec", 0.0) or 60.0
+            )
+        wm = float(window_minutes)
+        if win_min > wm:
+            return self._evaluation_minutes_left_at_open(window_minutes, strategy_cfg)
+        candidate = min(wm, win_max - (scan_sec / 60.0))
+        if win_min <= candidate <= win_max:
+            return candidate
+        mid = (win_min + win_max) / 2.0
+        return max(win_min, min(win_max, min(wm, mid)))
 
     def _legacy_lane_entry_policy_for_replay(
         self,
@@ -605,7 +666,7 @@ class UpdownBacktestEngine:
             ),
         )
 
-    def _yes_mid_at_window_open(
+    def _yes_mid_at_eval(
         self,
         *,
         window_open: pd.Timestamp,
@@ -613,6 +674,7 @@ class UpdownBacktestEngine:
         window_minutes: int,
         df_1m: pd.DataFrame,
         pm_yes: Optional[pd.Series],
+        eval_minutes_left: Optional[float] = None,
     ) -> float:
         """YES mid at entry evaluation: Polymarket 1m marks if present, else OHLCV proxy.
 
@@ -620,19 +682,37 @@ class UpdownBacktestEngine:
         """
         if df_1m is None or df_1m.empty or "open_time" not in df_1m.columns:
             asset_open = 0.0
-            first_close = 0.0
+            eval_close = 0.0
         else:
             window_df = df_1m[
                 (df_1m["open_time"] >= window_open) & (df_1m["open_time"] < window_close)
             ]
             if window_df.empty or "open" not in window_df.columns:
                 asset_open = 0.0
-                first_close = 0.0
+                eval_close = 0.0
             else:
                 asset_open = float(window_df.iloc[0]["open"])
-                first_close = float(window_df.iloc[0]["close"])
+                if eval_minutes_left is not None:
+                    eval_ts = pd.Timestamp(window_close) - pd.Timedelta(
+                        minutes=float(eval_minutes_left)
+                    )
+                    if eval_ts.tzinfo is None:
+                        eval_ts = eval_ts.tz_localize("UTC")
+                    else:
+                        eval_ts = eval_ts.tz_convert("UTC")
+                    at_eval = window_df[window_df["open_time"] <= eval_ts]
+                    if at_eval.empty:
+                        eval_close = float(window_df.iloc[0]["close"])
+                    else:
+                        eval_close = float(at_eval.iloc[-1]["close"])
+                else:
+                    eval_close = float(window_df.iloc[0]["close"])
 
-        t0 = pd.Timestamp(window_open)
+        t0 = pd.Timestamp(window_close)
+        if eval_minutes_left is not None:
+            t0 = t0 - pd.Timedelta(minutes=float(eval_minutes_left))
+        else:
+            t0 = pd.Timestamp(window_open)
         if t0.tzinfo is None:
             t0 = t0.tz_localize("UTC")
         else:
@@ -646,11 +726,30 @@ class UpdownBacktestEngine:
             if q is not None and pd.notna(q):
                 return float(max(0.01, min(0.99, float(q))))
 
-        if asset_open > 0 and first_close > 0:
+        if asset_open > 0 and eval_close > 0:
             return self._proxy_yes_price_from_underlying(
-                asset_open, first_close, window_minutes
+                asset_open, eval_close, window_minutes
             )
         return 0.50
+
+    def _yes_mid_at_window_open(
+        self,
+        *,
+        window_open: pd.Timestamp,
+        window_close: pd.Timestamp,
+        window_minutes: int,
+        df_1m: pd.DataFrame,
+        pm_yes: Optional[pd.Series],
+        eval_minutes_left: Optional[float] = None,
+    ) -> float:
+        return self._yes_mid_at_eval(
+            window_open=window_open,
+            window_close=window_close,
+            window_minutes=window_minutes,
+            df_1m=df_1m,
+            pm_yes=pm_yes,
+            eval_minutes_left=eval_minutes_left,
+        )
 
     @staticmethod
     def _proxy_yes_price_from_underlying(
@@ -2376,6 +2475,9 @@ class UpdownBacktestEngine:
         strategy_cfg = self.config.get("strategies", {}).get(strategy_cfg_key, {})
         self._signal_strategy_name = strategy_cfg_key
         self._active_strategy_cfg = strategy_cfg
+        self._entry_eval_delay_sec = self._resolve_entry_eval_delay_sec(
+            self.config, strategy_cfg
+        )
         skip_counts: Counter[str] = Counter()
 
         def _bump_skip(reason: str) -> None:
@@ -2549,9 +2651,11 @@ class UpdownBacktestEngine:
                 tf_label = "30m"
             else:
                 tf_label = "15m"
-            eval_left = self._evaluation_minutes_left(window_minutes)
+            eval_left_open = self._evaluation_minutes_left_at_open(
+                window_minutes, strategy_cfg
+            )
             timing_window_open = self._within_entry_timing_window(
-                mins_left=eval_left,
+                mins_left=eval_left_open,
                 tf=tf_label,
             )
             # Live strategies compute a preferred timing band for 30m markets, but do not
@@ -2607,6 +2711,30 @@ class UpdownBacktestEngine:
                     current += step_td
                     continue
 
+            # Determine action (aligned with live: short side buys NO)
+            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+            lane_policy = self._resolve_replay_lane_entry_policy(
+                symbol=symbol,
+                strategy_name=strategy_cfg_key,
+                strategy_cfg=strategy_cfg,
+                window_minutes=window_minutes,
+                action=action,
+                min_edge=min_edge,
+            )
+            if not lane_policy.enabled:
+                _bump_skip("lane_disabled")
+                current += step_td
+                continue
+            eval_left = self._replay_eval_minutes_left(
+                window_minutes=window_minutes,
+                lane_policy=lane_policy,
+                strategy_cfg=strategy_cfg,
+            )
+            if eval_left < lane_policy.entry_window_min or eval_left > lane_policy.entry_window_max:
+                _bump_skip("outside_entry_window")
+                current += step_td
+                continue
+
             pm_yes = try_load_yes_series_for_window(
                 symbol=symbol,
                 window_open=window_open,
@@ -2615,17 +2743,15 @@ class UpdownBacktestEngine:
                 cache_root=self._pm_marks_cache_root,
                 enabled=self._pm_marks_enabled,
             )
-            yes_mid_market = self._yes_mid_at_window_open(
+            yes_mid_market = self._yes_mid_at_eval(
                 window_open=window_open,
                 window_close=window_close,
                 window_minutes=window_minutes,
                 df_1m=df_1m_full,
                 pm_yes=pm_yes,
+                eval_minutes_left=eval_left,
             )
 
-            # ==================================================================
-            # Layer 3: Edge estimation (symbol + timeframe specific)
-            # ==================================================================
             if window_minutes == 5:
                 if is_eth:
                     eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
@@ -2689,25 +2815,6 @@ class UpdownBacktestEngine:
                         iql_hist_floor=float(sc_macro.get("iql_15m_hist_floor", 0.03)),
                         yes_price=yes_mid_market,
                     )
-
-            # Determine action (aligned with live: short side buys NO)
-            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
-            lane_policy = self._resolve_replay_lane_entry_policy(
-                symbol=symbol,
-                strategy_name=strategy_cfg_key,
-                strategy_cfg=strategy_cfg,
-                window_minutes=window_minutes,
-                action=action,
-                min_edge=min_edge,
-            )
-            if not lane_policy.enabled:
-                _bump_skip("lane_disabled")
-                current += step_td
-                continue
-            if eval_left < lane_policy.entry_window_min or eval_left > lane_policy.entry_window_max:
-                _bump_skip("outside_entry_window")
-                current += step_td
-                continue
             effective_min_edge = max(lane_policy.min_edge, lane_policy.hard_min_edge)
             if symbol == "HYPE":
                 hard_min_edge = max(0.05, float(strategy_cfg.get("hard_min_edge", 0.05)))

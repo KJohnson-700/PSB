@@ -347,10 +347,10 @@ def check_drift_from_expectations(
     """Reuse drift semantics from ``live_testing`` with a preloaded EXIT list."""
     live_trades = [r for r in rows if not _phantom_exit(r)]
     reports: List[DriftReport] = []
+    from src.execution.backtest_expectations import live_trades_for_expectation
+
     for strategy, bt_exp in (backtest_expectations or {}).items():
-        strat_trades = [
-            t for t in live_trades if str(t.get("strategy", "")).lower() == strategy.lower()
-        ]
+        strat_trades = live_trades_for_expectation(live_trades, strategy)
         if not strat_trades:
             continue
         wins = sum(1 for t in strat_trades if float(t.get("pnl") or 0) > 0)

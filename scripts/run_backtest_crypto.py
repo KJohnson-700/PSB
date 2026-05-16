@@ -257,6 +257,13 @@ def _result_to_dict(result: UpdownBacktestResult) -> dict:
         "oracle_history_loaded": result.oracle_history_loaded,
         "oracle_history_points": result.oracle_history_points,
         "oracle_basis_skips": result.oracle_basis_skips,
+        "skip_counts": dict(
+            sorted(
+                (result.skip_counts or {}).items(),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )
+        ),
         "trades": [
             {
                 "window_open":   str(t.window_open)[:19],
@@ -299,6 +306,7 @@ def save_report(
     payload: dict = {
         # Dashboard-compatibility fields (updateBacktest() reads these from top level)
         "strategy":         f"{_strategy_key}_{result.window_size}m",
+        "strategy_base":    _strategy_key,
         "trades_count":     result.wins + result.losses,
         "report_type":      "crypto_updown",
         "run_at":           datetime.now().isoformat(timespec="seconds"),

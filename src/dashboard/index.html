@@ -4569,9 +4569,18 @@ function updateBacktest(d) {
                 <span style="font-weight:600;font-size:0.82rem;color:${color||'var(--text)'};">${val}</span>
             </div>`;
         }
+        let skipHint = '';
+        if (entered === 0 && r.skip_counts && typeof r.skip_counts === 'object') {
+            const topSkips = Object.entries(r.skip_counts)
+                .sort((a, b) => Number(b[1]) - Number(a[1]))
+                .slice(0, 3)
+                .map(([k, v]) => `${k} (${v})`)
+                .join(', ');
+            if (topSkips) skipHint = ` Top skips: ${topSkips}.`;
+        }
         const noEntryNote = entered === 0
             ? `<div style="margin:6px 0 8px;color:var(--yellow);font-size:0.76rem;line-height:1.35;">
-                No qualifying entries${scanned > 0 ? ` across ${scanned} scanned windows` : ''}.
+                No qualifying entries${scanned > 0 ? ` across ${scanned} scanned windows` : ''}.${skipHint}
             </div>`
             : '';
         // Per-card run timestamp + staleness flag. Cards older than 24h get a yellow

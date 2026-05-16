@@ -504,12 +504,10 @@ class PerformanceTracker:
             and abs(t.get("pnl", 0)) <= 200.0
         ]
 
+        from src.execution.backtest_expectations import live_trades_for_expectation
+
         for strategy, bt_exp in backtest_expectations.items():
-            strat_trades = [
-                t
-                for t in live_trades
-                if t.get("strategy", "").lower() == strategy.lower()
-            ]
+            strat_trades = live_trades_for_expectation(live_trades, strategy)
             if not strat_trades:
                 continue
 

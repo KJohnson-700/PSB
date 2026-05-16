@@ -8,6 +8,20 @@
 
 ---
 
+## 2026-05-16 — Backtest vs live sync: 30m entry timing, skip_counts, drift keys
+
+**`src/backtest/updown_engine.py`:** Replay now reads entry-eval delay from `strategies.*` (not orphaned root keys), evaluates `mins_left` inside the lane entry band (not only at window open), and uses YES mid at eval time. Impossible bands (e.g. min > window length) fall back to open eval so skips count as `outside_entry_window`. Fixes BTC 30m backtests that showed **0 / 4368** entries while live paper traded inside the 25–29m band.
+
+**`scripts/run_backtest_crypto.py`, `src/dashboard/index.html`:** Persist `skip_counts` and `strategy_base` on crypto reports; dashboard shows dominant skip reasons when `windows_entered === 0`.
+
+**`src/execution/backtest_expectations.py`, `src/execution/live_testing.py`, `src/analysis/journal_learning.py`:** Normalize `bitcoin_30m` report keys to live journal `bitcoin` + `window_size` for drift and learning comparisons.
+
+**Tests:** `tests/test_backtest_expectations.py` (new); extended `tests/test_updown_backtest_parity.py` (30m lane band regression).
+
+**Verification:** `.venv/bin/python -m pytest tests/test_updown_backtest_parity.py tests/test_backtest_expectations.py tests/test_performance_feedback.py -q`; BTC 30m `2026-01-20`–`2026-04-20` → **85 trades** (was 0).
+
+---
+
 ## 2026-05-16 — Ghost calibration loop closed in runtime + ops visibility
 
 **`src/analysis/ghost_calibration.py`:** Added a dedicated ghost-candidate settlement/summary module. It auto-settles `data/calibration/rejected_candidates.jsonl` against Gamma market outcomes into `data/calibration/rejected_candidates_settled.jsonl`, keeps the flow idempotent via stable `ghost_id`, and builds a compact status payload (`total_rejected`, `total_settled`, `unresolved`, win/loss counts, top reason/action buckets) for runtime observability.

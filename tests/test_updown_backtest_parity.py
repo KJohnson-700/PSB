@@ -731,9 +731,16 @@ def test_hype_backtest_applies_hard_min_edge_floor_after_edge_calc():
 
 def test_backtest_counts_outside_entry_window_skips():
     cfg = _config()
-    cfg["entry_window_15m_min"] = 2.0
-    cfg["entry_window_15m_max"] = 10.0
+    # Lane band above max mins_left on a 15m window — replay cannot enter.
     cfg["entry_window_auto_align"] = False
+    cfg["strategies"]["bitcoin"]["entry_policy"] = {
+        "window_side_overrides": {
+            "15m": {
+                "up": {"entry_window_min": 20.0, "entry_window_max": 21.0, "min_edge": 0.08},
+                "down": {"entry_window_min": 20.0, "entry_window_max": 21.0, "min_edge": 0.09},
+            }
+        }
+    }
 
     engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
@@ -774,7 +781,8 @@ def test_backtest_entry_band_uses_lane_policy_yes_mid_not_sampled_fill():
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
     engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
     engine._sample_entry_price = lambda: 0.70
-    engine._yes_mid_at_window_open = lambda **kwargs: 0.50
+    engine._yes_mid_at_eval = lambda **kwargs: 0.50
+    engine._yes_mid_at_window_open = engine._yes_mid_at_eval
     engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
         5.0,
         "WIN",
@@ -829,6 +837,55 @@ def test_30m_backtest_uses_30m_entry_window_not_15m_window():
     cfg["entry_window_auto_align"] = False
     cfg["strategies"]["bitcoin"]["entry_timing_window_30m_min"] = 16.0
     cfg["strategies"]["bitcoin"]["entry_timing_window_30m_max"] = 30.0
+
+    engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
+    engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
+    engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
+    engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
+    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._sample_entry_price = lambda: 0.50
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
+
+    result = engine.run(
+        data=_ohlcv_fixture(),
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        window_minutes=30,
+        symbol="BTC",
+    )
+
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("outside_entry_window", 0) == 0
+
+
+def test_btc_30m_lane_entry_policy_band_allows_entries_at_replay_eval_time():
+    """30m lane policy 25–29m must not 100% outside_entry_window when open eval is ~30m."""
+    cfg = _config()
+    cfg["strategies"]["bitcoin"]["entry_policy"] = {
+        "window_side_overrides": {
+            "30m": {
+                "up": {
+                    "min_edge": 0.08,
+                    "entry_window_min": 25.0,
+                    "entry_window_max": 29.0,
+                },
+                "down": {
+                    "min_edge": 0.09,
+                    "entry_window_min": 25.0,
+                    "entry_window_max": 29.0,
+                },
+            }
+        }
+    }
+    cfg["strategies"]["bitcoin"]["entry_window_align_scan_interval_sec"] = 60
+    cfg["strategies"]["bitcoin"]["entry_window_latency_buffer_sec"] = 12
 
     engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
