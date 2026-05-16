@@ -52,6 +52,10 @@ from src.analysis.calibration_log import (
     append_calibration_record,
     build_record_from_closed_trade,
 )
+from src.analysis.ghost_calibration import (
+    build_ghost_calibration_status,
+    settle_rejected_candidates,
+)
 from src.analysis.lane_calibration import LaneCalibrator
 from src.notifications.notification_manager import (
     NotificationManager,
@@ -288,6 +292,8 @@ class PolyBot:
         self.last_ai_scan_stats: Dict[str, Dict[str, Any]] = {}
         self.last_buy_no_skip_counts: Dict[str, Dict[str, int]] = {}
         self.last_buy_no_skip_samples: Dict[str, Dict[str, Any]] = {}
+        self.ghost_calibration_status: Dict[str, Any] = {}
+        self._last_ghost_calibration_refresh_monotonic: float = 0.0
 
         # Trade journal: every process restart starts a FRESH session at
         # initial_bankroll (500). This ensures every restart = clean test run.
@@ -487,6 +493,7 @@ class PolyBot:
             em0.max_consecutive_losses,
             em0.pause_cycles,
         )
+        self._refresh_ghost_calibration_state(force=True)
 
     def _apply_exposure_env_overrides(self) -> None:
         """Apply exposure toggles from env before ExposureManager construction.
@@ -517,6 +524,25 @@ class PolyBot:
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)
             return LaneCalibrator(shadow_mode=True)
+
+    def _refresh_ghost_calibration_state(self, *, force: bool = False) -> None:
+        """Auto-settle ghost candidates and publish a runtime status snapshot."""
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 60.0:
+            return
+        settle_summary = settle_rejected_candidates()
+        status = build_ghost_calibration_status()
+        status["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
+        status["last_settle_summary"] = settle_summary
+        self.ghost_calibration_status = status
+        self._last_ghost_calibration_refresh_monotonic = now_mono
+        if settle_summary.get("newly_settled", 0):
+            logging.info(
+                "Ghost calibration settled %s new candidates (unresolved=%s total_settled=%s)",
+                settle_summary.get("newly_settled", 0),
+                status.get("unresolved", 0),
+                status.get("total_settled", 0),
+            )
 
     def _validate_lane_calibration_runtime(self) -> None:
         """Fail fast if calibration mode and strategy wiring disagree."""
@@ -1041,6 +1067,7 @@ class PolyBot:
         # Fire-and-forget: narrate the previous session into the new session dir.
         # Off the trading hot path; never awaited.
         asyncio.create_task(self._run_startup_narrators())
+        await asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
 
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("enabled", True):
@@ -1781,6 +1808,11 @@ class PolyBot:
                 await self._run_resolution_check(label="[TRADING]")
         except Exception as e:
             logging.error(f"Resolution tracking error: {e}")
+
+        try:
+            await asyncio.to_thread(self._refresh_ghost_calibration_state)
+        except Exception as e:
+            logging.warning("Ghost calibration refresh failed: %s", e)
 
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades

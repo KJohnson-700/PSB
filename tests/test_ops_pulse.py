@@ -126,6 +126,7 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
         cumulative_signal_counts={},
         last_cycle_times={},
         ai_agent=SimpleNamespace(api_keys={"MINIMAX_API_KEY": "sk-test"}),
+        ghost_calibration_status={"total_rejected": 4, "total_settled": 3, "unresolved": 1},
         last_ai_scan_stats={
             "bitcoin": {
                 "allowed_side": "LONG",
@@ -148,6 +149,7 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
     assert snap["ai_pipeline"]["aggregate"] == {}
     assert "decision_gates" in snap
     assert snap["decision_gates"]["enabled"] is False
+    assert snap["ghost_calibration"]["total_settled"] == 3
     assert snap["ai_status"]["ready"] is True
     assert "zero calls" in snap["ai_activity_note"]
     assert snap["side_selection"]["aggregate"]["LONG"] == 1

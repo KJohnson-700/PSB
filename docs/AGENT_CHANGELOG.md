@@ -8,6 +8,22 @@
 
 ---
 
+## 2026-05-16 — Ghost calibration loop closed in runtime + ops visibility
+
+**`src/analysis/ghost_calibration.py`:** Added a dedicated ghost-candidate settlement/summary module. It auto-settles `data/calibration/rejected_candidates.jsonl` against Gamma market outcomes into `data/calibration/rejected_candidates_settled.jsonl`, keeps the flow idempotent via stable `ghost_id`, and builds a compact status payload (`total_rejected`, `total_settled`, `unresolved`, win/loss counts, top reason/action buckets) for runtime observability.
+
+**`src/main.py`:** `PolyBot` now refreshes ghost calibration state at startup and once per trading cycle after resolution work. That closes the operational loop that previously existed only as an offline script: rejected candidates are now automatically revisited and the latest summary is cached on the bot instance instead of relying on a manual `tools/settle_rejected_candidates.py` run.
+
+**`src/ops_pulse.py`:** `OPS_JSON` / `/api/ops/summary` snapshots now include a `ghost_calibration` block so operators can verify whether ghost mode is actually ingesting outcomes, how much is still unresolved, and whether the settled cohort is favorable or not.
+
+**Tests:** Added `tests/test_ghost_calibration.py` for settlement idempotence / summary behavior and extended `tests/test_ops_pulse.py` to assert the new ops payload surface.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ghost_calibration.py tests/test_ops_pulse.py -q` passed, and `.venv/bin/python -m py_compile src/analysis/ghost_calibration.py src/main.py src/ops_pulse.py` passed before ship.
+
+**Not committed (runtime data):** `data/entry_prices/updown_fills.jsonl`, `data/calibration/`, `data/lane_state_audit.jsonl`.
+
+---
+
 ## 2026-05-16 — Lane-specific entry policy for BTC/SOL/ETH/HYPE/XRP macro lanes
 
 **`src/analysis/lane_entry_policy.py`:** Added a shared lane-entry resolver parallel to the existing exit resolver. Entry policy now resolves by **`strategy + window + side`** with precedence **global defaults → strategy entry policy → strategy `window_side_overrides`**, and returns typed fields for `enabled`, `min_edge`, `hard_min_edge`, `ai_override_min_edge`, `entry_price_min`, `entry_price_max`, `entry_window_min`, `entry_window_max`, and `size_multiplier`.

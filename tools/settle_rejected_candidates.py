@@ -26,6 +26,11 @@ from typing import Dict, Optional
 import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+try:
+    from src.analysis.lane_calibration import LaneCalibrator  # noqa: E402
+except Exception:  # noqa: BLE001 — calibrator optional; settling still works
+    LaneCalibrator = None  # type: ignore
 REJECTED_LOG = REPO_ROOT / "data" / "calibration" / "rejected_candidates.jsonl"
 SETTLED_LOG = REPO_ROOT / "data" / "calibration" / "rejected_candidates_settled.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -220,6 +225,40 @@ def main():
         with open(out_path, "a") as f:
             for r in settle_records:
                 f.write(json.dumps(r, separators=(",", ":")) + "\n")
+
+        # Feed newly settled ghost outcomes into per-lane posteriors. Lane IDs
+        # carry a `|rejected` suffix (set in rejected_candidate_log.py) so these
+        # never mix with taken-trade lanes.
+        if LaneCalibrator is not None:
+            cal = LaneCalibrator(shadow_mode=True)  # shadow_mode is irrelevant for record()
+            posterior_updates = 0
+            for r in settle_records:
+                lane = r.get("lane_id") or ""
+                if not lane:
+                    continue
+                # Convert est_prob_up → stated prob of the side actually bet.
+                # For BUY_NO, the bet wins when YES doesn't, so stated = 1 - est_prob_up.
+                eu = r.get("est_prob_up")
+                action = (r.get("action") or "").upper()
+                if eu is None:
+                    stated = None
+                else:
+                    try:
+                        eu_f = float(eu)
+                        stated = (1.0 - eu_f) if action == "BUY_NO" else eu_f
+                    except (TypeError, ValueError):
+                        stated = None
+                try:
+                    cal.record(
+                        lane_id=lane,
+                        stated_est_prob=stated,
+                        realized_pct=float(r.get("realized_pct") or 0.0),
+                        win=bool(r.get("win")),
+                    )
+                    posterior_updates += 1
+                except Exception as _pe:  # noqa: BLE001 — telemetry only
+                    print(f"  posterior update failed for {lane}: {_pe}", file=sys.stderr)
+            print(f"  posterior updates: {posterior_updates}")
 
     # Summary
     print(f"Processed {in_path}")

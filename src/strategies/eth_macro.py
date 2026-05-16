@@ -25,6 +25,7 @@ from src.strategies.strategy_ai_context import (
     format_market_metadata,
 )
 from src.execution.performance_feedback import get_drift_min_edge_mult
+from src.analysis.rejected_candidate_log import log_rejected_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -424,17 +425,26 @@ class ETHMacroStrategy(SolMacroStrategy):
                     "ETH Macro: ignoring btc_htf_bias_dry_run_override=%s — trading.dry_run is false",
                     _ovr,
                 )
+        # 2026-05-16 calibration: always classify the BTC 1H regime so signal
+        # diagnostics and dampener decisions reflect reality. The `enabled` flag
+        # continues to gate the min_edge/size multiplier *application*.
         btc_1h_regime = "BULL"
-        if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+        if btc_ta:
             btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
-            logger.info(
-                "ETH Macro BTC 1H regime: %s | min_edge×%.2f size×%.2f | spot=%.0f SMA20=%.0f",
-                btc_1h_regime,
-                self._regime_min_edge_mult(btc_1h_regime),
-                self._regime_size_mult(btc_1h_regime),
-                regime_price(btc_ta),
-                float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
-            )
+            if self._btc_1h_regime_gates.get("enabled", False):
+                logger.info(
+                    "ETH Macro BTC 1H regime: %s | min_edge×%.2f size×%.2f | spot=%.0f SMA20=%.0f",
+                    btc_1h_regime,
+                    self._regime_min_edge_mult(btc_1h_regime),
+                    self._regime_size_mult(btc_1h_regime),
+                    regime_price(btc_ta),
+                    float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
+                )
+            else:
+                logger.debug(
+                    "ETH Macro BTC 1H regime classified (multipliers gated off): %s",
+                    btc_1h_regime,
+                )
 
         # Non-BTC strategies are alt-first: ETH 1H establishes direction; BTC
         # is secondary context/fallback when ETH has no usable bias.
@@ -782,14 +792,41 @@ class ETHMacroStrategy(SolMacroStrategy):
                     btc_reasons.append("bypass_5m_stf_macro_agrees")
                 if self.btc_follow_5m_requires_impulse and not _impulse_gate_ok:
                     _bump_skip("btc_5m_no_impulse")
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name, window="5m",
+                        side=market_allowed_side, action=action,
+                        reason="btc_5m_no_impulse", market=market,
+                        yes_price=yes_price, est_prob_up=est_prob_up,
+                        htf_bias=primary_htf_bias,
+                        context={"btc_impulse": float(btc_impulse), "btc_reasons": list(btc_reasons)},
+                    )
                     continue
                 eth_5m_adj, eth_reasons = self._eth_5m_macd_score(
                     eth.macd_5m, market_allowed_side
                 )
                 if eth_5m_adj < self.eth_follow_5m_min_adj:
                     _bump_skip("eth_5m_weak_confirm")
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name, window="5m",
+                        side=market_allowed_side, action=action,
+                        reason="eth_5m_weak_confirm", market=market,
+                        yes_price=yes_price, est_prob_up=est_prob_up,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "eth_5m_adj": float(eth_5m_adj),
+                            "min_required": float(self.eth_follow_5m_min_adj),
+                        },
+                    )
                     continue
                 est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.04)
+                # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
+                if self.enforce_alt_1h_alignment:
+                    if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
+                        est_prob_up -= 0.04
+                        reason_parts.append("h1_dampen_long_5m")
+                    elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
+                        est_prob_up += 0.04
+                        reason_parts.append("h1_dampen_short_5m")
                 est_prob_up += btc_impulse if market_allowed_side == "LONG" else -btc_impulse
                 est_prob_up += eth_5m_adj if market_allowed_side == "LONG" else -eth_5m_adj
                 if eth.rsi_14 > 75:
@@ -811,14 +848,41 @@ class ETHMacroStrategy(SolMacroStrategy):
                         pass
                     else:
                         _bump_skip("btc_15m_not_following")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="15m",
+                            side=market_allowed_side, action=action,
+                            reason="btc_15m_not_following", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={},
+                        )
                         continue
                 eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
                     eth.macd_15m, market_allowed_side
                 )
                 if eth_15m_adj < self.eth_follow_15m_min_adj:
                     _bump_skip("eth_15m_weak_confirm")
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name, window="15m",
+                        side=market_allowed_side, action=action,
+                        reason="eth_15m_weak_confirm", market=market,
+                        yes_price=yes_price, est_prob_up=est_prob_up,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "eth_15m_adj": float(eth_15m_adj),
+                            "min_required": float(self.eth_follow_15m_min_adj),
+                        },
+                    )
                     continue
                 est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
+                # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
+                if self.enforce_alt_1h_alignment:
+                    if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
+                        est_prob_up -= 0.05
+                        reason_parts.append("h1_dampen_long_15m")
+                    elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
+                        est_prob_up += 0.05
+                        reason_parts.append("h1_dampen_short_15m")
                 est_prob_up += eth_15m_adj if market_allowed_side == "LONG" else -eth_15m_adj
                 if eth.rsi_14 > 75:
                     est_prob_up -= 0.03

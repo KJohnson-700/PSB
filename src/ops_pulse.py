@@ -400,6 +400,9 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "decision_gates": _decision_gate_digest(getattr(bot, "config", {}) or {}, ai_scan_stats),
         "buy_no_skip_diagnostics": _buy_no_skip_digest(ai_scan_stats),
         "side_selection": side_selection,
+        "ghost_calibration": dict(
+            getattr(bot, "ghost_calibration_status", {}) or {}
+        ),
         "ai_status": ai_status,
         "ai_pipeline": ai_pipeline,
         "ai_activity_note": _ai_activity_note(ai_status, ai_pipeline),

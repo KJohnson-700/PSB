@@ -79,6 +79,7 @@ from src.analysis.btc_1h_regime import (
     DEFAULT_SIZE_MULT,
 )
 from src.analysis.lane_identity import build_lane_metadata
+from src.analysis.rejected_candidate_log import log_rejected_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -1350,8 +1351,15 @@ class SolMacroStrategy:
                 btc_htf_details["btc_price"],
                 btc_htf_details["sabre_ma"],
             )
+            # 2026-05-16 calibration: always classify the BTC 1H regime so signal
+            # diagnostics (lane_id regime token, dampeners) reflect reality. The
+            # `enabled` flag continues to gate whether the min_edge/size multipliers
+            # actually fire; the regime *value* is now always real, not a fake "BULL"
+            # default. Was: btc_1h_regime fell through as the string "BULL" when
+            # gates were disabled (e.g. HYPE post-2026-05-13), which silently
+            # poisoned lane labels and dampener decisions.
+            btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
             if self._btc_1h_regime_gates.get("enabled", False):
-                btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
                 logger.info(
                     "BTC 1H regime: %s | min_edge×%.2f size×%.2f | 1H=%.0f SMA20=%.0f",
                     btc_1h_regime,
@@ -1359,6 +1367,10 @@ class SolMacroStrategy:
                     self._regime_size_mult(btc_1h_regime),
                     regime_price(btc_ta),
                     float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
+                )
+            else:
+                logger.debug(
+                    "BTC 1H regime classified (multipliers gated off): %s", btc_1h_regime
                 )
         else:
             btc_htf_bias = None
@@ -1887,24 +1899,28 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H histogram context remains diagnostic-only. Preserve the signal in
-                    # logs, but do not block entry on it.
+                    # 1H histogram alignment (Move 2, 2026-05-16 calibration). Previously
+                    # diagnostic-only; now dampens est_prob_up toward neutral when 1H
+                    # disagrees with trade direction. Magnitude matches macro weight so
+                    # disagreement roughly cancels the macro tilt.
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
-                            reason_parts.append("histogram_1h_against_long_5m")
+                            est_prob_up -= 0.04
+                            reason_parts.append("h1_dampen_long_5m")
                             logger.info(
                                 f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
-                                f"1H histogram negative/falling retained as diagnostic only "
+                                f"1H histogram against LONG, est_prob dampened -0.04 "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
                         if allowed_side == "SHORT" and not _h1_bear_ok:
-                            reason_parts.append("histogram_1h_against_short_5m")
+                            est_prob_up += 0.04
+                            reason_parts.append("h1_dampen_short_5m")
                             logger.info(
                                 f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
-                                f"1H histogram positive/rising retained as diagnostic only "
+                                f"1H histogram against SHORT, est_prob dampened +0.04 "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
 
@@ -1912,6 +1928,17 @@ class SolMacroStrategy:
                     _require_catalyst_5m = bool(self.config.get("require_btc_catalyst_5m", False))
                     if _require_catalyst_5m and not corr.lag_opportunity and not corr.btc_spike_detected:
                         _bump_skip("no_btc_catalyst_5m")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="5m",
+                            side=allowed_side, action=action,
+                            reason="no_btc_catalyst_5m", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "btc_spike": bool(corr.btc_spike_detected),
+                                "lag_opportunity": bool(corr.lag_opportunity),
+                            },
+                        )
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"no BTC catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
@@ -1953,6 +1980,17 @@ class SolMacroStrategy:
                     _sample("m5_adj", m5_adj)
                     if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
                         _bump_skip("sell_5m_low_corr")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="5m",
+                            side=allowed_side, action=action,
+                            reason="sell_5m_low_corr", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "correlation_1h": float(corr.correlation_1h),
+                                "floor": float(self.sell_5m_min_corr),
+                            },
+                        )
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"{action} corr {corr.correlation_1h:.2f} < floor {self.sell_5m_min_corr:.2f}"
@@ -1966,6 +2004,19 @@ class SolMacroStrategy:
                             else self.min_positive_m5_adj_5m
                         )
                         _bump_skip("weak_5m_signal")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="5m",
+                            side=allowed_side, action=action,
+                            reason="weak_5m_signal", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "m5_adj": float(m5_adj),
+                                "min_required": float(_min_req),
+                                "macd_5m_crossover": str(getattr(macd_5m, "crossover", "")),
+                                "macd_5m_histogram": float(getattr(macd_5m, "histogram", 0.0) or 0.0),
+                            },
+                        )
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={_min_req:.2f})"
@@ -2065,6 +2116,18 @@ class SolMacroStrategy:
 
                     if not self._passes_15m_iql(ta, allowed_side):
                         _bump_skip("iql_15m_reject")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="15m",
+                            side=allowed_side, action=action,
+                            reason="iql_15m_reject", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "macd_15m_histogram": float(getattr(sol.macd_15m, "histogram", 0.0) or 0.0),
+                                "macd_15m_crossover": str(getattr(sol.macd_15m, "crossover", "")),
+                                "iql_15m_hist_floor": float(self.iql_15m_hist_floor),
+                            },
+                        )
                         logger.info(
                             f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                             f"IQL reject (hist={sol.macd_15m.histogram:+.3f} "
@@ -2080,24 +2143,28 @@ class SolMacroStrategy:
                         est_prob_up, primary_htf_bias, corr
                     )
 
-                    # 1H histogram context remains diagnostic-only. Preserve the signal in
-                    # logs, but do not block entry on it.
+                    # 1H histogram alignment (Move 2, 2026-05-16 calibration). Every losing
+                    # SHORT lane in this cohort had 1H disagreement; previously logged only.
+                    # Dampen toward neutral when 1H disagrees (magnitude ~0.05, sized close
+                    # to the 15m macro weight so disagreement cancels roughly the macro tilt).
                     _macd_1h = sol.macd_1h
                     _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
-                            reason_parts.append("histogram_1h_against_long_15m")
+                            est_prob_up -= 0.05
+                            reason_parts.append("h1_dampen_long_15m")
                             logger.info(
                                 f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
-                                f"1H histogram negative/falling retained as diagnostic only "
+                                f"1H histogram against LONG, est_prob dampened -0.05 "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
                         if allowed_side == "SHORT" and not _h1_bear_ok:
-                            reason_parts.append("histogram_1h_against_short_15m")
+                            est_prob_up += 0.05
+                            reason_parts.append("h1_dampen_short_15m")
                             logger.info(
                                 f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
-                                f"1H histogram positive/rising retained as diagnostic only "
+                                f"1H histogram against SHORT, est_prob dampened +0.05 "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
 
@@ -2106,6 +2173,18 @@ class SolMacroStrategy:
                         _require_cat_15m = bool(self.config.get("require_btc_catalyst_15m_when_unconfirmed", False))
                         if _require_cat_15m and not corr.lag_opportunity and not corr.btc_spike_detected:
                             _bump_skip("no_btc_catalyst_15m_unconfirmed")
+                            log_rejected_candidate(
+                                strategy=self._signal_strategy_name, window="15m",
+                                side=allowed_side, action=action,
+                                reason="no_btc_catalyst_15m_unconfirmed", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up,
+                                htf_bias=primary_htf_bias,
+                                context={
+                                    "btc_spike": bool(corr.btc_spike_detected),
+                                    "lag_opportunity": bool(corr.lag_opportunity),
+                                    "ltf_strength": float(ltf_strength),
+                                },
+                            )
                             logger.info(
                                 f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
                                 f"no LTF + no catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
