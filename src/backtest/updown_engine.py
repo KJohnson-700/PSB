@@ -1313,6 +1313,17 @@ class UpdownBacktestEngine:
         return float(m.macd_line) < float(m.signal_line) and float(m.histogram) <= 0
 
     @staticmethod
+    def _macd_bullish_momentum_ok(m: Optional[MACDResult]) -> bool:
+        """Mirror of bearish — used for symmetric bullish-rally LTF replay gating."""
+        if m is None:
+            return False
+        if m.crossover == "BULLISH_CROSS":
+            return True
+        if m.histogram_rising and float(m.histogram) > 0:
+            return True
+        return float(m.macd_line) > float(m.signal_line) and float(m.histogram) >= 0
+
+    @staticmethod
     def _side_from_bias(bias: Optional[str]) -> Optional[str]:
         if bias == "BULLISH":
             return "LONG"
@@ -1440,6 +1451,68 @@ class UpdownBacktestEngine:
             return True, "bearish_ltf_override"
         return False, "no_override"
 
+    def _bullish_rally_ltf_override_replay(
+        self,
+        ta: TechnicalAnalysis,
+        df_5m: pd.DataFrame,
+        btc_1m: Optional[pd.DataFrame],
+        window_open: pd.Timestamp,
+        strategy_cfg: Dict[str, Any],
+    ) -> tuple[bool, str]:
+        """Mirror of _buy_no_ltf_override_replay for the LONG side."""
+        if not bool(strategy_cfg.get("buy_yes_ltf_override_enabled", False)):
+            return False, "disabled"
+        if len(df_5m) < _MIN_5M_BARS:
+            return False, "5m_insufficient"
+        bullish_15m = self._macd_bullish_momentum_ok(ta.macd_15m)
+        bullish_5m = self._macd_bullish_momentum_ok(self._svc.calc_macd(df_5m))
+        rsi_min = float(strategy_cfg.get("buy_yes_ltf_override_rsi_min", 55.0))
+        rsi_ok = float(ta.rsi_14 or 50.0) >= rsi_min
+        btc_floor = float(strategy_cfg.get("buy_yes_ltf_override_min_btc_5m_pct", 0.0))
+        btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
+        btc_ok = btc_move_5m_pct >= btc_floor
+        if bullish_15m and bullish_5m and rsi_ok and btc_ok:
+            return True, "bullish_ltf_override"
+        return False, "no_override"
+
+    def _resolve_side_with_ltf_overrides_replay(
+        self,
+        *,
+        primary_htf_bias: str,
+        ta: TechnicalAnalysis,
+        df_5m: pd.DataFrame,
+        btc_1m: Optional[pd.DataFrame],
+        window_open: pd.Timestamp,
+        strategy_cfg: Dict[str, Any],
+    ) -> tuple[Optional[str], str, str]:
+        """Replay-side mirror of sol_macro._resolve_allowed_side_with_ltf_overrides.
+
+        Returns (side, side_source, detail). side may be None (skip).
+        """
+        bullish_ok, _ = self._bullish_rally_ltf_override_replay(
+            ta, df_5m, btc_1m, window_open, strategy_cfg
+        )
+        bearish_ok, _ = self._buy_no_ltf_override_replay(
+            ta, df_5m, btc_1m, window_open, strategy_cfg
+        )
+        if primary_htf_bias == "BEARISH":
+            if bearish_ok and not bullish_ok:
+                return "SHORT", "bearish_dip_default", "bearish_ltf_override"
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_exception", "bullish_ltf_override"
+            if bullish_ok and bearish_ok:
+                return "SHORT", "bearish_dip_default", "chop_resolved_default"
+            return None, "skip", "bear_default_no_dip"
+        if primary_htf_bias == "BULLISH":
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_default", "bullish_ltf_override"
+            if bullish_ok and bearish_ok:
+                return "LONG", "bullish_rally_default", "chop_resolved_default"
+            if bearish_ok and not bullish_ok:
+                return "SHORT", "bearish_dip_exception", "bearish_ltf_override"
+            return None, "skip", "bull_default_no_rally"
+        return None, "skip", "neutral_htf_no_resolver"
+
     def _resolve_alt_replay_direction(
         self,
         *,
@@ -1490,7 +1563,26 @@ class UpdownBacktestEngine:
                 decision.primary_htf_bias = alt_1h_trend
                 decision.side_source = "alt_1h_primary"
                 decision.skip_btc_follow_1h = True
-                if alt_1h_trend == "BULLISH":
+                resolver_active = bool(
+                    strategy_cfg.get("buy_yes_ltf_override_enabled", False)
+                ) or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+                if resolver_active:
+                    r_side, r_source, r_detail = self._resolve_side_with_ltf_overrides_replay(
+                        primary_htf_bias=alt_1h_trend,
+                        ta=ta,
+                        df_5m=df_5m,
+                        btc_1m=btc_1m,
+                        window_open=window_open,
+                        strategy_cfg=strategy_cfg,
+                    )
+                    if r_side is None:
+                        decision.allowed_side = None
+                        decision.side_source = r_source
+                        decision.skip_reason = f"ltf_resolver_skip:{r_detail}"
+                        return decision
+                    decision.allowed_side = r_side
+                    decision.side_source = r_source
+                elif alt_1h_trend == "BULLISH":
                     override, _ = self._buy_no_ltf_override_replay(
                         ta, df_5m, btc_1m, window_open, strategy_cfg
                     )
@@ -1537,7 +1629,26 @@ class UpdownBacktestEngine:
         if primary_htf_bias in {"BULLISH", "BEARISH"}:
             decision.allowed_side = self._side_from_bias(primary_htf_bias)
             decision.side_source = "primary_htf"
-            if primary_htf_bias == "BULLISH":
+            resolver_active = bool(
+                strategy_cfg.get("buy_yes_ltf_override_enabled", False)
+            ) or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+            if resolver_active:
+                r_side, r_source, r_detail = self._resolve_side_with_ltf_overrides_replay(
+                    primary_htf_bias=primary_htf_bias,
+                    ta=ta,
+                    df_5m=df_5m,
+                    btc_1m=btc_1m,
+                    window_open=window_open,
+                    strategy_cfg=strategy_cfg,
+                )
+                if r_side is None:
+                    decision.allowed_side = None
+                    decision.side_source = r_source
+                    decision.skip_reason = f"ltf_resolver_skip:{r_detail}"
+                    return decision
+                decision.allowed_side = r_side
+                decision.side_source = r_source
+            elif primary_htf_bias == "BULLISH":
                 override, _ = self._buy_no_ltf_override_replay(
                     ta, df_5m, btc_1m, window_open, strategy_cfg
                 )
