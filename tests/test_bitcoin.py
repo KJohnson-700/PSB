@@ -94,6 +94,18 @@ def _make_btc_market(
     )
 
 
+def test_bitcoin_legacy_entry_policy_supports_hourly_overrides():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"]["min_edge_1h"] = 0.12
+    cfg["strategies"]["bitcoin"]["entry_price_max_1h_yes_side"] = 0.61
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    policy = strat._legacy_entry_policy(window_size="1h", action="BUY_YES")
+
+    assert policy["min_edge"] == 0.12
+    assert policy["entry_price_max"] == 0.61
+
+
 def _make_ta(
     price=75000,
     sabre_trend=1,  # 1=bull, -1=bear

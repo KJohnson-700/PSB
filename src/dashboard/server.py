@@ -586,14 +586,19 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
 
     if "up or down" in ql:
         times = re.findall(r"(\d+):(\d+)(AM|PM)", question or "")
-        window = 15
-        if len(times) >= 2:
+        # Hourly product questions are "Bitcoin Up or Down - May 17, 1AM ET" —
+        # no colon-time range, just a single hour token. Detect those first.
+        hourly_match = re.search(r"\b\d{1,2}(am|pm)\s*et\b", ql)
+        if hourly_match and len(times) < 2:
+            window = 60
+        else:
+            window = 15
+            if len(times) >= 2:
+                def _abs(h, m, p):
+                    return (int(h) % 12 + (12 if p == "PM" else 0)) * 60 + int(m)
 
-            def _abs(h, m, p):
-                return (int(h) % 12 + (12 if p == "PM" else 0)) * 60 + int(m)
-
-            diff = abs(_abs(*times[1]) - _abs(*times[0]))
-            window = diff if diff > 0 else 5
+                diff = abs(_abs(*times[1]) - _abs(*times[0]))
+                window = diff if diff > 0 else 5
         if re.search(r"\b(xrp|ripple)\b", ql):
             sym = "XRP"
         elif re.search(r"\b(ethereum|ether)\b", ql) or re.search(r"\beth\b", ql):
@@ -606,8 +611,30 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             sym = "SOL"
         else:
             sym = "UNK"
-        sz = "5m" if window <= 6 else ("30m" if window >= 23 else "15m")
+        if window >= 45:
+            sz = "1h"
+        elif window <= 6:
+            sz = "5m"
+        elif window >= 23:
+            sz = "30m"  # legacy band retained for historic journal rows
+        else:
+            sz = "15m"
         return f"{sym}_updown_{sz}"
+
+    # Hourly slug shape (e.g. bitcoin-up-or-down-may-17-2026-1am-et). Emit _1h
+    # for new trades; legacy _30m slug branches below stay for old journal rows.
+    # HYPE uses the short ``hype-up-or-down-...`` slug prefix on Polymarket hourly.
+    if re.search(r"-up-or-down-.*(?:am|pm)-et\b", mid):
+        if "ethereum-up-or-down" in mid or "eth_updown_1h" in mid:
+            return "ETH_updown_1h"
+        if "xrp-up-or-down" in mid or "xrp_updown_1h" in mid:
+            return "XRP_updown_1h"
+        if "bitcoin-up-or-down" in mid:
+            return "BTC_updown_1h"
+        if "solana-up-or-down" in mid:
+            return "SOL_updown_1h"
+        if "hype-up-or-down" in mid or "hyperliquid-up-or-down" in mid or "hype_updown_1h" in mid:
+            return "HYPE_updown_1h"
 
     if "eth-updown-30m" in mid or "eth_updown_30m" in mid:
         return "ETH_updown_30m"
@@ -638,6 +665,8 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             return "5m"
         if re.search(r"(30m|30-m|updown-30m)", s):
             return "30m"
+        if re.search(r"-up-or-down-.*(?:am|pm)-et\b", s) or re.search(r"\b(1h|1-h|updown-1h)\b", s):
+            return "1h"
         return "15m"
 
     if strategy == "sol_macro":
@@ -3294,7 +3323,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "bitcoin": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3302,7 +3331,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "sol_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3310,7 +3339,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "eth_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3318,7 +3347,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "hype_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3326,7 +3355,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "xrp_macro": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3334,7 +3363,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
         "weather": {
             "entries": 0,
             "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_30m": 0, "threshold": 0, "other": 0},
+            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
             "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
             "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
             "blockers": {},
@@ -3363,6 +3392,8 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
 
         if "updown_5m" in r_low:
             bucket["path"]["updown_5m"] += 1
+        elif "updown_1h" in r_low:
+            bucket["path"]["updown_1h"] += 1
         elif "updown_30m" in r_low:
             bucket["path"]["updown_30m"] += 1
         elif "updown_15m" in r_low:
@@ -4430,8 +4461,8 @@ def _validate_updown_override_patch(exit_rules: Dict[str, Any]) -> None:
             if not isinstance(window_lane_overrides, dict):
                 raise ValueError(f"{section_name}.window_lane_overrides must be an object")
             for window, window_cfg in window_lane_overrides.items():
-                if str(window) not in {"5m", "15m", "30m"}:
-                    raise ValueError(f"{section_name}.window_lane_overrides.{window} must be one of 5m, 15m, 30m")
+                if str(window) not in {"5m", "15m", "30m", "1h"}:
+                    raise ValueError(f"{section_name}.window_lane_overrides.{window} must be one of 5m, 15m, 30m, 1h")
                 _validate_section_keys(window_cfg, f"{section_name}.window_lane_overrides.{window}", {"up", "down"})
                 for lane, lane_cfg in window_cfg.items():
                     _validate_override_map(

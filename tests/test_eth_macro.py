@@ -61,6 +61,23 @@ def test_eth_btc_follow_5m_impulse_scores_only_real_btc_impulse():
     assert score == 0.0
 
 
+def test_eth_1h_follow_score_prefers_real_hourly_alignment():
+    strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
+    score, reasons = strat._eth_1h_follow_score(
+        MACDResult(histogram=0.08, histogram_rising=True, crossover="NONE"),
+        "LONG",
+    )
+    assert score > 0
+    assert "ETH1h green+rising" in reasons
+
+    score_against, reasons_against = strat._eth_1h_follow_score(
+        MACDResult(histogram=-0.03, histogram_rising=False, crossover="NONE"),
+        "LONG",
+    )
+    assert score_against < 0
+    assert "ETH1h against" in reasons_against
+
+
 def test_eth_rsi_soft_penalty_buy_no_when_oversold_not_hard_block():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
     hard, delta = strat._resolve_rsi_gate("BUY_NO", 35.0)
@@ -100,6 +117,7 @@ def test_eth_scan_buy_no_ltf_override_uses_eth_ta_without_name_error():
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
+            "min_edge": 0.03,
             "entry_window_auto_align": False,
         }
     )
@@ -174,6 +192,7 @@ def test_eth_scan_eth_only_when_btc_full_analysis_unavailable():
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
+            "min_edge": 0.03,
             "entry_window_auto_align": False,
             "btc_follow_1h_required": False,
             "neutral_macro_require_spike_or_lag": False,

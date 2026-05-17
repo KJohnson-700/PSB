@@ -336,6 +336,32 @@ class ETHMacroStrategy(SolMacroStrategy):
         return score, reasons
 
     @staticmethod
+    def _eth_1h_follow_score(macd_1h: MACDResult, allowed_side: str) -> tuple[float, List[str]]:
+        reasons: List[str] = []
+        score = 0.0
+        if allowed_side == "LONG":
+            if macd_1h.crossover == "BULLISH_CROSS":
+                score = 0.05
+                reasons.append("ETH1h bull cross")
+            elif macd_1h.histogram > 0 and macd_1h.histogram_rising:
+                score = 0.04
+                reasons.append("ETH1h green+rising")
+            elif macd_1h.crossover == "BEARISH_CROSS" or macd_1h.histogram < 0:
+                score = -0.04
+                reasons.append("ETH1h against")
+        else:
+            if macd_1h.crossover == "BEARISH_CROSS":
+                score = 0.05
+                reasons.append("ETH1h bear cross")
+            elif macd_1h.histogram < 0 and not macd_1h.histogram_rising:
+                score = 0.04
+                reasons.append("ETH1h red+falling")
+            elif macd_1h.crossover == "BULLISH_CROSS" or macd_1h.histogram > 0:
+                score = -0.04
+                reasons.append("ETH1h against")
+        return score, reasons
+
+    @staticmethod
     def _btc_htf_proxy_signal(bias: str) -> float:
         if bias == "BULLISH":
             return 0.75
@@ -610,6 +636,7 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             _updown_tf = updown_timeframe_label(resolved_updown_window_minutes(market))
             is_5m = _updown_tf == "5m"
+            is_1h = _updown_tf == "1h"
             yes_price = market.yes_price
 
             # UTC dead-zone — same config keys as sol_macro / bitcoin updown.
@@ -836,68 +863,127 @@ class ETHMacroStrategy(SolMacroStrategy):
                 confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(eth_5m_adj) * 2.0))
                 reason_parts.extend(["UPDOWN_5m", *btc_reasons, *eth_reasons])
             else:
-                if btc_full_ok and not self._btc_follow_15m_impulse_ok(
-                    btc_ta, market_allowed_side
-                ):
-                    if self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side):
-                        pass
-                    elif (
-                        self.btc_follow_stf_bypass_if_1h_ok
-                        and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
-                    ):
-                        pass
-                    else:
-                        _bump_skip("btc_15m_not_following")
+                if is_1h:
+                    if btc_full_ok and not self._btc_follow_1h_ok(btc_ta, market_allowed_side):
+                        _bump_skip("btc_1h_not_following")
                         log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="15m",
+                            strategy=self._signal_strategy_name, window="1h",
                             side=market_allowed_side, action=action,
-                            reason="btc_15m_not_following", market=market,
+                            reason="btc_1h_not_following", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
                             context={},
                         )
                         continue
-                eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
-                    eth.macd_15m, market_allowed_side
-                )
-                if eth_15m_adj < self.eth_follow_15m_min_adj:
-                    _bump_skip("eth_15m_weak_confirm")
-                    log_rejected_candidate(
-                        strategy=self._signal_strategy_name, window="15m",
-                        side=market_allowed_side, action=action,
-                        reason="eth_15m_weak_confirm", market=market,
-                        yes_price=yes_price, est_prob_up=est_prob_up,
-                        htf_bias=primary_htf_bias,
-                        context={
-                            "eth_15m_adj": float(eth_15m_adj),
-                            "min_required": float(self.eth_follow_15m_min_adj),
-                        },
+                    eth_1h_adj, eth_reasons = self._eth_1h_follow_score(
+                        eth.macd_1h, market_allowed_side
                     )
-                    continue
-                est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
-                # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
-                if self.enforce_alt_1h_alignment:
-                    if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
-                        est_prob_up -= 0.05
-                        reason_parts.append("h1_dampen_long_15m")
-                    elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
-                        est_prob_up += 0.05
-                        reason_parts.append("h1_dampen_short_15m")
-                est_prob_up += eth_15m_adj if market_allowed_side == "LONG" else -eth_15m_adj
-                if eth.rsi_14 > 75:
-                    est_prob_up -= 0.03
-                elif eth.rsi_14 < 25:
-                    est_prob_up += 0.03
-                confidence = max(0.55, min(0.85, 0.50 + abs(eth_15m_adj) * 2.2))
-                reason_parts.extend(
-                    [
-                        "UPDOWN_15m",
-                        *eth_reasons,
-                        f"slug={market.slug or '?'}",
-                        f"mins_left={_mins_left:.2f}",
-                        f"end={_end_utc.isoformat()}",
-                    ]
-                )
+                    eth_1h_min_adj = float(
+                        self.config.get(
+                            "eth_follow_1h_min_adj",
+                            max(0.03, self.eth_follow_15m_min_adj * 0.8),
+                        )
+                    )
+                    if eth_1h_adj < eth_1h_min_adj:
+                        _bump_skip("eth_1h_weak_confirm")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="1h",
+                            side=market_allowed_side, action=action,
+                            reason="eth_1h_weak_confirm", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "eth_1h_adj": float(eth_1h_adj),
+                                "min_required": float(eth_1h_min_adj),
+                            },
+                        )
+                        continue
+                    est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.09)
+                    if self.enforce_alt_1h_alignment:
+                        if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
+                            est_prob_up -= 0.06
+                            reason_parts.append("h1_dampen_long_1h")
+                        elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
+                            est_prob_up += 0.06
+                            reason_parts.append("h1_dampen_short_1h")
+                    est_prob_up += eth_1h_adj if market_allowed_side == "LONG" else -eth_1h_adj
+                    if eth.rsi_14 > 75:
+                        est_prob_up -= 0.02
+                    elif eth.rsi_14 < 25:
+                        est_prob_up += 0.02
+                    confidence = max(0.55, min(0.85, 0.50 + abs(eth_1h_adj) * 1.8))
+                    reason_parts.extend(
+                        [
+                            "UPDOWN_1h",
+                            *eth_reasons,
+                            f"slug={market.slug or '?'}",
+                            f"mins_left={_mins_left:.2f}",
+                            f"end={_end_utc.isoformat()}",
+                        ]
+                    )
+                else:
+                    if btc_full_ok and not self._btc_follow_15m_impulse_ok(
+                        btc_ta, market_allowed_side
+                    ):
+                        if self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side):
+                            pass
+                        elif (
+                            self.btc_follow_stf_bypass_if_1h_ok
+                            and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
+                        ):
+                            pass
+                        else:
+                            _bump_skip("btc_15m_not_following")
+                            log_rejected_candidate(
+                                strategy=self._signal_strategy_name, window="15m",
+                                side=market_allowed_side, action=action,
+                                reason="btc_15m_not_following", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up,
+                                htf_bias=primary_htf_bias,
+                                context={},
+                            )
+                            continue
+                    eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
+                        eth.macd_15m, market_allowed_side
+                    )
+                    if eth_15m_adj < self.eth_follow_15m_min_adj:
+                        _bump_skip("eth_15m_weak_confirm")
+                        log_rejected_candidate(
+                            strategy=self._signal_strategy_name, window="15m",
+                            side=market_allowed_side, action=action,
+                            reason="eth_15m_weak_confirm", market=market,
+                            yes_price=yes_price, est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "eth_15m_adj": float(eth_15m_adj),
+                                "min_required": float(self.eth_follow_15m_min_adj),
+                            },
+                        )
+                        continue
+                    est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
+                    # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
+                    if self.enforce_alt_1h_alignment:
+                        if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
+                            est_prob_up -= 0.05
+                            reason_parts.append("h1_dampen_long_15m")
+                        elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
+                            est_prob_up += 0.05
+                            reason_parts.append("h1_dampen_short_15m")
+                    est_prob_up += eth_15m_adj if market_allowed_side == "LONG" else -eth_15m_adj
+                    if eth.rsi_14 > 75:
+                        est_prob_up -= 0.03
+                    elif eth.rsi_14 < 25:
+                        est_prob_up += 0.03
+                    confidence = max(0.55, min(0.85, 0.50 + abs(eth_15m_adj) * 2.2))
+                    reason_parts.extend(
+                        [
+                            "UPDOWN_15m",
+                            *eth_reasons,
+                            f"slug={market.slug or '?'}",
+                            f"mins_left={_mins_left:.2f}",
+                            f"end={_end_utc.isoformat()}",
+                        ]
+                    )
 
             if rsi_soft_delta != 0.0:
                 est_prob_up += rsi_soft_delta

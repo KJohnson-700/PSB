@@ -450,6 +450,11 @@ def test_config_post_preserves_nested_window_lane_overrides(monkeypatch, tmp_pat
                                     "down": {
                                         "updown_stop_loss_pct": 0.14,
                                     }
+                                },
+                                "1h": {
+                                    "up": {
+                                        "updown_max_hold_mins": 12,
+                                    }
                                 }
                             }
                         }
@@ -462,6 +467,7 @@ def test_config_post_preserves_nested_window_lane_overrides(monkeypatch, tmp_pat
     text = config_path.read_text(encoding="utf-8")
     assert "window_lane_overrides" in text
     assert "updown_stop_loss_pct: 0.14" in text
+    assert "updown_max_hold_mins: 12" in text
 
 
 def test_exit_reason_summary_groups_current_journal(monkeypatch):

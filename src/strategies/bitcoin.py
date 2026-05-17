@@ -359,7 +359,7 @@ class BitcoinStrategy:
 
     def _resolve_entry_window_bounds(self, *, tf: str, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
         win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
         win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
@@ -374,8 +374,8 @@ class BitcoinStrategy:
         scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
         if tf == "5m":
             default_expand = 1.0
-        elif tf == "30m":
-            default_expand = 2.5
+        elif tf == "1h":
+            default_expand = 5.0  # hourly tolerates wider cadence drift
         else:
             default_expand = 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
@@ -400,11 +400,12 @@ class BitcoinStrategy:
                 default_min=2.5,
                 default_max=4.5,
             )
-        if tf == "30m":
+        if tf == "1h":
+            # Hourly products: wide passthrough until tuned from live data.
             return self._resolve_entry_window_bounds(
-                tf="30m",
-                default_min=25.0,
-                default_max=29.0,
+                tf="1h",
+                default_min=1.0,
+                default_max=59.0,
             )
         return self._resolve_entry_window_bounds(
             tf="15m",
@@ -418,18 +419,31 @@ class BitcoinStrategy:
         window_size: str,
         action: str,
     ) -> Dict[str, Any]:
-        min_edge = self.min_edge_5m if window_size == "5m" else self.min_edge
+        if window_size == "5m":
+            min_edge = self.min_edge_5m
+        elif window_size == "1h":
+            min_edge = float(self.config.get("min_edge_1h", self.min_edge))
+        else:
+            min_edge = self.min_edge
         min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
         if action == "BUY_NO" and min_edge_buy_no > 0:
             min_edge = min_edge_buy_no
         win_min, win_max = self._default_entry_window_bounds(window_size)
+        entry_price_max = float(self.config.get("entry_price_max_updown", 0.54))
+        if action == "BUY_YES" and window_size == "1h":
+            entry_price_max = float(
+                self.config.get(
+                    "entry_price_max_1h_yes_side",
+                    self.config.get("entry_price_max_1h_buy_yes", entry_price_max),
+                )
+            )
         return {
             "enabled": True,
             "min_edge": float(min_edge),
             "hard_min_edge": 0.0,
             "ai_override_min_edge": float(self.min_edge_5m_ai_override),
             "entry_price_min": float(self.config.get("entry_price_min_updown", 0.46)),
-            "entry_price_max": float(self.config.get("entry_price_max_updown", 0.54)),
+            "entry_price_max": float(entry_price_max),
             "entry_window_min": float(win_min),
             "entry_window_max": float(win_max),
             "size_multiplier": 1.0,
@@ -454,9 +468,9 @@ class BitcoinStrategy:
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
-        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "1h": (5.0, 55.0)}
         default_min, default_max = presets[tf]
         new_k = f"entry_timing_window_{tf}_min"
         leg_k = f"ai_entry_window_{tf}_min"
@@ -1124,6 +1138,7 @@ class BitcoinStrategy:
                 else "15m"
             )
             is_5m = _updown_tf == "5m"
+            is_1h = _updown_tf == "1h"
             ai_used = False
             threshold = None
             direction = "UP"  # default; overridden below
@@ -1131,7 +1146,7 @@ class BitcoinStrategy:
             dead_zone_would_block = False
             dead_zone_hour = None
 
-            # ── UP/DOWN MARKETS (15m or 5m) ──
+                # ── UP/DOWN MARKETS (5m / 15m / 1h) ──
             # YES = "Up" (price goes up), NO = "Down" (price goes down)
             # Our technical analysis determines direction directly
             if is_updown:
@@ -1445,23 +1460,31 @@ class BitcoinStrategy:
                     )
 
                 else:
-                    # ── FIFTEEN-MINUTE UP/DOWN MARKET PATH ──
+                    # ── LONGER-CYCLE UP/DOWN MARKET PATH (15m / 1h) ──
                     # Estimate probability from technical analysis
                     # Base: 0.50 (coin flip) + adjustments from HTF, LTF and timing
                     est_prob_up = 0.50
+                    window_label = "1h" if is_1h else "15m"
+                    htf_boost_strong = 0.09 if is_1h else 0.08
+                    htf_boost_weak = 0.04 if is_1h else 0.03
+                    ltf_weight = 0.12 if is_1h else 0.20
+                    timing_weight = 0.50 if is_1h else 1.00
+                    rsi_extreme = 0.02 if is_1h else 0.03
+                    rsi_mid = 0.01 if is_1h else 0.02
+                    vp_chop_penalty = 0.005 if is_1h else 0.01
 
                     # HTF bias — requires ALL 3 votes (Sabre + price vs MA + 4H MACD).
                     # 2/3 votes produce near-random win rates that can't cover slippage.
                     htf_boost = 0.0
                     _price_above_ma = btc_price > sabre.ma_value
                     if sabre.trend == 1 and _price_above_ma and macd_4h.above_zero:
-                        htf_boost = 0.08  # All 3 votes bullish — strong signal
+                        htf_boost = htf_boost_strong
                     elif sabre.trend == -1 and not _price_above_ma and not macd_4h.above_zero:
-                        htf_boost = -0.08  # All 3 votes bearish — strong signal
+                        htf_boost = -htf_boost_strong
                     elif sabre.trend == 1 and macd_4h.above_zero:
-                        htf_boost = 0.03  # 2/3 bull (price below MA) — weak
+                        htf_boost = htf_boost_weak
                     elif sabre.trend == -1 and not macd_4h.above_zero:
-                        htf_boost = -0.03  # 2/3 bear (price above MA) — weak
+                        htf_boost = -htf_boost_weak
                     # else: mixed votes → no directional boost (htf_boost stays 0.0)
                     est_prob_up += htf_boost
 
@@ -1473,10 +1496,10 @@ class BitcoinStrategy:
                     macd_1h = ta.macd_1h
                     if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_15m_long_reject")
+                            _bump_skip(f"hist_gate_{window_label}_long_reject")
                             log_rejected_candidate(
-                                strategy="bitcoin", window="15m", side="LONG", action=action,
-                                reason="hist_gate_15m_long_reject", market=market,
+                                strategy="bitcoin", window=window_label, side="LONG", action=action,
+                                reason=f"hist_gate_{window_label}_long_reject", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
                                 context={
                                     "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
@@ -1486,20 +1509,20 @@ class BitcoinStrategy:
                                 },
                             )
                             logger.info(
-                                f"  BTC [15m] skip '{market.question[:40]}' — "
+                                f"  BTC [{window_label}] skip '{market.question[:40]}' — "
                                 f"4H falling, 1H also falling — no momentum building for LONG"
                             )
                             continue
                         logger.info(
-                            f"  BTC [15m] 1H gate pass '{market.question[:40]}' — "
+                            f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
                             f"4H falling but 1H rising — local momentum recovery"
                         )
                     if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
-                            _bump_skip("hist_gate_15m_short_reject")
+                            _bump_skip(f"hist_gate_{window_label}_short_reject")
                             log_rejected_candidate(
-                                strategy="bitcoin", window="15m", side="SHORT", action=action,
-                                reason="hist_gate_15m_short_reject", market=market,
+                                strategy="bitcoin", window=window_label, side="SHORT", action=action,
+                                reason=f"hist_gate_{window_label}_short_reject", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
                                 context={
                                     "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
@@ -1509,36 +1532,36 @@ class BitcoinStrategy:
                                 },
                             )
                             logger.info(
-                                f"  BTC [15m] skip '{market.question[:40]}' — "
+                                f"  BTC [{window_label}] skip '{market.question[:40]}' — "
                                 f"4H rising, 1H also rising — no momentum building for SHORT"
                             )
                             continue
                         logger.info(
-                            f"  BTC [15m] 1H gate pass '{market.question[:40]}' — "
+                            f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
                             f"4H rising but 1H falling — local momentum recovery SHORT"
                         )
 
                     # LTF confirmation adds conviction
-                    ltf_adj = ltf_strength * 0.20
+                    ltf_adj = ltf_strength * ltf_weight
                     est_prob_up += ltf_adj if effective_side == "LONG" else -ltf_adj
 
                     # Timing/momentum adds more
                     if effective_side == "LONG":
-                        est_prob_up += timing_bonus
+                        est_prob_up += timing_bonus * timing_weight
                     else:
-                        est_prob_up -= timing_bonus
+                        est_prob_up -= timing_bonus * timing_weight
 
                     # RSI adjustments — expanded from 80/20 to 65/35 range.
                     # Live data: RSI 65-70 during SHORT had zero weight but is a real overbought signal.
                     # Very extreme (>80/<20) gets full -0.03/+0.03; mid-extreme (65-80/20-35) gets -0.02/+0.02
                     if ta.rsi_14 > 80:
-                        est_prob_up -= 0.03  # Very overbought — strong support for SHORT
+                        est_prob_up -= rsi_extreme
                     elif ta.rsi_14 > 65:
-                        est_prob_up -= 0.02  # Overbought zone — modest support for SHORT
+                        est_prob_up -= rsi_mid
                     elif ta.rsi_14 < 20:
-                        est_prob_up += 0.03  # Very oversold — strong support for LONG
+                        est_prob_up += rsi_extreme
                     elif ta.rsi_14 < 35:
-                        est_prob_up += 0.02  # Oversold zone — modest support for LONG
+                        est_prob_up += rsi_mid
 
                     # Sabre tension — lowered threshold from 4.0 to 2.0 to match threshold-market path.
                     # 72.9% of signals have tension_abs > 2.0; the 4.0 threshold almost never fired.
@@ -1557,7 +1580,7 @@ class BitcoinStrategy:
                     if vp.poc_price > 0:
                         price_vs_poc = (btc_price - vp.poc_price) / vp.poc_price
                         if abs(price_vs_poc) < 0.003:
-                            est_prob_up -= 0.01  # At POC, likely to chop
+                            est_prob_up -= vp_chop_penalty
                         reason_parts.append(f"VP_POC=${vp.poc_price:,.0f}")
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -1576,15 +1599,20 @@ class BitcoinStrategy:
                     else:
                         edge = (1.0 - estimated_prob) - (1.0 - yes_price)
 
-                    confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
+                    confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * timing_weight)
 
                     reason_parts.extend([
-                        "UPDOWN_15m",
+                        f"UPDOWN_{window_label}",
                         f"btc=${btc_price:,.0f}",
                         f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"4H_MACD={'+'if macd_4h.above_zero else '-'}{abs(macd_4h.histogram):.0f}",
-                        f"15m_MACD={'+' if macd_15m.macd_line > macd_15m.signal_line else '-'}{abs(macd_15m.histogram):.1f}",
+                        (
+                            f"1H_MACD={'+' if macd_1h.macd_line > macd_1h.signal_line else '-'}"
+                            f"{abs(macd_1h.histogram):.1f}"
+                            if is_1h
+                            else f"15m_MACD={'+' if macd_15m.macd_line > macd_15m.signal_line else '-'}{abs(macd_15m.histogram):.1f}"
+                        ),
                         f"RSI={ta.rsi_14:.0f}",
                         f"Sabre={'B' if sabre.trend==1 else 'S'} t={sabre.tension:+.1f}",
                     ])

@@ -571,7 +571,7 @@ class SolMacroStrategy:
 
     def _resolve_entry_window_bounds(self, *, tf: str, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
         win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
         win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
@@ -584,8 +584,8 @@ class SolMacroStrategy:
         scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
         if tf == "5m":
             default_expand = 1.0
-        elif tf == "30m":
-            default_expand = 2.5
+        elif tf == "1h":
+            default_expand = 5.0  # hourly tolerates wider cadence drift
         else:
             default_expand = 1.5
         max_expand_min = float(self.config.get("entry_window_auto_align_max_expand_min", default_expand))
@@ -610,11 +610,12 @@ class SolMacroStrategy:
                 default_min=2.75,
                 default_max=3.75,
             )
-        if tf == "30m":
+        if tf == "1h":
+            # Hourly products: wide passthrough until tuned from live data.
             return self._resolve_entry_window_bounds(
-                tf="30m",
-                default_min=26.0,
-                default_max=28.66,
+                tf="1h",
+                default_min=1.0,
+                default_max=59.0,
             )
         return self._resolve_entry_window_bounds(
             tf="15m",
@@ -629,7 +630,12 @@ class SolMacroStrategy:
         action: str,
         direction: str,
     ) -> Dict[str, Any]:
-        min_edge = self.min_edge_5m if window_size == "5m" else self.min_edge
+        if window_size == "5m":
+            min_edge = self.min_edge_5m
+        elif window_size == "1h":
+            min_edge = float(self.config.get("min_edge_1h", self.min_edge))
+        else:
+            min_edge = self.min_edge
         min_edge = max(min_edge, self.hard_min_edge)
         if action == "BUY_NO" and self.min_edge_buy_no > 0:
             min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
@@ -642,7 +648,14 @@ class SolMacroStrategy:
         if lane_mult > 0:
             size_multiplier *= lane_mult
         entry_price_max = float(self.entry_price_max)
-        if action == "BUY_YES" and window_size != "5m":
+        if action == "BUY_YES" and window_size == "1h":
+            entry_price_max = float(
+                self.config.get(
+                    "entry_price_max_1h_yes_side",
+                    self.config.get("entry_price_max_1h_buy_yes", entry_price_max),
+                )
+            )
+        elif action == "BUY_YES" and window_size != "5m":
             entry_price_max = float(
                 self.config.get(
                     "entry_price_max_15m_yes_side",
@@ -684,9 +697,9 @@ class SolMacroStrategy:
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
         """Return the preferred minutes-left band for marginal up/down tie-break timing."""
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
-        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "1h": (5.0, 55.0)}
         default_min, default_max = presets[tf]
         new_k = f"entry_timing_window_{tf}_min"
         leg_k = f"ai_entry_window_{tf}_min"
@@ -2109,15 +2122,25 @@ class SolMacroStrategy:
                     )
 
                 else:
-                    # ── FIFTEEN-MINUTE UP/DOWN MARKET PATH ──
+                    # ── LONGER-CYCLE UP/DOWN MARKET PATH (15m / 1h) ──
                     # PRIMARY signal: macro trend + LTF confirmation (live data evidence)
                     # SECONDARY signal: lag / spike (small probability booster only)
                     est_prob_up = 0.50
+                    is_hourly = _updown_tf == "1h"
+                    window_label = "1h" if is_hourly else "15m"
+                    primary_bias_weight = 0.09 if is_hourly else 0.07
+                    h1_dampen = 0.07 if is_hourly else 0.05
+                    ltf_weight = 0.12 if is_hourly else 0.22
+                    lag_boost_min = 0.015 if is_hourly else 0.02
+                    lag_boost_max = 0.03 if is_hourly else 0.04
+                    spike_boost = 0.02 if is_hourly else 0.03
+                    timing_weight = 0.50 if is_hourly else 1.00
+                    rsi_extreme = 0.02 if is_hourly else 0.03
 
                     if not self._passes_15m_iql(ta, allowed_side):
                         _bump_skip("iql_15m_reject")
                         log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="15m",
+                            strategy=self._signal_strategy_name, window=window_label,
                             side=allowed_side, action=action,
                             reason="iql_15m_reject", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
@@ -2129,7 +2152,7 @@ class SolMacroStrategy:
                             },
                         )
                         logger.info(
-                            f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                            f"  {_alt_label} [{window_label}] skip '{market.question[:40]}' — "
                             f"IQL reject (hist={sol.macd_15m.histogram:+.3f} "
                             f"cross={sol.macd_15m.crossover}, floor={self.iql_15m_hist_floor:.3f})"
                         )
@@ -2137,7 +2160,7 @@ class SolMacroStrategy:
 
                     # Macro trend — PRIMARY driver (increased from 0.05 since it's now the gate)
                     est_prob_up = self._apply_primary_htf_bias(
-                        est_prob_up, primary_htf_bias, 0.07
+                        est_prob_up, primary_htf_bias, primary_bias_weight
                     )
                     est_prob_up = self._apply_degraded_corr_bias(
                         est_prob_up, primary_htf_bias, corr
@@ -2152,19 +2175,19 @@ class SolMacroStrategy:
                     _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
-                            est_prob_up -= 0.05
-                            reason_parts.append("h1_dampen_long_15m")
+                            est_prob_up -= h1_dampen
+                            reason_parts.append(f"h1_dampen_long_{window_label}")
                             logger.info(
-                                f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
-                                f"1H histogram against LONG, est_prob dampened -0.05 "
+                                f"  {_alt_label} [{window_label}] allow '{market.question[:40]}' — "
+                                f"1H histogram against LONG, est_prob dampened -{h1_dampen:.2f} "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
                         if allowed_side == "SHORT" and not _h1_bear_ok:
-                            est_prob_up += 0.05
-                            reason_parts.append("h1_dampen_short_15m")
+                            est_prob_up += h1_dampen
+                            reason_parts.append(f"h1_dampen_short_{window_label}")
                             logger.info(
-                                f"  {_alt_label} [15m] allow '{market.question[:40]}' — "
-                                f"1H histogram against SHORT, est_prob dampened +0.05 "
+                                f"  {_alt_label} [{window_label}] allow '{market.question[:40]}' — "
+                                f"1H histogram against SHORT, est_prob dampened +{h1_dampen:.2f} "
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
 
@@ -2174,7 +2197,7 @@ class SolMacroStrategy:
                         if _require_cat_15m and not corr.lag_opportunity and not corr.btc_spike_detected:
                             _bump_skip("no_btc_catalyst_15m_unconfirmed")
                             log_rejected_candidate(
-                                strategy=self._signal_strategy_name, window="15m",
+                                strategy=self._signal_strategy_name, window=window_label,
                                 side=allowed_side, action=action,
                                 reason="no_btc_catalyst_15m_unconfirmed", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up,
@@ -2186,35 +2209,38 @@ class SolMacroStrategy:
                                 },
                             )
                             logger.info(
-                                f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
+                                f"  {_alt_label} [{window_label}] skip '{market.question[:40]}' — "
                                 f"no LTF + no catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
                             )
                             continue
 
                     # LTF confirmation — PRIMARY probability driver (increased from 0.18)
-                    ltf_adj = ltf_strength * 0.22
+                    ltf_adj = ltf_strength * ltf_weight
                     est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
 
                     # BTC catalyst boosts — lag/spike signal quality priced into est_prob
                     if corr.lag_opportunity and corr.opportunity_direction == allowed_side:
-                        _lag_boost = min(0.04, max(0.02, abs(corr.opportunity_magnitude) * 0.015))
+                        _lag_boost = min(
+                            lag_boost_max,
+                            max(lag_boost_min, abs(corr.opportunity_magnitude) * 0.015),
+                        )
                         est_prob_up += _lag_boost if allowed_side == "LONG" else -_lag_boost
                         reason_parts.append(f"lag_boost={_lag_boost:+.3f}")
                     elif corr.btc_spike_detected:
-                        est_prob_up += 0.03 if allowed_side == "LONG" else -0.03
+                        est_prob_up += spike_boost if allowed_side == "LONG" else -spike_boost
                         reason_parts.append("btc_spike_boost")
 
                     # Timing / 5m momentum
                     if allowed_side == "LONG":
-                        est_prob_up += timing_bonus
+                        est_prob_up += timing_bonus * timing_weight
                     else:
-                        est_prob_up -= timing_bonus
+                        est_prob_up -= timing_bonus * timing_weight
 
                     # RSI extremes
                     if sol.rsi_14 > 75:
-                        est_prob_up -= 0.03
+                        est_prob_up -= rsi_extreme
                     elif sol.rsi_14 < 25:
-                        est_prob_up += 0.03
+                        est_prob_up += rsi_extreme
 
                     # Correlation confidence — unified with 5m path.
                     # Light damping: primary edge is macro+LTF, not correlation.
@@ -2252,10 +2278,10 @@ class SolMacroStrategy:
                     else:
                         edge = (1.0 - estimated_prob) - (1.0 - yes_price)
                     # Confidence driven by LTF strength (primary); lag signal removed
-                    confidence = min(0.85, 0.50 + ltf_strength * 0.22 + abs(timing_bonus) * 0.5)
+                    confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * 0.5 * timing_weight)
 
                     reason_parts.extend([
-                        "UPDOWN_15m",
+                        f"UPDOWN_{window_label}",
                         f"{_spot_key}=${sol_price:,.2f}",
                         f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                         f"est_up={estimated_prob:.3f}",

@@ -72,6 +72,18 @@ def test_optional_rsi_buy_ceiling_soft_penalty_by_default():
     assert delta3 == 0.0
 
 
+def test_sol_legacy_entry_policy_supports_hourly_overrides():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["min_edge_1h"] = 0.11
+    cfg["strategies"]["sol_macro"]["entry_price_max_1h_yes_side"] = 0.60
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    policy = strategy._legacy_entry_policy(window_size="1h", action="BUY_YES", direction="UP")
+
+    assert policy["min_edge"] == 0.11
+    assert policy["entry_price_max"] == 0.60
+
+
 def test_optional_rsi_buy_ceiling_hard_block_when_enabled():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
