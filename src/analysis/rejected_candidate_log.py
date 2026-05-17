@@ -1,4 +1,4 @@
-"""Ghost-trade log for candidates rejected at structural gates.
+"""Rejected-candidate tracker log for structural-gate skips.
 
 Appends one JSON object per rejection to ``data/calibration/rejected_candidates.jsonl``.
 Purpose: answer the question "is my winning direction being unfairly blocked?" by

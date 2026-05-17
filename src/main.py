@@ -514,7 +514,7 @@ class PolyBot:
     def _build_lane_calibrator(self) -> LaneCalibrator:
         """Construct the per-lane probability calibrator.
 
-        Defaults to shadow mode so production behavior is unchanged until the
+        Defaults to observation-only mode so production behavior is unchanged until the
         operator explicitly flips ``lane_calibration.shadow_mode: false``.
         """
         cal_cfg = (self.config.get("lane_calibration") or {})
@@ -526,7 +526,7 @@ class PolyBot:
             return LaneCalibrator(shadow_mode=True)
 
     def _refresh_ghost_calibration_state(self, *, force: bool = False) -> None:
-        """Auto-settle ghost candidates and publish a runtime status snapshot."""
+        """Auto-settle rejected candidates and publish a runtime status snapshot."""
         now_mono = time.monotonic()
         if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 60.0:
             return
@@ -538,7 +538,7 @@ class PolyBot:
         self._last_ghost_calibration_refresh_monotonic = now_mono
         if settle_summary.get("newly_settled", 0):
             logging.info(
-                "Ghost calibration settled %s new candidates (unresolved=%s total_settled=%s)",
+                "Rejected-candidate tracker settled %s new candidates (unresolved=%s total_settled=%s)",
                 settle_summary.get("newly_settled", 0),
                 status.get("unresolved", 0),
                 status.get("total_settled", 0),
@@ -1812,7 +1812,7 @@ class PolyBot:
         try:
             await asyncio.to_thread(self._refresh_ghost_calibration_state)
         except Exception as e:
-            logging.warning("Ghost calibration refresh failed: %s", e)
+            logging.warning("Rejected-candidate tracker refresh failed: %s", e)
 
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades

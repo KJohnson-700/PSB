@@ -1,12 +1,12 @@
-"""Ghost-candidate settlement and observability helpers.
+"""Rejected-candidate settlement and observability helpers.
 
-Ghost mode captures rejected candidates that would otherwise have been trades.
-This module closes that loop by:
+The rejected-candidate tracker captures blocked entries that would otherwise
+have been trades. This module closes that loop by:
 
 1. Settling rejected candidates once their markets resolve.
 2. Producing a compact runtime status snapshot for ops/dashboard surfaces.
 
-The settled ghost outcomes are intentionally kept separate from live lane
+The settled blocked-trade outcomes are intentionally kept separate from live lane
 posteriors. They answer "what did the blocked trade do?" without polluting the
 calibration stream for actually executed trades.
 """
@@ -56,7 +56,7 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
                 if isinstance(obj, dict):
                     yield obj
     except OSError as exc:
-        logger.warning("ghost_calibration read failed (%s): %s", path, exc)
+        logger.warning("rejected_candidate_tracker read failed (%s): %s", path, exc)
 
 
 def _load_settled_ids(path: Path) -> set[str]:
@@ -262,7 +262,7 @@ def settle_rejected_candidates(
             finally:
                 os.close(fd)
         except OSError as exc:
-            logger.warning("ghost_calibration append failed (%s): %s", output_path, exc)
+            logger.warning("rejected_candidate_tracker append failed (%s): %s", output_path, exc)
 
     return summary
 

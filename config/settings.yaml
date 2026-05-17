@@ -240,13 +240,13 @@ lane_management:
 # LANE CALIBRATION (Phase 6 — probability correction)
 # ============================================
 # Per-lane EWMA alpha + Beta-Bernoulli posterior built from closed-trade
-# outcomes. In shadow mode the posteriors update on each close but the
-# strategy-side ``calibrate()`` call (wired in the flip-to-live PR) returns the
-# raw probability unchanged, so live behavior is identical. Posteriors persist
+# outcomes. In observation-only mode the posteriors update on each close but
+# the strategy-side ``calibrate()`` call returns the raw probability unchanged,
+# so live behavior is identical. Posteriors persist
 # to ``data/calibration/lane_posteriors.json``.
 lane_calibration:
   enabled: true
-  shadow_mode: true   # set to false (and ship the calibrate() entry-wiring PR) to activate corrections
+  shadow_mode: true   # observation-only: false makes calibrate() entry-affecting
 
 entry_policy:
   defaults:

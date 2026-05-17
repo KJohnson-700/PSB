@@ -8,6 +8,20 @@
 
 ---
 
+## 2026-05-16 — Naming cleanup for rejected-candidate tracking + lane calibration rollout note
+
+**`src/analysis/ghost_calibration.py`, `src/analysis/rejected_candidate_log.py`, `src/main.py`, `src/ops_pulse.py`:** Renamed user-facing/runtime wording from ambiguous **ghost calibration / ghost mode** language to **rejected-candidate tracker** wherever the feature is describing blocked-trade logging and settlement. `OPS_JSON` now exposes a new `rejected_candidate_tracker` block while preserving `ghost_calibration` as a backward-compatible alias for existing consumers.
+
+**`config/settings.yaml`:** Clarified `lane_calibration.shadow_mode` as **observation-only** mode in comments. Current behavior: posteriors update on close, but entry probabilities remain unchanged until `shadow_mode` is turned off.
+
+**`docs/AGENT_CHANGELOG.md`:** Corrected the stale note that said lane-calibration entry wiring was not shipped. The `LaneCalibrator.calibrate(...)` entry call sites already exist in `bitcoin`, `eth_macro`, and `sol_macro` (which also covers XRP/HYPE via inheritance).
+
+**Operational recommendation:** Do **not** flip lane calibration live globally yet. The code path is ready, but current per-lane posterior samples are still uneven and several effective alphas are clamp-driven or derived from thin cohorts, so a global `shadow_mode: false` change would be statistically premature without a lane-level minimum-sample gate or a narrower staged rollout.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ghost_calibration.py tests/test_ops_pulse.py tests/test_lane_calibration.py tests/test_bitcoin.py tests/test_sol_macro.py -q` passed (`129 passed`).
+
+---
+
 ## 2026-05-16 — Backtest vs live sync: 30m entry timing, skip_counts, drift keys
 
 **`src/backtest/updown_engine.py`:** Replay now reads entry-eval delay from `strategies.*` (not orphaned root keys), evaluates `mins_left` inside the lane entry band (not only at window open), and uses YES mid at eval time. Impossible bands (e.g. min > window length) fall back to open eval so skips count as `outside_entry_window`. Fixes BTC 30m backtests that showed **0 / 4368** entries while live paper traded inside the 25–29m band.
@@ -22,13 +36,13 @@
 
 ---
 
-## 2026-05-16 — Ghost calibration loop closed in runtime + ops visibility
+## 2026-05-16 — Rejected-candidate tracker loop closed in runtime + ops visibility
 
-**`src/analysis/ghost_calibration.py`:** Added a dedicated ghost-candidate settlement/summary module. It auto-settles `data/calibration/rejected_candidates.jsonl` against Gamma market outcomes into `data/calibration/rejected_candidates_settled.jsonl`, keeps the flow idempotent via stable `ghost_id`, and builds a compact status payload (`total_rejected`, `total_settled`, `unresolved`, win/loss counts, top reason/action buckets) for runtime observability.
+**`src/analysis/ghost_calibration.py`:** Added a dedicated rejected-candidate settlement/summary module. It auto-settles `data/calibration/rejected_candidates.jsonl` against Gamma market outcomes into `data/calibration/rejected_candidates_settled.jsonl`, keeps the flow idempotent via stable `ghost_id`, and builds a compact status payload (`total_rejected`, `total_settled`, `unresolved`, win/loss counts, top reason/action buckets) for runtime observability.
 
-**`src/main.py`:** `PolyBot` now refreshes ghost calibration state at startup and once per trading cycle after resolution work. That closes the operational loop that previously existed only as an offline script: rejected candidates are now automatically revisited and the latest summary is cached on the bot instance instead of relying on a manual `tools/settle_rejected_candidates.py` run.
+**`src/main.py`:** `PolyBot` now refreshes rejected-candidate tracker state at startup and once per trading cycle after resolution work. That closes the operational loop that previously existed only as an offline script: rejected candidates are now automatically revisited and the latest summary is cached on the bot instance instead of relying on a manual `tools/settle_rejected_candidates.py` run.
 
-**`src/ops_pulse.py`:** `OPS_JSON` / `/api/ops/summary` snapshots now include a `ghost_calibration` block so operators can verify whether ghost mode is actually ingesting outcomes, how much is still unresolved, and whether the settled cohort is favorable or not.
+**`src/ops_pulse.py`:** `OPS_JSON` / `/api/ops/summary` snapshots now include a rejected-candidate tracker block so operators can verify whether blocked-trade outcomes are actually being ingested, how much is still unresolved, and whether the settled cohort is favorable or not.
 
 **Tests:** Added `tests/test_ghost_calibration.py` for settlement idempotence / summary behavior and extended `tests/test_ops_pulse.py` to assert the new ops payload surface.
 
@@ -58,7 +72,7 @@
 
 ## 2026-05-15 — Lane calibration (shadow), calibration log, BTC HTF vote diagnostics
 
-**`src/analysis/calibration_log.py`, `src/analysis/lane_calibration.py`, `tools/calibration_report.py`:** Phase 0 append-only calibration trade log (`data/calibration/trades.jsonl`) and Phase 6 per-lane EWMA/Beta posteriors (`data/calibration/lane_posteriors.json`). **`lane_calibration.shadow_mode: true`** in config — posteriors update on close but **`calibrate()`** does not change live entries until a follow-up PR flips shadow off and wires entry-side correction.
+**`src/analysis/calibration_log.py`, `src/analysis/lane_calibration.py`, `tools/calibration_report.py`:** Phase 0 append-only calibration trade log (`data/calibration/trades.jsonl`) and Phase 6 per-lane EWMA/Beta posteriors (`data/calibration/lane_posteriors.json`). **`lane_calibration.shadow_mode: true`** in config — posteriors update on close but **`calibrate()`** does not change live entries while observation-only mode stays on.
 
 **`src/main.py`:** Builds **`LaneCalibrator`** at startup; on each live exit appends calibration rows and records posterior snapshots; resolution settlements also call **`kelly_sizer.record_outcome`** with detected window.
 
@@ -70,7 +84,7 @@
 
 **Not committed (runtime data):** `data/entry_prices/updown_fills.jsonl`, `data/lane_state_audit.jsonl`.
 
-**Next step (deferred, not yet shipped) — Phase 6 flip-to-live wiring.** Once 1–2 paper sessions have populated `data/calibration/lane_posteriors.json` and `python tools/calibration_report.py` shows posteriors converging to sane values (expected from prior 53-trade analysis: ETH 5m down `α ≈ 4`, HYPE 15m up `α ≈ 2.6`, SOL 5m `α` at low clamp), ship a follow-up PR that (a) flips `lane_calibration.shadow_mode: false`, and (b) wires `LaneCalibrator.calibrate(lane_id, est_prob_up)` immediately before each strategy's `est_prob_up = max(0.10, min(0.90, est_prob_up))` clamp: `src/strategies/bitcoin.py:1272` and `:1397`, `src/strategies/eth_macro.py:851`, `src/strategies/sol_macro.py:1906` and `:2044` (SOL covers XRP/HYPE via inheritance). Lane_id at each site can be built JIT via `src.analysis.lane_identity.build_lane_metadata(...)` using the in-loop `strategy / window_size / action / htf_bias / btc_1h_regime / side_source` already in scope. Plan file with full spec: `~/.claude/plans/why-the-fuck-are-warm-flask.md`. Vault log: `Hermes Second Brain/projects/psb/logs/2026-05-15-lane-calibration-shadow.md`.
+**Next step — decide whether to flip observation-only mode live.** The entry-side `LaneCalibrator.calibrate(...)` wiring now exists in `bitcoin`, `eth_macro`, and `sol_macro` (which also covers XRP/HYPE via inheritance). The remaining decision is operational: use paper-session evidence from `data/calibration/lane_posteriors.json` and `python tools/calibration_report.py` to decide whether `lane_calibration.shadow_mode: false` is justified.
 
 ---
 
