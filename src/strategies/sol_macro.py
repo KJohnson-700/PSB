@@ -108,6 +108,33 @@ def macd_bearish_momentum_ok(m: Any) -> bool:
     return False
 
 
+def macd_bullish_momentum_ok(m: Any) -> bool:
+    """True when MACD bundle shows momentum favoring UP (alt leg), for BUY_YES override.
+
+    Mirror of macd_bearish_momentum_ok — used for symmetric bullish-rally LTF gating.
+    """
+    if m is None:
+        return False
+    crossover = getattr(m, "crossover", None) or ""
+    if crossover == "BULLISH_CROSS":
+        return True
+    try:
+        hist = float(getattr(m, "histogram", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        hist = 0.0
+    rising = bool(getattr(m, "histogram_rising", False))
+    try:
+        macd_line = float(getattr(m, "macd_line", 0.0) or 0.0)
+        signal_line = float(getattr(m, "signal_line", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        macd_line = signal_line = 0.0
+    if rising and hist > 0:
+        return True
+    if macd_line > signal_line and hist >= 0:
+        return True
+    return False
+
+
 class SolMacroSignal(BaseModel):
     """Represents a signal on a Solana price market."""
     market_id: str = Field(..., description="Market identifier")
@@ -415,6 +442,17 @@ class SolMacroStrategy:
         self.buy_no_ltf_override_max_btc_5m_pct = float(
             self.config.get("buy_no_ltf_override_max_btc_5m_pct", 0.0)
         )
+        # Symmetric bullish-rally LTF gate — required for ALL LONG paths
+        # (bull default + bear-exception rally). Mirrors buy_no thresholds.
+        self.buy_yes_ltf_override_enabled = bool(
+            self.config.get("buy_yes_ltf_override_enabled", False)
+        )
+        self.buy_yes_ltf_override_rsi_min = float(
+            self.config.get("buy_yes_ltf_override_rsi_min", 55.0)
+        )
+        self.buy_yes_ltf_override_min_btc_5m_pct = float(
+            self.config.get("buy_yes_ltf_override_min_btc_5m_pct", 0.0)
+        )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
 
@@ -433,8 +471,11 @@ class SolMacroStrategy:
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
 
-    def _buy_no_ltf_override(self, ta: Any) -> tuple[bool, str]:
-        """Permit SHORT side in bullish macro only on clear bearish short-window alt tape."""
+    def _bearish_dip_ltf_ok(self, ta: Any) -> tuple[bool, str]:
+        """SHORT-side LTF gate — clear bearish short-window alt tape.
+
+        Required for ALL SHORT paths: bear-regime default AND bull-regime dip exception.
+        """
         if not self.buy_no_ltf_override_enabled:
             return False, "disabled"
         sol = ta.sol
@@ -458,6 +499,79 @@ class SolMacroStrategy:
         if not btc_ok:
             missing.append(f"btc5m>{self.buy_no_ltf_override_max_btc_5m_pct:+.3f}%")
         return False, ",".join(missing)
+
+    def _bullish_rally_ltf_ok(self, ta: Any) -> tuple[bool, str]:
+        """LONG-side LTF gate — clear bullish short-window alt tape.
+
+        Required for ALL LONG paths: bull-regime default AND bear-regime rally exception.
+        Mirrors _bearish_dip_ltf_ok with inverted thresholds.
+        """
+        if not self.buy_yes_ltf_override_enabled:
+            return False, "disabled"
+        sol = ta.sol
+        corr = ta.correlation
+        bullish_15m = macd_bullish_momentum_ok(sol.macd_15m)
+        bullish_5m = macd_bullish_momentum_ok(sol.macd_5m)
+        rsi_ok = float(sol.rsi_14 or 50.0) >= self.buy_yes_ltf_override_rsi_min
+        btc_ok = float(corr.btc_move_5m_pct or 0.0) >= self.buy_yes_ltf_override_min_btc_5m_pct
+        if bullish_15m and bullish_5m and rsi_ok and btc_ok:
+            return True, (
+                f"bullish_ltf_override: 15m+5m bullish, RSI={sol.rsi_14:.1f}, "
+                f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+            )
+        missing = []
+        if not bullish_15m:
+            missing.append("15m_not_bullish")
+        if not bullish_5m:
+            missing.append("5m_not_bullish")
+        if not rsi_ok:
+            missing.append(f"rsi<{self.buy_yes_ltf_override_rsi_min:.1f}")
+        if not btc_ok:
+            missing.append(f"btc5m<{self.buy_yes_ltf_override_min_btc_5m_pct:+.3f}%")
+        return False, ",".join(missing)
+
+    def _buy_no_ltf_override(self, ta: Any) -> tuple[bool, str]:
+        """Back-compat alias — delegates to _bearish_dip_ltf_ok."""
+        return self._bearish_dip_ltf_ok(ta)
+
+    def _resolve_allowed_side_with_ltf_overrides(
+        self, ta: Any, primary_htf_bias: str
+    ) -> tuple[Optional[str], str, str]:
+        """Four-path side resolver with symmetric LTF momentum gating.
+
+        Returns (side, side_source, detail). side may be None (skip with reason in detail).
+
+        Paths:
+          1. BEAR default SHORT — admit only if bearish dip confirms.
+          2. BEAR exception LONG — bullish rally confirms; wins over absent bearish dip.
+          3. BULL default LONG — admit only if bullish rally confirms.
+          4. BULL exception SHORT — bearish dip confirms AND no bullish rally (clash rule:
+             buy_no cannot fire when bullish rally would otherwise confirm default LONG).
+          5. Ambiguous chop (both momentums) — prefer regime default if its momentum passed;
+             else skip with ltf_momentum_ambiguous.
+        """
+        bullish_ok, bullish_reason = self._bullish_rally_ltf_ok(ta)
+        bearish_ok, bearish_reason = self._bearish_dip_ltf_ok(ta)
+
+        if primary_htf_bias == "BEARISH":
+            if bearish_ok and not bullish_ok:
+                return "SHORT", "bearish_dip_default", bearish_reason
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_exception", bullish_reason
+            if bullish_ok and bearish_ok:
+                return "SHORT", "bearish_dip_default", f"chop_resolved_default: {bearish_reason}"
+            return None, "skip", f"bear_default_no_dip: {bearish_reason}"
+
+        if primary_htf_bias == "BULLISH":
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_default", bullish_reason
+            if bullish_ok and bearish_ok:
+                return "LONG", "bullish_rally_default", f"chop_resolved_default: {bullish_reason}"
+            if bearish_ok and not bullish_ok:
+                return "SHORT", "bearish_dip_exception", bearish_reason
+            return None, "skip", f"bull_default_no_rally: {bullish_reason}"
+
+        return None, "skip", "neutral_htf_no_resolver"
 
     def _make_buy_no_skip_payload(
         self,
@@ -1481,9 +1595,37 @@ class SolMacroStrategy:
                 logger.info(f"{_brand}: Macro NEUTRAL, no lag — using {_alt_label} 1H bias: {allowed_side}")
         else:
             # BULLISH or BEARISH alt macro — alt HTF is primary; BTC is secondary.
+            # Four-path resolver gates BOTH directions with LTF momentum when its feature
+            # flags are enabled. Falls back to legacy regime-default when both flags off.
             allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
             side_source = "primary_htf"
-            if primary_htf_bias == "BULLISH":
+            resolver_active = (
+                self.buy_yes_ltf_override_enabled or self.buy_no_ltf_override_enabled
+            )
+            if resolver_active:
+                _resolved_side, _resolved_source, _resolved_detail = (
+                    self._resolve_allowed_side_with_ltf_overrides(ta, primary_htf_bias)
+                )
+                if _resolved_side is None:
+                    logger.info(
+                        "%s: LTF resolver skipped %s macro — %s",
+                        _brand,
+                        primary_htf_bias,
+                        _resolved_detail,
+                    )
+                    return []
+                if _resolved_side != allowed_side or _resolved_source != "primary_htf":
+                    logger.info(
+                        "%s: LTF resolver → %s (%s) — %s",
+                        _brand,
+                        _resolved_side,
+                        _resolved_source,
+                        _resolved_detail,
+                    )
+                allowed_side = _resolved_side
+                side_source = _resolved_source
+            elif primary_htf_bias == "BULLISH" and self.buy_no_ltf_override_enabled:
+                # Legacy path retained for back-compat when only buy_no flag is on.
                 _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
                 if _short_override:
                     allowed_side = "SHORT"

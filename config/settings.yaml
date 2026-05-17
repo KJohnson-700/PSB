@@ -519,9 +519,16 @@ strategies:
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     max_edge_updown: 0.15         # Fixed: was 0.09 while min_edge_unconfirmed=0.10 — impossible band (min > max)
+    # Symmetric LTF momentum gates: both BUY_YES (LONG) and BUY_NO (SHORT) require
+    # short-window momentum to confirm. Neither side is naked macro-only.
+    # Bearish dip — ALL SHORT paths (bear default + bull exception)
     buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
     buy_no_ltf_override_rsi_max: 45.0
     buy_no_ltf_override_max_btc_5m_pct: 0.0
+    # Bullish rally — ALL LONG paths (bull default + bear exception)
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
     use_ai_updown: true          # Re-enabled: lag signal stripped, AI now safe to use on updown
@@ -698,9 +705,16 @@ strategies:
     block_counter_macro_leg_updown: true      # block LONG with macro_leg below floor / SHORT with macro_leg above ceiling
     updown_macro_leg_min_for_long: 0.0
     updown_macro_leg_max_for_short: 0.0
+    # Symmetric LTF momentum gates: both BUY_YES (LONG) and BUY_NO (SHORT) require
+    # short-window momentum to confirm. Neither side is naked macro-only.
+    # Bearish dip — ALL SHORT paths (bear default + bull exception)
     buy_no_ltf_override_enabled: true         # allow SHORT/BUY_NO in bullish macro only when 15m+5m alt tape is bearish
     buy_no_ltf_override_rsi_max: 45.0
     buy_no_ltf_override_max_btc_5m_pct: 0.0
+    # Bullish rally — ALL LONG paths (bull default + bear exception)
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
     # ETH side resolution:
     # - btc: keep alt-first side and disable per-market side meddling
     # - hybrid: annotate/confirm only
@@ -892,9 +906,16 @@ strategies:
     anti_ltf_gate_enabled: false
     require_ltf_confirmation: false
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    # Symmetric LTF momentum gates: both BUY_YES (LONG) and BUY_NO (SHORT) require
+    # short-window momentum to confirm. Neither side is naked macro-only.
+    # Bearish dip — ALL SHORT paths (bear default + bull exception)
     buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
     buy_no_ltf_override_rsi_max: 45.0
     buy_no_ltf_override_max_btc_5m_pct: 0.0
+    # Bullish rally — ALL LONG paths (bull default + bear exception)
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -1055,9 +1076,16 @@ strategies:
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
     block_counter_macro_leg_updown: true      # block LONG with negative macro_leg / SHORT with positive macro_leg
+    # Symmetric LTF momentum gates: both BUY_YES (LONG) and BUY_NO (SHORT) require
+    # short-window momentum to confirm. Neither side is naked macro-only.
+    # Bearish dip — ALL SHORT paths (bear default + bull exception)
     buy_no_ltf_override_enabled: true         # paper calibration: open BUY_NO lane on confirmed bearish short-window tape
     buy_no_ltf_override_rsi_max: 45.0
     buy_no_ltf_override_max_btc_5m_pct: 0.0
+    # Bullish rally — ALL LONG paths (bull default + bear exception)
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true

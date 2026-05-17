@@ -143,6 +143,150 @@ def test_buy_no_ltf_override_rejects_weak_bearish_noise():
     assert "btc5m>+0.000%" in reason
 
 
+def _make_ta_bullish_rally() -> SOLTechnicalAnalysis:
+    return SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=62.0,
+            macd_15m=MACDResult(histogram=0.06, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.04, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.05),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+
+def _make_ta_bearish_dip() -> SOLTechnicalAnalysis:
+    return SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=38.0,
+            macd_15m=MACDResult(histogram=-0.08, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.03, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=-0.05),
+        multi_tf=MultiTimeframeTrend(h1_trend="BEARISH"),
+    )
+
+
+def _make_ta_chop() -> SOLTechnicalAnalysis:
+    return SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=50.0,
+            macd_15m=MACDResult(histogram=0.01, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.01, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.0),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+
+def _make_resolver_strategy() -> SolMacroStrategy:
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_ltf_override_enabled"] = True
+    cfg["strategies"]["sol_macro"]["buy_yes_ltf_override_enabled"] = True
+    return SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+
+def test_resolver_bull_default_long_when_bullish_rally_confirms():
+    strategy = _make_resolver_strategy()
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_bullish_rally(), "BULLISH"
+    )
+    assert side == "LONG"
+    assert source == "bullish_rally_default"
+    assert "bullish_ltf_override" in detail
+
+
+def test_resolver_bull_clash_blocks_buy_no_when_rally_confirms():
+    """When bullish rally confirms in BULL, buy_no cannot fire — clash rule."""
+    strategy = _make_resolver_strategy()
+    # Construct tape that satisfies BOTH bullish_rally AND bearish_dip simultaneously.
+    # (Engineered chop where both helpers pass — extremely rare in practice.)
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=55.0,  # at min threshold for bullish; below buy_no 45 max → NOT bearish-dip RSI
+            macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.03, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.05),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+    side, source, _ = strategy._resolve_allowed_side_with_ltf_overrides(ta, "BULLISH")
+    assert side == "LONG"
+    assert source == "bullish_rally_default"
+
+
+def test_resolver_bull_exception_short_when_only_bearish_dip_confirms():
+    """BULL regime: dip-only tape → SHORT exception (no bullish rally to clash)."""
+    strategy = _make_resolver_strategy()
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_bearish_dip(), "BULLISH"
+    )
+    assert side == "SHORT"
+    assert source == "bearish_dip_exception"
+    assert "bearish_ltf_override" in detail
+
+
+def test_resolver_bear_default_short_when_bearish_dip_confirms():
+    strategy = _make_resolver_strategy()
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_bearish_dip(), "BEARISH"
+    )
+    assert side == "SHORT"
+    assert source == "bearish_dip_default"
+    assert "bearish_ltf_override" in detail
+
+
+def test_resolver_bear_exception_long_when_bullish_rally_confirms():
+    strategy = _make_resolver_strategy()
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_bullish_rally(), "BEARISH"
+    )
+    assert side == "LONG"
+    assert source == "bullish_rally_exception"
+    assert "bullish_ltf_override" in detail
+
+
+def test_resolver_bull_skip_when_no_momentum_confirms():
+    strategy = _make_resolver_strategy()
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_chop(), "BULLISH"
+    )
+    assert side is None
+    assert source == "skip"
+    assert detail.startswith("bull_default_no_rally")
+
+
+def test_resolver_bear_skip_when_no_momentum_confirms():
+    strategy = _make_resolver_strategy()
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=50.0,
+            macd_15m=MACDResult(histogram=0.01, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.01, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.0),
+        multi_tf=MultiTimeframeTrend(h1_trend="BEARISH"),
+    )
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(ta, "BEARISH")
+    assert side is None
+    assert source == "skip"
+    assert detail.startswith("bear_default_no_dip")
+
+
+def test_bullish_rally_ltf_ok_requires_all_four_conditions():
+    strategy = _make_resolver_strategy()
+    # All four pass.
+    ok, reason = strategy._bullish_rally_ltf_ok(_make_ta_bullish_rally())
+    assert ok is True
+    assert "bullish_ltf_override" in reason
+    # Drop RSI below threshold.
+    ta = _make_ta_bullish_rally()
+    ta.sol.rsi_14 = 50.0
+    ok2, reason2 = strategy._bullish_rally_ltf_ok(ta)
+    assert ok2 is False
+    assert "rsi<55.0" in reason2
+
+
 def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["min_positive_m5_adj_5m"] = 0.04
