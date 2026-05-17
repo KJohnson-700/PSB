@@ -1422,6 +1422,14 @@ backtest:
   # Initial bankroll (500 for live test with $3-5 bets)
   initial_bankroll: 500
 
+  # Walk-forward lane calibration for BTC up/down replay (separate posteriors file).
+  # shadow_mode here overrides lane_calibration.shadow_mode when set.
+  # seed_from_live: true loads data/calibration/lane_posteriors.json as starting state.
+  lane_calibration:
+    posteriors_path: "data/calibration/lane_posteriors_backtest.json"
+    seed_from_live: false
+    # shadow_mode: true   # omit to inherit lane_calibration.shadow_mode (observation-only)
+
   # Polymarket YES 1m marks for crypto up/down exit replay (win-rate calibration vs live).
   # Requires POLYMARKETDATA_API_KEY. Slugs match the scanner families:
   #   {btc|sol|eth|xrp|hype}-updown-{5m|15m}-{UTC_window_start_epoch}  (unix family)

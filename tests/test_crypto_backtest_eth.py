@@ -78,6 +78,34 @@ class TestBacktestReportStrategyKey(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_save_report_includes_replay_assumptions(self):
+        save_report = _load_run_backtest_crypto_module().save_report
+        from src.backtest.updown_engine import UpdownBacktestResult
+
+        r = UpdownBacktestResult(
+            symbol="ETH",
+            window_size=15,
+            start_date="2025-01-01",
+            end_date="2025-01-07",
+            initial_bankroll=500.0,
+            final_bankroll=500.0,
+            trades=[],
+            windows_scanned=1,
+            windows_entered=0,
+            wins=0,
+            losses=0,
+            replay_assumptions={"min_edge_source": "strategies.eth_macro.min_edge"},
+        )
+        path = save_report(r, {"1m": 0})
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload.get("replay_assumptions", {}).get("min_edge_source"),
+                "strategies.eth_macro.min_edge",
+            )
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_crypto_backtest_strategy_key_map_matches_live_strategies(self):
         """All CLI symbols map to dashboard keys; unknown symbol falls back to sol_macro."""
         mod = _load_run_backtest_crypto_module()
@@ -318,6 +346,55 @@ class TestUpdownEngineShortIsBuyNo(unittest.TestCase):
             text,
         )
         self.assertNotIn("SELL_YES", text)
+
+
+class TestBacktestMinEdgeSources(unittest.TestCase):
+    def test_backtest_defaults_follow_live_strategy_min_edge_when_override_missing(self):
+        from src.backtest.updown_engine import UpdownBacktestEngine
+
+        engine = UpdownBacktestEngine(
+            config={
+                "backtest": {},
+                "strategies": {
+                    "bitcoin": {"min_edge": 0.11, "min_edge_5m": 0.09},
+                    "sol_macro": {"min_edge": 0.12, "min_edge_5m": 0.08},
+                    "eth_macro": {"min_edge": 0.13, "min_edge_5m": 0.10},
+                    "xrp_macro": {"min_edge": 0.14, "min_edge_5m": 0.07},
+                    "hype_macro": {"min_edge": 0.15, "min_edge_5m": 0.06},
+                },
+                "trading": {"exit_rules": {}},
+                "exposure": {},
+            },
+            initial_bankroll=500.0,
+        )
+
+        self.assertEqual(engine.min_edge_15m, 0.11)
+        self.assertEqual(engine.min_edge_5m, 0.09)
+        self.assertEqual(engine.min_edge_sol_15m, 0.12)
+        self.assertEqual(engine.min_edge_eth_15m, 0.13)
+        self.assertEqual(engine.min_edge_xrp_15m, 0.14)
+        self.assertEqual(engine.min_edge_hype_15m, 0.15)
+
+    def test_backtest_min_edge_override_still_wins(self):
+        from src.backtest.updown_engine import UpdownBacktestEngine
+
+        engine = UpdownBacktestEngine(
+            config={
+                "backtest": {"min_edge_eth_15m": 0.21},
+                "strategies": {
+                    "eth_macro": {"min_edge": 0.13, "min_edge_5m": 0.10},
+                },
+                "trading": {"exit_rules": {}},
+                "exposure": {},
+            },
+            initial_bankroll=500.0,
+        )
+
+        self.assertEqual(engine.min_edge_eth_15m, 0.21)
+        self.assertEqual(
+            engine._build_replay_assumptions("ETH", 15).get("min_edge_source"),
+            "backtest.min_edge_eth_15m",
+        )
 
 
 if __name__ == "__main__":

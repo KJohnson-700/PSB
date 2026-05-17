@@ -257,6 +257,7 @@ def _result_to_dict(result: UpdownBacktestResult) -> dict:
         "oracle_history_loaded": result.oracle_history_loaded,
         "oracle_history_points": result.oracle_history_points,
         "oracle_basis_skips": result.oracle_basis_skips,
+        "replay_assumptions": dict(result.replay_assumptions or {}),
         "skip_counts": dict(
             sorted(
                 (result.skip_counts or {}).items(),
@@ -342,6 +343,7 @@ def save_report(
             "avg_edge":         round(test_result.avg_edge, 4),
             "expectancy":       round(test_result.expectancy, 4),
             "slippage_total":   round(test_result.slippage_total, 4),
+            "replay_assumptions": dict(test_result.replay_assumptions or {}),
             "trades":           _result_to_dict(test_result)["trades"],
             # Full detail in sub-sections
             "train":            _result_to_dict(_get_train(result, test_result)),

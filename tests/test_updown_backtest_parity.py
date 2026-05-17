@@ -3,6 +3,7 @@ import pytest
 
 from src.backtest.updown_engine import UpdownBacktestEngine
 from src.analysis.btc_price_service import MACDResult, TechnicalAnalysis
+from src.strategies import btc_updown_5m as btc5m
 
 
 def _config() -> dict:
@@ -746,7 +747,7 @@ def test_backtest_counts_outside_entry_window_skips():
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._edge_15m = lambda *args, **kwargs: (0.62, 0.6)
 
     result = engine.run(
         data=_ohlcv_fixture(),
@@ -779,7 +780,7 @@ def test_backtest_entry_band_uses_lane_policy_yes_mid_not_sampled_fill():
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._edge_15m = lambda *args, **kwargs: (0.62, 0.6)
     engine._sample_entry_price = lambda: 0.70
     engine._yes_mid_at_eval = lambda **kwargs: 0.50
     engine._yes_mid_at_window_open = engine._yes_mid_at_eval
@@ -814,7 +815,7 @@ def test_backtest_counts_edge_above_cap_skips():
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.20, 0.7)
+    engine._edge_15m = lambda *args, **kwargs: (0.68, 0.7)
 
     result = engine.run(
         data=_ohlcv_fixture(),
@@ -842,7 +843,7 @@ def test_30m_backtest_uses_30m_entry_window_not_15m_window():
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._edge_15m = lambda *args, **kwargs: (0.62, 0.6)
     engine._sample_entry_price = lambda: 0.50
     engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
         5.0,
@@ -891,7 +892,7 @@ def test_btc_30m_lane_entry_policy_band_allows_entries_at_replay_eval_time():
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._edge_15m = lambda *args, **kwargs: (0.62, 0.6)
     engine._sample_entry_price = lambda: 0.50
     engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
         5.0,
@@ -924,7 +925,7 @@ def test_btc_30m_default_entry_window_allows_entries_without_explicit_30m_config
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
-    engine._edge_15m = lambda *args, **kwargs: (0.10, 0.6)
+    engine._edge_15m = lambda *args, **kwargs: (0.62, 0.6)
     engine._sample_entry_price = lambda: 0.50
     engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
         5.0,
@@ -1006,7 +1007,244 @@ def test_btc_15m_edge_uses_1h_recovery_and_timing_bonus():
     ta.candle_momentum.m5_direction = "DRIFT_UP"
     ta.candle_momentum.m15_in_prediction_window = True
 
-    edge, confidence = engine._edge_15m(ta, "LONG", ltf_strength=0.35, htf_bias="BULLISH")
+    raw_est, confidence = engine._edge_15m(ta, "LONG", ltf_strength=0.35, htf_bias="BULLISH")
 
-    assert edge > 0.0
+    assert raw_est > 0.55
     assert confidence > 0.57
+
+
+def test_btc_5m_4h_1h_hist_gate_allows_long_on_1h_recovery():
+    macd_4h = MACDResult(
+        histogram=10.0,
+        prev_histogram=12.0,
+        histogram_rising=False,
+        above_zero=True,
+    )
+    macd_1h = MACDResult(
+        histogram=2.0,
+        prev_histogram=1.0,
+        histogram_rising=True,
+    )
+    assert btc5m.btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, "LONG")
+
+
+def test_btc_5m_4h_1h_hist_gate_rejects_long_without_1h_recovery():
+    macd_4h = MACDResult(
+        histogram=10.0,
+        prev_histogram=12.0,
+        histogram_rising=False,
+        above_zero=True,
+    )
+    macd_1h = MACDResult(
+        histogram=2.0,
+        prev_histogram=3.0,
+        histogram_rising=False,
+    )
+    assert not btc5m.btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, "LONG")
+
+
+def test_btc_5m_edge_uses_1h_hist_recovery_not_4h_only():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        rsi_14=50.0,
+        macd_4h=MACDResult(
+            histogram=10.0,
+            prev_histogram=12.0,
+            histogram_rising=False,
+            above_zero=True,
+        ),
+        macd_1h=MACDResult(
+            histogram=2.0,
+            prev_histogram=1.0,
+            histogram_rising=True,
+        ),
+    )
+    ta.trend_sabre.trend = 1
+    ts = pd.date_range("2026-01-01T00:00:00Z", periods=5, freq="1min")
+    df_1m = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0, 100.1, 100.2, 100.2, 100.2],
+            "close": [100.1, 100.2, 100.25, 100.25, 100.25],
+        }
+    )
+    edge, confidence, _raw, _lane = engine._edge_5m_btc(
+        ta,
+        "LONG",
+        df_1m,
+        pd.Timestamp("2026-01-01T00:00:00Z"),
+        ta.macd_4h,
+        yes_price=0.50,
+        eval_minutes_left=3.8,
+        window_minutes=5,
+    )
+    assert edge > 0.0
+    assert confidence >= 0.45
+
+
+def test_btc_5m_rsi_overbought_blocks_long():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        rsi_14=70.0,
+        macd_4h=MACDResult(histogram_rising=True, above_zero=True),
+        macd_1h=MACDResult(histogram_rising=True),
+    )
+    ta.trend_sabre.trend = 1
+    edge, _, _raw, _lane = engine._edge_5m_btc(
+        ta,
+        "LONG",
+        pd.DataFrame(),
+        pd.Timestamp("2026-01-01T00:00:00Z"),
+        ta.macd_4h,
+        yes_price=0.50,
+    )
+    assert edge == 0.0
+
+
+def test_score_m5_direction_lean_tier():
+    assert btc5m.score_m5_direction("LEAN_UP", "LONG") == pytest.approx(0.01)
+    assert btc5m.score_m5_direction("LEAN_DOWN", "SHORT") == pytest.approx(0.01)
+
+
+def test_btc_5m_engine_edge_matches_shared_quant_module():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    ta = TechnicalAnalysis(
+        current_price=100.0,
+        rsi_14=55.0,
+        macd_4h=MACDResult(histogram_rising=True, above_zero=True),
+        macd_1h=MACDResult(histogram_rising=True),
+    )
+    ta.trend_sabre.trend = 1
+    window_open = pd.Timestamp("2026-01-01T00:00:00Z")
+    ts = pd.date_range(window_open, periods=3, freq="1min")
+    df_1m = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0, 100.0, 100.1],
+            "close": [100.0, 100.1, 100.15],
+        }
+    )
+    yes_price = 0.48
+    eval_left = 1.0
+    m5_dir, _ = engine._calc_m5_momentum(df_1m, window_open, "LONG")
+    shared = btc5m.compute_btc_5m_quant(
+        sabre=ta.trend_sabre,
+        macd_4h=ta.macd_4h,
+        macd_1h=ta.macd_1h,
+        rsi_14=ta.rsi_14,
+        allowed_side="LONG",
+        yes_price=yes_price,
+        m5_direction=m5_dir,
+        m5_in_prediction_window=btc5m.m5_in_prediction_window_at_age(
+            btc5m.m5_candle_age_minutes(5, eval_left)
+        ),
+    )
+    edge, confidence, _raw, _lane = engine._edge_5m_btc(
+        ta,
+        "LONG",
+        df_1m,
+        window_open,
+        ta.macd_4h,
+        yes_price=yes_price,
+        eval_minutes_left=eval_left,
+        window_minutes=5,
+    )
+    assert edge == pytest.approx(shared.edge)
+    assert confidence == pytest.approx(shared.confidence)
+
+
+def test_btc_5m_prediction_window_uses_eval_age_not_window_open():
+    assert btc5m.m5_in_prediction_window_at_age(btc5m.m5_candle_age_minutes(5, 1.0))
+    assert not btc5m.m5_in_prediction_window_at_age(btc5m.m5_candle_age_minutes(5, 3.8))
+
+
+def test_btc_5m_yes_at_eval_differs_from_window_open():
+    engine = UpdownBacktestEngine(config=_config(), initial_bankroll=500.0)
+    window_open = pd.Timestamp("2026-01-01T00:00:00Z")
+    window_close = window_open + pd.Timedelta(minutes=5)
+    ts = pd.date_range(window_open, periods=5, freq="1min")
+    df_1m = pd.DataFrame(
+        {
+            "open_time": ts,
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "close": [100.0, 100.5, 101.0, 101.5, 102.0],
+        }
+    )
+    at_open = engine._yes_mid_at_eval(
+        window_open=window_open,
+        window_close=window_close,
+        window_minutes=5,
+        df_1m=df_1m,
+        pm_yes=None,
+        eval_minutes_left=None,
+    )
+    late_eval = engine._yes_mid_at_eval(
+        window_open=window_open,
+        window_close=window_close,
+        window_minutes=5,
+        df_1m=df_1m,
+        pm_yes=None,
+        eval_minutes_left=1.0,
+    )
+    assert at_open != late_eval
+
+
+def test_backtest_lane_calibration_shadow_mode_matches_raw_edge(tmp_path):
+    from src.analysis.lane_calibration_replay import (
+        build_lane_calibrator_for_replay,
+        edge_from_raw_est_prob,
+    )
+
+    cfg = _config()
+    cfg["lane_calibration"] = {"enabled": True, "shadow_mode": True}
+    cfg["backtest"] = {
+        "lane_calibration": {
+            "posteriors_path": str(tmp_path / "lane_posteriors_backtest.json"),
+            "shadow_mode": True,
+        }
+    }
+    cal = build_lane_calibrator_for_replay(cfg)
+    edge_raw, _, _ = edge_from_raw_est_prob(
+        cal,
+        0.62,
+        0.50,
+        "LONG",
+        strategy="bitcoin",
+        window_minutes=15,
+        htf_bias="BULLISH",
+    )
+    assert edge_raw == pytest.approx(0.12)
+
+
+def test_backtest_lane_calibration_active_shrinks_overconfident_long(tmp_path):
+    from src.analysis.lane_calibration import LaneCalibrator
+    from src.analysis.lane_calibration_replay import edge_from_raw_est_prob
+
+    cal = LaneCalibrator(path=tmp_path / "bt_lane.json", shadow_mode=False)
+    _, lane_id, _ = edge_from_raw_est_prob(
+        cal,
+        0.70,
+        0.50,
+        "LONG",
+        strategy="bitcoin",
+        window_minutes=15,
+        htf_bias="BULLISH",
+        signal_reason="UPDOWN_15m",
+    )
+    assert lane_id
+    for _ in range(25):
+        cal.record(lane_id, stated_est_prob=0.70, realized_pct=-0.20, win=False)
+
+    edge_cal, _, _ = edge_from_raw_est_prob(
+        cal,
+        0.70,
+        0.50,
+        "LONG",
+        strategy="bitcoin",
+        window_minutes=15,
+        htf_bias="BULLISH",
+        signal_reason="UPDOWN_15m",
+    )
+    assert edge_cal < 0.20

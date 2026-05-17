@@ -8,6 +8,40 @@
 
 ---
 
+## 2026-05-17 — Handoff: BUY_YES recovery + dual-direction rally logic (plan only, not implemented)
+
+**`docs/HANDOFF_BUY_YES_RALLY_MERGE.md`:** Operator handoff for next agent — targeted fixes (no blind revert to pre–May 9), restore BUY_YES path quality from May 3–8 paper baseline, contain `buy_no_ltf` clash, add symmetric LTF momentum on **both** LONG and SHORT paths in bull and bear. Plan: `.cursor/plans/buy_yes_rally_merge_4b6efcaa.plan.md`.
+
+**Status:** documentation only; implementation pending explicit execute.
+
+---
+
+## 2026-05-17 — Backtest/live sync: replay threshold source, report assumptions, paper-vs-backtest diff tool
+
+**`src/backtest/updown_engine.py`:** Removed another backtest/live drift seam by making replay min-edge thresholds prefer the live strategy keys (`strategies.*.min_edge`, `min_edge_5m`) unless an explicit `backtest.min_edge_*` override is set. Replay results now also carry structured `replay_assumptions` so reports state where the threshold came from, whether entry prices came from empirical live fills vs fallback sampling, whether Polymarket 1m marks were enabled, and which execution details are still not modeled in replay.
+
+**`scripts/run_backtest_crypto.py`:** Crypto report JSON now persists `replay_assumptions` at both top level and split-test level so dashboard / audit consumers can see the exact replay contract instead of assuming it.
+
+**`scripts/compare_paper_to_backtest.py`:** Added a lightweight operator audit tool that compares one paper journal session slice against one backtest report for the same `strategy` / `window_size`, surfacing drift in trade count, WR, PnL, expectancy, action mix, exit reasons, and entry-price cohorts. This is an aggregate parity check, not a full candidate-universe replay.
+
+**Tests:** Extended `tests/test_crypto_backtest_eth.py` for replay-assumption persistence and live-key min-edge resolution; added `tests/test_compare_paper_to_backtest.py` for split-report loading and journal filtering.
+
+**Verification target:** `.venv/bin/python -m pytest tests/test_crypto_backtest_eth.py tests/test_compare_paper_to_backtest.py tests/test_updown_backtest_parity.py -q`.
+
+---
+
+## 2026-05-17 — BTC 5m live/backtest single source of truth (`btc_updown_5m`)
+
+**`src/strategies/btc_updown_5m.py`:** Shared quant module (hist gate, HTF boost, m5 scoring, prediction window, RSI gates, edge vs **live `yes_price`**). **`bitcoin.py`** 5m path and **`UpdownBacktestEngine._edge_5m_btc`** both call **`compute_btc_5m_quant`** — not a backtest revert.
+
+**`src/backtest/updown_engine.py`:** BTC 5m keeps **in-band eval YES** (`1c39eda`); m5 direction stays first-90s of candle (live); prediction-window bonus uses **candle age at `eval_minutes_left`**.
+
+**`tests/test_updown_backtest_parity.py`:** Asserts engine edge == shared module; eval-age prediction window; eval vs open YES.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_updown_backtest_parity.py tests/test_bitcoin.py -q`.
+
+---
+
 ## 2026-05-17 — Symmetric LTF momentum gates for BUY_YES and BUY_NO (handoff `HANDOFF_BUY_YES_RALLY_MERGE.md`)
 
 **`src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`, `src/backtest/updown_engine.py`, `config/settings.yaml`, `tests/test_sol_macro.py`, `tests/test_eth_macro.py`:** Added the four-path side resolver described in the handoff. Both LONG and SHORT admissions now require their own short-window momentum confirmation in both BULL and BEAR regimes, rather than only the SHORT side requiring it in BULL. Fixes the post-May-9 regression where `buy_no_ltf_override` could flip a BULL macro to SHORT and clash with otherwise-valid BUY_YES rally tape.

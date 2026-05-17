@@ -68,6 +68,17 @@ from src.analysis.btc_price_service import (
     AnchoredVolumeProfile,
 )
 from src.backtest.updown_polymarket_marks import try_load_yes_series_for_window
+from src.analysis.lane_calibration_replay import (
+    build_lane_calibrator_for_replay,
+    edge_from_raw_est_prob,
+    record_updown_calibration_close,
+)
+from src.strategies.btc_updown_5m import (
+    compute_btc_5m_quant,
+    m5_candle_age_minutes,
+    m5_in_prediction_window_at_age,
+    score_m5_direction,
+)
 from src.execution.performance_feedback import get_drift_min_edge_mult
 from src.execution.updown_exit_shared import (
     adverse_for_updown_cents_time_stop,
@@ -112,6 +123,8 @@ class UpdownTrade:
     asset_open:    float = 0.0   # BTC / SOL / ETH price at window open
     asset_close:   float = 0.0   # BTC / SOL / ETH price at window close
     exit_reason:   str = "settlement"
+    raw_est_prob_up: float = 0.0
+    lane_id:       str = ""
 
 
 @dataclass
@@ -133,6 +146,7 @@ class UpdownBacktestResult:
     oracle_history_loaded: bool = False
     oracle_history_points: int = 0
     oracle_basis_skips: int = 0
+    replay_assumptions: Dict[str, Any] = field(default_factory=dict)
     skip_counts: Dict[str, int] = field(default_factory=dict)
     total_windows: int = 0
     run_complete: bool = True
@@ -234,6 +248,7 @@ class UpdownBacktestResult:
                 oracle_symbol=self.oracle_symbol,
                 oracle_history_loaded=self.oracle_history_loaded,
                 oracle_history_points=self.oracle_history_points,
+                replay_assumptions=dict(self.replay_assumptions or {}),
                 skip_counts={},
                 total_windows=UpdownBacktestResult._count_windows_for_range(start, end, self.window_size),
                 run_complete=self.run_complete,
@@ -272,19 +287,12 @@ class UpdownBacktestEngine:
     def __init__(self, config: Dict[str, Any], initial_bankroll: float = 500.0):
         self.config           = config
         self.initial_bankroll = initial_bankroll
+        self._replay_min_edge_sources: Dict[str, str] = {}
 
         # Slippage config
         slip_cfg         = config.get("backtest", {}).get("slippage", {})
         self.slippage_bps = slip_cfg.get("default_bps", 25)
 
-        # Strategy thresholds -- BACKTEST-SPECIFIC defaults
-        #
-        # Live strategies use min_edge thresholds calibrated for variable
-        # yes_price (e.g., 0.14 for BTC 15m).  But in backtest, entry is
-        # always at YES = 0.50, so edge = pure signal strength and never
-        # benefits from market mispricing.  We therefore use lower thresholds
-        # tuned for signal-only edge.  A backtest.min_edge_* section in the
-        # config can override these defaults if needed.
         bt_cfg   = config.get("backtest", {})
         strat    = config.get("strategies", {})
         btc_cfg  = strat.get("bitcoin",  {})
@@ -293,16 +301,86 @@ class UpdownBacktestEngine:
         xrp_cfg  = strat.get("xrp_macro",  {})
         hype_cfg = strat.get("hype_macro", {})
 
-        self.min_edge_15m       = bt_cfg.get("min_edge_btc_15m",   0.06)
-        self.min_edge_5m        = bt_cfg.get("min_edge_btc_5m",    0.07)
-        self.min_edge_sol_15m   = bt_cfg.get("min_edge_sol_15m",   0.06)
-        self.min_edge_sol_5m    = bt_cfg.get("min_edge_sol_5m",    0.06)
-        self.min_edge_eth_15m   = bt_cfg.get("min_edge_eth_15m",   self.min_edge_sol_15m)
-        self.min_edge_eth_5m    = bt_cfg.get("min_edge_eth_5m",    self.min_edge_sol_5m)
-        self.min_edge_xrp_15m   = bt_cfg.get("min_edge_xrp_15m",  self.min_edge_sol_15m)
-        self.min_edge_xrp_5m    = bt_cfg.get("min_edge_xrp_5m",   self.min_edge_sol_5m)
-        self.min_edge_hype_15m  = bt_cfg.get("min_edge_hype_15m", self.min_edge_sol_15m)
-        self.min_edge_hype_5m   = bt_cfg.get("min_edge_hype_5m",  self.min_edge_sol_5m)
+        self.min_edge_15m       = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=btc_cfg,
+            override_key="min_edge_btc_15m",
+            live_key="min_edge",
+            fallback=0.06,
+            label="BTC_15m",
+        )
+        self.min_edge_5m        = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=btc_cfg,
+            override_key="min_edge_btc_5m",
+            live_key="min_edge_5m",
+            fallback=self.min_edge_15m,
+            label="BTC_5m",
+        )
+        self.min_edge_sol_15m   = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=sol_cfg,
+            override_key="min_edge_sol_15m",
+            live_key="min_edge",
+            fallback=0.06,
+            label="SOL_15m",
+        )
+        self.min_edge_sol_5m    = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=sol_cfg,
+            override_key="min_edge_sol_5m",
+            live_key="min_edge_5m",
+            fallback=self.min_edge_sol_15m,
+            label="SOL_5m",
+        )
+        self.min_edge_eth_15m   = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=eth_cfg,
+            override_key="min_edge_eth_15m",
+            live_key="min_edge",
+            fallback=self.min_edge_sol_15m,
+            label="ETH_15m",
+        )
+        self.min_edge_eth_5m    = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=eth_cfg,
+            override_key="min_edge_eth_5m",
+            live_key="min_edge_5m",
+            fallback=self.min_edge_eth_15m,
+            label="ETH_5m",
+        )
+        self.min_edge_xrp_15m   = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=xrp_cfg,
+            override_key="min_edge_xrp_15m",
+            live_key="min_edge",
+            fallback=self.min_edge_sol_15m,
+            label="XRP_15m",
+        )
+        self.min_edge_xrp_5m    = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=xrp_cfg,
+            override_key="min_edge_xrp_5m",
+            live_key="min_edge_5m",
+            fallback=self.min_edge_xrp_15m,
+            label="XRP_5m",
+        )
+        self.min_edge_hype_15m  = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=hype_cfg,
+            override_key="min_edge_hype_15m",
+            live_key="min_edge",
+            fallback=self.min_edge_sol_15m,
+            label="HYPE_15m",
+        )
+        self.min_edge_hype_5m   = self._resolve_replay_min_edge(
+            backtest_cfg=bt_cfg,
+            strategy_cfg=hype_cfg,
+            override_key="min_edge_hype_5m",
+            live_key="min_edge_5m",
+            fallback=self.min_edge_hype_15m,
+            label="HYPE_5m",
+        )
         # Each symbol has independent min_edge keys; XRP/HYPE fall back to SOL if not set.
         self._kelly_btc   = btc_cfg.get("kelly_fraction",  0.15)
         self._kelly_sol   = sol_cfg.get("kelly_fraction",  self._kelly_btc)
@@ -386,8 +464,63 @@ class UpdownBacktestEngine:
         # Default delay; per-run ``run()`` overwrites from active strategy block.
         self._entry_eval_delay_sec = float(bt_cfg.get("entry_eval_delay_sec", 0.0) or 0.0)
         self.kelly_sizer = KellySizer(config)
+        self._lane_calibrator = build_lane_calibrator_for_replay(config)
         self._signal_strategy_name = "bitcoin"
         self._active_strategy_cfg: Dict[str, Any] = {}
+
+    def _resolve_replay_min_edge(
+        self,
+        *,
+        backtest_cfg: Dict[str, Any],
+        strategy_cfg: Dict[str, Any],
+        override_key: str,
+        live_key: str,
+        fallback: float,
+        label: str,
+    ) -> float:
+        """Prefer explicit backtest overrides, else mirror the live strategy key."""
+        if override_key in backtest_cfg and backtest_cfg.get(override_key) is not None:
+            value = float(backtest_cfg.get(override_key))
+            self._replay_min_edge_sources[label] = f"backtest.{override_key}"
+            return value
+        if live_key in strategy_cfg and strategy_cfg.get(live_key) is not None:
+            value = float(strategy_cfg.get(live_key))
+            self._replay_min_edge_sources[label] = (
+                f"strategies.{self._strategy_config_name_for_label(label)}.{live_key}"
+            )
+            return value
+        self._replay_min_edge_sources[label] = f"fallback:{fallback:.4f}"
+        return float(fallback)
+
+    @staticmethod
+    def _strategy_config_name_for_label(label: str) -> str:
+        symbol = label.split("_", 1)[0]
+        return {
+            "BTC": "bitcoin",
+            "SOL": "sol_macro",
+            "ETH": "eth_macro",
+            "XRP": "xrp_macro",
+            "HYPE": "hype_macro",
+        }.get(symbol, "sol_macro")
+
+    def _build_replay_assumptions(self, symbol: str, window_minutes: int) -> Dict[str, Any]:
+        tf_label = f"{int(window_minutes)}m"
+        if self._fill_prices is not None:
+            entry_source = "empirical_live_fill_distribution"
+            entry_points = int(len(self._fill_prices))
+        else:
+            entry_source = "normal_fallback"
+            entry_points = 0
+        return {
+            "min_edge_source": self._replay_min_edge_sources.get(f"{symbol}_{tf_label}", "unknown"),
+            "entry_price_source": entry_source,
+            "entry_price_points": entry_points,
+            "exit_mark_source": "polymarket_yes_1m" if self._pm_marks_enabled else "underlying_proxy",
+            "entry_eval_delay_sec": float(self._entry_eval_delay_sec),
+            "polymarket_marks_enabled": bool(self._pm_marks_enabled),
+            "liquidity_filter_mode": "not_modeled_in_replay",
+            "spread_filter_mode": "not_modeled_in_replay",
+        }
 
     # -- fill price distribution -----------------------------------------------
 
@@ -1035,6 +1168,15 @@ class UpdownBacktestEngine:
                 result.m5_direction = "DRIFT_UP"
             elif move_pct < -0.03:
                 result.m5_direction = "DRIFT_DOWN"
+            elif move_pct > 0.01:
+                result.m5_direction = "LEAN_UP"
+            elif move_pct < -0.01:
+                result.m5_direction = "LEAN_DOWN"
+
+            m5_age_minutes = (
+                float(m5_early.iloc[-1]["open_time"] - window_open).total_seconds() / 60.0
+            )
+            result.m5_in_prediction_window = 3.0 <= m5_age_minutes <= 4.0
 
         return result
 
@@ -1873,12 +2015,8 @@ class UpdownBacktestEngine:
                 est_prob_up += 0.02 if sabre.tension > 0 else -0.02
 
         est_prob_up = max(0.10, min(0.90, est_prob_up))
-        if allowed_side == "LONG":
-            edge = est_prob_up - yes_price
-        else:
-            edge = yes_price - est_prob_up
         confidence = min(0.85, 0.50 + ltf_strength * 0.20 + abs(timing_bonus))
-        return edge, confidence
+        return est_prob_up, confidence
 
     # ==========================================================================
     # SOL 15m edge (matches sol_macro.py 15m updown path)
@@ -1944,7 +2082,7 @@ class UpdownBacktestEngine:
         return edge, confidence
 
     # ==========================================================================
-    # BTC 5m candle momentum (mirrors live calc_candle_momentum thresholds)
+    # BTC 5m candle momentum (live calc_candle_momentum early-candle read)
     # ==========================================================================
 
     @staticmethod
@@ -1955,27 +2093,19 @@ class UpdownBacktestEngine:
     ) -> Tuple[str, float]:
         """Derive m5_direction and m5_adj from early-candle 1m bars.
 
-        Mirrors live calc_candle_momentum() which reads the first 1.5 min of
-        the CURRENT 5m candle.  We replicate by reading the first 2 complete
-        1m bars within [window_open, window_open + 2min).  This uses 2 min of
-        data from within the window (mild look-ahead, documented) but the
-        trade still has 3 min to settle, matching the live timing.
+        Mirrors live ``calc_candle_momentum()``: first 90s of the current 5m
+        candle (same early window live reads at scan time, regardless of
+        ``eval_minutes_left`` within the entry band).
 
-        Thresholds (from btc_price_service.py -- NO LEAN, live only produces
-        SPIKE/DRIFT/NONE for m5_direction):
+        Thresholds (btc_price_service.calc_candle_momentum / former _core):
             SPIKE : abs(move_pct) > 0.08 %
             DRIFT : abs(move_pct) > 0.03 %
-
-        Scoring (from bitcoin.py 5m path):
-            SPIKE aligned   : +0.06
-            DRIFT aligned   : +0.04
-            SPIKE/DRIFT opp : -0.04
+            LEAN  : abs(move_pct) > 0.01 %
         """
         if df_1m.empty:
             return "NONE", 0.0
 
-        # First ~90s of the window: 1m bars at window_open and window_open+1m
-        cutoff = window_open + pd.Timedelta(seconds=120)
+        cutoff = window_open + pd.Timedelta(seconds=90)
         early = df_1m[(df_1m["open_time"] >= window_open) & (df_1m["open_time"] < cutoff)]
         if early.empty:
             return "NONE", 0.0
@@ -1987,24 +2117,15 @@ class UpdownBacktestEngine:
 
         move_pct = (early_close - candle_open) / candle_open * 100
 
-        # Only SPIKE and DRIFT -- live calc_candle_momentum never produces LEAN
         if   move_pct >  0.08: direction = "SPIKE_UP"
         elif move_pct < -0.08: direction = "SPIKE_DOWN"
         elif move_pct >  0.03: direction = "DRIFT_UP"
         elif move_pct < -0.03: direction = "DRIFT_DOWN"
+        elif move_pct >  0.01: direction = "LEAN_UP"
+        elif move_pct < -0.01: direction = "LEAN_DOWN"
         else:                  direction = "NONE"
 
-        m5_adj = 0.0
-        if allowed_side == "LONG":
-            if   direction == "SPIKE_UP":                    m5_adj =  0.06
-            elif direction == "DRIFT_UP":                    m5_adj =  0.04
-            elif direction in ("SPIKE_DOWN", "DRIFT_DOWN"):  m5_adj = -0.04
-        else:
-            if   direction == "SPIKE_DOWN":                  m5_adj =  0.06
-            elif direction == "DRIFT_DOWN":                  m5_adj =  0.04
-            elif direction in ("SPIKE_UP", "DRIFT_UP"):      m5_adj = -0.04
-
-        return direction, m5_adj
+        return direction, score_m5_direction(direction, allowed_side)
 
     # ==========================================================================
     # 5m edge -- BTC and SOL paths (matches live strategies)
@@ -2020,6 +2141,9 @@ class UpdownBacktestEngine:
         window_open: pd.Timestamp = None,
         corr_1h: Optional[float] = None,
         yes_price: float = 0.50,
+        eval_minutes_left: Optional[float] = None,
+        window_minutes: int = 5,
+        htf_bias: str = "NEUTRAL",
     ) -> Tuple[float, float]:
         """Estimate edge for a 5m updown window.
 
@@ -2029,9 +2153,18 @@ class UpdownBacktestEngine:
         macd_htf = ta.macd_4h   # 4H for BTC, 1H for SOL (built from htf_key data)
 
         if symbol == "BTC":
-            return self._edge_5m_btc(
-                ta, allowed_side, df_1m, window_open, macd_htf, yes_price=yes_price
+            edge, confidence, _raw, _lane = self._edge_5m_btc(
+                ta,
+                allowed_side,
+                df_1m,
+                window_open,
+                macd_htf,
+                yes_price=yes_price,
+                eval_minutes_left=eval_minutes_left,
+                window_minutes=window_minutes,
+                htf_bias=htf_bias,
             )
+            return edge, confidence
         elif symbol == "ETH":
             min_buy = self.min_positive_m5_adj_eth_5m
             min_sell = self.min_positive_m5_adj_eth_5m_sell
@@ -2102,49 +2235,46 @@ class UpdownBacktestEngine:
         macd_4h: MACDResult,
         *,
         yes_price: float = 0.50,
-    ) -> Tuple[float, float]:
-        """BTC 5m path -- matches bitcoin.py 5m updown exactly."""
-        sabre = ta.trend_sabre
-        est_prob_up = 0.50
-
-        # HTF boost (matches live bitcoin.py 5m)
-        if   sabre.trend == 1  and     macd_4h.above_zero: htf_boost =  0.04
-        elif sabre.trend == 1  or      macd_4h.above_zero: htf_boost =  0.02
-        elif sabre.trend == -1 and not macd_4h.above_zero: htf_boost = -0.04
-        else:                                               htf_boost = -0.02
-        est_prob_up += htf_boost
-
-        # 4H histogram hard gate
-        if allowed_side == "LONG"  and not macd_4h.histogram_rising: return 0.0, 0.0
-        if allowed_side == "SHORT" and     macd_4h.histogram_rising: return 0.0, 0.0
-
-        # 5m candle momentum -- primary LTF signal for BTC 5m
-        # Uses first ~2 1m bars of the window (mirrors live early-candle read)
-        _, m5_adj = self._calc_m5_momentum(
+        eval_minutes_left: Optional[float] = None,
+        window_minutes: int = 5,
+        htf_bias: str = "NEUTRAL",
+    ) -> Tuple[float, float, float, str]:
+        """BTC 5m raw quant + live-style lane calibration -> edge."""
+        m5_dir, _ = self._calc_m5_momentum(
             df_1m if df_1m is not None else pd.DataFrame(),
             window_open,
             allowed_side,
         )
-        if allowed_side == "LONG":
-            est_prob_up += m5_adj
+        if eval_minutes_left is not None:
+            m5_age = m5_candle_age_minutes(window_minutes, eval_minutes_left)
+            in_pred = m5_in_prediction_window_at_age(m5_age)
         else:
-            est_prob_up -= m5_adj
+            in_pred = bool(ta.candle_momentum.m5_in_prediction_window)
 
-        # RSI 4-level (matches live bitcoin.py 5m: 80/65/20/35)
-        if   ta.rsi_14 > 80: est_prob_up -= 0.02
-        elif ta.rsi_14 > 65: est_prob_up -= 0.01
-        elif ta.rsi_14 < 20: est_prob_up += 0.02
-        elif ta.rsi_14 < 35: est_prob_up += 0.01
+        q = compute_btc_5m_quant(
+            sabre=ta.trend_sabre,
+            macd_4h=macd_4h,
+            macd_1h=ta.macd_1h,
+            rsi_14=ta.rsi_14,
+            allowed_side=allowed_side,
+            yes_price=yes_price,
+            m5_direction=m5_dir,
+            m5_in_prediction_window=in_pred,
+        )
+        if not q.hist_gate_allowed or q.rsi_blocked:
+            return 0.0, q.confidence, q.est_prob_up, ""
 
-        est_prob_up = max(0.10, min(0.90, est_prob_up))
-
-        if allowed_side == "LONG":
-            edge = est_prob_up - yes_price
-        else:
-            edge = yes_price - est_prob_up
-        # Confidence: matches live = max(0.45, min(0.85, 0.50 + |htf_boost|*2.5 + |m5_adj|*1.5))
-        confidence = max(0.45, min(0.85, 0.50 + abs(htf_boost) * 2.5 + abs(m5_adj) * 1.5))
-        return edge, confidence
+        edge, lane_id, _cal_p = edge_from_raw_est_prob(
+            self._lane_calibrator,
+            q.est_prob_up,
+            yes_price,
+            allowed_side,
+            strategy="bitcoin",
+            window_minutes=window_minutes,
+            htf_bias=htf_bias,
+            signal_reason="UPDOWN_5m",
+        )
+        return edge, q.confidence, q.est_prob_up, lane_id
 
     def _edge_5m_sol(
         self,
@@ -2854,6 +2984,14 @@ class UpdownBacktestEngine:
                 eval_minutes_left=eval_left,
             )
 
+            if is_btc and (yes_mid_market < 0.20 or yes_mid_market > 0.80):
+                _bump_skip("price_too_far_from_50_50")
+                current += step_td
+                continue
+
+            raw_est_prob_up = 0.0
+            lane_id = ""
+
             if window_minutes == 5:
                 if is_eth:
                     eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
@@ -2882,17 +3020,46 @@ class UpdownBacktestEngine:
                         corr_1h = self._btc_alt_corr_1h_approx(
                             window_open, btc_data["1m"], df_1m_full
                         )
-                    edge, confidence = self._edge_5m(
-                        ta, allowed_side, df_5m, symbol,
-                        df_1m=df_1m_full,
-                        window_open=window_open,
-                        corr_1h=corr_1h,
-                        yes_price=yes_mid_market,
-                    )
+                    if is_btc:
+                        edge, confidence, raw_est_prob_up, lane_id = self._edge_5m_btc(
+                            ta,
+                            allowed_side,
+                            df_1m_full,
+                            window_open,
+                            ta.macd_4h,
+                            yes_price=yes_mid_market,
+                            eval_minutes_left=eval_left,
+                            window_minutes=window_minutes,
+                            htf_bias=htf_bias,
+                        )
+                    else:
+                        edge, confidence = self._edge_5m(
+                            ta,
+                            allowed_side,
+                            df_5m,
+                            symbol,
+                            df_1m=df_1m_full,
+                            window_open=window_open,
+                            corr_1h=corr_1h,
+                            yes_price=yes_mid_market,
+                            eval_minutes_left=eval_left,
+                            window_minutes=window_minutes,
+                            htf_bias=htf_bias,
+                        )
             else:
                 if is_btc:
-                    edge, confidence = self._edge_15m(
+                    raw_est_prob_up, confidence = self._edge_15m(
                         ta, allowed_side, ltf_str, htf_bias, yes_mid_market
+                    )
+                    edge, lane_id, _cal_p = edge_from_raw_est_prob(
+                        self._lane_calibrator,
+                        raw_est_prob_up,
+                        yes_mid_market,
+                        allowed_side,
+                        strategy="bitcoin",
+                        window_minutes=window_minutes,
+                        htf_bias=htf_bias,
+                        signal_reason=f"UPDOWN_{window_minutes}m",
                     )
                 elif is_eth:
                     eth_cfg = self.config.get("strategies", {}).get("eth_macro", {})
@@ -3023,6 +3190,16 @@ class UpdownBacktestEngine:
 
             bankroll = max(0.0, bankroll + pnl)   # ruin cap
 
+            if is_btc and lane_id:
+                record_updown_calibration_close(
+                    self._lane_calibrator,
+                    lane_id=lane_id,
+                    stated_est_prob=raw_est_prob_up if raw_est_prob_up else None,
+                    pnl=pnl,
+                    size=size,
+                    outcome=outcome,
+                )
+
             trades.append(UpdownTrade(
                 window_open=window_open,
                 window_close=window_close,
@@ -3044,6 +3221,8 @@ class UpdownBacktestEngine:
                 asset_open=asset_open,
                 asset_close=asset_close,
                 exit_reason=exit_reason,
+                raw_est_prob_up=raw_est_prob_up,
+                lane_id=lane_id,
             ))
 
             if bankroll <= 0:
@@ -3072,6 +3251,7 @@ class UpdownBacktestEngine:
             oracle_history_loaded=oracle_history_loaded,
             oracle_history_points=oracle_history_points,
             oracle_basis_skips=oracle_basis_skips,
+            replay_assumptions=self._build_replay_assumptions(symbol, window_minutes),
             skip_counts=dict(skip_counts),
             total_windows=total_windows,
             run_complete=windows_scanned >= total_windows,
