@@ -8,6 +8,31 @@
 
 ---
 
+## 2026-05-17 — Symmetric LTF momentum gates for BUY_YES and BUY_NO (handoff `HANDOFF_BUY_YES_RALLY_MERGE.md`)
+
+**`src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`, `src/backtest/updown_engine.py`, `config/settings.yaml`, `tests/test_sol_macro.py`, `tests/test_eth_macro.py`:** Added the four-path side resolver described in the handoff. Both LONG and SHORT admissions now require their own short-window momentum confirmation in both BULL and BEAR regimes, rather than only the SHORT side requiring it in BULL. Fixes the post-May-9 regression where `buy_no_ltf_override` could flip a BULL macro to SHORT and clash with otherwise-valid BUY_YES rally tape.
+
+**Resolver paths** (in `_resolve_allowed_side_with_ltf_overrides`):
+- `bullish_rally_default` — BULL + bullish 15m+5m + RSI ≥ 55 + BTC 5m ≥ floor
+- `bullish_rally_exception` — BEAR + same bullish confirmation
+- `bearish_dip_default` — BEAR + bearish 15m+5m + RSI ≤ 45 + BTC 5m ≤ cap
+- `bearish_dip_exception` — BULL + same bearish confirmation **only when bullish rally does not also confirm** (clash rule)
+- Skip with `ltf_resolver_skip` when neither momentum confirms in either regime.
+
+**Scope:** sol_macro implements the canonical resolver; eth_macro ports the wiring into its duplicated scan loop; xrp_macro and hype_macro inherit cleanly via `SolMacroStrategy` and `super().scan_and_analyze()`. updown_engine replay mirrors the resolver for backtest/live parity.
+
+**Config:** Added `buy_yes_ltf_override_{enabled,rsi_min,min_btc_5m_pct}` to all four macro yaml blocks (sol/eth/hype/xrp), enabled by default. Existing `buy_no_ltf_override_*` keys are unchanged.
+
+**Tests:** `tests/test_sol_macro.py` +8 cases covering all four resolver paths, clash rule, and the bullish helper; `tests/test_eth_macro.py` +2 cases for the ETH duplicated-scan wiring. `_buy_no_ltf_override` kept as a back-compat alias for the new `_bearish_dip_ltf_ok` helper.
+
+**Verification:** `pytest tests/test_sol_macro.py tests/test_eth_macro.py tests/test_sol_macro_skip_accounting.py tests/test_updown_backtest_parity.py` → 141 passed. SOL 15m backtest 2026-01-20 → 2026-04-20 with the replay resolver active tightened trade count 63 → 36 (WR 27% → 28%) — symmetric gate filters ambiguous tape on both sides as designed.
+
+**Out of scope:** `bitcoin.py` rally logic (handoff carve-out); paper-vs-backtest comparison (separate skill).
+
+**Commits:** `0c91999` (sol_macro), `ca4ec48` (eth_macro), `5e4f018` (updown_engine).
+
+---
+
 ## 2026-05-16 — Naming cleanup for rejected-candidate tracking + lane calibration rollout note
 
 **`src/analysis/ghost_calibration.py`, `src/analysis/rejected_candidate_log.py`, `src/main.py`, `src/ops_pulse.py`:** Renamed user-facing/runtime wording from ambiguous **ghost calibration / ghost mode** language to **rejected-candidate tracker** wherever the feature is describing blocked-trade logging and settlement. `OPS_JSON` now exposes a new `rejected_candidate_tracker` block while preserving `ghost_calibration` as a backward-compatible alias for existing consumers.
