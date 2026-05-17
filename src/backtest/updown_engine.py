@@ -445,7 +445,7 @@ class UpdownBacktestEngine:
         self, *, tf: str, default_min: float, default_max: float
     ) -> tuple[float, float]:
         """Mirror live entry-window bounds, including optional auto-alignment."""
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
         cfg = self._active_strategy_cfg or {}
         win_min = float(cfg.get(f"entry_window_{tf}_min", self.config.get(f"entry_window_{tf}_min", default_min)))
@@ -460,8 +460,8 @@ class UpdownBacktestEngine:
         scan_interval_sec = float(self.config.get("entry_window_align_scan_interval_sec", 300))
         if tf == "5m":
             default_expand = 1.0
-        elif tf == "30m":
-            default_expand = 2.5
+        elif tf == "1h":
+            default_expand = 5.0
         else:
             default_expand = 1.5
         max_expand_min = float(
@@ -480,9 +480,9 @@ class UpdownBacktestEngine:
         return aligned_min, aligned_max
 
     def _resolve_entry_timing_window_bounds(self, *, tf: str) -> tuple[float, float]:
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
-        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "30m": (16.0, 26.0)}
+        presets = {"5m": (1.5, 2.5), "15m": (8.0, 13.0), "1h": (5.0, 55.0)}
         default_min, default_max = presets[tf]
         cfg = self._active_strategy_cfg or {}
         win_min = float(
@@ -508,7 +508,7 @@ class UpdownBacktestEngine:
     def _entry_timing_window_is_configured(
         self, *, tf: str, strategy_cfg: Dict[str, Any]
     ) -> bool:
-        if tf not in ("5m", "15m", "30m"):
+        if tf not in ("5m", "15m", "1h"):
             tf = "15m"
         keys = (
             f"entry_timing_window_{tf}_min",
@@ -562,7 +562,7 @@ class UpdownBacktestEngine:
         """Minutes left at replay entry decision — inside lane band when open is too early.
 
         Live scans repeatedly while ``mins_left`` moves down; a one-shot check at window
-        open (~30m left on a 30m market) misses bands like 25–29m and yields zero entries.
+        open (~30m left on a 30m or 1h market) misses bands like 25–29m and yields zero entries.
         """
         open_eval = self._evaluation_minutes_left_at_open(window_minutes, strategy_cfg)
         win_min = float(lane_policy.entry_window_min)
@@ -2647,8 +2647,8 @@ class UpdownBacktestEngine:
                 allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
             if window_minutes == 5:
                 tf_label = "5m"
-            elif window_minutes == 30:
-                tf_label = "30m"
+            elif window_minutes >= 45:
+                tf_label = "1h"
             else:
                 tf_label = "15m"
             eval_left_open = self._evaluation_minutes_left_at_open(
@@ -2658,8 +2658,8 @@ class UpdownBacktestEngine:
                 mins_left=eval_left_open,
                 tf=tf_label,
             )
-            # Live strategies compute a preferred timing band for 30m markets, but do not
-            # hard-reject the entire 30m lane on that signal alone. Keep the strict gate
+            # Live strategies compute a preferred timing band for longer-window markets, but do not
+            # hard-reject the entire 30m/1h lane on that signal alone. Keep the strict gate
             # for 5m/15m parity where live skip telemetry showed it mattered most.
             if (
                 window_minutes in (5, 15)

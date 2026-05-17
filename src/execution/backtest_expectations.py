@@ -29,7 +29,16 @@ def live_trade_window_minutes(trade: Dict[str, Any]) -> Optional[int]:
         raw = trade.get(key)
         if raw is None or raw == "":
             continue
-        s = str(raw).strip().lower().removesuffix("m")
+        s = str(raw).strip().lower()
+        # Accept hour suffixes (e.g. "1h" → 60) so hourly trades match backtest
+        # report keys like ``bitcoin_60m``. The journal records the live label
+        # emitted by ``updown_timeframe_label`` ("5m"/"15m"/"1h").
+        if s.endswith("h"):
+            try:
+                return int(float(s[:-1]) * 60)
+            except (TypeError, ValueError):
+                continue
+        s = s.removesuffix("m")
         try:
             return int(float(s))
         except (TypeError, ValueError):

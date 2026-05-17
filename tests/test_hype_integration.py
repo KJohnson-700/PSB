@@ -303,9 +303,9 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
     core_5m = [_market("Solana Up or Down - test", slug="sol-updown-5m-test")]
 
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
-    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: (core_15m, []))
+    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: core_15m)
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: core_5m)
-    monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
+    monkeypatch.setattr(scanner, "fetch_updown_1h_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_weather_markets", lambda limit=20: [])
 
     def _slow_hype(limit=100):
@@ -318,23 +318,23 @@ def test_scanner_sync_phase_returns_core_markets_when_optional_fetch_times_out(m
         markets,
         updown,
         updown_5m,
-        updown_30m,
+        updown_1h,
         hype_alt,
         weather,
         look_15m,
         look_5m,
-        look_30m,
+        look_1h,
     ) = scanner._sync_network_phase()
 
     assert markets == []
     assert updown == core_15m
     assert updown_5m == core_5m
-    assert updown_30m == []
+    assert updown_1h == []
     assert hype_alt == []
     assert weather == []
     assert look_15m >= 1
     assert look_5m >= 1
-    assert look_30m >= 1
+    assert look_1h >= 1
 
 
 def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypatch):
@@ -370,7 +370,7 @@ def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypa
     assert {"snapshot-btc-15m", "snapshot-sol-5m"} <= high_liquidity_ids
     assert opportunities["scanner_meta"]["updown_15m_count"] == 1
     assert opportunities["scanner_meta"]["updown_5m_count"] == 1
-    assert opportunities["scanner_meta"]["updown_30m_count"] == 0
+    assert opportunities["scanner_meta"]["updown_1h_count"] == 0
 
 
 def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypatch):
@@ -387,9 +387,9 @@ def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypa
     )
 
     monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
-    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: ([], []))
+    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: [])
     monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: [])
-    monkeypatch.setattr(scanner, "fetch_updown_30m_markets", lambda look_ahead=8: [])
+    monkeypatch.setattr(scanner, "fetch_updown_1h_markets", lambda look_ahead=8: [])
 
     def _slow_weather(limit=20):
         time.sleep(0.08)

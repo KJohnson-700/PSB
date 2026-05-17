@@ -1,7 +1,7 @@
 """
 Historical Polymarket YES marks for crypto up/down backtest exit replay (option A).
 
-Resolves the same ``{asset}-updown-{5m|15m|30m}-{unix}`` event slugs the live scanner
+Resolves the same ``{asset}-updown-{5m|15m|30m|1h}-{unix}`` event slugs the live scanner
 uses (UTC-aligned window start epoch), then pulls **1m** YES prices from the
 PolymarketData API when ``POLYMARKETDATA_API_KEY`` is set.
 

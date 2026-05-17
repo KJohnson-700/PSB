@@ -920,6 +920,7 @@ def _kelly_state_payload() -> Dict[str, Any]:
             "5m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
             "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
             "30m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+            "1h": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
         }
         for k in _KELLY_STRATEGY_KEYS
     }
@@ -1823,7 +1824,8 @@ def _live_backtest_scope_from_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "crypto_strategies": crypto_strategies,
         # Matches live slug routing buckets (scanner + updown_timeframe_label).
-        "windows": [5, 15, 30],
+        # 60 == 1h hourly product (replaced discontinued 30m).
+        "windows": [5, 15, 60],
         "weather_enabled": bool(weather_cfg.get("enabled", False)),
     }
 
@@ -3233,7 +3235,7 @@ async def get_trade_journey(
 
 @app.get("/api/journal/updown_breakdown")
 async def get_updown_breakdown():
-    """Break down closed trades by up/down bucket (30m / 15m / 5m per asset).
+    """Break down closed trades by up/down bucket (1h / 30m / 15m / 5m per asset).
     Also splits OLD CODE (pre-restart) vs NEW CODE (post-restart) results.
     NEW CODE is detected by first appearance of 'Anti-LTF gate passed' in today's log.
     """

@@ -180,7 +180,7 @@ def infer_updown_window_size(
     end_date: Optional[datetime] = None,
 ) -> str:
     w = str(window_size or "").strip().lower()
-    if w in {"5m", "15m", "30m"}:
+    if w in {"5m", "15m", "30m", "1h"}:
         return w
     if opened_at is None or end_date is None:
         return ""
@@ -197,7 +197,9 @@ def infer_updown_window_size(
     if abs(mins - 15.0) <= 0.6 or rounded == 15:
         return "15m"
     if abs(mins - 30.0) <= 1.0 or rounded == 30:
-        return "30m"
+        return "30m"  # legacy: 30m product discontinued but historic positions persist
+    if abs(mins - 60.0) <= 2.0 or rounded == 60:
+        return "1h"
     return ""
 
 

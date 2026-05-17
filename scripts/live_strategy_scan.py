@@ -58,15 +58,15 @@ def _run_scan(config: dict) -> int:
         markets,
         up15,
         up5,
-        up30,
+        up1h,
         hype_alt,
         weather,
         look_ahead_15m,
         look_ahead_5m,
-        look_ahead_30m,
+        look_ahead_1h,
     ) = scanner._sync_network_phase()
     elapsed_ms = int((time.perf_counter() - start) * 1000)
-    high_liq = list(markets) + list(up15) + list(up5) + list(up30) + list(hype_alt)
+    high_liq = list(markets) + list(up15) + list(up5) + list(up1h) + list(hype_alt)
 
     print("\nScanner health check")
     print("====================")
@@ -75,14 +75,14 @@ def _run_scan(config: dict) -> int:
     print("sync_timeout: False")
     print(f"look_ahead_15m: {look_ahead_15m}")
     print(f"look_ahead_5m: {look_ahead_5m}")
-    print(f"look_ahead_30m: {look_ahead_30m}")
+    print(f"look_ahead_1h: {look_ahead_1h}")
     print(f"high_liquidity: {len(high_liq)}")
     print(f"updown_15m: {len(up15)}")
     print(f"updown_5m: {len(up5)}")
-    print(f"updown_30m: {len(up30)}")
+    print(f"updown_1h: {len(up1h)}")
     print(f"weather: {len(weather)}")
 
-    if up15 or up5 or up30:
+    if up15 or up5 or up1h:
         by_asset_window: dict[tuple[str, str], int] = {}
         for m in up15:
             key = (_asset_label(m.question), "15m")
@@ -90,8 +90,8 @@ def _run_scan(config: dict) -> int:
         for m in up5:
             key = (_asset_label(m.question), "5m")
             by_asset_window[key] = by_asset_window.get(key, 0) + 1
-        for m in up30:
-            key = (_asset_label(m.question), "30m")
+        for m in up1h:
+            key = (_asset_label(m.question), "1h")
             by_asset_window[key] = by_asset_window.get(key, 0) + 1
 
         print("\nasset/window counts:")
@@ -100,7 +100,7 @@ def _run_scan(config: dict) -> int:
 
     # No async session used in this sync health check path.
     scanner._background_fetch_pool.shutdown(wait=False, cancel_futures=True)
-    if not up15 and not up5 and not up30:
+    if not up15 and not up5 and not up1h:
         print("\nWARNING: no updown markets returned.")
         return 1
     return 0

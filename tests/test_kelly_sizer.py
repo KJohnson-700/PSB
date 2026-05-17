@@ -47,9 +47,9 @@ def test_binary_position_uses_same_configured_floor_and_ceiling():
     assert sizer.size_binary_position("weather", bankroll=500, win_probability=0.60, contract_price=0.50) == 15.0
 
 
-def test_get_all_window_stats_includes_30m_bucket():
+def test_get_all_window_stats_includes_hourly_and_legacy_30m_buckets():
     sizer = KellySizer({"trading": {}, "strategies": {}})
     ws = sizer.get_all_window_stats()
-    assert set(ws["bitcoin"].keys()) >= {"5m", "15m", "30m"}
+    assert set(ws["bitcoin"].keys()) >= {"5m", "15m", "30m", "1h"}
     assert ws["bitcoin"]["30m"]["trades"] == 0
-
+    assert ws["bitcoin"]["1h"]["trades"] == 0

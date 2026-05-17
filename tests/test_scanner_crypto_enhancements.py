@@ -17,22 +17,18 @@ def _config() -> dict:
     }
 
 
-def test_iter_updown_30m_human_compact_slugs_shape():
+def test_iter_updown_1h_human_slugs_shape():
+    # May 13, 09:44 UTC = May 13, 05:44 EDT → hour floor 5AM ET
     ref = datetime(2026, 5, 13, 9, 44, tzinfo=timezone.utc)
-    slugs = MarketScanner._iter_updown_30m_human_compact_slugs(look_ahead=0, now_utc=ref)
-    assert len(slugs) == 5
-    assert "bitcoin-up-or-down-may-13-530am-600am-et" in slugs
-    assert "hyperliquid-up-or-down-may-13-530am-600am-et" in slugs
-
-
-def test_compact_updown_range_time_et_tokens():
-    from zoneinfo import ZoneInfo
-
-    et = ZoneInfo("America/New_York")
-    t1 = datetime(2026, 4, 20, 4, 15, tzinfo=et)
-    t2 = datetime(2026, 4, 20, 4, 30, tzinfo=et)
-    assert MarketScanner._compact_updown_range_time_et(t1) == "415am"
-    assert MarketScanner._compact_updown_range_time_et(t2) == "430am"
+    slugs = MarketScanner._iter_updown_1h_human_slugs(look_ahead=0, now_utc=ref)
+    assert len(slugs) == 5  # 5 assets — doge/bnb deferred until trading well
+    assert "bitcoin-up-or-down-may-13-2026-5am-et" in slugs
+    assert "ethereum-up-or-down-may-13-2026-5am-et" in slugs
+    assert "solana-up-or-down-may-13-2026-5am-et" in slugs
+    assert "xrp-up-or-down-may-13-2026-5am-et" in slugs
+    # HYPE uses the short ``hype-`` prefix on Polymarket hourly (not ``hyperliquid-``).
+    assert "hype-up-or-down-may-13-2026-5am-et" in slugs
+    assert not any("hyperliquid" in s for s in slugs)
 
 
 def test_parse_gamma_event_market_accepts_array_fields():
@@ -226,7 +222,9 @@ def test_updown_slug_falls_through_to_events_when_markets_empty(monkeypatch):
     assert closed == ["markets", "events"]
 
 
-def test_fetch_updown_markets_splits_fifteen_and_thirty_carry(monkeypatch):
+def test_fetch_updown_markets_filters_to_fifteen_band(monkeypatch):
+    """fetch_updown_markets returns only ~15m windows; the legacy 30m carry path is
+    dropped since Polymarket discontinued the 30m crypto product family."""
     scanner = MarketScanner(_config())
     end = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
     base = dict(
@@ -253,11 +251,12 @@ def test_fetch_updown_markets_splits_fifteen_and_thirty_carry(monkeypatch):
         return list(raw)
 
     monkeypatch.setattr(scanner, "_fetch_event_slug_markets", fake_fetch)
-    fifteen, carry = scanner.fetch_updown_markets(look_ahead=1)
+    fifteen = scanner.fetch_updown_markets(look_ahead=1)
     assert {m.id for m in fifteen} == {"m15", "mnone_15slug"}
-    assert {m.id for m in carry} == {"m30"}
-    assert "m60" not in {m.id for m in fifteen} | {m.id for m in carry}
-    assert "mnone_bad" not in {m.id for m in fifteen} | {m.id for m in carry}
+    # 30m, 60m, and unparseable rows are all dropped.
+    assert "m30" not in {m.id for m in fifteen}
+    assert "m60" not in {m.id for m in fifteen}
+    assert "mnone_bad" not in {m.id for m in fifteen}
 
 
 def test_dedupe_markets_by_id():

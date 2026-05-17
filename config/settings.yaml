@@ -23,12 +23,8 @@ polymarket:
   # Bounded fallback for named HYPE/Hyperliquid event slugs not covered by the
   # normal up/down fetch. This no longer crawls the full active event set.
   fetch_hype_alt_markets: true
-  # Extra 30m discovery: Gamma often has no {asset}-updown-30m-{unix} markets; also try compact
-  # ET range slugs (bitcoin-up-or-down-may-13-430am-500am-et) matching the HYPE alt slug family.
-  fetch_updown_30m_human_compact_slugs: true
-  # If true, markets from the *-updown-15m-* slug responses with ~30m window_minutes (title)
-  # are merged into the updown_30m list (Gamma often has no *-updown-30m-* listings).
-  updown_30m_merge_from_15m_slug_batch: true
+  # 30m crypto Up/Down was discontinued by Polymarket; the 1h product replaced it.
+  # Slug shape: {asset}-up-or-down-{month}-{day}-{year}-{H}{am|pm}-et (see scanner.py).
   fetch_weather_markets: false
   # Gamma REST: retries for transient timeouts / 5xx (slug and list fetches).
   gamma_http_max_retries: 3
@@ -94,7 +90,7 @@ trading:
     take_profit_pct: 0.50        # 2026-05-10: raised 0.15 → 0.50. Updown audit (test_20260509_212625): TP fired at avg +35% but resolved-YES trades returned +124%. Bot exits at ~quarter of available upside; raising captures more of the binary settlement curve. Used for BOTH non-updown and updown markets (code path: live_testing.py `if pnl_pct >= self.take_profit_pct`).
     stop_loss_pct: 0.30          # Tightened from 0.40: Weinstein -$2.40 nearly wiped all gains; losses 1.7x wins
     max_hold_hours: 72           # Exit after 72 hours regardless (non-updown markets)
-    # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m / 15m / 30m candle markets)
+    # Updown market exits (SOL/ETH/XRP/BTC/HYPE 5m / 15m / 1h candle markets)
     # Journal mapping (see docs/session_reports/may11_2026_exit_reason_reconciliation.md):
     #   - `updown_stop_loss`  → `updown_stop_loss_pct` (same-position % adverse vs cost basis; anytime in hold).
     #   - `updown_time_stop`  → `updown_stop_cents` + `updown_exit_window_mins` (+ max_fraction / high-entry override).
@@ -404,27 +400,30 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 19.0
-        30m:
+        # 1h hourly product (replaces deprecated 30m). Wide entry window initially —
+        # tune after seeing live data; hourly resolves at the top of the hour.
+        1h:
           up:
             min_edge: 0.10
             ai_override_min_edge: 0.10
             entry_price_min: 0.45
             entry_price_max: 0.55
-            entry_window_min: 25.0
-            entry_window_max: 29.0
+            entry_window_min: 1.0
+            entry_window_max: 59.0
           down:
             min_edge: 0.09
             ai_override_min_edge: 0.10
             entry_price_min: 0.45
             entry_price_max: 0.55
-            entry_window_min: 25.0
-            entry_window_max: 29.0
+            entry_window_min: 1.0
+            entry_window_max: 59.0
     # Price zones where AI is skipped (edge is obvious)
     clear_edge_low: 0.20
     clear_edge_high: 0.80
     # 5m scanner look-ahead: how many future 5m windows to fetch
     look_ahead_15m: 8
     look_ahead_5m: 1
+    look_ahead_1h: 4
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep hours with strong backtest evidence
     # at meaningful negative expectancy, drop the borderline ones until live data
@@ -652,19 +651,20 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 28.0
-        30m:
+        # 1h hourly product (replaces deprecated 30m); wide window until tuned.
+        1h:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
 
     # ── BTC minimum dollar move required before entering ──
     # BTC must have moved at least this many dollars in the relevant window.
@@ -825,19 +825,20 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 24.0
-        30m:
+        # 1h hourly product (replaces deprecated 30m); wide window until tuned.
+        1h:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -969,19 +970,20 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 32.0
-        30m:
+        # 1h hourly product (replaces deprecated 30m); wide window until tuned.
+        1h:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
     btc_spike_floor_pct_5m: 0.15   # sol_macro parity — consistent BTC impulse detection for lag thesis
     btc_spike_floor_pct_15m: 0.40
     lag_signal_min_pct: 0.12
@@ -1133,19 +1135,20 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 16.0
-        30m:
+        # 1h hourly product (replaces deprecated 30m); wide window until tuned.
+        1h:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 26.0
-            entry_window_max: 28.66
+            entry_window_min: 1.0
+            entry_window_max: 59.0
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1392,8 +1395,9 @@ backtest:
   initial_bankroll: 500
 
   # Polymarket YES 1m marks for crypto up/down exit replay (win-rate calibration vs live).
-  # Requires POLYMARKETDATA_API_KEY. Slugs match the scanner unix family:
-  #   {btc|sol|eth|xrp|hype}-updown-{5m|15m|30m}-{UTC_window_start_epoch}
+  # Requires POLYMARKETDATA_API_KEY. Slugs match the scanner families:
+  #   {btc|sol|eth|xrp|hype}-updown-{5m|15m}-{UTC_window_start_epoch}  (unix family)
+  #   {bitcoin|ethereum|solana|xrp}-up-or-down-{month}-{day}-{year}-{H}{am|pm}-et  (1h)
   # Caches per window under cache_dir. When disabled or fetch sparse, engine uses
   # the underlying OHLCV YES proxy (legacy).
   polymarket_marks:

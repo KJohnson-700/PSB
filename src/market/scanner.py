@@ -244,7 +244,7 @@ def is_crypto_updown_market(market: Market) -> bool:
 
 
 def resolved_updown_window_minutes(market: Market) -> int:
-    """Best-effort candle length for routing (5 / 15 / 30). Prefer Gamma ``window_minutes``."""
+    """Best-effort candle length for routing (5 / 15 / 60). Prefer Gamma ``window_minutes``."""
     wm = getattr(market, "window_minutes", None)
     if wm is not None:
         try:
@@ -262,7 +262,10 @@ def resolved_updown_window_minutes(market: Market) -> int:
     if "updown-5m-" in slug_l or "updown-5-" in slug_l:
         return 5
     if "updown-30m-" in slug_l:
-        return 30
+        return 30  # historic journal/backfill rows only — product discontinued
+    # Hourly slug shape: e.g. bitcoin-up-or-down-may-17-2026-1am-et
+    if _UPDOWN_SLUG_DATE_RE.search(slug_l):
+        return 60
     if "5m" in q or "5-min" in q:
         return 5
     if "30m" in q or "30-min" in q:
@@ -271,12 +274,16 @@ def resolved_updown_window_minutes(market: Market) -> int:
 
 
 def updown_timeframe_label(window_minutes: int) -> str:
-    """Bucket for strategy entry logic: 5m, 15m, or 30m."""
+    """Bucket for strategy entry logic: 5m, 15m, or 1h.
+
+    The legacy 30m crypto product was discontinued; hourly (~60min) is the live
+    long-cycle bucket. Anything above 22min routes to 1h.
+    """
     if window_minutes <= 6:
         return "5m"
     if window_minutes <= 22:
         return "15m"
-    return "30m"
+    return "1h"
 
 
 def _parse_updown_market_end_from_text(
@@ -519,7 +526,7 @@ class MarketScanner:
         with self._slug_cache_lock:
             self._cycle_empty_event_slugs = set()
             self._slug_fetch_stats = {}
-        look_ahead_15m, look_ahead_5m, look_ahead_30m = self._resolve_updown_lookahead()
+        look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
         fetch_hype = self._should_fetch_hype_alt_markets()
         fetch_weather = self._should_fetch_weather_markets()
         weather_snapshot = self._get_weather_market_snapshot() if fetch_weather else []
@@ -528,7 +535,7 @@ class MarketScanner:
             "gamma": lambda: self._fetch_markets_gamma(limit=200),
             "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
             "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
-            "updown_30m": lambda: self.fetch_updown_30m_markets(look_ahead=look_ahead_30m),
+            "updown_1h": lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h),
         }
         if fetch_hype:
             tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
@@ -561,30 +568,25 @@ class MarketScanner:
                 results.setdefault(name, [])
             pool.shutdown(wait=not timed_out, cancel_futures=True)
 
-        up_pair = results.get("updown", ([], []))
-        if isinstance(up_pair, tuple) and len(up_pair) == 2:
-            updown_15m, updown_30m_carry = up_pair
+        # fetch_updown_markets historically returned (15m, ~30m carry) — the 30m carry path
+        # is dead (Polymarket discontinued the 30m crypto product family). Accept either
+        # the legacy tuple form or a bare list, ignoring any second element.
+        up_pair = results.get("updown", [])
+        if isinstance(up_pair, tuple) and up_pair:
+            updown_15m = up_pair[0] if isinstance(up_pair[0], list) else []
         else:
             updown_15m = up_pair if isinstance(up_pair, list) else []
-            updown_30m_carry = []
-
-        pm = self.config.get("polymarket", {}) or {}
-        if not bool(pm.get("updown_30m_merge_from_15m_slug_batch", True)):
-            updown_30m_carry = []
-
-        up30_slug = results.get("updown_30m", []) or []
-        up30_merged = _dedupe_markets_by_id(list(up30_slug) + list(updown_30m_carry))
 
         return (
             results.get("gamma", []),
             updown_15m,
             results.get("updown_5m", []),
-            up30_merged,
+            results.get("updown_1h", []) or [],
             results.get("hype_alt", []),
             weather_snapshot,
             look_ahead_15m,
             look_ahead_5m,
-            look_ahead_30m,
+            look_ahead_1h,
         )
 
     def _get_weather_market_snapshot(self) -> List[Market]:
@@ -665,10 +667,10 @@ class MarketScanner:
         meta: Dict[str, Any] = {
             "look_ahead_15m": 0,
             "look_ahead_5m": 0,
-            "look_ahead_30m": 0,
+            "look_ahead_1h": 0,
             "updown_15m_count": 0,
             "updown_5m_count": 0,
-            "updown_30m_count": 0,
+            "updown_1h_count": 0,
             "updown_hype_alt_count": 0,
             "weather_market_count": 0,
             "slug_fetch_stats": {},
@@ -683,7 +685,7 @@ class MarketScanner:
             "near_expiration": [],
             "updown": [],
             "updown_5m": [],
-            "updown_30m": [],
+            "updown_1h": [],
             "updown_hype_alt": [],
             "weather": [],
             "scanner_meta": meta,
@@ -693,7 +695,7 @@ class MarketScanner:
         """Resolve scanner look-ahead from enabled strategy configs.
 
         Returns:
-            (lookahead_15m, lookahead_5m, lookahead_30m)
+            (lookahead_15m, lookahead_5m, lookahead_1h)
         """
         strategies = self.config.get("strategies", {}) or {}
         keys = ["bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"]
@@ -709,16 +711,20 @@ class MarketScanner:
         # Seed low so max() across strategy configs reflects requested lookahead (not a floor of 8).
         look_15m = 1
         look_5m = 1
-        look_30m = 1
+        look_1h = 1
         for cfg in cfg_pool:
             look_15m = max(look_15m, int(cfg.get("look_ahead_15m", 8)))
             look_5m = max(look_5m, int(cfg.get("look_ahead_5m", 3)))
-            look_30m = max(look_30m, int(cfg.get("look_ahead_30m", 4)))
+            # Accept legacy look_ahead_30m as alias for the renamed lane.
+            look_1h = max(
+                look_1h,
+                int(cfg.get("look_ahead_1h", cfg.get("look_ahead_30m", 4))),
+            )
 
         look_15m = max(1, min(96, look_15m))
         look_5m = max(1, min(288, look_5m))
-        look_30m = max(1, min(48, look_30m))
-        return look_15m, look_5m, look_30m
+        look_1h = max(1, min(48, look_1h))
+        return look_15m, look_5m, look_1h
         
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session.
@@ -1053,42 +1059,30 @@ class MarketScanner:
                 slugs.append(f"{asset_prefix}-updown-{label}-{window_ts}")
         return slugs
 
-    @staticmethod
-    def _compact_updown_range_time_et(when_et: datetime) -> str:
-        """Build a Polymarket-style time token like ``430am`` / ``1030pm`` for *-up-or-down-* slugs."""
-        h = when_et.hour
-        is_pm = h >= 12
-        h12 = h % 12 or 12
-        return f"{h12}{when_et.minute:02d}{'pm' if is_pm else 'am'}"
+    # Asset prefixes Polymarket lists under the hourly Up/Down product
+    # (https://polymarket.com/crypto/hourly). Note HYPE uses the short ``hype-``
+    # prefix here (not ``hyperliquid-``).
+    # NOTE: ``dogecoin`` and ``bnb`` are also live on hourly but intentionally deferred
+    # until btc/eth/sol/xrp/hype are trading well. Add them here when ready.
+    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = ("bitcoin", "ethereum", "solana", "xrp", "hype")
 
     @classmethod
-    def _iter_updown_30m_human_compact_slugs(
+    def _iter_updown_1h_human_slugs(
         cls, *, look_ahead: int, now_utc: Optional[datetime] = None
     ) -> List[str]:
-        """Human compact ET range slugs for 30m windows (no year segment).
+        """Hourly Up/Down slugs in the live Polymarket shape.
 
-        Gamma often returns ``[]`` for ``{asset}-updown-30m-{unix}``; Polymarket also lists
-        short-window crypto under ``{asset}-up-or-down-{month}-{day}-{t1}-{t2}-et`` (see
-        ``tests/test_hype_integration.py``). These are merged into the 30m fetch path so
-        ``updown_30m`` can hydrate when that family is live.
+        Example: ``bitcoin-up-or-down-may-17-2026-1am-et`` — single start-hour token (ET),
+        year included. One market per asset per hour, starting at the current ET hour.
         """
         ref = now_utc or datetime.now(timezone.utc)
-        now_et = ref.astimezone(_ET)
-        t = now_et.replace(second=0, microsecond=0)
-        minute_floor = (t.minute // 30) * 30
-        slot0 = t.replace(minute=minute_floor)
-        assets = ("bitcoin", "solana", "ethereum", "xrp", "hyperliquid")
+        now_et = ref.astimezone(_ET).replace(minute=0, second=0, microsecond=0)
         out: List[str] = []
         seen: set[str] = set()
         for offset in range(0, max(0, int(look_ahead)) + 1):
-            start = slot0 + timedelta(minutes=30 * offset)
-            end = start + timedelta(minutes=30)
-            month = start.strftime("%B").lower()
-            day = start.day
-            a = cls._compact_updown_range_time_et(start)
-            b = cls._compact_updown_range_time_et(end)
-            for asset_w in assets:
-                slug = f"{asset_w}-up-or-down-{month}-{day}-{a}-{b}-et"
+            slot = now_et + timedelta(hours=offset)
+            for asset_w in cls._HOURLY_UPDOWN_ASSETS:
+                slug = cls._build_human_updown_event_slug(asset_w, slot.astimezone(timezone.utc))
                 if slug not in seen:
                     seen.add(slug)
                     out.append(slug)
@@ -1233,25 +1227,14 @@ class MarketScanner:
         markets.sort(key=lambda m: (m.end_date or datetime.max.replace(tzinfo=timezone.utc), m.slug, m.id))
         return markets
 
-    def fetch_updown_markets(self, look_ahead: int = 8) -> Tuple[List[Market], List[Market]]:
-        """Fetch crypto Up/Down markets from the ``*-updown-15m-{unix}`` slug family.
-
-        Args:
-            look_ahead: number of future 15-min windows to fetch (default 8 ≈ 2 hours ahead)
-
-        Returns:
-            ``(fifteen_bucket, thirty_minute_carry)`` — strict 15m windows (10–20 min inferred),
-            plus markets from the **same** slug responses whose title implies ~30 minutes
-            (26–34 min). Gamma often has **no** ``*-updown-30m-*`` listings; those ~30m rows
-            used to be dropped entirely by the 15m-only filter.
-        """
+    def fetch_updown_markets(self, look_ahead: int = 8) -> List[Market]:
+        """Fetch crypto Up/Down markets from the ``*-updown-15m-{unix}`` slug family."""
         raw = self._fetch_event_slug_markets(
             self._iter_updown_event_slugs(step_minutes=15, look_ahead=look_ahead),
             timeout_sec=8,
             stats_key="updown_15m",
         )
         fifteen: List[Market] = []
-        carry_30: List[Market] = []
         skipped_other: List[Market] = []
         for m in raw:
             wm = m.window_minutes
@@ -1263,8 +1246,6 @@ class MarketScanner:
                 continue
             if 10 <= wm <= 20:
                 fifteen.append(m)
-            elif 26 <= wm <= 34:
-                carry_30.append(m)
             else:
                 skipped_other.append(m)
         if skipped_other:
@@ -1272,14 +1253,9 @@ class MarketScanner:
                 {int(x.window_minutes) for x in skipped_other if x.window_minutes is not None}
             )
             logger.info(
-                "Skipped %d updown rows from 15m slug batch (window_minutes not in 15m or ~30m carry bands; durations=%s)",
+                "Skipped %d updown rows from 15m slug batch (window_minutes not in 10-20 band; durations=%s)",
                 len(skipped_other),
                 durs,
-            )
-        if carry_30:
-            logger.info(
-                "15m slug batch: %d market(s) with ~30m window_minutes → merged into updown_30m path",
-                len(carry_30),
             )
 
         if fifteen:
@@ -1299,7 +1275,7 @@ class MarketScanner:
                 f"XRP: {sum(1 for m in fifteen if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
                 f"HYPE: {sum(1 for m in fifteen if _is_hype_mkt(m))})"
             )
-        return fifteen, carry_30
+        return fifteen
 
     def fetch_updown_5m_markets(self, look_ahead: int = 3) -> List[Market]:
         """Fetch current + upcoming 5-minute crypto Up/Down markets.
@@ -1344,57 +1320,52 @@ class MarketScanner:
             )
         return markets
 
-    def fetch_updown_30m_markets(self, look_ahead: int = 4) -> List[Market]:
-        """Fetch current + upcoming 30-minute crypto Up/Down markets.
+    def fetch_updown_1h_markets(self, look_ahead: int = 4) -> List[Market]:
+        """Fetch current + upcoming 1-hour crypto Up/Down markets.
 
-        Discovery uses explicit ``*-updown-30m-{unix}`` (and optional compact ET slugs).
-        Do **not** infer 30m from bulk Gamma slug substring ``"30"`` — ``*-updown-5m-*``
-        timestamps often contain ``30`` in the epoch digits (false positives). See
-        ``docs/GAMMA_UPDOWN_30M_DISCOVERY.md``.
+        Slug shape: ``{asset}-up-or-down-{month}-{day}-{year}-{H}{am|pm}-et``
+        (e.g. ``bitcoin-up-or-down-may-17-2026-1am-et``).
+
+        Polymarket discontinued the legacy ``*-updown-30m-{unix}`` family entirely; the
+        hourly product is the live replacement. All 5 assets we trade (btc/eth/sol/xrp/hype)
+        are listed at https://polymarket.com/crypto/hourly; doge/bnb are deferred per
+        _HOURLY_UPDOWN_ASSETS.
         """
-        pm = self.config.get("polymarket", {}) or {}
-        ts_slugs = self._iter_updown_event_slugs(step_minutes=30, look_ahead=look_ahead)
-        extra: List[str] = []
-        if bool(pm.get("fetch_updown_30m_human_compact_slugs", True)):
-            extra = self._iter_updown_30m_human_compact_slugs(look_ahead=look_ahead)
-        ordered: List[str] = []
-        seen_slug: set[str] = set()
-        for s in ts_slugs + extra:
-            if s not in seen_slug:
-                seen_slug.add(s)
-                ordered.append(s)
+        slugs = self._iter_updown_1h_human_slugs(look_ahead=look_ahead)
         markets = self._fetch_event_slug_markets(
-            ordered,
+            slugs,
             timeout_sec=8,
-            stats_key="updown_30m",
+            stats_key="updown_1h",
         )
-        # ~30m candles: allow mild inference drift vs strict 23–45.
-        lo, hi = 20, 52
+        # Hourly markets have endDate-startDate spanning the trade-open window (~48h),
+        # so band-filter against window_minutes — _infer_updown_window_minutes returns 60
+        # for any market whose slug matches the ``up-or-down-<month>-<day>-<year>`` pattern.
+        lo, hi = 55, 65
         rejected = [m for m in markets if m.window_minutes and not (lo <= m.window_minutes <= hi)]
         markets = [m for m in markets if m.window_minutes and lo <= m.window_minutes <= hi]
         if rejected:
             logger.info(
-                "Skipped %d non-30m updown markets from 30m bucket (durations=%s)",
+                "Skipped %d non-1h updown markets from hourly bucket (durations=%s)",
                 len(rejected),
                 sorted({m.window_minutes for m in rejected}),
             )
 
         if markets:
-            def _is_eth_mkt_30(m: Market) -> bool:
+            def _is_eth_mkt_1h(m: Market) -> bool:
                 q = m.question.lower()
                 return "ethereum" in q or "ether" in q or bool(re.search(r"\beth\b", q))
 
-            def _is_hype_mkt_30(m: Market) -> bool:
+            def _is_hype_mkt_1h(m: Market) -> bool:
                 q = m.question.lower()
                 return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
 
             logger.info(
-                f"Fetched {len(markets)} 30m updown markets "
+                f"Fetched {len(markets)} 1h updown markets "
                 f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
                 f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
-                f"ETH: {sum(1 for m in markets if _is_eth_mkt_30(m))}, "
+                f"ETH: {sum(1 for m in markets if _is_eth_mkt_1h(m))}, "
                 f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
-                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_30(m))})"
+                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_1h(m))})"
             )
         return markets
 
@@ -1403,7 +1374,9 @@ class MarketScanner:
 
         This is a bounded fallback path for named `hyperliquid` / `hype` event slugs.
         """
-        look_ahead_15m, look_ahead_5m, look_ahead_30m = self._resolve_updown_lookahead()
+        look_ahead_15m, look_ahead_5m, _look_ahead_1h = self._resolve_updown_lookahead()
+        # HYPE has no hourly crypto Up/Down product on Polymarket, so the hourly slug
+        # batch is skipped here. Keep 5m and 15m alt-slug families.
         slugs = self._iter_named_event_slugs(
             prefixes=("hyperliquid", "hype"),
             step_minutes=15,
@@ -1414,13 +1387,6 @@ class MarketScanner:
                 prefixes=("hyperliquid", "hype"),
                 step_minutes=5,
                 look_ahead=max(1, min(look_ahead_5m, 24)),
-            )
-        )
-        slugs.extend(
-            self._iter_named_event_slugs(
-                prefixes=("hyperliquid", "hype"),
-                step_minutes=30,
-                look_ahead=max(1, min(look_ahead_30m, 12)),
             )
         )
         markets = self._fetch_event_slug_markets(
@@ -1558,7 +1524,7 @@ class MarketScanner:
 
         Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
         timeout so the asyncio event loop is not blocked for minutes on slow APIs.
-        Price hydration for gamma, weather, 15m / 5m / 30m updown batches runs in
+        Price hydration for gamma, weather, 15m / 5m / 1h updown batches runs in
         parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
         """
         t_scan_start = time.perf_counter()
@@ -1568,12 +1534,12 @@ class MarketScanner:
                 markets,
                 updown,
                 updown_5m,
-                updown_30m,
+                updown_1h,
                 hype_alt,
                 weather,
                 look_ahead_15m,
                 look_ahead_5m,
-                look_ahead_30m,
+                look_ahead_1h,
             ) = await asyncio.wait_for(
                 asyncio.to_thread(self._sync_network_phase),
                 timeout=self._scanner_sync_timeout + 2.0,
@@ -1593,12 +1559,12 @@ class MarketScanner:
         async def _hydrate(ms: List[Market]) -> List[Market]:
             return await self.update_market_prices(ms) if ms else []
 
-        markets, weather, updown, updown_5m, updown_30m = await asyncio.gather(
+        markets, weather, updown, updown_5m, updown_1h = await asyncio.gather(
             _hydrate(markets),
             _hydrate(weather),
             _hydrate(updown),
             _hydrate(updown_5m),
-            _hydrate(updown_30m),
+            _hydrate(updown_1h),
         )
 
         opportunities: Dict[str, Any] = {
@@ -1634,17 +1600,17 @@ class MarketScanner:
         else:
             opportunities["updown_5m"] = []
 
-        if updown_30m:
-            opportunities["high_liquidity"].extend(updown_30m)
-            opportunities["updown_30m"] = updown_30m
+        if updown_1h:
+            opportunities["high_liquidity"].extend(updown_1h)
+            opportunities["updown_1h"] = updown_1h
         else:
-            opportunities["updown_30m"] = []
+            opportunities["updown_1h"] = []
 
         if hype_alt:
             known_updown_ids = (
                 {m.id for m in opportunities.get("updown", [])}
                 | {m.id for m in opportunities.get("updown_5m", [])}
-                | {m.id for m in opportunities.get("updown_30m", [])}
+                | {m.id for m in opportunities.get("updown_1h", [])}
             )
             hype_alt = [m for m in hype_alt if m.id not in known_updown_ids]
 
@@ -1664,10 +1630,10 @@ class MarketScanner:
         opportunities["scanner_meta"] = {
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
-            "look_ahead_30m": look_ahead_30m,
+            "look_ahead_1h": look_ahead_1h,
             "updown_15m_count": len(opportunities.get("updown", [])),
             "updown_5m_count": len(opportunities.get("updown_5m", [])),
-            "updown_30m_count": len(opportunities.get("updown_30m", [])),
+            "updown_1h_count": len(opportunities.get("updown_1h", [])),
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
             "weather_market_count": len(opportunities.get("weather", [])),
             "slug_fetch_stats": self._get_slug_fetch_stats_snapshot(),
