@@ -485,7 +485,40 @@ class ETHMacroStrategy(SolMacroStrategy):
                 allowed_side,
                 btc_htf_bias,
             )
-            if alt_1h_trend == "BULLISH":
+            # Symmetric four-path resolver — gates LONG and SHORT with their own LTF
+            # momentum in both regimes. Falls back to legacy regime-default + buy_no
+            # override when only the buy_no flag is on.
+            resolver_active = (
+                self.buy_yes_ltf_override_enabled or self.buy_no_ltf_override_enabled
+            )
+            if resolver_active:
+                _resolved_side, _resolved_source, _resolved_detail = (
+                    self._resolve_allowed_side_with_ltf_overrides(eth_ta, alt_1h_trend)
+                )
+                if _resolved_side is None:
+                    logger.info(
+                        "ETH Macro: LTF resolver skipped %s macro — %s",
+                        alt_1h_trend,
+                        _resolved_detail,
+                    )
+                    self._record_eth_abort(
+                        "ltf_resolver_skip",
+                        {
+                            "alt_1h_trend": alt_1h_trend,
+                            "detail": _resolved_detail,
+                            "markets_considered": len(eth_markets),
+                        },
+                    )
+                    return []
+                if _resolved_side != allowed_side or _resolved_source != "primary_htf":
+                    logger.info(
+                        "ETH Macro: LTF resolver → %s (%s) — %s",
+                        _resolved_side,
+                        _resolved_source,
+                        _resolved_detail,
+                    )
+                allowed_side = _resolved_side
+            elif alt_1h_trend == "BULLISH" and self.buy_no_ltf_override_enabled:
                 _short_override, _short_override_reason = self._buy_no_ltf_override(eth_ta)
                 if _short_override:
                     allowed_side = "SHORT"

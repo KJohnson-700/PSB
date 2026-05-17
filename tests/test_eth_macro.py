@@ -108,6 +108,49 @@ def test_eth_buy_no_ltf_override_uses_eth_strategy_config():
     assert "bearish_ltf_override" in reason
 
 
+def test_eth_resolver_picks_long_on_bullish_rally_under_bull_macro():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["buy_no_ltf_override_enabled"] = True
+    cfg["strategies"]["eth_macro"]["buy_yes_ltf_override_enabled"] = True
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=62.0,
+            macd_15m=MACDResult(histogram=0.06, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.04, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.05),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+    side, source, _ = strat._resolve_allowed_side_with_ltf_overrides(ta, "BULLISH")
+
+    assert side == "LONG"
+    assert source == "bullish_rally_default"
+
+
+def test_eth_resolver_skips_bull_macro_without_rally_confirmation():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["buy_no_ltf_override_enabled"] = True
+    cfg["strategies"]["eth_macro"]["buy_yes_ltf_override_enabled"] = True
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=50.0,
+            macd_15m=MACDResult(histogram=0.01, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.01, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.0),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+    side, source, detail = strat._resolve_allowed_side_with_ltf_overrides(ta, "BULLISH")
+
+    assert side is None
+    assert source == "skip"
+    assert detail.startswith("bull_default_no_rally")
+
+
 def test_eth_scan_buy_no_ltf_override_uses_eth_ta_without_name_error():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
