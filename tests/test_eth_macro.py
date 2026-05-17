@@ -129,7 +129,8 @@ def test_eth_resolver_picks_long_on_bullish_rally_under_bull_macro():
     assert source == "bullish_rally_default"
 
 
-def test_eth_resolver_skips_bull_macro_without_rally_confirmation():
+def test_eth_resolver_bull_default_long_fires_even_without_rally_confirmation():
+    """Additive-only: BULL default LONG cannot be blocked by weak LTF."""
     cfg = _config()
     cfg["strategies"]["eth_macro"]["buy_no_ltf_override_enabled"] = True
     cfg["strategies"]["eth_macro"]["buy_yes_ltf_override_enabled"] = True
@@ -144,11 +145,10 @@ def test_eth_resolver_skips_bull_macro_without_rally_confirmation():
         multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
     )
 
-    side, source, detail = strat._resolve_allowed_side_with_ltf_overrides(ta, "BULLISH")
+    side, source, _ = strat._resolve_allowed_side_with_ltf_overrides(ta, "BULLISH")
 
-    assert side is None
-    assert source == "skip"
-    assert detail.startswith("bull_default_no_rally")
+    assert side == "LONG"
+    assert source == "bullish_rally_default"
 
 
 def test_eth_scan_buy_no_ltf_override_uses_eth_ta_without_name_error():

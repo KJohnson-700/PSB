@@ -188,12 +188,11 @@ def _make_resolver_strategy() -> SolMacroStrategy:
 
 def test_resolver_bull_default_long_when_bullish_rally_confirms():
     strategy = _make_resolver_strategy()
-    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+    side, source, _ = strategy._resolve_allowed_side_with_ltf_overrides(
         _make_ta_bullish_rally(), "BULLISH"
     )
     assert side == "LONG"
     assert source == "bullish_rally_default"
-    assert "bullish_ltf_override" in detail
 
 
 def test_resolver_bull_clash_blocks_buy_no_when_rally_confirms():
@@ -228,12 +227,11 @@ def test_resolver_bull_exception_short_when_only_bearish_dip_confirms():
 
 def test_resolver_bear_default_short_when_bearish_dip_confirms():
     strategy = _make_resolver_strategy()
-    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+    side, source, _ = strategy._resolve_allowed_side_with_ltf_overrides(
         _make_ta_bearish_dip(), "BEARISH"
     )
     assert side == "SHORT"
     assert source == "bearish_dip_default"
-    assert "bearish_ltf_override" in detail
 
 
 def test_resolver_bear_exception_long_when_bullish_rally_confirms():
@@ -246,17 +244,18 @@ def test_resolver_bear_exception_long_when_bullish_rally_confirms():
     assert "bullish_ltf_override" in detail
 
 
-def test_resolver_bull_skip_when_no_momentum_confirms():
+def test_resolver_bull_default_long_fires_even_without_bullish_confirmation():
+    """Additive-only: BULL default LONG always fires; LTF gate cannot block it."""
     strategy = _make_resolver_strategy()
-    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+    side, source, _ = strategy._resolve_allowed_side_with_ltf_overrides(
         _make_ta_chop(), "BULLISH"
     )
-    assert side is None
-    assert source == "skip"
-    assert detail.startswith("bull_default_no_rally")
+    assert side == "LONG"
+    assert source == "bullish_rally_default"
 
 
-def test_resolver_bear_skip_when_no_momentum_confirms():
+def test_resolver_bear_default_short_fires_even_without_bearish_confirmation():
+    """Additive-only: BEAR default SHORT always fires; LTF gate cannot block it."""
     strategy = _make_resolver_strategy()
     ta = SOLTechnicalAnalysis(
         sol=SOLAnalysis(
@@ -267,10 +266,9 @@ def test_resolver_bear_skip_when_no_momentum_confirms():
         correlation=BTCSOLCorrelation(btc_move_5m_pct=0.0),
         multi_tf=MultiTimeframeTrend(h1_trend="BEARISH"),
     )
-    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(ta, "BEARISH")
-    assert side is None
-    assert source == "skip"
-    assert detail.startswith("bear_default_no_dip")
+    side, source, _ = strategy._resolve_allowed_side_with_ltf_overrides(ta, "BEARISH")
+    assert side == "SHORT"
+    assert source == "bearish_dip_default"
 
 
 def test_bullish_rally_ltf_ok_requires_all_four_conditions():

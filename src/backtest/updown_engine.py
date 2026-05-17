@@ -1487,7 +1487,9 @@ class UpdownBacktestEngine:
     ) -> tuple[Optional[str], str, str]:
         """Replay-side mirror of sol_macro._resolve_allowed_side_with_ltf_overrides.
 
-        Returns (side, side_source, detail). side may be None (skip).
+        Additive-only: defaults always fire, exceptions flip side when their LTF
+        confirms and the opposite-direction LTF does not. Never returns None for
+        BULLISH/BEARISH inputs.
         """
         bullish_ok, _ = self._bullish_rally_ltf_override_replay(
             ta, df_5m, btc_1m, window_open, strategy_cfg
@@ -1495,22 +1497,14 @@ class UpdownBacktestEngine:
         bearish_ok, _ = self._buy_no_ltf_override_replay(
             ta, df_5m, btc_1m, window_open, strategy_cfg
         )
-        if primary_htf_bias == "BEARISH":
-            if bearish_ok and not bullish_ok:
-                return "SHORT", "bearish_dip_default", "bearish_ltf_override"
-            if bullish_ok and not bearish_ok:
-                return "LONG", "bullish_rally_exception", "bullish_ltf_override"
-            if bullish_ok and bearish_ok:
-                return "SHORT", "bearish_dip_default", "chop_resolved_default"
-            return None, "skip", "bear_default_no_dip"
         if primary_htf_bias == "BULLISH":
-            if bullish_ok and not bearish_ok:
-                return "LONG", "bullish_rally_default", "bullish_ltf_override"
-            if bullish_ok and bearish_ok:
-                return "LONG", "bullish_rally_default", "chop_resolved_default"
             if bearish_ok and not bullish_ok:
                 return "SHORT", "bearish_dip_exception", "bearish_ltf_override"
-            return None, "skip", "bull_default_no_rally"
+            return "LONG", "bullish_rally_default", "default_long"
+        if primary_htf_bias == "BEARISH":
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_exception", "bullish_ltf_override"
+            return "SHORT", "bearish_dip_default", "default_short"
         return None, "skip", "neutral_htf_no_resolver"
 
     def _resolve_alt_replay_direction(
@@ -1575,13 +1569,10 @@ class UpdownBacktestEngine:
                         window_open=window_open,
                         strategy_cfg=strategy_cfg,
                     )
-                    if r_side is None:
-                        decision.allowed_side = None
+                    # Additive-only resolver: r_side never None for BULL/BEAR.
+                    if r_side is not None:
+                        decision.allowed_side = r_side
                         decision.side_source = r_source
-                        decision.skip_reason = f"ltf_resolver_skip:{r_detail}"
-                        return decision
-                    decision.allowed_side = r_side
-                    decision.side_source = r_source
                 elif alt_1h_trend == "BULLISH":
                     override, _ = self._buy_no_ltf_override_replay(
                         ta, df_5m, btc_1m, window_open, strategy_cfg

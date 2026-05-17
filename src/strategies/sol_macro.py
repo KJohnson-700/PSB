@@ -537,39 +537,32 @@ class SolMacroStrategy:
     def _resolve_allowed_side_with_ltf_overrides(
         self, ta: Any, primary_htf_bias: str
     ) -> tuple[Optional[str], str, str]:
-        """Four-path side resolver with symmetric LTF momentum gating.
+        """Additive-only side resolver — defaults always fire, exceptions are opt-in.
 
-        Returns (side, side_source, detail). side may be None (skip with reason in detail).
+        Returns (side, side_source, detail). For BULLISH/BEARISH inputs, side is never None;
+        defaults are byte-identical to pre-resolver behavior. The only behavior change is
+        that an opposite-trend LTF momentum break can flip the side to its exception path.
 
         Paths:
-          1. BEAR default SHORT — admit only if bearish dip confirms.
-          2. BEAR exception LONG — bullish rally confirms; wins over absent bearish dip.
-          3. BULL default LONG — admit only if bullish rally confirms.
-          4. BULL exception SHORT — bearish dip confirms AND no bullish rally (clash rule:
-             buy_no cannot fire when bullish rally would otherwise confirm default LONG).
-          5. Ambiguous chop (both momentums) — prefer regime default if its momentum passed;
-             else skip with ltf_momentum_ambiguous.
+          - BULL default LONG — always fires (no LTF gate).
+          - BULL → SHORT exception — bearish_dip_ltf_ok AND NOT bullish_rally_ltf_ok.
+            Clash rule: buy_no cannot fire when bullish rally also confirms (preserves rally LONG).
+          - BEAR default SHORT — always fires (no LTF gate).
+          - BEAR → LONG exception — bullish_rally_ltf_ok AND NOT bearish_dip_ltf_ok.
+            Symmetric clash rule: BEAR-rally LONG only when bearish dip is absent.
         """
         bullish_ok, bullish_reason = self._bullish_rally_ltf_ok(ta)
         bearish_ok, bearish_reason = self._bearish_dip_ltf_ok(ta)
 
-        if primary_htf_bias == "BEARISH":
-            if bearish_ok and not bullish_ok:
-                return "SHORT", "bearish_dip_default", bearish_reason
-            if bullish_ok and not bearish_ok:
-                return "LONG", "bullish_rally_exception", bullish_reason
-            if bullish_ok and bearish_ok:
-                return "SHORT", "bearish_dip_default", f"chop_resolved_default: {bearish_reason}"
-            return None, "skip", f"bear_default_no_dip: {bearish_reason}"
-
         if primary_htf_bias == "BULLISH":
-            if bullish_ok and not bearish_ok:
-                return "LONG", "bullish_rally_default", bullish_reason
-            if bullish_ok and bearish_ok:
-                return "LONG", "bullish_rally_default", f"chop_resolved_default: {bullish_reason}"
             if bearish_ok and not bullish_ok:
                 return "SHORT", "bearish_dip_exception", bearish_reason
-            return None, "skip", f"bull_default_no_rally: {bullish_reason}"
+            return "LONG", "bullish_rally_default", f"default_long: bullish={bullish_ok} bearish={bearish_ok}"
+
+        if primary_htf_bias == "BEARISH":
+            if bullish_ok and not bearish_ok:
+                return "LONG", "bullish_rally_exception", bullish_reason
+            return "SHORT", "bearish_dip_default", f"default_short: bullish={bullish_ok} bearish={bearish_ok}"
 
         return None, "skip", "neutral_htf_no_resolver"
 
@@ -1606,24 +1599,19 @@ class SolMacroStrategy:
                 _resolved_side, _resolved_source, _resolved_detail = (
                     self._resolve_allowed_side_with_ltf_overrides(ta, primary_htf_bias)
                 )
-                if _resolved_side is None:
+                # Additive-only resolver: side is never None for BULLISH/BEARISH inputs.
+                # Defaults match legacy behavior; only the exception path can flip side.
+                if _resolved_side and _resolved_side != allowed_side:
                     logger.info(
-                        "%s: LTF resolver skipped %s macro — %s",
-                        _brand,
-                        primary_htf_bias,
-                        _resolved_detail,
-                    )
-                    return []
-                if _resolved_side != allowed_side or _resolved_source != "primary_htf":
-                    logger.info(
-                        "%s: LTF resolver → %s (%s) — %s",
+                        "%s: LTF resolver flipped to exception → %s (%s) — %s",
                         _brand,
                         _resolved_side,
                         _resolved_source,
                         _resolved_detail,
                     )
-                allowed_side = _resolved_side
-                side_source = _resolved_source
+                if _resolved_side is not None:
+                    allowed_side = _resolved_side
+                    side_source = _resolved_source
             elif primary_htf_bias == "BULLISH" and self.buy_no_ltf_override_enabled:
                 # Legacy path retained for back-compat when only buy_no flag is on.
                 _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
