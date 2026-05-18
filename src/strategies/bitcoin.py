@@ -38,7 +38,10 @@ from pydantic import BaseModel, Field
 
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
-from src.analysis.rejected_candidate_log import log_rejected_candidate
+from src.analysis.rejected_candidate_log import (
+    build_threshold_probe_variants,
+    log_rejected_candidate,
+)
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
@@ -1644,12 +1647,28 @@ class BitcoinStrategy:
                             f"Give your independent assessment — BUY_YES, BUY_NO, or HOLD.\n"
                             f"\n=== MARKET ===\n{format_market_metadata(market)}"
                         )
+                        ai_lane_id = str(
+                            build_lane_metadata(
+                                strategy="bitcoin",
+                                window_size="15m" if "15m" in (market.question or "").lower() else ("5m" if "5m" in (market.question or "").lower() else "unknown"),
+                                action=action,
+                                direction=direction,
+                                entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                                ai_used=True,
+                                reason="ai_confirm",
+                                signal_reason="ai_confirm",
+                                htf_bias=htf_bias,
+                            ).get("lane_id")
+                            or ""
+                        )
                         ai_analysis = await self._analyze_market_with_timeout(
                             market_question=market.question,
                             market_description=ai_context,
                             current_yes_price=yes_price,
                             market_id=market.id,
                             strategy_hint="bitcoin",
+                            lane_id=ai_lane_id,
+                            quant_action=action,
                         )
                         ai_calls += 1
                         ai_used = True
@@ -1701,6 +1720,7 @@ class BitcoinStrategy:
                                     current_yes_price=yes_price,
                                     market_id=market.id,
                                     strategy_hint="bitcoin",
+                                    lane_id=ai_lane_id,
                                     marginal_recommendation=str(ai_analysis.recommendation),
                                     quant_action=action,
                                     quant_edge=edge,
@@ -1749,12 +1769,28 @@ class BitcoinStrategy:
                         f"assessment for this market? Reply BUY_YES, BUY_NO, or HOLD.\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
+                    ai_lane_id = str(
+                        build_lane_metadata(
+                            strategy="bitcoin",
+                            window_size="15m" if "15m" in (market.question or "").lower() else ("5m" if "5m" in (market.question or "").lower() else "unknown"),
+                            action=action,
+                            direction=direction,
+                            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                            ai_used=True,
+                            reason="ai_only",
+                            signal_reason="ai_only",
+                            htf_bias=htf_bias,
+                        ).get("lane_id")
+                        or ""
+                    )
                     ai_analysis = await self._analyze_market_with_timeout(
                         market_question=market.question,
                         market_description=ai_context,
                         current_yes_price=yes_price,
                         market_id=market.id,
                         strategy_hint="bitcoin",
+                        lane_id=ai_lane_id,
+                        quant_action=action,
                     )
                     ai_calls += 1
                     ai_used = True
@@ -1800,6 +1836,7 @@ class BitcoinStrategy:
                                 current_yes_price=yes_price,
                                 market_id=market.id,
                                 strategy_hint="bitcoin",
+                                lane_id=ai_lane_id,
                                 marginal_recommendation=str(ai_analysis.recommendation),
                                 quant_action=action,
                                 quant_edge=edge,
@@ -2047,6 +2084,31 @@ class BitcoinStrategy:
             _sample("edge", edge)
             if edge < effective_min_edge:
                 _bump_skip("lane_min_edge")
+                log_rejected_candidate(
+                    strategy=self._signal_strategy_name,
+                    window=_updown_tf if is_updown else "15m",
+                    side=allowed_side,
+                    action=action,
+                    reason="lane_min_edge",
+                    market=market,
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=htf_bias,
+                    context={
+                        "edge": round(float(edge), 6),
+                        "effective_min_edge": round(float(effective_min_edge), 6),
+                        "raw_est_prob": round(float(raw_est_prob), 6),
+                        "estimated_prob": round(float(estimated_prob), 6),
+                        "confidence": round(float(confidence), 6),
+                        "side_source": side_source,
+                    },
+                    probe_variants=build_threshold_probe_variants(
+                        metric_name="min_edge",
+                        observed_value=float(edge),
+                        baseline_threshold=float(effective_min_edge),
+                    ),
+                    policy_version="lane_min_edge_v1",
+                )
                 if action == "BUY_NO":
                     _record_buy_no_skip(
                         market=market,

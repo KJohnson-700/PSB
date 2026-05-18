@@ -79,7 +79,10 @@ from src.analysis.btc_1h_regime import (
     DEFAULT_SIZE_MULT,
 )
 from src.analysis.lane_identity import build_lane_metadata
-from src.analysis.rejected_candidate_log import log_rejected_candidate
+from src.analysis.rejected_candidate_log import (
+    build_threshold_probe_variants,
+    log_rejected_candidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2638,12 +2641,30 @@ class SolMacroStrategy:
                         f"Should we take this {action} trade, or HOLD?\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
+                    ai_lane_id = str(
+                        build_lane_metadata(
+                            strategy=self._signal_strategy_name,
+                            window_size=_updown_tf if is_updown else "15m",
+                            action=action,
+                            direction=direction,
+                            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                            ai_used=True,
+                            reason="ai_decision",
+                            signal_reason="ai_decision",
+                            htf_bias=btc_htf_bias,
+                            primary_htf_bias=primary_htf_bias,
+                            alt_htf_bias=macro_trend,
+                            btc_1h_regime=btc_1h_regime,
+                        ).get("lane_id")
+                        or ""
+                    )
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context,
                         current_yes_price=yes_price,
                         market_id=market.id,
                         strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
                         quant_action=action,
                         quant_edge=edge,
                         quant_confidence=confidence,
@@ -2720,7 +2741,8 @@ class SolMacroStrategy:
                                 current_yes_price=yes_price,
                                 market_id=market.id,
                                 strategy_hint=self._signal_strategy_name,
-                                    marginal_recommendation=str(ai_decision.action),
+                                lane_id=ai_lane_id,
+                                marginal_recommendation=str(ai_decision.action),
                                 quant_action=action,
                                 quant_edge=edge,
                                 quant_threshold=(
@@ -2871,12 +2893,30 @@ class SolMacroStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
+                ai_lane_id = str(
+                    build_lane_metadata(
+                        strategy=self._signal_strategy_name,
+                        window_size=_win,
+                        action=action,
+                        direction=direction,
+                        entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                        ai_used=True,
+                        reason="ai_decision",
+                        signal_reason="ai_decision",
+                        htf_bias=btc_htf_bias,
+                        primary_htf_bias=primary_htf_bias,
+                        alt_htf_bias=macro_trend,
+                        btc_1h_regime=btc_1h_regime,
+                    ).get("lane_id")
+                    or ""
+                )
                 ai_decision = await self.ai_agent.evaluate_trade_decision(
                     market_question=market.question,
                     market_description=ai_context2,
                     current_yes_price=yes_price,
                     market_id=market.id,
                     strategy_hint=self._signal_strategy_name,
+                    lane_id=ai_lane_id,
                     quant_action=action,
                     quant_edge=edge,
                     quant_confidence=confidence,
@@ -2915,6 +2955,7 @@ class SolMacroStrategy:
                                     current_yes_price=yes_price,
                                     market_id=market.id,
                                     strategy_hint=self._signal_strategy_name,
+                                    lane_id=ai_lane_id,
                                     marginal_recommendation=str(ai_decision.action),
                                     quant_action=action,
                                     quant_edge=edge,
@@ -2956,6 +2997,32 @@ class SolMacroStrategy:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
                 _bump_skip("lane_min_edge")
+                log_rejected_candidate(
+                    strategy=self._signal_strategy_name,
+                    window=_updown_tf if is_updown else "15m",
+                    side=allowed_side,
+                    action=action,
+                    reason="lane_min_edge",
+                    market=market,
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "edge": round(float(edge), 6),
+                        "effective_min_edge": round(float(effective_min_edge), 6),
+                        "raw_est_prob": round(float(raw_est_prob), 6),
+                        "estimated_prob": round(float(estimated_prob), 6),
+                        "confidence": round(float(confidence), 6),
+                        "side_source": side_source,
+                        "rsi_soft_penalty": round(float(rsi_soft_penalty), 6),
+                    },
+                    probe_variants=build_threshold_probe_variants(
+                        metric_name="min_edge",
+                        observed_value=float(edge),
+                        baseline_threshold=float(effective_min_edge),
+                    ),
+                    policy_version="lane_min_edge_v1",
+                )
                 if action == "BUY_NO":
                     _skip_reason = (
                         "edge_after_penalty_below_threshold"
@@ -3066,12 +3133,31 @@ class SolMacroStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
+                    ai_lane_id = str(
+                        build_lane_metadata(
+                            strategy=self._signal_strategy_name,
+                            window_size=_win,
+                            action=action,
+                            direction=direction,
+                            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                            side_source=_updown_lane,
+                            ai_used=True,
+                            reason="ai_decision",
+                            signal_reason=f"ai_decision_{_updown_lane}",
+                            htf_bias=btc_htf_bias,
+                            primary_htf_bias=primary_htf_bias,
+                            alt_htf_bias=macro_trend,
+                            btc_1h_regime=btc_1h_regime,
+                        ).get("lane_id")
+                        or ""
+                    )
                     ai_decision = await self.ai_agent.evaluate_trade_decision(
                         market_question=market.question,
                         market_description=ai_context3,
                         current_yes_price=yes_price,
                         market_id=market.id,
                         strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
                         quant_action=action,
                         quant_edge=edge,
                         quant_confidence=confidence,

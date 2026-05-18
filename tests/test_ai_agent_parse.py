@@ -3,6 +3,7 @@
 import pytest
 
 from datetime import datetime
+import json
 
 from src.analysis.ai_agent import AIAgent, AIAnalysis, AIResponseValidationError
 from tests.async_helpers import run_async
@@ -80,6 +81,100 @@ def test_short_window_cache_ttl_overrides_legacy_default() -> None:
     assert ag._cache_ttl_for_market("Bitcoin Up or Down 15m", "bitcoin") == 180
     assert ag._cache_ttl_for_market("Ethereum Up or Down 5m", "eth_macro") == 60
     assert ag._cache_ttl_for_market("Will BTC hit $120k?", "bitcoin") == 600
+
+
+def test_cache_key_includes_lane_id() -> None:
+    ag = _agent()
+    k1 = ag._cache_key("m1", "bitcoin", "bitcoin|15m|down|bearish|ai_assisted")
+    k2 = ag._cache_key("m1", "bitcoin", "bitcoin|15m|up|bullish|ai_assisted")
+    assert k1 != k2
+
+
+def test_lane_feedback_context_includes_prompt_version_and_bucket_stats(tmp_path) -> None:
+    trades = tmp_path / "trades.jsonl"
+    trades.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "strategy": "bitcoin",
+                        "window": "15m",
+                        "side": "BUY_NO",
+                        "lane_id": "bitcoin|15m|down|bearish|ai_assisted",
+                        "stated_est_prob": 0.40,
+                        "win": False,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "strategy": "bitcoin",
+                        "window": "15m",
+                        "side": "BUY_NO",
+                        "lane_id": "bitcoin|15m|down|bearish|ai_assisted",
+                        "stated_est_prob": 0.35,
+                        "win": True,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    posteriors = tmp_path / "lane_posteriors.json"
+    posteriors.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lanes": {
+                    "bitcoin|15m|down|bearish|ai_assisted": {
+                        "n": 12,
+                        "alpha_ewma": 0.85,
+                        "beta_a": 6.0,
+                        "beta_b": 8.0,
+                        "last_updated": "2026-05-17T00:00:00Z",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rejected = tmp_path / "rejected_candidates_settled.jsonl"
+    rejected.write_text(
+        json.dumps(
+            {
+                "strategy": "bitcoin",
+                "window": "15m",
+                "action": "BUY_NO",
+                "win": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [],
+                "prompt_version": "lane-feedback-test",
+                "lane_feedback_min_samples": 1,
+                "trades_log_path": str(trades),
+                "lane_posteriors_path": str(posteriors),
+                "rejected_settled_path": str(rejected),
+            }
+        }
+    )
+
+    text = ag._build_lane_feedback_context(
+        strategy_hint="bitcoin",
+        lane_id="bitcoin|15m|down|bearish|ai_assisted",
+        quant_action="BUY_NO",
+    )
+
+    assert "lane-feedback-test" in text
+    assert "bitcoin 15m BUY_NO" in text
+    assert "too optimistic historically" in text
+    assert "Rejected sibling candidates" in text
 
 
 def test_research_narrative_config_helpers() -> None:
@@ -297,6 +392,94 @@ def test_run_shadow_pipeline_three_stages_fake() -> None:
     assert out.get("ok") is True
     assert out.get("marginal_mismatch") is True
     assert out.get("portfolio_action") == "BUY_NO"
+
+
+def test_run_shadow_pipeline_logs_prompt_policy_and_feature_hash(
+    tmp_path, monkeypatch
+) -> None:
+    from src.analysis import ai_agent as ai_agent_mod
+
+    shadow_log = tmp_path / "shadow_pipeline.jsonl"
+    monkeypatch.setattr(ai_agent_mod, "SHADOW_PIPELINE_LOG_FILE", shadow_log)
+
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [
+                    {
+                        "name": "fake_provider",
+                        "type": "fake",
+                        "model": "fake-model",
+                        "api_key_secret": "FAKE_KEY",
+                    }
+                ],
+                "prompt_version": "prompt-v-test",
+                "policy_version": "policy-v-test",
+                "shadow_pipeline": {"enabled": True, "log_jsonl": True},
+            }
+        }
+    )
+    ag.set_api_keys({"FAKE_KEY": "token"})
+
+    async def _fake_provider(
+        prompt: str,
+        market_id: str,
+        model: str,
+        api_key: str,
+        provider_config: dict,
+        anchor_yes_price: float = 0.0,
+        response_parser=None,
+        system_prompt=None,
+    ):
+        assert response_parser is not None
+        if system_prompt == ag.RESEARCH_SYSTEM_PROMPT:
+            payload = (
+                '{"market":"Q","recommendation":"BULLISH","rationale":"r",'
+                '"strategic_actions":["a"],"confidence":0.7}'
+            )
+        elif system_prompt == ag.TRADER_SHADOW_SYSTEM_PROMPT:
+            payload = (
+                '{"action":"BUY_YES","reasoning":"t","entry_price":0.5,'
+                '"stop_loss":null,"position_sizing":0.1,"max_loss_acceptable":null}'
+            )
+        elif system_prompt == ag.PORTFOLIO_SHADOW_SYSTEM_PROMPT:
+            payload = (
+                '{"rating":"BULLISH","action":"BUY_YES","executive_summary":"e",'
+                '"investment_horizon":"15m","position_size":0.1,"entry_price":0.5,'
+                '"stop_loss":null,"metadata":{}}'
+            )
+        else:
+            raise AssertionError("unexpected system prompt")
+        return response_parser(payload, market_id, anchor_yes_price)
+
+    setattr(ag, "_analyze_with_fake", _fake_provider)
+    out = run_async(
+        ag.run_shadow_pipeline(
+            market_question="Q",
+            market_description="D",
+            current_yes_price=0.48,
+            market_id="m-shadow-log",
+            strategy_hint="eth_macro",
+            lane_id="eth_macro|15m|down|bearish|marginal",
+            marginal_recommendation="BUY_YES",
+            quant_action="BUY_YES",
+            quant_edge=0.06,
+            quant_threshold=0.09,
+        )
+    )
+
+    assert out is not None
+    assert out["prompt_version"] == "prompt-v-test"
+    assert out["policy_version"] == "policy-v-test"
+    assert out["feature_hash"]
+
+    rows = shadow_log.read_text(encoding="utf-8").strip().splitlines()
+    assert len(rows) == 1
+    payload = json.loads(rows[0])
+    assert payload["prompt_version"] == "prompt-v-test"
+    assert payload["policy_version"] == "policy-v-test"
+    assert payload["feature_hash"] == out["feature_hash"]
 
 
 def test_ai_agent_accepts_full_root_config_or_ai_section_only() -> None:

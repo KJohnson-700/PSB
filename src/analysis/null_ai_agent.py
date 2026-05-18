@@ -11,6 +11,24 @@ class NullAIAgent:
     def is_available(self) -> bool:
         return False
 
+    def research_narrative_enabled(self) -> bool:
+        return False
+
+    def research_narrative_max_calls_per_scan(self) -> int:
+        return 0
+
+    def research_narrative_min_confidence(self) -> float:
+        return 1.0
+
+    def shadow_pipeline_enabled(self) -> bool:
+        return False
+
+    def shadow_pipeline_max_calls_per_scan(self) -> int:
+        return 0
+
+    def shadow_pipeline_min_confidence(self) -> float:
+        return 1.0
+
     async def analyze_market(
         self,
         market_question: str,

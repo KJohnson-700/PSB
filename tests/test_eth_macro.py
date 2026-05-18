@@ -78,6 +78,16 @@ def test_eth_1h_follow_score_prefers_real_hourly_alignment():
     assert "ETH1h against" in reasons_against
 
 
+def test_eth_15m_follow_threshold_can_relax_short_lane_only():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["eth_follow_15m_min_adj"] = 0.04
+    cfg["strategies"]["eth_macro"]["eth_follow_15m_min_adj_short"] = 0.03
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strat._eth_follow_15m_required_adj("LONG") == 0.04
+    assert strat._eth_follow_15m_required_adj("SHORT") == 0.03
+
+
 def test_eth_rsi_soft_penalty_buy_no_when_oversold_not_hard_block():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
     hard, delta = strat._resolve_rsi_gate("BUY_NO", 35.0)

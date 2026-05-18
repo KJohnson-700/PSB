@@ -8,6 +8,35 @@
 
 ---
 
+## 2026-05-17 — Settled ghost lane/gate report for missed-EV vs protected-loss ranking
+
+**`tools/ghost_gate_report.py`:** Added a read-only operator report over `data/calibration/rejected_candidates_settled.jsonl`. It summarizes settled ghost outcomes at three levels:
+- lane-level ghost calibration
+- gate-level rankings (`strategy|window|action|reason`)
+- probe-variant sensitivity buckets when newer rows contain `probe_variants`
+
+The economics are split explicitly into **`missed_ev_pct`** (positive realized returns blocked by the gate) and **`protected_loss_pct`** (negative realized returns avoided by the gate), plus **`net_gate_value_pct = protected_loss_pct - missed_ev_pct`** so a positive number means the gate helped overall and a negative number means it likely blocked more value than it saved.
+
+**`tests/test_ghost_gate_report.py`:** Added coverage for lane/gate aggregation and probe-variant aggregation semantics.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ghost_gate_report.py tests/test_ghost_calibration.py -q` passed. The tool also ran successfully against the live settled file (`22324` rows at run time).
+
+---
+
+## 2026-05-17 — Ghost probes + shadow lineage + ETH 15m short-only weak-confirm relaxation
+
+**`src/analysis/rejected_candidate_log.py`, `src/analysis/ghost_calibration.py`:** Extended rejected-candidate rows with additive probe telemetry for threshold counterfactuals (`probe_variants`) plus optional `policy_version` / `feature_hash`, and preserved those fields into the settled ghost ledger. This closes the main observability gap for rejected trades: lane/gate rejects can now record nearby threshold relax/tighten outcomes instead of only the raw blocked snapshot.
+
+**`src/strategies/bitcoin.py`, `src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`:** Started logging `lane_min_edge` rejects into the ghost dataset with probe variants keyed off the live `effective_min_edge` and actual edge at the decision point. ETH also now supports side-specific `eth_follow_15m_min_adj_{long,short}` thresholds; config sets only `eth_follow_15m_min_adj_short: 0.03`, leaving the global/base 15m confirm bar at `0.04`. That is an intentional narrow relaxation for the ghost-identified ETH 15m short weak-confirm lane, not a global widening.
+
+**`src/analysis/ai_agent.py`, `src/analysis/null_ai_agent.py`, `src/backtest/backtest_ai.py`, `config/settings.yaml`:** Shadow pipeline outputs now carry explicit `prompt_version`, `policy_version`, and deterministic `feature_hash`. The config now pins `ai.prompt_version` / `ai.policy_version`, and the null/backtest AI shims were kept interface-compatible with the live agent after the new arguments/helper methods landed.
+
+**Tests:** Added coverage for shadow log lineage, ETH short-lane threshold override, and null-AI helper compatibility; updated the backtest AI proxy signature for parity with live AI. Verification passed:
+- `.venv/bin/python -m pytest tests/test_ai_agent_parse.py tests/test_eth_macro.py tests/test_strategies.py tests/test_ghost_calibration.py -q`
+- `.venv/bin/python -m pytest tests/test_bitcoin.py tests/test_sol_macro.py -q`
+
+---
+
 ## 2026-05-17 — Alts: 4H MACD histogram-slope override (additive, default-off)
 
 Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — `disable_buy_no_counter_trend` gate firing on bullish HTF + 4H MACD histogram declining) onto the alt four-path resolver as an **additive** firing path. Symmetric mirror on the LONG side for the BEAR→LONG exception. Uses **alt-native** 4H MACD (per the "alts are not decided by BTC" rule), not BTC's.
@@ -96,6 +125,18 @@ Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — 
 **Out of scope:** `bitcoin.py` rally logic (handoff carve-out); paper-vs-backtest comparison (separate skill).
 
 **Commits:** `0c91999` (sol_macro), `ca4ec48` (eth_macro), `5e4f018` (updown_engine).
+
+---
+
+## 2026-05-17 — Lane-specific AI decision feedback and cache isolation
+
+**`src/analysis/ai_agent.py`:** Added lane-aware prompt feedback for the live AI decision path. The AI prompt can now include exact-lane posterior stats from `lane_posteriors.json`, broader lane-family calibration from `trades.jsonl`, and rejected-candidate sibling win-rate from `rejected_candidates_settled.jsonl`. Added `prompt_version` tagging to marginal/shadow logs, plus lane-specific cache keys so different lanes in the same strategy no longer reuse one cached AI response.
+
+**`src/strategies/bitcoin.py`, `src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`:** Threaded `lane_id` into AI decision/shadow calls so BTC/SOL/ETH AI gating is no longer strategy-only; the live AI layer now receives lane-specific context when evaluating marginal/enforced trades.
+
+**`tests/test_ai_agent_parse.py`:** Added regression coverage for lane-specific cache keys and lane-feedback prompt context.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ai_agent_parse.py tests/test_ai_preentry_veto.py -q` passed (`28 passed`). `.venv/bin/python -m py_compile src/analysis/ai_agent.py src/strategies/bitcoin.py src/strategies/sol_macro.py src/strategies/eth_macro.py` passed.
 
 ---
 

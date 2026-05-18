@@ -244,6 +244,9 @@ def settle_rejected_candidates(
                 "est_prob_up": rec.get("est_prob_up"),
                 "htf_bias": rec.get("htf_bias"),
                 "context": rec.get("context", {}),
+                "probe_variants": rec.get("probe_variants", []),
+                "policy_version": rec.get("policy_version"),
+                "feature_hash": rec.get("feature_hash"),
             }
         )
         summary["newly_settled"] += 1

@@ -18,6 +18,7 @@ For detailed instructions on how to add or configure AI providers, please see:
 /docs/AI_PROVIDER_INTEGRATION.md
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -64,12 +65,20 @@ from src.ai.schema import (
 
 logger = logging.getLogger(__name__)
 
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 AI_PIPELINE_LOG_DIR = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "ai_pipeline"
+    REPO_ROOT / "data" / "logs" / "ai_pipeline"
 )
 MARGINAL_LOG_FILE = AI_PIPELINE_LOG_DIR / "marginal_analysis.jsonl"
 RESEARCH_LOG_FILE = AI_PIPELINE_LOG_DIR / "research_plans.jsonl"
 SHADOW_PIPELINE_LOG_FILE = AI_PIPELINE_LOG_DIR / "shadow_pipeline.jsonl"
+DEFAULT_TRADES_LOG_FILE = REPO_ROOT / "data" / "calibration" / "trades.jsonl"
+DEFAULT_LANE_POSTERIORS_FILE = REPO_ROOT / "data" / "calibration" / "lane_posteriors.json"
+DEFAULT_REJECTED_SETTLED_FILE = (
+    REPO_ROOT / "data" / "calibration" / "rejected_candidates_settled.jsonl"
+)
+DEFAULT_PROMPT_VERSION = "lane-feedback-v1"
+DEFAULT_POLICY_VERSION = "decision-layer-v1"
 
 
 class AIResponseValidationError(ValueError):
@@ -232,6 +241,25 @@ OUTPUT (machine-parseable — follow exactly):
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
+        self.prompt_version = str(
+            self.config.get("prompt_version", DEFAULT_PROMPT_VERSION)
+        ).strip() or DEFAULT_PROMPT_VERSION
+        self.policy_version = str(
+            self.config.get("policy_version", DEFAULT_POLICY_VERSION)
+        ).strip() or DEFAULT_POLICY_VERSION
+        self.lane_feedback_min_samples = max(
+            1, int(self.config.get("lane_feedback_min_samples", 8) or 8)
+        )
+        self._trades_log_path = Path(
+            self.config.get("trades_log_path") or DEFAULT_TRADES_LOG_FILE
+        )
+        self._lane_posteriors_path = Path(
+            self.config.get("lane_posteriors_path") or DEFAULT_LANE_POSTERIORS_FILE
+        )
+        self._rejected_settled_path = Path(
+            self.config.get("rejected_settled_path") or DEFAULT_REJECTED_SETTLED_FILE
+        )
+        self._file_cache: Dict[str, tuple[tuple[int, int], Any]] = {}
         # Round-robin first model for OpenRouter free tier (spread per-model limits).
         self._openrouter_model_rr: Dict[str, int] = {}
 
@@ -259,6 +287,24 @@ OUTPUT (machine-parseable — follow exactly):
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
+        self.prompt_version = str(
+            self.config.get("prompt_version", DEFAULT_PROMPT_VERSION)
+        ).strip() or DEFAULT_PROMPT_VERSION
+        self.policy_version = str(
+            self.config.get("policy_version", DEFAULT_POLICY_VERSION)
+        ).strip() or DEFAULT_POLICY_VERSION
+        self.lane_feedback_min_samples = max(
+            1, int(self.config.get("lane_feedback_min_samples", 8) or 8)
+        )
+        self._trades_log_path = Path(
+            self.config.get("trades_log_path") or DEFAULT_TRADES_LOG_FILE
+        )
+        self._lane_posteriors_path = Path(
+            self.config.get("lane_posteriors_path") or DEFAULT_LANE_POSTERIORS_FILE
+        )
+        self._rejected_settled_path = Path(
+            self.config.get("rejected_settled_path") or DEFAULT_REJECTED_SETTLED_FILE
+        )
 
     def is_available(self) -> bool:
         """
@@ -472,17 +518,54 @@ OUTPUT (machine-parseable — follow exactly):
         except Exception as e:
             logger.debug("AI pipeline log write failed %s: %s", path, e)
 
+    @staticmethod
+    def _stable_feature_hash(payload: Dict[str, Any]) -> str:
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+    def _build_shadow_feature_hash(
+        self,
+        *,
+        market_id: str,
+        strategy_hint: str,
+        lane_id: str,
+        quant_action: str,
+        quant_edge: Optional[float],
+        quant_threshold: Optional[float],
+        current_yes_price: float,
+        marginal_recommendation: str,
+    ) -> str:
+        return self._stable_feature_hash(
+            {
+                "market_id": str(market_id or ""),
+                "strategy_hint": str(strategy_hint or ""),
+                "lane_id": str(lane_id or ""),
+                "quant_action": str(quant_action or ""),
+                "quant_edge": round(float(quant_edge), 6) if quant_edge is not None else None,
+                "quant_threshold": round(float(quant_threshold), 6)
+                if quant_threshold is not None
+                else None,
+                "current_yes_price": round(float(current_yes_price), 6),
+                "marginal_recommendation": str(marginal_recommendation or ""),
+                "prompt_version": self.prompt_version,
+                "policy_version": self.policy_version,
+            }
+        )
+
     def _log_marginal_analysis(
         self,
         analysis: AIAnalysis,
         *,
         market_question: str,
         strategy_hint: str,
+        lane_id: str = "",
     ) -> None:
         if not self.structured_log:
             return
         payload = {
             "ts_utc": datetime.utcnow().isoformat() + "Z",
+            "prompt_version": self.prompt_version,
+            "lane_id": lane_id,
             "market_id": analysis.market_id,
             "market_question": market_question,
             "strategy_hint": strategy_hint,
@@ -506,6 +589,7 @@ OUTPUT (machine-parseable — follow exactly):
         current_yes_price: float,
         market_id: str,
         strategy_hint: str = "",
+        lane_id: str = "",
         quant_action: str = "",
         quant_edge: Optional[float] = None,
         quant_threshold: Optional[float] = None,
@@ -536,12 +620,18 @@ OUTPUT (machine-parseable — follow exactly):
             "Return research JSON keys: market,recommendation,rationale,strategic_actions,confidence."
         )
         research_context = "\n".join(context_parts)
+        lane_feedback = self._build_lane_feedback_context(
+            strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            quant_action=quant_action,
+        )
 
         user_prompt = self._build_prompt(
             market_question=f"Research note: {market_question}",
             market_description=research_context,
             current_yes_price=current_yes_price,
             news_context="",
+            lane_feedback=lane_feedback,
         )
         await self._rate_limit()
 
@@ -812,6 +902,7 @@ OUTPUT (machine-parseable — follow exactly):
         current_yes_price: float,
         market_id: str,
         strategy_hint: str = "",
+        lane_id: str = "",
         marginal_recommendation: str = "",
         quant_action: str = "",
         quant_edge: Optional[float] = None,
@@ -829,6 +920,11 @@ OUTPUT (machine-parseable — follow exactly):
         provider_chain = self._shadow_provider_chain()
         if not provider_chain:
             return None
+        lane_feedback = self._build_lane_feedback_context(
+            strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            quant_action=quant_action,
+        )
 
         research_plan = existing_research
         if research_plan is None:
@@ -854,6 +950,7 @@ OUTPUT (machine-parseable — follow exactly):
                 market_description=research_context,
                 current_yes_price=current_yes_price,
                 news_context="",
+                lane_feedback=lane_feedback,
             )
             rparser: Callable[[str, str, float], ResearchPlan] = (
                 lambda content, mid, _a: self._parse_research_response(
@@ -888,6 +985,7 @@ OUTPUT (machine-parseable — follow exactly):
             market_description=trader_context,
             current_yes_price=current_yes_price,
             news_context="",
+            lane_feedback=lane_feedback,
         )
         tparser: Callable[[str, str, float], TraderProposal] = (
             lambda content, mid, _a: self._parse_trader_response(content, mid)
@@ -920,6 +1018,7 @@ OUTPUT (machine-parseable — follow exactly):
             market_description=port_context,
             current_yes_price=current_yes_price,
             news_context="",
+            lane_feedback=lane_feedback,
         )
         pparser: Callable[[str, str, float], PortfolioDecision] = (
             lambda content, mid, _a: self._parse_portfolio_shadow_response(content, mid)
@@ -956,8 +1055,22 @@ OUTPUT (machine-parseable — follow exactly):
             or 0.0
         )
         if bool(self.shadow_pipeline_cfg.get("log_jsonl", True)):
+            feature_hash = self._build_shadow_feature_hash(
+                market_id=market_id,
+                strategy_hint=strategy_hint,
+                lane_id=lane_id,
+                quant_action=quant_action,
+                quant_edge=quant_edge,
+                quant_threshold=quant_threshold,
+                current_yes_price=current_yes_price,
+                marginal_recommendation=marginal_recommendation,
+            )
             payload = {
                 "ts_utc": datetime.utcnow().isoformat() + "Z",
+                "prompt_version": self.prompt_version,
+                "policy_version": self.policy_version,
+                "feature_hash": feature_hash,
+                "lane_id": lane_id,
                 "market_id": market_id,
                 "strategy": strategy_hint,
                 "strategy_hint": strategy_hint,
@@ -996,6 +1109,18 @@ OUTPUT (machine-parseable — follow exactly):
             "marginal_mismatch": mismatch,
             "portfolio_action": decision.action.value,
             "shadow_confidence": shadow_confidence,
+            "prompt_version": self.prompt_version,
+            "policy_version": self.policy_version,
+            "feature_hash": self._build_shadow_feature_hash(
+                market_id=market_id,
+                strategy_hint=strategy_hint,
+                lane_id=lane_id,
+                quant_action=quant_action,
+                quant_edge=quant_edge,
+                quant_threshold=quant_threshold,
+                current_yes_price=current_yes_price,
+                marginal_recommendation=marginal_recommendation,
+            ),
         }
 
     async def evaluate_trade_decision(
@@ -1006,6 +1131,7 @@ OUTPUT (machine-parseable — follow exactly):
         current_yes_price: float,
         market_id: str,
         strategy_hint: str,
+        lane_id: str = "",
         quant_action: str,
         quant_edge: float,
         quant_confidence: float,
@@ -1038,6 +1164,7 @@ OUTPUT (machine-parseable — follow exactly):
                 source="unavailable",
             )
 
+        action = str(quant_action or "").strip().upper()
         min_confidence = self.decision_layer_min_confidence()
         analysis = await self.analyze_market(
             market_question=market_question,
@@ -1045,12 +1172,13 @@ OUTPUT (machine-parseable — follow exactly):
             current_yes_price=current_yes_price,
             market_id=market_id,
             strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            quant_action=action,
         )
         if analysis is None:
             return AIDecision(False, "SKIP", 0.0, None, None, "direct_ai_failed", "direct")
 
         rec = str(analysis.recommendation or "").strip().upper()
-        action = str(quant_action or "").strip().upper()
         if rec == "HOLD":
             return AIDecision(
                 False,
@@ -1114,6 +1242,7 @@ OUTPUT (machine-parseable — follow exactly):
                 current_yes_price=current_yes_price,
                 market_id=market_id,
                 strategy_hint=strategy_hint,
+                lane_id=lane_id,
                 marginal_recommendation=rec,
                 quant_action=action,
                 quant_edge=quant_edge,
@@ -1423,9 +1552,193 @@ OUTPUT (machine-parseable — follow exactly):
                 f"market={market_id} estimated_probability missing or not a usable number in [0,1]"
             )
 
-    def _cache_key(self, market_id: str, strategy_hint: str = "") -> str:
-        """Cache key includes strategy so the same market gets fresh analysis per strategy."""
-        return f"{market_id}:{strategy_hint}" if strategy_hint else market_id
+    def _cache_key(
+        self,
+        market_id: str,
+        strategy_hint: str = "",
+        lane_id: str = "",
+    ) -> str:
+        """Cache key includes lane so adjacent strategy paths don't collide."""
+        parts = [market_id]
+        if strategy_hint:
+            parts.append(strategy_hint)
+        if lane_id:
+            parts.append(lane_id)
+        return ":".join(parts)
+
+    @staticmethod
+    def _lane_tokens(lane_id: str) -> Dict[str, str]:
+        parts = [p.strip().lower() for p in str(lane_id or "").split("|")]
+        if len(parts) < 3:
+            return {}
+        return {
+            "strategy": parts[0],
+            "window": parts[1],
+            "side": parts[2],
+            "regime": parts[3] if len(parts) > 3 else "",
+            "family": parts[4] if len(parts) > 4 else "",
+        }
+
+    def _read_json_cached(self, path: Path) -> Any:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        key = str(path)
+        sig = (int(stat.st_mtime_ns), int(stat.st_size))
+        cached = self._file_cache.get(key)
+        if cached and cached[0] == sig:
+            return cached[1]
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        self._file_cache[key] = (sig, data)
+        return data
+
+    def _read_jsonl_cached(self, path: Path) -> List[Dict[str, Any]]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return []
+        key = str(path)
+        sig = (int(stat.st_mtime_ns), int(stat.st_size))
+        cached = self._file_cache.get(key)
+        if cached and cached[0] == sig:
+            return list(cached[1])
+        rows: List[Dict[str, Any]] = []
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict):
+                        rows.append(obj)
+        except OSError:
+            return []
+        self._file_cache[key] = (sig, rows)
+        return list(rows)
+
+    def _build_lane_feedback_context(
+        self,
+        *,
+        strategy_hint: str,
+        lane_id: str,
+        quant_action: str = "",
+    ) -> str:
+        lane_id = str(lane_id or "").strip().lower()
+        tokens = self._lane_tokens(lane_id)
+        if not lane_id or not tokens:
+            return ""
+
+        lines = [
+            f"=== LANE FEEDBACK ({self.prompt_version}) ===",
+            f"lane_id={lane_id}",
+            "Treat this as calibration context, not a hard rule. Override it only when current evidence is materially different.",
+        ]
+
+        post_blob = self._read_json_cached(self._lane_posteriors_path) or {}
+        post_lanes = (post_blob.get("lanes") or {}) if isinstance(post_blob, dict) else {}
+        post_entry = post_lanes.get(lane_id) or {}
+        try:
+            exact_n = int(post_entry.get("n") or 0)
+        except (TypeError, ValueError):
+            exact_n = 0
+        try:
+            alpha = float(post_entry.get("alpha_ewma") or 1.0)
+        except (TypeError, ValueError):
+            alpha = 1.0
+        try:
+            beta_a = float(post_entry.get("beta_a") or 2.0)
+            beta_b = float(post_entry.get("beta_b") or 3.0)
+            beta_mean = beta_a / (beta_a + beta_b)
+        except (TypeError, ValueError, ZeroDivisionError):
+            beta_mean = 0.4
+
+        if exact_n >= self.lane_feedback_min_samples:
+            if alpha < 1.0:
+                cal_note = f"historically optimistic by about {(1.0 - alpha) * 100:.1f}% toward 50/50"
+            elif alpha > 1.0:
+                cal_note = f"historically conservative by about {(alpha - 1.0) * 100:.1f}% away from 50/50"
+            else:
+                cal_note = "historically close to neutral calibration"
+            lines.append(
+                f"Exact executed lane: n={exact_n}, posterior_wr={beta_mean * 100:.1f}%, alpha={alpha:.2f} ({cal_note})."
+            )
+        else:
+            lines.append(
+                f"Exact executed lane: only n={exact_n} closed trades; lean more on the broader lane-family sample."
+            )
+
+        trades = self._read_jsonl_cached(self._trades_log_path)
+        bucket_n = 0
+        bucket_wins = 0
+        bucket_prob_sum = 0.0
+        for row in trades:
+            if str(row.get("strategy") or "").strip().lower() != tokens["strategy"]:
+                continue
+            if str(row.get("window") or "").strip().lower() != tokens["window"]:
+                continue
+            row_action = str(row.get("side") or row.get("action") or "").strip().upper()
+            row_side = "down" if row_action == "BUY_NO" else "up"
+            if row_side != tokens["side"]:
+                continue
+            bucket_n += 1
+            if row.get("win") is True:
+                bucket_wins += 1
+            est_prob = row.get("stated_est_prob")
+            try:
+                est_prob_f = float(est_prob)
+                bucket_prob_sum += (1.0 - est_prob_f) if row_action == "BUY_NO" else est_prob_f
+            except (TypeError, ValueError):
+                pass
+
+        action_label = str(quant_action or "").strip().upper() or (
+            "BUY_NO" if tokens["side"] == "down" else "BUY_YES"
+        )
+        if bucket_n >= self.lane_feedback_min_samples:
+            avg_prob = bucket_prob_sum / bucket_n if bucket_n else 0.0
+            realized_wr = bucket_wins / bucket_n if bucket_n else 0.0
+            gap_pp = (avg_prob - realized_wr) * 100.0
+            if gap_pp > 0.5:
+                gap_note = f"your lane-family probabilities have been {gap_pp:.1f}pp too optimistic historically"
+            elif gap_pp < -0.5:
+                gap_note = f"your lane-family probabilities have been {abs(gap_pp):.1f}pp too pessimistic historically"
+            else:
+                gap_note = "your lane-family probabilities have been roughly calibrated historically"
+            lines.append(
+                f"Lane family {tokens['strategy']} {tokens['window']} {action_label}: n={bucket_n}, avg_stated_win_prob={avg_prob * 100:.1f}%, realized_wr={realized_wr * 100:.1f}% ({gap_note})."
+            )
+
+        rejected = self._read_jsonl_cached(self._rejected_settled_path)
+        ghost_n = 0
+        ghost_wins = 0
+        for row in rejected:
+            if str(row.get("strategy") or "").strip().lower() != tokens["strategy"]:
+                continue
+            if str(row.get("window") or "").strip().lower() != tokens["window"]:
+                continue
+            action = str(row.get("action") or "").strip().upper()
+            ghost_side = "down" if action == "BUY_NO" else "up"
+            if ghost_side != tokens["side"]:
+                continue
+            ghost_n += 1
+            if row.get("win") is True:
+                ghost_wins += 1
+        if ghost_n >= self.lane_feedback_min_samples:
+            lines.append(
+                f"Rejected sibling candidates for this lane family: n={ghost_n}, would_be_wr={ghost_wins / ghost_n * 100:.1f}%."
+            )
+
+        lines.append(
+            "If your current estimate disagrees with this history, explain what is different about the present setup."
+        )
+        return "\n".join(lines)
 
     def _cache_ttl_for_market(self, market_question: str, strategy_hint: str = "") -> int:
         """Use shorter TTLs for short-window candle markets where stale AI is costly."""
@@ -1441,6 +1754,7 @@ OUTPUT (machine-parseable — follow exactly):
         market_id: str,
         current_price: float = 0.0,
         strategy_hint: str = "",
+        lane_id: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[AIAnalysis]:
         """Return cached analysis if still fresh and price hasn't moved significantly.
@@ -1449,7 +1763,7 @@ OUTPUT (machine-parseable — follow exactly):
         a significant price move means market sentiment shifted and the old
         analysis is no longer valid.
         """
-        key = self._cache_key(market_id, strategy_hint)
+        key = self._cache_key(market_id, strategy_hint, lane_id)
         ttl = int(ttl or self._cache_ttl)
         if key in self._cache:
             cached_time, cached_result, cached_price = self._cache[key]
@@ -1478,10 +1792,11 @@ OUTPUT (machine-parseable — follow exactly):
         result: AIAnalysis,
         price: float = 0.0,
         strategy_hint: str = "",
+        lane_id: str = "",
         ttl: Optional[int] = None,
     ):
         """Store analysis result in cache with the yes_price at time of caching."""
-        key = self._cache_key(market_id, strategy_hint)
+        key = self._cache_key(market_id, strategy_hint, lane_id)
         self._cache[key] = (time.time(), result, price)
         ttl = int(ttl or self._cache_ttl)
         logger.debug(f"AI CACHE SET: {market_id} price={price:.3f} (size={len(self._cache)}, ttl={ttl}s)")
@@ -1602,6 +1917,8 @@ OUTPUT (machine-parseable — follow exactly):
         market_id: str,
         news_context: str = "",
         strategy_hint: str = "",
+        lane_id: str = "",
+        quant_action: str = "",
     ) -> Optional[AIAnalysis]:
         """
         Analyze a market with caching and rate limiting.
@@ -1621,15 +1938,27 @@ OUTPUT (machine-parseable — follow exactly):
 
         # Check cache first — avoid burning tokens on repeat analysis
         cache_ttl = self._cache_ttl_for_market(market_question, strategy_hint)
-        cached = self._get_cached(market_id, current_yes_price, strategy_hint, ttl=cache_ttl)
+        cached = self._get_cached(
+            market_id,
+            current_yes_price,
+            strategy_hint,
+            lane_id,
+            ttl=cache_ttl,
+        )
         if cached is not None:
             return cached
 
+        lane_feedback = self._build_lane_feedback_context(
+            strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            quant_action=quant_action,
+        )
         user_prompt = self._build_prompt(
             market_question=market_question,
             market_description=market_description,
             current_yes_price=current_yes_price,
-            news_context=news_context
+            news_context=news_context,
+            lane_feedback=lane_feedback,
         )
 
         if self.consensus_enabled:
@@ -1637,11 +1966,19 @@ OUTPUT (machine-parseable — follow exactly):
                 user_prompt, market_id, current_yes_price
             )
             if result:
-                self._set_cache(market_id, result, current_yes_price, strategy_hint, ttl=cache_ttl)
+                self._set_cache(
+                    market_id,
+                    result,
+                    current_yes_price,
+                    strategy_hint,
+                    lane_id,
+                    ttl=cache_ttl,
+                )
                 self._log_marginal_analysis(
                     result,
                     market_question=market_question,
                     strategy_hint=strategy_hint,
+                    lane_id=lane_id,
                 )
             return result
 
@@ -1697,11 +2034,19 @@ OUTPUT (machine-parseable — follow exactly):
                         f"rec={analysis_result.recommendation} conf={analysis_result.confidence_score:.2f} "
                         f"elapsed_ms={elapsed_ms}"
                     )
-                    self._set_cache(market_id, analysis_result, current_yes_price, strategy_hint, ttl=cache_ttl)
+                    self._set_cache(
+                        market_id,
+                        analysis_result,
+                        current_yes_price,
+                        strategy_hint,
+                        lane_id,
+                        ttl=cache_ttl,
+                    )
                     self._log_marginal_analysis(
                         analysis_result,
                         market_question=market_question,
                         strategy_hint=strategy_hint,
+                        lane_id=lane_id,
                     )
                     return analysis_result
 
@@ -1834,7 +2179,8 @@ OUTPUT (machine-parseable — follow exactly):
         market_question: str,
         market_description: str,
         current_yes_price: float,
-        news_context: str
+        news_context: str,
+        lane_feedback: str = "",
     ) -> str:
         """Build the user prompt for the AI"""
         
@@ -1850,7 +2196,9 @@ CURRENT MARKET PRICE: YES = ${current_yes_price:.2f} (implies {current_yes_price
         
         if news_context:
             prompt += f"RECENT NEWS CONTEXT:\n{news_context}\n"
-        
+        if lane_feedback:
+            prompt += f"{lane_feedback}\n\n"
+
         prompt += """
 Based on your analysis, estimate the TRUE probability and recommend a trade.
 Remember: The market price may be wrong due to sentiment, bias, or incomplete information.

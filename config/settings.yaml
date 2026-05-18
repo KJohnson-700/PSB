@@ -242,7 +242,9 @@ lane_management:
 # to ``data/calibration/lane_posteriors.json``.
 lane_calibration:
   enabled: true
-  shadow_mode: true   # observation-only: false makes calibrate() entry-affecting
+  shadow_mode: true        # legacy fallback when per-mode keys below are omitted
+  paper_shadow_mode: true  # paper/dry-run stays observation-only by default
+  live_shadow_mode: false  # live trading uses calibrated probabilities by default
 
 entry_policy:
   defaults:
@@ -782,7 +784,8 @@ strategies:
     btc_follow_5m_requires_impulse: false
     eth_follow_5m_min_adj: 0.02   # lowered from 0.04 — easier 5m entry in grindy tape
     eth_follow_15m_hist_min: 0.02 # lowered from 0.03 (2026-05-06) — 15m starvation; only ETH 15m-exclusive lever
-    eth_follow_15m_min_adj: 0.04  # was 0.05 — slight relax to recover 15m lane without dropping hist_min
+    eth_follow_15m_min_adj: 0.04  # default/base threshold; lane-specific overrides below can relax without global widening
+    eth_follow_15m_min_adj_short: 0.03  # ghost-settled miss signal: reopen only ETH 15m short weak-confirm lane this phase
     oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
     # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
@@ -1221,6 +1224,8 @@ updown_composite:
 # AI CONFIGURATION
 # ============================================
 ai:
+  prompt_version: "lane-feedback-v1"
+  policy_version: "decision-layer-v1"
   # ── Master toggle ──────────────────────────────────────────────────────────
   # Requires non-empty provider_chain + at least one provider key (e.g. MINIMAX_API_KEY in .env).
   enabled: true

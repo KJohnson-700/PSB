@@ -113,6 +113,8 @@ class TestNullAIAgent:
     def test_null_ai_matches_live_call_shape_and_returns_none(self):
         ai = NullAIAgent()
         assert ai.is_available() is False
+        assert ai.research_narrative_enabled() is False
+        assert ai.shadow_pipeline_enabled() is False
         result = run_async(
             ai.analyze_market(
                 "Q",

@@ -37,6 +37,8 @@ class BacktestAIAgent:
         market_id: str,
         news_context: str = "",
         strategy_hint: str = "",
+        lane_id: str = "",
+        quant_action: str = "",
         end_date: Optional[datetime] = None,
         **kwargs,
     ) -> Optional[AIAnalysis]:
@@ -44,7 +46,17 @@ class BacktestAIAgent:
         Return deterministic analysis for backtest.
         This is a lightweight proxy only. It does not attempt to emulate live AI.
         """
-        _ = (market_question, market_description, market_id, news_context, strategy_hint, end_date, kwargs)
+        _ = (
+            market_question,
+            market_description,
+            market_id,
+            news_context,
+            strategy_hint,
+            lane_id,
+            quant_action,
+            end_date,
+            kwargs,
+        )
         proxy_cfg = self.config.get("backtest", {}).get("ai_proxy", {})
         center_band = float(proxy_cfg.get("center_band", 0.04))
         reversion_strength = float(proxy_cfg.get("reversion_strength", 0.35))
