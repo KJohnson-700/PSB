@@ -489,7 +489,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             # momentum in both regimes. Falls back to legacy regime-default + buy_no
             # override when only the buy_no flag is on.
             resolver_active = (
-                self.buy_yes_ltf_override_enabled or self.buy_no_ltf_override_enabled
+                self.buy_yes_ltf_override_enabled
+                or self.buy_no_ltf_override_enabled
+                or self.buy_yes_4h_hist_override_enabled
+                or self.buy_no_4h_hist_override_enabled
             )
             if resolver_active:
                 _resolved_side, _resolved_source, _resolved_detail = (

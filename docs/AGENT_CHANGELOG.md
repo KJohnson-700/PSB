@@ -8,6 +8,38 @@
 
 ---
 
+## 2026-05-17 — Alts: 4H MACD histogram-slope override (additive, default-off)
+
+Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — `disable_buy_no_counter_trend` gate firing on bullish HTF + 4H MACD histogram declining) onto the alt four-path resolver as an **additive** firing path. Symmetric mirror on the LONG side for the BEAR→LONG exception. Uses **alt-native** 4H MACD (per the "alts are not decided by BTC" rule), not BTC's.
+
+**`src/analysis/sol_btc_service.py`:** Added `macd_4h` field to `SOLAnalysis`, fetched native 4H klines for the alt symbol in `calc_sol_indicators()`, computed via the inherited `calc_macd()` helper.
+
+**`src/strategies/sol_macro.py`:** Added two new config flags — `buy_no_4h_hist_override_enabled` and `buy_yes_4h_hist_override_enabled` (both default `false`). Extended `_bearish_dip_ltf_ok` and `_bullish_rally_ltf_ok` with an OR-combined 4H-hist firing path: when the flag is on, alt 4H hist declining (BUY_NO) or rising (BUY_YES) fires the override even if the existing 5m/15m + RSI + BTC-5m gate doesn't confirm. `resolver_active` outer gate updated to include the new flags.
+
+**`src/strategies/eth_macro.py`:** Mirrored `resolver_active` gate; helper overrides inherited from `SolMacroStrategy`.
+
+**`src/backtest/updown_engine.py`:** Replay-path mirror via new `_alt_macd_4h_from_1h(df_1h)` helper (resamples alt 1H to 4H since the replay engine doesn't fetch native 4H for alts). Extended `_buy_no_ltf_override_replay`, `_bullish_rally_ltf_override_replay`, `_resolve_side_with_ltf_overrides_replay` and both call sites to thread `df_1h` and respect the new flags.
+
+**`config/settings.yaml`:** Added the two flags to all four macro blocks (`sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`) defaulting to `false` — opt-in per asset after backtest evidence.
+
+**`tests/test_sol_macro.py`:** 6 new tests covering: flag-off path (does not fire), flag-on with declining/rising 4H hist (fires via 4H path), flag-on with wrong-direction slope (does not fire), end-to-end resolver BULL→SHORT and BEAR→LONG via 4H path.
+
+**Verification:** `pytest tests/test_sol_macro.py tests/test_eth_macro.py tests/test_sol_macro_skip_accounting.py tests/test_updown_backtest_parity.py` → 157 passed (141 prior + 6 new + 10 from existing additions). Empirical SOL 15m backtest comparison blocked by a pre-existing `float(timedelta).total_seconds()` bug at `updown_engine.py:1188` (present on HEAD, unrelated to this change — flagged for separate fix).
+
+**Why default-off:** No tightening; per "don't tweak winners," ship dark and enable per-asset only after evidence the additional firing path is net-positive. Plan: `~/.claude/plans/in-your-opinion-should-parsed-snowflake.md`.
+
+---
+
+## 2026-05-17 — Dashboard: BUY_YES vs BUY_NO session compare (Performance tab)
+
+**`src/dashboard/server.py`:** `GET /api/journal/action_breakdown` — session closed trades split by `BUY_YES` / `BUY_NO` (flat-aware WR, net/avg PnL, `slipping` when both sides have 3+ trades).
+
+**`src/dashboard/index.html`:** Replaced unused Strategy Performance signal metric boxes with **per-strategy lanes** (BTC/SOL/ETH/HYPE/XRP/WX), each showing Buy YES vs Buy NO WR, W/L, and net PnL; session slip banner when both sides have 3+ closes. `dashboard_ui_rev`: `2026-05-17-action-perf-strategy-lanes`.
+
+**Tests:** `tests/test_dashboard_action_breakdown.py`; bundle guard for `action-perf-grid` and no `BTC Signals` in `#strategy-boxes`.
+
+---
+
 ## 2026-05-17 — Handoff: BUY_YES recovery + dual-direction rally logic (plan only, not implemented)
 
 **`docs/HANDOFF_BUY_YES_RALLY_MERGE.md`:** Operator handoff for next agent — targeted fixes (no blind revert to pre–May 9), restore BUY_YES path quality from May 3–8 paper baseline, contain `buy_no_ltf` clash, add symmetric LTF momentum on **both** LONG and SHORT paths in bull and bear. Plan: `.cursor/plans/buy_yes_rally_merge_4b6efcaa.plan.md`.

@@ -285,6 +285,93 @@ def test_bullish_rally_ltf_ok_requires_all_four_conditions():
     assert "rsi<55.0" in reason2
 
 
+def _make_ta_chop_with_4h(hist: float, prev_hist: float) -> SOLTechnicalAnalysis:
+    """Chop tape that fails the 5m/15m/RSI/BTC gates; 4H slope is the only differentiator."""
+    return SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            rsi_14=50.0,
+            macd_15m=MACDResult(histogram=0.01, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.01, histogram_rising=False),
+            macd_4h=MACDResult(
+                histogram=hist,
+                prev_histogram=prev_hist,
+                histogram_rising=(hist > prev_hist),
+            ),
+        ),
+        correlation=BTCSOLCorrelation(btc_move_5m_pct=0.0),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+
+
+def test_4h_hist_override_disabled_by_default_does_not_fire():
+    """Flag default-off: 4H hist declining alone does NOT fire the override."""
+    cfg = _make_config()
+    # Only existing LTF flag on; the new 4H-hist flags default to False.
+    cfg["strategies"]["sol_macro"]["buy_no_ltf_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ok, reason = strategy._bearish_dip_ltf_ok(_make_ta_chop_with_4h(hist=-0.05, prev_hist=0.05))
+    assert ok is False
+    assert "4h_hist" not in reason  # 4H path inactive
+
+
+def test_4h_hist_override_buy_no_fires_when_alt_4h_hist_declining():
+    """Flag-on additive path: chop 5m/15m + 4H hist declining → bearish_dip fires via 4H path."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_4h_hist_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ok, reason = strategy._bearish_dip_ltf_ok(_make_ta_chop_with_4h(hist=-0.05, prev_hist=0.02))
+    assert ok is True
+    assert "4h_hist_override" in reason
+    assert "declining" in reason
+
+
+def test_4h_hist_override_buy_yes_fires_when_alt_4h_hist_rising():
+    """Flag-on symmetric mirror: 4H hist rising → bullish_rally fires via 4H path."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_yes_4h_hist_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ok, reason = strategy._bullish_rally_ltf_ok(_make_ta_chop_with_4h(hist=0.05, prev_hist=-0.02))
+    assert ok is True
+    assert "4h_hist_override" in reason
+    assert "rising" in reason
+
+
+def test_4h_hist_override_buy_no_does_not_fire_when_4h_hist_rising():
+    """Flag-on but 4H slope wrong direction → no fire."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_4h_hist_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    ok, reason = strategy._bearish_dip_ltf_ok(_make_ta_chop_with_4h(hist=0.05, prev_hist=-0.02))
+    assert ok is False
+    assert "4h_hist_not_declining" in reason
+
+
+def test_4h_hist_override_resolver_bull_to_short_exception_via_4h_path():
+    """End-to-end: BULL regime + chop 5m + 4H declining + 4h_hist flag on → SHORT exception."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_no_4h_hist_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_chop_with_4h(hist=-0.05, prev_hist=0.02), "BULLISH"
+    )
+    assert side == "SHORT"
+    assert source == "bearish_dip_exception"
+    assert "4h_hist_override" in detail
+
+
+def test_4h_hist_override_resolver_bear_to_long_exception_via_4h_path():
+    """End-to-end mirror: BEAR regime + chop 5m + 4H rising + 4h_hist flag on → LONG exception."""
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["buy_yes_4h_hist_override_enabled"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    side, source, detail = strategy._resolve_allowed_side_with_ltf_overrides(
+        _make_ta_chop_with_4h(hist=0.05, prev_hist=-0.02), "BEARISH"
+    )
+    assert side == "LONG"
+    assert source == "bullish_rally_exception"
+    assert "4h_hist_override" in detail
+
+
 def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["min_positive_m5_adj_5m"] = 0.04

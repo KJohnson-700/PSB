@@ -529,6 +529,11 @@ strategies:
     buy_yes_ltf_override_enabled: true
     buy_yes_ltf_override_rsi_min: 55.0
     buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    # 4H MACD histogram slope override — additive firing path mirroring
+    # bitcoin.py:1233-1243 counter-trend trigger. Default-off; enable per asset
+    # after backtest evidence the new firing path is net-positive.
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
     use_ai_updown: true          # Re-enabled: lag signal stripped, AI now safe to use on updown
@@ -715,6 +720,11 @@ strategies:
     buy_yes_ltf_override_enabled: true
     buy_yes_ltf_override_rsi_min: 55.0
     buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    # 4H MACD histogram slope override — additive firing path mirroring
+    # bitcoin.py:1233-1243 counter-trend trigger. Default-off; enable per asset
+    # after backtest evidence the new firing path is net-positive.
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
     # ETH side resolution:
     # - btc: keep alt-first side and disable per-market side meddling
     # - hybrid: annotate/confirm only
@@ -916,6 +926,11 @@ strategies:
     buy_yes_ltf_override_enabled: true
     buy_yes_ltf_override_rsi_min: 55.0
     buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    # 4H MACD histogram slope override — additive firing path mirroring
+    # bitcoin.py:1233-1243 counter-trend trigger. Default-off; enable per asset
+    # after backtest evidence the new firing path is net-positive.
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -1086,6 +1101,11 @@ strategies:
     buy_yes_ltf_override_enabled: true
     buy_yes_ltf_override_rsi_min: 55.0
     buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    # 4H MACD histogram slope override — additive firing path mirroring
+    # bitcoin.py:1233-1243 counter-trend trigger. Default-off; enable per asset
+    # after backtest evidence the new firing path is net-positive.
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
     center_price_band: 0.02       # filter near-50/50 entries without BTC catalyst
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true

@@ -104,6 +104,8 @@ class SOLAnalysis:
     ema_50: float = 0.0
     # RSI
     rsi_14: float = 50.0
+    # MACD — 4H for slow-trend histogram slope (alt-native, used by buy_yes/buy_no 4H-hist overrides)
+    macd_4h: MACDResult = field(default_factory=MACDResult)
     # MACD — 1H for HTF histogram gate (matches backtest engine's htf_key="1h" for SOL)
     macd_1h: MACDResult = field(default_factory=MACDResult)
     # MACD — 30m intermediate confirmation
@@ -637,6 +639,7 @@ class SOLBTCService:
         df_5m = self.fetch_klines(self.alt_symbol, "5m", 100)
         df_30m = self.fetch_klines(self.alt_symbol, "30m", 120)
         df_1h = self.fetch_klines(self.alt_symbol, "1h", 100)
+        df_4h = self.fetch_klines(self.alt_symbol, "4h", 200)
 
         if df_15m.empty:
             logger.warning("Could not fetch SOL 15m klines")
@@ -655,6 +658,9 @@ class SOLBTCService:
 
         # ATR from 15m
         atr_14 = float(self._calc_atr(df_15m, 14).iloc[-1])
+
+        # MACD on 4H (slow-trend histogram slope — alt-native input for buy_yes/buy_no 4H-hist overrides)
+        macd_4h = self.calc_macd(df_4h, fast=12, slow=26, signal=9) if not df_4h.empty and len(df_4h) >= 30 else MACDResult()
 
         # MACD on 1H (HTF histogram gate — matches backtest engine htf_key="1h" for SOL)
         macd_1h = self.calc_macd(df_1h, fast=12, slow=26, signal=9) if not df_1h.empty and len(df_1h) >= 30 else MACDResult()
@@ -701,6 +707,7 @@ class SOLBTCService:
             ema_21=ema_21,
             ema_50=ema_50,
             rsi_14=rsi_14,
+            macd_4h=macd_4h,
             macd_1h=macd_1h,
             macd_30m=macd_30m,
             macd_15m=macd_15m,

@@ -453,6 +453,16 @@ class SolMacroStrategy:
         self.buy_yes_ltf_override_min_btc_5m_pct = float(
             self.config.get("buy_yes_ltf_override_min_btc_5m_pct", 0.0)
         )
+        # Additive 4H-hist override (mirrors bitcoin.py:1233-1243 counter-trend trigger).
+        # When enabled, an alt 4H MACD histogram slope alone can fire the dip/rally
+        # exception path even if the 5m/15m+RSI+BTC-5m conditions don't confirm.
+        # Default-off — opt-in per asset after backtest evidence.
+        self.buy_no_4h_hist_override_enabled = bool(
+            self.config.get("buy_no_4h_hist_override_enabled", False)
+        )
+        self.buy_yes_4h_hist_override_enabled = bool(
+            self.config.get("buy_yes_4h_hist_override_enabled", False)
+        )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
 
@@ -475,29 +485,49 @@ class SolMacroStrategy:
         """SHORT-side LTF gate — clear bearish short-window alt tape.
 
         Required for ALL SHORT paths: bear-regime default AND bull-regime dip exception.
+
+        Two firing paths, OR-combined (additive):
+          1. 5m/15m + RSI + BTC-5m (gated by buy_no_ltf_override_enabled)
+          2. Alt 4H MACD histogram declining (gated by buy_no_4h_hist_override_enabled);
+             mirrors bitcoin.py:1233-1243 counter-trend trigger.
         """
-        if not self.buy_no_ltf_override_enabled:
+        if not self.buy_no_ltf_override_enabled and not self.buy_no_4h_hist_override_enabled:
             return False, "disabled"
         sol = ta.sol
         corr = ta.correlation
-        bearish_15m = macd_bearish_momentum_ok(sol.macd_15m)
-        bearish_5m = macd_bearish_momentum_ok(sol.macd_5m)
-        rsi_ok = float(sol.rsi_14 or 50.0) <= self.buy_no_ltf_override_rsi_max
-        btc_ok = float(corr.btc_move_5m_pct or 0.0) <= self.buy_no_ltf_override_max_btc_5m_pct
-        if bearish_15m and bearish_5m and rsi_ok and btc_ok:
-            return True, (
-                f"bearish_ltf_override: 15m+5m bearish, RSI={sol.rsi_14:.1f}, "
-                f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
-            )
+
+        bearish_15m = bearish_5m = rsi_ok = btc_ok = False
+        if self.buy_no_ltf_override_enabled:
+            bearish_15m = macd_bearish_momentum_ok(sol.macd_15m)
+            bearish_5m = macd_bearish_momentum_ok(sol.macd_5m)
+            rsi_ok = float(sol.rsi_14 or 50.0) <= self.buy_no_ltf_override_rsi_max
+            btc_ok = float(corr.btc_move_5m_pct or 0.0) <= self.buy_no_ltf_override_max_btc_5m_pct
+            if bearish_15m and bearish_5m and rsi_ok and btc_ok:
+                return True, (
+                    f"bearish_ltf_override: 15m+5m bearish, RSI={sol.rsi_14:.1f}, "
+                    f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+                )
+
+        if self.buy_no_4h_hist_override_enabled:
+            macd_4h = getattr(sol, "macd_4h", None)
+            if macd_4h is not None and not macd_4h.histogram_rising:
+                return True, (
+                    f"4h_hist_override: alt 4H hist declining "
+                    f"(curr={macd_4h.histogram:+.5f}, prev={macd_4h.prev_histogram:+.5f})"
+                )
+
         missing = []
-        if not bearish_15m:
-            missing.append("15m_not_bearish")
-        if not bearish_5m:
-            missing.append("5m_not_bearish")
-        if not rsi_ok:
-            missing.append(f"rsi>{self.buy_no_ltf_override_rsi_max:.1f}")
-        if not btc_ok:
-            missing.append(f"btc5m>{self.buy_no_ltf_override_max_btc_5m_pct:+.3f}%")
+        if self.buy_no_ltf_override_enabled:
+            if not bearish_15m:
+                missing.append("15m_not_bearish")
+            if not bearish_5m:
+                missing.append("5m_not_bearish")
+            if not rsi_ok:
+                missing.append(f"rsi>{self.buy_no_ltf_override_rsi_max:.1f}")
+            if not btc_ok:
+                missing.append(f"btc5m>{self.buy_no_ltf_override_max_btc_5m_pct:+.3f}%")
+        if self.buy_no_4h_hist_override_enabled:
+            missing.append("4h_hist_not_declining")
         return False, ",".join(missing)
 
     def _bullish_rally_ltf_ok(self, ta: Any) -> tuple[bool, str]:
@@ -505,29 +535,49 @@ class SolMacroStrategy:
 
         Required for ALL LONG paths: bull-regime default AND bear-regime rally exception.
         Mirrors _bearish_dip_ltf_ok with inverted thresholds.
+
+        Two firing paths, OR-combined (additive):
+          1. 5m/15m + RSI + BTC-5m (gated by buy_yes_ltf_override_enabled)
+          2. Alt 4H MACD histogram rising (gated by buy_yes_4h_hist_override_enabled);
+             symmetric mirror of the BUY_NO 4H-hist override.
         """
-        if not self.buy_yes_ltf_override_enabled:
+        if not self.buy_yes_ltf_override_enabled and not self.buy_yes_4h_hist_override_enabled:
             return False, "disabled"
         sol = ta.sol
         corr = ta.correlation
-        bullish_15m = macd_bullish_momentum_ok(sol.macd_15m)
-        bullish_5m = macd_bullish_momentum_ok(sol.macd_5m)
-        rsi_ok = float(sol.rsi_14 or 50.0) >= self.buy_yes_ltf_override_rsi_min
-        btc_ok = float(corr.btc_move_5m_pct or 0.0) >= self.buy_yes_ltf_override_min_btc_5m_pct
-        if bullish_15m and bullish_5m and rsi_ok and btc_ok:
-            return True, (
-                f"bullish_ltf_override: 15m+5m bullish, RSI={sol.rsi_14:.1f}, "
-                f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
-            )
+
+        bullish_15m = bullish_5m = rsi_ok = btc_ok = False
+        if self.buy_yes_ltf_override_enabled:
+            bullish_15m = macd_bullish_momentum_ok(sol.macd_15m)
+            bullish_5m = macd_bullish_momentum_ok(sol.macd_5m)
+            rsi_ok = float(sol.rsi_14 or 50.0) >= self.buy_yes_ltf_override_rsi_min
+            btc_ok = float(corr.btc_move_5m_pct or 0.0) >= self.buy_yes_ltf_override_min_btc_5m_pct
+            if bullish_15m and bullish_5m and rsi_ok and btc_ok:
+                return True, (
+                    f"bullish_ltf_override: 15m+5m bullish, RSI={sol.rsi_14:.1f}, "
+                    f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+                )
+
+        if self.buy_yes_4h_hist_override_enabled:
+            macd_4h = getattr(sol, "macd_4h", None)
+            if macd_4h is not None and macd_4h.histogram_rising:
+                return True, (
+                    f"4h_hist_override: alt 4H hist rising "
+                    f"(curr={macd_4h.histogram:+.5f}, prev={macd_4h.prev_histogram:+.5f})"
+                )
+
         missing = []
-        if not bullish_15m:
-            missing.append("15m_not_bullish")
-        if not bullish_5m:
-            missing.append("5m_not_bullish")
-        if not rsi_ok:
-            missing.append(f"rsi<{self.buy_yes_ltf_override_rsi_min:.1f}")
-        if not btc_ok:
-            missing.append(f"btc5m<{self.buy_yes_ltf_override_min_btc_5m_pct:+.3f}%")
+        if self.buy_yes_ltf_override_enabled:
+            if not bullish_15m:
+                missing.append("15m_not_bullish")
+            if not bullish_5m:
+                missing.append("5m_not_bullish")
+            if not rsi_ok:
+                missing.append(f"rsi<{self.buy_yes_ltf_override_rsi_min:.1f}")
+            if not btc_ok:
+                missing.append(f"btc5m<{self.buy_yes_ltf_override_min_btc_5m_pct:+.3f}%")
+        if self.buy_yes_4h_hist_override_enabled:
+            missing.append("4h_hist_not_rising")
         return False, ",".join(missing)
 
     def _buy_no_ltf_override(self, ta: Any) -> tuple[bool, str]:
@@ -1593,7 +1643,10 @@ class SolMacroStrategy:
             allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
             side_source = "primary_htf"
             resolver_active = (
-                self.buy_yes_ltf_override_enabled or self.buy_no_ltf_override_enabled
+                self.buy_yes_ltf_override_enabled
+                or self.buy_no_ltf_override_enabled
+                or self.buy_yes_4h_hist_override_enabled
+                or self.buy_no_4h_hist_override_enabled
             )
             if resolver_active:
                 _resolved_side, _resolved_source, _resolved_detail = (
