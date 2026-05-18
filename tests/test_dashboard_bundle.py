@@ -48,6 +48,8 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
     assert 'id="backtest-output-tail"' in body
     assert 'id="bt-hud"' in body
+    assert 'id="action-perf-lanes"' in body
+    assert "BTC Signals" not in body.split('id="strategy-boxes"')[1].split('id="strategy-table"')[0]
 
     h = c.get("/health")
     assert h.status_code == 200
@@ -269,6 +271,58 @@ def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
     assert second[0]["status"] == "skipped"
     assert second[0]["reason"] == "startup_dedupe"
     assert started == ["SOL 5m crypto [auto-on-startup:test_session]"]
+
+
+def test_backtest_start_rejects_deprecated_30m_window(monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    client = TestClient(dashboard_server.app)
+    r = client.post(
+        "/api/backtest/start",
+        json={"symbol": "BTC", "window": 30},
+        headers={"X-API-Key": "test-key"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("status") == "error"
+    assert body.get("message") == "Backtest window must be 5, 15, or 60 (1h)"
+
+
+def test_live_backtest_scope_includes_1h_not_30m():
+    from src.dashboard.server import _live_backtest_scope_from_config
+
+    scope = _live_backtest_scope_from_config({"strategies": {"bitcoin": {"enabled": True}}})
+    assert scope["windows"] == [5, 15, 60]
+    assert scope["backtest_windows"] == [5, 15, 60]
+    assert 30 not in scope["windows"]
+
+
+def test_backtest_start_all_bundle_accepts_1h_window(monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    captured: list[list[str]] = []
+
+    def _fake_start(cmd_args, summary):
+        captured.append(list(cmd_args))
+        return {"status": "started", "job_id": "jb1h", "pid": 999, "summary": summary}
+
+    monkeypatch.setattr(dashboard_server, "_start_backtest_job", _fake_start)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+
+    client = TestClient(dashboard_server.app)
+    r = client.post(
+        "/api/backtest/start",
+        json={"symbol": "ALL", "window": 60},
+        headers={"X-API-Key": "test-key"},
+    )
+    assert r.status_code == 200
+    assert r.json().get("status") == "started"
+    assert "--window" in captured[0] and "60" in captured[0]
 
 
 def test_backtest_start_all_bundle_invokes_bundle_script(monkeypatch, tmp_path):

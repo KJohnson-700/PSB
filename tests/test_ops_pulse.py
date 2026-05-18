@@ -1,7 +1,7 @@
 """Tests for OPS_JSON snapshot helpers."""
 
 from types import SimpleNamespace
-
+import src.ops_pulse as ops_pulse
 from src.ops_pulse import _decision_gate_digest, _scan_skip_digest, build_ops_snapshot
 
 
@@ -70,7 +70,9 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
     assert digest["active_blocks"]["hype_macro"]["oracle_basis_block"] == 1
 
 
-def test_build_ops_snapshot_includes_skip_digest_and_regime():
+def test_build_ops_snapshot_includes_skip_digest_and_regime(monkeypatch, tmp_path):
+    monkeypatch.setattr(ops_pulse, "OPS_PULSE_FILE", tmp_path / "ops_pulse.jsonl")
+
     class J:
         session_id = "s1"
         session_dir = "/tmp"
@@ -153,7 +155,11 @@ def test_build_ops_snapshot_includes_skip_digest_and_regime():
     assert snap["ai_status"]["ready"] is True
     assert "zero calls" in snap["ai_activity_note"]
     assert snap["side_selection"]["aggregate"]["LONG"] == 1
+    assert snap["side_selection"]["long_lanes"] == ["bitcoin"]
     assert snap["side_selection"]["short_lanes"] == []
+    assert snap["side_selection"]["per_strategy"]["bitcoin"]["buy_yes_possible_this_pulse"] is True
+    assert snap["side_selection"]["recent_side_rollup"]["lookback_pulses"] == 1
+    assert snap["side_selection"]["recent_side_rollup"]["per_strategy"]["bitcoin"]["LONG"] == 1
     assert "No strategy selected SHORT" in snap["side_selection"]["buy_no_absence_reason"]
     assert snap["timestamps_policy"]["canonical"] == "UTC"
     assert snap["regime"]["btc_spot_usd"] == 78500.0
@@ -223,7 +229,9 @@ def test_build_ops_snapshot_ai_pipeline_digest_aggregates_aliases():
     assert agg["shadow_marginal_mismatch"] == 1
 
 
-def test_build_ops_snapshot_side_selection_surfaces_short_side():
+def test_build_ops_snapshot_side_selection_surfaces_short_side(monkeypatch, tmp_path):
+    monkeypatch.setattr(ops_pulse, "OPS_PULSE_FILE", tmp_path / "ops_pulse.jsonl")
+
     class J:
         session_id = "s1"
         session_dir = "/tmp"
@@ -266,5 +274,11 @@ def test_build_ops_snapshot_side_selection_surfaces_short_side():
 
     snap = build_ops_snapshot(bot, "test")
     assert snap["side_selection"]["aggregate"]["SHORT"] == 1
+    assert snap["side_selection"]["aggregate"]["LONG"] == 1
+    assert snap["side_selection"]["long_lanes"] == ["bitcoin"]
     assert snap["side_selection"]["short_lanes"] == ["eth_macro"]
+    assert snap["side_selection"]["per_strategy"]["eth_macro"]["buy_yes_possible_this_pulse"] is False
+    assert snap["side_selection"]["per_strategy"]["eth_macro"]["buy_no_possible_this_pulse"] is True
+    assert snap["side_selection"]["recent_side_rollup"]["per_strategy"]["bitcoin"]["LONG"] == 1
+    assert snap["side_selection"]["recent_side_rollup"]["per_strategy"]["eth_macro"]["SHORT"] == 1
     assert snap["side_selection"]["buy_no_absence_reason"] == ""

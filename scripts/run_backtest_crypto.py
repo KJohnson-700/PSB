@@ -390,15 +390,15 @@ def main() -> int:
     default_start, default_end = _default_dates()
 
     parser = argparse.ArgumentParser(
-        description="Crypto updown backtest (BTC / SOL / ETH / HYPE / XRP, 5m / 15m / 30m)"
+        description="Crypto updown backtest (BTC / SOL / ETH / HYPE / XRP, 5m / 15m / 1h)"
     )
     parser.add_argument(
         "--symbol", choices=["BTC", "SOL", "ETH", "HYPE", "XRP"], default="BTC",
         help="Asset to backtest (default: BTC)"
     )
     parser.add_argument(
-        "--window", type=int, choices=[5, 15, 30], default=15,
-        help="Window size in minutes (default: 15)"
+        "--window", type=int, choices=[5, 15, 60], default=15,
+        help="Window size in minutes: 5, 15, or 60 for 1h (default: 15)"
     )
     parser.add_argument("--start",      default=default_start,
                         help=f"Start date YYYY-MM-DD (default: {default_start})")

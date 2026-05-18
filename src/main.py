@@ -520,14 +520,30 @@ class PolyBot:
         elif raw in ("0", "false", "no", "off"):
             self.config.setdefault("exposure", {})["loss_kill_switch_enabled"] = False
 
+    def _is_dry_run_mode(self) -> bool:
+        return bool((self.config.get("trading") or {}).get("dry_run", True))
+
+    def _lane_calibration_shadow_mode(self) -> bool:
+        """Resolve calibration mode from paper/live trading mode.
+
+        ``lane_calibration.shadow_mode`` remains the legacy fallback, but the
+        preferred contract is:
+        - ``paper_shadow_mode`` for paper/dry-run sessions
+        - ``live_shadow_mode`` for live sessions
+        """
+        cal_cfg = (self.config.get("lane_calibration") or {})
+        default_shadow = bool(cal_cfg.get("shadow_mode", True))
+        if self._is_dry_run_mode():
+            return bool(cal_cfg.get("paper_shadow_mode", default_shadow))
+        return bool(cal_cfg.get("live_shadow_mode", default_shadow))
+
     def _build_lane_calibrator(self) -> LaneCalibrator:
         """Construct the per-lane probability calibrator.
 
-        Defaults to observation-only mode so production behavior is unchanged until the
-        operator explicitly flips ``lane_calibration.shadow_mode: false``.
+        Paper and live can resolve different calibration modes so the same bot can
+        paper-trade in observation mode while using calibrated probabilities live.
         """
-        cal_cfg = (self.config.get("lane_calibration") or {})
-        shadow = bool(cal_cfg.get("shadow_mode", True))
+        shadow = self._lane_calibration_shadow_mode()
         try:
             return LaneCalibrator(shadow_mode=shadow)
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
@@ -612,12 +628,10 @@ class PolyBot:
         deep_merge_config(self.config, updates)
         self.lane_manager = LaneManager(self.config)
         # Refresh calibrator's shadow-mode flag if config touched it; posteriors stay.
-        if updates.get("lane_calibration"):
+        if updates.get("lane_calibration") or updates.get("trading"):
             prev = getattr(self, "lane_calibrator", None)
-            shadow = bool(
-                (self.config.get("lane_calibration") or {}).get("shadow_mode", True)
-            )
-            if prev is not None:
+            shadow = self._lane_calibration_shadow_mode()
+            if prev is not None and hasattr(prev, "shadow_mode"):
                 prev.shadow_mode = shadow
             else:
                 self.lane_calibrator = self._build_lane_calibrator()
@@ -1788,29 +1802,10 @@ class PolyBot:
         except Exception as e:
             logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
 
-        # Strategy 3: Weather — forecast vs market price (run after crypto lanes)
-        if self.weather_strategy.enabled:
-            try:
-                weather_signals = await self.weather_strategy.scan_and_analyze(
-                    markets=weather_markets, bankroll=self.bankroll
-                )
-                _now_iso = datetime.now().isoformat(timespec="seconds")
-                self.last_signal_counts["weather"] = len(weather_signals)
-                self.last_cycle_times["weather"] = _now_iso
-                self.cumulative_signal_counts["weather"] = (
-                    self.cumulative_signal_counts.get("weather", 0) + len(weather_signals)
-                )
-                self.last_ai_scan_stats["weather"] = dict(
-                    getattr(self.weather_strategy, "_scan_stats", {}) or {}
-                )
-                for signal in weather_signals:
-                    await self._execute_weather_signal(signal)
-                if weather_signals:
-                    logging.info(f"[TRADING] Weather: {len(weather_signals)} signals")
-                else:
-                    logging.info("[TRADING] Weather: No signals this cycle")
-            except Exception as e:
-                logging.error(f"Weather strategy error: {e}", exc_info=True)
+        # Weather is being removed; keep the scan path hard-disabled even if stale
+        # config still marks the strategy enabled.
+        self.last_signal_counts["weather"] = 0
+        self.last_ai_scan_stats["weather"] = {}
 
         try:
             async with self._execution_lock:
@@ -2449,6 +2444,27 @@ class PolyBot:
 
     async def _execute_weather_signal_impl(self, signal: WeatherSignal):
         strat = "weather"
+        _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
+        lane_meta = build_lane_metadata(
+            strategy=strat,
+            window_size=str(getattr(signal, "subtype", "") or "weather"),
+            action=signal.action,
+            direction=("down" if signal.action == "BUY_NO" else "up"),
+            entry_leg=_entry_leg,
+            side_source="forecast_gap",
+            ai_used=bool(getattr(signal, "ai_ensemble", None)),
+            reason=signal.reason,
+            signal_reason=signal.reason,
+            htf_bias=str(getattr(signal, "city", "") or getattr(signal, "subtype", "") or "weather"),
+        )
+        if not self._check_lane_execution(
+            strategy=strat,
+            signal_reason=signal.reason,
+            lane_meta=lane_meta,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+        ):
+            return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
         if not can_trade:
             logging.warning(f"{strat} trade risk check failed: {reason}")
@@ -2458,6 +2474,11 @@ class PolyBot:
                 strat,
                 f"{reason} | {signal.reason}" if signal.reason else reason,
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=f"{reason} | {signal.reason}" if signal.reason else reason,
+                ),
             )
             return
 
@@ -2476,6 +2497,11 @@ class PolyBot:
                 strat,
                 f"term_risk: {reason}" + (f" | {signal.reason}" if signal.reason else ""),
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason=f"term_risk: {reason}" + (f" | {signal.reason}" if signal.reason else ""),
+                ),
             )
             return
 
@@ -2502,6 +2528,11 @@ class PolyBot:
                 strat,
                 "unsellable_token" + (f" | {signal.reason}" if signal.reason else ""),
                 self.bankroll,
+                extra=self._lane_skip_extra(
+                    lane_meta=lane_meta,
+                    signal_reason=signal.reason,
+                    skip_reason="unsellable_token" + (f" | {signal.reason}" if signal.reason else ""),
+                ),
             )
             return
 
@@ -2526,7 +2557,6 @@ class PolyBot:
 
         if order and hasattr(order, "order_id"):
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
-            _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
@@ -2574,6 +2604,7 @@ class PolyBot:
                     "weather_horizon_days": getattr(signal, "horizon_days", None),
                     "weather_calibration_bias": getattr(signal, "calibration_bias", 0.0),
                     "weather_calibration_count": getattr(signal, "calibration_count", 0),
+                    **lane_meta,
                 },
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,

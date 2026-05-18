@@ -96,6 +96,17 @@ _MIN_4H_BARS  = 65   # Sabre SMA(35) + ATR(14) + warmup
 _MIN_15M_BARS = 50   # MACD(26,9) + warmup
 _MIN_5M_BARS  = 40   # 5m MACD warmup
 
+
+def replay_window_tf_label(window_minutes: int) -> str:
+    """Config / lane key for replay (live uses 1h, not deprecated 30m)."""
+    wm = int(window_minutes)
+    if wm == 5:
+        return "5m"
+    if wm >= 45:
+        return "1h"
+    return "15m"
+
+
 # ==============================================================================
 # Result data-classes
 # ==============================================================================
@@ -504,7 +515,7 @@ class UpdownBacktestEngine:
         }.get(symbol, "sol_macro")
 
     def _build_replay_assumptions(self, symbol: str, window_minutes: int) -> Dict[str, Any]:
-        tf_label = f"{int(window_minutes)}m"
+        tf_label = replay_window_tf_label(window_minutes)
         if self._fill_prices is not None:
             entry_source = "empirical_live_fill_distribution"
             entry_points = int(len(self._fill_prices))
@@ -729,11 +740,11 @@ class UpdownBacktestEngine:
         action: str,
         min_edge: float,
     ) -> Dict[str, Any]:
-        tf_label = f"{int(window_minutes)}m"
+        tf_label = replay_window_tf_label(window_minutes)
         if window_minutes == 5:
             default_min, default_max = (0.5, 5.0)
-        elif window_minutes == 30:
-            default_min, default_max = ((25.0, 29.0) if symbol == "BTC" else (26.0, 28.66))
+        elif window_minutes >= 45:
+            default_min, default_max = (1.0, 59.0)
         else:
             default_min, default_max = (2.0, 16.0)
         win_min, win_max = self._resolve_entry_window_bounds(
@@ -787,7 +798,7 @@ class UpdownBacktestEngine:
         side = "up" if action == "BUY_YES" else "down"
         return resolve_lane_entry_policy(
             strategy_name=strategy_name,
-            window_size=f"{int(window_minutes)}m",
+            window_size=replay_window_tf_label(window_minutes),
             side=side,
             full_config=self.config,
             legacy_policy=self._legacy_lane_entry_policy_for_replay(
@@ -1570,6 +1581,31 @@ class UpdownBacktestEngine:
         defaults = {"BULL": 1.0, "RANGE": 1.25, "BEAR": 1.40}
         return float(mults.get(regime, defaults.get(regime, 1.0)))
 
+    def _alt_macd_4h_from_1h(self, df_1h: Optional[pd.DataFrame]) -> Optional[MACDResult]:
+        """Resample alt 1H bars to 4H and compute MACD. Returns None if insufficient data.
+
+        Used by replay-path 4H-hist override gate; live path consumes
+        SOLAnalysis.macd_4h directly via a native 4H fetch.
+        """
+        if df_1h is None or df_1h.empty or "open_time" not in df_1h.columns or len(df_1h) < 120:
+            return None
+        df_4h = (
+            df_1h.set_index("open_time")
+            .resample("4h")
+            .agg({
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            })
+            .dropna()
+            .reset_index()
+        )
+        if len(df_4h) < 30:
+            return None
+        return self._svc.calc_macd(df_4h)
+
     def _buy_no_ltf_override_replay(
         self,
         ta: TechnicalAnalysis,
@@ -1577,20 +1613,28 @@ class UpdownBacktestEngine:
         btc_1m: Optional[pd.DataFrame],
         window_open: pd.Timestamp,
         strategy_cfg: Dict[str, Any],
+        df_1h: Optional[pd.DataFrame] = None,
     ) -> tuple[bool, str]:
-        if not bool(strategy_cfg.get("buy_no_ltf_override_enabled", False)):
+        ltf_on = bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+        hist_on = bool(strategy_cfg.get("buy_no_4h_hist_override_enabled", False))
+        if not ltf_on and not hist_on:
             return False, "disabled"
-        if len(df_5m) < _MIN_5M_BARS:
-            return False, "5m_insufficient"
-        bearish_15m = self._macd_bearish_momentum_ok(ta.macd_15m)
-        bearish_5m = self._macd_bearish_momentum_ok(self._svc.calc_macd(df_5m))
-        rsi_max = float(strategy_cfg.get("buy_no_ltf_override_rsi_max", 45.0))
-        rsi_ok = float(ta.rsi_14 or 50.0) <= rsi_max
-        btc_cap = float(strategy_cfg.get("buy_no_ltf_override_max_btc_5m_pct", 0.0))
-        btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
-        btc_ok = btc_move_5m_pct <= btc_cap
-        if bearish_15m and bearish_5m and rsi_ok and btc_ok:
-            return True, "bearish_ltf_override"
+        if ltf_on:
+            if len(df_5m) < _MIN_5M_BARS:
+                return False, "5m_insufficient"
+            bearish_15m = self._macd_bearish_momentum_ok(ta.macd_15m)
+            bearish_5m = self._macd_bearish_momentum_ok(self._svc.calc_macd(df_5m))
+            rsi_max = float(strategy_cfg.get("buy_no_ltf_override_rsi_max", 45.0))
+            rsi_ok = float(ta.rsi_14 or 50.0) <= rsi_max
+            btc_cap = float(strategy_cfg.get("buy_no_ltf_override_max_btc_5m_pct", 0.0))
+            btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
+            btc_ok = btc_move_5m_pct <= btc_cap
+            if bearish_15m and bearish_5m and rsi_ok and btc_ok:
+                return True, "bearish_ltf_override"
+        if hist_on:
+            macd_4h = self._alt_macd_4h_from_1h(df_1h)
+            if macd_4h is not None and not macd_4h.histogram_rising:
+                return True, "4h_hist_override"
         return False, "no_override"
 
     def _bullish_rally_ltf_override_replay(
@@ -1600,21 +1644,29 @@ class UpdownBacktestEngine:
         btc_1m: Optional[pd.DataFrame],
         window_open: pd.Timestamp,
         strategy_cfg: Dict[str, Any],
+        df_1h: Optional[pd.DataFrame] = None,
     ) -> tuple[bool, str]:
         """Mirror of _buy_no_ltf_override_replay for the LONG side."""
-        if not bool(strategy_cfg.get("buy_yes_ltf_override_enabled", False)):
+        ltf_on = bool(strategy_cfg.get("buy_yes_ltf_override_enabled", False))
+        hist_on = bool(strategy_cfg.get("buy_yes_4h_hist_override_enabled", False))
+        if not ltf_on and not hist_on:
             return False, "disabled"
-        if len(df_5m) < _MIN_5M_BARS:
-            return False, "5m_insufficient"
-        bullish_15m = self._macd_bullish_momentum_ok(ta.macd_15m)
-        bullish_5m = self._macd_bullish_momentum_ok(self._svc.calc_macd(df_5m))
-        rsi_min = float(strategy_cfg.get("buy_yes_ltf_override_rsi_min", 55.0))
-        rsi_ok = float(ta.rsi_14 or 50.0) >= rsi_min
-        btc_floor = float(strategy_cfg.get("buy_yes_ltf_override_min_btc_5m_pct", 0.0))
-        btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
-        btc_ok = btc_move_5m_pct >= btc_floor
-        if bullish_15m and bullish_5m and rsi_ok and btc_ok:
-            return True, "bullish_ltf_override"
+        if ltf_on:
+            if len(df_5m) < _MIN_5M_BARS:
+                return False, "5m_insufficient"
+            bullish_15m = self._macd_bullish_momentum_ok(ta.macd_15m)
+            bullish_5m = self._macd_bullish_momentum_ok(self._svc.calc_macd(df_5m))
+            rsi_min = float(strategy_cfg.get("buy_yes_ltf_override_rsi_min", 55.0))
+            rsi_ok = float(ta.rsi_14 or 50.0) >= rsi_min
+            btc_floor = float(strategy_cfg.get("buy_yes_ltf_override_min_btc_5m_pct", 0.0))
+            btc_move_5m_pct = self._recent_move_pct(btc_1m, window_open, 5)
+            btc_ok = btc_move_5m_pct >= btc_floor
+            if bullish_15m and bullish_5m and rsi_ok and btc_ok:
+                return True, "bullish_ltf_override"
+        if hist_on:
+            macd_4h = self._alt_macd_4h_from_1h(df_1h)
+            if macd_4h is not None and macd_4h.histogram_rising:
+                return True, "4h_hist_override"
         return False, "no_override"
 
     def _resolve_side_with_ltf_overrides_replay(
@@ -1626,6 +1678,7 @@ class UpdownBacktestEngine:
         btc_1m: Optional[pd.DataFrame],
         window_open: pd.Timestamp,
         strategy_cfg: Dict[str, Any],
+        df_1h: Optional[pd.DataFrame] = None,
     ) -> tuple[Optional[str], str, str]:
         """Replay-side mirror of sol_macro._resolve_allowed_side_with_ltf_overrides.
 
@@ -1634,10 +1687,10 @@ class UpdownBacktestEngine:
         BULLISH/BEARISH inputs.
         """
         bullish_ok, _ = self._bullish_rally_ltf_override_replay(
-            ta, df_5m, btc_1m, window_open, strategy_cfg
+            ta, df_5m, btc_1m, window_open, strategy_cfg, df_1h=df_1h
         )
         bearish_ok, _ = self._buy_no_ltf_override_replay(
-            ta, df_5m, btc_1m, window_open, strategy_cfg
+            ta, df_5m, btc_1m, window_open, strategy_cfg, df_1h=df_1h
         )
         if primary_htf_bias == "BULLISH":
             if bearish_ok and not bullish_ok:
@@ -1699,9 +1752,12 @@ class UpdownBacktestEngine:
                 decision.primary_htf_bias = alt_1h_trend
                 decision.side_source = "alt_1h_primary"
                 decision.skip_btc_follow_1h = True
-                resolver_active = bool(
-                    strategy_cfg.get("buy_yes_ltf_override_enabled", False)
-                ) or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+                resolver_active = (
+                    bool(strategy_cfg.get("buy_yes_ltf_override_enabled", False))
+                    or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+                    or bool(strategy_cfg.get("buy_yes_4h_hist_override_enabled", False))
+                    or bool(strategy_cfg.get("buy_no_4h_hist_override_enabled", False))
+                )
                 if resolver_active:
                     r_side, r_source, r_detail = self._resolve_side_with_ltf_overrides_replay(
                         primary_htf_bias=alt_1h_trend,
@@ -1710,6 +1766,7 @@ class UpdownBacktestEngine:
                         btc_1m=btc_1m,
                         window_open=window_open,
                         strategy_cfg=strategy_cfg,
+                        df_1h=df_1h,
                     )
                     # Additive-only resolver: r_side never None for BULL/BEAR.
                     if r_side is not None:
@@ -1717,7 +1774,7 @@ class UpdownBacktestEngine:
                         decision.side_source = r_source
                 elif alt_1h_trend == "BULLISH":
                     override, _ = self._buy_no_ltf_override_replay(
-                        ta, df_5m, btc_1m, window_open, strategy_cfg
+                        ta, df_5m, btc_1m, window_open, strategy_cfg, df_1h=df_1h
                     )
                     if override:
                         decision.allowed_side = "SHORT"
@@ -1762,9 +1819,12 @@ class UpdownBacktestEngine:
         if primary_htf_bias in {"BULLISH", "BEARISH"}:
             decision.allowed_side = self._side_from_bias(primary_htf_bias)
             decision.side_source = "primary_htf"
-            resolver_active = bool(
-                strategy_cfg.get("buy_yes_ltf_override_enabled", False)
-            ) or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+            resolver_active = (
+                bool(strategy_cfg.get("buy_yes_ltf_override_enabled", False))
+                or bool(strategy_cfg.get("buy_no_ltf_override_enabled", False))
+                or bool(strategy_cfg.get("buy_yes_4h_hist_override_enabled", False))
+                or bool(strategy_cfg.get("buy_no_4h_hist_override_enabled", False))
+            )
             if resolver_active:
                 r_side, r_source, r_detail = self._resolve_side_with_ltf_overrides_replay(
                     primary_htf_bias=primary_htf_bias,
@@ -1773,6 +1833,7 @@ class UpdownBacktestEngine:
                     btc_1m=btc_1m,
                     window_open=window_open,
                     strategy_cfg=strategy_cfg,
+                    df_1h=df_1h,
                 )
                 if r_side is None:
                     decision.allowed_side = None
@@ -1783,7 +1844,7 @@ class UpdownBacktestEngine:
                 decision.side_source = r_source
             elif primary_htf_bias == "BULLISH":
                 override, _ = self._buy_no_ltf_override_replay(
-                    ta, df_5m, btc_1m, window_open, strategy_cfg
+                    ta, df_5m, btc_1m, window_open, strategy_cfg, df_1h=df_1h
                 )
                 if override:
                     decision.allowed_side = "SHORT"

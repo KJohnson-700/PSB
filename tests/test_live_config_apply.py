@@ -112,6 +112,69 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.xrp_macro_strategy.lane_calibrator is bot.lane_calibrator
 
 
+def test_lane_calibration_mode_follows_dry_run_toggle():
+    bot = PolyBot.__new__(PolyBot)
+    bot.config = {
+        "trading": {"dry_run": True},
+        "lane_calibration": {
+            "enabled": True,
+            "shadow_mode": True,
+            "paper_shadow_mode": True,
+            "live_shadow_mode": False,
+        },
+    }
+
+    assert bot._lane_calibration_shadow_mode() is True
+
+    bot.config["trading"]["dry_run"] = False
+    assert bot._lane_calibration_shadow_mode() is False
+
+
+def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode_changes():
+    class _FakeCalibrator:
+        def __init__(self):
+            self.shadow_mode = True
+
+    bot = PolyBot.__new__(PolyBot)
+    bot.config = {
+        "trading": {"dry_run": True},
+        "lane_calibration": {
+            "enabled": True,
+            "shadow_mode": True,
+            "paper_shadow_mode": True,
+            "live_shadow_mode": False,
+        },
+        "ai": {"enabled": True},
+        "strategies": {
+            "bitcoin": {"enabled": True},
+            "sol_macro": {"enabled": True},
+            "eth_macro": {"enabled": True},
+            "hype_macro": {"enabled": True},
+            "xrp_macro": {"enabled": True},
+            "weather": {"enabled": True},
+        },
+        "exposure": {},
+        "polymarket": {},
+    }
+    bot.ai_agent = _FakeAIAgent()
+    bot.notifier = _FakeNotifier()
+    bot.market_scanner = _FakeScanner()
+    bot.btc_exposure_manager = _FakeExposureManager()
+    bot.sol_exposure_manager = _FakeExposureManager()
+    bot.eth_exposure_manager = _FakeExposureManager()
+    bot.hype_exposure_manager = _FakeExposureManager()
+    bot.xrp_exposure_manager = _FakeExposureManager()
+    bot.weather_exposure_manager = _FakeExposureManager()
+    bot.event_exposure_manager = bot.weather_exposure_manager
+    bot._dead_zone_skip_callback = lambda **kwargs: None
+    bot.kelly_sizer = None
+    bot.lane_calibrator = _FakeCalibrator()
+
+    bot.apply_config_updates({"trading": {"dry_run": False}})
+
+    assert bot.lane_calibrator.shadow_mode is False
+
+
 def test_apply_realized_pnl_to_bankroll_floors_at_zero():
     bot = PolyBot.__new__(PolyBot)
     bot.bankroll = 3.5

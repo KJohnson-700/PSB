@@ -1785,6 +1785,31 @@ class SolMacroStrategy:
                 return round(vs[idx], 4)
             return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
 
+        def _log_skip_reject(
+            *,
+            market: Any,
+            window: str,
+            side: str,
+            action: str,
+            reason: str,
+            yes_price: Optional[float],
+            est_prob_up: float = 0.50,
+            htf_bias: Optional[str] = None,
+            context: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            log_rejected_candidate(
+                strategy=self._signal_strategy_name,
+                window=window,
+                side=side,
+                action=action,
+                reason=reason,
+                market=market,
+                yes_price=yes_price,
+                est_prob_up=est_prob_up,
+                htf_bias=htf_bias,
+                context=context or {},
+            )
+
         # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
         _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
@@ -1793,17 +1818,32 @@ class SolMacroStrategy:
             _regime_ai_override *= self._regime_min_edge_mult(btc_1h_regime)
 
         for market in sol_markets:
-            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
-                _bump_skip("liquidity")
-                continue
-
-            yes_price = market.yes_price
             is_updown = self._is_updown_market(market)
             _updown_tf = (
                 updown_timeframe_label(resolved_updown_window_minutes(market))
                 if is_updown
                 else "15m"
             )
+            yes_price = market.yes_price
+            action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+            direction = "UP" if allowed_side == "LONG" else "DOWN"
+            primary_htf_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
+            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
+                _bump_skip("liquidity")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf if is_updown else "15m",
+                    side=allowed_side,
+                    action=action,
+                    reason="liquidity",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "market_liquidity": float(market.liquidity),
+                        "min_liquidity": float(self.min_liquidity),
+                    },
+                )
+                continue
             is_5m = _updown_tf == "5m"
             if is_updown and _updown_tf != "5m" and skip_15m_reason:
                 _bump_skip(skip_15m_reason)
@@ -1901,6 +1941,20 @@ class SolMacroStrategy:
                 _sample("entry_price", yes_price)
                 if yes_price < 0.20 or yes_price > 0.80:
                     _bump_skip("price_too_far_from_even")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason="price_too_far_from_even",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "entry_price": float(yes_price),
+                            "entry_price_min": 0.20,
+                            "entry_price_max": 0.80,
+                        },
+                    )
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — price {yes_price:.2f} "
                         f"too far from 50/50, window in progress"
@@ -2036,6 +2090,31 @@ class SolMacroStrategy:
                 oracle_validation = self._validate_updown_oracle(sol)
                 if not oracle_validation.passed:
                     _bump_skip(oracle_validation.reason)
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason=oracle_validation.reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "oracle_basis_bps": (
+                                float(oracle_validation.basis_bps)
+                                if oracle_validation.basis_bps is not None
+                                else None
+                            ),
+                            "oracle_freshness_sec": (
+                                float(oracle_validation.freshness_sec)
+                                if oracle_validation.freshness_sec is not None
+                                else None
+                            ),
+                            "oracle_max_basis_bps": float(
+                                self.config.get("oracle_max_basis_bps", 0.0) or 0.0
+                            ),
+                            "oracle_max_age_sec": float(self.oracle_max_age_sec),
+                        },
+                    )
                     if action == "BUY_NO":
                         self._emit_buy_no_skip(
                             market=market,
@@ -2785,6 +2864,22 @@ class SolMacroStrategy:
                 continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="lane_entry_window",
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "eval_mins_left": float(_eval_left),
+                        "mins_left": float(_mins_left),
+                        "entry_window_min": float(lane_policy.entry_window_min),
+                        "entry_window_max": float(lane_policy.entry_window_max),
+                    },
+                )
                 logger.debug(
                     "  %s skip '%s...' — %.1fm left (eval %.2f), lane=%s needs %.2f–%.2fm",
                     self._signal_strategy_name,

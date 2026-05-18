@@ -500,12 +500,9 @@ class MarketScanner:
         )
 
     def _should_fetch_weather_markets(self) -> bool:
-        pm = self.config.get("polymarket") or {}
-        if "fetch_weather_markets" in pm:
-            return bool(pm.get("fetch_weather_markets"))
-        return bool(
-            (self.config.get("strategies") or {}).get("weather", {}).get("enabled", False)
-        )
+        # Weather is being retired; keep it off the scanner even if old config
+        # blocks still carry weather flags.
+        return False
 
     def _sync_network_phase(self) -> Tuple[
         List[Market],

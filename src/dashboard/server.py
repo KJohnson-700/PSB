@@ -572,6 +572,18 @@ ACTIVE_STRATEGY_NAMES = (
     "weather",
 )
 CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP"}
+CRYPTO_BACKTEST_WINDOWS = (5, 15, 60)
+
+
+def _parse_crypto_backtest_window(raw: Any) -> tuple[Optional[int], Optional[str]]:
+    """Normalize dashboard/CLI window to minutes supported by run_backtest_crypto."""
+    try:
+        w_int = int(raw)
+    except (TypeError, ValueError):
+        return None, "Invalid window (use 5, 15, or 60 for 1h)"
+    if w_int not in CRYPTO_BACKTEST_WINDOWS:
+        return None, "Backtest window must be 5, 15, or 60 (1h)"
+    return w_int, None
 
 
 def _classify_updown_trade(question: str, strategy: str, market_id: str = "") -> str:
@@ -731,7 +743,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-15-strategy-neon-chart-palette",
+        "dashboard_ui_rev": "2026-05-17-action-lanes-always-visible",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -747,6 +759,7 @@ _journal_cache: Dict[str, object] = {
 }
 
 _exit_reason_summary_cache: Dict[Tuple[str, Optional[float]], Dict[str, Any]] = {}
+_action_breakdown_cache: Dict[Tuple[str, Optional[float]], Dict[str, Any]] = {}
 
 
 def _get_journal():
@@ -1823,9 +1836,10 @@ def _live_backtest_scope_from_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     weather_cfg = strat.get("weather") or {}
     return {
         "crypto_strategies": crypto_strategies,
-        # Matches live slug routing buckets (scanner + updown_timeframe_label).
-        # 60 == 1h hourly product (replaced discontinued 30m).
-        "windows": [5, 15, 60],
+        # Matches live + backtest: 5m / 15m / 1h (60 minutes; legacy 30m discontinued).
+        "windows": list(CRYPTO_BACKTEST_WINDOWS),
+        "backtest_windows": list(CRYPTO_BACKTEST_WINDOWS),
+        "live_windows": list(CRYPTO_BACKTEST_WINDOWS),
         "weather_enabled": bool(weather_cfg.get("enabled", False)),
     }
 
@@ -2386,8 +2400,13 @@ async def start_backtest(request: Request):
         strategies_list = [str(x).strip() for x in strategies_raw if str(x).strip()]
     periods = body.get("periods", "all")
     symbol = body.get("symbol", "")
-    window = str(body.get("window", 15))
+    window_raw = body.get("window", 15)
     test_start = body.get("test_start", "").strip()
+
+    w_int, window_err = _parse_crypto_backtest_window(window_raw)
+    if window_err:
+        return {"status": "error", "message": window_err}
+    window = str(w_int)
 
     with _backtest_jobs_lock:
         running_n = sum(
@@ -2418,13 +2437,7 @@ async def start_backtest(request: Request):
         bundle_script = PROJECT_ROOT / "scripts" / "run_crypto_backtest_bundle.py"
         if not bundle_script.exists():
             return {"status": "error", "message": f"{bundle_script} not found"}
-        try:
-            w_int = int(window)
-        except (TypeError, ValueError):
-            return {"status": "error", "message": "Invalid window for bundle"}
-        if w_int not in (5, 15, 30):
-            return {"status": "error", "message": "Bundle window must be 5, 15, or 30"}
-        cmd_args = [sys.executable, str(bundle_script), "--window", str(w_int)]
+        cmd_args = [sys.executable, str(bundle_script), "--window", window]
         start_d = str(body.get("start", "") or "").strip()
         end_d = str(body.get("end", "") or "").strip()
         if start_d:
@@ -3020,6 +3033,7 @@ async def invalidate_journal_cache(request: Request):
     global _journal_cache
     _journal_cache = {"path": None, "mtime": None, "journal": None}
     _exit_reason_summary_cache.clear()
+    _action_breakdown_cache.clear()
     return {"status": "ok"}
 
 
@@ -3142,6 +3156,185 @@ async def get_exit_reason_summary(session_id: Optional[str] = None):
             "win_loss_by_reason": {},
         }
     return _build_exit_reason_summary(j)
+
+
+def _action_bucket_template() -> Dict[str, Any]:
+    return {"wins": 0, "losses": 0, "flat": 0, "pnl": 0.0}
+
+
+def _fmt_action_bucket(raw: Dict[str, Any]) -> Dict[str, Any]:
+    wins = int(raw.get("wins", 0))
+    losses = int(raw.get("losses", 0))
+    flat = int(raw.get("flat", 0))
+    n = wins + losses + flat
+    net_pnl = float(raw.get("pnl", 0.0))
+    return {
+        "wins": wins,
+        "losses": losses,
+        "flat": flat,
+        "trades": n,
+        "win_rate": round(wins / n, 4) if n > 0 else 0.0,
+        "net_pnl": round(net_pnl, 2),
+        "avg_pnl": round(net_pnl / n, 2) if n > 0 else 0.0,
+    }
+
+
+def _compute_action_slipping(
+    yes: Dict[str, Any], no: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    min_trades = 3
+    if yes.get("trades", 0) < min_trades or no.get("trades", 0) < min_trades:
+        return None
+    yes_pnl = float(yes.get("net_pnl", 0))
+    no_pnl = float(no.get("net_pnl", 0))
+    yes_wr = float(yes.get("win_rate", 0))
+    no_wr = float(no.get("win_rate", 0))
+    if yes_pnl < no_pnl:
+        slipping = "BUY_YES"
+        reason = "lower_net_pnl"
+    elif no_pnl < yes_pnl:
+        slipping = "BUY_NO"
+        reason = "lower_net_pnl"
+    elif yes_wr < no_wr:
+        slipping = "BUY_YES"
+        reason = "lower_win_rate"
+    else:
+        slipping = "BUY_NO"
+        reason = "lower_win_rate"
+    other = no if slipping == "BUY_YES" else yes
+    slip = yes if slipping == "BUY_YES" else no
+    return {
+        "action": slipping,
+        "reason": reason,
+        "delta_win_rate": round(float(slip.get("win_rate", 0)) - float(other.get("win_rate", 0)), 4),
+        "delta_net_pnl": round(float(slip.get("net_pnl", 0)) - float(other.get("net_pnl", 0)), 2),
+    }
+
+
+_ACTION_BREAKDOWN_STRATEGIES = (
+    "bitcoin",
+    "sol_macro",
+    "eth_macro",
+    "hype_macro",
+    "xrp_macro",
+    "weather",
+)
+
+
+def _empty_action_breakdown_payload(session_id: Optional[str] = None) -> Dict[str, Any]:
+    empty_yes = _fmt_action_bucket(_action_bucket_template())
+    empty_no = _fmt_action_bucket(_action_bucket_template())
+    by_strategy: Dict[str, Any] = {}
+    for strat in _ACTION_BREAKDOWN_STRATEGIES:
+        by_strategy[strat] = {
+            "actions": {"BUY_YES": dict(empty_yes), "BUY_NO": dict(empty_no)},
+            "slipping": None,
+            "total_trades": 0,
+        }
+    return {
+        "session_id": session_id,
+        "total_closed": 0,
+        "other_action_trades": 0,
+        "actions": {"BUY_YES": empty_yes, "BUY_NO": empty_no},
+        "slipping": None,
+        "by_strategy": by_strategy,
+    }
+
+
+def _new_strategy_action_raw() -> Dict[str, Dict[str, Any]]:
+    return {
+        "BUY_YES": _action_bucket_template(),
+        "BUY_NO": _action_bucket_template(),
+        "SELL_YES": _action_bucket_template(),
+    }
+
+
+def _accumulate_action_bucket(bucket: Dict[str, Any], pnl: float) -> None:
+    if pnl > 0.01:
+        bucket["wins"] += 1
+    elif pnl < -0.01:
+        bucket["losses"] += 1
+    else:
+        bucket["flat"] += 1
+    bucket["pnl"] += pnl
+
+
+def _build_action_breakdown(journal: Any) -> Dict[str, Any]:
+    """Session closed-trade stats split by BUY_YES vs BUY_NO, per strategy and total."""
+    session_id = str(getattr(journal, "session_id", "") or "")
+    mtime = _journal_entries_mtime(journal)
+    cache_key = (session_id, mtime)
+    cached = _action_breakdown_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    raw: Dict[str, Dict[str, Any]] = _new_strategy_action_raw()
+    by_strategy_raw: Dict[str, Dict[str, Dict[str, Any]]] = {
+        s: _new_strategy_action_raw() for s in _ACTION_BREAKDOWN_STRATEGIES
+    }
+    other_count = 0
+    total_closed = 0
+
+    for trade in journal.get_closed_trades():
+        total_closed += 1
+        action = str(trade.get("action") or "").strip().upper()
+        strategy = str(trade.get("strategy") or "unknown")
+        try:
+            pnl = float(trade.get("pnl", 0) or 0)
+        except (TypeError, ValueError):
+            pnl = 0.0
+        if action not in raw:
+            other_count += 1
+            continue
+        _accumulate_action_bucket(raw[action], pnl)
+        if strategy in by_strategy_raw and action in by_strategy_raw[strategy]:
+            _accumulate_action_bucket(by_strategy_raw[strategy][action], pnl)
+
+    actions: Dict[str, Any] = {
+        "BUY_YES": _fmt_action_bucket(raw["BUY_YES"]),
+        "BUY_NO": _fmt_action_bucket(raw["BUY_NO"]),
+    }
+    if raw["SELL_YES"]["wins"] + raw["SELL_YES"]["losses"] + raw["SELL_YES"]["flat"] > 0:
+        actions["SELL_YES"] = _fmt_action_bucket(raw["SELL_YES"])
+
+    by_strategy: Dict[str, Any] = {}
+    for strat in _ACTION_BREAKDOWN_STRATEGIES:
+        sraw = by_strategy_raw[strat]
+        s_actions = {
+            "BUY_YES": _fmt_action_bucket(sraw["BUY_YES"]),
+            "BUY_NO": _fmt_action_bucket(sraw["BUY_NO"]),
+        }
+        s_total = s_actions["BUY_YES"]["trades"] + s_actions["BUY_NO"]["trades"]
+        if sraw["SELL_YES"]["wins"] + sraw["SELL_YES"]["losses"] + sraw["SELL_YES"]["flat"] > 0:
+            s_actions["SELL_YES"] = _fmt_action_bucket(sraw["SELL_YES"])
+        by_strategy[strat] = {
+            "actions": s_actions,
+            "slipping": _compute_action_slipping(s_actions["BUY_YES"], s_actions["BUY_NO"]),
+            "total_trades": s_total,
+        }
+
+    payload = {
+        "session_id": session_id or None,
+        "total_closed": total_closed,
+        "other_action_trades": other_count,
+        "actions": actions,
+        "slipping": _compute_action_slipping(actions["BUY_YES"], actions["BUY_NO"]),
+        "by_strategy": by_strategy,
+    }
+    _action_breakdown_cache.clear()
+    _action_breakdown_cache[cache_key] = payload
+    return payload
+
+
+@app.get("/api/journal/action_breakdown")
+async def get_action_breakdown(session_id: Optional[str] = None):
+    """BUY_YES vs BUY_NO closed-trade performance for the current paper session."""
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not j:
+        return _empty_action_breakdown_payload(session_id)
+    return _build_action_breakdown(j)
 
 
 @app.get("/api/journal/trade-points")
@@ -4752,6 +4945,7 @@ async def reset_paper_session(request: Request):
         _journal_cache["path"] = None
         _journal_cache["mtime"] = None
         _exit_reason_summary_cache.clear()
+        _action_breakdown_cache.clear()
         _ai_summary_cache.clear()
 
     logging.info(

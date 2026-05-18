@@ -293,3 +293,21 @@ async def test_execute_weather_impl_buy_no():
     await bot._execute_weather_signal_impl(sig)
     bot.clob_client.place_order.assert_called_once()
     _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="weather")
+
+
+@pytest.mark.asyncio
+async def test_execute_weather_impl_respects_lane_execution_gate():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.lane_manager.can_execute = MagicMock(
+        return_value=(False, "lane_paper_only", "paper", "weather|temp")
+    )
+    sig = _weather_signal(action="BUY_NO")
+
+    await bot._execute_weather_signal_impl(sig)
+
+    bot.clob_client.place_order.assert_not_called()
+    bot.journal.log_skip.assert_called_once()
+    extra = bot.journal.log_skip.call_args.kwargs["extra"]
+    assert extra["promotion_state"] == "paper"
+    assert extra["skip_reason"] == "lane_paper_only"

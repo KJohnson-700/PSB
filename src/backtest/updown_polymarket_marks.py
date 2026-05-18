@@ -52,7 +52,9 @@ def build_unix_updown_slug(symbol: str, window_open: pd.Timestamp, window_minute
     step_s = int(window_minutes) * 60
     ts = int(w.timestamp())
     aligned = (ts // step_s) * step_s
-    return f"{prefix}-updown-{int(window_minutes)}m-{aligned}"
+    wm = int(window_minutes)
+    seg = "1h" if wm >= 45 else f"{wm}m"
+    return f"{prefix}-updown-{seg}-{aligned}"
 
 
 def _cache_path(cache_root: Path, slug: str, window_open: pd.Timestamp, window_close: pd.Timestamp) -> Path:

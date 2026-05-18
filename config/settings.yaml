@@ -1272,8 +1272,9 @@ ai:
   # Maximum tokens per response. MiniMax-M2.5 uses ThinkingBlocks before JSON,
   # so needs ~1500 total (thinking ~800 + JSON ~200). Was 4000, which was wasteful.
   max_tokens: 1500
-  # Optional markdown+JSONL dump of validated marginal AI outputs (off by default).
-  structured_log: false
+  # Persist validated direct AI decisions to JSONL/markdown for post-trade calibration.
+  # This logs marginal/enforced AI outputs even when the Tier-C shadow pipeline does not run.
+  structured_log: true
 
   # ── Token conservation ──
   # Cache AI results per market for this many seconds (avoids re-analyzing same market every cycle)
@@ -1316,6 +1317,7 @@ ai:
     max_calls_per_scan: 1
     min_confidence_to_log: 0.60
     log_jsonl: true
+    # Shadow is opportunistic: it only runs on qualifying AI-gated setups, not every market scan.
     provider_name: ""      # optional: pin to one provider name from provider_chain
     model_override: ""     # optional model id for all three stages
   # Pre-entry veto: when AI is consulted on a marginal trade and returns very low

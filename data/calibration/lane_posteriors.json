@@ -1,18 +1,18 @@
 {
   "lanes": {
     "bitcoin|15m|down|bearish|drift": {
-      "alpha_ewma": -3.0693249281858668,
-      "beta_a": 14.0,
-      "beta_b": 9.0,
-      "last_updated": "2026-05-16T14:19:48.729455+00:00",
-      "n": 18
+      "alpha_ewma": 1.1953147061261018,
+      "beta_a": 16.0,
+      "beta_b": 18.0,
+      "last_updated": "2026-05-18T04:06:24.627592+00:00",
+      "n": 29
     },
     "bitcoin|15m|down|bearish|predict_window": {
-      "alpha_ewma": -1.186370687237144,
-      "beta_a": 9.0,
-      "beta_b": 15.0,
-      "last_updated": "2026-05-16T12:13:36.859768+00:00",
-      "n": 19
+      "alpha_ewma": -2.2539764148642094,
+      "beta_a": 13.0,
+      "beta_b": 17.0,
+      "last_updated": "2026-05-17T16:47:14.415342+00:00",
+      "n": 25
     },
     "bitcoin|15m|down|bearish|rejected": {
       "alpha_ewma": 3.8091668767743396,
@@ -22,32 +22,60 @@
       "n": 2489
     },
     "bitcoin|15m|down|bearish|spike": {
+      "alpha_ewma": -3.5816875,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-17T23:21:43.597735+00:00",
+      "n": 2
+    },
+    "bitcoin|15m|down|bearish|standard": {
+      "alpha_ewma": -2.2664784246003253,
+      "beta_a": 22.0,
+      "beta_b": 30.0,
+      "last_updated": "2026-05-18T03:32:40.177025+00:00",
+      "n": 47
+    },
+    "bitcoin|1h|down|bearish|drift": {
+      "alpha_ewma": 4.086661594202899,
+      "beta_a": 2.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-18T02:04:38.057967+00:00",
+      "n": 3
+    },
+    "bitcoin|1h|down|bearish|predict_window": {
+      "alpha_ewma": -5.0,
+      "beta_a": 4.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-17T18:20:39.018423+00:00",
+      "n": 2
+    },
+    "bitcoin|1h|down|bearish|spike": {
       "alpha_ewma": -5.0,
       "beta_a": 3.0,
       "beta_b": 3.0,
-      "last_updated": "2026-05-15T18:17:31.308040+00:00",
+      "last_updated": "2026-05-17T16:59:37.537402+00:00",
       "n": 1
     },
-    "bitcoin|15m|down|bearish|standard": {
-      "alpha_ewma": -0.5933326805047272,
-      "beta_a": 14.0,
-      "beta_b": 22.0,
-      "last_updated": "2026-05-16T13:50:27.605774+00:00",
-      "n": 31
+    "bitcoin|1h|down|bearish|standard": {
+      "alpha_ewma": 1.9614666851595013,
+      "beta_a": 3.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-17T17:49:30.576649+00:00",
+      "n": 4
     },
     "bitcoin|5m|down|bearish|drift": {
-      "alpha_ewma": 0.3327439563652228,
-      "beta_a": 13.0,
-      "beta_b": 25.0,
-      "last_updated": "2026-05-16T15:46:17.897157+00:00",
-      "n": 33
+      "alpha_ewma": 2.061244992315766,
+      "beta_a": 21.0,
+      "beta_b": 33.0,
+      "last_updated": "2026-05-18T04:04:44.891191+00:00",
+      "n": 49
     },
     "bitcoin|5m|down|bearish|predict_window": {
-      "alpha_ewma": -3.5,
+      "alpha_ewma": -2.225,
       "beta_a": 3.0,
-      "beta_b": 4.0,
-      "last_updated": "2026-05-16T13:49:26.866350+00:00",
-      "n": 2
+      "beta_b": 5.0,
+      "last_updated": "2026-05-17T02:44:15.897145+00:00",
+      "n": 3
     },
     "bitcoin|5m|down|bearish|rejected": {
       "alpha_ewma": -4.241359088316774,
@@ -57,25 +85,32 @@
       "n": 588
     },
     "bitcoin|5m|down|bearish|spike": {
-      "alpha_ewma": -0.3197782833124998,
-      "beta_a": 5.0,
-      "beta_b": 7.0,
-      "last_updated": "2026-05-16T07:38:47.041447+00:00",
-      "n": 7
+      "alpha_ewma": -0.6257588382392889,
+      "beta_a": 6.0,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-18T03:36:53.424883+00:00",
+      "n": 10
     },
     "bitcoin|5m|down|bearish|standard": {
-      "alpha_ewma": 3.0214552456870605,
-      "beta_a": 12.0,
-      "beta_b": 25.0,
-      "last_updated": "2026-05-16T15:02:17.106329+00:00",
-      "n": 32
+      "alpha_ewma": 1.8057118732243504,
+      "beta_a": 23.0,
+      "beta_b": 35.0,
+      "last_updated": "2026-05-18T03:42:27.945861+00:00",
+      "n": 53
     },
     "bitcoin|5m|down|neutral|drift": {
-      "alpha_ewma": -2.1361496740997024,
-      "beta_a": 5.0,
+      "alpha_ewma": -2.565727222984747,
+      "beta_a": 6.0,
       "beta_b": 8.0,
-      "last_updated": "2026-05-15T14:42:59.219726+00:00",
-      "n": 8
+      "last_updated": "2026-05-17T23:07:07.284895+00:00",
+      "n": 9
+    },
+    "bitcoin|5m|down|neutral|predict_window": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-17T20:31:15.485499+00:00",
+      "n": 1
     },
     "bitcoin|5m|down|neutral|spike": {
       "alpha_ewma": -0.3488008333333338,
@@ -85,11 +120,11 @@
       "n": 6
     },
     "bitcoin|5m|down|neutral|standard": {
-      "alpha_ewma": 3.13733333333333,
-      "beta_a": 2.0,
-      "beta_b": 4.0,
-      "last_updated": "2026-05-15T15:43:00.584832+00:00",
-      "n": 1
+      "alpha_ewma": 2.223748333333331,
+      "beta_a": 3.0,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-17T21:18:24.275524+00:00",
+      "n": 3
     },
     "bitcoin|5m|up|unknown|rejected": {
       "alpha_ewma": 1.0,
@@ -99,39 +134,53 @@
       "n": 4
     },
     "eth_macro|15m|down|bearish__bearish__bull|drift": {
-      "alpha_ewma": 1.046286764210938,
-      "beta_a": 4.0,
-      "beta_b": 8.0,
-      "last_updated": "2026-05-16T09:31:30.375293+00:00",
-      "n": 7
+      "alpha_ewma": -0.3821534813189612,
+      "beta_a": 8.0,
+      "beta_b": 14.0,
+      "last_updated": "2026-05-18T00:02:09.668267+00:00",
+      "n": 17
     },
     "eth_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 2.1559900000000005,
-      "beta_a": 2.0,
-      "beta_b": 5.0,
-      "last_updated": "2026-05-15T14:31:33.344353+00:00",
-      "n": 2
+      "alpha_ewma": 0.017723983487599015,
+      "beta_a": 6.0,
+      "beta_b": 11.0,
+      "last_updated": "2026-05-18T00:46:29.415807+00:00",
+      "n": 12
     },
     "eth_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 2.5361076923076924,
-      "beta_a": 2.0,
-      "beta_b": 5.0,
-      "last_updated": "2026-05-16T08:04:11.587091+00:00",
-      "n": 2
+      "alpha_ewma": 1.5217588096153842,
+      "beta_a": 3.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-17T23:16:34.637862+00:00",
+      "n": 5
     },
-    "eth_macro|15m|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": -2.299769230769231,
+    "eth_macro|15m|up|bullish__bullish__bull|drift": {
+      "alpha_ewma": -2.7832784615384605,
       "beta_a": 2.0,
-      "beta_b": 4.0,
-      "last_updated": "2026-05-16T00:51:26.916216+00:00",
+      "beta_b": 6.0,
+      "last_updated": "2026-05-17T10:22:05.037195+00:00",
+      "n": 3
+    },
+    "eth_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 5.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-17T21:37:14.640907+00:00",
       "n": 1
     },
-    "eth_macro|5m|down|bearish__bearish__bull|drift": {
-      "alpha_ewma": -2.156570375,
+    "eth_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": -1.8202731095467028,
       "beta_a": 3.0,
-      "beta_b": 6.0,
-      "last_updated": "2026-05-16T06:45:22.420781+00:00",
-      "n": 4
+      "beta_b": 7.0,
+      "last_updated": "2026-05-17T20:03:07.941178+00:00",
+      "n": 5
+    },
+    "eth_macro|5m|down|bearish__bearish__bull|drift": {
+      "alpha_ewma": -1.4456220959375,
+      "beta_a": 4.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-17T17:17:13.824907+00:00",
+      "n": 6
     },
     "eth_macro|5m|down|bearish__bearish__bull|spike": {
       "alpha_ewma": -3.5,
@@ -141,11 +190,11 @@
       "n": 4
     },
     "eth_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 1.097227073621515,
-      "beta_a": 9.0,
-      "beta_b": 21.0,
-      "last_updated": "2026-05-16T20:36:44.212281+00:00",
-      "n": 25
+      "alpha_ewma": 1.5519882464293167,
+      "beta_a": 11.0,
+      "beta_b": 26.0,
+      "last_updated": "2026-05-18T04:34:45.942327+00:00",
+      "n": 32
     },
     "eth_macro|5m|up|bullish__bullish__bull|drift": {
       "alpha_ewma": -0.8590833333333334,
@@ -162,32 +211,32 @@
       "n": 1
     },
     "hype_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 0.32463953298153214,
-      "beta_a": 4.0,
+      "alpha_ewma": -1.152947937420843,
+      "beta_a": 6.0,
       "beta_b": 8.0,
-      "last_updated": "2026-05-16T13:22:10.560035+00:00",
-      "n": 7
+      "last_updated": "2026-05-17T01:05:51.976891+00:00",
+      "n": 9
     },
     "hype_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 4.589690049903922,
-      "beta_a": 2.0,
-      "beta_b": 11.0,
-      "last_updated": "2026-05-16T18:11:38.108088+00:00",
-      "n": 8
+      "alpha_ewma": 3.2107250961581126,
+      "beta_a": 3.0,
+      "beta_b": 14.0,
+      "last_updated": "2026-05-17T13:46:27.693814+00:00",
+      "n": 12
     },
     "hype_macro|15m|up|bullish__bullish__bull|spike": {
-      "alpha_ewma": 4.759215686274509,
+      "alpha_ewma": 3.295333333333333,
       "beta_a": 3.0,
-      "beta_b": 3.0,
-      "last_updated": "2026-05-15T11:39:53.363334+00:00",
-      "n": 1
+      "beta_b": 4.0,
+      "last_updated": "2026-05-17T19:31:10.822629+00:00",
+      "n": 2
     },
     "hype_macro|15m|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": 5.0,
-      "beta_a": 4.0,
-      "beta_b": 3.0,
-      "last_updated": "2026-05-15T19:22:45.586212+00:00",
-      "n": 2
+      "alpha_ewma": -0.24335288103723834,
+      "beta_a": 13.0,
+      "beta_b": 18.0,
+      "last_updated": "2026-05-18T01:03:41.374905+00:00",
+      "n": 26
     },
     "hype_macro|5m|down|bullish__bullish__bull|override": {
       "alpha_ewma": 5.0,
@@ -196,12 +245,19 @@
       "last_updated": "2026-05-15T12:19:03.513679+00:00",
       "n": 1
     },
+    "hype_macro|5m|down|bullish__bullish__bull|standard": {
+      "alpha_ewma": -5.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-17T23:09:42.169643+00:00",
+      "n": 1
+    },
     "hype_macro|5m|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": -3.424769375000001,
-      "beta_a": 2.0,
-      "beta_b": 7.0,
-      "last_updated": "2026-05-15T17:52:25.993275+00:00",
-      "n": 4
+      "alpha_ewma": -2.484629330912039,
+      "beta_a": 5.0,
+      "beta_b": 17.0,
+      "last_updated": "2026-05-18T01:03:42.425732+00:00",
+      "n": 17
     },
     "sol_macro|15m|down|bearish__bearish__bull|spike": {
       "alpha_ewma": 1.6404,
@@ -211,11 +267,11 @@
       "n": 2
     },
     "sol_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 2.913576380581458,
-      "beta_a": 2.0,
-      "beta_b": 9.0,
-      "last_updated": "2026-05-16T09:53:26.121926+00:00",
-      "n": 6
+      "alpha_ewma": 0.7696424063976106,
+      "beta_a": 4.0,
+      "beta_b": 12.0,
+      "last_updated": "2026-05-17T23:39:09.589256+00:00",
+      "n": 11
     },
     "sol_macro|5m|down|bearish__bearish__bull|ai_assisted": {
       "alpha_ewma": 5.0,
@@ -225,32 +281,67 @@
       "n": 1
     },
     "sol_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 1.177807202632947,
-      "beta_a": 10.0,
-      "beta_b": 22.0,
-      "last_updated": "2026-05-16T17:57:38.177841+00:00",
-      "n": 27
+      "alpha_ewma": 2.238465703902304,
+      "beta_a": 11.0,
+      "beta_b": 23.0,
+      "last_updated": "2026-05-17T08:23:12.749213+00:00",
+      "n": 29
     },
     "xrp_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": -1.2164550997482655,
-      "beta_a": 8.0,
-      "beta_b": 8.0,
-      "last_updated": "2026-05-16T14:45:15.928908+00:00",
-      "n": 11
+      "alpha_ewma": -0.6505340678381166,
+      "beta_a": 9.0,
+      "beta_b": 11.0,
+      "last_updated": "2026-05-18T01:19:17.177141+00:00",
+      "n": 15
     },
     "xrp_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 3.8080715048711555,
+      "alpha_ewma": 3.131647045925697,
       "beta_a": 2.0,
-      "beta_b": 10.0,
-      "last_updated": "2026-05-16T14:24:49.095897+00:00",
-      "n": 7
+      "beta_b": 18.0,
+      "last_updated": "2026-05-18T04:01:11.359140+00:00",
+      "n": 15
+    },
+    "xrp_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": -2.9929952380952387,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-17T12:36:54.184311+00:00",
+      "n": 2
+    },
+    "xrp_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": -3.5920200000000007,
+      "beta_a": 3.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-17T21:51:36.740772+00:00",
+      "n": 4
+    },
+    "xrp_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -3.930755357142856,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-17T17:10:13.158685+00:00",
+      "n": 2
+    },
+    "xrp_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-18T03:58:42.544326+00:00",
+      "n": 1
     },
     "xrp_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.995718499900831,
+      "alpha_ewma": 1.5130273915823729,
       "beta_a": 11.0,
-      "beta_b": 14.0,
-      "last_updated": "2026-05-16T13:08:11.117673+00:00",
-      "n": 20
+      "beta_b": 15.0,
+      "last_updated": "2026-05-18T04:26:41.210388+00:00",
+      "n": 21
+    },
+    "xrp_macro|5m|down|neutral__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-17T20:38:56.181140+00:00",
+      "n": 1
     }
   },
   "schema_version": 1

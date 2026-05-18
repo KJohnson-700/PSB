@@ -829,15 +829,15 @@ def test_backtest_counts_edge_above_cap_skips():
     assert result.skip_counts.get("edge_above_cap", 0) > 0
 
 
-def test_30m_backtest_uses_30m_entry_window_not_15m_window():
+def test_1h_backtest_uses_1h_entry_window_not_15m_window():
     cfg = _config()
     cfg["entry_window_15m_min"] = 2.0
     cfg["entry_window_15m_max"] = 16.0
-    cfg["entry_window_30m_min"] = 16.0
-    cfg["entry_window_30m_max"] = 30.0
+    cfg["entry_window_1h_min"] = 16.0
+    cfg["entry_window_1h_max"] = 59.0
     cfg["entry_window_auto_align"] = False
-    cfg["strategies"]["bitcoin"]["entry_timing_window_30m_min"] = 16.0
-    cfg["strategies"]["bitcoin"]["entry_timing_window_30m_max"] = 30.0
+    cfg["strategies"]["bitcoin"]["entry_timing_window_1h_min"] = 16.0
+    cfg["strategies"]["bitcoin"]["entry_timing_window_1h_max"] = 59.0
 
     engine = UpdownBacktestEngine(config=cfg, initial_bankroll=500.0)
     engine._build_ta = lambda *args, **kwargs: TechnicalAnalysis(current_price=100.0)
@@ -858,7 +858,7 @@ def test_30m_backtest_uses_30m_entry_window_not_15m_window():
         data=_ohlcv_fixture(),
         start_date="2026-01-01",
         end_date="2026-01-01",
-        window_minutes=30,
+        window_minutes=60,
         symbol="BTC",
     )
 
@@ -866,21 +866,21 @@ def test_30m_backtest_uses_30m_entry_window_not_15m_window():
     assert result.skip_counts.get("outside_entry_window", 0) == 0
 
 
-def test_btc_30m_lane_entry_policy_band_allows_entries_at_replay_eval_time():
-    """30m lane policy 25–29m must not 100% outside_entry_window when open eval is ~30m."""
+def test_btc_1h_lane_entry_policy_band_allows_entries_at_replay_eval_time():
+    """1h lane policy must not 100% outside_entry_window when open eval is ~60m."""
     cfg = _config()
     cfg["strategies"]["bitcoin"]["entry_policy"] = {
         "window_side_overrides": {
-            "30m": {
+            "1h": {
                 "up": {
                     "min_edge": 0.08,
                     "entry_window_min": 25.0,
-                    "entry_window_max": 29.0,
+                    "entry_window_max": 55.0,
                 },
                 "down": {
                     "min_edge": 0.09,
                     "entry_window_min": 25.0,
-                    "entry_window_max": 29.0,
+                    "entry_window_max": 55.0,
                 },
             }
         }
@@ -907,7 +907,7 @@ def test_btc_30m_lane_entry_policy_band_allows_entries_at_replay_eval_time():
         data=_ohlcv_fixture(),
         start_date="2026-01-01",
         end_date="2026-01-01",
-        window_minutes=30,
+        window_minutes=60,
         symbol="BTC",
     )
 
@@ -915,7 +915,7 @@ def test_btc_30m_lane_entry_policy_band_allows_entries_at_replay_eval_time():
     assert result.skip_counts.get("outside_entry_window", 0) == 0
 
 
-def test_btc_30m_default_entry_window_allows_entries_without_explicit_30m_config():
+def test_btc_1h_default_entry_window_allows_entries_without_explicit_1h_config():
     cfg = _config()
     cfg["entry_window_auto_align"] = False
     cfg["entry_window_align_scan_interval_sec"] = 60
@@ -940,7 +940,7 @@ def test_btc_30m_default_entry_window_allows_entries_without_explicit_30m_config
         data=_ohlcv_fixture(),
         start_date="2026-01-01",
         end_date="2026-01-01",
-        window_minutes=30,
+        window_minutes=60,
         symbol="BTC",
     )
 

@@ -8,6 +8,80 @@
 
 ---
 
+## 2026-05-18 — Agent preference: no unsolicited gate tightening
+
+**`AGENTS.md`:** Added operator rule — on strategy/performance questions, report data patterns and bugs; do **not** suggest raising `min_edge`, disabling windows, blocking hours, or similar restriction unless the user explicitly asks to tighten or reduce activity.
+
+---
+
+## 2026-05-18 — Lane calibration: separate paper vs live shadow mode
+
+**`src/main.py`:** `PolyBot` resolves `LaneCalibrator` shadow mode from `trading.dry_run`: `lane_calibration.paper_shadow_mode` for paper/dry-run, `lane_calibration.live_shadow_mode` for live (legacy `shadow_mode` remains fallback). Hot config reload also refreshes calibrator when `trading` block changes.
+
+**`tests/test_live_config_apply.py`:** Coverage for paper vs live shadow resolution on config apply.
+
+**Why:** Same process can paper-trade in observation-only calibration while applying shrunk posteriors on live entries without flipping a global YAML flag between sessions.
+
+---
+
+## 2026-05-18 — Backtest replay: 1h window labels + 4H-hist override parity
+
+**`src/backtest/updown_engine.py`:** `replay_window_tf_label()` maps 5 / 15 / 60-minute windows to live lane keys (`5m`, `15m`, `1h`); replay LTF override helpers now mirror live `buy_*_4h_hist_override_enabled` via resampled alt 4H MACD from 1H bars. Bundle/dashboard backtest start accepts window **60** (not legacy 30).
+
+**`src/dashboard/server.py`:** `_parse_crypto_backtest_window()` validates 5 / 15 / 60 for dashboard-triggered crypto backtests.
+
+**Tests:** `tests/test_updown_backtest_parity.py`, `tests/test_dashboard_bundle.py` updated for 1h replay contract.
+
+---
+
+## 2026-05-18 — Main loop: weather scan hard-disabled
+
+**`src/main.py`:** Removed live weather `scan_and_analyze` / execute path from the trading cycle; forces `last_signal_counts.weather = 0` so ops telemetry does not imply weather is still firing. Execution helpers remain for manual/tests.
+
+---
+
+## 2026-05-18 — Local calibration batch (paper session artifacts)
+
+**`data/calibration/`:** Appended local paper-session rows — `trades.jsonl`, `rejected_candidates.jsonl`, `rejected_candidates_settled.jsonl`, `lane_posteriors.json`; `data/entry_prices/updown_fills.jsonl`, `data/lane_state_audit.jsonl` for May 15–18 HYPE/SOL/ETH/XRP macro runs used in BUY_YES / ghost-gate analysis.
+
+---
+
+## 2026-05-17 — Side-selection observability: current pulse vs recent LONG/SHORT history
+
+**`src/ops_pulse.py`:** Expanded `side_selection` telemetry so operators can distinguish “currently short-biased” from “BUY_YES disabled.” Each pulse now includes `long_lanes`, per-strategy `buy_yes_possible_this_pulse`, and a `recent_side_rollup` over the latest ops pulses so recent LONG/SHORT selection remains visible even when the current scan happens to be all `SHORT`.
+
+**`tests/test_ops_pulse.py`:** Added coverage for the new side-selection fields and isolated the tests from the real local `data/logs/ops_pulse.jsonl` file by monkeypatching the pulse path.
+
+**Why:** Investigation of the 2026-05-17 evening local run showed the merge itself was not down-only: `sol_macro` and `hype_macro` had recent `LONG` / `BUY_YES` side selection in live pulses, while `eth_macro` and `xrp_macro` remained `SHORT` because their underlying 1H bias inputs were bearish in the observed window. The old payload exposed only the current pulse, which made a transient all-short snapshot look like BUY_YES had been turned off globally.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ops_pulse.py -q` passed.
+
+---
+
+## 2026-05-17 — Rejected-candidate logging expanded for major ETH/XRP short suppressors
+
+**`src/strategies/eth_macro.py`:** Added rejected-candidate logging for previously invisible ETH up/down skips: `liquidity`, `price_too_far`, `oracle_basis_block`, and `lane_entry_window`. These rows now persist the operative side/action plus basic gate context such as liquidity floor, entry-price band, oracle basis cap, and evaluated minutes-left window.
+
+**`src/strategies/sol_macro.py`:** Added the same rejected-candidate logging coverage for the shared SOL-family up/down path used by `sol_macro`, `xrp_macro`, and `hype_macro` for `liquidity`, `price_too_far_from_even`, oracle validation failures (including `oracle_basis_block` / `oracle_stale` / `oracle_missing`), and `lane_entry_window`.
+
+**`tests/test_eth_macro.py`, `tests/test_sol_macro.py`:** Added regression tests proving the ETH oracle-basis block, ETH lane-entry-window block, and SOL-family up/down oracle block all write to the rejected-candidate ledger path.
+
+**Why:** Short-side audit on the 2026-05-17 local run showed the biggest live ETH/XRP suppressors were visible in `ops_pulse` but missing from `data/calibration/rejected_candidates*.jsonl`, which meant the ghost calibrator could not learn whether those gates were protective or over-tight. This patch fixes the main observability blind spot without loosening thresholds yet.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_eth_macro.py tests/test_sol_macro.py -q` passed (`111 passed`).
+
+---
+
+## 2026-05-17 — AI decision logging enabled for post-restart observability
+
+**`config/settings.yaml`:** Turned `ai.structured_log` on so validated direct AI decisions are written to `data/logs/ai_pipeline/marginal_analysis.jsonl`. Added an explicit note that `ai.shadow_pipeline.log_jsonl` only writes when the Tier-C shadow path actually runs on a qualifying AI-gated setup; it is not a per-scan heartbeat.
+
+**Why:** Post-restart diagnosis showed `shadow_pipeline.jsonl` stopped advancing after `2026-05-17 20:14:30 PDT`, but `ops_pulse.jsonl` also showed recent pulses with `shadow_pipeline_calls: 0`. That means the write path was not broken; the bot simply was not entering the shadow branch. Enabling structured marginal logs restores disk visibility into direct AI approve/reject decisions without forcing extra shadow latency on every candidate.
+
+**Verification:** Confirmed code-path behavior in `src/analysis/ai_agent.py`: direct AI logs are gated by `structured_log`, while shadow logs append independently when `run_shadow_pipeline(...)` completes. Recent `ops_pulse.jsonl` pulses after restart reported `shadow_pipeline_calls: 0`, matching the stalled shadow file.
+
+---
+
 ## 2026-05-17 — Settled ghost lane/gate report for missed-EV vs protected-loss ranking
 
 **`tools/ghost_gate_report.py`:** Added a read-only operator report over `data/calibration/rejected_candidates_settled.jsonl`. It summarizes settled ghost outcomes at three levels:
@@ -63,7 +137,7 @@ Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — 
 
 **`src/dashboard/server.py`:** `GET /api/journal/action_breakdown` — session closed trades split by `BUY_YES` / `BUY_NO` (flat-aware WR, net/avg PnL, `slipping` when both sides have 3+ trades).
 
-**`src/dashboard/index.html`:** Replaced unused Strategy Performance signal metric boxes with **per-strategy lanes** (BTC/SOL/ETH/HYPE/XRP/WX), each showing Buy YES vs Buy NO WR, W/L, and net PnL; session slip banner when both sides have 3+ closes. `dashboard_ui_rev`: `2026-05-17-action-perf-strategy-lanes`.
+**`src/dashboard/index.html`:** Replaced unused Strategy Performance signal metric boxes with **per-strategy lanes** (BTC/SOL/ETH/HYPE/XRP/WX), each showing Buy YES vs Buy NO WR, W/L, and net PnL; session slip banner when both sides have 3+ closes; lane grid always rendered (loading/empty states). `dashboard_ui_rev`: `2026-05-17-action-lanes-always-visible`.
 
 **Tests:** `tests/test_dashboard_action_breakdown.py`; bundle guard for `action-perf-grid` and no `BTC Signals` in `#strategy-boxes`.
 

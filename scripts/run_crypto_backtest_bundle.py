@@ -93,7 +93,7 @@ def main() -> int:
     )
     p.add_argument("--start", default=default_start)
     p.add_argument("--end", default=default_end)
-    p.add_argument("--window", type=int, choices=[5, 15, 30], default=15)
+    p.add_argument("--window", type=int, choices=[5, 15, 60], default=15)
     p.add_argument("--test-start", default=None, metavar="DATE")
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--skip-oracle", action="store_true")

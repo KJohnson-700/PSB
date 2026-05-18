@@ -664,19 +664,61 @@ class ETHMacroStrategy(SolMacroStrategy):
                 return round(vs[idx], 4)
             return {"n": n, "min": round(vs[0], 4), "p25": pct(0.25), "p50": pct(0.50), "p75": pct(0.75), "max": round(vs[-1], 4)}
 
+        def _log_skip_reject(
+            *,
+            market: Any,
+            window: str,
+            side: str,
+            action: str,
+            reason: str,
+            yes_price: Optional[float],
+            est_prob_up: float = 0.50,
+            htf_bias: Optional[str] = None,
+            context: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            log_rejected_candidate(
+                strategy=self._signal_strategy_name,
+                window=window,
+                side=side,
+                action=action,
+                reason=reason,
+                market=market,
+                yes_price=yes_price,
+                est_prob_up=est_prob_up,
+                htf_bias=htf_bias,
+                context=context or {},
+            )
+
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
         for market in eth_markets:
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
-            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
-                _bump_skip("liquidity")
-                continue
-
             _updown_tf = updown_timeframe_label(resolved_updown_window_minutes(market))
             is_5m = _updown_tf == "5m"
             is_1h = _updown_tf == "1h"
             yes_price = market.yes_price
+            market_allowed_side, side_source = self._resolve_market_side(
+                allowed_side, btc_htf_bias, yes_price
+            )
+            action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
+            primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
+            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
+                _bump_skip("liquidity")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="liquidity",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "market_liquidity": float(market.liquidity),
+                        "min_liquidity": float(self.min_liquidity),
+                    },
+                )
+                continue
 
             # UTC dead-zone — same config keys as sol_macro / bitcoin updown.
             _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
@@ -758,17 +800,26 @@ class ETHMacroStrategy(SolMacroStrategy):
             _sample("entry_price", yes_price)
             if yes_price < 0.20 or yes_price > 0.80:
                 _bump_skip("price_too_far")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="price_too_far",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "entry_price": float(yes_price),
+                        "entry_price_min": 0.20,
+                        "entry_price_max": 0.80,
+                    },
+                )
                 continue
 
-            market_allowed_side, side_source = self._resolve_market_side(
-                allowed_side, btc_htf_bias, yes_price
-            )
             side_source_counts[side_source] = side_source_counts.get(side_source, 0) + 1
 
-            action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             action_counts[action] = action_counts.get(action, 0) + 1
             direction = "UP" if market_allowed_side == "LONG" else "DOWN"
-            primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
             reason_parts = [
                 f"ETH_HTF={alt_1h_trend}",
                 f"BTC_HTF={btc_htf_bias}",
@@ -836,6 +887,25 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _sample("rsi_soft_penalty", rsi_soft_penalty)
             if self._oracle_basis_blocks_entry(eth.oracle_basis_bps):
                 _bump_skip("oracle_basis_block")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="oracle_basis_block",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "oracle_basis_bps": (
+                            float(eth.oracle_basis_bps)
+                            if eth.oracle_basis_bps is not None
+                            else None
+                        ),
+                        "oracle_max_basis_bps": float(
+                            self.config.get("oracle_max_basis_bps", 0.0) or 0.0
+                        ),
+                    },
+                )
                 continue
 
             est_prob_up = 0.50
@@ -1077,6 +1147,22 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
             if _eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max:
                 _bump_skip("lane_entry_window")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="lane_entry_window",
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "eval_mins_left": float(_eval_left),
+                        "mins_left": float(_mins_left),
+                        "entry_window_min": float(lane_policy.entry_window_min),
+                        "entry_window_max": float(lane_policy.entry_window_max),
+                    },
+                )
                 continue
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)

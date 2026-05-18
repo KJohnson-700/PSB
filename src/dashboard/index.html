@@ -176,6 +176,36 @@
         @media (max-width:520px){
             .strategy-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
         }
+        .action-perf-wrap{margin-bottom:12px;min-width:0}
+        .action-perf-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+        .action-perf-head .action-perf-title{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--td)}
+        .action-perf-head .action-perf-total{font-size:0.72rem;color:var(--td)}
+        .action-slip-banner{display:none;font-family:'IBM Plex Mono',monospace;font-size:0.72rem;letter-spacing:.04em;padding:8px 10px;border-radius:4px;margin-bottom:10px;background:rgba(255,68,102,.08);border:1px solid rgba(255,68,102,.35);color:var(--re)}
+        .action-slip-banner.visible{display:block}
+        .action-compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:0}
+        .action-side-yes .hero-lbl{color:rgba(0,229,255,.75)}
+        .action-side-no .hero-lbl{color:rgba(176,96,255,.75)}
+        .action-side--slipping{border-color:rgba(255,68,102,.45)!important;box-shadow:0 0 22px rgba(255,68,102,.14),0 0 40px rgba(255,68,102,.08)!important}
+        .action-perf-note{font-size:0.7rem;color:var(--td);margin-top:8px;line-height:1.45}
+        .action-perf-empty{font-size:0.78rem;color:var(--td);padding:14px 0;text-align:center}
+        .action-strategy-lanes{align-items:stretch;min-height:118px}
+        .action-lanes-loading{grid-column:1/-1;font-size:0.78rem;color:var(--td);padding:20px 0;text-align:center}
+        .action-strategy-lanes .action-lane{
+            background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
+            border-radius:4px;padding:12px 10px;min-height:118px;display:flex;flex-direction:column;
+            gap:8px;text-align:left;transition:border-color .18s,box-shadow .18s;
+            box-shadow:0 0 20px rgba(0,0,0,.38),0 0 16px rgba(176,96,255,.06);
+        }
+        .action-strategy-lanes .action-lane:hover{border-color:rgba(0,229,255,.28);box-shadow:0 0 22px rgba(0,229,255,.16),0 0 40px rgba(176,96,255,.1)}
+        .action-lane-title{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+        .action-lane-total{font-size:0.65rem;color:var(--td);margin-top:2px}
+        .action-lane-row{display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-radius:3px;border:1px solid transparent;background:rgba(4,6,10,.45)}
+        .action-lane-row--yes .action-lane-action{color:rgba(0,229,255,.85)}
+        .action-lane-row--no .action-lane-action{color:rgba(176,96,255,.85)}
+        .action-lane-row--slip{border-color:rgba(255,68,102,.4);background:rgba(255,68,102,.06)}
+        .action-lane-action{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase}
+        .action-lane-main{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;font-weight:600;line-height:1.2}
+        .action-lane-sub{font-size:0.68rem;color:var(--td);line-height:1.35}
 
         /* ── Badges ── */
         .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
@@ -1543,13 +1573,17 @@
     <!-- Strategy Performance -->
     <div class="card" data-aos="fade-up" style="margin-top:16px;margin-bottom:16px;">
         <h2>Strategy Performance</h2>
-        <div class="strategy-metric-grid" id="strategy-boxes">
-            <div class="metric-box"><div class="value">-</div><div class="label">BTC Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">SOL Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">ETH Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">HYPE Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">XRP Signals</div></div>
-            <div class="metric-box"><div class="value">-</div><div class="label">Weather Signals</div></div>
+        <div class="action-perf-wrap" id="strategy-boxes">
+            <div class="action-perf-head">
+                <span class="action-perf-title">Entry action · current session</span>
+                <span class="action-perf-total" id="action-perf-total">—</span>
+            </div>
+            <div id="action-perf-slip" class="action-slip-banner" aria-live="polite"></div>
+            <div id="action-perf-empty" class="action-perf-empty" style="display:none;">No closed trades this session — lanes below still show Buy YES vs Buy NO per strategy.</div>
+            <div class="strategy-metric-grid action-strategy-lanes" id="action-perf-lanes">
+                <p class="action-lanes-loading" id="action-perf-lanes-loading">Loading entry-action lanes…</p>
+            </div>
+            <div id="action-perf-note" class="action-perf-note"></div>
         </div>
         <table id="strategy-table" style="margin-top:8px;">
             <thead><tr><th>Strategy</th><th>Live Signals</th><th>Backtest Trades</th><th>Backtest PnL</th><th>Reports</th><th>Break-even</th></tr></thead>
@@ -2471,6 +2505,8 @@ function switchMainView(which, opts) {
             fetchAll();
         }
         if (which === 'performance') {
+            fetchAll();
+            loadActionBreakdown();
             loadLivePerformance();
             setTimeout(function() {
                 if (typeof loadAllocationChart === 'function') loadAllocationChart();
@@ -2696,9 +2732,9 @@ async function fetchAll() {
     const needUpdownWr = needLive || needPerformance;
     /** Journal + Performance both show session rollup; summary must be fetched for either. */
     const needJournalSummary = needJournal || needPerformance;
-    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, laneHealthR, laneStatesR, laneHistoryR;
+    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
     try {
-        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
+        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
@@ -2718,6 +2754,7 @@ async function fetchAll() {
             needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
+            fetchT('/api/journal/action_breakdown'),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
             needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
@@ -2840,6 +2877,18 @@ async function fetchAll() {
     try {
         if (exitReasonR?.ok) updateExitReasons(await exitReasonR.json());
     } catch (e) { console.error('[dashboard] exit reasons:', e); }
+
+    try {
+        if (actionBreakdownR?.ok) {
+            updateActionBreakdown(await actionBreakdownR.json());
+        } else {
+            const err = actionBreakdownR ? `HTTP ${actionBreakdownR.status}` : 'timeout';
+            updateActionBreakdown({ total_closed: 0, by_strategy: {}, _error: err });
+        }
+    } catch (e) {
+        console.error('[dashboard] action breakdown:', e);
+        updateActionBreakdown({ total_closed: 0, by_strategy: {}, _error: String(e) });
+    }
 
     try {
         updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData);
@@ -3753,9 +3802,8 @@ async function toggleKillSwitch() {
 function updateMetrics(d) {
     updateWeatherDiag(d && typeof d === 'object' ? d : null);
     if (!d || typeof d !== 'object') return;
-    const boxes = document.getElementById('strategy-boxes');
     const tbody = document.querySelector('#strategy-table tbody');
-    if (!boxes || !tbody) return;
+    if (!tbody) return;
 
     const _metricStrats = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'weather'];
     const fp = _metricStrats.map(s => {
@@ -3770,10 +3818,9 @@ function updateMetrics(d) {
             m.reports || 0,
         ].join('|');
     }).join(';');
-    if (boxes.dataset.dashMetricsFp === fp) return;
-    boxes.dataset.dashMetricsFp = fp;
+    if (tbody.dataset.dashMetricsFp === fp) return;
+    tbody.dataset.dashMetricsFp = fp;
 
-    // Format "X ago" from ISO string
     function _cycleAge(isoStr) {
         if (!isoStr) return '';
         const ago = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000);
@@ -3781,39 +3828,6 @@ function updateMetrics(d) {
         if (ago < 3600) return Math.floor(ago/60) + 'm ago';
         return Math.floor(ago/3600) + 'h ago';
     }
-
-    function sigBox(strat, label) {
-        const color = stratHex(strat);
-        const m = d[strat] || {};
-        const sigs = m.signals ?? 0;
-        const closedTrades = m.trades || 0;
-        const opens = Number(m.open_positions ?? 0);
-        const total = m.total_signals || 0;
-        const age = m.last_cycle ? _cycleAge(m.last_cycle) : '';
-        let status = '';
-        if (opens > 0) {
-            status = `<div style="font-size:0.65rem;color:var(--green);margin-top:2px;">${opens} open</div>`;
-        } else if (age) {
-            status = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;" title="${m.last_cycle}">${age}</div>`;
-        } else {
-            status = `<div style="font-size:0.65rem;color:var(--text-muted);margin-top:2px;">waiting…</div>`;
-        }
-        const closedHint = closedTrades > 0
-            ? `<div style="font-size:0.6rem;color:var(--text-muted);margin-top:1px;">${closedTrades} closed (journal)</div>`
-            : '';
-        const totalLine = total > 0
-            ? `<div style="font-size:0.6rem;color:var(--text-muted);margin-top:1px;">${total} signals Σ</div>`
-            : '';
-        return `<div class="metric-box"><div class="value" style="color:${color}">${sigs}</div><div class="label">${label}</div>${status}${closedHint}${totalLine}</div>`;
-    }
-
-    boxes.innerHTML =
-        sigBox('bitcoin', 'BTC Signals') +
-        sigBox('sol_macro', 'SOL Signals') +
-        sigBox('eth_macro', 'ETH Signals') +
-        sigBox('hype_macro', 'HYPE Signals') +
-        sigBox('xrp_macro', 'XRP Signals') +
-        sigBox('weather', 'Weather Signals');
 
     const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', weather:'Event-based'};
     const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', weather:'Independent'};
@@ -3825,6 +3839,7 @@ function updateMetrics(d) {
         return `<tr><td>${stratPillHTML(s)}</td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.reports||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
     }).join('');
 }
+
 
 function updateScan(d) {
     const sumEl = document.getElementById('scan-summary');
@@ -6159,6 +6174,126 @@ function updateLivePerf(d) {
     kellyEl.innerHTML = html;
 }
 
+
+
+
+function updateActionBreakdown(d) {
+    const totalEl = document.getElementById('action-perf-total');
+    const slipEl = document.getElementById('action-perf-slip');
+    const emptyEl = document.getElementById('action-perf-empty');
+    const lanesEl = document.getElementById('action-perf-lanes');
+    const noteEl = document.getElementById('action-perf-note');
+    if (!totalEl || !slipEl || !emptyEl || !lanesEl) return;
+
+    const ACTION_LANES = [
+        { id: 'bitcoin', label: 'BTC' },
+        { id: 'sol_macro', label: 'SOL' },
+        { id: 'eth_macro', label: 'ETH' },
+        { id: 'hype_macro', label: 'HYPE' },
+        { id: 'xrp_macro', label: 'XRP' },
+        { id: 'weather', label: 'WX' },
+    ];
+    const byStrategy = (d && d.by_strategy) || {};
+    const totalClosed = Number(d?.total_closed || 0);
+
+    totalEl.textContent = totalClosed ? `${totalClosed} closed` : '—';
+
+    function wrColor(wr) {
+        if (wr >= 0.6) return 'var(--gr)';
+        if (wr >= 0.5) return 'var(--tx)';
+        return 'var(--re)';
+    }
+    function fmtPnl(v) {
+        const n = Number(v || 0);
+        const sign = n >= 0 ? '+' : '';
+        return `${sign}$${n.toFixed(2)}`;
+    }
+    function esc(s) {
+        return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    }
+    function rowHtml(actionKey, bucket, slipAction) {
+        const trades = Number(bucket.trades || 0);
+        const wr = Number(bucket.win_rate || 0);
+        const flat = Number(bucket.flat || 0);
+        const flatPart = flat > 0 ? ` · ${flat}F` : '';
+        const rowClass = actionKey === 'BUY_YES' ? 'action-lane-row--yes' : 'action-lane-row--no';
+        const slipClass = slipAction === actionKey ? ' action-lane-row--slip' : '';
+        const main = trades
+            ? `<span style="color:${wrColor(wr)}">${(wr * 100).toFixed(0)}%</span> · ${bucket.wins || 0}W/${bucket.losses || 0}L${flatPart}`
+            : '—';
+        const sub = trades ? `Net ${fmtPnl(bucket.net_pnl)} · Avg ${fmtPnl(bucket.avg_pnl)}` : 'No closes';
+        const label = actionKey === 'BUY_YES' ? 'Buy YES' : 'Buy NO';
+        return `<div class="action-lane-row ${rowClass}${slipClass}">
+            <div class="action-lane-action">${label}</div>
+            <div class="action-lane-main">${main}</div>
+            <div class="action-lane-sub">${sub}</div>
+        </div>`;
+    }
+
+    const fetchError = d && d._error;
+    emptyEl.style.display = totalClosed ? 'none' : 'block';
+    lanesEl.style.display = 'grid';
+
+    const sessionSlip = d?.slipping;
+    if (sessionSlip && sessionSlip.action) {
+        slipEl.classList.add('visible');
+        const other = sessionSlip.action === 'BUY_YES' ? 'BUY_NO' : 'BUY_YES';
+        const wrDelta = Number(sessionSlip.delta_win_rate || 0) * 100;
+        slipEl.textContent =
+            `Session: ${sessionSlip.action} slipping vs ${other} · WR ${wrDelta >= 0 ? '+' : ''}${wrDelta.toFixed(1)}pp · PnL ${fmtPnl(sessionSlip.delta_net_pnl)}`;
+    } else {
+        slipEl.classList.remove('visible');
+        slipEl.textContent = '';
+    }
+
+    lanesEl.innerHTML = ACTION_LANES.map(({ id, label }) => {
+        const block = byStrategy[id] || {};
+        const actions = block.actions || {};
+        const yes = actions.BUY_YES || {};
+        const no = actions.BUY_NO || {};
+        const laneSlip = block.slipping && block.slipping.action ? block.slipping.action : null;
+        const color = typeof stratHex === 'function' ? stratHex(id) : 'var(--cy)';
+        const laneTrades = Number(block.total_trades || 0);
+        const slipHint = laneSlip
+            ? `<div class="action-lane-sub" style="color:var(--re);margin-top:2px;">${esc(laneSlip)} slipping</div>`
+            : '';
+        return `<div class="action-lane" title="${esc(id)}">
+            <div>
+                <div class="action-lane-title" style="color:${color}">${esc(label)}</div>
+                <div class="action-lane-total">${laneTrades ? laneTrades + ' closed' : 'No closes'}</div>
+            </div>
+            ${rowHtml('BUY_YES', yes, laneSlip)}
+            ${rowHtml('BUY_NO', no, laneSlip)}
+            ${slipHint}
+        </div>`;
+    }).join('');
+
+    if (noteEl) {
+        if (fetchError) {
+            noteEl.textContent = `Could not load breakdown (${fetchError}). Restart the bot so /api/journal/action_breakdown is available, then hard-refresh.`;
+        } else if (sessionSlip && sessionSlip.action) {
+            noteEl.textContent = 'Red row = slipping side for that strategy (3+ closes per side). Table below has backtest and live signal counts.';
+        } else {
+            noteEl.textContent = 'Six lanes: Buy YES vs Buy NO per strategy (current session). Slip callout needs 3+ closes on both sides.';
+        }
+    }
+}
+
+async function loadActionBreakdown() {
+    try {
+        const r = await fetchT('/api/journal/action_breakdown');
+        if (r?.ok) {
+            updateActionBreakdown(await r.json());
+            return;
+        }
+        const err = r ? `HTTP ${r.status}` : 'timeout';
+        updateActionBreakdown({ total_closed: 0, by_strategy: {}, _error: err });
+    } catch (e) {
+        updateActionBreakdown({ total_closed: 0, by_strategy: {}, _error: String(e) });
+    }
+}
+
+
 function updateUpdownBreakdown(ud) {
     if (!ud) return;
 
@@ -6988,6 +7123,7 @@ async function refreshDashboardData() {
     }
 }
 
+updateActionBreakdown({ total_closed: 0, by_strategy: {} });
 fetchAll();
 loadConfig();
 updateFullscreenButtonState();

@@ -608,6 +608,54 @@ def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     assert strategy._updown_composite_floor(lane="default", quant_confidence=0.55) == 0.66
 
 
+def test_sol_updown_oracle_block_is_logged_to_rejected_candidates():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "min_liquidity": 1,
+            "dead_zone_enabled": False,
+            "use_ai": False,
+            "use_ai_updown": False,
+            "require_oracle_for_updown": True,
+            "oracle_max_basis_bps": 10.0,
+            "entry_window_auto_align": False,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    strategy = SolMacroStrategy(cfg, ai, MagicMock())
+
+    ta = _make_bearish_ta()
+    ta.sol.chainlink_price = 120.0
+    ta.sol.current_price = 120.30
+    ta.sol.chainlink_updated_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    ta.sol.oracle_basis_bps = 25.0
+    strategy.sol_service.get_full_analysis = MagicMock(return_value=ta)
+
+    market = MagicMock()
+    market.id = "sol_updown_oracle"
+    market.question = "Solana Up or Down - May 17, 9:00AM-9:15AM ET"
+    market.description = market.question
+    market.yes_price = 0.50
+    market.no_price = 0.50
+    market.liquidity = 50000.0
+    market.token_id_yes = "tok-yes-sol"
+    market.token_id_no = "tok-no-sol"
+    market.end_date = datetime.now(timezone.utc) + timedelta(minutes=14)
+    market.token_ids = ["tok-yes-sol", "tok-no-sol"]
+    market.slug = "sol-updown-15m-1770000010"
+    market.group_item_title = "Solana Up or Down"
+    market.volume = 10000.0
+    market.spread = 0.02
+
+    with patch("src.strategies.sol_macro.log_rejected_candidate") as mock_log:
+        signals = run_async(strategy.scan_and_analyze([market], bankroll=10000.0))
+
+    assert signals == []
+    assert mock_log.call_count == 1
+    assert mock_log.call_args.kwargs["reason"] == "oracle_basis_block"
+
+
 def _make_bullish_ta():
     """Create a bullish SOL technical analysis."""
     return SOLTechnicalAnalysis(

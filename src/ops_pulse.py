@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -185,6 +186,30 @@ def _coerce_nonnegative_int(v: Any) -> int:
         return 0
 
 
+def _iter_recent_ops_pulses(limit: int = 120) -> list[Dict[str, Any]]:
+    """Read the last N structured ops pulses from disk, best-effort."""
+    if limit <= 0 or not OPS_PULSE_FILE.exists():
+        return []
+    try:
+        tail: deque[str] = deque(maxlen=limit)
+        with OPS_PULSE_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    tail.append(line)
+        rows: list[Dict[str, Any]] = []
+        for line in tail:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows
+    except Exception:
+        return []
+
+
 def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     """
     Per-lane and aggregate counters for optional AI pipeline instrumentation.
@@ -258,13 +283,33 @@ def _side_selection_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
             "allowed_side": side or None,
             "signals": signals,
             "side_source_counts": side_counts,
+            "buy_yes_possible_this_pulse": side == "LONG",
             "buy_no_possible_this_pulse": side == "SHORT",
         }
+    recent = _iter_recent_ops_pulses(limit=120)
+    recent_counts: Dict[str, Dict[str, int]] = {}
+    for lane in lanes:
+        counts: Counter[str] = Counter()
+        for row in recent:
+            hist = (((row.get("side_selection") or {}).get("per_strategy") or {}).get(lane) or {})
+            hist_side = str(hist.get("allowed_side") or "").upper()
+            if hist_side in ("LONG", "SHORT"):
+                counts[hist_side] += 1
+        current_side = str((per_lane.get(lane) or {}).get("allowed_side") or "").upper()
+        if current_side in ("LONG", "SHORT"):
+            counts[current_side] += 1
+        recent_counts[lane] = {"LONG": int(counts.get("LONG", 0)), "SHORT": int(counts.get("SHORT", 0))}
+    long_lanes = [lane for lane, data in per_lane.items() if data["allowed_side"] == "LONG"]
     short_lanes = [lane for lane, data in per_lane.items() if data["allowed_side"] == "SHORT"]
     return {
         "per_strategy": per_lane,
         "aggregate": aggregate,
+        "long_lanes": long_lanes,
         "short_lanes": short_lanes,
+        "recent_side_rollup": {
+            "lookback_pulses": len(recent) + 1,
+            "per_strategy": recent_counts,
+        },
         "buy_no_absence_reason": (
             "No strategy selected SHORT/NO side in this pulse; BUY_NO filters and "
             "execution were not exercised."

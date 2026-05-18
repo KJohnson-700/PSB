@@ -13,6 +13,7 @@
 - Before enabling execution on a path that was idle or gated, give a brief explicit reason (config, risk gate, or code path) so the decision is understandable without relying on chat memory.
 - Strategy and backtest auditing (distinct from routine pytest/CI green checks): prioritize finding bugs, miscalculations, inconsistencies, and spec drift in data, strategy code, and reports, and give actionable improvement suggestions; follow `docs/polymarket-backtest-subagent-skill.md`.
 - After material strategy changes (not minor bugfixes), deliver concise review or backtest summaries and prefer in-repo or dashboard-visible artifacts over copy-paste-only handoffs. When scoping a **new** short-window or new-asset strategy (e.g. HYPE on Polymarket), prioritize external research on documented approaches, fees, and resolution mechanics—not only porting an existing lag template.
+- **No unsolicited tightening:** On strategy or performance questions, report what the data shows (patterns, lanes, hours, gates, bugs). Do **not** suggest tightening gates, raising `min_edge`, disabling windows, blocking hours, or similar restriction unless the user explicitly asks to tighten, restrict, or reduce activity.
 
 ## Strategy Log — AI Editor Instructions
 
