@@ -1085,7 +1085,7 @@ strategies:
     calibration_size_multiplier_5m: 0.30  # keep XRP 5m diagnostic only until it has a positive live cohort
     entry_price_min: 0.42
     entry_price_max: 0.58
-    entry_price_max_15m_yes_side: 0.55  # 15m up/down: cap rich YES entries (legacy key entry_price_max_15m_buy_yes still read)
+    entry_price_max_15m_yes_side: 0.57  # 2026-05-17 ghost-mode probe: modestly reopen XRP 15m BUY_YES without touching 5m
     min_lag_magnitude_pct: 0.40  # 2026-04-24: raised from 0.30 — match SOL; XRP moves are smaller so weaker lags are less reliable
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.40
@@ -1172,9 +1172,9 @@ strategies:
             size_multiplier: 0.30
         15m:
           up:
-            min_edge: 0.09
+            min_edge: 0.085
             entry_price_min: 0.42
-            entry_price_max: 0.55
+            entry_price_max: 0.57
             entry_window_min: 2.0
             entry_window_max: 16.0
           down:

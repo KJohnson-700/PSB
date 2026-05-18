@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-05-17 — Ghost-mode reopen: XRP 15m BUY_YES only
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), eased only the `xrp_macro` `15m` `BUY_YES` lane: `entry_price_max_15m_yes_side` **0.55 → 0.57**, and the `entry_policy.window_side_overrides.15m.up.min_edge` **0.09 → 0.085** with matching `entry_price_max` **0.55 → 0.57**. No `5m` XRP settings changed, and ETH/HYPE were left untouched.
+- **Why:** The operator explicitly wants a ghost-mode calibration probe, not another loss-containment tightening pass. Recent XRP evidence does **not** support reopening `5m BUY_YES`, but `15m BUY_YES` was close enough to flat to justify a small upward-side admission probe while keeping the bad short-window path unchanged.
+- **Hypothesis:** A modest reopen on XRP `15m BUY_YES` should increase live sample count in the salvageable lane without reintroducing the clearly poor `5m BUY_YES` behavior.
+- **Expected outcome:** Over the next ~15 closed `xrp_macro` `15m BUY_YES` trades, trade count should rise versus the prior gate, and net PnL should stay near flat or improve. If the reopened cohort turns clearly negative, revert the `15m` reopen and keep XRP upside learning restricted to other paths.
+- **Actual outcome:** `pending` (need ≥15 closed XRP `15m BUY_YES` trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-09 — Oracle-first + composite score gate for XRP up/down
 
 - **What changed:** `xrp_macro` inherits the shared oracle-first and composite up/down gate, with `require_oracle_for_updown=true`, `oracle_max_age_sec=180`, and `oracle_max_basis_bps=10.0`.
