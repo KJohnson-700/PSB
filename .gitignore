@@ -35,6 +35,8 @@ data/live_scans/
 data/coach/
 data/backtest/reports/*.json
 data/backtest/polymarket_marks/*.parquet
+data/calibration/rejected_candidates.jsonl
+data/calibration/rejected_candidates_settled.jsonl
 
 # IDE / local agents
 .cursor/

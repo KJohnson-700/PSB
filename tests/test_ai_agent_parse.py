@@ -58,6 +58,29 @@ def test_parse_missing_estimated_probability_raises() -> None:
         _agent()._parse_response(raw, "m3", 0.5)
 
 
+def test_parse_minimax_probability_fallback_infers_missing_probability() -> None:
+    raw = (
+        '{"reasoning":"Momentum still favors YES.","confidence_score":"medium-high",'
+        '"recommendation":"BUY_YES"}'
+    )
+    a = _agent()._parse_response_allow_probability_inference(raw, "m3b", 0.52)
+    assert a.recommendation == "BUY_YES"
+    assert a.confidence_score == 0.72
+    assert a.estimated_probability > 0.52
+    assert a.estimated_probability <= 0.95
+
+
+def test_parse_minimax_probability_fallback_recovers_unusable_probability() -> None:
+    raw = (
+        '{"reasoning":"Momentum still favors YES.","confidence_score":0.8,'
+        '"estimated_probability":"likely around sixty percent",'
+        '"recommendation":"BUY_YES"}'
+    )
+    a = _agent()._parse_response_allow_probability_inference(raw, "m3c", 0.50)
+    assert a.recommendation == "BUY_YES"
+    assert a.estimated_probability > 0.50
+
+
 def test_coerce_confidence_phrases() -> None:
     ag = _agent()
     assert ag._coerce_confidence_score("medium-high") == 0.72
@@ -175,6 +198,64 @@ def test_lane_feedback_context_includes_prompt_version_and_bucket_stats(tmp_path
     assert "bitcoin 15m BUY_NO" in text
     assert "too optimistic historically" in text
     assert "Rejected sibling candidates" in text
+
+
+def test_lane_feedback_bundle_exposes_source_metadata(tmp_path) -> None:
+    trades = tmp_path / "trades.jsonl"
+    trades.write_text(
+        json.dumps(
+            {
+                "strategy": "bitcoin",
+                "window": "15m",
+                "side": "BUY_NO",
+                "lane_id": "bitcoin|15m|down|bearish|ai_assisted",
+                "stated_est_prob": 0.40,
+                "win": True,
+                "entry_price_bucket": "0.49_0.51",
+                "regime_tag_bucket": "bearish",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    posteriors = tmp_path / "lane_posteriors.json"
+    posteriors.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lanes": {
+                    "bitcoin|15m|down|bearish|ai_assisted": {
+                        "n": 2,
+                        "alpha_ewma": 0.9,
+                        "beta_a": 3.0,
+                        "beta_b": 3.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [],
+                "lane_feedback_min_samples": 1,
+                "trades_log_path": str(trades),
+                "lane_posteriors_path": str(posteriors),
+            }
+        }
+    )
+    bundle = ag._build_lane_feedback_bundle(
+        strategy_hint="bitcoin",
+        lane_id="bitcoin|15m|down|bearish|ai_assisted",
+        quant_action="BUY_NO",
+        calibration_bucket_tags={"edge_bucket": "0.05_0.08"},
+    )
+    assert "exact_lane_posterior" in bundle["feedback_sources_used"]
+    assert "lane_family_trades" in bundle["feedback_sources_used"]
+    assert bundle["sample_count_used"]["exact_lane_posterior"] == 2
+    assert bundle["bucket_tags"]["edge_bucket"] == "0.05_0.08"
 
 
 def test_research_narrative_config_helpers() -> None:
@@ -315,6 +396,17 @@ def test_parse_trader_and_portfolio_shadow_json() -> None:
     )
     assert pd.rating.value == "BULLISH"
     assert pd.position_size == 0.2
+
+
+def test_parse_portfolio_shadow_accepts_summary_aliases() -> None:
+    ag = _agent()
+    pd = ag._parse_portfolio_shadow_response(
+        '{"rating":"BULLISH","action":"BUY_YES","summary":"go",'
+        '"investment_horizon":"15m","position_size":0.2,"entry_price":0.5,'
+        '"stop_loss":null,"metadata":{}}',
+        "m1",
+    )
+    assert pd.executive_summary == "go"
 
 
 def test_shadow_marginal_mismatch() -> None:
@@ -569,7 +661,7 @@ def test_decision_layer_rejects_low_confidence_ai_action() -> None:
             market_id="m-low-conf",
             strategy_hint="bitcoin",
             quant_action="BUY_YES",
-            quant_edge=0.10,
+            quant_edge=0.14,
             quant_confidence=0.54,
             quant_threshold=0.12,
         )
@@ -591,6 +683,10 @@ def test_decision_layer_enforced_lane_config_helpers() -> None:
                         "bitcoin": ["neutral_15m", "marginal"],
                         "hype_macro": ["marginal"],
                     },
+                    "shadow_required_lanes": {
+                        "bitcoin": ["marginal"],
+                        "hype_macro": ["marginal"],
+                    },
                 },
             }
         }
@@ -598,8 +694,11 @@ def test_decision_layer_enforced_lane_config_helpers() -> None:
 
     assert ag.decision_layer_lane_enforced("bitcoin", "neutral_15m") is True
     assert ag.decision_layer_lane_enforced("bitcoin", "5m") is False
+    assert ag.decision_layer_lane_requires_shadow("bitcoin", "marginal") is True
+    assert ag.decision_layer_lane_requires_shadow("bitcoin", "neutral_15m") is False
     assert ag.decision_layer_lane_enforced("hype_macro", "marginal") is True
     assert ag.decision_layer_hard_skip_unavailable("hype_macro", "marginal") is True
+    assert ag.decision_layer_lane_requires_shadow("hype_macro", "marginal") is True
     assert ag.decision_layer_lane_enforced("hype_macro", "default") is False
 
 
@@ -634,7 +733,7 @@ def test_decision_layer_rejects_hold_and_action_mismatch() -> None:
             market_id="m-hold",
             strategy_hint="bitcoin",
             quant_action="BUY_YES",
-            quant_edge=0.10,
+            quant_edge=0.14,
             quant_confidence=0.70,
             quant_threshold=0.12,
         )
@@ -668,6 +767,75 @@ def test_decision_layer_rejects_hold_and_action_mismatch() -> None:
     )
     assert mismatch.approved is False
     assert mismatch.reason == "direct_ai_action_mismatch"
+
+
+def test_decision_layer_abstains_on_marginal_hold_and_low_confidence() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {"enabled": True, "min_confidence": 0.60},
+            }
+        }
+    )
+
+    async def fake_hold(**kwargs):
+        return AIAnalysis(
+            reasoning="wait",
+            confidence_score=0.90,
+            estimated_probability=0.70,
+            recommendation="HOLD",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_hold  # type: ignore[method-assign]
+    hold = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-hold-marginal",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.70,
+            quant_threshold=0.12,
+        )
+    )
+    assert hold.approved is True
+    assert hold.action == "BUY_YES"
+    assert hold.reason == "direct_ai_hold_abstain_marginal"
+
+    async def fake_low_conf(**kwargs):
+        return AIAnalysis(
+            reasoning="unclear",
+            confidence_score=0.51,
+            estimated_probability=0.64,
+            recommendation="BUY_YES",
+            market_id=kwargs["market_id"],
+            timestamp=datetime.utcnow(),
+        )
+
+    ag.analyze_market = fake_low_conf  # type: ignore[method-assign]
+    low_conf = run_async(
+        ag.evaluate_trade_decision(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-low-conf-marginal",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            quant_edge=0.10,
+            quant_confidence=0.54,
+            quant_threshold=0.12,
+        )
+    )
+    assert low_conf.approved is True
+    assert low_conf.action == "BUY_YES"
+    assert low_conf.reason == "direct_ai_low_confidence_abstain_marginal"
 
 
 def test_decision_layer_rejects_ai_unavailable_and_shadow_mismatch_when_required() -> None:

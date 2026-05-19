@@ -66,6 +66,21 @@ def test_shadow_pipeline_helpers_round_trip() -> None:
     assert a.shadow_pipeline_min_confidence() == 0.6
 
 
+def test_shadow_observer_helpers_round_trip() -> None:
+    a = _agent({
+        "enabled": True,
+        "provider_chain": [],
+        "shadow_observer": {
+            "enabled": True,
+            "max_calls_per_scan": 2,
+            "reasons": ["liquidity", "lane_entry_window"],
+        },
+    })
+    assert a.shadow_observer_enabled() is True
+    assert a.shadow_observer_max_calls_per_scan() == 2
+    assert a.shadow_observer_reasons() == {"liquidity", "lane_entry_window"}
+
+
 def test_refresh_from_config_picks_up_veto() -> None:
     a = _agent({"enabled": True, "provider_chain": []})
     assert a.preentry_veto_active(0.1) is False

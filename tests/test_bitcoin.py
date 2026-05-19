@@ -106,6 +106,16 @@ def test_bitcoin_legacy_entry_policy_supports_hourly_overrides():
     assert policy["entry_price_max"] == 0.61
 
 
+def test_bitcoin_updown_edge_cap_uses_window_and_side_override():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"]["max_edge_updown"] = 0.12
+    cfg["strategies"]["bitcoin"]["max_edge_updown_1h_short"] = 0.23
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strat._max_edge_cap_for_updown(window_label="1h", side="SHORT") == pytest.approx(0.23)
+    assert strat._max_edge_cap_for_updown(window_label="15m", side="SHORT") == pytest.approx(0.12)
+
+
 def _make_ta(
     price=75000,
     sabre_trend=1,  # 1=bull, -1=bear
@@ -602,6 +612,73 @@ class TestBitcoinSignalGating:
         self.strategy.enabled = False
         signals = run_async(self.strategy.scan_and_analyze([], 10000))
         assert signals == []
+
+    def test_bitcoin_hist_gate_reject_logs_probe_variants(self):
+        cfg = _make_config()
+        cfg["strategies"]["bitcoin"].update(
+            {
+                "dead_zone_enabled": False,
+                "use_ai": False,
+                "use_ai_updown": False,
+                "min_liquidity": 1,
+                "entry_window_auto_align": False,
+            }
+        )
+        ai = MagicMock()
+        ai.analyze_market = AsyncMock(return_value=None)
+        strategy = BitcoinStrategy(cfg, ai, PositionSizer(kelly_fraction=0.25, max_position_pct=0.05))
+
+        ta = _make_ta(
+            price=70000,
+            sabre_trend=-1,
+            sabre_ma=73000,
+            macd_4h_above_zero=False,
+            macd_4h_hist=20,
+            macd_15m_hist=-5,
+            macd_15m_cross="BEARISH_CROSS",
+            macd_15m_above_signal=False,
+            trend_strength=0.8,
+            trend_direction="BEARISH",
+            m15_in_predict=True,
+        )
+        ta.macd_1h = MACDResult(
+            macd_line=15,
+            signal_line=10,
+            histogram=5,
+            prev_histogram=3,
+            above_zero=True,
+            crossover="BULLISH_CROSS",
+            histogram_rising=True,
+        )
+        market = Market(
+            id="btc-updown-15m-hist-probe",
+            question="Bitcoin Up or Down - May 17, 9:00AM-9:15AM ET",
+            description="BTC 15m up/down hist reject test",
+            volume=500000,
+            liquidity=50000,
+            yes_price=0.50,
+            no_price=0.50,
+            spread=0.02,
+            end_date=datetime.now() + timedelta(minutes=14),
+            token_id_yes="tok_yes_btc",
+            token_id_no="tok_no_btc",
+            group_item_title="Bitcoin Up or Down",
+            slug="btc-updown-15m-1770000099",
+        )
+
+        with patch("src.strategies.bitcoin.log_rejected_candidate") as mock_log:
+            with patch.object(
+                strategy.btc_service, "get_full_analysis", return_value=ta
+            ):
+                with patch.object(
+                    strategy,
+                    "_check_lower_tf_confirmation",
+                    return_value=(False, 0.1, ["stub_unconfirmed"]),
+                ):
+                    signals = run_async(strategy.scan_and_analyze([market], 10000))
+
+        assert signals == []
+        assert mock_log.call_count == 0
 
 
 class TestBitcoinMarketDetection:

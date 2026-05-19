@@ -86,6 +86,9 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
     enforced_cfg = ai_cfg.get("enforced_lanes") if isinstance(ai_cfg, dict) else {}
     if not isinstance(enforced_cfg, dict):
         enforced_cfg = {}
+    shadow_required_cfg = ai_cfg.get("shadow_required_lanes") if isinstance(ai_cfg, dict) else {}
+    if not isinstance(shadow_required_cfg, dict):
+        shadow_required_cfg = {}
 
     active_blocks: Dict[str, Dict[str, int]] = {}
     gate_scores: Dict[str, Any] = {}
@@ -95,6 +98,11 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
         enforced = enforced_cfg.get(lane) or []
         if not isinstance(enforced, list):
             enforced = list(enforced) if isinstance(enforced, (tuple, set)) else []
+        shadow_required = shadow_required_cfg.get(lane) or []
+        if not isinstance(shadow_required, list):
+            shadow_required = (
+                list(shadow_required) if isinstance(shadow_required, (tuple, set)) else []
+            )
         stats = ai_scan_stats.get(lane) or {}
         skips = stats.get("top_skip_reasons") or {}
         filtered: Dict[str, int] = {}
@@ -125,14 +133,17 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
         lane_payload[lane] = {
             "enabled": bool(scfg.get("enabled", False)),
             "enforced_lanes": [str(item) for item in enforced],
+            "shadow_required_lanes": [str(item) for item in shadow_required],
             "oracle": oracle_payload,
             "composite_floor": (
                 scfg.get("neutral_15m_min_composite_score") if lane == "bitcoin" else None
             ),
             "shadow_required": bool(
-                scfg.get("neutral_15m_requires_shadow_portfolio", False)
-                if lane == "bitcoin"
-                else False
+                shadow_required
+                or (
+                    lane == "bitcoin"
+                    and scfg.get("neutral_15m_requires_shadow_portfolio", False)
+                )
             ),
         }
 
@@ -232,6 +243,8 @@ def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "research_calls": ("research_calls",),
         "shadow_pipeline_calls": ("shadow_pipeline_calls",),
         "shadow_pipeline_ok": ("shadow_pipeline_ok",),
+        "shadow_observer_calls": ("shadow_observer_calls",),
+        "shadow_observer_ok": ("shadow_observer_ok",),
         "shadow_marginal_mismatch": ("shadow_marginal_mismatch",),
     }
     per_lane: Dict[str, Dict[str, int]] = {}

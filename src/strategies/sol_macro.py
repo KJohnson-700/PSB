@@ -40,6 +40,7 @@ LAYER 5: EDGE CALCULATION
   ► Combined probability vs market price = edge
   ► Exposure scaled by ExposureManager (same risk framework as BTC strategy)
 """
+import asyncio
 import logging
 import re
 import time
@@ -50,6 +51,10 @@ from pydantic import BaseModel, Field
 
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
+from src.analysis.ai_decision_broker import (
+    PendingDecision as _BrokerPendingDecision,
+    STATE_PENDING as _BROKER_STATE_PENDING,
+)
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BTCSOLCorrelation
@@ -67,7 +72,10 @@ from src.analysis.lane_entry_policy import (
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import resolve_enabled_flag
-from src.execution.performance_feedback import get_drift_min_edge_mult
+from src.execution.performance_feedback import (
+    get_drift_min_edge_mult,
+    get_loosen_min_edge_mult,
+)
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -80,7 +88,9 @@ from src.analysis.btc_1h_regime import (
 )
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.rejected_candidate_log import (
+    build_range_probe_variants,
     build_threshold_probe_variants,
+    build_upper_cap_probe_variants,
     log_rejected_candidate,
 )
 
@@ -230,7 +240,8 @@ class SolMacroStrategy:
     """SOL Macro strategy — capitalize on BTC-to-SOL price lag."""
 
     def __init__(self, config: Dict[str, Any], ai_agent: AIAgent, position_sizer: PositionSizer,
-                 kelly_sizer=None, exposure_manager: ExposureManager = None):
+                 kelly_sizer=None, exposure_manager: ExposureManager = None,
+                 ai_broker=None):
         self.full_config = config
         self.config = config.get('strategies', {}).get('sol_macro', {})
         self.enabled = resolve_enabled_flag(
@@ -239,6 +250,10 @@ class SolMacroStrategy:
             logger=logger,
         )
         self.ai_agent = ai_agent
+        # AI decision broker: when set, the strategy enqueues per-market AI
+        # requests instead of awaiting the provider in-line. None → legacy
+        # synchronous behavior.
+        self.ai_broker = ai_broker
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.btc_service = BTCPriceService()
@@ -254,6 +269,18 @@ class SolMacroStrategy:
         # AI-hold soft veto: cache market IDs where AI recently said HOLD so the
         # strong-signal path cannot bypass that decision within the TTL window.
         self._ai_hold_cache: Dict[str, float] = {}
+        legacy_ai_timeout = float(self.config.get("ai_call_timeout_sec", 15.0) or 15.0)
+        self.ai_decision_timeout_sec = float(
+            self.config.get("ai_decision_timeout_sec", legacy_ai_timeout) or legacy_ai_timeout
+        )
+        observer_timeout_default = min(8.0, max(3.0, legacy_ai_timeout))
+        self.ai_observer_timeout_sec = float(
+            self.config.get("ai_observer_timeout_sec", observer_timeout_default)
+            or observer_timeout_default
+        )
+        self._shadow_observer_tasks: set[asyncio.Task] = set()
+        self._shadow_observer_retry_after: Dict[str, float] = {}
+        self._refresh_shadow_observer_controls()
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
 
@@ -271,10 +298,129 @@ class SolMacroStrategy:
             lag_signal_min_pct=self.lag_signal_min_pct,
         )
 
+    def _refresh_shadow_observer_controls(self) -> None:
+        self.ai_observer_retry_cooldown_sec = float(
+            self.config.get(
+                "ai_observer_retry_cooldown_sec",
+                max(60.0, float(self.ai_observer_timeout_sec) * 3.0),
+            )
+            or max(60.0, float(self.ai_observer_timeout_sec) * 3.0)
+        )
+        self.ai_observer_max_inflight = max(
+            1,
+            int(self.config.get("ai_observer_max_inflight", 1) or 1),
+        )
+
+    def _prune_shadow_observer_state(self) -> None:
+        if self._shadow_observer_tasks:
+            self._shadow_observer_tasks = {
+                task for task in self._shadow_observer_tasks if not task.done()
+            }
+        if self._shadow_observer_retry_after:
+            now = time.monotonic()
+            self._shadow_observer_retry_after = {
+                key: retry_after
+                for key, retry_after in self._shadow_observer_retry_after.items()
+                if retry_after > now
+            }
+
+    @staticmethod
+    def _shadow_observer_key(*, market_id: str, reason: str) -> str:
+        return f"{reason}:{market_id}"
+
+    def _resolve_or_enqueue_ai(
+        self,
+        *,
+        lane_id: str,
+        market,
+        ai_context: str,
+        yes_price: float,
+        edge: float,
+        confidence: float,
+        action: str,
+        quant_threshold: float,
+        raw_est_prob,
+        estimated_prob,
+        require_shadow_portfolio: bool,
+        htf_bias=None,
+        open_position_ids=None,
+    ):
+        """Broker-aware AI lookup. Returns (state, ai_decision):
+          ("resolved", AIDecision)
+          ("pending", None)
+          ("unavailable", None)
+        """
+        if self.ai_broker is None:
+            return "unavailable", None
+        key = (self._signal_strategy_name, str(market.id), str(lane_id or ""), action)
+        resolved = self.ai_broker.get_resolved(
+            key,
+            current_yes_price=yes_price,
+            current_action=action,
+            current_edge=edge,
+            open_position_ids=open_position_ids,
+        )
+        if resolved is not None:
+            return "resolved", resolved
+        snapshot = _BrokerPendingDecision(
+            key=key,
+            state=_BROKER_STATE_PENDING,
+            created_at=time.time(),
+            cycle_enqueued=0,
+            yes_price_at_enqueue=float(yes_price),
+            edge_sign=1 if float(edge) >= 0 else -1,
+            action=action,
+            market_question=market.question,
+            market_description=ai_context,
+            current_yes_price=float(yes_price),
+            edge=float(edge),
+            confidence=float(confidence),
+            estimated_prob=(float(estimated_prob) if estimated_prob is not None else None),
+            raw_est_prob=(float(raw_est_prob) if raw_est_prob is not None else None),
+            quant_threshold=float(quant_threshold),
+            require_shadow_portfolio=bool(require_shadow_portfolio),
+            htf_bias=htf_bias,
+        )
+        self.ai_broker.enqueue(snapshot)
+        return "pending", None
+
+    async def _evaluate_trade_decision_with_timeout(self, **kwargs):
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.evaluate_trade_decision(**kwargs),
+                timeout=self.ai_decision_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "%s: evaluate_trade_decision timeout for market %s after %.1fs",
+                self._signal_strategy_name,
+                market_id,
+                self.ai_decision_timeout_sec,
+            )
+            return None
+
+    async def _observe_rejected_candidate_with_timeout(self, **kwargs):
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.observe_rejected_candidate(**kwargs),
+                timeout=self.ai_observer_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "%s: rejected observer timeout for market %s after %.1fs",
+                self._signal_strategy_name,
+                market_id,
+                self.ai_observer_timeout_sec,
+            )
+            return None
+
     def _apply_strategy_config(self, *, rebuild_service: bool = False) -> None:
         # Thresholds from config first — before any other init work — so
         # scan_and_analyze always sees instance values from YAML, not class fallbacks.
         self.min_liquidity = self.config.get("min_liquidity", 1000)
+        self.min_liquidity_buy_no = self.config.get("min_liquidity_buy_no", None)
         self.min_edge = self.config.get("min_edge", 0.09)
         self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
         # Non-bypassable absolute edge floor for this strategy lane.
@@ -377,6 +523,10 @@ class SolMacroStrategy:
         self.oracle_max_basis_bps = float(
             self.config.get("oracle_max_basis_bps", 10.0)
         )
+        _basis_relax = self.config.get("oracle_basis_relax_max_bps")
+        self.oracle_basis_relax_max_bps = (
+            float(_basis_relax) if _basis_relax is not None else None
+        )
         _relax = self.config.get("oracle_stale_basis_relax_max_bps")
         self.oracle_stale_basis_relax_max_bps = (
             float(_relax) if _relax is not None else None
@@ -468,6 +618,26 @@ class SolMacroStrategy:
         )
         if rebuild_service or not hasattr(self, "sol_service"):
             self.sol_service = self._build_alt_service()
+
+    def _resolve_min_liquidity_floor(self, *, window_size: str, action: str) -> float:
+        window = str(window_size or "").strip().lower()
+        side = "buy_no" if str(action or "").strip().upper() == "BUY_NO" else "buy_yes"
+        candidates = [
+            f"min_liquidity_{window}_{side}",
+            f"min_liquidity_{window}",
+        ]
+        if side == "buy_no":
+            candidates.append("min_liquidity_buy_no")
+        candidates.append("min_liquidity")
+        for key in candidates:
+            raw = self.config.get(key)
+            if raw is None:
+                continue
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+        return float(self.min_liquidity)
 
     def _alt_asset_code(self) -> str:
         """Lowercase spot code for reason strings and journal keys (sol/eth/hype/xrp)."""
@@ -947,6 +1117,7 @@ class SolMacroStrategy:
             now=now,
             allow_exchange_when_oracle_missing=self.updown_allow_exchange_when_oracle_missing,
             stale_basis_relax_max_bps=self.oracle_stale_basis_relax_max_bps,
+            basis_relax_max_bps=self.oracle_basis_relax_max_bps,
         )
 
     def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
@@ -960,7 +1131,8 @@ class SolMacroStrategy:
         return bool(callable(check) and check(self._signal_strategy_name, lane) is True)
 
     def _requires_shadow_for_lane(self, lane: str) -> bool:
-        return False
+        check = getattr(self.ai_agent, "decision_layer_lane_requires_shadow", None)
+        return bool(callable(check) and check(self._signal_strategy_name, lane) is True)
 
     def _size_multiplier_for_lane(self, lane: str) -> float:
         return 1.0
@@ -1756,6 +1928,8 @@ class SolMacroStrategy:
         ai_calls = 0
         shadow_pipeline_calls = 0
         shadow_pipeline_ok = 0
+        shadow_observer_calls = 0
+        shadow_observer_ok = 0
         skip_reasons: Dict[str, int] = {}
         gate_samples: Dict[str, list] = {}
         action_counts: Dict[str, int] = {}
@@ -1796,6 +1970,9 @@ class SolMacroStrategy:
             est_prob_up: float = 0.50,
             htf_bias: Optional[str] = None,
             context: Optional[Dict[str, Any]] = None,
+            probe_variants: Optional[List[Dict[str, Any]]] = None,
+            policy_version: Optional[str] = None,
+            stage: Optional[str] = None,
         ) -> None:
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
@@ -1808,7 +1985,136 @@ class SolMacroStrategy:
                 est_prob_up=est_prob_up,
                 htf_bias=htf_bias,
                 context=context or {},
+                probe_variants=probe_variants or [],
+                policy_version=policy_version,
+                stage=stage,
             )
+
+        observer_tasks: List[asyncio.Task] = []
+
+        async def _observe_structural_reject(
+            *,
+            market: Any,
+            window: str,
+            side: str,
+            action: str,
+            reason: str,
+            yes_price: float,
+            quant_edge: Optional[float],
+            quant_threshold: Optional[float],
+            htf_bias: Optional[str],
+            context_lines: List[str],
+            metadata: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            nonlocal shadow_pipeline_calls, shadow_pipeline_ok
+            nonlocal shadow_observer_calls, shadow_observer_ok
+            enabled = getattr(self.ai_agent, "shadow_observer_enabled", lambda: False)()
+            if not isinstance(enabled, bool) or not enabled:
+                return
+            try:
+                max_calls = int(
+                    getattr(self.ai_agent, "shadow_observer_max_calls_per_scan", lambda: 0)()
+                )
+            except (TypeError, ValueError):
+                return
+            if max_calls <= 0:
+                return
+            if shadow_pipeline_calls >= max_calls:
+                return
+            market_id = str(getattr(market, "id", "") or "")
+            self._prune_shadow_observer_state()
+            if len(self._shadow_observer_tasks) >= self.ai_observer_max_inflight:
+                return
+            observer_key = self._shadow_observer_key(market_id=market_id, reason=reason)
+            now = time.monotonic()
+            if self._shadow_observer_retry_after.get(observer_key, 0.0) > now:
+                return
+            self._shadow_observer_retry_after[observer_key] = (
+                now + self.ai_observer_retry_cooldown_sec
+            )
+            try:
+                market_metadata = format_market_metadata(market)
+            except Exception:
+                market_metadata = (
+                    f"id={getattr(market, 'id', '')}\n"
+                    f"question={getattr(market, 'question', '')}\n"
+                    f"slug={getattr(market, 'slug', '')}"
+                )
+            lane_id = str(
+                build_lane_metadata(
+                    strategy=self._signal_strategy_name,
+                    window_size=window,
+                    action=action,
+                    direction=("down" if action == "BUY_NO" else "up"),
+                    entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                    side_source="rejected_observer",
+                    ai_used=True,
+                    reason=reason,
+                    signal_reason=f"rejected_candidate_{reason}",
+                    htf_bias=htf_bias,
+                    primary_htf_bias=htf_bias,
+                ).get("lane_id")
+                or ""
+            )
+            observer_context = "\n".join(
+                [
+                    market.description or market.question,
+                    "",
+                    "=== REJECTED CANDIDATE OBSERVER ===",
+                    f"reason={reason}",
+                    f"window={window}",
+                    f"side={side}",
+                    f"action={action}",
+                    f"yes_price={yes_price:.4f}",
+                    *[line for line in context_lines if line],
+                    "",
+                    f"=== MARKET ===\n{market_metadata}",
+                ]
+            )
+            # Consume the scan budget before awaiting the observer. Timed-out
+            # observer calls should still count as attempts; otherwise one slow
+            # provider can trigger repeated best-effort AI calls across many
+            # rejected markets in the same scan.
+            shadow_pipeline_calls += 1
+            shadow_observer_calls += 1
+            async def _run_observer() -> Optional[Dict[str, Any]]:
+                return await self._observe_rejected_candidate_with_timeout(
+                    rejection_reason=reason,
+                    market_question=market.question,
+                    market_description=observer_context,
+                    current_yes_price=yes_price,
+                    market_id=market_id,
+                    strategy_hint=self._signal_strategy_name,
+                    lane_id=lane_id,
+                    quant_action=action,
+                    quant_edge=quant_edge,
+                    quant_threshold=quant_threshold,
+                    metadata=metadata or {},
+                )
+
+            def _finalize_observer(task: asyncio.Task) -> None:
+                nonlocal shadow_pipeline_ok, shadow_observer_ok
+                self._shadow_observer_tasks.discard(task)
+                try:
+                    observer_out = task.result()
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    logger.debug(
+                        "%s: rejected observer task failed for market %s",
+                        self._signal_strategy_name,
+                        getattr(market, "id", ""),
+                        exc_info=True,
+                    )
+                    return
+                if observer_out and observer_out.get("ok"):
+                    shadow_pipeline_ok += 1
+                    shadow_observer_ok += 1
+
+            task = asyncio.create_task(_run_observer())
+            self._shadow_observer_tasks.add(task)
+            task.add_done_callback(_finalize_observer)
+            observer_tasks.append(task)
 
         # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
         _sample("ltf_strength", ltf_strength)
@@ -1828,7 +2134,11 @@ class SolMacroStrategy:
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
             primary_htf_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
-            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
+            _liq_floor = self._resolve_min_liquidity_floor(
+                window_size=_updown_tf if is_updown else "15m",
+                action=action,
+            )
+            if market.liquidity > 0 and market.liquidity < _liq_floor:
                 _bump_skip("liquidity")
                 _log_skip_reject(
                     market=market,
@@ -1838,10 +2148,27 @@ class SolMacroStrategy:
                     reason="liquidity",
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
+                    stage="liquidity",
                     context={
                         "market_liquidity": float(market.liquidity),
-                        "min_liquidity": float(self.min_liquidity),
+                        "min_liquidity": float(_liq_floor),
                     },
+                )
+                await _observe_structural_reject(
+                    market=market,
+                    window=_updown_tf if is_updown else "15m",
+                    side=allowed_side,
+                    action=action,
+                    reason="liquidity",
+                    yes_price=yes_price,
+                    quant_edge=None,
+                    quant_threshold=float(_liq_floor),
+                    htf_bias=primary_htf_bias,
+                    context_lines=[
+                        f"market_liquidity={float(market.liquidity):.2f}",
+                        f"min_liquidity={float(_liq_floor):.2f}",
+                    ],
+                    metadata={"market_liquidity": float(market.liquidity)},
                 )
                 continue
             is_5m = _updown_tf == "5m"
@@ -1954,6 +2281,15 @@ class SolMacroStrategy:
                             "entry_price_min": 0.20,
                             "entry_price_max": 0.80,
                         },
+                        probe_variants=build_range_probe_variants(
+                            metric_name="entry_price_band",
+                            observed_value=float(yes_price),
+                            baseline_min=0.20,
+                            baseline_max=0.80,
+                            relax_steps=[0.02, 0.05, 0.10],
+                            tighten_steps=[0.02, 0.05],
+                        ),
+                        policy_version="entry_price_band_v1",
                     )
                     logger.debug(
                         f"  {_brand} skip '{market.question[:40]}' — price {yes_price:.2f} "
@@ -2114,6 +2450,21 @@ class SolMacroStrategy:
                             ),
                             "oracle_max_age_sec": float(self.oracle_max_age_sec),
                         },
+                        probe_variants=build_upper_cap_probe_variants(
+                            metric_name="oracle_basis_abs_bps",
+                            observed_value=(
+                                abs(float(oracle_validation.basis_bps))
+                                if oracle_validation.basis_bps is not None
+                                else None
+                            ),
+                            baseline_cap=float(
+                                self.config.get("oracle_max_basis_bps", 0.0) or 0.0
+                            ),
+                            relax_steps=[2.0, 5.0, 10.0],
+                            tighten_steps=[2.0, 5.0],
+                        ) if oracle_validation.reason == "oracle_basis_block" else [],
+                        policy_version="oracle_validation_v1",
+                        stage="oracle",
                     )
                     if action == "BUY_NO":
                         self._emit_buy_no_skip(
@@ -2212,6 +2563,7 @@ class SolMacroStrategy:
                             reason="no_btc_catalyst_5m", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="btc_catalyst_5m",
                             context={
                                 "btc_spike": bool(corr.btc_spike_detected),
                                 "lag_opportunity": bool(corr.lag_opportunity),
@@ -2264,6 +2616,7 @@ class SolMacroStrategy:
                             reason="sell_5m_low_corr", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="corr_floor_5m",
                             context={
                                 "correlation_1h": float(corr.correlation_1h),
                                 "floor": float(self.sell_5m_min_corr),
@@ -2288,6 +2641,7 @@ class SolMacroStrategy:
                             reason="weak_5m_signal", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="signal_strength_5m",
                             context={
                                 "m5_adj": float(m5_adj),
                                 "min_required": float(_min_req),
@@ -2328,6 +2682,21 @@ class SolMacroStrategy:
                         reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
                     elif self._low_corr_blocks_entry(corr):
                         _bump_skip("low_corr_suppressed")
+                        _log_skip_reject(
+                            market=market,
+                            window="5m",
+                            side=allowed_side,
+                            action=action,
+                            reason="low_corr_suppressed",
+                            yes_price=yes_price,
+                            est_prob_up=est_prob_up,
+                            htf_bias=primary_htf_bias,
+                            stage="low_corr_suppressed",
+                            context={
+                                "correlation_1h": float(corr.correlation_1h),
+                                "low_corr_threshold_1h": float(self.low_corr_threshold_1h),
+                            },
+                        )
                         logger.info(
                             f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
                             f"1H corr {corr.correlation_1h:.2f} below hard floor "
@@ -2410,6 +2779,7 @@ class SolMacroStrategy:
                             reason="iql_15m_reject", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="iql_15m",
                             context={
                                 "macd_15m_histogram": float(getattr(sol.macd_15m, "histogram", 0.0) or 0.0),
                                 "macd_15m_crossover": str(getattr(sol.macd_15m, "crossover", "")),
@@ -2467,6 +2837,7 @@ class SolMacroStrategy:
                                 reason="no_btc_catalyst_15m_unconfirmed", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up,
                                 htf_bias=primary_htf_bias,
+                                stage="btc_catalyst_5m",
                                 context={
                                     "btc_spike": bool(corr.btc_spike_detected),
                                     "lag_opportunity": bool(corr.lag_opportunity),
@@ -2675,8 +3046,26 @@ class SolMacroStrategy:
 
                 # AI tiebreaker for marginal edge (skipped when AI offline or use_ai false)
                 if edge < self.min_edge and edge > 0.03:
+                    def _log_ai_veto(_reason: str, **extra: Any) -> None:
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf if is_updown else "15m",
+                            side=allowed_side,
+                            action=action,
+                            reason=_reason,
+                            yes_price=yes_price,
+                            est_prob_up=estimated_prob,
+                            htf_bias=primary_htf_bias,
+                            stage="ai_veto",
+                            context={
+                                "edge": round(float(edge), 6),
+                                "min_edge": float(self.min_edge),
+                                **extra,
+                            },
+                        )
                     if not self.config.get("use_ai", True):
                         _bump_skip("ai_disabled_marginal_threshold")
+                        _log_ai_veto("ai_disabled_marginal_threshold")
                         logger.debug(
                             f"{_brand}: use_ai=false — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
@@ -2684,6 +3073,7 @@ class SolMacroStrategy:
                         continue
                     if not self.ai_agent.is_available():
                         _bump_skip("ai_offline_marginal_threshold")
+                        _log_ai_veto("ai_offline_marginal_threshold")
                         logger.debug(
                             f"{_brand}: AI offline — skipping marginal trade "
                             f"'{market.question[:40]}...' edge={edge:.4f}"
@@ -2691,6 +3081,7 @@ class SolMacroStrategy:
                         continue
                     if ai_calls >= self.max_ai_calls_per_scan:
                         _bump_skip("ai_call_limit_marginal_threshold")
+                        _log_ai_veto("ai_call_limit_marginal_threshold")
                         logger.debug(
                             f"{_brand}: max AI calls per scan ({self.max_ai_calls_per_scan}) — "
                             f"skipping marginal '{market.question[:40]}...'"
@@ -2737,20 +3128,46 @@ class SolMacroStrategy:
                         ).get("lane_id")
                         or ""
                     )
-                    ai_decision = await self.ai_agent.evaluate_trade_decision(
-                        market_question=market.question,
-                        market_description=ai_context,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint=self._signal_strategy_name,
+                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
                         lane_id=ai_lane_id,
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
+                        market=market,
+                        ai_context=ai_context,
+                        yes_price=yes_price,
+                        edge=edge,
+                        confidence=confidence,
+                        action=action,
                         quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
+                        raw_est_prob=raw_est_prob,
+                        estimated_prob=estimated_prob,
                         require_shadow_portfolio=False,
+                        htf_bias=btc_htf_bias,
                     )
+                    if _broker_state == "pending":
+                        ai_calls += 1
+                        _bump_skip("ai_pending_marginal_threshold")
+                        _log_ai_veto("ai_pending_marginal_threshold")
+                        continue
+                    if _broker_state == "unavailable":
+                        ai_decision = await self._evaluate_trade_decision_with_timeout(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint=self._signal_strategy_name,
+                            lane_id=ai_lane_id,
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_confidence=confidence,
+                            quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
+                            raw_probability=raw_est_prob,
+                            post_calibration_probability=estimated_prob,
+                            require_shadow_portfolio=False,
+                        )
                     ai_calls += 1
+                    if ai_decision is None:
+                        _bump_skip("ai_decision_timeout_marginal_threshold")
+                        _log_ai_veto("ai_decision_timeout_marginal_threshold")
+                        continue
                     ai_used = True
                     ai_analysis = ai_decision.direct_analysis
                     # Log reasoning so we can audit what the model is actually deciding
@@ -2762,6 +3179,7 @@ class SolMacroStrategy:
                         )
                     if not ai_decision.approved:
                         _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
                         logger.warning(
                             "%s: AI decision rejected market %s (%s): %s",
                             _brand,
@@ -2772,16 +3190,19 @@ class SolMacroStrategy:
                         continue
                     if ai_analysis is None:
                         _bump_skip("ai_none_marginal_threshold")
+                        _log_ai_veto("ai_none_marginal_threshold")
                         continue
                     if ai_decision.action == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
                         _bump_skip("ai_hold_marginal_threshold")
+                        _log_ai_veto("ai_hold_marginal_threshold")
                         logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
                     if not ai_recommendation_supports_action(
                         ai_decision.action, action
                     ):
                         _bump_skip("ai_veto_marginal_threshold")
+                        _log_ai_veto("ai_veto_marginal_threshold", ai_action=str(ai_decision.action))
                         logger.debug(
                             f"{_brand}: AI {ai_decision.action} conflicts with {action} "
                             f"on '{market.question[:40]}...'"
@@ -2789,6 +3210,7 @@ class SolMacroStrategy:
                         continue
                     if ai_decision.confidence < self.ai_confidence_threshold:
                         _bump_skip("ai_low_confidence_marginal_threshold")
+                        _log_ai_veto("ai_low_confidence_marginal_threshold", ai_confidence=float(ai_decision.confidence))
                         logger.debug(
                             f"{_brand}: AI confidence {ai_decision.confidence:.2f} "
                             f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
@@ -2797,6 +3219,7 @@ class SolMacroStrategy:
                     ai_edge = float(ai_decision.edge or 0.0)
                     if ai_edge <= 0:
                         _bump_skip("ai_nonpositive_edge_marginal_threshold")
+                        _log_ai_veto("ai_nonpositive_edge_marginal_threshold", ai_edge=ai_edge)
                         logger.debug(
                             f"{_brand}: non-positive ai_edge={ai_edge:.4f} marginal "
                             f"'{market.question[:40]}...'"
@@ -2879,6 +3302,34 @@ class SolMacroStrategy:
                         "entry_window_min": float(lane_policy.entry_window_min),
                         "entry_window_max": float(lane_policy.entry_window_max),
                     },
+                    probe_variants=build_range_probe_variants(
+                        metric_name="entry_window_mins_left",
+                        observed_value=float(_eval_left),
+                        baseline_min=float(lane_policy.entry_window_min),
+                        baseline_max=float(lane_policy.entry_window_max),
+                        relax_steps=[1.0, 2.0, 5.0],
+                        tighten_steps=[1.0, 2.0],
+                    ),
+                    policy_version="lane_entry_window_v1",
+                )
+                await _observe_structural_reject(
+                    market=market,
+                    window=_updown_tf if is_updown else "15m",
+                    side=allowed_side,
+                    action=action,
+                    reason="lane_entry_window",
+                    yes_price=yes_price,
+                    quant_edge=edge,
+                    quant_threshold=float(effective_min_edge),
+                    htf_bias=primary_htf_bias,
+                    context_lines=[
+                        f"eval_mins_left={float(_eval_left):.2f}",
+                        f"entry_window_min={float(lane_policy.entry_window_min):.2f}",
+                        f"entry_window_max={float(lane_policy.entry_window_max):.2f}",
+                        f"quant_edge={float(edge):.4f}",
+                        f"effective_min_edge={float(effective_min_edge):.4f}",
+                    ],
+                    metadata={"eval_mins_left": float(_eval_left)},
                 )
                 logger.debug(
                     "  %s skip '%s...' — %.1fm left (eval %.2f), lane=%s needs %.2f–%.2fm",
@@ -2958,6 +3409,13 @@ class SolMacroStrategy:
             effective_min_edge *= get_drift_min_edge_mult(
                 self._signal_strategy_name, self.full_config
             )
+            effective_min_edge *= get_loosen_min_edge_mult(
+                self._signal_strategy_name,
+                self.full_config,
+                window=_updown_tf if is_updown else "15m",
+                side=lane_side,
+                regime=macro_trend,
+            )
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (
@@ -3005,20 +3463,44 @@ class SolMacroStrategy:
                     ).get("lane_id")
                     or ""
                 )
-                ai_decision = await self.ai_agent.evaluate_trade_decision(
-                    market_question=market.question,
-                    market_description=ai_context2,
-                    current_yes_price=yes_price,
-                    market_id=market.id,
-                    strategy_hint=self._signal_strategy_name,
+                _broker_state, ai_decision = self._resolve_or_enqueue_ai(
                     lane_id=ai_lane_id,
-                    quant_action=action,
-                    quant_edge=edge,
-                    quant_confidence=confidence,
+                    market=market,
+                    ai_context=ai_context2,
+                    yes_price=yes_price,
+                    edge=edge,
+                    confidence=confidence,
+                    action=action,
                     quant_threshold=effective_min_edge,
+                    raw_est_prob=raw_est_prob,
+                    estimated_prob=estimated_prob,
                     require_shadow_portfolio=False,
+                    htf_bias=btc_htf_bias,
                 )
+                if _broker_state == "pending":
+                    ai_calls += 1
+                    _bump_skip("ai_pending")
+                    continue
+                if _broker_state == "unavailable":
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context2,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=False,
+                    )
                 ai_calls += 1
+                if ai_decision is None:
+                    _bump_skip("ai_decision_timeout")
+                    continue
                 ai_used = True
                 ai2 = ai_decision.direct_analysis
                 if not ai_decision.approved:
@@ -3102,6 +3584,7 @@ class SolMacroStrategy:
                     yes_price=yes_price,
                     est_prob_up=estimated_prob,
                     htf_bias=primary_htf_bias,
+                    stage="lane_min_edge",
                     context={
                         "edge": round(float(edge), 6),
                         "effective_min_edge": round(float(effective_min_edge), 6),
@@ -3246,20 +3729,44 @@ class SolMacroStrategy:
                         ).get("lane_id")
                         or ""
                     )
-                    ai_decision = await self.ai_agent.evaluate_trade_decision(
-                        market_question=market.question,
-                        market_description=ai_context3,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint=self._signal_strategy_name,
+                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
                         lane_id=ai_lane_id,
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
+                        market=market,
+                        ai_context=ai_context3,
+                        yes_price=yes_price,
+                        edge=edge,
+                        confidence=confidence,
+                        action=action,
                         quant_threshold=effective_min_edge,
+                        raw_est_prob=raw_est_prob,
+                        estimated_prob=estimated_prob,
                         require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
+                        htf_bias=btc_htf_bias,
                     )
+                    if _broker_state == "pending":
+                        ai_calls += 1
+                        _bump_skip(f"ai_pending_{_updown_lane}")
+                        continue
+                    if _broker_state == "unavailable":
+                        ai_decision = await self._evaluate_trade_decision_with_timeout(
+                            market_question=market.question,
+                            market_description=ai_context3,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint=self._signal_strategy_name,
+                            lane_id=ai_lane_id,
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_confidence=confidence,
+                            quant_threshold=effective_min_edge,
+                            raw_probability=raw_est_prob,
+                            post_calibration_probability=estimated_prob,
+                            require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
+                        )
                     ai_calls += 1
+                    if ai_decision is None:
+                        _bump_skip(f"ai_decision_timeout_{_updown_lane}")
+                        continue
                     ai_used = True
                     if ai_decision.shadow_result is not None:
                         shadow_pipeline_calls += 1
@@ -3366,6 +3873,22 @@ class SolMacroStrategy:
                 _max_edge_updown = self.config.get("max_edge_updown", 0.09)
                 if edge > _max_edge_updown:
                     _bump_skip("edge_above_cap")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="edge_above_cap",
+                        yes_price=yes_price,
+                        est_prob_up=estimated_prob,
+                        htf_bias=primary_htf_bias,
+                        stage="edge_cap",
+                        context={
+                            "edge": round(float(edge), 6),
+                            "max_edge_updown": float(_max_edge_updown),
+                            "effective_min_edge": round(float(effective_min_edge), 6),
+                        },
+                    )
                     if action == "BUY_NO":
                         self._emit_buy_no_skip(
                             market=market,
@@ -3385,6 +3908,22 @@ class SolMacroStrategy:
                             counts=buy_no_skip_counts,
                             last_sample=last_buy_no_skip_sample,
                         )
+                    await _observe_structural_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="edge_above_cap",
+                        yes_price=yes_price,
+                        quant_edge=edge,
+                        quant_threshold=float(_max_edge_updown),
+                        htf_bias=primary_htf_bias,
+                        context_lines=[
+                            f"quant_edge={float(edge):.4f}",
+                            f"max_edge_updown={float(_max_edge_updown):.4f}",
+                        ],
+                        metadata={"max_edge_updown": float(_max_edge_updown)},
+                    )
                     logger.info(
                         f"  {_brand} skip '{market.question[:40]}...' edge={edge:.4f} "
                         f"> max={_max_edge_updown} updown cap (catch-up already priced in)"
@@ -3515,6 +4054,9 @@ class SolMacroStrategy:
                 f"size=${final_size:.2f} conf={confidence:.2f}"
             )
 
+        if observer_tasks:
+            await asyncio.wait(observer_tasks, timeout=0.01)
+
         gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
         if gate_samples:
             logger.info(f"  [gate-dist] {gate_distributions}")
@@ -3543,6 +4085,11 @@ class SolMacroStrategy:
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
             "skip_15m_gate": skip_15m_reason,
+            "ai_calls": ai_calls,
+            "shadow_pipeline_calls": shadow_pipeline_calls,
+            "shadow_pipeline_ok": shadow_pipeline_ok,
+            "shadow_observer_calls": shadow_observer_calls,
+            "shadow_observer_ok": shadow_observer_ok,
             "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),

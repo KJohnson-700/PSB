@@ -160,6 +160,10 @@ trading:
       hype_macro:
         window_lane_overrides:
           5m:
+            up:
+              updown_stop_loss_pct: 0.15
+              updown_in_profit_stop_trigger_pct: 0.03
+              updown_in_profit_stop_tighten_to_pct: 0.06
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -170,6 +174,10 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
+            up:
+              updown_stop_loss_pct: 0.17
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_stop_loss_pct: 0.17
               updown_stop_cents: 0.02
@@ -245,6 +253,7 @@ lane_calibration:
   shadow_mode: true        # legacy fallback when per-mode keys below are omitted
   paper_shadow_mode: true  # paper/dry-run stays observation-only by default
   live_shadow_mode: false  # live trading uses calibrated probabilities by default
+  min_samples_to_apply_live: 15
 
 entry_policy:
   defaults:
@@ -325,7 +334,9 @@ strategies:
     neutral_rsi_extra_min_edge: 0.02
     # Ops compromise between legacy 50 (strict NEUTRAL churn vs macros at 20) and full parity at 20.
     min_4h_hist_magnitude: 35
-    max_edge_updown: 0.12         # Safety cap: live audit showed >0.12 underperformed; investigate before raising
+    max_edge_updown: 0.12         # Default BTC cap; keep strict on 5m / longs where inflated-edge drift was clearest
+    max_edge_updown_15m_short: 0.18  # Reopen missed BTC short follow-through without removing the cap outright
+    max_edge_updown_1h_short: 0.23   # 1h BTC shorts were the clearest high-conviction misses in the latest ghost/session review
     ai_confidence_threshold: 0.60
     # Cap LLM calls per scan cycle (marginal / no-threshold / updown assist).
     max_ai_calls_per_scan: 12
@@ -538,11 +549,15 @@ strategies:
     buy_yes_4h_hist_override_enabled: true
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
+    # Observation-only rejected-candidate AI path runs analyze_market + shadow pipeline.
+    # 8s was too tight for current provider tail latency and created noisy timeout warnings.
+    ai_observer_timeout_sec: 20
     use_ai_updown: true          # Re-enabled: lag signal stripped, AI now safe to use on updown
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_basis_relax_max_bps: 12.0  # Prevent full-asset lockout on tiny fresh basis overshoots (~10.6bps vs 10.0 cap)
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -746,6 +761,9 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
+    # Observation-only rejected-candidate AI path runs analyze_market + shadow pipeline.
+    # 8s was too tight for current provider tail latency and created noisy timeout warnings.
+    ai_observer_timeout_sec: 20
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -910,6 +928,7 @@ strategies:
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     min_liquidity: 500            # 2026-05-13 local live starvation fix: HYPE books are thinner than SOL/ETH; stop dropping most candidates on liquidity
+    min_liquidity_buy_no: 300     # 2026-05-18 HYPE 5m BUY_NO starvation fix: shorts land on thinner books than longs; loosen only the short-side floor
     min_edge: 0.09                # sol_macro parity
     min_edge_buy_no: 0.08         # added 2026-05-06 — mirror xrp_macro candidate A; addresses 48% of HYPE BUY_NO edge_below_min skips
     min_edge_5m: 0.07             # sol_macro parity (flat tape MACD tiers need reachable floor)
@@ -940,6 +959,9 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 12
+    # Observation-only rejected-candidate AI path runs analyze_market + shadow pipeline.
+    # 8s was too tight for current provider tail latency and created noisy timeout warnings.
+    ai_observer_timeout_sec: 20
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -1045,7 +1067,7 @@ strategies:
     iql_15m_enabled: false         # evaluate without SOL-style IQL histogram gate stack on HYPE bars
     iql_15m_hist_floor: 0.06      # ignored when disabled; kept for schema parity
     min_positive_m5_adj_5m_sell: 0.04
-    sell_5m_min_corr: 0.50
+    sell_5m_min_corr: 0.40        # 2026-05-18 HYPE 5m BUY_NO starvation fix: 0.50 was the dominant BUY_NO-only suppressor (430/4707 rejects)
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1074,6 +1096,9 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.60
     max_ai_calls_per_scan: 8
+    # Observation-only rejected-candidate AI path runs analyze_market + shadow pipeline.
+    # 8s was too tight for current provider tail latency and created noisy timeout warnings.
+    ai_observer_timeout_sec: 20
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     ai_updown_marginal_min_edge: 0.03
@@ -1283,6 +1308,23 @@ ai:
   cache_ttl_5m: 60    # 1 minute — keep below ~20% of market lifetime
   # Minimum gap between consecutive API calls (seconds) — prevents burst rate limit hits
   min_call_gap: 2.0
+  # Backpressure cap: max number of callers that may queue on the rate-limit
+  # lock at once. Once exceeded, additional callers return None immediately so
+  # they fall back to non-AI gates rather than block for many seconds and
+  # trip the strategy's evaluate_trade_decision / rejected observer timeout.
+  # Sized so depth * min_call_gap <= shortest downstream timeout (15s).
+  max_queue_depth: 6
+  # Async-decoupled AI decision broker. Strategies enqueue per-market AI
+  # requests instead of awaiting the provider in-line. A single background
+  # worker drains the queue; resolved decisions are picked up next cycle
+  # after a strict staleness check (price drift, action flip, edge sign flip,
+  # position now held, age > max_decision_age_sec).
+  decision_broker:
+    enabled: true
+    max_decision_age_sec: 120     # discard decisions older than this (1.5–2 cycles)
+    max_pending_decisions: 24     # queue cap; oldest PENDING dropped on overflow
+    price_drift_threshold: 0.03   # invalidate if yes_price moved more than this
+    log_jsonl: true               # write per-transition to pending_ai_decisions.jsonl
   # Optional second-pass narrative call (Tier B). Log-only; does not change trade gates.
   research_narrative:
     enabled: false
@@ -1320,6 +1362,22 @@ ai:
     # Shadow is opportunistic: it only runs on qualifying AI-gated setups, not every market scan.
     provider_name: ""      # optional: pin to one provider name from provider_chain
     model_override: ""     # optional model id for all three stages
+  # Observation-only AI for selected structural rejects. This does not loosen any
+  # trade gate; it only lets pre-gate candidates emit direct/shadow reasoning so
+  # the AI learning loop is not starved when everything dies before ai_calls.
+  shadow_observer:
+    enabled: true
+    max_calls_per_scan: 1
+    # Fraction of eligible rejections that actually trigger the AI observer
+    # call (0.0–1.0). The observer is log-only — it does not gate trades, so
+    # sampling it is safe and the rejection JSONL log is unaffected. Set to
+    # 0.2 to shed 80% of observer AI calls, freeing queue slots for the
+    # decision-layer calls that actually approve/block trades.
+    sample_rate: 0.2
+    reasons:
+      - liquidity
+      - lane_entry_window
+      - edge_above_cap
   # Pre-entry veto: when AI is consulted on a marginal trade and returns very low
   # confidence, kill the trade. Conservative — only fires on egregious uncertainty.
   preentry_veto:
@@ -1337,6 +1395,7 @@ ai:
   # Each section is gated independently. Output is appended to the strategy log.
   session_summary:
     enabled: true
+    startup_delay_seconds: 90
     include_underperformance: true
     include_skip_exit_reasons: true
     include_calibration_drift: true
@@ -1537,6 +1596,16 @@ performance_feedback:
   kelly_mult_when_diverging: 1.0
   kelly_mult_min: 0.5
   kelly_mult_max: 1.0
+  # Ghost-settled loosening: mine rejected_candidates_settled.jsonl for lanes where
+  # blocked min-edge rejects are winning often enough to justify lowering the bar.
+  overtight_reasons: ["lane_min_edge"]
+  overtight_min_lane_sample: 25
+  overtight_min_pass_sample: 12
+  overtight_ghost_wr_threshold: 0.58
+  overtight_max_relax_delta: 0.03
+  # Keep v1 loosening conservative and strictly positive-edge.
+  overtight_min_edge_mult_floor: 0.70
+  overtight_min_edge_mult_ceil: 1.0
   # Merge learning_loop.backtest_expectations into report-derived expectations (YAML fills gaps/overrides).
   merge_learning_loop_expectations: true
 

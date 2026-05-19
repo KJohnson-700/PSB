@@ -205,6 +205,20 @@ class PositionExitManager:
                 continue
 
             pnl_pct = unrealized_pnl / cost_basis
+            current_token_price = (
+                current_no_price if entry_leg == "NO" else current_yes_price
+            )
+            peak_token_price = float(
+                getattr(pos, "peak_token_price", 0.0) or pos.entry_price
+            )
+            if current_token_price > peak_token_price:
+                peak_token_price = current_token_price
+                setattr(pos, "peak_token_price", peak_token_price)
+            peak_pnl_pct = (
+                (peak_token_price - pos.entry_price) / pos.entry_price
+                if pos.entry_price > 0
+                else 0.0
+            )
 
             # Check exit conditions
             reason = None
@@ -234,6 +248,7 @@ class PositionExitManager:
                 effective_stop_loss_pct = effective_updown_stop_loss_pct(
                     resolved.updown_stop_loss_pct,
                     pnl_pct,
+                    peak_pnl_pct=peak_pnl_pct,
                     in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
                     tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
                 )

@@ -31,6 +31,10 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
                     "bitcoin": ["neutral_15m", "marginal"],
                     "hype_macro": ["marginal"],
                 },
+                "shadow_required_lanes": {
+                    "bitcoin": ["neutral_15m", "marginal"],
+                    "hype_macro": ["marginal"],
+                },
             }
         },
         "strategies": {
@@ -61,10 +65,12 @@ def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():
     assert digest["enabled"] is True
     assert "hype_15m_buy_yes_min_score" not in digest["floors"]
     assert digest["lanes"]["bitcoin"]["enforced_lanes"] == ["neutral_15m", "marginal"]
+    assert digest["lanes"]["bitcoin"]["shadow_required_lanes"] == ["neutral_15m", "marginal"]
     assert digest["lanes"]["bitcoin"]["shadow_required"] is True
     assert digest["lanes"]["hype_macro"]["enforced_lanes"] == ["marginal"]
+    assert digest["lanes"]["hype_macro"]["shadow_required_lanes"] == ["marginal"]
     assert digest["lanes"]["hype_macro"]["composite_floor"] is None
-    assert digest["lanes"]["hype_macro"]["shadow_required"] is False
+    assert digest["lanes"]["hype_macro"]["shadow_required"] is True
     assert "size_multiplier_15m_buy_yes" not in digest["lanes"]["hype_macro"]
     assert digest["lanes"]["hype_macro"]["oracle"]["max_basis_bps"] == 12.0
     assert digest["active_blocks"]["hype_macro"]["oracle_basis_block"] == 1

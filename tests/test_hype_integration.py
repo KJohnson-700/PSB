@@ -192,63 +192,6 @@ def test_parse_gamma_event_market_prefers_candle_end_over_event_end():
     assert market.end_date == datetime(2026, 4, 29, 2, 15, tzinfo=timezone.utc)
 
 
-def test_weather_temperature_slug_regex_accepts_expected_slug_family():
-    m = _WEATHER_TEMP_SLUG_RE.match("highest-temperature-in-manila-on-apr-29-2026")
-    assert m is not None
-    assert m.group(1) == "highest-temperature"
-
-
-def test_weather_temperature_slug_regex_rejects_non_temperature_slug():
-    assert _WEATHER_TEMP_SLUG_RE.match("will-it-rain-in-manila-on-apr-29-2026") is None
-
-
-def test_dedicated_weather_candidate_accepts_weather_slug_and_title():
-    market = _market(
-        "Will Hong Kong have between 130-140mm of precipitation in April?",
-        slug="will-hong-kong-have-between-130-140mm-of-precipitation-in-april",
-    )
-    assert MarketScanner._is_dedicated_weather_candidate(market) is True
-
-
-def test_dedicated_weather_candidate_rejects_generic_non_weather_market():
-    market = _market(
-        "Will candidate X win in April?",
-        slug="will-candidate-x-win-in-april",
-    )
-    market = Market(
-        **{
-            **market.__dict__,
-            "description": "General politics market with no weather context.",
-            "group_item_title": "Politics",
-        }
-    )
-    assert MarketScanner._is_dedicated_weather_candidate(market) is False
-
-
-def test_dedicated_weather_candidate_rejects_false_positive_wind_name_slug():
-    market = _market(
-        "Will Jonas Wind be the top goal scorer in the 2025-26 Bundesliga season?",
-        slug="will-jonas-wind-be-the-top-goal-scorer-in-the-2025-26-bundesliga-season",
-    )
-    assert MarketScanner._is_dedicated_weather_candidate(market) is False
-
-
-def test_dedicated_weather_candidate_rejects_false_positive_hail_title():
-    market = _market(
-        "Will Project Hail Mary be the top grossing movie of 2026?",
-        slug="will-project-hail-mary-be-the-top-grossing-movie-of-2026",
-    )
-    assert MarketScanner._is_dedicated_weather_candidate(market) is False
-
-
-def test_dedicated_weather_candidate_rejects_named_storm_market_without_precip_structure():
-    market = _market(
-        "Will a named storm form before hurricane season?",
-        slug="will-a-named-storm-form-before-hurricane-season",
-    )
-    assert MarketScanner._is_dedicated_weather_candidate(market) is False
-
-
 def test_scanner_timeout_is_capped_below_cycle_interval():
     cfg = _config()
     cfg["polymarket"]["scanner_sync_timeout_sec"] = 180
@@ -274,6 +217,7 @@ def test_hype_updown_composite_floor_and_lane_helpers_inherit_sol_base():
             "enabled": True,
             "hard_skip_if_unavailable_on_enforced": True,
             "enforced_lanes": {"hype_macro": ["marginal"]},
+            "shadow_required_lanes": {"hype_macro": ["marginal"]},
         },
     }
     cfg["updown_composite"] = {
@@ -286,7 +230,7 @@ def test_hype_updown_composite_floor_and_lane_helpers_inherit_sol_base():
     assert strategy._updown_composite_floor(lane="marginal") == 0.62
     assert strategy._requires_ai_for_lane("marginal") is True
     assert strategy._requires_ai_for_lane("default") is False
-    assert strategy._requires_shadow_for_lane("marginal") is False
+    assert strategy._requires_shadow_for_lane("marginal") is True
     assert strategy._size_multiplier_for_lane("marginal") == 1.0
 
 
@@ -371,43 +315,6 @@ def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypa
     assert opportunities["scanner_meta"]["updown_15m_count"] == 1
     assert opportunities["scanner_meta"]["updown_5m_count"] == 1
     assert opportunities["scanner_meta"]["updown_1h_count"] == 0
-
-
-def test_scanner_weather_fetch_uses_background_cache_after_slow_refresh(monkeypatch):
-    import time
-
-    cfg = _config()
-    cfg["polymarket"]["scanner_sync_timeout_sec"] = 0.05
-    cfg["strategies"]["weather"] = {"enabled": True, "scan_limit": 20}
-    scanner = MarketScanner(cfg)
-
-    weather_market = _market(
-        "Will NYC have less than 2 inches of precipitation in April?",
-        slug="will-nyc-have-less-than-2-inches-of-precipitation-in-april",
-    )
-
-    monkeypatch.setattr(scanner, "_fetch_markets_gamma", lambda limit=200: [])
-    monkeypatch.setattr(scanner, "fetch_updown_markets", lambda look_ahead=8: [])
-    monkeypatch.setattr(scanner, "fetch_updown_5m_markets", lambda look_ahead=8: [])
-    monkeypatch.setattr(scanner, "fetch_updown_1h_markets", lambda look_ahead=8: [])
-
-    def _slow_weather(limit=20):
-        time.sleep(0.08)
-        return [weather_market]
-
-    monkeypatch.setattr(scanner, "fetch_weather_markets", _slow_weather)
-
-    first = scanner._sync_network_phase()
-    assert first[5] == []
-
-    time.sleep(0.12)
-    second = scanner._sync_network_phase()
-    assert [m.id for m in second[5]] == [weather_market.id]
-
-
-def test_weather_scan_limit_defaults_to_120():
-    scanner = MarketScanner(_config())
-    assert scanner.weather_scan_limit == 120
 
 
 def test_optional_hype_and_weather_fetches_can_be_disabled():

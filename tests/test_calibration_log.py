@@ -66,6 +66,14 @@ def test_build_record_extracts_canonical_schema():
     assert rec["stated_est_prob"] == 0.58
     assert rec["calibrated_est_prob"] == 0.58  # Phase 0 identity
     assert rec["alpha_used"] == 1.0
+    assert rec["side_source"] == ""
+    assert rec["resolver_path"] == ""
+    assert rec["primary_htf_bias"] == ""
+    assert rec["lane_family"] == "standard"
+    assert rec["entry_policy_snapshot"] == {}
+    assert rec["raw_est_prob"] == 0.58
+    assert rec["edge_bucket"] == "0.12_0.18"
+    assert rec["entry_price_bucket"] == "0.43_0.46"
     assert rec["exit_reason"] == "take_profit"
     assert rec["schema_version"] == 1
 
@@ -88,6 +96,33 @@ def test_build_record_handles_loss_and_buy_no():
     assert rec["win"] is False
     assert rec["realized_pct"] < 0
     assert rec["stated_est_prob"] == 0.40
+
+
+def test_build_record_preserves_trace_fields_from_entry_signal():
+    closed = _sample_closed(
+        entry_signal={
+            "lane_id": "eth_macro|15m|up|bullish|override",
+            "est_prob": 0.61,
+            "raw_est_prob": 0.58,
+            "side_source": "bullish_rally_default",
+            "resolver_path": "four_path_resolver",
+            "primary_htf_bias": "BULLISH",
+            "lane_family": "override",
+            "entry_policy": {"min_edge": 0.09},
+            "effective_min_edge": 0.11,
+            "corr_1h": 0.72,
+        },
+    )
+    rec = build_record_from_closed_trade(closed, session_id="trace")
+    assert rec["side_source"] == "bullish_rally_default"
+    assert rec["resolver_path"] == "four_path_resolver"
+    assert rec["primary_htf_bias"] == "BULLISH"
+    assert rec["lane_family"] == "override"
+    assert rec["entry_policy_snapshot"] == {"min_edge": 0.09}
+    assert rec["effective_min_edge"] == 0.11
+    assert rec["raw_est_prob"] == 0.58
+    assert rec["calibrated_est_prob"] == 0.61
+    assert rec["correlation_bucket"] == "ge_0.70"
 
 
 def test_build_record_falls_back_when_lane_id_missing():

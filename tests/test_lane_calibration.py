@@ -120,7 +120,7 @@ def test_shadow_mode_calibrate_returns_raw(tmp_log: Path):
 
 
 def test_live_mode_warps_by_alpha(tmp_log: Path):
-    cal = LaneCalibrator(path=tmp_log, shadow_mode=False)
+    cal = LaneCalibrator(path=tmp_log, shadow_mode=False, min_samples_to_apply=10)
     # Build a lane with α > 1 (model under-predicts).
     for _ in range(SHRINK_N + 5):
         cal.record("L", stated_est_prob=0.60, realized_pct=0.30, win=True)
@@ -132,7 +132,7 @@ def test_live_mode_warps_by_alpha(tmp_log: Path):
 
 
 def test_live_mode_clamps_calibrated_into_unit_interval(tmp_log: Path):
-    cal = LaneCalibrator(path=tmp_log, shadow_mode=False)
+    cal = LaneCalibrator(path=tmp_log, shadow_mode=False, min_samples_to_apply=10)
     # Force α near upper clamp.
     for _ in range(SHRINK_N + 20):
         cal.record("L", stated_est_prob=0.55, realized_pct=0.40, win=True)
@@ -192,6 +192,15 @@ def test_empty_lane_id_returns_identity_snapshot(tmp_log: Path):
     cal = LaneCalibrator(path=tmp_log, shadow_mode=True)
     snap = cal.record("", 0.6, 0.2, win=True)
     assert snap["n"] == 0  # nothing was actually written
+
+
+def test_live_mode_blocks_calibration_below_min_sample(tmp_log: Path):
+    cal = LaneCalibrator(path=tmp_log, shadow_mode=False, min_samples_to_apply=15)
+    for _ in range(10):
+        cal.record("L", stated_est_prob=0.60, realized_pct=0.30, win=True)
+    assert cal.posterior("L")["n"] == 10
+    assert cal.alpha("L") == pytest.approx(1.0)
+    assert cal.calibrate("L", 0.65) == pytest.approx(0.65)
 
 
 # ───────────────────────────────────────────────────────────── integration smoke

@@ -295,7 +295,7 @@ def test_high_entry_price_uses_tighter_cents_stop():
 
 
 def test_in_profit_stop_tightens_when_threshold_crossed():
-    """Once pnl ≥ +5%, the adverse % stop tightens from 20% to 8%."""
+    """Without any prior in-profit excursion, a later drawdown uses the base stop."""
     cfg = {
         "trading": {
             "exit_rules": {
@@ -323,17 +323,55 @@ def test_in_profit_stop_tightens_when_threshold_crossed():
         end_date=now + timedelta(minutes=8),
         entry_leg="YES",
     )
-    # pnl = (0.45 - 0.50) / 0.50 = -10%. Below base 20% (wouldn't fire) but below tightened 8%
-    # ONLY if the in-profit tightening has been triggered. With current price never having
-    # exceeded entry, trigger has never crossed, so this should NOT fire.
+    # pnl = (0.45 - 0.50) / 0.50 = -10%. Below base 20% (wouldn't fire) and there has
+    # been no prior in-profit excursion to arm the tighter stop, so this should NOT fire.
     exits = mgr.check_exits(
         {"p1": pos},
         {"m1": 0.45},
         {"m1": ("YES_TOKEN", "NO_TOKEN")},
     )
-    # Current implementation gates on current pnl_pct, not peak — so at -10% pnl,
-    # the trigger (+5%) is not met, tightening does not apply, and 20% base does not fire.
     assert exits == []
+
+
+def test_in_profit_stop_uses_peak_profit_not_just_current_profit():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_in_profit_stop_trigger_pct": 0.05,
+                "updown_in_profit_stop_tighten_to_pct": 0.08,
+                "updown_exit_window_mins": 2.25,
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Bitcoin Up or Down - test",
+        outcome="YES",
+        strategy="bitcoin",
+        size=10.0,
+        entry_price=0.50,
+        current_price=0.50,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=3),
+        end_date=now + timedelta(minutes=8),
+        entry_leg="YES",
+        peak_token_price=0.50,
+    )
+
+    first = mgr.check_exits({"p1": pos}, {"m1": 0.54}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+    assert first == []
+    assert pos.peak_token_price == 0.54
+
+    second = mgr.check_exits({"p1": pos}, {"m1": 0.45}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+    assert len(second) == 1
+    assert second[0].reason == "updown_stop_loss"
 
 
 def test_legacy_position_without_window_size_falls_back_to_inferred_runway():

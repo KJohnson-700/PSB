@@ -275,6 +275,7 @@ class TradeJournal:
             "confidence": confidence,
             "entry_reason": reason,
             "opened_at": entry.timestamp,
+            "peak_token_price": entry_price,
             "weather_subtype": merged_extra.get("weather_subtype"),
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
@@ -322,13 +323,19 @@ class TradeJournal:
             mark_no = 1.0 - current_price
             pnl = (mark_no - pos["entry_price"]) * pos["size"]
             pos["current_price"] = mark_no
+            current_token_price = mark_no
         elif pos["side"] == "BUY":
             pnl = (current_price - pos["entry_price"]) * pos["size"]
             pos["current_price"] = current_price
+            current_token_price = current_price
         else:
             pnl = (pos["entry_price"] - current_price) * pos["size"]
             pos["current_price"] = current_price
+            current_token_price = current_price
         pos["pnl"] = round(pnl, 4)
+        peak_token_price = float(pos.get("peak_token_price", pos["entry_price"]) or pos["entry_price"])
+        if current_token_price > peak_token_price:
+            pos["peak_token_price"] = current_token_price
 
         # Carry entry diagnostics forward — raw defaults (0 / "") made PRICE_UPDATE rows look like "empty" trades.
         _edge = float(pos.get("edge", 0.0) or 0.0)

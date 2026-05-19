@@ -18,9 +18,11 @@ For detailed instructions on how to add or configure AI providers, please see:
 /docs/AI_PROVIDER_INTEGRATION.md
 """
 import asyncio
+import collections
 import hashlib
 import json
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -46,6 +48,7 @@ except ImportError:
     anthropic = None
 
 from src.analysis.usage_tracker import UsageTracker, usage_tracker as global_usage_tracker
+from src.analysis.calibration_buckets import build_bucket_tags
 from src.ai.render import (
     render_marginal_analysis,
     render_portfolio_decision,
@@ -72,6 +75,7 @@ AI_PIPELINE_LOG_DIR = (
 MARGINAL_LOG_FILE = AI_PIPELINE_LOG_DIR / "marginal_analysis.jsonl"
 RESEARCH_LOG_FILE = AI_PIPELINE_LOG_DIR / "research_plans.jsonl"
 SHADOW_PIPELINE_LOG_FILE = AI_PIPELINE_LOG_DIR / "shadow_pipeline.jsonl"
+REJECTED_OBSERVER_LOG_FILE = AI_PIPELINE_LOG_DIR / "rejected_candidate_observer.jsonl"
 DEFAULT_TRADES_LOG_FILE = REPO_ROOT / "data" / "calibration" / "trades.jsonl"
 DEFAULT_LANE_POSTERIORS_FILE = REPO_ROOT / "data" / "calibration" / "lane_posteriors.json"
 DEFAULT_REJECTED_SETTLED_FILE = (
@@ -79,6 +83,21 @@ DEFAULT_REJECTED_SETTLED_FILE = (
 )
 DEFAULT_PROMPT_VERSION = "lane-feedback-v1"
 DEFAULT_POLICY_VERSION = "decision-layer-v1"
+
+
+async def _close_async_client_quietly(client: Any) -> None:
+    """Best-effort async SDK cleanup for timed-out or failed provider calls."""
+    if client is None:
+        return
+    close = getattr(client, "close", None)
+    if close is None:
+        return
+    try:
+        maybe_awaitable = close()
+        if asyncio.iscoroutine(maybe_awaitable):
+            await maybe_awaitable
+    except Exception:
+        logger.debug("AI client close skipped", exc_info=True)
 
 
 class AIResponseValidationError(ValueError):
@@ -229,6 +248,13 @@ OUTPUT (machine-parseable — follow exactly):
         self._last_call_time = 0.0
         self._min_call_gap = self.config.get('min_call_gap', 1.5)  # seconds between API calls
         self._rate_lock: Optional[asyncio.Lock] = None  # Created lazily inside event loop
+        # Backpressure: cap how many callers may queue on the rate-limit lock.
+        # With min_call_gap=2.0 and depth=6, worst-case wait ≈ 12s (safely under
+        # the 15s decision and 20s observer timeouts). Excess callers fail fast.
+        self._max_queue_depth = int(self.config.get('max_queue_depth', 6) or 6)
+        self._rate_waiters = 0
+        self._rate_drop_count = 0
+        self._rate_drop_log_every = 25
 
         # Free-tier / multi-model rotation (OpenRouter, etc.)
         self._free_tier_daily_budget = self.config.get("free_tier_daily_request_budget") or 0
@@ -239,6 +265,7 @@ OUTPUT (machine-parseable — follow exactly):
         self.structured_log = bool(self.config.get("structured_log", False))
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
+        self.shadow_observer_cfg = dict(self.config.get("shadow_observer", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
         self.prompt_version = str(
@@ -280,11 +307,13 @@ OUTPUT (machine-parseable — follow exactly):
         self.consensus_min_agree = self.config.get("consensus_min_agree", 2)
         self._cache_ttl = self.config.get("cache_ttl", 600)
         self._min_call_gap = self.config.get("min_call_gap", 1.5)
+        self._max_queue_depth = int(self.config.get("max_queue_depth", 6) or 6)
         self._free_tier_daily_budget = self.config.get("free_tier_daily_request_budget") or 0
         self.live_inferencing = self.config.get("live_inferencing", True)
         self.structured_log = bool(self.config.get("structured_log", False))
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
+        self.shadow_observer_cfg = dict(self.config.get("shadow_observer", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
         self.prompt_version = str(
@@ -355,6 +384,40 @@ OUTPUT (machine-parseable — follow exactly):
         except (TypeError, ValueError):
             return 0.0
 
+    def shadow_observer_enabled(self) -> bool:
+        return bool(self.shadow_observer_cfg.get("enabled", False))
+
+    def shadow_observer_max_calls_per_scan(self) -> int:
+        raw = self.shadow_observer_cfg.get("max_calls_per_scan", 0)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
+    def shadow_observer_sample_rate(self) -> float:
+        """Fraction of eligible rejected-candidate observer calls to actually
+        fire (0.0–1.0). Default 1.0 = no sampling. Lower values cut AI queue
+        pressure without disabling the rejection JSONL log (which is unrelated
+        and emitted by the strategy regardless)."""
+        raw = self.shadow_observer_cfg.get("sample_rate", 1.0)
+        try:
+            rate = float(raw)
+        except (TypeError, ValueError):
+            return 1.0
+        if rate < 0.0:
+            return 0.0
+        if rate > 1.0:
+            return 1.0
+        return rate
+
+    def shadow_observer_reasons(self) -> set[str]:
+        raw = self.shadow_observer_cfg.get("reasons", [])
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple, set)):
+            return set()
+        return {str(item).strip() for item in raw if str(item).strip()}
+
     def preentry_veto_active(self, ai_confidence: float) -> bool:
         """Return True when the AI confidence is low enough that a marginal
         trade should be vetoed before execution. Off by default."""
@@ -386,6 +449,20 @@ OUTPUT (machine-parseable — follow exactly):
                 return str(lane or "").strip() in {str(item).strip() for item in configured}
             return False
         legacy = self.decision_layer_cfg.get("enforce_on")
+        if isinstance(legacy, (list, tuple, set)):
+            return str(lane or "").strip() in {str(item).strip() for item in legacy}
+        return False
+
+    def decision_layer_lane_requires_shadow(self, strategy: str, lane: str) -> bool:
+        if self.decision_layer_use_shadow_portfolio():
+            return True
+        lanes = self.decision_layer_cfg.get("shadow_required_lanes")
+        if isinstance(lanes, dict):
+            configured = lanes.get(str(strategy or "").strip())
+            if isinstance(configured, (list, tuple, set)):
+                return str(lane or "").strip() in {str(item).strip() for item in configured}
+            return False
+        legacy = self.decision_layer_cfg.get("shadow_required_on")
         if isinstance(legacy, (list, tuple, set)):
             return str(lane or "").strip() in {str(item).strip() for item in legacy}
         return False
@@ -559,6 +636,11 @@ OUTPUT (machine-parseable — follow exactly):
         market_question: str,
         strategy_hint: str,
         lane_id: str = "",
+        raw_probability: Optional[float] = None,
+        post_calibration_probability: Optional[float] = None,
+        feedback_sources_used: Optional[List[str]] = None,
+        sample_count_used: Optional[Dict[str, int]] = None,
+        bucket_tags: Optional[Dict[str, str]] = None,
     ) -> None:
         if not self.structured_log:
             return
@@ -572,6 +654,11 @@ OUTPUT (machine-parseable — follow exactly):
             "recommendation": analysis.recommendation,
             "confidence_score": analysis.confidence_score,
             "estimated_probability": analysis.estimated_probability,
+            "raw_probability": raw_probability,
+            "post_calibration_probability": post_calibration_probability,
+            "feedback_sources_used": list(feedback_sources_used or []),
+            "sample_count_used": dict(sample_count_used or {}),
+            "bucket_tags": dict(bucket_tags or {}),
             "reasoning": analysis.reasoning,
             "markdown": render_marginal_analysis(
                 analysis,
@@ -633,7 +720,8 @@ OUTPUT (machine-parseable — follow exactly):
             news_context="",
             lane_feedback=lane_feedback,
         )
-        await self._rate_limit()
+        if not await self._rate_limit():
+            return None
 
         parser: Callable[[str, str, float], ResearchPlan] = (
             lambda content, parsed_market_id, _anchor: self._parse_research_response(
@@ -786,7 +874,13 @@ OUTPUT (machine-parseable — follow exactly):
             default=0.55,
         )
         rating = self._normalize_portfolio_rating(data.get("rating"), conf_fallback)
-        summary = str(data.get("executive_summary") or "").strip()
+        summary = str(
+            data.get("executive_summary")
+            or data.get("summary")
+            or data.get("rationale")
+            or data.get("reasoning")
+            or ""
+        ).strip()
         if not summary:
             raise AIResponseValidationError(
                 f"market={market_id} portfolio executive_summary missing"
@@ -848,7 +942,8 @@ OUTPUT (machine-parseable — follow exactly):
         response_parser: Callable[[str, str, float], Any],
         type_guard: Any,
     ) -> Any:
-        await self._rate_limit()
+        if not await self._rate_limit():
+            return None
         provider_errors: List[str] = []
         out: Any = None
         for provider_config in provider_chain:
@@ -1123,6 +1218,93 @@ OUTPUT (machine-parseable — follow exactly):
             ),
         }
 
+    async def observe_rejected_candidate(
+        self,
+        *,
+        rejection_reason: str,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str = "",
+        lane_id: str = "",
+        quant_action: str = "",
+        quant_edge: Optional[float] = None,
+        quant_threshold: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Observation-only AI path for structurally rejected candidates.
+
+        This never changes execution. It exists solely so pre-gate rejects can
+        still emit marginal and shadow reasoning into the AI logs.
+        """
+        if not self.shadow_observer_enabled() or not self.live_inferencing:
+            return None
+        allowed_reasons = self.shadow_observer_reasons()
+        if allowed_reasons and rejection_reason not in allowed_reasons:
+            return None
+        if not self.is_available():
+            return None
+        sample_rate = self.shadow_observer_sample_rate()
+        if sample_rate <= 0.0:
+            return None
+        if sample_rate < 1.0 and random.random() >= sample_rate:
+            return None
+
+        payload: Dict[str, Any] = {
+            "ts_utc": datetime.utcnow().isoformat() + "Z",
+            "strategy_hint": strategy_hint,
+            "lane_id": lane_id,
+            "rejection_reason": rejection_reason,
+            "market_id": market_id,
+            "market_question": market_question,
+            "quant_action": quant_action,
+            "quant_edge": quant_edge,
+            "quant_threshold": quant_threshold,
+            "metadata": metadata or {},
+        }
+        analysis = await self.analyze_market(
+            market_question=market_question,
+            market_description=market_description,
+            current_yes_price=current_yes_price,
+            market_id=market_id,
+            strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            quant_action=quant_action,
+        )
+        if analysis is None:
+            payload.update({"ok": False, "failed_stage": "direct_ai_failed"})
+            self._append_jsonl(REJECTED_OBSERVER_LOG_FILE, payload)
+            return payload
+
+        shadow_out = await self.run_shadow_pipeline(
+            market_question=market_question,
+            market_description=market_description,
+            current_yes_price=current_yes_price,
+            market_id=market_id,
+            strategy_hint=strategy_hint,
+            lane_id=lane_id,
+            marginal_recommendation=str(analysis.recommendation or ""),
+            quant_action=quant_action,
+            quant_edge=quant_edge,
+            quant_threshold=quant_threshold,
+            existing_research=None,
+        )
+        payload.update(
+            {
+                "direct_recommendation": analysis.recommendation,
+                "direct_confidence": analysis.confidence_score,
+                "direct_estimated_probability": analysis.estimated_probability,
+                "shadow_ok": bool(shadow_out and shadow_out.get("ok")),
+                "shadow_failed_stage": (shadow_out or {}).get("failed_stage"),
+                "shadow_portfolio_action": (shadow_out or {}).get("portfolio_action"),
+                "ok": bool(shadow_out and shadow_out.get("ok")),
+            }
+        )
+        self._append_jsonl(REJECTED_OBSERVER_LOG_FILE, payload)
+        return payload
+
     async def evaluate_trade_decision(
         self,
         *,
@@ -1136,6 +1318,8 @@ OUTPUT (machine-parseable — follow exactly):
         quant_edge: float,
         quant_confidence: float,
         quant_threshold: float,
+        raw_probability: Optional[float] = None,
+        post_calibration_probability: Optional[float] = None,
         require_shadow_portfolio: Optional[bool] = None,
     ) -> AIDecision:
         """Enforced pre-entry AI decision layer.
@@ -1166,6 +1350,7 @@ OUTPUT (machine-parseable — follow exactly):
 
         action = str(quant_action or "").strip().upper()
         min_confidence = self.decision_layer_min_confidence()
+        is_marginal = float(quant_edge) < float(quant_threshold)
         analysis = await self.analyze_market(
             market_question=market_question,
             market_description=market_description,
@@ -1174,12 +1359,25 @@ OUTPUT (machine-parseable — follow exactly):
             strategy_hint=strategy_hint,
             lane_id=lane_id,
             quant_action=action,
+            raw_probability=raw_probability,
+            post_calibration_probability=post_calibration_probability,
         )
         if analysis is None:
             return AIDecision(False, "SKIP", 0.0, None, None, "direct_ai_failed", "direct")
 
         rec = str(analysis.recommendation or "").strip().upper()
         if rec == "HOLD":
+            if is_marginal:
+                return AIDecision(
+                    True,
+                    action,
+                    float(quant_confidence),
+                    float(analysis.estimated_probability),
+                    float(quant_edge),
+                    "direct_ai_hold_abstain_marginal",
+                    "direct_abstain",
+                    direct_analysis=analysis,
+                )
             return AIDecision(
                 False,
                 rec,
@@ -1202,6 +1400,17 @@ OUTPUT (machine-parseable — follow exactly):
                 direct_analysis=analysis,
             )
         if float(analysis.confidence_score) < min_confidence:
+            if is_marginal:
+                return AIDecision(
+                    True,
+                    action,
+                    max(float(quant_confidence), float(analysis.confidence_score)),
+                    float(analysis.estimated_probability),
+                    float(quant_edge),
+                    "direct_ai_low_confidence_abstain_marginal",
+                    "direct_abstain",
+                    direct_analysis=analysis,
+                )
             return AIDecision(
                 False,
                 rec,
@@ -1263,6 +1472,21 @@ OUTPUT (machine-parseable — follow exactly):
                 )
             portfolio_action = str(shadow.get("portfolio_action") or "").upper()
             if portfolio_action in {"HOLD", "SKIP"}:
+                if is_marginal:
+                    return AIDecision(
+                        True,
+                        action,
+                        max(
+                            float(quant_confidence),
+                            float(shadow.get("shadow_confidence") or analysis.confidence_score),
+                        ),
+                        float(analysis.estimated_probability),
+                        float(quant_edge),
+                        "shadow_portfolio_hold_abstain_marginal",
+                        "shadow_portfolio_abstain",
+                        direct_analysis=analysis,
+                        shadow_result=shadow,
+                    )
                 return AIDecision(
                     False,
                     portfolio_action,
@@ -1288,6 +1512,18 @@ OUTPUT (machine-parseable — follow exactly):
                 )
             shadow_confidence = float(shadow.get("shadow_confidence") or analysis.confidence_score)
             if shadow_confidence < min_confidence:
+                if is_marginal:
+                    return AIDecision(
+                        True,
+                        action,
+                        max(float(quant_confidence), shadow_confidence),
+                        float(analysis.estimated_probability),
+                        float(quant_edge),
+                        "shadow_portfolio_low_confidence_abstain_marginal",
+                        "shadow_portfolio_abstain",
+                        direct_analysis=analysis,
+                        shadow_result=shadow,
+                    )
                 return AIDecision(
                     False,
                     portfolio_action,
@@ -1624,23 +1860,32 @@ OUTPUT (machine-parseable — follow exactly):
         self._file_cache[key] = (sig, rows)
         return list(rows)
 
-    def _build_lane_feedback_context(
+    def _build_lane_feedback_bundle(
         self,
         *,
         strategy_hint: str,
         lane_id: str,
         quant_action: str = "",
-    ) -> str:
+        calibration_bucket_tags: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
         lane_id = str(lane_id or "").strip().lower()
         tokens = self._lane_tokens(lane_id)
         if not lane_id or not tokens:
-            return ""
+            return {
+                "context": "",
+                "feedback_sources_used": [],
+                "sample_count_used": {},
+                "bucket_tags": dict(calibration_bucket_tags or {}),
+            }
 
         lines = [
             f"=== LANE FEEDBACK ({self.prompt_version}) ===",
             f"lane_id={lane_id}",
             "Treat this as calibration context, not a hard rule. Override it only when current evidence is materially different.",
         ]
+        feedback_sources_used: List[str] = []
+        sample_count_used: Dict[str, int] = {}
+        bucket_tags = dict(calibration_bucket_tags or {})
 
         post_blob = self._read_json_cached(self._lane_posteriors_path) or {}
         post_lanes = (post_blob.get("lanes") or {}) if isinstance(post_blob, dict) else {}
@@ -1661,6 +1906,8 @@ OUTPUT (machine-parseable — follow exactly):
             beta_mean = 0.4
 
         if exact_n >= self.lane_feedback_min_samples:
+            feedback_sources_used.append("exact_lane_posterior")
+            sample_count_used["exact_lane_posterior"] = exact_n
             if alpha < 1.0:
                 cal_note = f"historically optimistic by about {(1.0 - alpha) * 100:.1f}% toward 50/50"
             elif alpha > 1.0:
@@ -1702,6 +1949,8 @@ OUTPUT (machine-parseable — follow exactly):
             "BUY_NO" if tokens["side"] == "down" else "BUY_YES"
         )
         if bucket_n >= self.lane_feedback_min_samples:
+            feedback_sources_used.append("lane_family_trades")
+            sample_count_used["lane_family_trades"] = bucket_n
             avg_prob = bucket_prob_sum / bucket_n if bucket_n else 0.0
             realized_wr = bucket_wins / bucket_n if bucket_n else 0.0
             gap_pp = (avg_prob - realized_wr) * 100.0
@@ -1714,6 +1963,32 @@ OUTPUT (machine-parseable — follow exactly):
             lines.append(
                 f"Lane family {tokens['strategy']} {tokens['window']} {action_label}: n={bucket_n}, avg_stated_win_prob={avg_prob * 100:.1f}%, realized_wr={realized_wr * 100:.1f}% ({gap_note})."
             )
+            price_counter = collections.Counter(
+                str(row.get("entry_price_bucket") or "").strip()
+                for row in trades
+                if str(row.get("strategy") or "").strip().lower() == tokens["strategy"]
+                and str(row.get("window") or "").strip().lower() == tokens["window"]
+                and ("down" if str(row.get("side") or row.get("action") or "").strip().upper() == "BUY_NO" else "up") == tokens["side"]
+                and str(row.get("entry_price_bucket") or "").strip()
+            )
+            regime_counter = collections.Counter(
+                str(row.get("regime_tag_bucket") or "").strip()
+                for row in trades
+                if str(row.get("strategy") or "").strip().lower() == tokens["strategy"]
+                and str(row.get("window") or "").strip().lower() == tokens["window"]
+                and ("down" if str(row.get("side") or row.get("action") or "").strip().upper() == "BUY_NO" else "up") == tokens["side"]
+                and str(row.get("regime_tag_bucket") or "").strip()
+            )
+            if price_counter:
+                top_bucket, top_bucket_n = price_counter.most_common(1)[0]
+                lines.append(
+                    f"Dominant entry-price bucket in this lane family: {top_bucket} (n={top_bucket_n})."
+                )
+            if regime_counter:
+                top_regime, top_regime_n = regime_counter.most_common(1)[0]
+                lines.append(
+                    f"Dominant regime bucket in this lane family: {top_regime} (n={top_regime_n})."
+                )
 
         rejected = self._read_jsonl_cached(self._rejected_settled_path)
         ghost_n = 0
@@ -1731,6 +2006,8 @@ OUTPUT (machine-parseable — follow exactly):
             if row.get("win") is True:
                 ghost_wins += 1
         if ghost_n >= self.lane_feedback_min_samples:
+            feedback_sources_used.append("rejected_siblings")
+            sample_count_used["rejected_siblings"] = ghost_n
             lines.append(
                 f"Rejected sibling candidates for this lane family: n={ghost_n}, would_be_wr={ghost_wins / ghost_n * 100:.1f}%."
             )
@@ -1738,7 +2015,30 @@ OUTPUT (machine-parseable — follow exactly):
         lines.append(
             "If your current estimate disagrees with this history, explain what is different about the present setup."
         )
-        return "\n".join(lines)
+        return {
+            "context": "\n".join(lines),
+            "feedback_sources_used": feedback_sources_used,
+            "sample_count_used": sample_count_used,
+            "bucket_tags": bucket_tags,
+        }
+
+    def _build_lane_feedback_context(
+        self,
+        *,
+        strategy_hint: str,
+        lane_id: str,
+        quant_action: str = "",
+        calibration_bucket_tags: Optional[Dict[str, str]] = None,
+    ) -> str:
+        return str(
+            self._build_lane_feedback_bundle(
+                strategy_hint=strategy_hint,
+                lane_id=lane_id,
+                quant_action=quant_action,
+                calibration_bucket_tags=calibration_bucket_tags,
+            ).get("context")
+            or ""
+        )
 
     def _cache_ttl_for_market(self, market_question: str, strategy_hint: str = "") -> int:
         """Use shorter TTLs for short-window candle markets where stale AI is costly."""
@@ -1805,8 +2105,12 @@ OUTPUT (machine-parseable — follow exactly):
             cutoff = time.time() - self._cache_ttl
             self._cache = {k: v for k, v in self._cache.items() if v[0] > cutoff}
 
-    async def _rate_limit(self):
-        """Enforce minimum gap between API calls to avoid rate limits.
+    async def _rate_limit(self) -> bool:
+        """Enforce minimum gap between API calls and bound queue depth.
+
+        Returns True if the caller may proceed, False if the queue is already
+        at ``_max_queue_depth`` (in which case the caller should drop fast
+        rather than block for many seconds and time out downstream).
 
         Uses an asyncio.Lock created lazily on first call (must be inside an
         event loop).  The lock serialises concurrent coroutines so that two
@@ -1815,13 +2119,27 @@ OUTPUT (machine-parseable — follow exactly):
         """
         if self._rate_lock is None:
             self._rate_lock = asyncio.Lock()
-        async with self._rate_lock:
-            now = time.time()
-            elapsed = now - self._last_call_time
-            if elapsed < self._min_call_gap:
-                wait = self._min_call_gap - elapsed
-                await asyncio.sleep(wait)
-            self._last_call_time = time.time()
+        if self._max_queue_depth > 0 and self._rate_waiters >= self._max_queue_depth:
+            self._rate_drop_count += 1
+            if self._rate_drop_count % self._rate_drop_log_every == 1:
+                logger.warning(
+                    "AI rate-limit queue full (depth=%d, total drops=%d) — caller bailing fast",
+                    self._max_queue_depth,
+                    self._rate_drop_count,
+                )
+            return False
+        self._rate_waiters += 1
+        try:
+            async with self._rate_lock:
+                now = time.time()
+                elapsed = now - self._last_call_time
+                if elapsed < self._min_call_gap:
+                    wait = self._min_call_gap - elapsed
+                    await asyncio.sleep(wait)
+                self._last_call_time = time.time()
+        finally:
+            self._rate_waiters -= 1
+        return True
 
     @staticmethod
     def _models_for_provider(provider_config: Dict[str, Any], fallback_model: str) -> List[str]:
@@ -1919,6 +2237,8 @@ OUTPUT (machine-parseable — follow exactly):
         strategy_hint: str = "",
         lane_id: str = "",
         quant_action: str = "",
+        raw_probability: Optional[float] = None,
+        post_calibration_probability: Optional[float] = None,
     ) -> Optional[AIAnalysis]:
         """
         Analyze a market with caching and rate limiting.
@@ -1948,11 +2268,19 @@ OUTPUT (machine-parseable — follow exactly):
         if cached is not None:
             return cached
 
-        lane_feedback = self._build_lane_feedback_context(
+        calibration_bucket_tags = build_bucket_tags(
+            edge=None if raw_probability is None or current_yes_price is None else abs(float(post_calibration_probability if post_calibration_probability is not None else raw_probability) - float(current_yes_price)),
+            yes_price=current_yes_price,
+            side_source="ai",
+            regime_tag=self._lane_tokens(lane_id).get("regime", "") if lane_id else "",
+        )
+        lane_feedback_bundle = self._build_lane_feedback_bundle(
             strategy_hint=strategy_hint,
             lane_id=lane_id,
             quant_action=quant_action,
+            calibration_bucket_tags=calibration_bucket_tags,
         )
+        lane_feedback = str(lane_feedback_bundle.get("context") or "")
         user_prompt = self._build_prompt(
             market_question=market_question,
             market_description=market_description,
@@ -1979,6 +2307,11 @@ OUTPUT (machine-parseable — follow exactly):
                     market_question=market_question,
                     strategy_hint=strategy_hint,
                     lane_id=lane_id,
+                    raw_probability=raw_probability,
+                    post_calibration_probability=post_calibration_probability,
+                    feedback_sources_used=lane_feedback_bundle.get("feedback_sources_used"),
+                    sample_count_used=lane_feedback_bundle.get("sample_count_used"),
+                    bucket_tags=lane_feedback_bundle.get("bucket_tags"),
                 )
             return result
 
@@ -1987,8 +2320,11 @@ OUTPUT (machine-parseable — follow exactly):
             logger.debug(f"No AI providers configured — skipping market {market_id}.")
             return None
 
-        # Rate limit before making the API call
-        await self._rate_limit()
+        # Rate limit before making the API call. Drop fast when the queue is
+        # already at capacity so a flood of parallel candidates can't pile up
+        # behind the lock and time out downstream.
+        if not await self._rate_limit():
+            return None
 
         provider_errors: List[str] = []
         for provider_config in self.provider_chain:
@@ -2047,6 +2383,11 @@ OUTPUT (machine-parseable — follow exactly):
                         market_question=market_question,
                         strategy_hint=strategy_hint,
                         lane_id=lane_id,
+                        raw_probability=raw_probability,
+                        post_calibration_probability=post_calibration_probability,
+                        feedback_sources_used=lane_feedback_bundle.get("feedback_sources_used"),
+                        sample_count_used=lane_feedback_bundle.get("sample_count_used"),
+                        bucket_tags=lane_feedback_bundle.get("bucket_tags"),
                     )
                     return analysis_result
 
@@ -2095,7 +2436,8 @@ OUTPUT (machine-parseable — follow exactly):
                 if not fn:
                     return None
                 if not pc.get("local", False):
-                    await self._rate_limit()
+                    if not await self._rate_limit():
+                        return None
                 model_candidates = self._models_for_provider(
                     pc, str(pc.get("model", ""))
                 )
@@ -2261,91 +2603,94 @@ Reply with only the JSON object required by the system message (four keys: reaso
         client = openai.AsyncOpenAI(**client_kw)
 
         last_err: Optional[BaseException] = None
-        for m in models:
-            ck = self._cooldown_key(provider_label, m)
-            if self._on_cooldown(ck):
-                logger.debug(f"OpenAI-compat: model {m} on cooldown — trying next.")
-                continue
-            # Local counter tracks request attempts; header-based warnings remain source-of-truth when present.
-            self._bump_local_quota_and_warn(provider_label)
-            start_time = time.time()
-            try:
-                kwargs: Dict[str, Any] = dict(
-                    model=m,
-                    messages=[
-                        {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
-                if json_mode:
-                    kwargs["response_format"] = {"type": "json_object"}
-
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(**kwargs),
-                    timeout=call_timeout,
-                )
-
-                content = response.choices[0].message.content
-                usage = response.usage
-                latency = time.time() - start_time
-                hdrs = self._response_headers(response)
-
-                if usage:
-                    self.usage_tracker.record_usage(
-                        provider="openrouter" if base_url and "openrouter" in str(base_url).lower() else "openai",
-                        model=m,
-                        input_tokens=usage.prompt_tokens,
-                        output_tokens=usage.completion_tokens,
-                        latency=latency,
-                    )
-
-                self._maybe_warn_header_quota(provider_label, hdrs)
-
-                parser = response_parser or self._parse_response
-                try:
-                    return parser(content or "", market_id, anchor_yes_price)
-                except AIResponseValidationError as e:
-                    logger.warning(
-                        "OpenAI-compat: schema/parse error model=%s: %s — trying next.",
-                        m,
-                        e,
-                    )
-                    last_err = e
+        try:
+            for m in models:
+                ck = self._cooldown_key(provider_label, m)
+                if self._on_cooldown(ck):
+                    logger.debug(f"OpenAI-compat: model {m} on cooldown — trying next.")
                     continue
+                # Local counter tracks request attempts; header-based warnings remain source-of-truth when present.
+                self._bump_local_quota_and_warn(provider_label)
+                start_time = time.time()
+                try:
+                    kwargs: Dict[str, Any] = dict(
+                        model=m,
+                        messages=[
+                            {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                    )
+                    if json_mode:
+                        kwargs["response_format"] = {"type": "json_object"}
 
-            except asyncio.TimeoutError:
-                last_err = asyncio.TimeoutError()
-                logger.warning(f"OpenAI-compat: timeout model={m} — trying next.")
-                continue
-            except OpenAIRateLimitError as e:
-                last_err = e
-                err_s = str(e).lower()
-                if "free-models-per-day" in err_s:
-                    self._set_cooldown(account_ck, cooldown_daily)
-                self._set_cooldown(ck, cooldown_429)
-                logger.warning(
-                    "OpenAI-compat: rate limit model=%s — account_cd=%s model_cd=%.0fs — trying next.",
-                    m,
-                    "on" if "free-models-per-day" in err_s else "off",
-                    cooldown_429,
-                )
-                continue
-            except Exception as e:
-                last_err = e
-                msg = str(e).lower()
-                if "429" in msg or "rate" in msg:
-                    if "free-models-per-day" in msg:
+                    response = await asyncio.wait_for(
+                        client.chat.completions.create(**kwargs),
+                        timeout=call_timeout,
+                    )
+
+                    content = response.choices[0].message.content
+                    usage = response.usage
+                    latency = time.time() - start_time
+                    hdrs = self._response_headers(response)
+
+                    if usage:
+                        self.usage_tracker.record_usage(
+                            provider="openrouter" if base_url and "openrouter" in str(base_url).lower() else "openai",
+                            model=m,
+                            input_tokens=usage.prompt_tokens,
+                            output_tokens=usage.completion_tokens,
+                            latency=latency,
+                        )
+
+                    self._maybe_warn_header_quota(provider_label, hdrs)
+
+                    parser = response_parser or self._parse_response
+                    try:
+                        return parser(content or "", market_id, anchor_yes_price)
+                    except AIResponseValidationError as e:
+                        logger.warning(
+                            "OpenAI-compat: schema/parse error model=%s: %s — trying next.",
+                            m,
+                            e,
+                        )
+                        last_err = e
+                        continue
+
+                except asyncio.TimeoutError:
+                    last_err = asyncio.TimeoutError()
+                    logger.warning(f"OpenAI-compat: timeout model={m} — trying next.")
+                    continue
+                except OpenAIRateLimitError as e:
+                    last_err = e
+                    err_s = str(e).lower()
+                    if "free-models-per-day" in err_s:
                         self._set_cooldown(account_ck, cooldown_daily)
                     self._set_cooldown(ck, cooldown_429)
-                logger.warning(
-                    "OpenAI-compat error model=%s: %s: %s — trying next.",
-                    m,
-                    type(e).__name__,
-                    e,
-                )
-                continue
+                    logger.warning(
+                        "OpenAI-compat: rate limit model=%s — account_cd=%s model_cd=%.0fs — trying next.",
+                        m,
+                        "on" if "free-models-per-day" in err_s else "off",
+                        cooldown_429,
+                    )
+                    continue
+                except Exception as e:
+                    last_err = e
+                    msg = str(e).lower()
+                    if "429" in msg or "rate" in msg:
+                        if "free-models-per-day" in msg:
+                            self._set_cooldown(account_ck, cooldown_daily)
+                        self._set_cooldown(ck, cooldown_429)
+                    logger.warning(
+                        "OpenAI-compat error model=%s: %s: %s — trying next.",
+                        m,
+                        type(e).__name__,
+                        e,
+                    )
+                    continue
+        finally:
+            await _close_async_client_quietly(client)
 
         if last_err:
             raise last_err
@@ -2364,6 +2709,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using Google Gemini API (GOOGLE_API_KEY from AI Studio)."""
         start_time = time.time()
+        client = None
         try:
             from google import genai
 
@@ -2406,6 +2752,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Gemini API error details: {e}")
             raise e
+        finally:
+            await _close_async_client_quietly(client)
 
     async def _analyze_with_groq(
         self,
@@ -2420,6 +2768,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
     ) -> Optional[AIAnalysis]:
         """Analyzes using Groq API (free tier, no credit card). Get key at console.groq.com"""
         start_time = time.time()
+        client = None
         try:
             from groq import AsyncGroq
 
@@ -2464,6 +2813,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Groq API error details: {e}")
             raise e
+        finally:
+            await _close_async_client_quietly(client)
 
     async def _analyze_with_anthropic(
         self,
@@ -2478,6 +2829,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
     ) -> Optional[AIAnalysis]:
         """Analyze using Anthropic API"""
         start_time = time.time()
+        client = None
         try:
             if anthropic is None:
                 raise ImportError("anthropic package is not installed")
@@ -2514,6 +2866,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
         except (asyncio.TimeoutError, Exception) as e:
             logger.debug(f"Anthropic API error details: {e}")
             raise e
+        finally:
+            await _close_async_client_quietly(client)
 
     async def _analyze_with_minimax(
         self,
@@ -2535,6 +2889,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
         call_timeout = self._provider_timeout(provider_config)
         for attempt in range(max_attempts):
             start_time = time.time()
+            client = None
             try:
                 if anthropic is None:
                     raise ImportError("anthropic package is not installed")
@@ -2570,7 +2925,9 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     )
 
                 logger.debug(f"Received analysis from Minimax: {content}")
-                parser = response_parser or self._parse_response
+                parser = (
+                    response_parser or self._parse_response_allow_probability_inference
+                )
                 return parser(content, market_id, anchor_yes_price)
 
             except asyncio.TimeoutError:
@@ -2595,6 +2952,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     continue
                 logger.warning(f"Minimax API error: {type(e).__name__}: {e}")
                 raise
+            finally:
+                await _close_async_client_quietly(client)
     
     def _extract_text_from_content(self, content_blocks) -> str:
         """Extract text from Anthropic-style content blocks (handles ThinkingBlock + TextBlock)."""
@@ -2754,6 +3113,61 @@ Reply with only the JSON object required by the system message (four keys: reaso
             market_id=market_id,
             timestamp=datetime.now(),
         )
+
+    def _parse_response_allow_probability_inference(
+        self,
+        content: str,
+        market_id: str,
+        anchor_yes_price: float = 0.0,
+    ) -> AIAnalysis:
+        """
+        Parse provider output while tolerating omitted/unusable estimated_probability.
+
+        This is intentionally narrower than the default parser: reasoning still must be
+        present, and only estimated_probability failures get a fallback via
+        _normalize_provider_json(..., allow_probability_inference=True).
+        """
+        try:
+            return self._parse_response(content, market_id, anchor_yes_price)
+        except AIResponseValidationError as e:
+            if "estimated_probability" not in str(e):
+                raise
+
+        cleaned = (content or "").strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start : end + 1]
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            salvaged = self._salvage_four_key_response(content, market_id)
+            if salvaged is None:
+                raise AIResponseValidationError(
+                    f"market={market_id} invalid JSON: {e}"
+                ) from e
+            data = salvaged
+        if not isinstance(data, dict):
+            raise AIResponseValidationError(f"market={market_id} JSON is not an object")
+        if not self._extract_reasoning(data):
+            raise AIResponseValidationError(f"market={market_id} empty reasoning")
+
+        out = self._normalize_provider_json(
+            data, market_id, anchor_yes_price, allow_probability_inference=True
+        )
+        if out is None:
+            raise AIResponseValidationError(
+                f"market={market_id} could not build AIAnalysis after probability fallback"
+            )
+        logger.warning(
+            "AI parse fallback for market %s: inferred estimated_probability for provider response",
+            market_id,
+        )
+        return out
     
     async def batch_analyze(
         self,

@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.analysis.btc_price_service import CandleMomentum, MACDResult, TechnicalAnalysis
 from src.analysis.sol_btc_service import (
@@ -86,6 +86,16 @@ def test_eth_15m_follow_threshold_can_relax_short_lane_only():
 
     assert strat._eth_follow_15m_required_adj("LONG") == 0.04
     assert strat._eth_follow_15m_required_adj("SHORT") == 0.03
+
+
+def test_eth_liquidity_floor_is_lane_aware_by_window_and_side():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["min_liquidity_15m_buy_no"] = 2200
+    cfg["strategies"]["eth_macro"]["min_liquidity_1h"] = 3500
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strat._resolve_min_liquidity_floor(window_size="15m", action="BUY_NO") == 2200
+    assert strat._resolve_min_liquidity_floor(window_size="1h", action="BUY_YES") == 3500
 
 
 def test_eth_rsi_soft_penalty_buy_no_when_oversold_not_hard_block():
@@ -377,6 +387,11 @@ def test_eth_oracle_basis_block_is_logged_to_rejected_candidates():
     assert signals == []
     assert mock_log.call_count == 1
     assert mock_log.call_args.kwargs["reason"] == "oracle_basis_block"
+    assert mock_log.call_args.kwargs["policy_version"] == "oracle_basis_block_v1"
+    assert any(
+        p.get("probe") == "oracle_basis_abs_bps"
+        for p in mock_log.call_args.kwargs["probe_variants"]
+    )
 
 
 def test_eth_lane_entry_window_is_logged_to_rejected_candidates():
@@ -452,6 +467,232 @@ def test_eth_lane_entry_window_is_logged_to_rejected_candidates():
     assert signals == []
     assert mock_log.call_count == 1
     assert mock_log.call_args.kwargs["reason"] == "lane_entry_window"
+    assert mock_log.call_args.kwargs["policy_version"] == "lane_entry_window_v1"
+    assert any(
+        p.get("probe") == "entry_window_mins_left"
+        for p in mock_log.call_args.kwargs["probe_variants"]
+    )
+
+
+def test_eth_liquidity_reject_can_feed_shadow_observer():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+        }
+    )
+    ai = MagicMock()
+    ai.research_narrative_enabled.return_value = False
+    ai.research_narrative_max_calls_per_scan.return_value = 0
+    ai.research_narrative_min_confidence.return_value = 1.0
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    ai.observe_rejected_candidate = AsyncMock(return_value={"ok": True})
+    strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
+    strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+
+    eth_ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            current_price=3500.0,
+            rsi_14=55.0,
+            macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.02, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(
+            btc_price=100000.0,
+            btc_move_5m_pct=0.10,
+            btc_move_15m_pct=0.20,
+            correlation_1h=0.8,
+            sol_trend="BULLISH",
+        ),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+    btc_ta = TechnicalAnalysis(
+        current_price=100000.0,
+        macd_1h=MACDResult(histogram=20.0, histogram_rising=True),
+        macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+        candle_momentum=CandleMomentum(
+            m15_direction="DRIFT_UP",
+            m5_direction="DRIFT_UP",
+            m5_move_pct=0.1,
+        ),
+    )
+    strat.sol_service.get_full_analysis = MagicMock(return_value=eth_ta)
+    strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
+
+    market = Market(
+        id="eth15_liquidity_observer",
+        question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
+        description="ETH 15m liquidity observer test",
+        volume=1000.0,
+        liquidity=1000.0,
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.02,
+        end_date=datetime.now(timezone.utc) + timedelta(minutes=14),
+        token_id_yes="yes",
+        token_id_no="no",
+        group_item_title="Ethereum Up or Down",
+        slug="eth-updown-15m-1770000003",
+    )
+
+    signals = run_async(strat.scan_and_analyze([market], bankroll=10000.0))
+
+    assert signals == []
+    ai.observe_rejected_candidate.assert_awaited_once()
+    assert strat.last_scan_stats["shadow_observer_calls"] == 1
+    assert strat.last_scan_stats["shadow_observer_ok"] == 1
+
+
+def test_eth_shadow_observer_timeout_consumes_scan_budget():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    ai.research_narrative_enabled.return_value = False
+    ai.research_narrative_max_calls_per_scan.return_value = 0
+    ai.research_narrative_min_confidence.return_value = 1.0
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
+    strat._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
+    strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+
+    eth_ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            current_price=3500.0,
+            rsi_14=55.0,
+            macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.02, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(
+            btc_price=100000.0,
+            btc_move_5m_pct=0.10,
+            btc_move_15m_pct=0.20,
+            correlation_1h=0.8,
+            sol_trend="BULLISH",
+        ),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+    btc_ta = TechnicalAnalysis(
+        current_price=100000.0,
+        macd_1h=MACDResult(histogram=20.0, histogram_rising=True),
+        macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+        candle_momentum=CandleMomentum(
+            m15_direction="DRIFT_UP",
+            m5_direction="DRIFT_UP",
+            m5_move_pct=0.1,
+        ),
+    )
+    strat.sol_service.get_full_analysis = MagicMock(return_value=eth_ta)
+    strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
+
+    def _market(idx: int) -> Market:
+        return Market(
+            id=f"eth15_liquidity_timeout_{idx}",
+            question=f"Ethereum Up or Down - May 13, 9:0{idx}AM-9:15AM ET",
+            description="ETH 15m liquidity observer timeout test",
+            volume=1000.0,
+            liquidity=1000.0,
+            yes_price=0.50,
+            no_price=0.50,
+            spread=0.02,
+            end_date=datetime.now(timezone.utc) + timedelta(minutes=14),
+            token_id_yes=f"yes-{idx}",
+            token_id_no=f"no-{idx}",
+            group_item_title="Ethereum Up or Down",
+            slug=f"eth-updown-15m-17700000{idx}",
+        )
+
+    signals = run_async(strat.scan_and_analyze([_market(1), _market(2)], bankroll=10000.0))
+
+    assert signals == []
+    strat._observe_rejected_candidate_with_timeout.assert_awaited_once()
+    assert strat.last_scan_stats["shadow_observer_calls"] == 1
+    assert strat.last_scan_stats["shadow_observer_ok"] == 0
+
+
+def test_eth_shadow_observer_skips_repeated_market_during_cooldown():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+            "ai_observer_retry_cooldown_sec": 300,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    ai.research_narrative_enabled.return_value = False
+    ai.research_narrative_max_calls_per_scan.return_value = 0
+    ai.research_narrative_min_confidence.return_value = 1.0
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
+    strat._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
+    strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+
+    eth_ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            current_price=3500.0,
+            rsi_14=55.0,
+            macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+            macd_5m=MACDResult(histogram=0.02, histogram_rising=True),
+        ),
+        correlation=BTCSOLCorrelation(
+            btc_price=100000.0,
+            btc_move_5m_pct=0.10,
+            btc_move_15m_pct=0.20,
+            correlation_1h=0.8,
+            sol_trend="BULLISH",
+        ),
+        multi_tf=MultiTimeframeTrend(h1_trend="BULLISH"),
+    )
+    btc_ta = TechnicalAnalysis(
+        current_price=100000.0,
+        macd_1h=MACDResult(histogram=20.0, histogram_rising=True),
+        macd_15m=MACDResult(histogram=0.05, histogram_rising=True),
+        candle_momentum=CandleMomentum(
+            m15_direction="DRIFT_UP",
+            m5_direction="DRIFT_UP",
+            m5_move_pct=0.1,
+        ),
+    )
+    strat.sol_service.get_full_analysis = MagicMock(return_value=eth_ta)
+    strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
+
+    market = Market(
+        id="eth15_liquidity_cooldown",
+        question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
+        description="ETH 15m liquidity observer cooldown test",
+        volume=1000.0,
+        liquidity=1000.0,
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.02,
+        end_date=datetime.now(timezone.utc) + timedelta(minutes=14),
+        token_id_yes="yes",
+        token_id_no="no",
+        group_item_title="Ethereum Up or Down",
+        slug="eth-updown-15m-1770000003",
+    )
+
+    run_async(strat.scan_and_analyze([market], bankroll=10000.0))
+    run_async(strat.scan_and_analyze([market], bankroll=10000.0))
+
+    strat._observe_rejected_candidate_with_timeout.assert_awaited_once()
 
 
 def test_eth_rsi_hard_gate_when_enabled():

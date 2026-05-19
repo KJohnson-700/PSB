@@ -312,6 +312,13 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Review sessions
 
+### 2026-05-18 — Ghost calibration follow-up: ETH BUY_YES remains the main pending tighten/disable candidate
+
+- **Headline:** Settled ghost data still says the weak ETH lane is `BUY_YES`, so any future ETH calibration move should stay focused on longs rather than loosening ETH weak-confirm gates.
+- **Evidence snapshot:** Aggregate settled ghost `eth_macro` `BUY_YES` results were `n=2354`, `WR=38.8%`, `total_realized_pct=-560.65`. The largest protective gate remained `eth_macro|1h|BUY_YES|eth_1h_weak_confirm` at `n=721`, `25.5%` WR, `total_realized_pct=-364.83`; `eth_macro|15m|BUY_YES|eth_15m_weak_confirm` was `n=1378`, `46.2%` WR, `total_realized_pct=-115.48`.
+- **Possible next move after more data:** If the next settled sample confirms the same pattern, raise ETH long-side effective min edge further or disable the weakest ETH `BUY_YES` lane explicitly.
+- **Do not loosen from this note:** Current ghost data does **not** support loosening `eth_1h_weak_confirm` or `eth_15m_weak_confirm`; those gates are still blocking net losers.
+
 ### 2026-05-07 — Post-loosening short backtest slice still silent
 
 - **Slice:** [`backtest_crypto_ETH_5m_20260507_134222.json`](/Users/mainfolder/Documents/psb-main%201/data/backtest/reports/backtest_crypto_ETH_5m_20260507_134222.json) and [`backtest_crypto_ETH_15m_20260507_134220.json`](/Users/mainfolder/Documents/psb-main%201/data/backtest/reports/backtest_crypto_ETH_15m_20260507_134220.json)

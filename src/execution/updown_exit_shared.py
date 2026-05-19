@@ -273,13 +273,19 @@ def effective_updown_stop_loss_pct(
     base_pct: float,
     pnl_pct: float,
     *,
+    peak_pnl_pct: Optional[float] = None,
     in_profit_trigger_pct: float,
     tighten_to_pct: float,
 ) -> float:
     """In-profit tightening of the adverse percentage stop (live semantics)."""
+    trigger_pnl_pct = (
+        max(float(pnl_pct), float(peak_pnl_pct))
+        if peak_pnl_pct is not None
+        else float(pnl_pct)
+    )
     if (
         in_profit_trigger_pct > 0
-        and pnl_pct >= in_profit_trigger_pct
+        and trigger_pnl_pct >= in_profit_trigger_pct
         and 0 < tighten_to_pct < base_pct
     ):
         return float(tighten_to_pct)

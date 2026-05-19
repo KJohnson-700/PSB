@@ -99,6 +99,18 @@ def test_missing_stale_and_bad_basis_oracle_fail_validation() -> None:
     assert bad_basis.reason == "oracle_basis_block"
     assert bad_basis.basis_bps == pytest.approx(20.0)
 
+    fresh_relaxed = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.1059322,
+        oracle_updated_at=datetime.now(timezone.utc),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+        basis_relax_max_bps=12.0,
+    )
+    assert fresh_relaxed.passed is True
+    assert fresh_relaxed.reason == "oracle_basis_relaxed"
+
     relaxed = validate_oracle_reference(
         oracle_price=100.0,
         exchange_spot=100.02,

@@ -972,6 +972,7 @@ class UpdownBacktestEngine:
 
         mins_at_entry = float(window_minutes)
         entry_leg = "NO" if action == "BUY_NO" else "YES"
+        peak_token = fill_price
 
         for _, row in w.iterrows():
             current_asset = float(row["close"])
@@ -995,11 +996,14 @@ class UpdownBacktestEngine:
                     current_yes = float(max(0.01, min(0.99, float(q))))
             current_no = 1.0 - current_yes
             current_token = current_yes if action == "BUY_YES" else current_no
+            peak_token = max(peak_token, current_token)
             pnl_pct = (current_token - fill_price) / fill_price if fill_price > 0 else 0.0
+            peak_pnl_pct = (peak_token - fill_price) / fill_price if fill_price > 0 else 0.0
 
             effective_sl = effective_updown_stop_loss_pct(
                 resolved.updown_stop_loss_pct,
                 pnl_pct,
+                peak_pnl_pct=peak_pnl_pct,
                 in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
                 tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
             )
@@ -3165,14 +3169,33 @@ class UpdownBacktestEngine:
                 spot_basis = self._last_1m_close_before(data.get("1m", pd.DataFrame()), window_open)
                 spot_for_basis = spot_basis if spot_basis is not None else float(ta.current_price)
                 basis_bps = ((spot_for_basis - oracle_price) / oracle_price) * 10000.0
-                if abs(basis_bps) > float(oracle_max_basis_bps):
+                basis_relax_max_bps = strategy_cfg.get("oracle_basis_relax_max_bps")
+                allowed_basis_bps = (
+                    float(basis_relax_max_bps)
+                    if basis_relax_max_bps is not None
+                    else float(oracle_max_basis_bps)
+                )
+                if abs(basis_bps) > allowed_basis_bps:
                     oracle_basis_skips += 1
                     _bump_skip("oracle_basis")
                     current += step_td
                     continue
 
             max_edge_updown = float(
-                strategy_cfg.get("max_edge_updown", self.config.get("max_edge_updown", 0.0)) or 0.0
+                strategy_cfg.get(
+                    f"max_edge_updown_{tf_label}_{allowed_side.lower()}",
+                    strategy_cfg.get(
+                        f"max_edge_updown_{tf_label}",
+                        strategy_cfg.get(
+                            f"max_edge_updown_{allowed_side.lower()}",
+                            strategy_cfg.get(
+                                "max_edge_updown",
+                                self.config.get("max_edge_updown", 0.0),
+                            ),
+                        ),
+                    ),
+                )
+                or 0.0
             )
             if max_edge_updown > 0 and edge > max_edge_updown:
                 _bump_skip("edge_above_cap")

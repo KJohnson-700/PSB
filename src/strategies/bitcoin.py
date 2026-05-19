@@ -38,6 +38,10 @@ from pydantic import BaseModel, Field
 
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
+from src.analysis.ai_decision_broker import (
+    PendingDecision as _BrokerPendingDecision,
+    STATE_PENDING as _BROKER_STATE_PENDING,
+)
 from src.analysis.rejected_candidate_log import (
     build_threshold_probe_variants,
     log_rejected_candidate,
@@ -58,7 +62,10 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
-from src.execution.performance_feedback import get_drift_min_edge_mult
+from src.execution.performance_feedback import (
+    get_drift_min_edge_mult,
+    get_loosen_min_edge_mult,
+)
 from src.analysis.lane_identity import build_lane_metadata
 from src.strategies.btc_updown_5m import (
     btc_5m_hist_gate_reject_reason,
@@ -146,10 +153,15 @@ class BitcoinStrategy:
     """Bitcoin strategy with strict hierarchical trend filter."""
 
     def __init__(self, config: Dict[str, Any], ai_agent: AIAgent, position_sizer: PositionSizer,
-                 kelly_sizer=None, exposure_manager: ExposureManager = None):
+                 kelly_sizer=None, exposure_manager: ExposureManager = None,
+                 ai_broker=None):
         self.full_config = config
         self.config = config.get('strategies', {}).get('bitcoin', {})
         self.ai_agent = ai_agent
+        # AI decision broker: when set, the strategy enqueues per-market AI
+        # requests instead of awaiting the provider in-line. None → legacy
+        # synchronous behavior (used by tests that don't construct a broker).
+        self.ai_broker = ai_broker
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.btc_service = BTCPriceService()
@@ -192,7 +204,13 @@ class BitcoinStrategy:
         )
         self.ai_confidence_threshold = self.config.get('ai_confidence_threshold', 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 8))
-        self.ai_call_timeout_sec = float(self.config.get("ai_call_timeout_sec", 15.0) or 15.0)
+        legacy_ai_timeout = float(self.config.get("ai_call_timeout_sec", 15.0) or 15.0)
+        self.ai_analysis_timeout_sec = float(
+            self.config.get("ai_analysis_timeout_sec", legacy_ai_timeout) or legacy_ai_timeout
+        )
+        self.ai_decision_timeout_sec = float(
+            self.config.get("ai_decision_timeout_sec", legacy_ai_timeout) or legacy_ai_timeout
+        )
         self.use_ai_updown_5m = bool(self.config.get("use_ai_updown_5m", False))
         self.kelly_fraction = self.config.get('kelly_fraction', 0.15)
         self.entry_price_min = self.config.get('entry_price_min', 0.15)
@@ -218,6 +236,21 @@ class BitcoinStrategy:
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
+
+    def _max_edge_cap_for_updown(self, *, window_label: str, side: str) -> float:
+        base_cap = float(self.config.get("max_edge_updown", 0.12) or 0.12)
+        side_key = str(side or "").lower()
+        candidates = [
+            f"max_edge_updown_{window_label}_{side_key}",
+            f"max_edge_updown_{window_label}",
+            f"max_edge_updown_{side_key}",
+            "max_edge_updown",
+        ]
+        for key in candidates:
+            value = self.config.get(key)
+            if value is not None:
+                return float(value)
+        return base_cap
 
     def _calibrate_est_prob(
         self,
@@ -308,15 +341,71 @@ class BitcoinStrategy:
         try:
             return await asyncio.wait_for(
                 self.ai_agent.analyze_market(**kwargs),
-                timeout=self.ai_call_timeout_sec,
+                timeout=self.ai_analysis_timeout_sec,
             )
         except asyncio.TimeoutError:
             logger.warning(
                 "BTC: analyze_market timeout for market %s after %.1fs",
                 market_id,
-                self.ai_call_timeout_sec,
+                self.ai_analysis_timeout_sec,
             )
             return None
+
+    def _resolve_or_enqueue_ai(
+        self,
+        *,
+        lane_id: str,
+        market,
+        ai_context: str,
+        yes_price: float,
+        edge: float,
+        confidence: float,
+        action: str,
+        quant_threshold: float,
+        raw_est_prob,
+        estimated_prob,
+        require_shadow_portfolio: bool,
+        htf_bias=None,
+        open_position_ids=None,
+    ):
+        """Broker-aware AI lookup. Returns (state, ai_decision):
+          ("resolved", AIDecision) — usable decision; proceed as if legacy await returned it
+          ("pending", None)        — enqueued for background resolution; skip this candidate
+          ("unavailable", None)    — no broker wired; caller must use legacy await
+        """
+        if self.ai_broker is None:
+            return "unavailable", None
+        key = ("bitcoin", str(market.id), lane_id, action)
+        resolved = self.ai_broker.get_resolved(
+            key,
+            current_yes_price=yes_price,
+            current_action=action,
+            current_edge=edge,
+            open_position_ids=open_position_ids,
+        )
+        if resolved is not None:
+            return "resolved", resolved
+        snapshot = _BrokerPendingDecision(
+            key=key,
+            state=_BROKER_STATE_PENDING,
+            created_at=time.time(),
+            cycle_enqueued=0,
+            yes_price_at_enqueue=float(yes_price),
+            edge_sign=1 if float(edge) >= 0 else -1,
+            action=action,
+            market_question=market.question,
+            market_description=ai_context,
+            current_yes_price=float(yes_price),
+            edge=float(edge),
+            confidence=float(confidence),
+            estimated_prob=(float(estimated_prob) if estimated_prob is not None else None),
+            raw_est_prob=(float(raw_est_prob) if raw_est_prob is not None else None),
+            quant_threshold=float(quant_threshold),
+            require_shadow_portfolio=bool(require_shadow_portfolio),
+            htf_bias=htf_bias,
+        )
+        self.ai_broker.enqueue(snapshot)
+        return "pending", None
 
     async def _evaluate_trade_decision_with_timeout(self, **kwargs):
         """Bound BTC AI decision latency on 5m/15m updown assists."""
@@ -324,15 +413,23 @@ class BitcoinStrategy:
         try:
             return await asyncio.wait_for(
                 self.ai_agent.evaluate_trade_decision(**kwargs),
-                timeout=self.ai_call_timeout_sec,
+                timeout=self.ai_decision_timeout_sec,
             )
         except asyncio.TimeoutError:
             logger.warning(
                 "BTC: evaluate_trade_decision timeout for market %s after %.1fs",
                 market_id,
-                self.ai_call_timeout_sec,
+                self.ai_decision_timeout_sec,
             )
             return None
+
+    def _requires_shadow_for_lane(self, lane: str) -> bool:
+        check = getattr(self.ai_agent, "decision_layer_lane_requires_shadow", None)
+        if callable(check) and check("bitcoin", lane) is True:
+            return True
+        if lane == "neutral_15m":
+            return bool(self.neutral_15m_requires_shadow_portfolio)
+        return False
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -1150,6 +1247,7 @@ class BitcoinStrategy:
             ai_used = False
             threshold = None
             direction = "UP"  # default; overridden below
+            side_source = "btc_htf_bias"
             reason_parts = [f"HTF={htf_bias}", f"side={allowed_side}"]
             dead_zone_would_block = False
             dead_zone_hour = None
@@ -1243,6 +1341,7 @@ class BitcoinStrategy:
                     action = "BUY_NO"
                     direction = "DOWN"
                     effective_side = "SHORT"
+                    side_source = "btc_bull_rollover_countertrend"
                     reason_parts.append("counter_trend=btc_4h_hist_declining")
                 elif allowed_side == "LONG":
                     action = "BUY_YES"
@@ -1311,6 +1410,24 @@ class BitcoinStrategy:
                                 "macd_4h_above_zero": bool(macd_4h.above_zero),
                                 "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
                             },
+                            probe_variants=build_threshold_probe_variants(
+                                metric_name="hist_support_count",
+                                observed_value=float(
+                                    (
+                                        int(bool(macd_4h.histogram_rising))
+                                        + int(bool(macd_1h.histogram_rising))
+                                    )
+                                    if effective_side == "LONG"
+                                    else (
+                                        int(not bool(macd_4h.histogram_rising))
+                                        + int(not bool(macd_1h.histogram_rising))
+                                    )
+                                ),
+                                baseline_threshold=1.0,
+                                relax_steps=[1.0],
+                                tighten_steps=[1.0],
+                            ),
+                            policy_version="hist_gate_support_count_v1",
                         )
                         logger.info(
                             f"  BTC [5m] skip '{market.question[:40]}' — {hist_reject}"
@@ -1425,6 +1542,17 @@ class BitcoinStrategy:
                                     "macd_4h_above_zero": bool(macd_4h.above_zero),
                                     "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
                                 },
+                                probe_variants=build_threshold_probe_variants(
+                                    metric_name="hist_support_count",
+                                    observed_value=float(
+                                        int(bool(macd_4h.histogram_rising))
+                                        + int(bool(macd_1h.histogram_rising))
+                                    ),
+                                    baseline_threshold=1.0,
+                                    relax_steps=[1.0],
+                                    tighten_steps=[1.0],
+                                ),
+                                policy_version="hist_gate_support_count_v1",
                             )
                             logger.info(
                                 f"  BTC [{window_label}] skip '{market.question[:40]}' — "
@@ -1437,27 +1565,25 @@ class BitcoinStrategy:
                         )
                     if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
-                            _bump_skip(f"hist_gate_{window_label}_short_reject")
-                            log_rejected_candidate(
-                                strategy="bitcoin", window=window_label, side="SHORT", action=action,
-                                reason=f"hist_gate_{window_label}_short_reject", market=market,
-                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
-                                context={
-                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
-                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
-                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
-                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
-                                },
+                            short_hist_penalty = float(
+                                self.config.get(
+                                    f"hist_gate_{window_label}_short_penalty",
+                                    0.03 if is_1h else 0.025,
+                                )
+                            )
+                            est_prob_up += short_hist_penalty
+                            reason_parts.append(
+                                f"hist_gate_{window_label}_short_penalty={short_hist_penalty:.3f}"
                             )
                             logger.info(
-                                f"  BTC [{window_label}] skip '{market.question[:40]}' — "
-                                f"4H rising, 1H also rising — no momentum building for SHORT"
+                                f"  BTC [{window_label}] penalize '{market.question[:40]}' — "
+                                f"4H rising, 1H also rising — reduce SHORT conviction by {short_hist_penalty:.3f}"
                             )
-                            continue
-                        logger.info(
-                            f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
-                            f"4H rising but 1H falling — local momentum recovery SHORT"
-                        )
+                        else:
+                            logger.info(
+                                f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
+                                f"4H rising but 1H falling — local momentum recovery SHORT"
+                            )
 
                     # LTF confirmation adds conviction
                     ltf_adj = ltf_strength * ltf_weight
@@ -1908,6 +2034,13 @@ class BitcoinStrategy:
                 _sample("neutral_rsi_penalty", self.neutral_rsi_extra_min_edge)
 
             effective_min_edge *= get_drift_min_edge_mult("bitcoin", self.full_config)
+            effective_min_edge *= get_loosen_min_edge_mult(
+                "bitcoin",
+                self.full_config,
+                window=_updown_tf if is_updown else "15m",
+                side=lane_side,
+                regime=htf_bias,
+            )
 
             # ── AI-hold soft veto ────────────────────────────────────────────
             # If AI said HOLD on this market within the last ai_hold_veto_ttl_sec,
@@ -1975,22 +2108,52 @@ class BitcoinStrategy:
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                     "Answer with BUY_YES, BUY_NO, or HOLD."
                 )
-                ai_decision = await self._evaluate_trade_decision_with_timeout(
-                    market_question=market.question,
-                    market_description=ai_context,
-                    current_yes_price=yes_price,
-                    market_id=market.id,
-                    strategy_hint="bitcoin",
-                    quant_action=action,
-                    quant_edge=edge,
-                    quant_confidence=confidence,
-                    quant_threshold=effective_min_edge,
-                    require_shadow_portfolio=(
-                        self.neutral_15m_requires_shadow_portfolio
-                        if _needs_ai_for_low_conf_neutral_15m
-                        else False
-                    ),
+                _broker_lane = (
+                    "btc_neutral_15m_borderline"
+                    if _needs_ai_for_low_conf_neutral_15m
+                    else "btc_updown_marginal"
                 )
+                _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                    lane_id=_broker_lane,
+                    market=market,
+                    ai_context=ai_context,
+                    yes_price=yes_price,
+                    edge=edge,
+                    confidence=confidence,
+                    action=action,
+                    quant_threshold=effective_min_edge,
+                    raw_est_prob=raw_est_prob,
+                    estimated_prob=estimated_prob,
+                    require_shadow_portfolio=(
+                        self._requires_shadow_for_lane("neutral_15m")
+                        if _needs_ai_for_low_conf_neutral_15m
+                        else self._requires_shadow_for_lane("marginal")
+                    ),
+                    htf_bias=htf_bias,
+                )
+                if _broker_state == "pending":
+                    ai_calls += 1
+                    _bump_skip("ai_pending")
+                    continue
+                if _broker_state == "unavailable":
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint="bitcoin",
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=(
+                            self._requires_shadow_for_lane("neutral_15m")
+                            if _needs_ai_for_low_conf_neutral_15m
+                            else self._requires_shadow_for_lane("marginal")
+                        ),
+                    )
                 ai_calls += 1
                 ai_used = True
 
@@ -2194,18 +2357,39 @@ class BitcoinStrategy:
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                         "Answer with BUY_YES, BUY_NO, or HOLD."
                     )
-                    ai_decision = await self._evaluate_trade_decision_with_timeout(
-                        market_question=market.question,
-                        market_description=ai_context,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint="bitcoin",
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
+                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                        lane_id="btc_neutral_15m_enforced",
+                        market=market,
+                        ai_context=ai_context,
+                        yes_price=yes_price,
+                        edge=edge,
+                        confidence=confidence,
+                        action=action,
                         quant_threshold=effective_min_edge,
-                        require_shadow_portfolio=self.neutral_15m_requires_shadow_portfolio,
+                        raw_est_prob=raw_est_prob,
+                        estimated_prob=estimated_prob,
+                        require_shadow_portfolio=self._requires_shadow_for_lane("neutral_15m"),
+                        htf_bias=htf_bias,
                     )
+                    if _broker_state == "pending":
+                        ai_calls += 1
+                        _bump_skip("ai_pending")
+                        continue
+                    if _broker_state == "unavailable":
+                        ai_decision = await self._evaluate_trade_decision_with_timeout(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint="bitcoin",
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_confidence=confidence,
+                            quant_threshold=effective_min_edge,
+                            raw_probability=raw_est_prob,
+                            post_calibration_probability=estimated_prob,
+                            require_shadow_portfolio=self._requires_shadow_for_lane("neutral_15m"),
+                        )
                     ai_calls += 1
                     ai_used = True
                     if ai_decision is None:
@@ -2243,7 +2427,10 @@ class BitcoinStrategy:
             # inflates edge when BTC is far from the 15m threshold — a large computed
             # edge means BTC has ALREADY moved, not that it WILL move. Cap it.
             if is_updown:
-                _max_edge_updown = self.config.get("max_edge_updown", 0.12)
+                _max_edge_updown = self._max_edge_cap_for_updown(
+                    window_label=_updown_tf,
+                    side=effective_side,
+                )
                 if edge > _max_edge_updown:
                     _bump_skip("edge_above_cap")
                     if action == "BUY_NO":
@@ -2380,7 +2567,7 @@ class BitcoinStrategy:
                 est_prob=_signal_est_prob,
                 raw_est_prob=_signal_raw_est_prob,
                 rsi=round(ta.rsi_14, 1),
-                side_source="btc_htf_bias",
+                side_source=side_source,
                 oracle_basis_bps=None,
                 entry_policy=entry_policy_meta,
                 indicator_snapshot={

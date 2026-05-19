@@ -186,8 +186,24 @@ class WebSocketClient:
                 await asyncio.sleep(self._reconnect_delay)
                 await self.connect()
 
-    async def _handle_message(self, data: Dict[str, Any]):
-        """Handle incoming WebSocket message"""
+    async def _handle_message(self, data: Any):
+        """Handle incoming WebSocket message.
+
+        Polymarket can send either a single event object or a batch list of
+        event objects in one websocket frame.
+        """
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    await self._handle_message(item)
+                else:
+                    logger.debug("Ignoring non-dict websocket batch item: %r", item)
+            return
+
+        if not isinstance(data, dict):
+            logger.debug("Ignoring unexpected websocket payload type: %r", type(data).__name__)
+            return
+
         msg_type = data.get("type")
 
         if msg_type == "book":

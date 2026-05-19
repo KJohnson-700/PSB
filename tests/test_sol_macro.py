@@ -84,6 +84,17 @@ def test_sol_legacy_entry_policy_supports_hourly_overrides():
     assert policy["entry_price_max"] == 0.60
 
 
+def test_sol_liquidity_floor_is_lane_aware_by_window_and_side():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["min_liquidity_1h_buy_no"] = 2500
+    cfg["strategies"]["sol_macro"]["min_liquidity_15m"] = 4000
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._resolve_min_liquidity_floor(window_size="1h", action="BUY_NO") == 2500
+    assert strategy._resolve_min_liquidity_floor(window_size="15m", action="BUY_YES") == 4000
+    assert strategy._resolve_min_liquidity_floor(window_size="5m", action="BUY_YES") == 10000
+
+
 def test_optional_rsi_buy_ceiling_hard_block_when_enabled():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
@@ -595,6 +606,26 @@ def test_updown_oracle_stale_relax_passes_when_basis_within_relax_cap():
     assert relaxed.reason == "oracle_stale_basis_relaxed"
 
 
+def test_updown_oracle_fresh_basis_relax_passes_small_overshoot():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["require_oracle_for_updown"] = True
+    cfg["strategies"]["sol_macro"]["oracle_max_age_sec"] = 180
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 10.0
+    cfg["strategies"]["sol_macro"]["oracle_basis_relax_max_bps"] = 12.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    now = datetime.now(timezone.utc)
+    relaxed = strategy._validate_updown_oracle(
+        SOLAnalysis(
+            current_price=100.1059322,
+            chainlink_price=100.0,
+            chainlink_updated_at=now - timedelta(seconds=15),
+        ),
+        now=now,
+    )
+    assert relaxed.passed is True
+    assert relaxed.reason == "oracle_basis_relaxed"
+
+
 def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     cfg = _make_config()
     cfg["updown_composite"] = {
@@ -654,6 +685,144 @@ def test_sol_updown_oracle_block_is_logged_to_rejected_candidates():
     assert signals == []
     assert mock_log.call_count == 1
     assert mock_log.call_args.kwargs["reason"] == "oracle_basis_block"
+    assert mock_log.call_args.kwargs["policy_version"] == "oracle_validation_v1"
+    assert any(
+        p.get("probe") == "oracle_basis_abs_bps"
+        for p in mock_log.call_args.kwargs["probe_variants"]
+    )
+
+
+def test_sol_liquidity_reject_can_feed_shadow_observer():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    ai.observe_rejected_candidate = AsyncMock(return_value={"ok": True})
+    strategy = SolMacroStrategy(cfg, ai, MagicMock())
+
+    ta = _make_bullish_ta()
+    strategy.sol_service.get_full_analysis = MagicMock(return_value=ta)
+
+    market = MagicMock()
+    market.id = "sol_liquidity_observer"
+    market.question = "Solana Up or Down - May 17, 9:00AM-9:15AM ET"
+    market.description = market.question
+    market.yes_price = 0.50
+    market.no_price = 0.50
+    market.liquidity = 1000.0
+    market.token_id_yes = "tok-yes-sol"
+    market.token_id_no = "tok-no-sol"
+    market.end_date = datetime.now(timezone.utc) + timedelta(minutes=14)
+    market.token_ids = ["tok-yes-sol", "tok-no-sol"]
+    market.slug = "sol-updown-15m-1770000011"
+    market.group_item_title = "Solana Up or Down"
+    market.volume = 10000.0
+    market.spread = 0.02
+
+    signals = run_async(strategy.scan_and_analyze([market], bankroll=10000.0))
+
+    assert signals == []
+    ai.observe_rejected_candidate.assert_awaited_once()
+    assert strategy.last_scan_stats["shadow_observer_calls"] == 1
+    assert strategy.last_scan_stats["shadow_observer_ok"] == 1
+
+
+def test_sol_shadow_observer_timeout_consumes_scan_budget():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    strategy = SolMacroStrategy(cfg, ai, MagicMock())
+    strategy._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
+
+    ta = _make_bullish_ta()
+    strategy.sol_service.get_full_analysis = MagicMock(return_value=ta)
+
+    def _market(idx: int) -> MagicMock:
+        market = MagicMock()
+        market.id = f"sol_liquidity_timeout_{idx}"
+        market.question = f"Solana Up or Down - May 17, 9:0{idx}AM-9:15AM ET"
+        market.description = market.question
+        market.yes_price = 0.50
+        market.no_price = 0.50
+        market.liquidity = 1000.0
+        market.token_id_yes = f"tok-yes-sol-{idx}"
+        market.token_id_no = f"tok-no-sol-{idx}"
+        market.end_date = datetime.now(timezone.utc) + timedelta(minutes=14)
+        market.token_ids = [market.token_id_yes, market.token_id_no]
+        market.slug = f"sol-updown-15m-17700000{idx}"
+        market.group_item_title = "Solana Up or Down"
+        market.volume = 10000.0
+        market.spread = 0.02
+        return market
+
+    signals = run_async(strategy.scan_and_analyze([_market(1), _market(2)], bankroll=10000.0))
+
+    assert signals == []
+    strategy._observe_rejected_candidate_with_timeout.assert_awaited_once()
+    assert strategy.last_scan_stats["shadow_observer_calls"] == 1
+    assert strategy.last_scan_stats["shadow_observer_ok"] == 0
+
+
+def test_sol_shadow_observer_skips_repeated_market_during_cooldown():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 5000,
+            "ai_observer_retry_cooldown_sec": 300,
+        }
+    )
+    ai = MagicMock()
+    ai.shadow_pipeline_enabled.return_value = False
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    strategy = SolMacroStrategy(cfg, ai, MagicMock())
+    strategy._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
+
+    ta = _make_bullish_ta()
+    strategy.sol_service.get_full_analysis = MagicMock(return_value=ta)
+
+    market = MagicMock()
+    market.id = "sol_liquidity_cooldown"
+    market.question = "Solana Up or Down - May 17, 9:00AM-9:15AM ET"
+    market.description = market.question
+    market.yes_price = 0.50
+    market.no_price = 0.50
+    market.liquidity = 1000.0
+    market.token_id_yes = "tok-yes-sol"
+    market.token_id_no = "tok-no-sol"
+    market.end_date = datetime.now(timezone.utc) + timedelta(minutes=14)
+    market.token_ids = ["tok-yes-sol", "tok-no-sol"]
+    market.slug = "sol-updown-15m-1770000011"
+    market.group_item_title = "Solana Up or Down"
+    market.volume = 10000.0
+    market.spread = 0.02
+
+    run_async(strategy.scan_and_analyze([market], bankroll=10000.0))
+    run_async(strategy.scan_and_analyze([market], bankroll=10000.0))
+
+    strategy._observe_rejected_candidate_with_timeout.assert_awaited_once()
 
 
 def _make_bullish_ta():

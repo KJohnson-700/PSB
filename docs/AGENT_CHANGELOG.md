@@ -8,6 +8,112 @@
 
 ---
 
+## 2026-05-19 — Dashboard: BTC chart bubbles share chip color + CSS glow
+
+**[`src/dashboard/index.html`](src/dashboard/index.html):** Replaced canvas trade markers with DOM `.bbl-dot` elements. `stratChipHex` / `stratChipHexForJournal` are the single color source for `.strat-cf` toggles and chart bubbles (exact `window.STRATS` hex — no `_shadeStratHex` / white stroke). Bubbles now match the asset chip tone exactly: `color + '18'` translucent fill, `color + '88'` border, no box-shadow glow (lighter, static; chip-driven pulse-sync attempts reverted).
+
+**[`src/dashboard/server.py`](src/dashboard/server.py):** `dashboard_ui_rev` → `2026-05-19-btc-chart-bubbles-dom`.
+
+## 2026-05-18 — Rejected observer retries now have cooldown/backpressure and AI clients close on timeout
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py):** Added per-strategy rejected-observer backpressure so the same structurally rejected market is not re-observed every cycle while still inside a cooldown window, and so only a bounded number of observer tasks can stay inflight at once. This applies to `sol_macro`, `eth_macro`, and inherited `hype_macro` / `xrp_macro`.
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py):** Provider SDK clients are now explicitly closed after OpenAI-compatible, Groq, Anthropic, Gemini, and MiniMax calls, including timeout/error paths.
+
+**[`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py), [`tests/test_eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_eth_macro.py):** Added regression coverage proving repeated scans do not re-launch the same rejected observer during cooldown.
+
+**Why:** Live May 18 local logs showed repeated `rejected observer timeout ... after 20.0s` warnings across the same alt lanes together with `Trading cycle overran configured interval: elapsed=63.3s interval=60s` and later `OSError(24, 'Too many open files')` on Gamma fetches. The observer path is diagnostic-only, so repeated retries and leaked client sockets were avoidable pressure on the 60s scan loop.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_sol_macro.py -k shadow_observer -q` and `.venv/bin/python -m pytest tests/test_eth_macro.py -k shadow_observer -q` passed.
+
+## 2026-05-18 — Ghost gate report now emits probe-backed relaxation candidates
+
+**[`tools/ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tools/ghost_gate_report.py):** Extended the settled ghost report with probe-level Wilson confidence intervals, win/loss counts, and a new `actionable_probe_relaxations` section. The new section is intentionally read-only and picks the smallest relax delta per `strategy|window|action|reason|probe` bucket that has enough settled sample, confidence above 50%, and negative net gate value.
+
+**[`tests/test_ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ghost_gate_report.py):** Added regression coverage for probe-backed relaxation selection and report output.
+
+**Why:** The runtime `performance_feedback` path only knows how to loosen `min_edge` using `context.edge` versus `context.effective_min_edge`. Large gate families such as BTC histogram rejects and oracle-basis blocks already carry `probe_variants`, but there was no operator report converting those settled probe rows into concrete threshold-relaxation candidates.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ghost_gate_report.py tests/test_ghost_calibration.py -q` passed.
+
+## 2026-05-18 — Ghost gate report now exposes confidence bounds and actionable sample floors
+
+**[`tools/ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tools/ghost_gate_report.py):** Added Wilson win-rate confidence intervals to lane and gate summaries plus a new `actionable overtight gates` section that only ranks gates with `n >= 100`, `win_rate_ci_low > 50%`, and negative net gate value. This keeps tiny high-WR buckets from outranking larger, better-supported gate families during operator review.
+
+**[`tests/test_ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ghost_gate_report.py):** Added regression coverage for the confidence interval fields and the actionable-overtight filter.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ghost_gate_report.py tests/test_ghost_calibration.py -q` passed.
+
+## 2026-05-18 — Rejected-candidate observer moved off alt scan hot path
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py):** Rejected-candidate observer calls now run as background tasks instead of being awaited inline during `scan_and_analyze`, so `sol_macro` / `eth_macro` and inherited `xrp_macro` / `hype_macro` no longer spend scan wall time waiting on observer-only AI diagnostics. Observer attempts still consume per-scan budget immediately, and success counters are updated in task callbacks.
+
+**Default timeout change:** The alt observer watchdog default was cut from the old `max(30s, legacy_ai_timeout)` behavior to an `8s` cap by default (with explicit config override still respected), which better fits a `60s` trading loop for non-execution telemetry.
+
+**Why:** Live May 18 logs showed repeated `rejected observer timeout ... after 30.0s` lines across multiple alt strategies together with `Trading cycle overran configured interval: elapsed=92.2s interval=60s`. The observer path is diagnostic-only, so letting it sit in the scan hot path for up to 30 seconds per lane was an avoidable productivity hit.
+
+## 2026-05-18 — Startup narrator contention + AI timeout budget split
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Delayed startup AI narrators by `90s` (`ai.session_summary.startup_delay_seconds`) so the previous-session summary work no longer competes with the first live decision-layer scans immediately after boot.
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py):** Split the old single `ai_call_timeout_sec` into per-path runtime budgets across every strategy-owned AI watchdog. BTC now distinguishes `ai_analysis_timeout_sec` vs `ai_decision_timeout_sec`; SOL/ETH distinguish `ai_decision_timeout_sec` vs `ai_observer_timeout_sec`. The observer default remains at least `30s`, which matches the fact that it can perform more than one AI stage per attempt.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_eth_macro.py -q` and `.venv/bin/python -m pytest tests/test_sol_macro.py -q` → `115 passed`.
+
+**Why:** On **May 18, 2026 around 02:07:36–02:07:51 PT**, the bot logged `evaluate_trade_decision timeout ... after 15.0s` and `rejected observer timeout ... after 15.0s` while startup narrators were also finishing AI work. The direct decision path, reject observer, and startup narrators were all sharing the same provider budget, but the provider chain itself allows much longer calls (`timeout_seconds: 120` for MiniMax), so the outer `15s` watchdog was too aggressive for observers and noisy during startup contention.
+
+## 2026-05-18 — Decision-layer marginal abstention + bounded non-BTC AI latency
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py):** Fixed the decision-layer bug where marginal setups were passed to AI and then often vetoed simply for being marginal. For `quant_edge < quant_threshold`, direct/shadow `HOLD` and low-confidence outputs now count as AI abstention rather than hard rejection; real disagreement still vetoes.
+
+**[`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):** Added `asyncio.wait_for(...)` timeouts around non-BTC `evaluate_trade_decision(...)` and `observe_rejected_candidate(...)` calls, matching the bounded-latency pattern that BTC already used. Timeout now degrades to an explicit skip reason instead of allowing one LLM call to stall a whole cycle.
+
+**[`tests/test_ai_agent_parse.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_agent_parse.py):** Added regression coverage for marginal abstention and preserved non-marginal rejection semantics. Verification run: `.venv/bin/python -m pytest tests/test_ai_agent_parse.py tests/test_eth_macro.py tests/test_sol_macro.py -q` → `137 passed`.
+
+**Why:** Live May 18 logs showed two separate problems: `ai_decision_direct_ai_hold` on marginal candidates, and 220–300 second cycle overruns with repeated sequential Minimax calls inside ETH/SOL/HYPE/XRP paths. These changes address both without changing the structural non-AI gates.
+
+## 2026-05-18 — Decision layer no longer tautologically vetoes marginal trades
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py):** Changed `evaluate_trade_decision(...)` so marginal candidates (`quant_edge < quant_threshold`) treat direct/shadow `HOLD` and low-confidence outputs as **AI abstention**, not hard rejection. Strong disagreement still vetoes: opposite action and non-positive AI edge remain blocking.
+
+**[`tests/test_ai_agent_parse.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_agent_parse.py):** Added regression coverage for marginal `HOLD` / low-confidence abstention while keeping non-marginal `HOLD` / low-confidence rejection intact.
+
+**Why:** The decision layer was being invoked exactly on sub-threshold marginal setups, and the model was often vetoing them for being sub-threshold or uncertain. In practice that made the “AI tiebreaker” behave like a tautological rejector and cut trade count beyond the intended marginal confirmation role.
+
+## 2026-05-18 — Minimax portfolio summary alias fallback
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py):** Hardened portfolio-stage JSON parsing so the shadow pipeline accepts `summary`, `rationale`, or `reasoning` when a provider omits the exact `executive_summary` key but still returns usable summary text.
+
+**[`tests/test_ai_agent_parse.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_agent_parse.py):** Added regression coverage for the `summary` alias so provider-specific schema drift does not silently re-break the parser.
+
+**Why:** Minimax returned HTTP `200 OK` but the portfolio parser rejected market `2283169` because the payload lacked the exact `executive_summary` field. This preserves strict failure for truly empty summaries while tolerating common key-name drift from Anthropic-compatible providers.
+
+## 2026-05-18 — Ghost overtight feedback loop for min-edge loosening
+
+**`src/execution/performance_feedback.py`:** Added a second runtime feedback path, `check_overtight(...)`, which reads settled ghost rejects from `data/calibration/rejected_candidates_settled.jsonl`, identifies min-edge lanes with strong blocked ghost win rates, and emits per-lane loosening recommendations into `config["_runtime_feedback"]["by_lane"]`. Recommendations are based on the actual shortfall needed for a ghost candidate to clear `effective_min_edge`, not only the small fixed probe deltas.
+
+**`src/strategies/bitcoin.py`, `src/strategies/eth_macro.py`, `src/strategies/sol_macro.py`:** Entry gating now multiplies `effective_min_edge` by the new lane-level loosening multiplier in addition to the existing strategy-level drift multiplier, so over-tight lanes can relax automatically at runtime without editing YAML.
+
+**`config/settings.yaml`:** Documented the overtight knobs under `performance_feedback`, including lane sample thresholds, ghost WR threshold, max relax delta, and the floor/ceiling for the loosening multiplier.
+
+**`tests/test_performance_feedback.py`:** Added coverage for lane-level multiplier lookup and for overtight feedback population when drift expectations are empty.
+
+**Why:** Settled ghost data already recorded blocked winners, but there was no code path converting that evidence into a runtime entry-bar adjustment. This closes the missing “loosening” half of the feedback loop.
+
+## 2026-05-18 — AI shadow observer for structurally rejected candidates
+
+**`src/analysis/ai_agent.py`:** Added an observation-only rejected-candidate AI path plus `data/logs/ai_pipeline/rejected_candidate_observer.jsonl`. When enabled, selected pre-gate rejects can still emit direct marginal logs and run the Tier C shadow pipeline without affecting execution decisions.
+
+**`src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`:** Wired the observer into the three structural reject reasons currently starving the AI layer in live scans: `liquidity`, `lane_entry_window`, and `edge_above_cap`. The hook is bounded per scan, best-effort only, and updates per-strategy scan stats with `shadow_observer_calls` / `shadow_observer_ok`.
+
+**`src/ops_pulse.py`, `config/settings.yaml`:** Added observer telemetry aliases to ops aggregation and enabled a new `ai.shadow_observer` config block with a one-call-per-scan cap for those reject reasons.
+
+**`tests/test_ai_preentry_veto.py`, `tests/test_eth_macro.py`, `tests/test_sol_macro.py`:** Added coverage for the new observer config helpers and for liquidity-path observer invocation on ETH/SOL macro scans.
+
+**Why:** Recent paper cycles showed `ai_calls: 0` even with AI enabled because candidates were dying at structural gates before reaching the normal marginal/enforced AI path. This restores bounded AI/shadow visibility on rejected candidates so the learning loop is not completely starved during structurally quiet regimes.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ai_preentry_veto.py tests/test_eth_macro.py tests/test_sol_macro.py -q` passed (`121 passed`).
+
 ## 2026-05-18 — Agent preference: no unsolicited gate tightening
 
 **`AGENTS.md`:** Added operator rule — on strategy/performance questions, report data patterns and bugs; do **not** suggest raising `min_edge`, disabling windows, blocking hours, or similar restriction unless the user explicitly asks to tighten or reduce activity.
@@ -69,6 +175,27 @@
 **Why:** Short-side audit on the 2026-05-17 local run showed the biggest live ETH/XRP suppressors were visible in `ops_pulse` but missing from `data/calibration/rejected_candidates*.jsonl`, which meant the ghost calibrator could not learn whether those gates were protective or over-tight. This patch fixes the main observability blind spot without loosening thresholds yet.
 
 **Verification:** `.venv/bin/python -m pytest tests/test_eth_macro.py tests/test_sol_macro.py -q` passed (`111 passed`).
+
+---
+
+## 2026-05-17 — Counterfactual probe coverage extended beyond `min_edge`
+
+**`src/analysis/rejected_candidate_log.py`:** Added reusable probe builders for:
+- upper-cap gates (`observed <= cap`), used for oracle basis hard vetoes
+- range-band gates (`min <= observed <= max`), used for entry-price and entry-window filters
+
+**`src/strategies/eth_macro.py`, `src/strategies/sol_macro.py`:** Major live suppressors now emit probe variants instead of raw rejects only:
+- `oracle_basis_block` / oracle-basis validation → `oracle_basis_abs_bps`
+- `lane_entry_window` → `entry_window_mins_left`
+- `price_too_far` / `price_too_far_from_even` → `entry_price_band`
+
+**`src/strategies/bitcoin.py`:** BTC histogram rejects now emit a support-count probe (`hist_support_count`) so settled ghost analysis can compare the current “require at least one supportive 4H/1H histogram vote” rule against a looser “allow zero support” or tighter “require both” rule. This closes the main probe gap on the known over-tight BTC short histogram family.
+
+**`tests/test_bitcoin.py`, `tests/test_eth_macro.py`, `tests/test_sol_macro.py`:** Added regression coverage to assert the new probe payloads and policy versions are present on BTC histogram, ETH oracle/window, and SOL-family oracle reject logs.
+
+**Why:** The settled ghost report had enough evidence to identify over-tight BTC histogram rejects and protective ETH weak-confirm rejects, but the biggest live suppressors still lacked parameterized counterfactuals. This patch means the next run will start producing probe-level settled rows for the exact gate families that were previously un-auditable.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_bitcoin.py tests/test_eth_macro.py tests/test_sol_macro.py -q` passed (`150 passed`).
 
 ---
 

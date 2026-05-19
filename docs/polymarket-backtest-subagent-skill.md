@@ -47,6 +47,7 @@ Use as a **Skill** (copy to `.cursor/skills/strategy-test-review/SKILL.md` local
 - **Config drift** — `min_edge`, `entry_price_*`, `blocked_utc_hours_*` differ between live path and backtest path without an explicit experiment flag.
 - **Exposure** — `min_trade_usd` / tier caps: backtest uses different floors than `ExposureManager.scale_size` in live.
 - **Data quality** — Missing bars, stale OHLCV, wrong symbol; report claims N markets but list shows fewer.
+- **BTC-secondary audit** — For `sol_macro`, `eth_macro`, `hype_macro`, and `xrp_macro`, always evaluate whether BTC-secondary context/gates are net helpful or harmful by lane, side, and window. Inspect settled ghosts and live skip telemetry for `btc_1h_not_following`, `flat_btc_no_lag`, `no_btc_catalyst_*`, `btc_min_move_*`, lag/spike gates, and similar BTC-follow or BTC-catalyst families. Treat this as a standing audit question, not a one-off.
 
 ---
 

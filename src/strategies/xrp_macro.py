@@ -53,8 +53,9 @@ class XRPMacroStrategy(SolMacroStrategy):
         position_sizer: PositionSizer,
         kelly_sizer=None,
         exposure_manager: ExposureManager = None,
+        ai_broker=None,
     ):
-        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
+        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager, ai_broker=ai_broker)
         self.config = config.get("strategies", {}).get("xrp_macro", {})
         self.enabled = resolve_enabled_flag(
             "xrp_macro",

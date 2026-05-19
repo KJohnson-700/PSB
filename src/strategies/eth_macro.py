@@ -4,6 +4,7 @@ ETH Macro Strategy.
 ETH is its own alt leg: ETH spot/HTF/oracle data drives primary direction.
 BTC is secondary context/follow-quality input only.
 """
+import asyncio
 import logging
 import time
 import re
@@ -25,9 +26,14 @@ from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
 )
-from src.execution.performance_feedback import get_drift_min_edge_mult
+from src.execution.performance_feedback import (
+    get_drift_min_edge_mult,
+    get_loosen_min_edge_mult,
+)
 from src.analysis.rejected_candidate_log import (
+    build_range_probe_variants,
     build_threshold_probe_variants,
+    build_upper_cap_probe_variants,
     log_rejected_candidate,
 )
 
@@ -82,8 +88,9 @@ class ETHMacroStrategy(SolMacroStrategy):
         position_sizer: PositionSizer,
         kelly_sizer=None,
         exposure_manager: ExposureManager = None,
+        ai_broker=None,
     ):
-        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
+        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager, ai_broker=ai_broker)
         self.config = config.get("strategies", {}).get("eth_macro", {})
         self.enabled = resolve_enabled_flag(
             "eth_macro",
@@ -107,6 +114,16 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.eth_follow_15m_min_adj_short = float(
             self.config.get("eth_follow_15m_min_adj_short", self.eth_follow_15m_min_adj)
         )
+        legacy_ai_timeout = float(self.config.get("ai_call_timeout_sec", 15.0) or 15.0)
+        self.ai_decision_timeout_sec = float(
+            self.config.get("ai_decision_timeout_sec", legacy_ai_timeout) or legacy_ai_timeout
+        )
+        observer_timeout_default = min(8.0, max(3.0, legacy_ai_timeout))
+        self.ai_observer_timeout_sec = float(
+            self.config.get("ai_observer_timeout_sec", observer_timeout_default)
+            or observer_timeout_default
+        )
+        self._refresh_shadow_observer_controls()
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
         self.btc_follow_1h_required = bool(self.config.get("btc_follow_1h_required", True))
@@ -145,6 +162,36 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.btc_follow_5m_allow_1h_impulse_bypass = bool(
             self.config.get("btc_follow_5m_allow_1h_impulse_bypass", True)
         )
+
+    async def _evaluate_trade_decision_with_timeout(self, **kwargs):
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.evaluate_trade_decision(**kwargs),
+                timeout=self.ai_decision_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "ETH: evaluate_trade_decision timeout for market %s after %.1fs",
+                market_id,
+                self.ai_decision_timeout_sec,
+            )
+            return None
+
+    async def _observe_rejected_candidate_with_timeout(self, **kwargs):
+        market_id = str(kwargs.get("market_id", ""))
+        try:
+            return await asyncio.wait_for(
+                self.ai_agent.observe_rejected_candidate(**kwargs),
+                timeout=self.ai_observer_timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "ETH: rejected observer timeout for market %s after %.1fs",
+                market_id,
+                self.ai_observer_timeout_sec,
+            )
+            return None
 
     def _eth_stf_bypass_when_macro_agrees(
         self, btc_htf_bias: Optional[str], market_allowed_side: str
@@ -631,6 +678,8 @@ class ETHMacroStrategy(SolMacroStrategy):
         research_plans_logged = 0
         shadow_pipeline_calls = 0
         shadow_pipeline_ok = 0
+        shadow_observer_calls = 0
+        shadow_observer_ok = 0
         shadow_marginal_mismatch = 0
         research_enabled = self.ai_agent.research_narrative_enabled()
         research_max_calls = self.ai_agent.research_narrative_max_calls_per_scan()
@@ -675,6 +724,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             est_prob_up: float = 0.50,
             htf_bias: Optional[str] = None,
             context: Optional[Dict[str, Any]] = None,
+            probe_variants: Optional[List[Dict[str, Any]]] = None,
+            policy_version: Optional[str] = None,
+            stage: Optional[str] = None,
         ) -> None:
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
@@ -687,7 +739,136 @@ class ETHMacroStrategy(SolMacroStrategy):
                 est_prob_up=est_prob_up,
                 htf_bias=htf_bias,
                 context=context or {},
+                probe_variants=probe_variants or [],
+                policy_version=policy_version,
+                stage=stage,
             )
+
+        observer_tasks: List[asyncio.Task] = []
+
+        async def _observe_structural_reject(
+            *,
+            market: Any,
+            window: str,
+            side: str,
+            action: str,
+            reason: str,
+            yes_price: float,
+            quant_edge: Optional[float],
+            quant_threshold: Optional[float],
+            htf_bias: Optional[str],
+            context_lines: List[str],
+            metadata: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            nonlocal shadow_pipeline_calls, shadow_pipeline_ok
+            nonlocal shadow_observer_calls, shadow_observer_ok
+            enabled = getattr(self.ai_agent, "shadow_observer_enabled", lambda: False)()
+            if not isinstance(enabled, bool) or not enabled:
+                return
+            try:
+                max_calls = int(
+                    getattr(self.ai_agent, "shadow_observer_max_calls_per_scan", lambda: 0)()
+                )
+            except (TypeError, ValueError):
+                return
+            if max_calls <= 0:
+                return
+            if shadow_pipeline_calls >= max_calls:
+                return
+            market_id = str(getattr(market, "id", "") or "")
+            self._prune_shadow_observer_state()
+            if len(self._shadow_observer_tasks) >= self.ai_observer_max_inflight:
+                return
+            observer_key = self._shadow_observer_key(market_id=market_id, reason=reason)
+            now = time.monotonic()
+            if self._shadow_observer_retry_after.get(observer_key, 0.0) > now:
+                return
+            self._shadow_observer_retry_after[observer_key] = (
+                now + self.ai_observer_retry_cooldown_sec
+            )
+            try:
+                market_metadata = format_market_metadata(market)
+            except Exception:
+                market_metadata = (
+                    f"id={getattr(market, 'id', '')}\n"
+                    f"question={getattr(market, 'question', '')}\n"
+                    f"slug={getattr(market, 'slug', '')}"
+                )
+            lane_id = str(
+                build_lane_metadata(
+                    strategy=self._signal_strategy_name,
+                    window_size=window,
+                    action=action,
+                    direction=("down" if action == "BUY_NO" else "up"),
+                    entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                    side_source="rejected_observer",
+                    ai_used=True,
+                    reason=reason,
+                    signal_reason=f"rejected_candidate_{reason}",
+                    htf_bias=htf_bias,
+                    primary_htf_bias=htf_bias,
+                ).get("lane_id")
+                or ""
+            )
+            observer_context = "\n".join(
+                [
+                    market.description or market.question,
+                    "",
+                    "=== REJECTED CANDIDATE OBSERVER ===",
+                    f"reason={reason}",
+                    f"window={window}",
+                    f"side={side}",
+                    f"action={action}",
+                    f"yes_price={yes_price:.4f}",
+                    *[line for line in context_lines if line],
+                    "",
+                    f"=== MARKET ===\n{market_metadata}",
+                ]
+            )
+            # Consume the scan budget before awaiting the observer. Timed-out
+            # observer calls should still count as attempts; otherwise one slow
+            # provider can trigger repeated best-effort AI calls across many
+            # rejected markets in the same scan.
+            shadow_pipeline_calls += 1
+            shadow_observer_calls += 1
+            async def _run_observer() -> Optional[Dict[str, Any]]:
+                return await self._observe_rejected_candidate_with_timeout(
+                    rejection_reason=reason,
+                    market_question=market.question,
+                    market_description=observer_context,
+                    current_yes_price=yes_price,
+                    market_id=market_id,
+                    strategy_hint=self._signal_strategy_name,
+                    lane_id=lane_id,
+                    quant_action=action,
+                    quant_edge=quant_edge,
+                    quant_threshold=quant_threshold,
+                    metadata=metadata or {},
+                )
+
+            def _finalize_observer(task: asyncio.Task) -> None:
+                nonlocal shadow_pipeline_ok, shadow_observer_ok
+                self._shadow_observer_tasks.discard(task)
+                try:
+                    observer_out = task.result()
+                except asyncio.CancelledError:
+                    return
+                except Exception:
+                    logger.debug(
+                        "%s: rejected observer task failed for market %s",
+                        self._signal_strategy_name,
+                        getattr(market, "id", ""),
+                        exc_info=True,
+                    )
+                    return
+                if observer_out and observer_out.get("ok"):
+                    shadow_pipeline_ok += 1
+                    shadow_observer_ok += 1
+
+            task = asyncio.create_task(_run_observer())
+            self._shadow_observer_tasks.add(task)
+            task.add_done_callback(_finalize_observer)
+            observer_tasks.append(task)
 
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
@@ -703,7 +884,11 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
-            if market.liquidity > 0 and market.liquidity < self.min_liquidity:
+            _liq_floor = self._resolve_min_liquidity_floor(
+                window_size=_updown_tf,
+                action=action,
+            )
+            if market.liquidity > 0 and market.liquidity < _liq_floor:
                 _bump_skip("liquidity")
                 _log_skip_reject(
                     market=market,
@@ -713,10 +898,27 @@ class ETHMacroStrategy(SolMacroStrategy):
                     reason="liquidity",
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
+                    stage="liquidity",
                     context={
                         "market_liquidity": float(market.liquidity),
-                        "min_liquidity": float(self.min_liquidity),
+                        "min_liquidity": float(_liq_floor),
                     },
+                )
+                await _observe_structural_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="liquidity",
+                    yes_price=yes_price,
+                    quant_edge=None,
+                    quant_threshold=float(_liq_floor),
+                    htf_bias=primary_htf_bias,
+                    context_lines=[
+                        f"market_liquidity={float(market.liquidity):.2f}",
+                        f"min_liquidity={float(_liq_floor):.2f}",
+                    ],
+                    metadata={"market_liquidity": float(market.liquidity)},
                 )
                 continue
 
@@ -813,6 +1015,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                         "entry_price_min": 0.20,
                         "entry_price_max": 0.80,
                     },
+                    probe_variants=build_range_probe_variants(
+                        metric_name="entry_price_band",
+                        observed_value=float(yes_price),
+                        baseline_min=0.20,
+                        baseline_max=0.80,
+                        relax_steps=[0.02, 0.05, 0.10],
+                        tighten_steps=[0.02, 0.05],
+                    ),
+                    policy_version="entry_price_band_v1",
                 )
                 continue
 
@@ -827,6 +1038,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
+            follow_penalty_min_edge_add = 0.0
             if btc_htf_details:
                 reason_parts.append(
                     "BTC4H_votes="
@@ -905,6 +1117,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                             self.config.get("oracle_max_basis_bps", 0.0) or 0.0
                         ),
                     },
+                    probe_variants=build_upper_cap_probe_variants(
+                        metric_name="oracle_basis_abs_bps",
+                        observed_value=abs(float(eth.oracle_basis_bps or 0.0)),
+                        baseline_cap=float(self.config.get("oracle_max_basis_bps", 0.0) or 0.0),
+                        relax_steps=[2.0, 5.0, 10.0],
+                        tighten_steps=[2.0, 5.0],
+                    ),
+                    policy_version="oracle_basis_block_v1",
+                    stage="oracle",
                 )
                 continue
 
@@ -934,6 +1155,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         reason="btc_5m_no_impulse", market=market,
                         yes_price=yes_price, est_prob_up=est_prob_up,
                         htf_bias=primary_htf_bias,
+                        stage="signal_strength_5m",
                         context={"btc_impulse": float(btc_impulse), "btc_reasons": list(btc_reasons)},
                     )
                     continue
@@ -948,6 +1170,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         reason="eth_5m_weak_confirm", market=market,
                         yes_price=yes_price, est_prob_up=est_prob_up,
                         htf_bias=primary_htf_bias,
+                        stage="signal_strength_5m",
                         context={
                             "eth_5m_adj": float(eth_5m_adj),
                             "min_required": float(self.eth_follow_5m_min_adj),
@@ -974,16 +1197,26 @@ class ETHMacroStrategy(SolMacroStrategy):
             else:
                 if is_1h:
                     if btc_full_ok and not self._btc_follow_1h_ok(btc_ta, market_allowed_side):
-                        _bump_skip("btc_1h_not_following")
-                        log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="1h",
-                            side=market_allowed_side, action=action,
-                            reason="btc_1h_not_following", market=market,
-                            yes_price=yes_price, est_prob_up=est_prob_up,
-                            htf_bias=primary_htf_bias,
-                            context={},
-                        )
-                        continue
+                        if market_allowed_side == "SHORT":
+                            est_prob_up += float(
+                                self.config.get("btc_1h_not_following_short_penalty", 0.04)
+                            )
+                            follow_penalty_min_edge_add += float(
+                                self.config.get("btc_1h_not_following_short_min_edge_add", 0.01)
+                            )
+                            reason_parts.append("btc_1h_follow_penalty_short")
+                        else:
+                            _bump_skip("btc_1h_not_following")
+                            log_rejected_candidate(
+                                strategy=self._signal_strategy_name, window="1h",
+                                side=market_allowed_side, action=action,
+                                reason="btc_1h_not_following", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up,
+                                htf_bias=primary_htf_bias,
+                                stage="signal_strength_1h",
+                                context={},
+                            )
+                            continue
                     eth_1h_adj, eth_reasons = self._eth_1h_follow_score(
                         eth.macd_1h, market_allowed_side
                     )
@@ -1001,6 +1234,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                             reason="eth_1h_weak_confirm", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="signal_strength_1h",
                             context={
                                 "eth_1h_adj": float(eth_1h_adj),
                                 "min_required": float(eth_1h_min_adj),
@@ -1041,6 +1275,14 @@ class ETHMacroStrategy(SolMacroStrategy):
                             and self._btc_follow_1h_ok(btc_ta, market_allowed_side)
                         ):
                             pass
+                        elif market_allowed_side == "SHORT":
+                            est_prob_up += float(
+                                self.config.get("btc_15m_not_following_short_penalty", 0.03)
+                            )
+                            follow_penalty_min_edge_add += float(
+                                self.config.get("btc_15m_not_following_short_min_edge_add", 0.01)
+                            )
+                            reason_parts.append("btc_15m_follow_penalty_short")
                         else:
                             _bump_skip("btc_15m_not_following")
                             log_rejected_candidate(
@@ -1049,6 +1291,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 reason="btc_15m_not_following", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up,
                                 htf_bias=primary_htf_bias,
+                                stage="signal_strength_15m",
                                 context={},
                             )
                             continue
@@ -1066,6 +1309,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                             reason="eth_15m_weak_confirm", market=market,
                             yes_price=yes_price, est_prob_up=est_prob_up,
                             htf_bias=primary_htf_bias,
+                            stage="signal_strength_15m",
                             context={
                                 "eth_15m_adj": float(eth_15m_adj),
                                 "min_required": float(required_eth_15m_adj),
@@ -1142,6 +1386,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 float(getattr(self, "hard_min_edge", 0.0) or 0.0),
                 lane_policy.hard_min_edge,
             )
+            effective_min_edge += follow_penalty_min_edge_add
             if not lane_policy.enabled:
                 _bump_skip("lane_disabled")
                 continue
@@ -1162,6 +1407,34 @@ class ETHMacroStrategy(SolMacroStrategy):
                         "entry_window_min": float(lane_policy.entry_window_min),
                         "entry_window_max": float(lane_policy.entry_window_max),
                     },
+                    probe_variants=build_range_probe_variants(
+                        metric_name="entry_window_mins_left",
+                        observed_value=float(_eval_left),
+                        baseline_min=float(lane_policy.entry_window_min),
+                        baseline_max=float(lane_policy.entry_window_max),
+                        relax_steps=[1.0, 2.0, 5.0],
+                        tighten_steps=[1.0, 2.0],
+                    ),
+                    policy_version="lane_entry_window_v1",
+                )
+                await _observe_structural_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="lane_entry_window",
+                    yes_price=yes_price,
+                    quant_edge=edge,
+                    quant_threshold=float(effective_min_edge),
+                    htf_bias=primary_htf_bias,
+                    context_lines=[
+                        f"eval_mins_left={float(_eval_left):.2f}",
+                        f"entry_window_min={float(lane_policy.entry_window_min):.2f}",
+                        f"entry_window_max={float(lane_policy.entry_window_max):.2f}",
+                        f"quant_edge={float(edge):.4f}",
+                        f"effective_min_edge={float(effective_min_edge):.4f}",
+                    ],
+                    metadata={"eval_mins_left": float(_eval_left)},
                 )
                 continue
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
@@ -1236,6 +1509,13 @@ class ETHMacroStrategy(SolMacroStrategy):
                 reason_parts.append(_late_reason)
 
             effective_min_edge *= get_drift_min_edge_mult("eth_macro", self.full_config)
+            effective_min_edge *= get_loosen_min_edge_mult(
+                "eth_macro",
+                self.full_config,
+                window=_updown_tf,
+                side=lane_side,
+                regime=primary_htf_bias,
+            )
 
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
@@ -1298,43 +1578,90 @@ class ETHMacroStrategy(SolMacroStrategy):
                     ).get("lane_id")
                     or ""
                 )
-                ai_decision = await self.ai_agent.evaluate_trade_decision(
-                    market_question=market.question,
-                    market_description=ai_context,
-                    current_yes_price=yes_price,
-                    market_id=market.id,
-                    strategy_hint=self._signal_strategy_name,
+                _broker_state, ai_decision = self._resolve_or_enqueue_ai(
                     lane_id=ai_lane_id,
-                    quant_action=action,
-                    quant_edge=edge,
-                    quant_confidence=confidence,
+                    market=market,
+                    ai_context=ai_context,
+                    yes_price=yes_price,
+                    edge=edge,
+                    confidence=confidence,
+                    action=action,
                     quant_threshold=effective_min_edge,
+                    raw_est_prob=raw_est_prob,
+                    estimated_prob=estimated_prob,
                     require_shadow_portfolio=False,
+                    htf_bias=btc_htf_bias,
                 )
+                if _broker_state == "pending":
+                    ai_calls += 1
+                    _bump_skip("ai_pending")
+                    continue
+                if _broker_state == "unavailable":
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=False,
+                    )
                 ai_calls += 1
+                def _log_ai_veto(_reason: str, **extra: Any) -> None:
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason=_reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        stage="ai_veto",
+                        context={
+                            "edge": round(float(edge), 6),
+                            "effective_min_edge": round(float(effective_min_edge), 6),
+                            **extra,
+                        },
+                    )
+                if ai_decision is None:
+                    _bump_skip("ai_decision_timeout")
+                    _log_ai_veto("ai_decision_timeout")
+                    continue
                 ai_used = True
                 ai_analysis = ai_decision.direct_analysis
                 if not ai_decision.approved:
                     _bump_skip(f"ai_decision_{ai_decision.reason}")
+                    _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
                     if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
                         self._ai_hold_cache[market.id] = time.time()
                     continue
                 if ai_analysis is None:
                     _bump_skip("ai_none")
+                    _log_ai_veto("ai_none")
                     continue
                 if ai_decision.action == "HOLD":
                     self._ai_hold_cache[market.id] = time.time()
                     _bump_skip("ai_hold")
+                    _log_ai_veto("ai_hold")
                     continue
                 if not ai_recommendation_supports_action(ai_decision.action, action):
                     _bump_skip("ai_veto")
+                    _log_ai_veto("ai_veto", ai_action=str(ai_decision.action))
                     continue
                 if ai_decision.confidence < self.ai_confidence_threshold:
                     _bump_skip("ai_low_confidence")
+                    _log_ai_veto("ai_low_confidence", ai_confidence=float(ai_decision.confidence))
                     continue
                 ai_edge = float(ai_decision.edge or 0.0)
                 if ai_edge <= 0:
                     _bump_skip("ai_nonpositive_edge")
+                    _log_ai_veto("ai_nonpositive_edge", ai_edge=ai_edge)
                     continue
                 edge = max(edge, ai_edge)
                 confidence = max(confidence, ai_decision.confidence)
@@ -1445,6 +1772,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         baseline_threshold=float(effective_min_edge),
                     ),
                     policy_version="lane_min_edge_v1",
+                    stage="lane_min_edge",
                 )
                 if action == "BUY_NO":
                     _skip_reason = (
@@ -1523,6 +1851,22 @@ class ETHMacroStrategy(SolMacroStrategy):
             max_edge_updown = float(self.config.get("max_edge_updown", 0.15))
             if edge > max_edge_updown:
                 _bump_skip("edge_above_cap")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="edge_above_cap",
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob if "estimated_prob" in locals() else 0.50,
+                    htf_bias=primary_htf_bias,
+                    stage="edge_cap",
+                    context={
+                        "edge": round(float(edge), 6),
+                        "max_edge_updown": float(max_edge_updown),
+                        "effective_min_edge": round(float(effective_min_edge), 6),
+                    },
+                )
                 if action == "BUY_NO":
                     self._emit_buy_no_skip(
                         market=market,
@@ -1542,6 +1886,22 @@ class ETHMacroStrategy(SolMacroStrategy):
                         counts=buy_no_skip_counts,
                         last_sample=last_buy_no_skip_sample,
                     )
+                await _observe_structural_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="edge_above_cap",
+                    yes_price=yes_price,
+                    quant_edge=edge,
+                    quant_threshold=max_edge_updown,
+                    htf_bias=primary_htf_bias,
+                    context_lines=[
+                        f"quant_edge={float(edge):.4f}",
+                        f"max_edge_updown={float(max_edge_updown):.4f}",
+                    ],
+                    metadata={"max_edge_updown": float(max_edge_updown)},
+                )
                 continue
 
             if not self.kelly_sizer:
@@ -1670,6 +2030,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             signals.append(signal)
 
+        if observer_tasks:
+            await asyncio.wait(observer_tasks, timeout=0.01)
+
         gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
         if gate_samples:
             logger.info(f"  [gate-dist] {gate_distributions}")
@@ -1701,6 +2064,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             "research_plans_logged": research_plans_logged,
             "shadow_pipeline_calls": shadow_pipeline_calls,
             "shadow_pipeline_ok": shadow_pipeline_ok,
+            "shadow_observer_calls": shadow_observer_calls,
+            "shadow_observer_ok": shadow_observer_ok,
             "shadow_marginal_mismatch": shadow_marginal_mismatch,
             "buy_no_skip_counts": dict(sorted(buy_no_skip_counts.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "last_buy_no_skip_sample": dict(last_buy_no_skip_sample),

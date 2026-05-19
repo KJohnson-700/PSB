@@ -70,6 +70,9 @@ class Position:
     # YES = entry_price quotes YES token (BUY_YES, SELL_YES). NO = BUY_NO (NO token).
     entry_leg: str = "YES"
     window_size: str = ""
+    # Highest token mark seen while the position was open; used for peak-aware
+    # profit protection on up/down exits.
+    peak_token_price: float = 0.0
     # CLOB outcome token ids (from market clobTokenIds); used for book/mid by token and dashboard.
     token_id_yes: str = ""
     token_id_no: str = ""

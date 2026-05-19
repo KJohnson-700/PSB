@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.analysis.calibration_buckets import build_bucket_tags
+
 logger = logging.getLogger(__name__)
 
 # Centralised across-session log so calibration_report.py can aggregate easily.
@@ -65,6 +67,19 @@ def _resolve_lane_id(closed: Dict[str, Any]) -> str:
     return f"{strategy}|{window}|{side}|unknown|fallback"
 
 
+def _resolve_lane_family(signal: Dict[str, Any], lane_id: str) -> str:
+    family = signal.get("lane_family")
+    if isinstance(family, str) and family.strip():
+        return family.strip()
+    family = signal.get("entry_family")
+    if isinstance(family, str) and family.strip():
+        return family.strip()
+    parts = [part.strip() for part in str(lane_id or "").split("|")]
+    if len(parts) >= 5 and parts[4]:
+        return parts[4]
+    return ""
+
+
 def build_record_from_closed_trade(
     closed: Dict[str, Any],
     *,
@@ -93,14 +108,54 @@ def build_record_from_closed_trade(
     stated_est_prob = _coerce_float(signal.get("est_prob"))
     if stated_est_prob is None:
         stated_est_prob = _coerce_float(signal.get("raw_est_prob"))
+    raw_est_prob = _coerce_float(signal.get("raw_est_prob"))
+    if raw_est_prob is None:
+        raw_est_prob = stated_est_prob
+    calibrated_est_prob = _coerce_float(signal.get("est_prob"))
+    if calibrated_est_prob is None:
+        calibrated_est_prob = stated_est_prob
+    lane_id = _resolve_lane_id(closed)
+    side_source = str(signal.get("side_source") or "").strip()
+    resolver_path = str(signal.get("resolver_path") or side_source).strip()
+    primary_htf_bias = str(
+        signal.get("primary_htf_bias")
+        or signal.get("htf_bias")
+        or closed.get("htf_bias")
+        or ""
+    ).strip()
+    entry_policy_snapshot = signal.get("entry_policy")
+    if not isinstance(entry_policy_snapshot, dict):
+        entry_policy_snapshot = {}
+    effective_min_edge = _coerce_float(
+        signal.get("effective_min_edge") or closed.get("effective_min_edge")
+    )
+    gate_reason = str(closed.get("gate_reason") or "").strip()
+    gate_stage = str(closed.get("gate_stage") or "").strip()
+    indicator_snapshot = signal.get("indicator_snapshot")
+    if not isinstance(indicator_snapshot, dict):
+        indicator_snapshot = {}
+    corr_value = _coerce_float(
+        signal.get("corr_1h")
+        or indicator_snapshot.get("corr_1h")
+        or indicator_snapshot.get("correlation_1h")
+    )
 
     timestamp = (now or datetime.now(timezone.utc)).isoformat()
+    bucket_tags = build_bucket_tags(
+        edge=stated_edge,
+        yes_price=entry_price,
+        correlation=corr_value,
+        side_source=side_source,
+        regime_tag=primary_htf_bias,
+        gate_reason=gate_reason,
+        gate_stage=gate_stage,
+    )
 
     return {
         "ts": timestamp,
         "session_id": str(session_id or ""),
         "trade_id": str(closed.get("trade_id") or ""),
-        "lane_id": _resolve_lane_id(closed),
+        "lane_id": lane_id,
         "strategy": str(closed.get("strategy") or "unknown"),
         "window": str(closed.get("window_size") or signal.get("window_size") or ""),
         "side": _resolve_side(closed),
@@ -115,12 +170,22 @@ def build_record_from_closed_trade(
         "stated_edge": stated_edge,
         "stated_est_prob": stated_est_prob,
         # Phase 6 will overwrite the next two; Phase 0 logs them as identity.
-        "calibrated_est_prob": stated_est_prob,
+        "calibrated_est_prob": calibrated_est_prob,
         "alpha_used": 1.0,
         "exit_reason": str(closed.get("exit_reason") or ""),
         "opened_at": str(closed.get("opened_at") or ""),
         "closed_at": str(closed.get("closed_at") or ""),
+        "side_source": side_source,
+        "resolver_path": resolver_path,
+        "primary_htf_bias": primary_htf_bias,
+        "lane_family": _resolve_lane_family(signal, lane_id),
+        "entry_policy_snapshot": entry_policy_snapshot,
+        "effective_min_edge": effective_min_edge,
+        "raw_est_prob": raw_est_prob,
+        "gate_reason": gate_reason,
+        "gate_stage": gate_stage,
         "schema_version": 1,
+        **bucket_tags,
     }
 
 

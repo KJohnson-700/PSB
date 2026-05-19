@@ -63,9 +63,10 @@ class HYPEMacroStrategy(SolMacroStrategy):
         position_sizer: PositionSizer,
         kelly_sizer=None,
         exposure_manager: ExposureManager = None,
+        ai_broker=None,
     ):
         self._hyperliquid_cfg = dict(config.get("hyperliquid") or {})
-        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager)
+        super().__init__(config, ai_agent, position_sizer, kelly_sizer, exposure_manager, ai_broker=ai_broker)
         self.config = config.get("strategies", {}).get("hype_macro", {})
         self.enabled = resolve_enabled_flag(
             "hype_macro",

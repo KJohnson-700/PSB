@@ -83,9 +83,11 @@ class LaneCalibrator:
         path: Optional[Path] = None,
         *,
         shadow_mode: bool = True,
+        min_samples_to_apply: int = 0,
     ):
         self.path: Path = Path(path) if path is not None else DEFAULT_POSTERIORS_PATH
         self.shadow_mode: bool = bool(shadow_mode)
+        self.min_samples_to_apply: int = max(0, int(min_samples_to_apply or 0))
         self._posteriors: Dict[str, LanePosterior] = {}
         self._load()
 
@@ -198,6 +200,8 @@ class LaneCalibrator:
         p = self._posteriors.get(lane_id)
         if p is None or p.n == 0:
             return 1.0
+        if p.n < self.min_samples_to_apply:
+            return 1.0
         return self._shrunk_alpha(p)
 
     def raw_alpha(self, lane_id: str) -> Optional[float]:
@@ -218,6 +222,7 @@ class LaneCalibrator:
                 "beta_a": PRIOR_A,
                 "beta_b": PRIOR_B,
                 "beta_mean": PRIOR_A / (PRIOR_A + PRIOR_B),
+                "min_samples_to_apply": self.min_samples_to_apply,
             }
         return {
             "n": p.n,
@@ -226,6 +231,7 @@ class LaneCalibrator:
             "beta_a": p.beta_a,
             "beta_b": p.beta_b,
             "beta_mean": p.beta_a / (p.beta_a + p.beta_b),
+            "min_samples_to_apply": self.min_samples_to_apply,
         }
 
     def calibrate(self, lane_id: str, raw_est_prob: float) -> float:

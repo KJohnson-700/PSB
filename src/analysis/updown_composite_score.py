@@ -61,6 +61,7 @@ def validate_oracle_reference(
     now: Optional[datetime] = None,
     allow_exchange_when_oracle_missing: bool = False,
     stale_basis_relax_max_bps: Optional[float] = None,
+    basis_relax_max_bps: Optional[float] = None,
 ) -> OracleValidation:
     """Validate oracle freshness and basis against the exchange spot feed.
 
@@ -146,6 +147,15 @@ def validate_oracle_reference(
             freshness_sec=freshness,
         )
     if abs(basis) > float(max_basis_bps):
+        if basis_relax_max_bps is not None and abs(basis) <= float(basis_relax_max_bps):
+            return OracleValidation(
+                passed=True,
+                reason="oracle_basis_relaxed",
+                oracle_price=oracle_f,
+                exchange_spot=spot_f,
+                basis_bps=basis,
+                freshness_sec=freshness,
+            )
         return OracleValidation(
             passed=False,
             reason="oracle_basis_block",

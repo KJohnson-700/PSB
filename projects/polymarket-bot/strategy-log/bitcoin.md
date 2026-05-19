@@ -203,6 +203,13 @@ Refactor of the entry-decision logic in `src/strategies/_core/` unified live and
 
 ## Review sessions
 
+### 2026-05-18 — Ghost calibration follow-up: BTC 1H short histogram gate is the main pending loosen candidate
+
+- **Headline:** Settled ghost data currently points to the BTC `1h` short histogram reject as the clearest next BTC calibration move, but this is logged as a future candidate only until more resolved samples accumulate.
+- **Evidence snapshot:** `bitcoin|1h|BUY_NO|hist_gate_1h_short_reject` in the settled ghost report showed `n=885`, `74.9%` WR, `total_realized_pct=+444.68`, `net_gate_value_pct=-444.68`. Lane view for `bitcoin|1h|down|bearish|rejected` showed `n=701`, `74.0%` WR, `total_realized_pct=+347.89`.
+- **Possible next move after more data:** If the same pattern holds on the next settled batch, loosen the BTC 1H short histogram threshold rather than broad BTC entry gates.
+- **Do not infer from this note:** This does **not** support broad loosening of BTC price-band or entry-window gates by itself; the strongest current BTC ghost signal is specific to the 1H bearish histogram reject path.
+
 ### 2026-05-07 — BTC 15m backtest admission parity patch validated
 
 - **Headline:** BTC 15m backtest now produces real test-window trades after adding timing bonus and 1H recovery parity.

@@ -24,6 +24,7 @@ from src.market.scanner import MarketScanner, Market, is_crypto_updown_market
 from src.market.price_collector import PriceCollector
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
+from src.analysis.ai_decision_broker import AIDecisionBroker
 from src.analysis.math_utils import PositionSizer
 from src.strategies.bitcoin import BitcoinStrategy, BitcoinSignal
 from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
@@ -248,6 +249,23 @@ class PolyBot:
         self.price_collector = PriceCollector(self.config)
         self.ws_client = WebSocketClient(self.config)
         self.ai_agent = AIAgent(self.config)
+        # Async-decoupled AI decision broker: strategies enqueue here instead of
+        # awaiting the provider in their per-market loop. See the broker module
+        # docstring for the full design.
+        _broker_cfg = (
+            (self.config.get("ai") or {}).get("decision_broker") or {}
+        ) if isinstance(self.config.get("ai"), dict) else {}
+        from pathlib import Path as _Path
+        _log_path = _Path("data/ai_pipeline/pending_ai_decisions.jsonl")
+        self.ai_broker = AIDecisionBroker(
+            ai_agent=self.ai_agent,
+            max_decision_age_sec=float(_broker_cfg.get("max_decision_age_sec", 120.0)),
+            max_pending_decisions=int(_broker_cfg.get("max_pending_decisions", 24)),
+            price_drift_threshold=float(_broker_cfg.get("price_drift_threshold", 0.03)),
+            cycle_counter_ref=lambda: getattr(self, "_performance_feedback_cycle", 0),
+            log_path=_log_path,
+            log_jsonl=bool(_broker_cfg.get("log_jsonl", True)),
+        )
         self.position_sizer = PositionSizer(
             kelly_fraction=self.config.get("trading", {}).get("kelly_fraction", 0.25),
             max_position_pct=self.config.get("trading", {}).get(
@@ -544,11 +562,18 @@ class PolyBot:
         paper-trade in observation mode while using calibrated probabilities live.
         """
         shadow = self._lane_calibration_shadow_mode()
+        cal_cfg = (self.config.get("lane_calibration") or {})
+        min_samples_live = max(
+            0, int(cal_cfg.get("min_samples_to_apply_live", 15) or 0)
+        )
         try:
-            return LaneCalibrator(shadow_mode=shadow)
+            return LaneCalibrator(
+                shadow_mode=shadow,
+                min_samples_to_apply=(0 if shadow else min_samples_live),
+            )
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)
-            return LaneCalibrator(shadow_mode=True)
+            return LaneCalibrator(shadow_mode=True, min_samples_to_apply=0)
 
     def _refresh_ghost_calibration_state(self, *, force: bool = False) -> None:
         """Auto-settle rejected candidates and publish a runtime status snapshot."""
@@ -675,6 +700,7 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.btc_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
         )
         self.sol_macro_strategy = SolMacroStrategy(
             self.config,
@@ -682,6 +708,7 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.sol_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
         )
         self.eth_macro_strategy = ETHMacroStrategy(
             self.config,
@@ -689,6 +716,7 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.eth_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
         )
         self.hype_macro_strategy = HYPEMacroStrategy(
             self.config,
@@ -696,6 +724,7 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.hype_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
         )
         self.xrp_macro_strategy = XRPMacroStrategy(
             self.config,
@@ -703,6 +732,7 @@ class PolyBot:
             self.position_sizer,
             self.kelly_sizer,
             exposure_manager=self.xrp_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
         )
         for strategy in (
             self.bitcoin_strategy,
@@ -810,6 +840,11 @@ class PolyBot:
                         pos_data.get("window_size")
                         or (pos_data.get("entry_signal") or {}).get("window_size")
                         or ""
+                    ),
+                    peak_token_price=float(
+                        pos_data.get("peak_token_price")
+                        or pos_data.get("current_price")
+                        or pos_data.get("entry_price", 0)
                     ),
                     token_id_yes=str(pos_data.get("token_id_yes") or ""),
                     token_id_no=str(pos_data.get("token_id_no") or ""),
@@ -935,6 +970,11 @@ class PolyBot:
             summary_cfg = (self.config.get("ai", {}) or {}).get("session_summary", {}) or {}
             if not summary_cfg.get("enabled", False):
                 return
+            initial_delay = float(summary_cfg.get("startup_delay_seconds", 90) or 0)
+            if initial_delay > 0:
+                await asyncio.sleep(initial_delay)
+                if not self.running:
+                    return
             if not getattr(self, "ai_agent", None) or not self.ai_agent.is_available():
                 return
 
@@ -1091,6 +1131,11 @@ class PolyBot:
         # Off the trading hot path; never awaited.
         asyncio.create_task(self._run_startup_narrators())
         await asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
+
+        # Start the async-decoupled AI decision broker. After this returns,
+        # strategies can enqueue/lookup decisions via self.ai_broker.
+        if self.ai_broker is not None:
+            await self.ai_broker.start()
 
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("enabled", True):
@@ -1824,6 +1869,27 @@ class PolyBot:
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{self.risk_manager.max_trades_per_day}"
         )
         log_ops_pulse(self, "main")
+
+        # AI broker housekeeping + diagnostic. Sweep expired/stale entries
+        # and emit one line summarising broker state so we can see at a glance
+        # whether decisions are landing in time.
+        if self.ai_broker is not None:
+            try:
+                open_ids = {
+                    *(p.market_id for p in self.risk_manager.active_positions.values()),
+                    *(p.get("market_id", "") for p in self.journal.get_open_positions()),
+                }
+                self.ai_broker.sweep_expired(open_ids)
+                _bs = self.ai_broker.stats()
+                logging.info(
+                    "ai_broker pending=%d inflight=%d resolved=%d consumed=%d expired=%d "
+                    "failed=%d rejected=%d oldest=%.1fs alive=%s",
+                    _bs["pending"], _bs["inflight"], _bs["resolved_alive"],
+                    _bs["consumed"], _bs["expired"], _bs["failed"],
+                    _bs["rejected_overflow"], _bs["oldest_age_sec"], _bs["worker_alive"],
+                )
+            except Exception:
+                logging.exception("ai_broker housekeeping failed")
 
     def _build_correlation_context(self, *, current_strategy: str, current_action: str) -> str:
         """Compact one-line summary of currently-open positions for the post-trade
@@ -2640,6 +2706,11 @@ class PolyBot:
         await self.market_scanner.close()
         await self.ws_client.disconnect()
         await self.notifier.close()
+        if self.ai_broker is not None:
+            try:
+                await self.ai_broker.stop()
+            except Exception:
+                logging.exception("ai_broker stop failed")
 
         # Stop dashboard server
         if self._dashboard_server:

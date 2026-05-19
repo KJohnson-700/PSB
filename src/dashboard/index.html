@@ -792,7 +792,8 @@
         /* Trade bubbles for BTC chart overlay */
         .bbl-layer{position:absolute;inset:0;pointer-events:none;z-index:5}
         .bbl{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer}
-        .bbl-dot{width:13px;height:13px;border-radius:50%;border:2px solid rgba(255,255,255,.2);animation:popIn .3s ease both;position:relative;z-index:2}
+        .bbl-dot{width:12px;height:12px;border-radius:50%;border:2px solid;animation:popIn .3s ease both;position:relative;z-index:2;box-sizing:border-box}
+        .bbl-dot--loss{border-radius:3px}
         .bbl-ring{position:absolute;top:50%;left:50%;width:13px;height:13px;border-radius:50%;border:2px solid;animation:ping 1.3s ease-out both;animation-delay:.08s;pointer-events:none}
         .bbl:hover .bbl-tip{opacity:1;transform:translateX(-50%) translateY(-6px)}
         .bbl-tip{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(0);background:rgba(0,0,0,.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:8px 12px;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0;transition:opacity .15s,transform .15s;pointer-events:none;z-index:20;min-width:130px}
@@ -1157,7 +1158,7 @@
         </div>
         <div id="btc-chart-wrap">
             <div id="tradingview_btc"></div>
-            <canvas id="btc-trade-overlay" aria-hidden="true"></canvas>
+            <div id="btc-trade-overlay" class="bbl-layer" aria-hidden="true"></div>
         </div>
         <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
     </div>
@@ -2039,6 +2040,27 @@ window.STRATS = {
     unknown: '#64748b',
 };
 
+/** Journal strategy id → same key as BTC chart asset toggle `data-strat`. */
+const _BTC_OVERLAY_CHIP_KEY = {
+    bitcoin: 'bitcoin',
+    sol_macro: 'sol_lag',
+    eth_macro: 'eth_lag',
+    xrp_macro: 'xrp_lag',
+    hype_macro: 'hype_lag',
+};
+
+/** Exact hex used by `.strat-cf` chips (`paintStratChip`) — single source for chip + chart bubbles. */
+function stratChipHex(stratKey) {
+    const k = String(stratKey || '').trim();
+    return (window.STRATS && window.STRATS[k]) || '#888';
+}
+
+function stratChipHexForJournal(strategy) {
+    const key = String(strategy || '').trim();
+    const chipKey = _BTC_OVERLAY_CHIP_KEY[key] || key;
+    return stratChipHex(chipKey);
+}
+
 /** Hex for any strategy id (or chart bucket); never returns CSS `var()` — safe for canvas + marker APIs. */
 function stratHex(id) {
     const k = String(id || '').trim();
@@ -2092,7 +2114,7 @@ function countUp(el, target, dur) {
 function paintStratChip(btn) {
     if (!btn) return;
     var stratKey = btn.getAttribute('data-strat');
-    var color = (window.STRATS && window.STRATS[stratKey]) || '#888';
+    var color = stratChipHex(stratKey);
     var on = !btn.classList.contains('off');
     btn.style.color = color;
     btn.style.borderColor = color + (on ? '88' : '40');
@@ -7397,8 +7419,6 @@ let _btcPriceLines = [];   // track S/R lines so we can remove/re-add
 let _btcChartInterval = '15m';
 let _btcChartResizeObserver = null;
 let _btcChartWindowResizeHandler = null;
-let _btcTradeOverlayCanvas = null;
-let _btcTradeOverlayCtx = null;
 let _btcTradeOverlayPoints = [];
 let _btcTradeOverlayCandles = [];
 let _btcTradeOverlayRaf = null;
@@ -7436,20 +7456,6 @@ function _applyBTCChartVisibility() {
     } catch (e) {
         console.error('BTC chart visibility error:', e);
     }
-}
-
-const _BTC_TRADE_OVERLAY_PALETTE = {
-    bitcoin:  { fill: '#1f8bff', glow: 'rgba(31, 139, 255, 0.78)' },
-    sol_macro:{ fill: '#b14dff', glow: 'rgba(177, 77, 255, 0.78)' },
-    eth_macro:{ fill: '#00e5ff', glow: 'rgba(0, 229, 255, 0.78)' },
-    xrp_macro:{ fill: '#ffe000', glow: 'rgba(255, 224, 0, 0.78)' },
-    hype_macro:{ fill: '#ff6a00', glow: 'rgba(255, 106, 0, 0.78)' },
-    unknown:  { fill: '#64748b', glow: 'rgba(100, 116, 139, 0.55)' },
-};
-
-function _btcTradeOverlayPalette(strategy) {
-    const key = String(strategy || '').trim();
-    return _BTC_TRADE_OVERLAY_PALETTE[key] || _BTC_TRADE_OVERLAY_PALETTE.unknown;
 }
 
 function _queueBTCTradeOverlayDraw() {
@@ -7697,28 +7703,7 @@ function _syncBTCChartLayout() {
     if (!_btcChart || !container) return;
     const b = _btcChartMeasureBox(container);
     _btcChart.applyOptions({ width: b.w, height: b.h });
-    _syncBTCTradeOverlaySize();
     _queueBTCTradeOverlayDraw();
-}
-
-function _syncBTCTradeOverlaySize() {
-    const canvas = _btcTradeOverlayCanvas || document.getElementById('btc-trade-overlay');
-    const container = document.getElementById('tradingview_btc');
-    if (!canvas || !container) return;
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const width = Math.max(1, Math.round(container.clientWidth));
-    const height = Math.max(1, Math.round(container.clientHeight));
-    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-        canvas.width = Math.round(width * dpr);
-        canvas.height = Math.round(height * dpr);
-    }
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
-    const ctx = _btcTradeOverlayCtx || canvas.getContext('2d');
-    if (!ctx) return;
-    _btcTradeOverlayCanvas = canvas;
-    _btcTradeOverlayCtx = ctx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 function _setBTCTradeOverlayData(points, candles) {
@@ -7730,8 +7715,6 @@ function _setBTCTradeOverlayData(points, candles) {
 function initBTCChart() {
     const container = document.getElementById('tradingview_btc');
     const wrap = document.getElementById('btc-chart-wrap');
-    _btcTradeOverlayCanvas = document.getElementById('btc-trade-overlay');
-    _btcTradeOverlayCtx = _btcTradeOverlayCanvas ? _btcTradeOverlayCanvas.getContext('2d') : null;
     if (!container || typeof LightweightCharts === 'undefined') return;
 
     if (_btcChartResizeObserver) {
@@ -7777,7 +7760,6 @@ function initBTCChart() {
     // RSI removed — not needed
 
     _applyBTCChartVisibility();
-    _syncBTCTradeOverlaySize();
     _btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => { _queueBTCTradeOverlayDraw(); });
 
     if (wrap && typeof ResizeObserver !== 'undefined') {
@@ -7912,55 +7894,16 @@ function _findNearestBTCCandle(ts) {
     return Math.abs(Number(prev.time || 0) - ts) <= Math.abs(Number(next.time || 0) - ts) ? prev : next;
 }
 
-function _drawBTCTradeOverlayMarker(ctx, x, y, point) {
-    const palette = _btcTradeOverlayPalette(point.strategy);
-    const isWin = point.outcome === 'win';
-    const size = isWin ? 5.8 : 6.4;
-    const glowRadius = isWin ? 16 : 18;
-    ctx.save();
-    ctx.shadowBlur = glowRadius;
-    ctx.shadowColor = palette.glow;
-    ctx.fillStyle = palette.fill;
-    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
-    ctx.lineWidth = 1.15;
-    if (isWin) {
-        ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-    } else {
-        const half = size;
-        const corner = 2.2;
-        ctx.beginPath();
-        ctx.moveTo(x - half + corner, y - half);
-        ctx.lineTo(x + half - corner, y - half);
-        ctx.quadraticCurveTo(x + half, y - half, x + half, y - half + corner);
-        ctx.lineTo(x + half, y + half - corner);
-        ctx.quadraticCurveTo(x + half, y + half, x + half - corner, y + half);
-        ctx.lineTo(x - half + corner, y + half);
-        ctx.quadraticCurveTo(x - half, y + half, x - half, y + half - corner);
-        ctx.lineTo(x - half, y - half + corner);
-        ctx.quadraticCurveTo(x - half, y - half, x - half + corner, y - half);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-    }
-    ctx.restore();
-}
-
 function _drawBTCTradeOverlay() {
-    const canvas = _btcTradeOverlayCanvas || document.getElementById('btc-trade-overlay');
-    const ctx = _btcTradeOverlayCtx || (canvas ? canvas.getContext('2d') : null);
+    const layer = document.getElementById('btc-trade-overlay');
     const container = document.getElementById('tradingview_btc');
-    if (!canvas || !ctx || !container || !_btcChart || !_btcCandleSeries) return;
-    _btcTradeOverlayCanvas = canvas;
-    _btcTradeOverlayCtx = ctx;
-    _syncBTCTradeOverlaySize();
+    if (!layer || !container || !_btcChart || !_btcCandleSeries) return;
     const width = Math.max(1, container.clientWidth);
     const height = Math.max(1, container.clientHeight);
-    ctx.clearRect(0, 0, width, height);
+    layer.replaceChildren();
     const points = _btcTradeOverlayPoints || [];
     if (!points.length || !_btcTradeOverlayCandles.length) return;
+    const frag = document.createDocumentFragment();
     for (const point of points) {
         const laneFlag = ({
             bitcoin: 'btcTrades',
@@ -7982,8 +7925,21 @@ function _drawBTCTradeOverlay() {
         if (!Number.isFinite(yBase)) continue;
         const y = point.outcome === 'win' ? yBase + 13 : yBase - 13;
         if (!Number.isFinite(y) || y < -30 || y > height + 30) continue;
-        _drawBTCTradeOverlayMarker(ctx, x, y, point);
+        const color = stratChipHexForJournal(point.strategy);
+        const isWin = point.outcome === 'win';
+        const wrap = document.createElement('div');
+        wrap.className = 'bbl';
+        wrap.style.left = x + 'px';
+        wrap.style.top = y + 'px';
+        const dot = document.createElement('div');
+        dot.className = 'bbl-dot' + (isWin ? '' : ' bbl-dot--loss');
+        dot.style.background = color + '18';
+        dot.style.borderColor = color + '88';
+        dot.style.boxShadow = 'none';
+        wrap.appendChild(dot);
+        frag.appendChild(wrap);
     }
+    layer.appendChild(frag);
 }
 
 function _sanitizeCandlesForChart(candles) {

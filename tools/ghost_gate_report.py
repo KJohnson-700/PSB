@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -66,6 +67,19 @@ def _passes_filters(row: Dict[str, Any], args: argparse.Namespace) -> bool:
     return True
 
 
+def _wilson_interval(wins: int, n: int, z: float = 1.96) -> Dict[str, float]:
+    if n <= 0:
+        return {"win_rate_ci_low": 0.0, "win_rate_ci_high": 0.0}
+    phat = wins / n
+    denom = 1.0 + (z * z / n)
+    centre = (phat + (z * z / (2.0 * n))) / denom
+    radius = z * math.sqrt((phat * (1.0 - phat) + (z * z / (4.0 * n))) / n) / denom
+    return {
+        "win_rate_ci_low": round(max(0.0, centre - radius), 4),
+        "win_rate_ci_high": round(min(1.0, centre + radius), 4),
+    }
+
+
 def _econ_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     realized = [_as_float(r.get("realized_pct")) or 0.0 for r in rows]
     wins = sum(1 for r in rows if bool(r.get("win")) is True)
@@ -84,6 +98,7 @@ def _econ_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "missed_ev_pct": round(missed_ev, 6),
         "protected_loss_pct": round(protected_loss, 6),
         "net_gate_value_pct": round(protected_loss - missed_ev, 6),
+        **_wilson_interval(wins, n),
     }
 
 
@@ -186,12 +201,15 @@ def aggregate_probes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             {
                 "variant_key": key,
                 "n": n,
+                "wins": wins,
+                "losses": n - wins,
                 "win_rate": round((wins / n) if n else 0.0, 4),
                 "avg_realized_pct": round((total / n) if n else 0.0, 6),
                 "total_realized_pct": round(total, 6),
                 "missed_ev_pct": round(missed_ev, 6),
                 "protected_loss_pct": round(protected_loss, 6),
                 "net_gate_value_pct": round(protected_loss - missed_ev, 6),
+                **_wilson_interval(wins, n),
             }
         )
         out.append(payload)
@@ -199,10 +217,88 @@ def aggregate_probes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def build_probe_relax_recommendations(
+    probe_rows: List[Dict[str, Any]],
+    *,
+    min_n: int = 100,
+    min_ci_low: float = 0.50,
+) -> List[Dict[str, Any]]:
+    """Recommend conservative relax deltas for probe-aware gate families.
+
+    Picks the smallest relax delta per gate/probe bucket that has enough sample,
+    a Wilson lower bound above ``min_ci_low``, and negative net gate value
+    (meaning the gate likely blocked more value than it saved).
+    """
+    by_gate_probe: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in probe_rows:
+        if str(row.get("kind") or "") != "relax":
+            continue
+        key = "|".join(
+            [
+                str(row.get("strategy") or ""),
+                str(row.get("window") or ""),
+                str(row.get("action") or ""),
+                str(row.get("reason") or ""),
+                str(row.get("probe") or ""),
+            ]
+        )
+        by_gate_probe[key].append(row)
+
+    out: List[Dict[str, Any]] = []
+    for gate_probe_key, candidates in by_gate_probe.items():
+        candidates.sort(key=lambda row: (float(row["delta"]), -int(row["n"])))
+        chosen: Optional[Dict[str, Any]] = None
+        for row in candidates:
+            if int(row["n"]) < min_n:
+                continue
+            if float(row["win_rate_ci_low"]) <= min_ci_low:
+                continue
+            if float(row["net_gate_value_pct"]) >= 0.0:
+                continue
+            chosen = row
+            break
+        if chosen is None:
+            continue
+
+        payload = dict(chosen)
+        payload["gate_probe_key"] = gate_probe_key
+        payload["recommended_delta"] = float(chosen["delta"])
+        payload["recommended_action"] = (
+            f"relax {chosen['probe']} by {float(chosen['delta']):.6f}"
+        )
+        out.append(payload)
+
+    out.sort(
+        key=lambda row: (
+            float(row["missed_ev_pct"]),
+            float(row["win_rate_ci_low"]),
+            int(row["n"]),
+        ),
+        reverse=True,
+    )
+    return out
+
+
 def build_report(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     lane_rows = aggregate_lanes(rows)
     gate_rows = aggregate_gates(rows)
     probe_rows = aggregate_probes(rows)
+    probe_relax_rows = build_probe_relax_recommendations(probe_rows)
+    actionable_overtight = [
+        row
+        for row in gate_rows
+        if int(row["n"]) >= 100
+        and float(row["win_rate_ci_low"]) > 0.5
+        and float(row["net_gate_value_pct"]) < 0.0
+    ]
+    actionable_overtight.sort(
+        key=lambda row: (
+            float(row["missed_ev_pct"]),
+            float(row["win_rate_ci_low"]),
+            int(row["n"]),
+        ),
+        reverse=True,
+    )
     return {
         "rows": len(rows),
         "overall": _econ_metrics(rows),
@@ -210,7 +306,9 @@ def build_report(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "gates": gate_rows,
         "top_missed_ev": sorted(gate_rows, key=lambda r: (float(r["missed_ev_pct"]), int(r["n"])), reverse=True)[:20],
         "top_protected_loss": sorted(gate_rows, key=lambda r: (float(r["protected_loss_pct"]), int(r["n"])), reverse=True)[:20],
+        "actionable_overtight_gates": actionable_overtight[:20],
         "probe_variants": probe_rows,
+        "actionable_probe_relaxations": probe_relax_rows[:20],
     }
 
 
@@ -221,7 +319,7 @@ def _fmt_simple_table(rows: List[Dict[str, Any]], kind: str, limit: int) -> str:
     if kind == "lanes":
         header = (
             "lane_id".ljust(50)
-            + "  n   WR    avg%    total%   missedEV  protLoss  netGate"
+            + "  n   WR    CI_low  CI_hi   avg%    total%   missedEV  protLoss  netGate"
         )
         lines = [header, "-" * len(header)]
         for row in items:
@@ -229,6 +327,8 @@ def _fmt_simple_table(rows: List[Dict[str, Any]], kind: str, limit: int) -> str:
                 f"{str(row['lane_id'])[:50].ljust(50)}  "
                 f"{int(row['n']):>3d}  "
                 f"{float(row['win_rate'])*100:>5.1f}%  "
+                f"{float(row['win_rate_ci_low'])*100:>6.1f}%  "
+                f"{float(row['win_rate_ci_high'])*100:>6.1f}%  "
                 f"{float(row['avg_realized_pct']):>+7.3f}  "
                 f"{float(row['total_realized_pct']):>+8.3f}  "
                 f"{float(row['missed_ev_pct']):>8.3f}  "
@@ -236,9 +336,37 @@ def _fmt_simple_table(rows: List[Dict[str, Any]], kind: str, limit: int) -> str:
                 f"{float(row['net_gate_value_pct']):>+7.3f}"
             )
         return "\n".join(lines)
+    if kind == "probes":
+        header = (
+            "gate/probe".ljust(76)
+            + "  n   WR    CI_low  CI_hi   delta    missedEV  protLoss  netGate"
+        )
+        lines = [header, "-" * len(header)]
+        for row in items:
+            gate_probe = "|".join(
+                [
+                    str(row.get("strategy") or ""),
+                    str(row.get("window") or ""),
+                    str(row.get("action") or ""),
+                    str(row.get("reason") or ""),
+                    str(row.get("probe") or ""),
+                ]
+            )
+            lines.append(
+                f"{gate_probe[:76].ljust(76)}  "
+                f"{int(row['n']):>3d}  "
+                f"{float(row['win_rate'])*100:>5.1f}%  "
+                f"{float(row['win_rate_ci_low'])*100:>6.1f}%  "
+                f"{float(row['win_rate_ci_high'])*100:>6.1f}%  "
+                f"{float(row['delta']):>+7.3f}  "
+                f"{float(row['missed_ev_pct']):>8.3f}  "
+                f"{float(row['protected_loss_pct']):>8.3f}  "
+                f"{float(row['net_gate_value_pct']):>+7.3f}"
+            )
+        return "\n".join(lines)
     header = (
         "gate_key".ljust(58)
-        + "  n   WR    avg%    missedEV  protLoss  netGate"
+        + "  n   WR    CI_low  CI_hi   avg%    missedEV  protLoss  netGate"
     )
     lines = [header, "-" * len(header)]
     for row in items:
@@ -246,6 +374,8 @@ def _fmt_simple_table(rows: List[Dict[str, Any]], kind: str, limit: int) -> str:
             f"{str(row['gate_key'])[:58].ljust(58)}  "
             f"{int(row['n']):>3d}  "
             f"{float(row['win_rate'])*100:>5.1f}%  "
+            f"{float(row['win_rate_ci_low'])*100:>6.1f}%  "
+            f"{float(row['win_rate_ci_high'])*100:>6.1f}%  "
             f"{float(row['avg_realized_pct']):>+7.3f}  "
             f"{float(row['missed_ev_pct']):>8.3f}  "
             f"{float(row['protected_loss_pct']):>8.3f}  "
@@ -291,6 +421,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(_fmt_simple_table(report["lanes"], "lanes", args.limit))
     print("\n## top missed ev gates")
     print(_fmt_simple_table(report["top_missed_ev"], "gates", args.limit))
+    print("\n## actionable overtight gates (n>=100, CI_low>50%, netGate<0)")
+    print(_fmt_simple_table(report["actionable_overtight_gates"], "gates", args.limit))
+    print("\n## actionable probe relaxations (relax rows only; n>=100, CI_low>50%, netGate<0)")
+    print(_fmt_simple_table(report["actionable_probe_relaxations"], "probes", args.limit))
     print("\n## top protected loss gates")
     print(_fmt_simple_table(report["top_protected_loss"], "gates", args.limit))
     return 0
