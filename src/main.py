@@ -32,6 +32,8 @@ from src.strategies.eth_macro import ETHMacroStrategy
 from src.strategies.hype_macro import HYPEMacroStrategy
 from src.strategies.weather import WeatherStrategy, WeatherSignal
 from src.strategies.xrp_macro import XRPMacroStrategy
+from src.strategies.doge_macro import DOGEMacroStrategy
+from src.strategies.bnb_macro import BNBMacroStrategy
 from src.execution.clob_client import CLOBClient, RiskManager, Position
 from src.execution.trade_journal import TradeJournal, infer_entry_leg
 from src.execution.exposure_manager import ExposureManager
@@ -286,6 +288,8 @@ class PolyBot:
         self.eth_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='ETH')
         self.hype_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='HYPE')
         self.xrp_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='XRP')
+        self.doge_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='DOGE')
+        self.bnb_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='BNB')
         self.weather_exposure_manager = ExposureManager(
             self.config,
             is_paper=is_paper,
@@ -309,6 +313,8 @@ class PolyBot:
             "eth_macro": 0,
             "hype_macro": 0,
             "xrp_macro": 0,
+            "doge_macro": 0,
+            "bnb_macro": 0,
             "weather": 0,
         }
         # ISO timestamp of the last time each strategy completed a cycle
@@ -608,6 +614,8 @@ class PolyBot:
             ("eth_macro", getattr(self, "eth_macro_strategy", None)),
             ("hype_macro", getattr(self, "hype_macro_strategy", None)),
             ("xrp_macro", getattr(self, "xrp_macro_strategy", None)),
+            ("doge_macro", getattr(self, "doge_macro_strategy", None)),
+            ("bnb_macro", getattr(self, "bnb_macro_strategy", None)),
         )
         missing = [
             name for name, strategy in required
@@ -672,6 +680,8 @@ class PolyBot:
                 "eth_exposure_manager",
                 "hype_exposure_manager",
                 "xrp_exposure_manager",
+                "doge_exposure_manager",
+                "bnb_exposure_manager",
                 "weather_exposure_manager",
             ):
                 mgr = getattr(self, attr, None)
@@ -734,12 +744,30 @@ class PolyBot:
             exposure_manager=self.xrp_exposure_manager,
             ai_broker=getattr(self, "ai_broker", None),
         )
+        self.doge_macro_strategy = DOGEMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.doge_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
+        )
+        self.bnb_macro_strategy = BNBMacroStrategy(
+            self.config,
+            self.ai_agent,
+            self.position_sizer,
+            self.kelly_sizer,
+            exposure_manager=self.bnb_exposure_manager,
+            ai_broker=getattr(self, "ai_broker", None),
+        )
         for strategy in (
             self.bitcoin_strategy,
             self.sol_macro_strategy,
             self.eth_macro_strategy,
             self.hype_macro_strategy,
             self.xrp_macro_strategy,
+            self.doge_macro_strategy,
+            self.bnb_macro_strategy,
         ):
             strategy.lane_calibrator = self.lane_calibrator
         self._validate_lane_calibration_runtime()
@@ -783,6 +811,10 @@ class PolyBot:
         self.hype_macro_strategy.buy_no_skip_callback = buy_no_cb
         self.xrp_macro_strategy.dead_zone_skip_callback = cb
         self.xrp_macro_strategy.buy_no_skip_callback = buy_no_cb
+        self.doge_macro_strategy.dead_zone_skip_callback = cb
+        self.doge_macro_strategy.buy_no_skip_callback = buy_no_cb
+        self.bnb_macro_strategy.dead_zone_skip_callback = cb
+        self.bnb_macro_strategy.buy_no_skip_callback = buy_no_cb
 
     def _default_config(self) -> Dict[str, Any]:
         """Default configuration"""
@@ -1237,6 +1269,10 @@ class PolyBot:
             return self.hype_exposure_manager
         elif strategy == "xrp_macro":
             return self.xrp_exposure_manager
+        elif strategy == "doge_macro":
+            return self.doge_exposure_manager
+        elif strategy == "bnb_macro":
+            return self.bnb_exposure_manager
         return getattr(self, "weather_exposure_manager", self.event_exposure_manager)
 
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
@@ -1620,6 +1656,32 @@ class PolyBot:
                 )
             )
 
+        doge_cfg = self.config.get("strategies", {}).get("doge_macro", {})
+        if doge_cfg.get("enabled", False) and self.doge_macro_strategy:
+            self.doge_macro_strategy._open_positions_snapshot = open_positions_snapshot
+            strategy_tasks.append(
+                _time_strategy_scan(
+                    "doge_macro",
+                    self.doge_macro_strategy.scan_and_analyze(
+                        markets=short_horizon,
+                        bankroll=self.bankroll,
+                    ),
+                )
+            )
+
+        bnb_cfg = self.config.get("strategies", {}).get("bnb_macro", {})
+        if bnb_cfg.get("enabled", False) and self.bnb_macro_strategy:
+            self.bnb_macro_strategy._open_positions_snapshot = open_positions_snapshot
+            strategy_tasks.append(
+                _time_strategy_scan(
+                    "bnb_macro",
+                    self.bnb_macro_strategy.scan_and_analyze(
+                        markets=short_horizon,
+                        bankroll=self.bankroll,
+                    ),
+                )
+            )
+
         scan_started = time.perf_counter()
         scan_results = await asyncio.gather(
             *strategy_tasks,
@@ -1846,6 +1908,84 @@ class PolyBot:
                     )
         except Exception as e:
             logging.error(f"Crypto XRP macro error: {e}", exc_info=True)
+
+        try:
+            if "doge_macro" in strategy_signals:
+                doge_signals = strategy_signals["doge_macro"]
+                if isinstance(doge_signals, Exception):
+                    raise doge_signals
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["doge_macro"] = len(doge_signals)
+                self.last_cycle_times["doge_macro"] = _now_iso
+                self.cumulative_signal_counts["doge_macro"] = (
+                    self.cumulative_signal_counts.get("doge_macro", 0) + len(doge_signals)
+                )
+                self.last_ai_scan_stats["doge_macro"] = dict(
+                    getattr(self.doge_macro_strategy, "last_scan_stats", {}) or {}
+                )
+                self.last_buy_no_skip_counts["doge_macro"] = dict(
+                    self.last_ai_scan_stats["doge_macro"].get("buy_no_skip_counts", {}) or {}
+                )
+                self.last_buy_no_skip_samples["doge_macro"] = dict(
+                    self.last_ai_scan_stats["doge_macro"].get("last_buy_no_skip_sample", {}) or {}
+                )
+                for signal in doge_signals:
+                    await self._execute_sol_macro_signal(signal)
+                if doge_signals:
+                    logging.info(f"[TRADING] Crypto DOGE macro: {len(doge_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto DOGE macro: No signals this cycle")
+                _doge_stats = self.last_ai_scan_stats.get("doge_macro", {})
+                if _doge_stats:
+                    logging.info(
+                        "[TRADING] DOGE diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                        _doge_stats.get("action_counts", {}),
+                        _doge_stats.get("side_source_counts", {}),
+                        _doge_stats.get("top_skip_reasons", {}),
+                        self.last_buy_no_skip_counts.get("doge_macro", {}),
+                        self.last_buy_no_skip_samples.get("doge_macro", {}),
+                    )
+        except Exception as e:
+            logging.error(f"Crypto DOGE macro error: {e}", exc_info=True)
+
+        try:
+            if "bnb_macro" in strategy_signals:
+                bnb_signals = strategy_signals["bnb_macro"]
+                if isinstance(bnb_signals, Exception):
+                    raise bnb_signals
+                _now_iso = datetime.now().isoformat(timespec="seconds")
+                self.last_signal_counts["bnb_macro"] = len(bnb_signals)
+                self.last_cycle_times["bnb_macro"] = _now_iso
+                self.cumulative_signal_counts["bnb_macro"] = (
+                    self.cumulative_signal_counts.get("bnb_macro", 0) + len(bnb_signals)
+                )
+                self.last_ai_scan_stats["bnb_macro"] = dict(
+                    getattr(self.bnb_macro_strategy, "last_scan_stats", {}) or {}
+                )
+                self.last_buy_no_skip_counts["bnb_macro"] = dict(
+                    self.last_ai_scan_stats["bnb_macro"].get("buy_no_skip_counts", {}) or {}
+                )
+                self.last_buy_no_skip_samples["bnb_macro"] = dict(
+                    self.last_ai_scan_stats["bnb_macro"].get("last_buy_no_skip_sample", {}) or {}
+                )
+                for signal in bnb_signals:
+                    await self._execute_sol_macro_signal(signal)
+                if bnb_signals:
+                    logging.info(f"[TRADING] Crypto BNB macro: {len(bnb_signals)} signals")
+                else:
+                    logging.info("[TRADING] Crypto BNB macro: No signals this cycle")
+                _bnb_stats = self.last_ai_scan_stats.get("bnb_macro", {})
+                if _bnb_stats:
+                    logging.info(
+                        "[TRADING] BNB diagnostics: actions=%s side_sources=%s top_skips=%s buy_no_skips=%s last_buy_no=%s",
+                        _bnb_stats.get("action_counts", {}),
+                        _bnb_stats.get("side_source_counts", {}),
+                        _bnb_stats.get("top_skip_reasons", {}),
+                        self.last_buy_no_skip_counts.get("bnb_macro", {}),
+                        self.last_buy_no_skip_samples.get("bnb_macro", {}),
+                    )
+        except Exception as e:
+            logging.error(f"Crypto BNB macro error: {e}", exc_info=True)
 
         # Weather is being removed; keep the scan path hard-disabled even if stale
         # config still marks the strategy enabled.

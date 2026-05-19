@@ -884,6 +884,16 @@ Work landed on `main` the same calendar day; individual commits below are the au
 
 ---
 
+
+## 2026-05-19 — DOGE / BNB runtime wiring for calibration
+
+| Commit | Summary |
+|--------|---------|
+| `uncommitted` | Added real `doge_macro` / `bnb_macro` strategy classes, runtime instantiation in [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), exposure-manager routing, scan/execution diagnostics, and bootstrap config blocks in [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) so both lanes can generate rejected-candidate logs and settle into ghost-calibration data. Also extended [`tests/test_live_config_apply.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_live_config_apply.py) for the new runtime lanes. |
+
+---
+
+
 ## 2026-05-14 — BTC HTF observability
 
 | Commit | Summary |

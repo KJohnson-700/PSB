@@ -1240,6 +1240,282 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
 
+  doge_macro:
+    enabled: true                # 2026-05-19 bootstrap: runtime wiring enabled so DOGE can accumulate calibration / rejected-candidate data
+    dead_zone_enabled: false
+    use_ai: true
+    use_ai_updown: true
+    min_liquidity: 1000
+    min_edge: 0.09               # Bootstrap parity with xrp_macro until DOGE-specific settled data exists
+    min_edge_5m: 0.085
+    min_edge_15m_when_ltf_unconfirmed: 0.09
+    max_edge_updown: 0.15
+    ai_confidence_threshold: 0.60
+    max_ai_calls_per_scan: 8
+    ai_observer_timeout_sec: 20
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
+    oracle_max_basis_bps: 10.0
+    entry_timing_window_15m_min: 2.0
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
+    kelly_fraction: 0.27
+    calibration_size_multiplier_5m: 0.30
+    entry_price_min: 0.42
+    entry_price_max: 0.58
+    min_lag_magnitude_pct: 0.40
+    btc_spike_floor_pct_5m: 0.15
+    btc_spike_floor_pct_15m: 0.40
+    lag_signal_min_pct: 0.12
+    block_counter_macro_leg_updown: true
+    buy_no_ltf_override_enabled: true
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
+    center_price_band: 0.02
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
+    neutral_macro_require_spike_or_lag: true
+    require_btc_catalyst_5m: true
+    enforce_alt_1h_alignment: true
+    min_edge_buy_no: 0.08
+    rsi_buy_block_above: 70.0
+    rsi_sell_block_below: 30.0
+    rsi_hard_gate_enabled: false
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04
+    rsi_soft_penalty_buy_no: 0.00
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: true
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
+    iql_15m_enabled: false
+    low_corr_threshold_1h: 0.35
+    low_corr_damping: 0.80
+    blocked_utc_hours_updown: []
+    look_ahead_15m: 8
+    look_ahead_5m: 1
+    max_concurrent_positions: 2
+    entry_window_15m_min: 2.0
+    entry_window_15m_max: 16.0
+    entry_window_5m_min: 0.0
+    entry_window_5m_max: 4.5
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_jitter_sec: 10
+    entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.0
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+        15m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+        1h:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 1.0
+            entry_window_max: 59.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 1.0
+            entry_window_max: 59.0
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
+    btc_min_4h_hist_magnitude: 20.0
+    btc_1h_regime_gates:
+      enabled: false
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
+
+  bnb_macro:
+    enabled: true                # 2026-05-19 bootstrap: runtime wiring enabled so BNB can accumulate calibration / rejected-candidate data
+    dead_zone_enabled: false
+    use_ai: true
+    use_ai_updown: true
+    min_liquidity: 1000
+    min_edge: 0.09               # Bootstrap parity with xrp_macro until BNB-specific settled data exists
+    min_edge_5m: 0.085
+    min_edge_15m_when_ltf_unconfirmed: 0.09
+    max_edge_updown: 0.15
+    ai_confidence_threshold: 0.60
+    max_ai_calls_per_scan: 8
+    ai_observer_timeout_sec: 20
+    ai_hold_veto_ttl_sec: 300
+    min_edge_5m_ai_override: 0.10
+    ai_updown_marginal_min_edge: 0.03
+    require_oracle_for_updown: true
+    oracle_max_age_sec: 180
+    oracle_max_basis_bps: 10.0
+    entry_timing_window_15m_min: 2.0
+    entry_timing_window_15m_max: 15.0
+    entry_timing_window_5m_min: 0.5
+    entry_timing_window_5m_max: 5.0
+    kelly_fraction: 0.27
+    calibration_size_multiplier_5m: 0.30
+    entry_price_min: 0.42
+    entry_price_max: 0.58
+    min_lag_magnitude_pct: 0.40
+    btc_spike_floor_pct_5m: 0.15
+    btc_spike_floor_pct_15m: 0.40
+    lag_signal_min_pct: 0.12
+    block_counter_macro_leg_updown: true
+    buy_no_ltf_override_enabled: true
+    buy_no_ltf_override_rsi_max: 45.0
+    buy_no_ltf_override_max_btc_5m_pct: 0.0
+    buy_yes_ltf_override_enabled: true
+    buy_yes_ltf_override_rsi_min: 55.0
+    buy_yes_ltf_override_min_btc_5m_pct: 0.0
+    buy_no_4h_hist_override_enabled: true
+    buy_yes_4h_hist_override_enabled: true
+    center_price_band: 0.02
+    min_edge_when_centered: 0.12
+    center_price_requires_catalyst: true
+    neutral_macro_require_spike_or_lag: true
+    require_btc_catalyst_5m: true
+    enforce_alt_1h_alignment: true
+    min_edge_buy_no: 0.08
+    rsi_buy_block_above: 70.0
+    rsi_sell_block_below: 30.0
+    rsi_hard_gate_enabled: false
+    rsi_soft_penalty_enabled: true
+    rsi_soft_penalty_buy_yes: 0.04
+    rsi_soft_penalty_buy_no: 0.00
+    skip_on_degraded_correlation: true
+    degraded_correlation_size_multiplier: 0.50
+    degraded_bearish_est_up: 0.45
+    require_btc_volatility_gate: true
+    min_btc_move_pct_5m_for_lag_entries: 0.15
+    min_btc_move_pct_15m_for_lag_entries: 0.25
+    iql_15m_enabled: false
+    low_corr_threshold_1h: 0.35
+    low_corr_damping: 0.80
+    blocked_utc_hours_updown: []
+    look_ahead_15m: 8
+    look_ahead_5m: 1
+    max_concurrent_positions: 2
+    entry_window_15m_min: 2.0
+    entry_window_15m_max: 16.0
+    entry_window_5m_min: 0.0
+    entry_window_5m_max: 4.5
+    entry_window_auto_align: true
+    entry_window_align_scan_interval_sec: 60
+    entry_window_auto_align_max_expand_min: 3.0
+    entry_window_auto_align_jitter_sec: 10
+    entry_window_latency_buffer_sec: 12
+    entry_policy:
+      defaults:
+        enabled: true
+        hard_min_edge: 0.0
+        ai_override_min_edge: 0.10
+        size_multiplier: 1.0
+      window_side_overrides:
+        5m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 0.0
+            entry_window_max: 4.5
+            size_multiplier: 0.30
+        15m:
+          up:
+            min_edge: 0.085
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 2.0
+            entry_window_max: 16.0
+        1h:
+          up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 1.0
+            entry_window_max: 59.0
+          down:
+            min_edge: 0.08
+            entry_price_min: 0.42
+            entry_price_max: 0.55
+            entry_window_min: 1.0
+            entry_window_max: 59.0
+    btc_min_move_dollars_15m: 10.0
+    btc_min_move_dollars_5m: 3.0
+    btc_min_4h_hist_magnitude: 20.0
+    btc_1h_regime_gates:
+      enabled: false
+      range_band_pct: 0.0012
+      min_edge_mult:
+        BULL: 1.0
+        RANGE: 1.25
+        BEAR: 1.40
+      size_mult:
+        BULL: 1.0
+        RANGE: 0.7
+        BEAR: 0.5
+
 updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68

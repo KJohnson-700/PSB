@@ -55,6 +55,8 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
             "eth_macro": {"enabled": False, "kelly_fraction": 0.12},
             "hype_macro": {"enabled": False, "kelly_fraction": 0.08},
             "xrp_macro": {"enabled": False, "kelly_fraction": 0.10},
+            "doge_macro": {"enabled": False, "kelly_fraction": 0.10},
+            "bnb_macro": {"enabled": False, "kelly_fraction": 0.10},
             "weather": {"enabled": False, "kelly_fraction": 0.25},
         },
         "exposure": {"loss_kill_switch_enabled": True},
@@ -68,6 +70,8 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     bot.eth_exposure_manager = _FakeExposureManager()
     bot.hype_exposure_manager = _FakeExposureManager()
     bot.xrp_exposure_manager = _FakeExposureManager()
+    bot.doge_exposure_manager = _FakeExposureManager()
+    bot.bnb_exposure_manager = _FakeExposureManager()
     _weather_em = _FakeExposureManager()
     bot.weather_exposure_manager = _weather_em
     bot.event_exposure_manager = _weather_em
@@ -110,6 +114,8 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.eth_macro_strategy.lane_calibrator is bot.lane_calibrator
     assert bot.hype_macro_strategy.lane_calibrator is bot.lane_calibrator
     assert bot.xrp_macro_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.doge_macro_strategy.lane_calibrator is bot.lane_calibrator
+    assert bot.bnb_macro_strategy.lane_calibrator is bot.lane_calibrator
 
 
 def test_lane_calibration_mode_follows_dry_run_toggle():
@@ -151,6 +157,8 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
             "eth_macro": {"enabled": True},
             "hype_macro": {"enabled": True},
             "xrp_macro": {"enabled": True},
+            "doge_macro": {"enabled": True},
+            "bnb_macro": {"enabled": True},
             "weather": {"enabled": True},
         },
         "exposure": {},
@@ -164,6 +172,8 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
     bot.eth_exposure_manager = _FakeExposureManager()
     bot.hype_exposure_manager = _FakeExposureManager()
     bot.xrp_exposure_manager = _FakeExposureManager()
+    bot.doge_exposure_manager = _FakeExposureManager()
+    bot.bnb_exposure_manager = _FakeExposureManager()
     bot.weather_exposure_manager = _FakeExposureManager()
     bot.event_exposure_manager = bot.weather_exposure_manager
     bot._dead_zone_skip_callback = lambda **kwargs: None
