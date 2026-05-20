@@ -470,34 +470,39 @@
             margin-top:12px;
             padding:12px 14px 10px;
             border-radius:4px;
-            border:1px solid var(--border);
-            background:
-                radial-gradient(circle at 8% 0%, rgba(34,211,238,.10), transparent 55%),
-                linear-gradient(180deg, #04060c 0%, #02030a 100%);
+            border:1px solid rgba(255,215,0,.18);
+            background:linear-gradient(155deg,rgba(255,68,102,.09) 0%,rgba(5,4,14,.9) 26%,rgba(176,96,255,.18) 64%,rgba(0,255,136,.06) 100%);
+            box-shadow:
+                0 0 40px rgba(255,68,102,.10),
+                0 0 58px rgba(176,96,255,.16),
+                0 0 74px rgba(0,229,255,.10),
+                inset 0 0 0 1px rgba(255,255,255,.06);
             color:var(--text);
             overflow:hidden;
         }
         #exit-timing-hud::before{
             content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
-            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(255,255,255,.025) 3px,transparent 4px);
-            mix-blend-mode:screen;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.2) 3px,transparent 4px);
+            mix-blend-mode:multiply;
         }
         #exit-timing-hud .hud-head,
         #exit-timing-hud .hud-body{position:relative;z-index:1}
         #exit-timing-hud .hud-head{
             display:flex;align-items:center;gap:10px;
             margin-bottom:8px;padding-bottom:6px;
-            border-bottom:1px dashed rgba(34,211,238,.18);
+            border-bottom:1px dashed rgba(176,96,255,.22);
         }
         #exit-timing-hud .hud-pulse{
             width:6px;height:6px;border-radius:50%;
-            background:#22d3ee;box-shadow:0 0 8px #22d3ee;
+            background:var(--pu);box-shadow:0 0 8px rgba(176,96,255,.95);
             animation:hudPulse 2s ease-in-out infinite;
         }
         #exit-timing-hud .hud-title{
             font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
             text-transform:uppercase;letter-spacing:.18em;
-            color:var(--cy);text-shadow:0 0 8px rgba(34,211,238,.45);
+            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
+            -webkit-background-clip:text;background-clip:text;color:transparent;
+            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
         }
         #exit-timing-hud .hud-window{
             margin-left:auto;
@@ -584,34 +589,38 @@
         /* ── Cross-Asset Macro Alignment ── */
         #macro-align-section{
             position:relative;
-            background:
-                radial-gradient(circle at 6% 0%, rgba(34,211,238,.10), transparent 55%),
-                radial-gradient(circle at 96% 100%, rgba(176,96,255,.08), transparent 50%),
-                linear-gradient(180deg, #04070e 0%, #02040a 100%);
-            border:1px solid var(--border);
+            background:linear-gradient(155deg,rgba(255,68,102,.09) 0%,rgba(5,4,14,.9) 26%,rgba(176,96,255,.18) 64%,rgba(0,255,136,.06) 100%);
+            border:1px solid rgba(255,215,0,.18);
+            box-shadow:
+                0 0 40px rgba(255,68,102,.10),
+                0 0 58px rgba(176,96,255,.16),
+                0 0 74px rgba(0,229,255,.10),
+                inset 0 0 0 1px rgba(255,255,255,.06);
             overflow:hidden;
         }
         #macro-align-section::before{
             content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
-            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(255,255,255,.022) 3px,transparent 4px);
-            mix-blend-mode:screen;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.2) 3px,transparent 4px);
+            mix-blend-mode:multiply;
         }
         #macro-align-section > *{position:relative;z-index:1}
         #macro-align-section .ma-hdr{
             display:flex;justify-content:space-between;align-items:center;gap:14px;
             padding-bottom:8px;margin-bottom:10px;
-            border-bottom:1px dashed rgba(34,211,238,.18);
+            border-bottom:1px dashed rgba(176,96,255,.22);
         }
         #macro-align-section .ma-titlewrap{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
         #macro-align-section .ma-pulse{
-            width:8px;height:8px;border-radius:50%;background:#22d3ee;
-            box-shadow:0 0 10px #22d3ee, 0 0 22px rgba(34,211,238,.5);
+            width:8px;height:8px;border-radius:50%;background:var(--pu);
+            box-shadow:0 0 10px rgba(176,96,255,.95), 0 0 22px rgba(176,96,255,.42);
             animation:hudPulse 2s ease-in-out infinite;
         }
         #macro-align-section .ma-title{
             font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;
-            text-transform:uppercase;letter-spacing:.18em;color:var(--cy);
-            text-shadow:0 0 8px rgba(34,211,238,.45);margin:0;
+            text-transform:uppercase;letter-spacing:.18em;margin:0;
+            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
+            -webkit-background-clip:text;background-clip:text;color:transparent;
+            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
         }
         #macro-align-section .ma-sub{
             font-family:'IBM Plex Mono',monospace;font-size:10px;
@@ -630,8 +639,8 @@
         #macro-align-section .ma-tog + .ma-tog{border-left:1px solid rgba(255,255,255,.08)}
         #macro-align-section .ma-tog:hover{color:var(--text)}
         #macro-align-section .ma-tog.active{
-            background:rgba(34,211,238,.12);color:var(--cy);
-            text-shadow:0 0 6px rgba(34,211,238,.65);
+            background:rgba(176,96,255,.14);color:var(--pu);
+            text-shadow:0 0 6px rgba(176,96,255,.65);
         }
         #macro-align-section .ma-chips{
             display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;
@@ -1473,13 +1482,13 @@
         <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
     </div>
 
-    <!-- Cross-Asset Macro Alignment — 7 normalized %-return lines + trade bubbles -->
+    <!-- Simulated Macro Alignment — low-latency proxy tape + trade bubbles -->
     <div class="card" data-aos="fade-up" id="macro-align-section" style="margin-bottom:16px;">
         <div class="ma-hdr">
             <div class="ma-titlewrap">
                 <span class="ma-pulse" aria-hidden="true"></span>
-                <h2 class="ma-title">Cross-Asset Macro Alignment</h2>
-                <span class="ma-sub" id="macro-align-updated">awaiting series…</span>
+                <h2 class="ma-title">Macro Alignment // Sim Proxy</h2>
+                <span class="ma-sub" id="macro-align-updated">awaiting sim tape…</span>
             </div>
             <div class="ma-toggle" role="tablist" aria-label="Chart view">
                 <button type="button" class="ma-tog active" data-view="macro" id="macro-align-tog-macro" role="tab" aria-selected="true">Macro Align</button>
@@ -1492,14 +1501,14 @@
             <div class="ma-bbl-layer" id="macro-align-bbls" aria-hidden="true"></div>
             <div class="ma-crosshair" id="macro-align-crosshair" aria-hidden="true"></div>
             <div class="ma-tooltip" id="macro-align-tooltip" role="status"></div>
-            <div class="ma-empty" id="macro-align-empty">Loading cross-asset series…</div>
+            <div class="ma-empty" id="macro-align-empty">Loading low-latency sim tape…</div>
         </div>
         <div class="ma-foot">
             <span id="macro-align-foot-btc"></span>
             <span id="macro-align-foot-pairs"></span>
-            <span class="ma-foot-meta">NORMALIZED · % FROM SESSION OPEN</span>
+            <span class="ma-foot-meta">SIMULATED · LOW-LATENCY PROXY</span>
         </div>
-        <div class="ma-candles-hint">Candles view active — see the BTC candle chart above. Switch back to <strong>Macro Align</strong> to see all 7 assets normalized.</div>
+        <div class="ma-candles-hint">Candles view active — see the BTC candle chart above. Switch back to <strong>Macro Align</strong> for the low-latency simulation panel.</div>
     </div>
 
     <!-- Operations Pipeline (scan_skip_digest + decision gates + ai_pipeline) -->
@@ -8938,7 +8947,7 @@ async function loadMacroAlignChart() {
         const upd = document.getElementById('macro-align-updated');
         if (upd) {
             const okCount = Object.values(_maState.assets).filter(a => a && a.available).length;
-            upd.textContent = `${okCount}/${Object.keys(_maState.assets).length} assets · updated ${new Date().toLocaleTimeString()}`;
+            upd.textContent = `${okCount} feeds synced · sim refresh ${new Date().toLocaleTimeString()}`;
         }
     } catch (e) {
         console.error('macro_align error:', e);
