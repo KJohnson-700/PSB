@@ -255,6 +255,14 @@
             0%,100%{background:rgba(255,215,0,.10);border-color:var(--ye);color:var(--ye)}
             50%{background:rgba(255,215,0,.24);border-color:#ffe57a;color:#fff9d6}
         }
+        .badge-pause-flash{
+            animation:dashPausePulse .9s ease-in-out infinite;
+            box-shadow:0 0 12px rgba(255,140,0,.24),0 0 22px rgba(255,140,0,.18);
+        }
+        @keyframes dashPausePulse{
+            0%,100%{background:rgba(255,140,0,.10);border-color:#ff9f1a;color:#ffb347}
+            50%{background:rgba(255,140,0,.28);border-color:#ffc266;color:#fff3df}
+        }
 
         /* ── Buttons ── */
         button,.abtn{
@@ -1272,17 +1280,30 @@
         @keyframes pulseAi{0%,100%{box-shadow:0 0 4px rgba(176,96,255,.25)}50%{box-shadow:0 0 14px rgba(176,96,255,.55)}}
         /* Bot status marquee badge (LIVE / OFF scrolling) */
         .bdg-mq{display:inline-flex;align-items:center;height:18px;width:104px;overflow:hidden;border:1px solid;border-radius:3px;padding:0;font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.14em;position:relative;background:rgba(0,0,0,.5);vertical-align:middle}
+        button.bdg-mq{appearance:none;-webkit-appearance:none;line-height:1;cursor:pointer}
+        button.bdg-mq:hover{transform:none;filter:brightness(1.08)}
+        button.bdg-mq:active{transform:none;filter:brightness(.96)}
         .bdg-mq.run{color:var(--gr);border-color:var(--gr);box-shadow:0 0 10px rgba(0,255,136,.5),inset 0 0 10px rgba(0,255,136,.15);animation:pulseRun 1.5s ease-in-out infinite}
         .bdg-mq.off{color:var(--re);border-color:var(--re);box-shadow:0 0 10px rgba(255,68,102,.55),inset 0 0 10px rgba(255,68,102,.18);animation:pulseOff 1.3s ease-in-out infinite}
         .bdg-mq.paper-on{color:var(--ye);border-color:var(--ye);animation:pulsePaperMq 1.5s ease-in-out infinite}
         .bdg-mq.paper-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
+        .bdg-mq.kill-on{color:var(--ye);border-color:var(--ye);box-shadow:0 0 10px rgba(255,215,0,.38),inset 0 0 10px rgba(255,215,0,.12);animation:pulsePaperMq 1.6s ease-in-out infinite}
+        .bdg-mq.kill-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
+        .bdg-mq.dead-on{color:#60a5fa;border-color:#3b82f6;box-shadow:0 0 10px rgba(59,130,246,.4),inset 0 0 10px rgba(59,130,246,.12);animation:pulseDeadMq 1.6s ease-in-out infinite}
+        .bdg-mq.dead-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
         .bdg-mq .mq-track{display:inline-block;white-space:nowrap;padding-left:100%;animation:mqScroll 5.6s linear infinite;text-shadow:0 0 6px currentColor}
         .bdg-mq.off .mq-track{animation-duration:5.6s}
         .bdg-mq.paper-on .mq-track{animation-duration:5.0s}
         .bdg-mq.paper-off .mq-track{animation-duration:7.0s;text-shadow:none}
+        .bdg-mq.kill-on .mq-track,.bdg-mq.dead-on .mq-track{animation-duration:5.0s}
+        .bdg-mq.kill-off .mq-track,.bdg-mq.dead-off .mq-track{animation-duration:7.0s;text-shadow:none}
         @keyframes pulsePaperMq{
             0%,100%{box-shadow:0 0 6px rgba(255,215,0,.45),inset 0 0 8px rgba(255,215,0,.15)}
             50%{box-shadow:0 0 22px rgba(255,215,0,.95),inset 0 0 14px rgba(255,215,0,.35)}
+        }
+        @keyframes pulseDeadMq{
+            0%,100%{box-shadow:0 0 6px rgba(59,130,246,.4),inset 0 0 8px rgba(59,130,246,.12)}
+            50%{box-shadow:0 0 22px rgba(59,130,246,.95),inset 0 0 14px rgba(59,130,246,.34)}
         }
         .bdg-mq .mq-track span{padding:0 14px}
         @keyframes mqScroll{0%{transform:translateX(0)}100%{transform:translateX(-100%)}}
@@ -1354,22 +1375,22 @@
         #view-commands .cmd-ref-lead{font-size:clamp(1.05rem,1.5vw,1.38rem);line-height:1.25;letter-spacing:.06em;margin:0 0 10px}
 
         /* Color-coded strategy filter chips above BTC chart (replaces plain checkboxes) */
-        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s;user-select:none;line-height:1.2;position:relative;animation:stratCfChase 4.8s ease-in-out infinite}
+        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s;user-select:none;line-height:1.2;position:relative;animation:stratCfChase 4.1s ease-in-out infinite}
         .strat-cf:hover{filter:brightness(1.25)}
         .strat-cf:active{filter:brightness(.85)}
         .strat-cf.off{opacity:.35;filter:grayscale(.4);animation:none}
-        #btc-toggle-btc-trades {animation-delay:.20s}
-        #btc-toggle-sol-trades {animation-delay:1.00s}
-        #btc-toggle-eth-trades {animation-delay:1.80s}
-        #btc-toggle-xrp-trades {animation-delay:2.60s}
-        #btc-toggle-hype-trades{animation-delay:3.40s}
-        #btc-toggle-doge-trades{animation-delay:4.20s}
-        #btc-toggle-bnb-trades {animation-delay:5.00s}
+        #btc-toggle-btc-trades {animation-delay:.18s}
+        #btc-toggle-sol-trades {animation-delay:.74s}
+        #btc-toggle-eth-trades {animation-delay:1.30s}
+        #btc-toggle-xrp-trades {animation-delay:1.86s}
+        #btc-toggle-hype-trades{animation-delay:2.42s}
+        #btc-toggle-doge-trades{animation-delay:2.98s}
+        #btc-toggle-bnb-trades {animation-delay:3.54s}
         @keyframes stratCfChase{
             0%   {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
             3%   {transform:scale(1.10);box-shadow:0 0 14px currentColor,0 0 28px currentColor; text-shadow:0 0 9px currentColor}
-            10%  {transform:scale(1.05);box-shadow:0 0 10px currentColor,0 0 18px currentColor; text-shadow:0 0 6px currentColor}
-            18%  {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
+            8%   {transform:scale(1.05);box-shadow:0 0 10px currentColor,0 0 18px currentColor; text-shadow:0 0 6px currentColor}
+            12%  {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
             100% {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
         }
         @media (prefers-reduced-motion:reduce){
@@ -1583,13 +1604,7 @@
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
             <button class="abtn ag" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
             <button class="abtn ar" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
-            <button class="abtn ay" onclick="toggleLossKillSwitch()" id="loss-kill-switch-btn">Loss Kill Switch</button>
-            <button class="abtn ab" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
             <button class="abtn ac" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
-        </div>
-        <div style="font-size:0.7rem;margin-top:2px;color:var(--text-muted);display:flex;gap:12px;flex-wrap:wrap;">
-            <span id="loss-kill-switch-state">Loss kill switch: -</span>
-            <span id="dead-zone-state">Dead zones: -</span>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div id="command-pnl-section" class="cmd-pnl-card" style="display:none;">
@@ -3829,6 +3844,7 @@ function updateStatusBadgesAndKill(d) {
     if (!d || typeof d !== 'object') return;
     const badges = document.getElementById('status-badges');
     if (!badges) return;
+    const operatorFlags = window._dashOperatorFlags || {};
     const paperOn = !!d.dry_run;
     const liveExec = !!d.running && !paperOn;
     const liveLabel = liveExec ? 'LIVE ON' : 'LIVE OFF';
@@ -3841,18 +3857,37 @@ function updateStatusBadgesAndKill(d) {
     const paperCls = paperOn ? 'paper-on' : 'paper-off';
     const paperTitle = paperOn ? 'Paper mode is active.' : 'Paper mode is inactive.';
     const paperBadge = `<span class="bdg-mq ${paperCls}" title="${paperTitle}"><span class="mq-track"><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span></span></span>`;
+    const lossKillOn = typeof d?.exposure?.loss_kill_switch_enabled === 'boolean'
+        ? !!d.exposure.loss_kill_switch_enabled
+        : !!operatorFlags.lossKillSwitchEnabled;
+    const lossKillLabel = lossKillOn ? 'LOSS KILL ON' : 'LOSS KILL OFF';
+    const lossKillCls = lossKillOn ? 'kill-on' : 'kill-off';
+    const lossKillTitle = lossKillOn
+        ? 'Loss kill switch is enabled. Click to disable.'
+        : 'Loss kill switch is disabled. Click to enable.';
+    const lossKillBadge = `<button type="button" class="bdg-mq ${lossKillCls}" id="loss-kill-switch-btn" onclick="toggleLossKillSwitch()" title="${lossKillTitle}"><span class="mq-track"><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span></span></button>`;
+    const deadZonesOn = typeof operatorFlags.deadZoneEnabled === 'boolean'
+        ? !!operatorFlags.deadZoneEnabled
+        : ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
+            .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
+    const deadZonesLabel = deadZonesOn ? 'DEAD ZONES ON' : 'DEAD ZONES OFF';
+    const deadZonesCls = deadZonesOn ? 'dead-on' : 'dead-off';
+    const deadZonesTitle = deadZonesOn
+        ? 'Dead zones are enabled. Click to disable.'
+        : 'Dead zones are disabled. Click to enable.';
+    const deadZonesBadge = `<button type="button" class="bdg-mq ${deadZonesCls}" id="dead-zone-btn" onclick="toggleDeadZones()" title="${deadZonesTitle}"><span class="mq-track"><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span></span></button>`;
     const lossPauseTitle = d.loss_pause_active
         ? `Loss-streak lane pause active. Check Exposure Manager. Paused lanes: ${((d.loss_pause_lanes || []).join(', ') || 'unknown')}`
         : 'No loss-streak lane pause is currently active.';
     const lossPauseBadge = d.loss_pause_active
-        ? `<span class="badge badge-red badge-alert-flash" title="${String(lossPauseTitle).replace(/"/g, '&quot;')}">LOSS PAUSE</span>`
+        ? `<span class="badge badge-pause-flash" title="${String(lossPauseTitle).replace(/"/g, '&quot;')}">LOSS PAUSE</span>`
         : '<span class="badge badge-muted" title="No loss-streak lane pause is currently active.">LOSS PAUSE</span>';
     const ai = d.ai || {};
     const aiTip = String(ai.reason || '').replace(/"/g, '&quot;').replace(/</g, '');
     const aiBadge = ai.ready
         ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
         : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    const nextHtml = `${run} ${paperBadge} ${lossPauseBadge} ${aiBadge}`;
+    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${lossPauseBadge} ${aiBadge}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
@@ -6433,17 +6468,13 @@ async function loadConfig() {
 
 function updateOperatorToggleState(d) {
     const lossKillSwitchEnabled = Boolean(d?.exposure?.loss_kill_switch_enabled);
-    const killSwitchState = document.getElementById('loss-kill-switch-state');
-    const killSwitchBtn = document.getElementById('loss-kill-switch-btn');
-    if (killSwitchState) killSwitchState.textContent = `Loss kill switch: ${lossKillSwitchEnabled ? 'ON' : 'OFF'}`;
-    if (killSwitchBtn) killSwitchBtn.textContent = lossKillSwitchEnabled ? 'Disable Loss Kill Switch' : 'Enable Loss Kill Switch';
-
     const deadZoneEnabled = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
         .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
-    const deadZoneState = document.getElementById('dead-zone-state');
-    const deadZoneBtn = document.getElementById('dead-zone-btn');
-    if (deadZoneState) deadZoneState.textContent = `Dead zones: ${deadZoneEnabled ? 'ON' : 'OFF'}`;
-    if (deadZoneBtn) deadZoneBtn.textContent = deadZoneEnabled ? 'Disable Dead Zones' : 'Enable Dead Zones';
+    window._dashOperatorFlags = {
+        lossKillSwitchEnabled,
+        deadZoneEnabled,
+    };
+    if (lastStatusData) updateStatusBadgesAndKill(lastStatusData);
 }
 
 async function postConfigPatch(updates) {
