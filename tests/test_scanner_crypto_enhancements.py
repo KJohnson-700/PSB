@@ -28,9 +28,12 @@ def test_iter_updown_1h_human_slugs_shape():
     assert "xrp-up-or-down-may-13-2026-5am-et" in slugs
     # HYPE uses the short ``hype-`` prefix on Polymarket hourly (not ``hyperliquid-``).
     assert "hype-up-or-down-may-13-2026-5am-et" in slugs
-    assert "doge-up-or-down-may-13-2026-5am-et" in slugs
+    # DOGE is the inverse of the short-window slug family here: hourly uses
+    # ``dogecoin-`` rather than ``doge-`` on live Gamma.
+    assert "dogecoin-up-or-down-may-13-2026-5am-et" in slugs
     assert "bnb-up-or-down-may-13-2026-5am-et" in slugs
     assert not any("hyperliquid" in s for s in slugs)
+    assert not any(slug.startswith("doge-up-or-down-") for slug in slugs)
 
 
 def test_resolve_updown_lookahead_includes_doge_and_bnb_configs():

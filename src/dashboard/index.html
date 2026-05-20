@@ -263,11 +263,12 @@
         .controls{display:flex;gap:8px 10px;margin:9px 0;flex-wrap:wrap;align-items:center}
         #command-center-controls .btn-sm{padding:6px 11px;font-size:11px}
         .ops-mini{
-            border:1px solid var(--border);
-            border-radius:4px;
-            background:rgba(255,255,255,.02);
+            border:1px solid rgba(255,255,255,.08);
+            border-radius:6px;
+            background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));
             margin:4px 0 10px;
-            padding:8px 10px;
+            padding:10px 11px;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.02),0 0 16px rgba(0,0,0,.18);
         }
         .ops-mini-head{
             font-family:'IBM Plex Mono',monospace;
@@ -370,6 +371,92 @@
             box-shadow:inset 0 0 0 1px rgba(255,255,255,.025);
         }
         .backtest-output-tail::-webkit-scrollbar{display:none;height:0;width:0}
+
+        /* ── Backtest shell system (status card + derived panels) ── */
+        .bt-shell{
+            position:relative;overflow:hidden;
+            border:1px solid rgba(255,255,255,.12);
+            border-radius:8px;
+            background:linear-gradient(155deg,rgba(255,68,102,.06) 0%,rgba(0,0,0,.58) 28%,rgba(176,96,255,.08) 62%,rgba(0,255,136,.05) 100%);
+            box-shadow:
+                0 0 36px rgba(176,96,255,.14),
+                0 0 52px rgba(0,229,255,.10),
+                0 0 72px rgba(0,255,136,.07),
+                inset 0 0 0 1px rgba(255,255,255,.06);
+        }
+        .bt-shell.bt-shell-live{
+            border-color:rgba(255,215,0,.22);
+            box-shadow:
+                0 0 40px rgba(255,68,102,.12),
+                0 0 56px rgba(176,96,255,.16),
+                0 0 72px rgba(0,229,255,.12),
+                0 0 88px rgba(0,255,136,.10),
+                inset 0 0 0 1px rgba(255,255,255,.07);
+        }
+        .bt-shell::before{
+            content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+            opacity:.35;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.2) 3px,transparent 4px);
+            mix-blend-mode:multiply;
+        }
+        .bt-shell > *{position:relative;z-index:1}
+        .bt-shell-head{
+            display:flex;align-items:flex-start;justify-content:space-between;
+            gap:12px;flex-wrap:wrap;
+            margin-bottom:12px;padding-bottom:9px;
+            border-bottom:1px dashed rgba(176,96,255,.22);
+        }
+        .bt-shell-titlewrap{display:flex;flex-direction:column;gap:5px;min-width:0}
+        .bt-shell-kicker{
+            font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;
+            letter-spacing:.18em;text-transform:uppercase;color:var(--td);
+        }
+        .bt-shell-title{
+            margin:0;
+            font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.15vw,13px);font-weight:700;
+            letter-spacing:.2em;text-transform:uppercase;color:var(--tm);
+            text-shadow:0 0 14px rgba(176,96,255,.25);
+        }
+        .bt-shell-live .bt-shell-title{
+            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
+            -webkit-background-clip:text;background-clip:text;color:transparent;
+            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
+        }
+        .bt-shell-sub{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            color:var(--text-muted);letter-spacing:.06em;line-height:1.45;
+        }
+        .bt-shell-pill{
+            font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;
+            letter-spacing:.16em;padding:4px 10px;border:1px solid rgba(176,96,255,.45);
+            color:var(--pu);background:rgba(176,96,255,.12);border-radius:3px;
+            box-shadow:0 0 14px rgba(176,96,255,.2);text-transform:uppercase;
+            align-self:flex-start;
+        }
+        .bt-shell-pill.bt-shell-pill-live{
+            border-color:rgba(255,215,0,.28);color:var(--ye);background:rgba(255,215,0,.08);
+            box-shadow:0 0 14px rgba(255,215,0,.12);
+        }
+        .bt-shell-toolbar{
+            display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+        }
+        .bt-shell-section-label{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            color:var(--text-muted);letter-spacing:.12em;text-transform:uppercase;
+            margin:0 0 6px;
+        }
+        .bt-shell .metric-box{
+            background:linear-gradient(180deg,rgba(255,255,255,.042),rgba(255,255,255,.015));
+            border-color:rgba(255,255,255,.08);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 0 22px rgba(0,0,0,.28),0 0 22px rgba(176,96,255,.08);
+        }
+        .bt-shell .scrollbox{
+            background:linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,.012));
+            border:1px solid rgba(255,255,255,.07);
+            border-radius:6px;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.025);
+            padding:8px 10px;
+        }
 
         /* ── Backtest HUD (multi-accent heat + mission status) ── */
         .bt-hud{
@@ -589,12 +676,12 @@
         /* ── Cross-Asset Macro Alignment ── */
         #macro-align-section{
             position:relative;
-            background:linear-gradient(155deg,rgba(255,68,102,.09) 0%,rgba(5,4,14,.9) 26%,rgba(176,96,255,.18) 64%,rgba(0,255,136,.06) 100%);
-            border:1px solid rgba(255,215,0,.18);
+            background:linear-gradient(155deg,rgba(255,68,102,.06) 0%,rgba(0,0,0,.58) 28%,rgba(176,96,255,.08) 62%,rgba(0,255,136,.05) 100%);
+            border:1px solid rgba(255,255,255,.12);
             box-shadow:
-                0 0 40px rgba(255,68,102,.10),
-                0 0 58px rgba(176,96,255,.16),
-                0 0 74px rgba(0,229,255,.10),
+                0 0 36px rgba(176,96,255,.14),
+                0 0 52px rgba(0,229,255,.10),
+                0 0 72px rgba(0,255,136,.07),
                 inset 0 0 0 1px rgba(255,255,255,.06);
             overflow:hidden;
         }
@@ -612,15 +699,13 @@
         #macro-align-section .ma-titlewrap{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
         #macro-align-section .ma-pulse{
             width:8px;height:8px;border-radius:50%;background:var(--pu);
-            box-shadow:0 0 10px rgba(176,96,255,.95), 0 0 22px rgba(176,96,255,.42);
+            box-shadow:0 0 8px rgba(176,96,255,.7), 0 0 14px rgba(176,96,255,.22);
             animation:hudPulse 2s ease-in-out infinite;
         }
         #macro-align-section .ma-title{
-            font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;
-            text-transform:uppercase;letter-spacing:.18em;margin:0;
-            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
-            -webkit-background-clip:text;background-clip:text;color:transparent;
-            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
+            font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.15vw,13px);font-weight:700;
+            text-transform:uppercase;letter-spacing:.2em;margin:0;
+            color:var(--tm);text-shadow:0 0 14px rgba(176,96,255,.25);
         }
         #macro-align-section .ma-sub{
             font-family:'IBM Plex Mono',monospace;font-size:10px;
@@ -1103,8 +1188,14 @@
         /* Trade bubbles for BTC chart overlay */
         .bbl-layer{position:absolute;inset:0;pointer-events:none;z-index:5}
         .bbl{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer}
-        .bbl-dot{width:12px;height:12px;border-radius:50%;border:2px solid;animation:popIn .3s ease both;position:relative;z-index:2;box-sizing:border-box}
-        .bbl-dot--loss{border-radius:3px}
+        .bbl-dot{
+            width:13px;height:13px;border-radius:var(--bbl-radius,50%);
+            border:1.6px solid var(--bbl-border,#64748b);
+            animation:popIn .3s ease both;position:relative;z-index:2;box-sizing:border-box;
+            background:var(--bbl-fill,#64748b);
+            box-shadow:0 0 0 1px rgba(0,0,0,.28);
+        }
+        .bbl-dot--loss{--bbl-radius:3px}
         .bbl-ring{position:absolute;top:50%;left:50%;width:13px;height:13px;border-radius:50%;border:2px solid;animation:ping 1.3s ease-out both;animation-delay:.08s;pointer-events:none}
         .bbl:hover .bbl-tip{opacity:1;transform:translateX(-50%) translateY(-6px)}
         .bbl-tip{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(0);background:rgba(0,0,0,.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:8px 12px;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:11px;opacity:0;transition:opacity .15s,transform .15s;pointer-events:none;z-index:20;min-width:130px}
@@ -1516,10 +1607,14 @@
     </div>
 
     <!-- Operations Pipeline (scan_skip_digest + decision gates + ai_pipeline) -->
-    <div class="card" data-aos="fade-up" id="ops-pipeline-panel" style="margin-bottom:16px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <h2 style="margin-bottom:0;">&#9881; Operations Pipeline</h2>
-        <span style="font-size:0.7rem;color:var(--text-muted);">scan_skip_digest · decision gates · ai_pipeline counters</span>
+    <div class="card bt-shell bt-shell-live" data-aos="fade-up" id="ops-pipeline-panel" style="margin-bottom:16px;">
+      <div class="bt-shell-head">
+        <div class="bt-shell-titlewrap">
+          <div class="bt-shell-kicker">Live Telemetry</div>
+          <h2 class="bt-shell-title">&#9881; Operations Pipeline</h2>
+          <div class="bt-shell-sub">scan_skip_digest · decision gates · ai_pipeline counters</div>
+        </div>
+        <span class="bt-shell-pill bt-shell-pill-live">Live</span>
       </div>
       <div class="ops-mini-grid">
         <div class="ops-mini" title="scan_skip_digest from bot — top reasons markets did not become signals">
@@ -2186,8 +2281,15 @@
     </div>
 
     <!-- Backtest Controls -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;">
-        <h2>Backtest Controls</h2>
+    <div class="card bt-shell" data-aos="fade-up" style="margin-bottom:16px;">
+        <div class="bt-shell-head">
+            <div class="bt-shell-titlewrap">
+                <div class="bt-shell-kicker">Subprocess Control</div>
+                <h2 class="bt-shell-title">Backtest Controls</h2>
+                <div class="bt-shell-sub">Run local crypto backtests, monitor process output, and keep the backtest scope aligned with live-enabled strategies.</div>
+            </div>
+            <span class="bt-shell-pill">Control</span>
+        </div>
         <div class="controls">
             <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
                 <option value="">-- Loading scopes from settings… --</option>
@@ -2196,16 +2298,23 @@
         </div>
         <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div style="margin-top:10px;">
-            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:4px;">Backtest output tail</div>
+            <div class="bt-shell-section-label">Backtest output tail</div>
             <pre id="backtest-output-tail" class="backtest-output-tail">No active backtest output.</pre>
         </div>
     </div>
 
     <!-- Test Results + Live Scan -->
     <div class="grid" style="margin-bottom:16px;">
-        <div class="card" data-aos="fade-up">
-            <h2>Test Results</h2>
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div class="card bt-shell" data-aos="fade-up">
+            <div class="bt-shell-head">
+                <div class="bt-shell-titlewrap">
+                    <div class="bt-shell-kicker">Verification</div>
+                    <h2 class="bt-shell-title">Test Results</h2>
+                    <div class="bt-shell-sub">Fast pytest visibility from the dashboard without switching contexts.</div>
+                </div>
+                <span class="bt-shell-pill">Pytest</span>
+            </div>
+            <div class="bt-shell-toolbar" style="margin-bottom:12px;">
                 <button id="run-tests-btn" class="btn-sm" onclick="runTests()">Run Tests</button>
                 <span id="test-summary" style="font-size:0.85rem; color:var(--text-muted);">Click to run pytest</span>
             </div>
@@ -2216,9 +2325,16 @@
             </div>
             <div class="scrollbox" id="test-list" style="margin-top:8px;"></div>
         </div>
-        <div class="card" data-aos="fade-up">
-            <h2>Scan diagnostics</h2>
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div class="card bt-shell" data-aos="fade-up">
+            <div class="bt-shell-head">
+                <div class="bt-shell-titlewrap">
+                    <div class="bt-shell-kicker">Feed Health</div>
+                    <h2 class="bt-shell-title">Scan Diagnostics</h2>
+                    <div class="bt-shell-sub">Latest distribution telemetry, strategy scan rows, and retired-feed fallback messaging.</div>
+                </div>
+                <span class="bt-shell-pill">Scan</span>
+            </div>
+            <div class="bt-shell-toolbar" style="margin-bottom:12px;">
                 <button id="run-scan-btn" class="btn-sm btn-green" onclick="refreshDashboardData()" title="Same as header refresh — legacy /api/scans endpoints are retired">Refresh data</button>
                 <span id="scan-summary" style="font-size:0.85rem; color:var(--text-muted);">Strategy metrics load on each poll…</span>
             </div>
@@ -8579,6 +8695,15 @@ function _shadeStratHex(hex, t) {
     );
 }
 
+function _btcTradeOverlayStyle(color, isWin) {
+    const fill = _shadeStratHex(color, isWin ? -0.08 : -0.18);
+    const border = _shadeStratHex(color, isWin ? -0.24 : -0.34);
+    return {
+        fill,
+        border,
+    };
+}
+
 function _tradeMarkersFromPoints(points, strategy) {
     return (points || [])
         .filter((p) => p.strategy === strategy)
@@ -8632,6 +8757,8 @@ function _drawBTCTradeOverlay() {
             eth_macro: 'ethTrades',
             xrp_macro: 'xrpTrades',
             hype_macro: 'hypeTrades',
+            doge_macro: 'dogeTrades',
+            bnb_macro: 'bnbTrades',
         })[String(point.strategy || '').trim()];
         if (laneFlag && !_btcChartDisplay[laneFlag]) continue;
         const candle = _findNearestBTCCandle(Number(point.time));
@@ -8653,10 +8780,11 @@ function _drawBTCTradeOverlay() {
         wrap.style.left = x + 'px';
         wrap.style.top = y + 'px';
         const dot = document.createElement('div');
+        const markerStyle = _btcTradeOverlayStyle(color, isWin);
         dot.className = 'bbl-dot' + (isWin ? '' : ' bbl-dot--loss');
-        dot.style.background = color + '18';
-        dot.style.borderColor = color + '88';
-        dot.style.boxShadow = 'none';
+        dot.style.setProperty('--bbl-fill', markerStyle.fill);
+        dot.style.setProperty('--bbl-border', markerStyle.border);
+        dot.style.boxShadow = '0 0 10px ' + color + ', 0 0 20px ' + color;
         wrap.appendChild(dot);
         frag.appendChild(wrap);
     }

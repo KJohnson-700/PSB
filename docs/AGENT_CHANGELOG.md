@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-19 — Dashboard bt-shell panels + DOGE hourly slug + macro/exit HUD handoff
+
+**[`src/dashboard/index.html`](src/dashboard/index.html):** Added shared `.bt-shell` chrome for Operations Pipeline, Backtest Controls, Test Results, and Scan Diagnostics; toned Macro Alignment section to match; improved BTC chart trade bubbles (`_btcTradeOverlayStyle`, DOGE/BNB overlay lanes, CSS-variable dot fill/border + glow).
+
+**[`src/market/scanner.py`](src/market/scanner.py), [`tests/test_scanner_crypto_enhancements.py`](tests/test_scanner_crypto_enhancements.py):** Hourly Up/Down discovery uses live Gamma prefix `dogecoin-` (not short-window `doge-`).
+
+**[`docs/HANDOFF_2026-05-19_MACRO_ALIGN_AND_EXIT_HUD.md`](docs/HANDOFF_2026-05-19_MACRO_ALIGN_AND_EXIT_HUD.md):** Handoff for Macro Align chart + Exit Timing HUD work (design bundle, backend `/api/macro_align/series`, disputes).
+
+**Why:** Unify live/backtest panel styling with the backtest HUD; fix DOGE `1h` ghost intake; document in-flight macro/exit HUD session for the next agent.
+
 ## 2026-05-19 — DOGE/BNB oracle feeds wired; BNB shorts can clear thinner books
 
 **[`src/analysis/sol_btc_service.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/sol_btc_service.py):** Added official Chainlink `DOGE/USD` and `BNB/USD` feed mappings on Arbitrum to the shared alt-macro oracle map, plus CoinGecko fallback IDs for `DOGEUSDT` and `BNBUSDT` so non-Binance price fallback behavior stays consistent with the other alt lanes.

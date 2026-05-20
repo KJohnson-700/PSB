@@ -1093,9 +1093,18 @@ class MarketScanner:
         return slugs
 
     # Asset prefixes Polymarket lists under the hourly Up/Down product
-    # (https://polymarket.com/crypto/hourly). Note HYPE uses the short ``hype-``
-    # prefix here (not ``hyperliquid-``).
-    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = ("bitcoin", "ethereum", "solana", "xrp", "hype", "doge", "bnb")
+    # (https://polymarket.com/crypto/hourly). Prefixes are not fully consistent
+    # with the short-window slug families: HYPE uses ``hype-`` (not
+    # ``hyperliquid-``), while DOGE uses ``dogecoin-`` (not ``doge-``).
+    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = (
+        "bitcoin",
+        "ethereum",
+        "solana",
+        "xrp",
+        "hype",
+        "dogecoin",
+        "bnb",
+    )
 
     @classmethod
     def _iter_updown_1h_human_slugs(
