@@ -1259,6 +1259,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_stale_basis_relax_max_bps: 75.0   # 2026-05-19: DOGE Chainlink feed is Arbitrum-only with a slow heartbeat; accept stale prints only when exchange basis stays tight
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -1384,6 +1385,7 @@ strategies:
     use_ai: true
     use_ai_updown: true
     min_liquidity: 1000
+    min_liquidity_buy_no: 300    # 2026-05-19: keep long-side floor intact, but unblock thin-book BNB shorts that are settling correctly
     min_edge: 0.09               # Bootstrap parity with xrp_macro until BNB-specific settled data exists
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1397,6 +1399,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_stale_basis_relax_max_bps: 75.0   # 2026-05-19: BNB Chainlink feed is Arbitrum-only with a slow heartbeat; accept stale prints only when exchange basis stays tight
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5

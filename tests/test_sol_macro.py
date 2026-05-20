@@ -500,6 +500,8 @@ def test_macro_oracle_feed_map_covers_all_crypto_lanes():
     assert ORACLE_FEEDS["ETHUSDT"][0] == "polygon"
     assert ORACLE_FEEDS["XRPUSDT"][0] == "polygon"
     assert ORACLE_FEEDS["HYPEUSDT"][0] == "arbitrum"
+    assert ORACLE_FEEDS["DOGEUSDT"][0] == "arbitrum"
+    assert ORACLE_FEEDS["BNBUSDT"][0] == "arbitrum"
 
 
 def test_lag_opportunity_ages_from_persistent_service_state():

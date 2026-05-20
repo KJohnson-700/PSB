@@ -273,7 +273,6 @@ class UpdownBacktestResult:
                 oracle_history_points=self.oracle_history_points,
                 replay_assumptions=dict(self.replay_assumptions or {}),
                 skip_counts={},
-                replay_assumptions=dict(self.replay_assumptions or {}),
                 total_windows=UpdownBacktestResult._count_windows_for_range(start, end, self.window_size),
                 run_complete=self.run_complete,
                 elapsed_seconds=self.elapsed_seconds,
@@ -528,11 +527,7 @@ class UpdownBacktestEngine:
         }.get(symbol, "sol_macro")
 
     def _build_replay_assumptions(self, symbol: str, window_minutes: int) -> Dict[str, Any]:
-<<<<<<< Updated upstream
         tf_label = replay_window_tf_label(window_minutes)
-=======
-        tf_label = f"{int(window_minutes)}m"
->>>>>>> Stashed changes
         if self._fill_prices is not None:
             entry_source = "empirical_live_fill_distribution"
             entry_points = int(len(self._fill_prices))
@@ -2207,12 +2202,7 @@ class UpdownBacktestEngine:
         elif move_pct < -0.01: direction = "LEAN_DOWN"
         else:                  direction = "NONE"
 
-<<<<<<< Updated upstream
         return direction, score_m5_direction(direction, allowed_side)
-=======
-        m5_adj = score_m5_direction(direction, allowed_side)
-        return direction, m5_adj
->>>>>>> Stashed changes
 
     # ==========================================================================
     # 5m edge -- BTC and SOL paths (matches live strategies)
@@ -2326,11 +2316,7 @@ class UpdownBacktestEngine:
         window_minutes: int = 5,
         htf_bias: str = "NEUTRAL",
     ) -> Tuple[float, float, float, str]:
-<<<<<<< Updated upstream
         """BTC 5m raw quant + live-style lane calibration -> edge."""
-=======
-        """BTC 5m raw quant + live-style lane calibration → edge."""
->>>>>>> Stashed changes
         m5_dir, _ = self._calc_m5_momentum(
             df_1m if df_1m is not None else pd.DataFrame(),
             window_open,
@@ -3363,7 +3349,6 @@ class UpdownBacktestEngine:
             oracle_basis_skips=oracle_basis_skips,
             replay_assumptions=self._build_replay_assumptions(symbol, window_minutes),
             skip_counts=dict(skip_counts),
-            replay_assumptions=self._build_replay_assumptions(symbol, window_minutes),
             total_windows=total_windows,
             run_complete=windows_scanned >= total_windows,
             elapsed_seconds=round(time.monotonic() - started_at, 3),

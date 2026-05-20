@@ -43,6 +43,8 @@ CHAINLINK_ETH_USD = "0xF9680D99D6C9589e2a93a78A04A279e509205945"  # Polygon
 CHAINLINK_SOL_USD = "0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"  # Polygon
 CHAINLINK_XRP_USD = "0x785ba89291f676b5386652eB12b30cF361020694"  # Polygon
 CHAINLINK_HYPE_USD = "0xf9ce4fE2F0EcE0362cb416844AE179a49591D567"  # Arbitrum
+CHAINLINK_DOGE_USD = "0x9A7FB1b3950837a8D9b40517626E11D4127C098C"  # Arbitrum
+CHAINLINK_BNB_USD = "0x6970460aabF80C5BE983C6b74e5D06dEDCA95D4A"  # Arbitrum
 CHAINLINK_ABI = [
     {
         "inputs": [],
@@ -75,6 +77,8 @@ ORACLE_FEEDS = {
     # Pyth Hermes / other publishers are not wired in oracle_loader yet; adding them
     # would be a separate integration (history API + timestamp alignment with CL rounds).
     "HYPEUSDT": ("arbitrum", CHAINLINK_HYPE_USD),
+    "DOGEUSDT": ("arbitrum", CHAINLINK_DOGE_USD),
+    "BNBUSDT": ("arbitrum", CHAINLINK_BNB_USD),
 }
 
 
@@ -228,6 +232,8 @@ class SOLBTCService:
         "SOLUSDT": "solana",
         "XRPUSDT": "ripple",
         "HYPEUSDT": "hyperliquid",
+        "DOGEUSDT": "dogecoin",
+        "BNBUSDT": "binancecoin",
     }
 
     @staticmethod
