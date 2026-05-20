@@ -268,7 +268,7 @@
             background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));
             margin:4px 0 10px;
             padding:10px 11px;
-            box-shadow:inset 0 0 0 1px rgba(255,255,255,.02),0 0 16px rgba(0,0,0,.18);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.02),0 0 10px rgba(0,0,0,.14);
         }
         .ops-mini-head{
             font-family:'IBM Plex Mono',monospace;
@@ -379,18 +379,13 @@
             border-radius:8px;
             background:linear-gradient(155deg,rgba(255,68,102,.06) 0%,rgba(0,0,0,.58) 28%,rgba(176,96,255,.08) 62%,rgba(0,255,136,.05) 100%);
             box-shadow:
-                0 0 36px rgba(176,96,255,.14),
-                0 0 52px rgba(0,229,255,.10),
-                0 0 72px rgba(0,255,136,.07),
+                0 0 18px rgba(0,0,0,.24),
                 inset 0 0 0 1px rgba(255,255,255,.06);
         }
         .bt-shell.bt-shell-live{
             border-color:rgba(255,215,0,.22);
             box-shadow:
-                0 0 40px rgba(255,68,102,.12),
-                0 0 56px rgba(176,96,255,.16),
-                0 0 72px rgba(0,229,255,.12),
-                0 0 88px rgba(0,255,136,.10),
+                0 0 14px rgba(0,0,0,.20),
                 inset 0 0 0 1px rgba(255,255,255,.07);
         }
         .bt-shell::before{
@@ -415,12 +410,12 @@
             margin:0;
             font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.15vw,13px);font-weight:700;
             letter-spacing:.2em;text-transform:uppercase;color:var(--tm);
-            text-shadow:0 0 14px rgba(176,96,255,.25);
         }
         .bt-shell-live .bt-shell-title{
             background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
             -webkit-background-clip:text;background-clip:text;color:transparent;
-            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
+            text-shadow:none;
+            filter:none;
         }
         .bt-shell-sub{
             font-family:'IBM Plex Mono',monospace;font-size:10px;
@@ -430,12 +425,12 @@
             font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;
             letter-spacing:.16em;padding:4px 10px;border:1px solid rgba(176,96,255,.45);
             color:var(--pu);background:rgba(176,96,255,.12);border-radius:3px;
-            box-shadow:0 0 14px rgba(176,96,255,.2);text-transform:uppercase;
+            box-shadow:none;text-transform:uppercase;
             align-self:flex-start;
         }
         .bt-shell-pill.bt-shell-pill-live{
             border-color:rgba(255,215,0,.28);color:var(--ye);background:rgba(255,215,0,.08);
-            box-shadow:0 0 14px rgba(255,215,0,.12);
+            box-shadow:none;
         }
         .bt-shell-toolbar{
             display:flex;align-items:center;gap:8px;flex-wrap:wrap;
@@ -448,7 +443,7 @@
         .bt-shell .metric-box{
             background:linear-gradient(180deg,rgba(255,255,255,.042),rgba(255,255,255,.015));
             border-color:rgba(255,255,255,.08);
-            box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 0 22px rgba(0,0,0,.28),0 0 22px rgba(176,96,255,.08);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 0 14px rgba(0,0,0,.22);
         }
         .bt-shell .scrollbox{
             background:linear-gradient(180deg, rgba(255,255,255,.028), rgba(255,255,255,.012));
@@ -560,9 +555,7 @@
             border:1px solid rgba(255,215,0,.18);
             background:linear-gradient(155deg,rgba(255,68,102,.09) 0%,rgba(5,4,14,.9) 26%,rgba(176,96,255,.18) 64%,rgba(0,255,136,.06) 100%);
             box-shadow:
-                0 0 40px rgba(255,68,102,.10),
-                0 0 58px rgba(176,96,255,.16),
-                0 0 74px rgba(0,229,255,.10),
+                0 0 14px rgba(0,0,0,.18),
                 inset 0 0 0 1px rgba(255,255,255,.06);
             color:var(--text);
             overflow:hidden;
@@ -581,7 +574,7 @@
         }
         #exit-timing-hud .hud-pulse{
             width:6px;height:6px;border-radius:50%;
-            background:var(--pu);box-shadow:0 0 8px rgba(176,96,255,.95);
+            background:var(--pu);box-shadow:none;
             animation:hudPulse 2s ease-in-out infinite;
         }
         #exit-timing-hud .hud-title{
@@ -589,7 +582,7 @@
             text-transform:uppercase;letter-spacing:.18em;
             background:linear-gradient(90deg,var(--re) 0%,var(--ye) 35%,var(--pu) 58%,var(--cy) 78%,var(--gr) 100%);
             -webkit-background-clip:text;background-clip:text;color:transparent;
-            text-shadow:none;filter:drop-shadow(0 0 10px rgba(176,96,255,.35));
+            text-shadow:none;filter:none;
         }
         #exit-timing-hud .hud-window{
             margin-left:auto;
@@ -679,9 +672,7 @@
             background:linear-gradient(155deg,rgba(255,68,102,.06) 0%,rgba(0,0,0,.58) 28%,rgba(176,96,255,.08) 62%,rgba(0,255,136,.05) 100%);
             border:1px solid rgba(255,255,255,.12);
             box-shadow:
-                0 0 36px rgba(176,96,255,.14),
-                0 0 52px rgba(0,229,255,.10),
-                0 0 72px rgba(0,255,136,.07),
+                0 0 14px rgba(0,0,0,.18),
                 inset 0 0 0 1px rgba(255,255,255,.06);
             overflow:hidden;
         }
@@ -699,13 +690,13 @@
         #macro-align-section .ma-titlewrap{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
         #macro-align-section .ma-pulse{
             width:8px;height:8px;border-radius:50%;background:var(--pu);
-            box-shadow:0 0 8px rgba(176,96,255,.7), 0 0 14px rgba(176,96,255,.22);
+            box-shadow:none;
             animation:hudPulse 2s ease-in-out infinite;
         }
         #macro-align-section .ma-title{
             font-family:'IBM Plex Mono',monospace;font-size:clamp(11px,1.15vw,13px);font-weight:700;
             text-transform:uppercase;letter-spacing:.2em;margin:0;
-            color:var(--tm);text-shadow:0 0 14px rgba(176,96,255,.25);
+            color:var(--tm);text-shadow:none;
         }
         #macro-align-section .ma-sub{
             font-family:'IBM Plex Mono',monospace;font-size:10px;
@@ -905,6 +896,88 @@
         /* ── PnL colors ── */
         .pnl-pos{color:var(--gr)}
         .pnl-neg{color:var(--re)}
+
+        /* ── Command Center PnL ── */
+        .cmd-pnl-card{
+            position:relative;
+            margin-top:12px;
+            padding:11px 13px 13px;
+            border-radius:4px;
+            border:1px solid rgba(255,255,255,.10);
+            background:
+                linear-gradient(155deg,rgba(255,68,102,.04) 0%,rgba(6,7,18,.90) 28%,rgba(176,96,255,.07) 64%,rgba(0,255,136,.03) 100%);
+            box-shadow:
+                0 0 18px rgba(0,0,0,.28),
+                inset 0 0 0 1px rgba(255,255,255,.05);
+            overflow:hidden;
+        }
+        .cmd-pnl-card::before{
+            content:'';
+            position:absolute;
+            inset:0;
+            pointer-events:none;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(0,0,0,.18) 3px,transparent 4px);
+            mix-blend-mode:multiply;
+            opacity:.42;
+        }
+        .cmd-pnl-card > *{position:relative;z-index:1}
+        .cmd-pnl-head{
+            display:flex;
+            align-items:flex-end;
+            justify-content:flex-start;
+            gap:12px;
+            margin-bottom:9px;
+            padding-bottom:7px;
+            border-bottom:1px dashed rgba(176,96,255,.22);
+            flex-wrap:wrap;
+        }
+        .cmd-pnl-kicker{
+            font-family:'IBM Plex Mono',monospace;
+            font-size:9px;
+            font-weight:700;
+            letter-spacing:.18em;
+            text-transform:uppercase;
+            color:var(--td);
+        }
+        .cmd-pnl-title{
+            margin:3px 0 0;
+            font-family:'IBM Plex Mono',monospace;
+            font-size:clamp(11px,1.15vw,13px);
+            font-weight:700;
+            letter-spacing:.18em;
+            text-transform:uppercase;
+            background:linear-gradient(90deg,var(--re) 0%,var(--ye) 30%,var(--pu) 56%,var(--cy) 78%,var(--gr) 100%);
+            -webkit-background-clip:text;
+            background-clip:text;
+            color:transparent;
+        }
+        .cmd-pnl-sub{
+            font-family:'IBM Plex Mono',monospace;
+            font-size:10px;
+            color:var(--text-muted);
+            letter-spacing:.05em;
+            margin-top:4px;
+        }
+        .cmd-pnl-canvas-wrap{
+            position:relative;
+            border:1px solid rgba(255,255,255,.06);
+            border-radius:4px;
+            background:linear-gradient(180deg,rgba(2,4,16,.92),rgba(1,2,10,.98));
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.02), inset 0 8px 18px rgba(0,0,0,.22);
+            overflow:hidden;
+        }
+        .cmd-pnl-canvas-wrap::after{
+            content:'';
+            position:absolute;
+            inset:0;
+            pointer-events:none;
+            background:linear-gradient(180deg,rgba(255,255,255,.035),transparent 28%);
+            opacity:.45;
+        }
+        .cmd-pnl-canvas{
+            display:block;
+            width:100%;
+        }
 
         /* ── Live: master list under Active Positions + detail panel + metric deck ── */
         .pos-master-list-wrap{margin-bottom:10px}
@@ -1466,8 +1539,8 @@
             <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
-            <div class="hero-item" title="Live bankroll from the bot">
-                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
+            <div class="hero-item" title="Mark-to-market paper equity for the current session">
+                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Equity</div></div>
             <div class="hero-item" title="Realized PnL from closed trades this session.">
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
             <div class="hero-item" title="Open positions in the current bot session">
@@ -1478,17 +1551,28 @@
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
             <button class="abtn ag" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
-            <button class="abtn ar" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop</button>
-            <button class="abtn ab" onclick="runTests()">Run Unit Tests</button>
-            <button class="abtn ap" onclick="toggleWeather72hCap()" id="weather-cap-btn">Weather 72h Cap</button>
-            <button class="abtn ap" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
+            <button class="abtn ar" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
+            <button class="abtn ay" onclick="toggleLossKillSwitch()" id="loss-kill-switch-btn">Loss Kill Switch</button>
+            <button class="abtn ab" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
             <button class="abtn ac" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div style="font-size:0.7rem;margin-top:2px;color:var(--text-muted);display:flex;gap:12px;flex-wrap:wrap;">
-            <span id="weather-cap-state">Weather 72h cap: -</span>
+            <span id="loss-kill-switch-state">Loss kill switch: -</span>
             <span id="dead-zone-state">Dead zones: -</span>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
+        <div id="command-pnl-section" class="cmd-pnl-card" style="display:none;">
+            <div class="cmd-pnl-head">
+                <div>
+                    <div class="cmd-pnl-kicker">Paper Session Curve</div>
+                    <h3 class="cmd-pnl-title">Live P&amp;L Trace</h3>
+                    <div class="cmd-pnl-sub">Current paper session mark-to-market, sampled from the live bot feed and refreshed in-place.</div>
+                </div>
+            </div>
+            <div class="cmd-pnl-canvas-wrap">
+                <canvas id="command-pnl-chart" class="cmd-pnl-canvas" height="104" aria-label="Live paper session PnL chart"></canvas>
+            </div>
+        </div>
         <div id="trade-section" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
             <form id="trade-form">
                 <div class="form-row">
@@ -2066,6 +2150,8 @@
                 <div id="reason-eth" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
                 <div id="reason-hype" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
                 <div id="reason-xrp" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                <div id="reason-doge" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                <div id="reason-bnb" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
             </div>
         </div>
 
@@ -2081,6 +2167,8 @@
                         <option value="eth_macro">eth_macro</option>
                         <option value="hype_macro">hype_macro</option>
                         <option value="xrp_macro">xrp_macro</option>
+                        <option value="doge_macro">doge_macro</option>
+                        <option value="bnb_macro">bnb_macro</option>
                     </select>
                     <span id="trade-journey-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
                 </div>
@@ -2554,7 +2642,7 @@
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
         <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop</strong> calls <code>POST /api/live/stop</code> and opens the ORACLE <strong>shutdown</strong> splash (amber header lane, cancel-themed boot log) — the same treatment family as <strong>Start Live Test</strong>, which uses the cyan <strong>loading</strong> lane.</p>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
         <h3>Foreground terminal</h3>
         <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
         <h3>Emergency halt and resume</h3>
@@ -2584,14 +2672,14 @@ window.STRATS = {
     sol_lag: '#b14dff',
     eth_lag: '#00e5ff',
     hype_lag: '#ff6a00',
-    xrp_lag: '#ffe000',
+    xrp_lag: '#ff5a36',
     doge_lag: '#ff6ec7',
     bnb_lag: '#f3ba2f',
     weather: '#10b981',
     sol_macro: '#b14dff',
     eth_macro: '#00e5ff',
     hype_macro: '#ff6a00',
-    xrp_macro: '#ffe000',
+    xrp_macro: '#ff5a36',
     doge_macro: '#ff6ec7',
     bnb_macro: '#f3ba2f',
     consensus: '#22d3ee',
@@ -3079,6 +3167,7 @@ function switchMainView(which, opts) {
         });
         if (which === 'live') {
             fetchAll();
+            renderCommandCenterPnlChart();
         }
         if (which === 'journal' && typeof loadJournalSessionList === 'function') {
             loadJournalSessionList();
@@ -3363,6 +3452,7 @@ async function fetchAll() {
                 if (pnlSection) pnlSection.style.display = 'none';
                 const pnlCanvas = document.getElementById('pnl-chart');
                 if (pnlCanvas) { const c = pnlCanvas.getContext('2d'); c.clearRect(0, 0, pnlCanvas.width, pnlCanvas.height); }
+                clearCommandCenterPnlChart();
                 const stratCanvas = document.getElementById('strategy-pnl-chart');
                 if (stratCanvas) { const c = stratCanvas.getContext('2d'); c.clearRect(0, 0, stratCanvas.width, stratCanvas.height); }
             }
@@ -3663,7 +3753,7 @@ function applyHeroMetrics(d) {
         }
     }
     const brSub = document.getElementById('hero-bankroll-sub');
-    if (brSub) brSub.textContent = d.session_id ? ('id ' + String(d.session_id).slice(-14)) : '';
+    if (brSub) brSub.textContent = d.session_id ? ('mtm · ' + String(d.session_id).slice(-14)) : 'mtm';
 
     let sessionPnlRaw = null;
     if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
@@ -3701,6 +3791,8 @@ function applyHeroMetrics(d) {
     const dailyTrades = Number(p.daily_trades || 0);
     const tradesEl = document.getElementById('hero-trades');
     if (tradesEl) tradesEl.textContent = dailyTrades;
+
+    _sampleCommandCenterPnl(d);
 
 }
 
@@ -4358,6 +4450,21 @@ function updateStatus(d) {
     applyHeroMetrics(d);
     updateCommandCenterDigests(d);
 
+    const startBtn = document.getElementById('live-start-btn');
+    const stopBtn = document.getElementById('live-stop-btn');
+    const running = !!d?.running;
+    const halted = !!d?.kill_switch_active;
+    if (startBtn) startBtn.disabled = running;
+    if (stopBtn) {
+        stopBtn.disabled = !running && !halted;
+        stopBtn.textContent = halted ? 'Resume Trading' : 'Stop Trading';
+        stopBtn.title = halted
+            ? 'Clear the manual trading halt and allow new trades again'
+            : 'Stop placing new trades while keeping scans and dashboard metrics running';
+        stopBtn.classList.toggle('ag', halted);
+        stopBtn.classList.toggle('ar', !halted);
+    }
+
     window._dashLastStatusForDeck = Object.assign({}, window._dashLastStatusForDeck || {}, d);
     dashInitLivePositionsDeck();
     updateMetricDeck(window._dashLastStatusForDeck);
@@ -4674,29 +4781,34 @@ async function stopLiveBot() {
     const btn = document.getElementById('live-stop-btn');
     const startBtn = document.getElementById('live-start-btn');
     const status = document.getElementById('process-status');
+    const isResume = (lastStatusData && lastStatusData.kill_switch_active) || btn.textContent === 'Resume Trading';
     let showedOverlay = false;
     if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
-        DashPrivacy.show('shutdown', {
-            banner: 'ORACLE · LIVE CANCEL / STOP',
-            detail: 'POST /api/live/stop: arm the manual global stop and then tear down the dashboard-spawned bot child (SIGTERM, short wait, SIGKILL if needed). Check Exposure Manager and clear the manual stop before resuming trading.'
+        DashPrivacy.show(isResume ? 'loading' : 'shutdown', {
+            banner: isResume ? 'ORACLE · TRADING RESUME' : 'ORACLE · TRADING HALT',
+            detail: isResume
+                ? 'Clear the manual trading halt and let the running bot place new trades again. Scans and dashboard metrics stay online either way.'
+                : 'Arm the manual trading halt without killing the subprocess. Scans, open-position tracking, and Command Center metrics stay up while new entries are blocked.'
         });
         showedOverlay = true;
     }
     btn.disabled = true;
     try {
-        const r = await fetch('/api/live/stop', {method:'POST', headers: dashAuthHeaders()});
+        const endpoint = isResume ? '/api/live/resume' : '/api/live/stop';
+        const r = await fetch(endpoint, {method:'POST', headers: dashAuthHeaders()});
         const d = await r.json();
-        if (d.status === 'stopped' || d.status === 'killed') {
-            status.textContent = 'Manual stop enabled; live bot halted';
-            status.style.color = 'var(--yellow)';
-        } else if (d.status === 'manual_stop_enabled') {
-            status.textContent = 'Manual stop enabled';
+        if (isResume && d.status === 'trading_resumed') {
+            status.textContent = 'Trading resumed; scan loop kept running';
+            status.style.color = 'var(--green)';
+        } else if (!isResume && (d.status === 'manual_stop_enabled' || d.status === 'trading_halted')) {
+            status.textContent = 'Trading halted; scans and metrics still running';
             status.style.color = 'var(--yellow)';
         } else {
-            status.textContent = `Live bot ${d.status}`;
+            status.textContent = `Live control ${d.status}`;
             status.style.color = d.status === 'error' ? 'var(--red)' : 'var(--yellow)';
         }
-        startBtn.disabled = false;
+        if (typeof fetchAll === 'function') await fetchAll();
+        if (startBtn) startBtn.disabled = Boolean(lastStatusData?.running);
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
     finally {
         if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);
@@ -5067,9 +5179,9 @@ function rebuildCryptoBacktestSelect(scope) {
     const sel = document.getElementById('crypto-bt-select');
     if (!sel) return;
     const prev = sel.value;
-    const FALLBACK_CRYPTO = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+    const FALLBACK_CRYPTO = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map((strategy_key, i) => ({
         strategy_key,
-        symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+        symbol: ['BTC','SOL','ETH','HYPE','XRP','DOGE','BNB'][i],
         enabled: true,
     }));
     const sc = scope && Array.isArray(scope.crypto_strategies) ? scope.crypto_strategies : FALLBACK_CRYPTO;
@@ -5232,9 +5344,9 @@ function updateBacktest(d) {
     rebuildCryptoBacktestSelect(d.live_scope);
 
     const FALLBACK_SCOPE = {
-        crypto_strategies: ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro'].map((strategy_key, i) => ({
+        crypto_strategies: ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map((strategy_key, i) => ({
             strategy_key,
-            symbol: ['BTC','SOL','ETH','HYPE','XRP'][i],
+            symbol: ['BTC','SOL','ETH','HYPE','XRP','DOGE','BNB'][i],
             enabled: true,
         })),
         windows: [5, 15, 60],
@@ -5247,8 +5359,7 @@ function updateBacktest(d) {
     // ── Build HTML ───────────────────────────────────────────────────────────
     let html = '';
     html += `<p style="font-size:0.74rem;color:var(--text-muted);margin:0 0 12px;line-height:1.45;font-family:'IBM Plex Mono',monospace;">
-        Crypto rows = <strong>strategies.*.enabled</strong> in settings.yaml · windows = live 5m / 15m / 1h buckets.
-        Weather only if <strong>strategies.weather.enabled</strong>.</p>`;
+        Crypto rows = <strong>strategies.*.enabled</strong> in settings.yaml · windows = live 5m / 15m / 1h buckets.</p>`;
     if (latestCompleted) {
         function formatAge(ts) {
             if (!ts) return '';
@@ -6018,6 +6129,201 @@ async function loadPnLChart() {
     } catch(e) { console.error(e); }
 }
 
+window._commandCenterPnlState = window._commandCenterPnlState || {
+    sessionId: null,
+    points: [],
+    lastValue: null,
+    lastTs: 0,
+    baselineEquity: null,
+};
+
+function _commandCenterSessionPnl(d) {
+    if (!d || typeof d !== 'object') return null;
+    const s = d.session || {};
+    const p = d.portfolio || {};
+    if (s.total_pnl != null && s.total_pnl !== '' && Number.isFinite(Number(s.total_pnl))) {
+        return Number(s.total_pnl);
+    }
+    if (s.realized_pnl != null && s.realized_pnl !== '' && Number.isFinite(Number(s.realized_pnl))) {
+        return Number(s.realized_pnl);
+    }
+    if (p.daily_pnl != null && p.daily_pnl !== '' && Number.isFinite(Number(p.daily_pnl))) {
+        return Number(p.daily_pnl);
+    }
+    return null;
+}
+
+function _commandCenterEquity(d) {
+    if (!d || typeof d !== 'object') return null;
+    if (d.bankroll != null && d.bankroll !== '' && Number.isFinite(Number(d.bankroll))) {
+        return Number(d.bankroll);
+    }
+    return null;
+}
+
+function _sampleCommandCenterPnl(d) {
+    try {
+        const state = window._commandCenterPnlState;
+        const section = document.getElementById('command-pnl-section');
+        if (!state || !section) return;
+        const sessionId = String(d?.session_id || d?.session?.session_id || window._dashSessionId || '');
+        const totalPnl = _commandCenterSessionPnl(d);
+        const equity = _commandCenterEquity(d);
+        if (!sessionId || !Number.isFinite(totalPnl) || !Number.isFinite(equity)) {
+            if (!state.points.length) section.style.display = 'none';
+            return;
+        }
+        const now = Date.now();
+        if (state.sessionId !== sessionId) {
+            state.sessionId = sessionId;
+            state.points = [];
+            state.lastValue = null;
+            state.lastTs = 0;
+            state.baselineEquity = null;
+        }
+        if (state.baselineEquity === null) {
+            state.baselineEquity = equity - totalPnl;
+        }
+        if (!state.points.length) {
+            // Seed from inferred session starting bankroll/equity so the chart
+            // begins at the session base (e.g. 500) instead of at the first sampled PnL.
+            state.points.push({ t: now - 1, v: state.baselineEquity });
+        }
+        const shouldPush =
+            state.lastValue === null
+            || Math.abs(equity - state.lastValue) >= 0.005
+            || (now - state.lastTs) >= 15000;
+        if (shouldPush) {
+            state.points.push({ t: now, v: equity });
+            if (state.points.length > 240) state.points = state.points.slice(-240);
+            state.lastValue = equity;
+            state.lastTs = now;
+        }
+        renderCommandCenterPnlChart();
+    } catch (e) {
+        console.error('command center pnl sample error:', e);
+    }
+}
+
+function clearCommandCenterPnlChart() {
+    const state = window._commandCenterPnlState;
+    if (state) {
+        state.sessionId = null;
+        state.points = [];
+        state.lastValue = null;
+        state.lastTs = 0;
+        state.baselineEquity = null;
+    }
+    const section = document.getElementById('command-pnl-section');
+    const canvas = document.getElementById('command-pnl-chart');
+    if (section) section.style.display = 'none';
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+}
+
+function renderCommandCenterPnlChart() {
+    try {
+        const state = window._commandCenterPnlState;
+        const section = document.getElementById('command-pnl-section');
+        const canvas = document.getElementById('command-pnl-chart');
+        if (!state || !section || !canvas) return;
+        if (!state.points.length) {
+            clearCommandCenterPnlChart();
+            return;
+        }
+        section.style.display = 'block';
+        const values = state.points.map((p) => Number(p.v)).filter(Number.isFinite);
+        if (!values.length) {
+            clearCommandCenterPnlChart();
+            return;
+        }
+        const wrapW = canvas.offsetWidth || canvas.parentElement?.clientWidth || 0;
+        if (!wrapW) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = wrapW;
+        const h = canvas.height = 104;
+        const pad = { top: 10, right: 10, bottom: 12, left: 10 };
+        const innerW = Math.max(1, w - pad.left - pad.right);
+        const innerH = Math.max(1, h - pad.top - pad.bottom);
+        ctx.clearRect(0, 0, w, h);
+
+        const last = values[values.length - 1];
+        const baseline = Number.isFinite(state.baselineEquity) ? Number(state.baselineEquity) : values[0];
+        const deltaValues = values.map((v) => v - baseline);
+        const lastDelta = last - baseline;
+        const minSeen = Math.min(...deltaValues);
+        const maxSeen = Math.max(...deltaValues);
+        const downRoom = Math.max(Math.abs(minSeen), baseline, 25);
+        const upRoom = Math.max(Math.abs(maxSeen), Math.max(baseline * 0.35, 25));
+        const min = baseline - downRoom;
+        const max = baseline + upRoom;
+        const span = Math.max(1, max - min);
+        const signEps = 0.005;
+        const isFlat = Math.abs(lastDelta) <= signEps;
+        const isProfit = lastDelta > signEps;
+        const stroke = isProfit ? '#36d98a' : isFlat ? '#f0c040' : '#ff5f6d';
+        const glow = isProfit ? '54,217,138' : isFlat ? '240,192,64' : '255,95,109';
+        const fillTop = isProfit ? '54,217,138' : isFlat ? '240,192,64' : '255,95,109';
+
+        for (let i = 0; i < 4; i++) {
+            const y = pad.top + (innerH / 3) * i;
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+            ctx.lineWidth = 1;
+            ctx.moveTo(pad.left, y);
+            ctx.lineTo(w - pad.right, y);
+            ctx.stroke();
+        }
+
+        const zeroY = pad.top + innerH - (((baseline - min) / span) * innerH);
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255,215,0,0.28)';
+        ctx.moveTo(pad.left, zeroY);
+        ctx.lineTo(w - pad.right, zeroY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        values.forEach((val, i) => {
+            const x = pad.left + ((values.length === 1 ? 1 : i / (values.length - 1)) * innerW);
+            const y = pad.top + innerH - (((val - min) / span) * innerH);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = stroke;
+        ctx.shadowColor = `rgba(${glow},0.42)`;
+        ctx.shadowBlur = 8;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        const grad = ctx.createLinearGradient(0, pad.top, 0, h);
+        grad.addColorStop(0, `rgba(${fillTop},0.24)`);
+        grad.addColorStop(.55, `rgba(${fillTop},0.08)`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.lineTo(w - pad.right, zeroY);
+        ctx.lineTo(pad.left, zeroY);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        const lastX = pad.left + innerW;
+        const lastY = pad.top + innerH - (((last - min) / span) * innerH);
+        ctx.beginPath();
+        ctx.fillStyle = isProfit ? '#7bf0af' : isFlat ? '#f6d67a' : '#ff9aa4';
+        ctx.shadowColor = `rgba(${glow},0.75)`;
+        ctx.shadowBlur = 8;
+        ctx.arc(lastX, lastY, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    } catch (e) {
+        console.error('command center pnl render error:', e);
+    }
+}
+
 // Config panel
 async function loadConfig() {
     try {
@@ -6095,13 +6401,13 @@ async function loadConfig() {
 }
 
 function updateOperatorToggleState(d) {
-    const weatherCapEnabled = Boolean(d?.strategies?.weather?.resolution_window_enabled);
-    const weatherState = document.getElementById('weather-cap-state');
-    const weatherBtn = document.getElementById('weather-cap-btn');
-    if (weatherState) weatherState.textContent = `Weather 72h cap: ${weatherCapEnabled ? 'ON' : 'OFF'}`;
-    if (weatherBtn) weatherBtn.textContent = weatherCapEnabled ? 'Disable Weather 72h Cap' : 'Enable Weather 72h Cap';
+    const lossKillSwitchEnabled = Boolean(d?.exposure?.loss_kill_switch_enabled);
+    const killSwitchState = document.getElementById('loss-kill-switch-state');
+    const killSwitchBtn = document.getElementById('loss-kill-switch-btn');
+    if (killSwitchState) killSwitchState.textContent = `Loss kill switch: ${lossKillSwitchEnabled ? 'ON' : 'OFF'}`;
+    if (killSwitchBtn) killSwitchBtn.textContent = lossKillSwitchEnabled ? 'Disable Loss Kill Switch' : 'Enable Loss Kill Switch';
 
-    const deadZoneEnabled = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro']
+    const deadZoneEnabled = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
         .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
     const deadZoneState = document.getElementById('dead-zone-state');
     const deadZoneBtn = document.getElementById('dead-zone-btn');
@@ -6120,31 +6426,35 @@ async function postConfigPatch(updates) {
     return d;
 }
 
-async function toggleWeather72hCap() {
+async function toggleLossKillSwitch() {
+    const status = document.getElementById('process-status');
     try {
         const r = await fetch('/api/config');
         if (!r.ok) throw new Error('config load failed');
         const d = await r.json();
-        const nextEnabled = !Boolean(d?.strategies?.weather?.resolution_window_enabled);
+        const nextEnabled = !Boolean(d?.exposure?.loss_kill_switch_enabled);
         await postConfigPatch({
-            strategies: {
-                weather: {
-                    resolution_window_enabled: nextEnabled,
-                },
+            exposure: {
+                loss_kill_switch_enabled: nextEnabled,
             },
         });
         await loadConfig();
+        if (status) {
+            status.textContent = `Loss kill switch ${nextEnabled ? 'enabled' : 'disabled'}`;
+            status.style.color = nextEnabled ? 'var(--yellow)' : 'var(--green)';
+        }
     } catch (e) {
-        alert('Weather cap toggle failed: ' + e);
+        alert('Loss kill switch toggle failed: ' + e);
     }
 }
 
 async function toggleDeadZones() {
+    const status = document.getElementById('process-status');
     try {
         const r = await fetch('/api/config');
         if (!r.ok) throw new Error('config load failed');
         const d = await r.json();
-        const strategyKeys = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro'];
+        const strategyKeys = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro'];
         const nextEnabled = !strategyKeys.every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
         const updates = { strategies: {} };
         strategyKeys.forEach((key) => {
@@ -6152,6 +6462,10 @@ async function toggleDeadZones() {
         });
         await postConfigPatch(updates);
         await loadConfig();
+        if (status) {
+            status.textContent = `Dead zones ${nextEnabled ? 'enabled' : 'disabled'}`;
+            status.style.color = nextEnabled ? 'var(--yellow)' : 'var(--green)';
+        }
     } catch (e) {
         alert('Dead zone toggle failed: ' + e);
     }
@@ -6869,7 +7183,7 @@ function updateActionBreakdown(d) {
         } else if (sessionSlip && sessionSlip.action) {
             noteEl.textContent = 'Red row = slipping side for that strategy (3+ closes per side). Table below has backtest and live signal counts.';
         } else {
-            noteEl.textContent = 'Six lanes: Buy YES vs Buy NO per strategy (current session). Slip callout needs 3+ closes on both sides.';
+            noteEl.textContent = 'Seven lanes: Buy YES vs Buy NO per strategy (current session). Slip callout needs 3+ closes on both sides.';
         }
     }
 }
@@ -6940,8 +7254,10 @@ function updateReasonBuckets(d) {
     const ethEl = document.getElementById('reason-eth');
     const hypeEl = document.getElementById('reason-hype');
     const xrpEl = document.getElementById('reason-xrp');
+    const dogeEl = document.getElementById('reason-doge');
+    const bnbEl = document.getElementById('reason-bnb');
     const updEl = document.getElementById('reason-buckets-updated');
-    if (!btcEl || !solEl || !ethEl || !hypeEl || !xrpEl || !d || !d.reason_buckets) return;
+    if (!btcEl || !solEl || !ethEl || !hypeEl || !xrpEl || !dogeEl || !bnbEl || !d || !d.reason_buckets) return;
 
     const rb = d.reason_buckets;
     const fmtPairs = (obj) => Object.entries(obj || {})
@@ -6968,6 +7284,8 @@ function updateReasonBuckets(d) {
     ethEl.innerHTML = render('ETH', rb.eth_macro);
     hypeEl.innerHTML = render('HYPE', rb.hype_macro);
     xrpEl.innerHTML = render('XRP', rb.xrp_macro);
+    dogeEl.innerHTML = render('DOGE', rb.doge_macro);
+    bnbEl.innerHTML = render('BNB', rb.bnb_macro);
     if (updEl) {
         const ts = d.updated_at ? String(d.updated_at).replace('T', ' ').slice(0, 19) + ' UTC' : new Date().toLocaleTimeString();
         updEl.textContent = 'updated ' + ts;
@@ -7724,6 +8042,7 @@ function _scheduleCanvasChartRedraw() {
     if (_canvasChartsResizeRaf !== null) return;
     _canvasChartsResizeRaf = requestAnimationFrame(() => {
         _canvasChartsResizeRaf = null;
+        renderCommandCenterPnlChart();
         loadPnLChart();
         loadAllocationChart();
         loadStrategyPnLChart();
@@ -7764,6 +8083,8 @@ if (_currentMainView() === 'journal') {
     loadAISummary();
     loadJournalSessionList();
     loadSessionHistory();
+} else if (_currentMainView() === 'live') {
+    renderCommandCenterPnlChart();
 } else if (_currentMainView() === 'performance') {
     loadAllocationChart();
     loadStrategyPnLChart();
@@ -7814,7 +8135,9 @@ window.addEventListener('beforeunload', () => {
 _registerInterval(fetchAll, 14000);
 _registerInterval(() => {
     const view = _currentMainView();
-    if (view === 'journal') {
+    if (view === 'live') {
+        renderCommandCenterPnlChart();
+    } else if (view === 'journal') {
         loadPnLChart();
         loadAISummary();
         loadSessionHistory();
@@ -7947,6 +8270,8 @@ async function loadSessionHistory() {
             <th style="color:var(--text-muted);">ETH</th>
             <th style="color:var(--text-muted);">HYPE</th>
             <th style="color:var(--text-muted);">XRP</th>
+            <th style="color:var(--text-muted);">DOGE</th>
+            <th style="color:var(--text-muted);">BNB</th>
             <th style="color:var(--text-muted);">Open</th>
         </tr></thead><tbody>`;
 
@@ -7971,6 +8296,8 @@ async function loadSessionHistory() {
             const ethPnl = ss.eth_macro?.pnl ?? null;
             const hypePnl = ss.hype_macro?.pnl ?? null;
             const xrpPnl = ss.xrp_macro?.pnl ?? null;
+            const dogePnl = ss.doge_macro?.pnl ?? null;
+            const bnbPnl = ss.bnb_macro?.pnl ?? null;
             const fmtStrat = (v) => v !== null ? `<span style="color:${v>0?'var(--green)':v<0?'var(--red)':'var(--text-muted)'};">${v>0?'+':''}$${v.toFixed(2)}</span>` : '<span style="color:var(--text-muted);">—</span>';
 
             html += `<tr style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.05);"
@@ -7989,6 +8316,8 @@ async function loadSessionHistory() {
                 <td>${fmtStrat(ethPnl)}</td>
                 <td>${fmtStrat(hypePnl)}</td>
                 <td>${fmtStrat(xrpPnl)}</td>
+                <td>${fmtStrat(dogePnl)}</td>
+                <td>${fmtStrat(bnbPnl)}</td>
                 <td style="color:var(--text-muted);">${open}</td>
             </tr>`;
         });
@@ -8036,7 +8365,7 @@ const _HUD_STRATS = [
     { key: 'sol_macro',  label: 'SOL',  c: '#a855f7' },
     { key: 'eth_macro',  label: 'ETH',  c: '#fb923c' },
     { key: 'hype_macro', label: 'HYPE', c: '#a78bfa' },
-    { key: 'xrp_macro',  label: 'XRP',  c: '#38bdf8' },
+    { key: 'xrp_macro',  label: 'XRP',  c: '#ff5a36' },
     { key: 'doge_macro', label: 'DOGE', c: '#ff6ec7' },
     { key: 'bnb_macro',  label: 'BNB',  c: '#f3ba2f' },
 ];
@@ -8696,8 +9025,8 @@ function _shadeStratHex(hex, t) {
 }
 
 function _btcTradeOverlayStyle(color, isWin) {
-    const fill = _shadeStratHex(color, isWin ? -0.08 : -0.18);
-    const border = _shadeStratHex(color, isWin ? -0.24 : -0.34);
+    const fill = _shadeStratHex(color, isWin ? -0.24 : -0.32);
+    const border = _shadeStratHex(color, isWin ? -0.38 : -0.46);
     return {
         fill,
         border,
@@ -8784,7 +9113,6 @@ function _drawBTCTradeOverlay() {
         dot.className = 'bbl-dot' + (isWin ? '' : ' bbl-dot--loss');
         dot.style.setProperty('--bbl-fill', markerStyle.fill);
         dot.style.setProperty('--bbl-border', markerStyle.border);
-        dot.style.boxShadow = '0 0 10px ' + color + ', 0 0 20px ' + color;
         wrap.appendChild(dot);
         frag.appendChild(wrap);
     }

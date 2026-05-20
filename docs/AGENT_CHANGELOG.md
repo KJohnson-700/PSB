@@ -8,6 +8,42 @@
 
 ---
 
+## 2026-05-19 — Command Center live equity chart + trading-halt controls cleanup
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** Added a dedicated Command Center live equity/PnL chart above Active Positions, then iterated its renderer to use live status data, session-baseline seeding, sign-based green/yellow/red coloring, and an anchored zero/baseline treatment that still shows drawdown from the starting bankroll after mid-session refreshes. Simplified the card to graph-only, reduced idle glow to match the backtest HUD family, and flattened the remaining live-tab glow on Operations Pipeline, Exit Timing HUD, and Macro Alignment.
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py):** Changed live Command Center status payloads to expose mark-to-market equity for the hero bankroll/equity field instead of cash-only bankroll, so the hero number stays consistent with session total PnL and the new live equity chart.
+
+**Live control semantics:** Reworked dashboard stop behavior so `Stop Trading` arms the manual `data/KILL_SWITCH` halt without killing the running bot subprocess, and added `POST /api/live/resume` so the same button can flip to `Resume Trading`. The dashboard loss-kill-switch and dead-zone buttons remain wired to config toggles rather than overlapping with the manual stop.
+
+**Why:** The Command Center previously had no live curve, and initial attempts mixed past-session journal chart behavior with current-session telemetry, then compared cash bankroll against mark-to-market PnL, which made the live numbers look internally inconsistent. The follow-up pass made the live tab read from one coherent MTM source and aligned the visual treatment with the calmer backtest status example card.
+
+## 2026-05-19 — Dashboard live controls + DOGE/BNB scope hardening
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** Replaced the stale live-tab `Weather 72h Cap` control/state with the actual `exposure.loss_kill_switch_enabled` control/state beside `Dead Zones`, extended dead-zone toggles to `doge_macro` and `bnb_macro`, expanded the fallback Performance scope to include DOGE/BNB, and standardized XRP’s live palette from yellow to `#38bdf8` so it no longer collides visually with BNB gold.
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py):** Added `doge_macro` and `bnb_macro` to the authoritative backtest/live-scope config list and to config-patch validation, then bumped `dashboard_ui_rev` so stale browser bundles do not keep resurrecting the older dashboard state.
+
+**Why:** The dashboard had drifted into a mixed state where newer DOGE/BNB UI paths existed, but core config/live-scope plumbing still assumed the older asset set and the command-center strip still rendered a legacy weather cap control. This patch makes the backend the source of truth for the seven-asset dashboard and removes one of the recurring stale-UI indicators from the live tab.
+
+## 2026-05-19 — XRP fresh oracle-basis relax aligned with SOL
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Added `xrp_macro.oracle_basis_relax_max_bps: 12.0` so fresh XRP Chainlink-vs-spot basis overshoots can pass when they are only slightly above the `10.0` bps hard cap, matching the existing SOL behavior.
+
+**Why:** In active paper session `test_20260519_201151`, XRP was scanning but not firing because the journal was dominated by `oracle_basis_block` rows with fresh basis values clustered just above the configured cap. SOL already had a small fresh-basis relax path; XRP did not, so this patch closes that config drift without broadening stale-oracle tolerance.
+
+## 2026-05-19 — Flat-BTC gate narrowed to neutral-alt fallback for shared alt lanes
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):** Added a shared `flat_btc_only_blocks_when_alt_neutral` path so `flat_btc_no_lag` only hard-blocks when the alt lacks a usable native `1h` bias. When enabled, any directional alt `1h` trend bypasses the flat-BTC hard skip instead of requiring exact action alignment.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Enabled the broader neutral-only BTC gate behavior for `sol_macro`, `hype_macro`, `xrp_macro`, `doge_macro`, and `bnb_macro`. Left `eth_macro.flat_btc_only_blocks_when_alt_neutral: false` with an explicit watch note because ETH is currently trading and was not approved for behavior change in this pass.
+
+**[`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py):** Added focused coverage for the new shared bypass helper in both the new neutral-only mode and the legacy alignment-only mode.
+
+**Why:** The repo had already moved non-BTC lanes to alt-first direction selection, but several shared-lane configs still let flat BTC behave like a hard admission blocker. This change keeps BTC as secondary context for DOGE/BNB/XRP and the other shared alt lanes while preserving ETH’s stricter behavior pending separate review.
+
+---
+
 ## 2026-05-19 — Dashboard bt-shell panels + DOGE hourly slug + macro/exit HUD handoff
 
 **[`src/dashboard/index.html`](src/dashboard/index.html):** Added shared `.bt-shell` chrome for Operations Pipeline, Backtest Controls, Test Results, and Scan Diagnostics; toned Macro Alignment section to match; improved BTC chart trade bubbles (`_btcTradeOverlayStyle`, DOGE/BNB overlay lanes, CSS-variable dot fill/border + glow).

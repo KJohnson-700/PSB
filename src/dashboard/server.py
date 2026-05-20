@@ -764,7 +764,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-19-btc-chart-bubbles-dom",
+        "dashboard_ui_rev": "2026-05-19-dashboard-live-controls-doge-bnb-scope",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1243,8 +1243,14 @@ async def sse_stream(request: Request):
                 bankroll_payload: Dict[str, Any] = {"bankroll": None, "source": "unavailable"}
                 bankroll_snap = None
                 if bot and hasattr(bot, "bankroll"):
-                    bankroll_snap = round(float(bot.bankroll), 2)
-                    bankroll_payload = {"bankroll": bankroll_snap, "source": "bot"}
+                    realized_pnl = float(js.get("realized_pnl", 0) or 0)
+                    total_pnl = float(js.get("total_pnl", 0) or 0)
+                    unrealized_pnl = total_pnl - realized_pnl
+                    bankroll_snap = round(float(bot.bankroll) + unrealized_pnl, 2)
+                    bankroll_payload = {
+                        "bankroll": bankroll_snap,
+                        "source": "bot_mark_to_market",
+                    }
                 elif not bot:
                     j_disk = _get_journal()
                     session_dir_disk = (
@@ -1280,7 +1286,7 @@ async def sse_stream(request: Request):
                     "session_open": session_open,
                     "bankroll": bankroll_snap,
                     "bankroll_source": (
-                        "bot"
+                        "bot_mark_to_market"
                         if bot and hasattr(bot, "bankroll")
                         else bankroll_payload.get("source", "unavailable")
                     ),
@@ -1556,9 +1562,17 @@ async def get_status():
             can_trade = False
             can_trade_reason = "Manual global stop active (data/KILL_SWITCH)"
 
-        bankroll = getattr(bot, "bankroll", 0.0)
+        try:
+            _js = bot.journal.get_summary()
+        except Exception:
+            _js = {}
+        bankroll_cash = getattr(bot, "bankroll", 0.0)
+        realized_pnl = float(_js.get("realized_pnl", 0) or 0)
+        total_pnl = float(_js.get("total_pnl", 0) or 0)
+        unrealized_pnl = total_pnl - realized_pnl
+        bankroll = round(float(bankroll_cash) + unrealized_pnl, 2)
         portfolio = (
-            bot.risk_manager.get_portfolio_summary(bankroll) if bankroll else None
+            bot.risk_manager.get_portfolio_summary(bankroll_cash) if bankroll_cash else None
         )
 
         def serialize_position(p):
@@ -1602,10 +1616,6 @@ async def get_status():
         ]
         _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
         try:
-            _js = bot.journal.get_summary()
-        except Exception:
-            _js = {}
-        try:
             from src.ops_pulse import build_ops_snapshot
 
             _ops = build_ops_snapshot(bot, "status")
@@ -1623,7 +1633,7 @@ async def get_status():
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
             "bankroll": bankroll,
-            "bankroll_source": "bot",
+            "bankroll_source": "bot_mark_to_market",
             "bankroll_warning": None,
             "portfolio": portfolio,
             "positions": positions,
@@ -1847,6 +1857,8 @@ def _live_backtest_scope_from_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         ("eth_macro", "ETH"),
         ("hype_macro", "HYPE"),
         ("xrp_macro", "XRP"),
+        ("doge_macro", "DOGE"),
+        ("bnb_macro", "BNB"),
     ):
         block = strat.get(key) or {}
         crypto_strategies.append(
@@ -2148,32 +2160,43 @@ async def start_live_bot(request: Request):
 
 @app.post("/api/live/stop")
 async def stop_live_bot(request: Request):
-    """Arm the manual global stop and stop the live bot subprocess if running."""
-    global _bot_process
+    """Arm the manual global stop without tearing down the bot subprocess."""
     _check_auth(request)
 
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_file.parent.mkdir(parents=True, exist_ok=True)
     kill_switch_file.touch()
+    running = _bot_process is not None and _bot_process.poll() is None
+    if running:
+        logger.info("Manual global stop enabled; subprocess kept alive for scans/metrics")
+        return {
+            "status": "trading_halted",
+            "kill_switch_active": True,
+            "subprocess_running": True,
+        }
+    logger.info("Manual global stop enabled (no live subprocess was running)")
+    return {
+        "status": "manual_stop_enabled",
+        "kill_switch_active": True,
+        "subprocess_running": False,
+    }
 
-    if _bot_process is None:
-        logger.info("Manual global stop enabled (no live subprocess was running)")
-        return {"status": "manual_stop_enabled", "kill_switch_active": True}
 
-    try:
-        _bot_process.terminate()
-        _bot_process.wait(timeout=10)
-        logger.info("Live bot stopped and manual global stop enabled")
-        _bot_process = None
-        return {"status": "stopped", "kill_switch_active": True}
-    except subprocess.TimeoutExpired:
-        _bot_process.kill()
-        _bot_process = None
-        logger.warning("Live bot killed after timeout; manual global stop remains enabled")
-        return {"status": "killed", "kill_switch_active": True}
-    except Exception as e:
-        logger.error("Failed to stop live bot cleanly after enabling manual global stop: %s", e)
-        return {"status": "error", "message": str(e), "kill_switch_active": True}
+@app.post("/api/live/resume")
+async def resume_live_bot(request: Request):
+    """Clear the manual global stop so a running bot can trade again."""
+    _check_auth(request)
+
+    kill_switch_file = DATA_ROOT / "KILL_SWITCH"
+    if kill_switch_file.exists():
+        kill_switch_file.unlink()
+        logger.info("Manual global stop cleared from dashboard")
+    running = _bot_process is not None and _bot_process.poll() is None
+    return {
+        "status": "trading_resumed",
+        "kill_switch_active": False,
+        "subprocess_running": running,
+    }
 
 
 # ─── BACKTEST MANAGEMENT ──────────────────────────────────────────────
@@ -4478,7 +4501,7 @@ _MACRO_ALIGN_ASSETS = [
     {"key": "sol_macro",  "symbol": "SOLUSDT",  "label": "SOL",  "color": "#a855f7", "source": "binance"},
     {"key": "eth_macro",  "symbol": "ETHUSDT",  "label": "ETH",  "color": "#fb923c", "source": "binance"},
     {"key": "hype_macro", "symbol": "HYPEUSDT", "label": "HYPE", "color": "#a78bfa", "source": "hyperliquid"},
-    {"key": "xrp_macro",  "symbol": "XRPUSDT",  "label": "XRP",  "color": "#38bdf8", "source": "binance"},
+    {"key": "xrp_macro",  "symbol": "XRPUSDT",  "label": "XRP",  "color": "#ff5a36", "source": "binance"},
     {"key": "doge_macro", "symbol": "DOGEUSDT", "label": "DOGE", "color": "#ff6ec7", "source": "binance"},
     {"key": "bnb_macro",  "symbol": "BNBUSDT",  "label": "BNB",  "color": "#f3ba2f", "source": "binance"},
 ]
@@ -4855,6 +4878,8 @@ class ConfigUpdates(BaseModel):
                 "eth_macro",
                 "hype_macro",
                 "xrp_macro",
+                "doge_macro",
+                "bnb_macro",
                 "weather",
             }
             _validate_section_keys(self.strategies, "strategies", allowed_strategies)
