@@ -109,7 +109,7 @@ def test_exposure_tile_labels_consecutive_losses_explicitly():
     assert "live streak" in html
 
 
-def test_btc_chart_uses_glow_overlay_for_trade_markers():
+def test_btc_chart_uses_css_variable_overlay_for_trade_markers():
     html = INDEX.read_text(encoding="utf-8")
     assert 'id="btc-trade-overlay"' in html
     assert "#btc-trade-overlay{position:absolute;inset:0;" in html
@@ -117,7 +117,10 @@ def test_btc_chart_uses_glow_overlay_for_trade_markers():
     assert "function stratChipHex(stratKey)" in html
     assert "function stratChipHexForJournal(strategy)" in html
     assert "stratChipHexForJournal(point.strategy)" in html
-    assert "dot.style.boxShadow = '0 0 10px ' + color + ', 0 0 20px ' + color" in html
+    assert "dot.style.setProperty('--bbl-fill', markerStyle.fill);" in html
+    assert "dot.style.setProperty('--bbl-border', markerStyle.border);" in html
+    assert "ring.className = 'bbl-ring';" in html
+    assert "tip.className = 'bbl-tip';" in html
     assert "function _drawBTCTradeOverlay()" in html
     assert "_btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => { _queueBTCTradeOverlayDraw(); });" in html
     assert "_setBTCTradeOverlayData(overlayPoints, _candles || []);" in html
@@ -209,11 +212,30 @@ def test_ai_summary_text_extractor_hides_thinking_blocks():
 
 def test_dashboard_contains_operator_toggle_buttons():
     html = INDEX.read_text(encoding="utf-8")
-    assert "toggleWeather72hCap()" in html
+    assert "toggleLossKillSwitch()" in html
     assert "toggleDeadZones()" in html
-    assert "resolution_window_enabled" in html
-    assert "Weather 72h cap:" in html
-    assert "Dead zones:" in html
+    assert "loss_kill_switch_enabled" in html
+    assert "LOSS KILL ON" in html or "LOSS KILL OFF" in html
+    assert "DEAD ZONES ON" in html or "DEAD ZONES OFF" in html
+
+
+def test_action_breakdown_backend_includes_doge_and_bnb():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    assert '"doge_macro"' in server
+    assert '"bnb_macro"' in server
+    assert "_ACTION_BREAKDOWN_STRATEGIES = _DASHBOARD_STRATEGY_NAMES" in server
+    assert "_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES + (\"weather\",)" in server
+
+
+def test_reason_buckets_backend_includes_doge_and_bnb():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    start = server.find("async def get_strategy_reason_buckets(")
+    assert start != -1, "reason buckets handler missing"
+    end = server.find("# 1) Recent ENTRY reasons from journal", start)
+    assert end != -1, "reason buckets payload seed missing"
+    block = server[start:end]
+    assert "strategy: _empty_reason_bucket() for strategy in _DASHBOARD_STRATEGY_NAMES" in block
+    assert "_empty_reason_bucket()" in server
 
 
 def test_dashboard_crypto_backtest_select_includes_all_bundle():
@@ -297,6 +319,15 @@ def test_live_backtest_scope_includes_1h_not_30m():
     scope = _live_backtest_scope_from_config({"strategies": {"bitcoin": {"enabled": True}}})
     assert scope["windows"] == [5, 15, 60]
     assert scope["backtest_windows"] == [5, 15, 60]
+    assert [row["strategy_key"] for row in scope["crypto_strategies"]] == [
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
+    ]
     assert 30 not in scope["windows"]
 
 

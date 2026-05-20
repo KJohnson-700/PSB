@@ -572,6 +572,7 @@ ACTIVE_STRATEGY_NAMES = (
     "doge_macro",
     "bnb_macro",
 )
+_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES + ("weather",)
 CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP", "DOGE", "BNB"}
 CRYPTO_BACKTEST_WINDOWS = (5, 15, 60)
 
@@ -764,7 +765,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-19-dashboard-live-controls-doge-bnb-scope",
+        "dashboard_ui_rev": "2026-05-20-dashboard-action-breakdown-doge-bnb",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -3271,14 +3272,25 @@ def _compute_action_slipping(
     }
 
 
-_ACTION_BREAKDOWN_STRATEGIES = (
-    "bitcoin",
-    "sol_macro",
-    "eth_macro",
-    "hype_macro",
-    "xrp_macro",
-    "weather",
-)
+_ACTION_BREAKDOWN_STRATEGIES = _DASHBOARD_STRATEGY_NAMES
+
+
+def _empty_reason_bucket() -> Dict[str, Any]:
+    return {
+        "entries": 0,
+        "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
+        "path": {
+            "updown_15m": 0,
+            "updown_5m": 0,
+            "updown_1h": 0,
+            "updown_30m": 0,
+            "threshold": 0,
+            "other": 0,
+        },
+        "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
+        "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
+        "blockers": {},
+    }
 
 
 def _empty_action_breakdown_payload(session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -3576,54 +3588,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
     watchlist_limit = max(40, min(watchlist_limit, 300))
 
     out: Dict[str, Dict[str, Any]] = {
-        "bitcoin": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
-        "sol_macro": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
-        "eth_macro": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
-        "hype_macro": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
-        "xrp_macro": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
-        "weather": {
-            "entries": 0,
-            "actions": {"BUY_YES": 0, "BUY_NO": 0, "SELL_YES": 0},
-            "path": {"updown_15m": 0, "updown_5m": 0, "updown_1h": 0, "updown_30m": 0, "threshold": 0, "other": 0},
-            "bias": {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "other": 0},
-            "exposure": {"full": 0, "moderate": 0, "minimal": 0, "paused": 0, "other": 0},
-            "blockers": {},
-        },
+        strategy: _empty_reason_bucket() for strategy in _DASHBOARD_STRATEGY_NAMES
     }
 
     # 1) Recent ENTRY reasons from journal

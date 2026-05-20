@@ -290,9 +290,39 @@
         .agh{background:rgba(255,255,255,.04)!important;border-color:rgba(255,255,255,.1)!important;color:var(--tm)!important}
 
         /* ── Controls row ── */
-        .status-bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+        .status-bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;max-width:100%}
+        #status-badges{justify-content:flex-end}
         .controls{display:flex;gap:8px 10px;margin:9px 0;flex-wrap:wrap;align-items:center}
         #command-center-controls .btn-sm{padding:6px 11px;font-size:11px}
+        #command-center-controls{animation:cfChase 4.8s linear infinite 1s}
+        #command-center-controls .abtn.cmd-sync-shine{
+            position:relative;
+            overflow:hidden;
+            isolation:isolate;
+        }
+        #command-center-controls .abtn.cmd-sync-shine::after{
+            content:'';
+            position:absolute; inset:-1px;
+            border-radius:inherit;
+            padding:1px;
+            pointer-events:none;
+            background:conic-gradient(
+                from calc(var(--shine-pos) * 1turn),
+                transparent 0deg 280deg,
+                color-mix(in srgb, currentColor 60%, transparent) 320deg,
+                currentColor 348deg,
+                #fff 358deg,
+                currentColor 360deg
+            );
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+                    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+                    mask-composite: exclude;
+            opacity:var(--shine-on);
+            filter:drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
+            transition:opacity .15s ease;
+        }
+        #command-center-controls .abtn.cmd-sync-shine:disabled::after{opacity:0}
         .ops-mini{
             border:1px solid rgba(255,255,255,.08);
             border-radius:6px;
@@ -757,6 +787,7 @@
             display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;
         }
         #macro-align-section .ma-chip{
+            position:relative;
             font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;
             letter-spacing:.08em;text-transform:uppercase;
             display:inline-flex;align-items:center;gap:6px;
@@ -764,10 +795,82 @@
             background:rgba(255,255,255,.02);cursor:pointer;user-select:none;
             transition:opacity .15s ease, filter .15s ease, transform .12s ease;
         }
+        #macro-align-section .cf.drop{animation:cfEntry .7s cubic-bezier(.22,.95,.36,1) both}
+        #macro-align-section .cf.drop:nth-child(1){animation-delay:.00s}
+        #macro-align-section .cf.drop:nth-child(2){animation-delay:.10s}
+        #macro-align-section .cf.drop:nth-child(3){animation-delay:.20s}
+        #macro-align-section .cf.drop:nth-child(4){animation-delay:.30s}
+        #macro-align-section .cf.drop:nth-child(5){animation-delay:.40s}
+        #macro-align-section .cf.drop:nth-child(6){animation-delay:.50s}
+        #macro-align-section .cf.drop:nth-child(7){animation-delay:.60s}
+        @keyframes cfEntry{0%{transform:translateY(-26px);opacity:0;filter:blur(2px)}55%{transform:translateY(3px);opacity:1;filter:blur(0)}80%{transform:translateY(-1px)}100%{transform:translateY(0);opacity:1}}
         #macro-align-section .ma-chip:hover{filter:brightness(1.25)}
         #macro-align-section .ma-chip:active{transform:scale(.96)}
         #macro-align-section .ma-chip[data-on="0"]{opacity:.32;filter:saturate(.4)}
         #macro-align-section .ma-chip[data-unavail="1"]{opacity:.28;cursor:not-allowed}
+
+        /* ── Border-shine: one shared clock on the chart header drives every chip's
+           ::after via inherited @property vars, so all chips sweep in unison.
+           A chip with the `on` class shows the shine; toggling it off hides it. ── */
+        @property --shine-pos { syntax: '<number>'; initial-value: 0; inherits: true; }
+        @property --shine-on  { syntax: '<number>'; initial-value: 0; inherits: true; }
+        #macro-align-section .chart-hdr{animation:cfChase 4.8s linear infinite 1s}
+        #macro-align-section .cf.drop::after{
+            content:'';
+            position:absolute; inset:-1px;
+            border-radius:inherit;
+            padding:1px;
+            pointer-events:none;
+            background: conic-gradient(
+                from calc(var(--shine-pos) * 1turn),
+                transparent 0deg 280deg,
+                color-mix(in srgb, currentColor 60%, transparent) 320deg,
+                currentColor 348deg,
+                #fff 358deg,
+                currentColor 360deg
+            );
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+                    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+                    mask-composite: exclude;
+            opacity: var(--shine-on);
+            filter: drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
+            transition: opacity .15s ease;
+        }
+        #macro-align-section .cf.drop:not(.on)::after{opacity:0}
+        @keyframes cfChase{
+            0%   { --shine-pos: 0;   --shine-on: 0 }
+            2%   { --shine-pos: 0;   --shine-on: 1 }
+            16%  { --shine-pos: 1;   --shine-on: 1 }
+            19%  { --shine-pos: 1;   --shine-on: 0 }
+            100% { --shine-pos: 1;   --shine-on: 0 }
+        }
+        /* Fallback for browsers without @property */
+        @supports not (background: conic-gradient(from calc(var(--x,0) * 1turn), red, blue)) {
+            #macro-align-section .chart-hdr{animation:none}
+            #macro-align-section .cf.drop::after{
+                background: linear-gradient(90deg, transparent 0%, transparent 60%, currentColor 82%, #fff 90%, currentColor 95%, transparent 100%);
+                background-size: 220% 100%;
+                background-position: -120% 0;
+                animation: cfChaseFallback 4.8s linear infinite 1s;
+            }
+            #macro-align-section .cf.drop:not(.on)::after{animation:none;opacity:0}
+            @keyframes cfChaseFallback{
+                0%   { background-position:-120% 0; opacity:0 }
+                3%   { opacity:1 }
+                16%  { background-position: 120% 0; opacity:1 }
+                19%  { opacity:0 }
+                100% { background-position: 120% 0; opacity:0 }
+            }
+            #command-center-controls{animation:none}
+            #command-center-controls .abtn.cmd-sync-shine::after{
+                background:linear-gradient(90deg, transparent 0%, transparent 60%, currentColor 82%, #fff 90%, currentColor 95%, transparent 100%);
+                background-size:220% 100%;
+                background-position:-120% 0;
+                animation:cfChaseFallback 4.8s linear infinite 1s;
+            }
+            #command-center-controls .abtn.cmd-sync-shine:disabled::after{animation:none;opacity:0}
+        }
         #macro-align-section .ma-chip .ma-chip-dash{
             display:inline-block;width:10px;height:2px;background:currentColor;
             box-shadow:0 0 4px currentColor;border-radius:1px;
@@ -1014,6 +1117,16 @@
 
         /* ── Live: master list under Active Positions + detail panel + metric deck ── */
         .pos-master-list-wrap{margin-bottom:10px}
+        .active-positions-title{
+            font-size:1rem;
+            line-height:1.2;
+            letter-spacing:.04em;
+            text-transform:uppercase;
+        }
+        .active-positions-title #positions-count{
+            font-size:0.65rem!important;
+            vertical-align:middle;
+        }
         .pos-master{border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.28);min-height:72px;max-height:min(28vh,280px);overflow:auto;min-width:0}
         .pos-master-row{display:flex;align-items:center;gap:8px;padding:10px 11px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.06);transition:background .15s,border-color .18s;min-width:0}
         .pos-master-row:last-child{border-bottom:none}
@@ -1210,7 +1323,7 @@
         html.dashboard-fullscreen h3{font-size:30px}
         /* Shrink Live P&L Trace + Active Positions headers in custom fullscreen — they were oversized vs. the rest of the card */
         html.dashboard-fullscreen .cmd-pnl-title,
-        html.dashboard-fullscreen h3.active-positions-title{font-size:18px;letter-spacing:.08em}
+        html.dashboard-fullscreen h3.active-positions-title{font-size:16px;line-height:1.15;letter-spacing:.06em}
         html.dashboard-fullscreen h3.active-positions-title #positions-count{font-size:0.65rem}
         html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:none;white-space:normal;line-height:1.45}
         html.dashboard-fullscreen .signal-row{font-size:13px}
@@ -1259,6 +1372,15 @@
         #live-start-btn:not(:disabled){
             background:rgba(0,255,136,.28)!important;
             color:#c8ffde!important;
+        }
+        #live-start-btn:disabled{
+            opacity:1!important;
+            background:rgba(0,255,136,.18)!important;
+            border-color:rgba(0,255,136,.45)!important;
+            color:rgba(200,255,222,.72)!important;
+            box-shadow:none!important;
+            filter:none!important;
+            cursor:not-allowed;
         }
 
         /* Kill switch radial vignette */
@@ -1378,27 +1500,64 @@
         #view-commands .cmd-note{font-size:11px;color:var(--td);line-height:1.6;margin:4px 0 8px}
         #view-commands .cmd-ref-lead{font-size:clamp(1.05rem,1.5vw,1.38rem);line-height:1.25;letter-spacing:.06em;margin:0 0 10px}
 
-        /* Color-coded strategy filter chips above BTC chart (replaces plain checkboxes) */
-        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s;user-select:none;line-height:1.2;position:relative;animation:stratCfChase 4.1s ease-in-out infinite}
+        /* Color-coded strategy filter chips above BTC chart (shared border shine, BTC-only scope) */
+        @property --btc-shine-pos { syntax: '<number>'; initial-value: 0; inherits: true; }
+        @property --btc-shine-on  { syntax: '<number>'; initial-value: 0; inherits: true; }
+        #btc-chart-section .btc-chip-hdr{animation:btcCfChase 4.8s linear infinite 1s}
+        .strat-cf{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.05em;padding:3px 9px;border-radius:3px;border:1px solid;background:transparent;cursor:pointer;transition:opacity .12s,filter .12s;user-select:none;line-height:1.2;position:relative}
         .strat-cf:hover{filter:brightness(1.25)}
         .strat-cf:active{filter:brightness(.85)}
-        .strat-cf.off{opacity:.35;filter:grayscale(.4);animation:none}
-        #btc-toggle-btc-trades {animation-delay:.18s}
-        #btc-toggle-sol-trades {animation-delay:.74s}
-        #btc-toggle-eth-trades {animation-delay:1.30s}
-        #btc-toggle-xrp-trades {animation-delay:1.86s}
-        #btc-toggle-hype-trades{animation-delay:2.42s}
-        #btc-toggle-doge-trades{animation-delay:2.98s}
-        #btc-toggle-bnb-trades {animation-delay:3.54s}
-        @keyframes stratCfChase{
-            0%   {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
-            3%   {transform:scale(1.10);box-shadow:0 0 14px currentColor,0 0 28px currentColor; text-shadow:0 0 9px currentColor}
-            8%   {transform:scale(1.05);box-shadow:0 0 10px currentColor,0 0 18px currentColor; text-shadow:0 0 6px currentColor}
-            12%  {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
-            100% {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
+        .strat-cf::after{
+            content:'';
+            position:absolute; inset:-1px;
+            border-radius:inherit;
+            padding:1px;
+            pointer-events:none;
+            background: conic-gradient(
+                from calc(var(--btc-shine-pos) * 1turn),
+                transparent 0deg 280deg,
+                color-mix(in srgb, currentColor 60%, transparent) 320deg,
+                currentColor 348deg,
+                #fff 358deg,
+                currentColor 360deg
+            );
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+                    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+                    mask-composite: exclude;
+            opacity: var(--btc-shine-on);
+            filter: drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
+            transition: opacity .15s ease;
+        }
+        .strat-cf.off{opacity:.35;filter:grayscale(.4)}
+        .strat-cf.off::after{opacity:0}
+        @keyframes btcCfChase{
+            0%   { --btc-shine-pos: 0;   --btc-shine-on: 0 }
+            2%   { --btc-shine-pos: 0;   --btc-shine-on: 1 }
+            16%  { --btc-shine-pos: 1;   --btc-shine-on: 1 }
+            19%  { --btc-shine-pos: 1;   --btc-shine-on: 0 }
+            100% { --btc-shine-pos: 1;   --btc-shine-on: 0 }
+        }
+        @supports not (background: conic-gradient(from calc(var(--x,0) * 1turn), red, blue)) {
+            #btc-chart-section .btc-chip-hdr{animation:none}
+            .strat-cf::after{
+                background: linear-gradient(90deg, transparent 0%, transparent 60%, currentColor 82%, #fff 90%, currentColor 95%, transparent 100%);
+                background-size: 220% 100%;
+                background-position: -120% 0;
+                animation: btcCfChaseFallback 4.8s linear infinite 1s;
+            }
+            .strat-cf.off::after{animation:none;opacity:0}
+            @keyframes btcCfChaseFallback{
+                0%   { background-position:-120% 0; opacity:0 }
+                3%   { opacity:1 }
+                16%  { background-position: 120% 0; opacity:1 }
+                19%  { opacity:0 }
+                100% { background-position: 120% 0; opacity:0 }
+            }
         }
         @media (prefers-reduced-motion:reduce){
-            .strat-cf{animation:none}
+            #btc-chart-section .btc-chip-hdr{animation:none}
+            .strat-cf::after{animation:none;opacity:0}
         }
 
         /* Tab content slide-in */
@@ -1590,8 +1749,8 @@
 
     <!-- COMMAND CENTER — top of live tab -->
     <div class="card" data-aos="fade-up" data-aos-delay="0" style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h2 style="flex:1;padding:10px 0 7px;">Command Center</h2>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+            <h2 style="flex:1 1 220px;min-width:200px;padding:10px 0 7px;">Command Center</h2>
             <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
@@ -1606,9 +1765,11 @@
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
-            <button class="abtn ag" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
-            <button class="abtn ar" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
-            <button class="abtn ac" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
+            <button class="abtn ag cmd-sync-shine" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
+            <button class="abtn ar cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
+            <button class="abtn ay cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-switch-btn">Loss Kill Switch</button>
+            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
+            <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
         <div id="command-pnl-section" class="cmd-pnl-card" style="display:none;">
@@ -1676,7 +1837,7 @@
     <div class="card" data-aos="fade-up" data-aos-delay="80" id="btc-chart-section" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <h2 style="margin-bottom:0;">BTC Live Chart</h2>
-            <div style="display:flex;gap:6px;align-items:center;">
+            <div class="btc-chip-hdr" style="display:flex;gap:6px;align-items:center;">
                 <button type="button" id="btc-toggle-btc-trades"  class="strat-cf" data-series="btcTrades"  data-strat="bitcoin"  onclick="toggleStratChip(this)">BTC</button>
                 <button type="button" id="btc-toggle-sol-trades"  class="strat-cf" data-series="solTrades"  data-strat="sol_lag"  onclick="toggleStratChip(this)">SOL</button>
                 <button type="button" id="btc-toggle-eth-trades"  class="strat-cf" data-series="ethTrades"  data-strat="eth_lag"  onclick="toggleStratChip(this)">ETH</button>
@@ -1722,7 +1883,7 @@
                 <button type="button" class="ma-tog" data-view="candles" id="macro-align-tog-candles" role="tab" aria-selected="false">Candles</button>
             </div>
         </div>
-        <div class="ma-chips" id="macro-align-chips" role="toolbar" aria-label="Asset filters"></div>
+        <div class="ma-chips chart-hdr" id="macro-align-chips" role="toolbar" aria-label="Asset filters"></div>
         <div class="ma-chartwrap" id="macro-align-chartwrap">
             <canvas id="macro-align-canvas" width="1200" height="280"></canvas>
             <div class="ma-bbl-layer" id="macro-align-bbls" aria-hidden="true"></div>
@@ -9174,12 +9335,41 @@ function _drawBTCTradeOverlay() {
         wrap.className = 'bbl';
         wrap.style.left = x + 'px';
         wrap.style.top = y + 'px';
+        const stratLabel = ({
+            bitcoin: 'BTC',
+            sol_macro: 'SOL',
+            eth_macro: 'ETH',
+            xrp_macro: 'XRP',
+            hype_macro: 'HYPE',
+            doge_macro: 'DOGE',
+            bnb_macro: 'BNB',
+        })[String(point.strategy || '').trim()] || String(point.strategy || 'TRADE').toUpperCase();
+        const pnl = Number(point.pnl || 0);
+        const pnlStr = (pnl >= 0 ? '+' : '−') + '$' + Math.abs(pnl).toFixed(2);
+        const closedTs = Number(point.closed_at || point.time || 0);
+        const closedLabel = Number.isFinite(closedTs) && closedTs > 0
+            ? new Date(closedTs * 1000).toLocaleString()
+            : 'n/a';
+        const tipLines = [
+            `${stratLabel} ${isWin ? 'WIN' : 'LOSS'}`,
+            pnlStr,
+            closedLabel,
+        ];
+        wrap.title = tipLines.join(' · ');
         const dot = document.createElement('div');
         const markerStyle = _btcTradeOverlayStyle(color, isWin);
         dot.className = 'bbl-dot' + (isWin ? '' : ' bbl-dot--loss');
         dot.style.setProperty('--bbl-fill', markerStyle.fill);
         dot.style.setProperty('--bbl-border', markerStyle.border);
+        const ring = document.createElement('div');
+        ring.className = 'bbl-ring';
+        ring.style.borderColor = markerStyle.border;
+        const tip = document.createElement('div');
+        tip.className = 'bbl-tip';
+        tip.innerHTML = tipLines.map(_htmlEscape).join('<br>');
         wrap.appendChild(dot);
+        wrap.appendChild(ring);
+        wrap.appendChild(tip);
         frag.appendChild(wrap);
     }
     layer.appendChild(frag);
@@ -9252,7 +9442,7 @@ function _maRenderChips() {
         const pctCls = pctNum != null && pctNum < 0 ? 'neg' : pctNum != null ? 'pos' : '';
         const aria = on ? 'true' : 'false';
         return `
-            <button type="button" class="ma-chip" role="switch" aria-checked="${aria}"
+            <button type="button" class="ma-chip cf drop${on ? ' on' : ''}" role="switch" aria-checked="${aria}"
                 data-strat="${k}" data-on="${on ? 1 : 0}" data-unavail="${unavail ? 1 : 0}"
                 style="color:${color};border-color:${color}66;background:${color}11"
                 title="${unavail ? a.label + ' — awaiting candle endpoint' : 'Click to toggle ' + a.label + ' on the chart'}">
