@@ -914,13 +914,7 @@ def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-_KELLY_STRATEGY_KEYS = (
-    "bitcoin",
-    "sol_macro",
-    "eth_macro",
-    "hype_macro",
-    "xrp_macro",
-)
+_KELLY_STRATEGY_KEYS = ACTIVE_STRATEGY_NAMES
 
 
 def _kelly_state_payload() -> Dict[str, Any]:

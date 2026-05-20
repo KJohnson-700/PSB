@@ -238,6 +238,13 @@ def test_reason_buckets_backend_includes_doge_and_bnb():
     assert "_empty_reason_bucket()" in server
 
 
+def test_kelly_backend_includes_doge_and_bnb():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    assert "_KELLY_STRATEGY_KEYS = ACTIVE_STRATEGY_NAMES" in server
+    assert '"doge_macro"' in server
+    assert '"bnb_macro"' in server
+
+
 def test_dashboard_crypto_backtest_select_includes_all_bundle():
     html = INDEX.read_text(encoding="utf-8")
     assert "ALL-" in html and "BTC,SOL,ETH,XRP,HYPE bundle" in html
