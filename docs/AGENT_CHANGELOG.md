@@ -8,6 +8,14 @@
 
 ---
 
+## 2026-05-20 — Dashboard HUD gradient applied to every card + Command Center PnL y-axis fix
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html) (cards):** Base `.g,.card` background swapped from flat `rgba(0,0,0,.62)` to the same 4-stop 155° diagonal gradient already used by `.bt-hud` and `.bt-shell` — pink bleed (TL) → near-black vignette stop at 28% → purple shoulder at 62% → green bleed (BR). Added scanline overlay via `::before` (`repeating-linear-gradient`, `mix-blend-mode:multiply`, opacity .32) and lifted card children to `position:relative;z-index:1` so content paints above the overlay. Layered colored outer glows (purple/cyan/green) + inset hairline. Added suppression rule `.card.bt-shell::before, .card.bt-hud::before { display:none }` so cards that already carry a HUD scanline don't double-overlay. Cascades automatically to crypto cards, BTC Live Chart (`#btc-chart-section`), Command Center, Performance / Journal / Backtest tab cards.
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html) (Command Center PnL chart):** Replaced `downRoom = max(|minSeen|, baseline, 25)` / `upRoom = max(|maxSeen|, baseline*0.35, 25)` with bounds derived from observed PnL magnitude only (`max(|seen|*1.2, observedMag*1.2, 25)`). The old formula forced the y-axis span to scale with starting equity (e.g. ±$10k for a $10k baseline), so small live-PnL swings looked like a flat ruler. Now a –$15 dip scales against an axis spanning ~±$30, making movement visible immediately.
+
+**Why:** Operator flagged that the Command Center PnL line "looked straight" at –$15 and asked whether the chart can render negative — root cause was axis scaling, not draw logic. Same session: operator wanted the gradient/scanline treatment from the backtest STANDBY HUD propagated across every card surface. Both ship together as a single dashboard polish pass.
+
 ## 2026-05-20 — BTC 71h zero-trade fix: HTF boost bump + counter-trend BUY_NO re-enabled + bias/quant disagree logging
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Re-enabled counter-trend BUY_NO under BULLISH bias by flipping `disable_buy_no_counter_trend: true` → `false`. Added four new HTF boost knobs (`btc_htf_boost_strong_1h: 0.14`, `btc_htf_boost_weak_1h: 0.07`, `btc_htf_boost_strong_15m: 0.12`, `btc_htf_boost_weak_15m: 0.06`) — ~50% bump over the old hardcoded 0.09/0.04 (1h) and 0.08/0.03 (15m) values so `raw_est_prob` under a clean 3/3 BULLISH setup reaches ~0.64 instead of ~0.59 (median yes_price is 0.505, mean 0.554). 5m boost intentionally unchanged.
