@@ -252,6 +252,43 @@ class BitcoinStrategy:
                 return float(value)
         return base_cap
 
+    def _maybe_quant_flip(
+        self,
+        action: str,
+        direction: str,
+        effective_side: str,
+        side_source: str,
+        raw_est_prob: Optional[float],
+        reason_parts: list,
+    ):
+        # Post-quant counter-trend flip. The pre-quant counter-trend gate (1335-1339)
+        # only listens to 4H MACD histogram. When the quant model itself contradicts
+        # the HTF-picked side (e.g. BULLISH HTF → BUY_YES but raw_est_prob<0.48),
+        # rejecting on edge is worse than flipping to the side the quant supports.
+        # Symmetric for HTF=BEARISH. Respects existing disable flags.
+        if raw_est_prob is None:
+            return action, direction, effective_side, side_source
+        try:
+            thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
+        except (TypeError, ValueError):
+            thresh = 0.48
+        upper = 1.0 - thresh
+        if (
+            action == "BUY_YES"
+            and raw_est_prob < thresh
+            and not self.config.get("disable_buy_no_counter_trend", False)
+        ):
+            reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})<{thresh:.2f}")
+            return "BUY_NO", "DOWN", "SHORT", "btc_quant_disagree_flip"
+        if (
+            action == "BUY_NO"
+            and raw_est_prob > upper
+            and not self.config.get("disable_buy_yes", False)
+        ):
+            reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})>{upper:.2f}")
+            return "BUY_YES", "UP", "LONG", "btc_quant_disagree_flip"
+        return action, direction, effective_side, side_source
+
     def _calibrate_est_prob(
         self,
         raw_est_prob: float,
@@ -1459,6 +1496,10 @@ class BitcoinStrategy:
                         m5_reasons.append("5m predict window")
 
                     raw_est_prob = quant.est_prob_up
+                    action, direction, effective_side, side_source = self._maybe_quant_flip(
+                        action, direction, effective_side, side_source,
+                        raw_est_prob, reason_parts,
+                    )
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -1636,6 +1677,10 @@ class BitcoinStrategy:
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
+                    action, direction, effective_side, side_source = self._maybe_quant_flip(
+                        action, direction, effective_side, side_source,
+                        raw_est_prob, reason_parts,
+                    )
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
