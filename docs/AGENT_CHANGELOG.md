@@ -8,6 +8,7 @@
 
 ---
 
+<<<<<<< Updated upstream
 ## 2026-05-19 — Dashboard: BTC chart bubbles share chip color + CSS glow
 
 **[`src/dashboard/index.html`](src/dashboard/index.html):** Replaced canvas trade markers with DOM `.bbl-dot` elements. `stratChipHex` / `stratChipHexForJournal` are the single color source for `.strat-cf` toggles and chart bubbles (exact `window.STRATS` hex — no `_shadeStratHex` / white stroke). Bubbles now match the asset chip tone exactly: `color + '18'` translucent fill, `color + '88'` border, no box-shadow glow (lighter, static; chip-driven pulse-sync attempts reverted).
@@ -270,6 +271,8 @@ Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — 
 
 ---
 
+=======
+>>>>>>> Stashed changes
 ## 2026-05-17 — Handoff: BUY_YES recovery + dual-direction rally logic (plan only, not implemented)
 
 **`docs/HANDOFF_BUY_YES_RALLY_MERGE.md`:** Operator handoff for next agent — targeted fixes (no blind revert to pre–May 9), restore BUY_YES path quality from May 3–8 paper baseline, contain `buy_no_ltf` clash, add symmetric LTF momentum on **both** LONG and SHORT paths in bull and bear. Plan: `.cursor/plans/buy_yes_rally_merge_4b6efcaa.plan.md`.
@@ -304,6 +307,7 @@ Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — 
 
 ---
 
+<<<<<<< Updated upstream
 ## 2026-05-17 — Symmetric LTF momentum gates for BUY_YES and BUY_NO (handoff `HANDOFF_BUY_YES_RALLY_MERGE.md`)
 
 **`src/strategies/sol_macro.py`, `src/strategies/eth_macro.py`, `src/backtest/updown_engine.py`, `config/settings.yaml`, `tests/test_sol_macro.py`, `tests/test_eth_macro.py`:** Added the four-path side resolver described in the handoff. Both LONG and SHORT admissions now require their own short-window momentum confirmation in both BULL and BEAR regimes, rather than only the SHORT side requiring it in BULL. Fixes the post-May-9 regression where `buy_no_ltf_override` could flip a BULL macro to SHORT and clash with otherwise-valid BUY_YES rally tape.
@@ -341,6 +345,8 @@ Ported BTC's BUY_NO-specific counter-trend mechanic (`bitcoin.py:1233-1243` — 
 
 ---
 
+=======
+>>>>>>> Stashed changes
 ## 2026-05-16 — Naming cleanup for rejected-candidate tracking + lane calibration rollout note
 
 **`src/analysis/ghost_calibration.py`, `src/analysis/rejected_candidate_log.py`, `src/main.py`, `src/ops_pulse.py`:** Renamed user-facing/runtime wording from ambiguous **ghost calibration / ghost mode** language to **rejected-candidate tracker** wherever the feature is describing blocked-trade logging and settlement. `OPS_JSON` now exposes a new `rejected_candidate_tracker` block while preserving `ghost_calibration` as a backward-compatible alias for existing consumers.

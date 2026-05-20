@@ -1410,6 +1410,7 @@ class BitcoinStrategy:
                                 "macd_4h_above_zero": bool(macd_4h.above_zero),
                                 "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
                             },
+<<<<<<< Updated upstream
                             probe_variants=build_threshold_probe_variants(
                                 metric_name="hist_support_count",
                                 observed_value=float(
@@ -1428,6 +1429,8 @@ class BitcoinStrategy:
                                 tighten_steps=[1.0],
                             ),
                             policy_version="hist_gate_support_count_v1",
+=======
+>>>>>>> Stashed changes
                         )
                         logger.info(
                             f"  BTC [5m] skip '{market.question[:40]}' — {hist_reject}"
