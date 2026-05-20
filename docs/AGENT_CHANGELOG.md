@@ -8,6 +8,26 @@
 
 ---
 
+## 2026-05-20 — BTC 71h zero-trade fix: HTF boost bump + counter-trend BUY_NO re-enabled + bias/quant disagree logging
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Re-enabled counter-trend BUY_NO under BULLISH bias by flipping `disable_buy_no_counter_trend: true` → `false`. Added four new HTF boost knobs (`btc_htf_boost_strong_1h: 0.14`, `btc_htf_boost_weak_1h: 0.07`, `btc_htf_boost_strong_15m: 0.12`, `btc_htf_boost_weak_15m: 0.06`) — ~50% bump over the old hardcoded 0.09/0.04 (1h) and 0.08/0.03 (15m) values so `raw_est_prob` under a clean 3/3 BULLISH setup reaches ~0.64 instead of ~0.59 (median yes_price is 0.505, mean 0.554). 5m boost intentionally unchanged.
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** Updown 15m/1h path at the est_prob_up construction site now reads the boost values from config with the new defaults. At the `lane_min_edge` rejection site, split the reject reason into `lane_min_edge` vs `lane_min_edge_bias_quant_disagree` and added a `bias_quant_disagree` boolean to the rejection context, so we can isolate the cohort where the htf_bias classifier and the quant model disagree directionally (raw_est on opposite side of yes_price from bias).
+
+**[`CLAUDE.md`](/Users/mainfolder/Documents/psb-main%201/CLAUDE.md):** New file codifying the current project phase as calibration / data gathering. Priorities: increase trade frequency, find each asset's lane sweet spot from observed data, never tighten gates or raise min_edge. Includes diagnostic checklist for starved lanes and notes on per-asset macro overrides.
+
+**Why:** Last filled BTC trade in `trades.jsonl` was 2026-05-17 09:49 UTC — ~71 hours of zero entries despite the bot actively evaluating 515 BTC markets today. 501 of those 515 were rejected by `lane_min_edge`. Distribution analysis (`raw_est_prob` vs `yes_price` across the 480 BUY_YES under BULLISH bias) showed median raw_est=0.480 vs yes_price=0.505, mean 0.486 vs 0.554 — the quant model was producing probabilities ~7 pp below market under exactly the regime the classifier wanted to be long. Calibration was confirmed to be a no-op (raw == calibrated, mean shift 0.000), so the gap is in the HTF boost weights and the side-selection lock to BULLISH-only-LONG. This patch addresses both: (a) re-enables the existing `btc_bull_rollover` BUY_NO path that was config-disabled in early May, (b) bumps HTF boost so BULLISH conviction actually produces edge against market, (c) tags disagreement events so we can measure whether the bias or the quant is closer to truth on next post-restart pass. Running bot needs restart to pick up the new code paths.
+
+## 2026-05-19 — ETH up/down oracle validator restored; Gamma scanner sockets bounded
+
+**[`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py):** The live ETH up/down scan path now uses the shared `_validate_updown_oracle(...)` result instead of the older `_oracle_basis_blocks_entry(...)` basis-only shortcut. That restores enforcement of `require_oracle_for_updown`, `oracle_max_age_sec`, and any configured fresh/stale basis relax policy in the actual ETH runtime lane, and it logs oracle freshness/basis details under the true reject reason (`oracle_basis_block`, `oracle_missing`, `oracle_stale`, etc.).
+
+**[`src/market/scanner.py`](/Users/mainfolder/Documents/psb-main%201/src/market/scanner.py):** Gamma `requests` sessions now mount their adapter with `pool_block=True` so slug-fetch worker threads stay within the configured connection pool instead of opening extra sockets under bursty parallel fetch pressure.
+
+**[`tests/test_eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_eth_macro.py):** Added regression coverage proving an ETH candidate with `oracle_basis_bps=11.0` passes live scan when `oracle_basis_relax_max_bps=12.0`, rather than being incorrectly rejected by the stale basis-only runtime path.
+
+**Why:** Tonight’s ghost/reject stream showed ETH `oracle_basis_block` dominating fresh rejects, while code inspection showed the ETH scan path had drifted from the shared oracle validator already used by the SOL-derived lanes. The same review pass also found live `scanner.gamma` warnings with `OSError(24, 'Too many open files')`, so the Gamma adapter was hardened before the overnight run.
+
 ## 2026-05-19 — Command Center live equity chart + trading-halt controls cleanup
 
 **[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** Added a dedicated Command Center live equity/PnL chart above Active Positions, then iterated its renderer to use live status data, session-baseline seeding, sign-based green/yellow/red coloring, and an anchored zero/baseline treatment that still shows drawdown from the starting bankroll after mid-session refreshes. Simplified the card to graph-only, reduced idle glow to match the backtest HUD family, and flattened the remaining live-tab glow on Operations Pipeline, Exit Timing HUD, and Macro Alignment.

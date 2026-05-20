@@ -458,9 +458,22 @@ strategies:
     blocked_utc_hours_updown: [0, 1, 2, 7, 11]
     # false = allow BUY_YES when HTF is bullish (true suppressed LONG/up signals in practice).
     disable_buy_yes: false
-    # 2026-05-04: BTC grinding UP — counter-trend BUY_NO was 36% WR (-$14.60). Disable until
-    # BTC regime shifts. Re-enable when 4H MACD crosses bearish and price rolls over.
-    disable_buy_no_counter_trend: true
+    # 2026-05-20: re-enabled as part of (1) quant-override-bias fix. BTC has 0 trades in 48h
+    # because BULLISH bias forces BUY_YES but raw_est (0.48) sits below yes_price (0.55) → all
+    # 480 LONG attempts rejected by lane_min_edge. Re-enabling counter-trend BUY_NO lets the
+    # bot enter on the SHORT side when bias is BULLISH but 4H momentum has rolled over —
+    # which is the regime the model is actually signaling. Watch live WR; flip back to true
+    # if BUY_NO under BULL goes back to 36% WR.
+    disable_buy_no_counter_trend: false
+    # (2) HTF boost weights — was 0.09/0.04 (1h), 0.08/0.03 (15m). Bumped ~50% so that
+    # raw_est_prob under a clean BULLISH 2/3 or 3/3 setup actually exceeds typical yes_price
+    # (median 0.505, mean 0.554). Old strong=+0.09 from base 0.50 → 0.59 was barely above
+    # mean market; new strong=+0.14 → 0.64 produces real edge under genuine BULL setups.
+    # Symmetric on SHORT side. Lower bounds: 5m unchanged at +0.04 (too noisy to amplify).
+    btc_htf_boost_strong_1h: 0.14
+    btc_htf_boost_weak_1h: 0.07
+    btc_htf_boost_strong_15m: 0.12
+    btc_htf_boost_weak_15m: 0.06
     # Require stronger edge for BUY_NO entries (short in a bull/mixed market needs conviction).
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
@@ -595,6 +608,7 @@ strategies:
     tuning_size_multiplier: 1.0         # 2026-05-07: removed temporary 0.60 downsize; expectancy repair handled by gate changes this session
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: false
+    flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     # IQL: MACD histogram is in raw price units; 0.03 was far too tight for SOL (~$84).
@@ -900,6 +914,7 @@ strategies:
     tuning_size_multiplier: 1.0         # 2026-05-07: removed temporary 0.60 downsize; expectancy repair handled by gate changes this session
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
+    flat_btc_only_blocks_when_alt_neutral: false  # ETH watch-only for now; keep stricter legacy flat-BTC gating until reviewed separately
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     # ETH MACD histogram scales ~20–30x vs SOL (price ~$2k+ vs ~$80); floor must not share SOL’s 0.03.
@@ -1061,6 +1076,7 @@ strategies:
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: false
+    flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     # Same macro BTC HTF conviction as sol_macro family (not bitcoin.up/down middle band — lag lane consistency).
@@ -1105,6 +1121,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_basis_relax_max_bps: 12.0  # Session fix 2026-05-19: match SOL fresh-basis tolerance so tiny XRP overshoots do not fully starve live scans
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -1151,6 +1168,7 @@ strategies:
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
+    flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     # IQL: XRP ~$2 — 0.03 hist is a stiff but viable floor; SOL/ETH/HYPE use strategy-specific floors above.
@@ -1298,6 +1316,7 @@ strategies:
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
+    flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     iql_15m_enabled: false
@@ -1438,6 +1457,7 @@ strategies:
     degraded_correlation_size_multiplier: 0.50
     degraded_bearish_est_up: 0.45
     require_btc_volatility_gate: true
+    flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     iql_15m_enabled: false

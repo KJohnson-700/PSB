@@ -1500,8 +1500,15 @@ class BitcoinStrategy:
                     # Base: 0.50 (coin flip) + adjustments from HTF, LTF and timing
                     est_prob_up = 0.50
                     window_label = "1h" if is_1h else "15m"
-                    htf_boost_strong = 0.09 if is_1h else 0.08
-                    htf_boost_weak = 0.04 if is_1h else 0.03
+                    # (2) HTF boost weights pulled from config so we can tune without code edits.
+                    # Defaults bumped 2026-05-20 from 0.09/0.04 (1h) and 0.08/0.03 (15m).
+                    # See config/settings.yaml btc_htf_boost_* keys for rationale.
+                    if is_1h:
+                        htf_boost_strong = float(self.config.get("btc_htf_boost_strong_1h", 0.14))
+                        htf_boost_weak = float(self.config.get("btc_htf_boost_weak_1h", 0.07))
+                    else:
+                        htf_boost_strong = float(self.config.get("btc_htf_boost_strong_15m", 0.12))
+                        htf_boost_weak = float(self.config.get("btc_htf_boost_weak_15m", 0.06))
                     ltf_weight = 0.12 if is_1h else 0.20
                     timing_weight = 0.50 if is_1h else 1.00
                     rsi_extreme = 0.02 if is_1h else 0.03
@@ -2246,13 +2253,27 @@ class BitcoinStrategy:
                 pass
             _sample("edge", edge)
             if edge < effective_min_edge:
-                _bump_skip("lane_min_edge")
+                # (3) Flag bias/quant directional disagreement so we can isolate this cohort
+                # in analysis. True when raw_est is on the opposite side of 0.50 from the
+                # direction the htf_bias picked, OR when raw_est < yes_price under BULLISH
+                # bias / raw_est > yes_price under BEARISH bias.
+                _bias_quant_disagree = False
+                if htf_bias == "BULLISH":
+                    _bias_quant_disagree = float(raw_est_prob) < float(yes_price)
+                elif htf_bias == "BEARISH":
+                    _bias_quant_disagree = float(raw_est_prob) > float(yes_price)
+                _skip_reason = (
+                    "lane_min_edge_bias_quant_disagree"
+                    if _bias_quant_disagree
+                    else "lane_min_edge"
+                )
+                _bump_skip(_skip_reason)
                 log_rejected_candidate(
                     strategy=self._signal_strategy_name,
                     window=_updown_tf if is_updown else "15m",
                     side=allowed_side,
                     action=action,
-                    reason="lane_min_edge",
+                    reason=_skip_reason,
                     market=market,
                     yes_price=yes_price,
                     est_prob_up=estimated_prob,
@@ -2264,6 +2285,7 @@ class BitcoinStrategy:
                         "estimated_prob": round(float(estimated_prob), 6),
                         "confidence": round(float(confidence), 6),
                         "side_source": side_source,
+                        "bias_quant_disagree": bool(_bias_quant_disagree),
                     },
                     probe_variants=build_threshold_probe_variants(
                         metric_name="min_edge",
