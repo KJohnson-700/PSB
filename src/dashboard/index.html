@@ -1168,6 +1168,8 @@
         #btc-toggle-eth-trades {animation-delay:1.80s}
         #btc-toggle-xrp-trades {animation-delay:2.60s}
         #btc-toggle-hype-trades{animation-delay:3.40s}
+        #btc-toggle-doge-trades{animation-delay:4.20s}
+        #btc-toggle-bnb-trades {animation-delay:5.00s}
         @keyframes stratCfChase{
             0%   {transform:scale(1);   box-shadow:0 0 0 transparent;          text-shadow:none}
             3%   {transform:scale(1.10);box-shadow:0 0 14px currentColor,0 0 28px currentColor; text-shadow:0 0 9px currentColor}
@@ -1457,6 +1459,8 @@
                 <button type="button" id="btc-toggle-eth-trades"  class="strat-cf" data-series="ethTrades"  data-strat="eth_lag"  onclick="toggleStratChip(this)">ETH</button>
                 <button type="button" id="btc-toggle-xrp-trades"  class="strat-cf" data-series="xrpTrades"  data-strat="xrp_lag"  onclick="toggleStratChip(this)">XRP</button>
                 <button type="button" id="btc-toggle-hype-trades" class="strat-cf" data-series="hypeTrades" data-strat="hype_lag" onclick="toggleStratChip(this)">HYPE</button>
+                <button type="button" id="btc-toggle-doge-trades" class="strat-cf" data-series="dogeTrades" data-strat="doge_lag" onclick="toggleStratChip(this)">DOGE</button>
+                <button type="button" id="btc-toggle-bnb-trades"  class="strat-cf" data-series="bnbTrades"  data-strat="bnb_lag"  onclick="toggleStratChip(this)">BNB</button>
                 <select id="btc-chart-interval" onchange="setBTCInterval(this.value)" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-size:0.75rem;font-family:inherit;">
                     <option value="15" selected>15m</option>
                     <option value="5">5m</option>
@@ -1479,7 +1483,7 @@
             </div>
             <div class="hud-body" id="exit-timing-hud-body"></div>
         </div>
-        <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
+        <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE / DOGE / BNB watchlist: loading…</div>
     </div>
 
     <!-- Simulated Macro Alignment — low-latency proxy tape + trade bubbles -->
@@ -1757,6 +1761,92 @@
         </div>
       </div>
 
+      <div class="card" data-aos="fade-up" data-aos-delay="560" id="doge-analysis-panel">
+        <h2 style="margin-bottom:8px;">DOGE</h2>
+        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">DOGE 1H primary; DOGE–BTC lag and BTC Δ% are secondary context.</p>
+        <div class="status-hero crypto-hero-six">
+          <div class="hero-item"><div class="hero-val" id="doge-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">DOGE Price</div></div>
+          <div class="hero-item"><div class="hero-val" id="doge-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
+          <div class="hero-item"><div class="hero-val" id="doge-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
+          <div class="hero-item"><div class="hero-val" id="doge-macro">-</div><div class="hero-lbl">DOGE–BTC lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="doge-doge-move">-</div><div class="hero-lbl">DOGE Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="doge-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+        </div>
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="doge-macd30m" style="color:var(--text);">-</span></div>
+          <div>MACD 15m: <span id="doge-macd15m" style="color:var(--text);">-</span></div>
+          <div>MACD 5m: <span id="doge-macd5m" style="color:var(--text);">-</span></div>
+          <div>Corr: <span id="doge-corr" style="color:var(--text);">-</span></div>
+          <div>ATR: <span id="doge-atr" style="color:var(--text);">-</span></div>
+        </div>
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
+          <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">1h</div>
+              <div id="doge-1h-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="doge-1h-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="doge-1h-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
+              <div id="doge-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="doge-15m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="doge-15m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">5m</div>
+              <div id="doge-5m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="doge-5m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="doge-5m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-aos="fade-up" data-aos-delay="640" id="bnb-analysis-panel">
+        <h2 style="margin-bottom:8px;">BNB</h2>
+        <p style="font-size:0.68rem;color:var(--text-muted);margin:0 0 8px 0;line-height:1.4;">BNB 1H primary; BNB–BTC lag and BTC Δ% are secondary context.</p>
+        <div class="status-hero crypto-hero-six">
+          <div class="hero-item"><div class="hero-val" id="bnb-price" style="font-size:1.3rem;">-</div><div class="hero-lbl">BNB Price</div></div>
+          <div class="hero-item"><div class="hero-val" id="bnb-macro-trend">-</div><div class="hero-lbl">1H Macro</div></div>
+          <div class="hero-item"><div class="hero-val" id="bnb-rsi">-</div><div class="hero-lbl">RSI(14)</div></div>
+          <div class="hero-item"><div class="hero-val" id="bnb-macro">-</div><div class="hero-lbl">BNB–BTC lag</div></div>
+          <div class="hero-item"><div class="hero-val" id="bnb-bnb-move">-</div><div class="hero-lbl">BNB Δ% 5·15·30m</div></div>
+          <div class="hero-item"><div class="hero-val" id="bnb-btc-move">-</div><div class="hero-lbl">BTC Δ% 5·15·30m</div></div>
+        </div>
+        <div class="crypto-meta-five">
+          <div>MACD 30m: <span id="bnb-macd30m" style="color:var(--text);">-</span></div>
+          <div>MACD 15m: <span id="bnb-macd15m" style="color:var(--text);">-</span></div>
+          <div>MACD 5m: <span id="bnb-macd5m" style="color:var(--text);">-</span></div>
+          <div>Corr: <span id="bnb-corr" style="color:var(--text);">-</span></div>
+          <div>ATR: <span id="bnb-atr" style="color:var(--text);">-</span></div>
+        </div>
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Signal Gates</div>
+          <div class="signal-gates-grid">
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">1h</div>
+              <div id="bnb-1h-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="bnb-1h-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="bnb-1h-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">15m</div>
+              <div id="bnb-15m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="bnb-15m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="bnb-15m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+            <div style="background:rgba(4,6,10,0.6);border:1px solid var(--border);border-radius:6px;padding:10px;">
+              <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">5m</div>
+              <div id="bnb-5m-status-badge" style="font-size:0.72rem;font-weight:700;margin-bottom:6px;">-</div>
+              <div id="bnb-5m-status-detail" style="font-size:0.68rem;color:var(--text-muted);line-height:1.6;"></div>
+              <div id="bnb-5m-wr" style="margin-top:6px;font-size:0.72rem;font-weight:600;color:var(--text-muted);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <dialog id="ai-review-dialog" class="ai-review-modal">
@@ -1784,7 +1874,7 @@
     </div>
 
     <!-- Weather Strategy Panel (moved to bottom of Live tab) -->
-    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;">
+    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;display:none;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <h2 style="margin-bottom:0;">&#9928; Weather</h2>
         <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
@@ -2140,6 +2230,8 @@
                 <div class="tab" data-strat="eth_macro" onclick="switchScanTab('eth_macro')">ETH</div>
                 <div class="tab" data-strat="hype_macro" onclick="switchScanTab('hype_macro')">HYPE</div>
                 <div class="tab" data-strat="xrp_macro" onclick="switchScanTab('xrp_macro')">XRP</div>
+                <div class="tab" data-strat="doge_macro" onclick="switchScanTab('doge_macro')">DOGE</div>
+                <div class="tab" data-strat="bnb_macro" onclick="switchScanTab('bnb_macro')">BNB</div>
             </div>
             <div id="weather-scan-diag" style="display:none;padding:8px 4px 4px;"></div>
             <div class="scrollbox" id="scan-signals" style="min-height:100px;"></div>
@@ -2377,11 +2469,15 @@ window.STRATS = {
     eth_lag: '#00e5ff',
     hype_lag: '#ff6a00',
     xrp_lag: '#ffe000',
+    doge_lag: '#ff6ec7',
+    bnb_lag: '#f3ba2f',
     weather: '#10b981',
     sol_macro: '#b14dff',
     eth_macro: '#00e5ff',
     hype_macro: '#ff6a00',
     xrp_macro: '#ffe000',
+    doge_macro: '#ff6ec7',
+    bnb_macro: '#f3ba2f',
     consensus: '#22d3ee',
     unknown: '#64748b',
 };
@@ -2393,6 +2489,8 @@ const _BTC_OVERLAY_CHIP_KEY = {
     eth_macro: 'eth_lag',
     xrp_macro: 'xrp_lag',
     hype_macro: 'hype_lag',
+    doge_macro: 'doge_lag',
+    bnb_macro: 'bnb_lag',
 };
 
 /** Exact hex used by `.strat-cf` chips (`paintStratChip`) — single source for chip + chart bubbles. */
@@ -3100,9 +3198,9 @@ async function fetchAll() {
     const needUpdownWr = needLive || needPerformance;
     /** Journal + Performance both show session rollup; summary must be fetched for either. */
     const needJournalSummary = needJournal || needPerformance;
-    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
+    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
     try {
-        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
+        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             fetchT('/api/scans/latest'),
@@ -3115,6 +3213,8 @@ async function fetchAll() {
             needLive ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
             needLive ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
             needLive ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
+            needLive ? fetchT('/api/doge/analysis', 14000) : Promise.resolve(null),
+            needLive ? fetchT('/api/bnb/analysis', 14000) : Promise.resolve(null),
             needPerformance ? fetchT('/api/live/performance') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
@@ -3205,13 +3305,15 @@ async function fetchAll() {
         updateExposure({ error: 'Exposure status unavailable (' + e + ')' });
     }
 
-    let btcData = null, solData = null, ethData = null, hypeData = null, xrpData = null, updownData = null, reasonData = null;
+    let btcData = null, solData = null, ethData = null, hypeData = null, xrpData = null, dogeData = null, bnbData = null, updownData = null, reasonData = null;
     try {
         btcData = btcR?.ok ? await btcR.json() : null;
         solData = solR?.ok ? await solR.json() : null;
         ethData = ethR?.ok ? await ethR.json() : null;
         hypeData = hypeR?.ok ? await hypeR.json() : null;
         xrpData = xrpR?.ok ? await xrpR.json() : null;
+        dogeData = dogeR?.ok ? await dogeR.json() : null;
+        bnbData = bnbR?.ok ? await bnbR.json() : null;
         updownData = updownR?.ok ? await updownR.json() : null;
         reasonData = reasonR?.ok ? await reasonR.json() : null;
     } catch (e) { console.error('[dashboard] analysis JSON:', e); }
@@ -3223,6 +3325,8 @@ async function fetchAll() {
             _safeUpdateLiveAsset('eth', ethData, updateETHAnalysis, 3);
             _safeUpdateLiveAsset('hype', hypeData, updateHYPEAnalysis, 3);
             _safeUpdateLiveAsset('xrp', xrpData, updateXRPAnalysis, 3);
+            _safeUpdateLiveAsset('doge', dogeData, updateDOGEAnalysis, 3);
+            _safeUpdateLiveAsset('bnb', bnbData, updateBNBAnalysis, 3);
         }
     } catch (e) { console.error('[dashboard] crypto panels:', e); }
 
@@ -3259,7 +3363,7 @@ async function fetchAll() {
     }
 
     try {
-        updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData);
+        updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, dogeData, bnbData, updownData);
     } catch (e) { console.error('[dashboard] crypto signal status:', e); }
 
     try {
@@ -6317,7 +6421,7 @@ function updateAltLagAnalysis(d, prefix) {
     const priceEl = document.getElementById(prefix + '-price');
     const spotKey = prefix + '_price';
     const sp = d.spot_price ?? d[spotKey] ?? d.sol_price ?? 0;
-    const dec = prefix === 'xrp' ? 4 : 2;
+    const dec = prefix === 'xrp' ? 4 : prefix === 'doge' ? 5 : 2;
     if (priceEl) priceEl.textContent = '$' + sp.toFixed(dec);
     const macro = d.macro_trend || '-';
     const macroEl = document.getElementById(prefix + '-macro-trend');
@@ -6382,6 +6486,8 @@ function updateSOLAnalysis(d) { updateAltLagAnalysis(d, 'sol'); }
 function updateETHAnalysis(d) { updateAltLagAnalysis(d, 'eth'); }
 function updateHYPEAnalysis(d) { updateAltLagAnalysis(d, 'hype'); }
 function updateXRPAnalysis(d) { updateAltLagAnalysis(d, 'xrp'); }
+function updateDOGEAnalysis(d) { updateAltLagAnalysis(d, 'doge'); }
+function updateBNBAnalysis(d) { updateAltLagAnalysis(d, 'bnb'); }
 
 function updateExitReasons(d) {
     const $ = (id) => document.getElementById(id);
@@ -6457,7 +6563,11 @@ function updateLivePerf(d) {
                 const trades = Number(m?.trades || 0);
                 const wr = Number(m?.win_rate || 0);
                 const pnl = Number(m?.total_pnl ?? m?.pnl ?? 0);
-                return `<span style="margin-right:12px;">${s}: ${_tradesLabel(trades)}, ${(wr*100).toFixed(0)}% win, $${pnl.toFixed(2)}</span>`;
+                const c = stratHex(s);
+                const label = { bitcoin:'BTC', sol_macro:'SOL', eth_macro:'ETH', hype_macro:'HYPE', xrp_macro:'XRP', doge_macro:'DOGE', bnb_macro:'BNB' }[s] || s;
+                const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+                const wrColor = wr >= 0.55 ? 'var(--green)' : wr > 0 ? 'var(--yellow)' : 'var(--text-muted)';
+                return `<span style="margin-right:12px;"><span style="color:${c};font-weight:700;">${label}</span>: ${_tradesLabel(trades)}, <span style="color:${wrColor};">${(wr*100).toFixed(0)}% win</span>, <span style="color:${pnlColor};">$${pnl.toFixed(2)}</span></span>`;
             }).join('');
         } else {
             stratDiv.textContent = totalTrades ? 'No strategy breakdown' : 'No live trades yet — start the bot to generate results';
@@ -6488,7 +6598,7 @@ function updateLivePerf(d) {
     const ws = d.kelly_state._window_stats;
     const stratLabel = {
         bitcoin: 'BTC', sol_macro: 'SOL', eth_macro: 'ETH',
-        hype_macro: 'HYPE', xrp_macro: 'XRP',
+        hype_macro: 'HYPE', xrp_macro: 'XRP', doge_macro: 'DOGE', bnb_macro: 'BNB',
     };
     const stratKeys = Object.entries(d.kelly_state)
         .filter(([k]) => k !== 'unknown' && k !== '_window_stats');
@@ -6677,7 +6787,7 @@ function updateUpdownBreakdown(ud) {
         }
     }
 
-    const TARGET = ['BTC_updown_15m', 'BTC_updown_1h', 'BTC_updown_5m', 'SOL_updown_15m', 'SOL_updown_1h', 'SOL_updown_5m', 'ETH_updown_15m', 'ETH_updown_1h', 'ETH_updown_5m', 'HYPE_updown_15m', 'HYPE_updown_1h', 'HYPE_updown_5m', 'XRP_updown_15m', 'XRP_updown_1h', 'XRP_updown_5m'];
+    const TARGET = ['BTC_updown_15m', 'BTC_updown_1h', 'BTC_updown_5m', 'SOL_updown_15m', 'SOL_updown_1h', 'SOL_updown_5m', 'ETH_updown_15m', 'ETH_updown_1h', 'ETH_updown_5m', 'HYPE_updown_15m', 'HYPE_updown_1h', 'HYPE_updown_5m', 'XRP_updown_15m', 'XRP_updown_1h', 'XRP_updown_5m', 'DOGE_updown_15m', 'DOGE_updown_1h', 'DOGE_updown_5m', 'BNB_updown_15m', 'BNB_updown_1h', 'BNB_updown_5m'];
     function renderBucket(data, elId) {
         const el = document.getElementById(elId);
         if (!el) return;
@@ -6788,10 +6898,10 @@ async function fetchTradeJourney() {
 }
 
 // ─── CRYPTO SIGNAL STATUS PANEL ───────────────────────────────
-function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, updownData) {
+function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, dogeData, bnbData, updownData) {
     const now = new Date().toLocaleTimeString();
     const stampEl = document.getElementById('signal-status-updated');
-    if (!btcData && !solData && !ethData && !hypeData && !xrpData && !updownData) {
+    if (!btcData && !solData && !ethData && !hypeData && !xrpData && !dogeData && !bnbData && !updownData) {
         if (stampEl) stampEl.textContent = '';
         return;
     }
@@ -7132,6 +7242,8 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
     applyAltLagGates(ethData, 'eth', 'ETH_updown_1h', 'ETH_updown_15m', 'ETH_updown_5m');
     applyAltLagGates(hypeData, 'hype', 'HYPE_updown_1h', 'HYPE_updown_15m', 'HYPE_updown_5m');
     applyAltLagGates(xrpData, 'xrp', 'XRP_updown_1h', 'XRP_updown_15m', 'XRP_updown_5m');
+    applyAltLagGates(dogeData, 'doge', 'DOGE_updown_1h', 'DOGE_updown_15m', 'DOGE_updown_5m');
+    applyAltLagGates(bnbData, 'bnb', 'BNB_updown_1h', 'BNB_updown_15m', 'BNB_updown_5m');
 
     if (!ethData || ethData.error) {
         setBadge('eth-1h-status-badge', '\u2014 no TA', 'grey');
@@ -7183,6 +7295,40 @@ function updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, 
         if (x30) x30.innerHTML = wrLabel(xw30) || 'No trades yet';
         if (x15) x15.innerHTML = wrLabel(xw15) || 'No trades yet';
         if (x5) x5.innerHTML = wrLabel(xw5) || 'No trades yet';
+    }
+    if (!dogeData || dogeData.error) {
+        setBadge('doge-1h-status-badge', '\u2014 no TA', 'grey');
+        setDetail('doge-1h-status-detail', []);
+        setBadge('doge-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('doge-15m-status-detail', ['DOGE analysis feed unavailable (WR below is from closed trades if journaled).']);
+        setBadge('doge-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('doge-5m-status-detail', ['DOGE analysis feed unavailable.']);
+        const dw30 = getWR(updownData, 'DOGE_updown_1h');
+        const dw15 = getWR(updownData, 'DOGE_updown_15m');
+        const dw5 = getWR(updownData, 'DOGE_updown_5m');
+        const d30 = document.getElementById('doge-1h-wr');
+        const d15 = document.getElementById('doge-15m-wr');
+        const d5 = document.getElementById('doge-5m-wr');
+        if (d30) d30.innerHTML = wrLabel(dw30) || 'No trades yet';
+        if (d15) d15.innerHTML = wrLabel(dw15) || 'No trades yet';
+        if (d5) d5.innerHTML = wrLabel(dw5) || 'No trades yet';
+    }
+    if (!bnbData || bnbData.error) {
+        setBadge('bnb-1h-status-badge', '\u2014 no TA', 'grey');
+        setDetail('bnb-1h-status-detail', []);
+        setBadge('bnb-15m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('bnb-15m-status-detail', ['BNB analysis feed unavailable (WR below is from closed trades if journaled).']);
+        setBadge('bnb-5m-status-badge', '\u2014 no TA', 'grey');
+        setDetail('bnb-5m-status-detail', ['BNB analysis feed unavailable.']);
+        const bw30 = getWR(updownData, 'BNB_updown_1h');
+        const bw15 = getWR(updownData, 'BNB_updown_15m');
+        const bw5 = getWR(updownData, 'BNB_updown_5m');
+        const b30 = document.getElementById('bnb-1h-wr');
+        const b15 = document.getElementById('bnb-15m-wr');
+        const b5 = document.getElementById('bnb-5m-wr');
+        if (b30) b30.innerHTML = wrLabel(bw30) || 'No trades yet';
+        if (b15) b15.innerHTML = wrLabel(bw15) || 'No trades yet';
+        if (b5) b5.innerHTML = wrLabel(bw5) || 'No trades yet';
     }
 }
 
@@ -8003,6 +8149,8 @@ let _btcChartDisplay = {
     ethTrades: true,
     xrpTrades: true,
     hypeTrades: true,
+    dogeTrades: true,
+    bnbTrades: true,
     trigger: true,
 };
 function _applyBTCChartVisibility() {
@@ -8364,6 +8512,8 @@ function _formatAltWatchlistTriggers(watchlist) {
         ['eth_macro', 'ETH', 2],
         ['xrp_macro', 'XRP', 4],
         ['hype_macro', 'HYPE', 2],
+        ['doge_macro', 'DOGE', 5],
+        ['bnb_macro', 'BNB', 2],
     ];
     const bits = [];
     for (const [strat, sym, dec] of cfg) {
@@ -9012,6 +9162,8 @@ async function loadBTCChart() {
             .concat(_tradeMarkersFromPoints(tradePoints, 'eth_macro'))
             .concat(_tradeMarkersFromPoints(tradePoints, 'xrp_macro'))
             .concat(_tradeMarkersFromPoints(tradePoints, 'hype_macro'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'doge_macro'))
+            .concat(_tradeMarkersFromPoints(tradePoints, 'bnb_macro'))
             .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
         _setBTCTradeOverlayData(overlayPoints, _candles || []);
 

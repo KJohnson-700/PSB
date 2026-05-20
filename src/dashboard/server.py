@@ -571,7 +571,6 @@ ACTIVE_STRATEGY_NAMES = (
     "xrp_macro",
     "doge_macro",
     "bnb_macro",
-    "weather",
 )
 CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP", "DOGE", "BNB"}
 CRYPTO_BACKTEST_WINDOWS = (5, 15, 60)
@@ -1496,7 +1495,8 @@ async def get_status():
         "eth_macro",
         "hype_macro",
         "xrp_macro",
-        "weather",
+        "doge_macro",
+        "bnb_macro",
     )
     strategy_attrs = {
         "bitcoin": "bitcoin_strategy",
@@ -1504,7 +1504,8 @@ async def get_status():
         "eth_macro": "eth_macro_strategy",
         "hype_macro": "hype_macro_strategy",
         "xrp_macro": "xrp_macro_strategy",
-        "weather": "weather_strategy",
+        "doge_macro": "doge_macro_strategy",
+        "bnb_macro": "bnb_macro_strategy",
     }
 
     def _build_strategy_state(cfg: Dict[str, Any], running: bool) -> Dict[str, Dict[str, Any]]:
@@ -2908,6 +2909,20 @@ async def get_strategy_metrics():
             "reports": 0,
         },
         "xrp_macro": {
+            "signals": 0,
+            "trades": 0,
+            "pnl": 0,
+            "win_rate": None,
+            "reports": 0,
+        },
+        "doge_macro": {
+            "signals": 0,
+            "trades": 0,
+            "pnl": 0,
+            "win_rate": None,
+            "reports": 0,
+        },
+        "bnb_macro": {
             "signals": 0,
             "trades": 0,
             "pnl": 0,
@@ -4427,6 +4442,32 @@ async def get_xrp_analysis():
         return {"error": "XRP analysis not available"}
     except Exception as e:
         logger.error(f"XRP analysis endpoint error: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/doge/analysis")
+async def get_doge_analysis():
+    """Live DOGE–BTC correlation for dashboard."""
+    try:
+        ta, alt_sym = await asyncio.to_thread(_run_alt_analysis_sync, "DOGEUSDT", "doge_macro_strategy")
+        if ta:
+            return _solbtc_analysis_payload(ta, alt_sym)
+        return {"error": "DOGE analysis not available"}
+    except Exception as e:
+        logger.error(f"DOGE analysis endpoint error: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
+@app.get("/api/bnb/analysis")
+async def get_bnb_analysis():
+    """Live BNB–BTC correlation for dashboard."""
+    try:
+        ta, alt_sym = await asyncio.to_thread(_run_alt_analysis_sync, "BNBUSDT", "bnb_macro_strategy")
+        if ta:
+            return _solbtc_analysis_payload(ta, alt_sym)
+        return {"error": "BNB analysis not available"}
+    except Exception as e:
+        logger.error(f"BNB analysis endpoint error: {e}", exc_info=True)
         return {"error": str(e)}
 
 
