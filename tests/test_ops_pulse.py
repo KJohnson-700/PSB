@@ -9,10 +9,15 @@ def test_scan_skip_digest_aggregate():
     ai = {
         "sol_macro": {"top_skip_reasons": {"outside_entry_window": 16, "min_edge": 2}},
         "eth_macro": {"top_skip_reasons": {"outside_entry_window": 10, "oracle": 1}},
+        "doge_macro": {"top_skip_reasons": {"outside_entry_window": 3}},
+        "bnb_macro": {"top_skip_reasons": {"min_edge": 4}},
     }
     d = _scan_skip_digest(ai)
     assert d["per_strategy"]["sol_macro"]["outside_entry_window"] == 16
-    assert d["aggregate_top"]["outside_entry_window"] == 26
+    assert d["per_strategy"]["doge_macro"]["outside_entry_window"] == 3
+    assert d["per_strategy"]["bnb_macro"]["min_edge"] == 4
+    assert d["aggregate_top"]["outside_entry_window"] == 29
+    assert d["aggregate_top"]["min_edge"] == 6
 
 
 def test_decision_gate_digest_surfaces_oracle_composite_and_enforced_lanes():

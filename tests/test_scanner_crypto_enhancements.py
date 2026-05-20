@@ -21,14 +21,40 @@ def test_iter_updown_1h_human_slugs_shape():
     # May 13, 09:44 UTC = May 13, 05:44 EDT → hour floor 5AM ET
     ref = datetime(2026, 5, 13, 9, 44, tzinfo=timezone.utc)
     slugs = MarketScanner._iter_updown_1h_human_slugs(look_ahead=0, now_utc=ref)
-    assert len(slugs) == 5  # 5 assets — doge/bnb deferred until trading well
+    assert len(slugs) == 7
     assert "bitcoin-up-or-down-may-13-2026-5am-et" in slugs
     assert "ethereum-up-or-down-may-13-2026-5am-et" in slugs
     assert "solana-up-or-down-may-13-2026-5am-et" in slugs
     assert "xrp-up-or-down-may-13-2026-5am-et" in slugs
     # HYPE uses the short ``hype-`` prefix on Polymarket hourly (not ``hyperliquid-``).
     assert "hype-up-or-down-may-13-2026-5am-et" in slugs
+    assert "doge-up-or-down-may-13-2026-5am-et" in slugs
+    assert "bnb-up-or-down-may-13-2026-5am-et" in slugs
     assert not any("hyperliquid" in s for s in slugs)
+
+
+def test_resolve_updown_lookahead_includes_doge_and_bnb_configs():
+    scanner = MarketScanner(
+        {
+            "polymarket": {},
+            "trading": {"cycle_interval_sec": 120},
+            "strategies": {
+                "doge_macro": {
+                    "enabled": True,
+                    "look_ahead_15m": 11,
+                    "look_ahead_5m": 9,
+                    "look_ahead_1h": 6,
+                },
+                "bnb_macro": {
+                    "enabled": True,
+                    "look_ahead_15m": 7,
+                    "look_ahead_5m": 5,
+                    "look_ahead_1h": 8,
+                },
+            },
+        }
+    )
+    assert scanner._resolve_updown_lookahead() == (11, 9, 8)
 
 
 def test_parse_gamma_event_market_accepts_array_fields():
@@ -94,6 +120,35 @@ def test_fetch_markets_gamma_closes_bulk_response(monkeypatch):
     markets = scanner._fetch_markets_gamma(limit=1)
     assert len(markets) == 1
     assert closed["count"] == 1
+
+
+def test_gamma_requests_session_reused_per_thread_and_closed_on_scanner_close(monkeypatch):
+    scanner = MarketScanner(_config())
+    created = []
+    closed = []
+
+    class _FakeSession:
+        def __init__(self):
+            created.append(self)
+
+        def mount(self, prefix, adapter):  # noqa: ARG002
+            return None
+
+        def close(self):
+            closed.append(self)
+
+    monkeypatch.setattr("src.market.scanner.requests.Session", _FakeSession)
+
+    s1 = scanner._get_gamma_requests_session()
+    s2 = scanner._get_gamma_requests_session()
+
+    assert s1 is s2
+    assert len(created) == 1
+
+    scanner._close_gamma_requests_sessions()
+
+    assert closed == [s1]
+    assert scanner._gamma_sessions == set()
 
 
 def test_fetch_event_slug_markets_records_per_source_slug_stats(monkeypatch):

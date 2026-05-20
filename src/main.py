@@ -1313,13 +1313,29 @@ class PolyBot:
                 s
                 for s in settled
                 if s.get("strategy")
-                in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+                in (
+                    "bitcoin",
+                    "sol_macro",
+                    "eth_macro",
+                    "hype_macro",
+                    "xrp_macro",
+                    "doge_macro",
+                    "bnb_macro",
+                )
             ]
             event_settled = [
                 s
                 for s in settled
                 if s.get("strategy")
-                not in ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
+                not in (
+                    "bitcoin",
+                    "sol_macro",
+                    "eth_macro",
+                    "hype_macro",
+                    "xrp_macro",
+                    "doge_macro",
+                    "bnb_macro",
+                )
             ]
             if crypto_settled:
                 crypto_pnl = sum(s["pnl"] for s in crypto_settled)

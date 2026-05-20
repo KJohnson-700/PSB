@@ -132,6 +132,8 @@ def test_updown_slug_iterator_uses_timestamp_market_slugs():
     assert any(slug.startswith("eth-updown-15m-") for slug in slugs)
     assert any(slug.startswith("xrp-updown-15m-") for slug in slugs)
     assert any(slug.startswith("hype-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("doge-updown-15m-") for slug in slugs)
+    assert any(slug.startswith("bnb-updown-15m-") for slug in slugs)
     assert not any("up-or-down" in slug for slug in slugs)
 
 
@@ -315,6 +317,24 @@ def test_scan_for_opportunities_high_liquidity_includes_updown_snapshot(monkeypa
     assert opportunities["scanner_meta"]["updown_15m_count"] == 1
     assert opportunities["scanner_meta"]["updown_5m_count"] == 1
     assert opportunities["scanner_meta"]["updown_1h_count"] == 0
+    assert isinstance(opportunities["scanner_meta"]["sync_phase_elapsed_ms"], int)
+
+
+def test_scan_for_opportunities_skips_when_previous_sync_still_running():
+    cfg = _config()
+    scanner = MarketScanner(cfg)
+
+    async def _run():
+        scanner._active_sync_phase = asyncio.get_running_loop().create_future()
+        result = await scanner.scan_for_opportunities()
+        assert result["high_liquidity"] == []
+        assert result["scanner_meta"]["sync_phase_overlap_skipped"] is True
+        assert result["scanner_meta"]["sync_phase_timeout"] is True
+
+    try:
+        asyncio.run(_run())
+    finally:
+        asyncio.run(scanner.close())
 
 
 def test_optional_hype_and_weather_fetches_can_be_disabled():

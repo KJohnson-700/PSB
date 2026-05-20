@@ -129,12 +129,12 @@ class Market:
 
 # Matches BTC / SOL / ETH short-candle "Up or Down" questions (15m / 5m windows).
 _CRYPTO_ASSET_UPDOWN_PATTERN = re.compile(
-    r"(?:(?:bitcoin|btc)|(?:solana|sol)|(?:ethereum|eth|ether)|(?:ripple|xrp)|(?:hyperliquid|hype))\s+up\s+or\s+down",
+    r"(?:(?:bitcoin|btc)|(?:solana|sol)|(?:ethereum|eth|ether)|(?:ripple|xrp)|(?:hyperliquid|hype)|(?:dogecoin|doge)|(?:bnb|binance\s+coin))\s+up\s+or\s+down",
     re.IGNORECASE,
 )
 # Slug prefix from Gamma event slugs (5m / 15m updown).
 _CRYPTO_UPDOWN_SLUG_RE = re.compile(
-    r"(?:btc|sol|eth|xrp|hype)-updown-(?:5m|15m|30m)-", re.IGNORECASE
+    r"(?:btc|sol|eth|xrp|hype|doge|bnb)-updown-(?:5m|15m|30m)-", re.IGNORECASE
 )
 _HYPE_ALT_UPDOWN_SLUG_RE = re.compile(
     r"(?:hyperliquid-up-or-down|hype-up-or-down)-", re.IGNORECASE
@@ -233,13 +233,17 @@ def is_crypto_updown_market(market: Market) -> bool:
             "ripple",
             "hyperliquid",
             "hype",
+            "dogecoin",
+            "doge",
+            "bnb",
+            "binance coin",
         )
     ):
         return True
     git = (market.group_item_title or "").lower()
     return "up or down" in git and any(
         tok in git
-        for tok in ("bitcoin", "btc", "solana", "sol", "ethereum", "eth", "xrp", "hyperliquid", "hype")
+        for tok in ("bitcoin", "btc", "solana", "sol", "ethereum", "eth", "xrp", "hyperliquid", "hype", "doge", "dogecoin", "bnb", "binance coin")
     )
 
 
@@ -386,6 +390,15 @@ class MarketScanner:
         self.config = config
         self._reload_config_fields()
         self.session: Optional[aiohttp.ClientSession] = None
+        self._sync_driver_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="scanner-driver"
+        )
+        self._sync_fetch_pool = ThreadPoolExecutor(
+            max_workers=5, thread_name_prefix="scanner-sync"
+        )
+        self._slug_fetch_pool = ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="scanner-slug"
+        )
         self._background_fetch_pool = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="scanner-bg"
         )
@@ -397,6 +410,9 @@ class MarketScanner:
         self._cycle_empty_event_slugs: set[str] = set()
         self._slug_fetch_stats: Dict[str, Dict[str, int]] = {}
         self._gamma_thread_state = thread_local()
+        self._gamma_sessions_lock = Lock()
+        self._gamma_sessions: set[requests.Session] = set()
+        self._active_sync_phase: Optional[asyncio.Future] = None
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
@@ -465,7 +481,19 @@ class MarketScanner:
             session.mount("https://", adapter)
             session.mount("http://", adapter)
             self._gamma_thread_state.gamma_session = session
+            with self._gamma_sessions_lock:
+                self._gamma_sessions.add(session)
         return session
+
+    def _close_gamma_requests_sessions(self) -> None:
+        with self._gamma_sessions_lock:
+            sessions = list(self._gamma_sessions)
+            self._gamma_sessions.clear()
+        for session in sessions:
+            try:
+                session.close()
+            except Exception:
+                logger.debug("Failed to close Gamma requests session", exc_info=True)
 
     def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
         text = f"{question or ''} {description or ''}"
@@ -538,8 +566,7 @@ class MarketScanner:
             tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
 
         results: Dict[str, Any] = {}
-        pool = ThreadPoolExecutor(max_workers=len(tasks), thread_name_prefix="scanner")
-        futures = {pool.submit(fn): name for name, fn in tasks.items()}
+        futures = {self._sync_fetch_pool.submit(fn): name for name, fn in tasks.items()}
         timed_out = False
         try:
             for future in as_completed(futures, timeout=self._scanner_sync_timeout):
@@ -563,7 +590,6 @@ class MarketScanner:
                     continue
                 future.cancel()
                 results.setdefault(name, [])
-            pool.shutdown(wait=not timed_out, cancel_futures=True)
 
         # fetch_updown_markets historically returned (15m, ~30m carry) — the 30m carry path
         # is dead (Polymarket discontinued the 30m crypto product family). Accept either
@@ -695,7 +721,15 @@ class MarketScanner:
             (lookahead_15m, lookahead_5m, lookahead_1h)
         """
         strategies = self.config.get("strategies", {}) or {}
-        keys = ["bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro"]
+        keys = [
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "doge_macro",
+            "bnb_macro",
+        ]
 
         enabled_cfgs = []
         for key in keys:
@@ -993,7 +1027,7 @@ class MarketScanner:
         return markets
 
     # ──────────────────────────────────────────────────────────────
-    # 15-minute Up/Down market fetcher (BTC & SOL)
+    # Short-window Up/Down market fetcher
     # ──────────────────────────────────────────────────────────────
     GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 
@@ -1003,6 +1037,8 @@ class MarketScanner:
         "eth",
         "xrp",
         "hype",
+        "doge",
+        "bnb",
     )
 
     @staticmethod
@@ -1059,9 +1095,7 @@ class MarketScanner:
     # Asset prefixes Polymarket lists under the hourly Up/Down product
     # (https://polymarket.com/crypto/hourly). Note HYPE uses the short ``hype-``
     # prefix here (not ``hyperliquid-``).
-    # NOTE: ``dogecoin`` and ``bnb`` are also live on hourly but intentionally deferred
-    # until btc/eth/sol/xrp/hype are trading well. Add them here when ready.
-    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = ("bitcoin", "ethereum", "solana", "xrp", "hype")
+    _HOURLY_UPDOWN_ASSETS: Tuple[str, ...] = ("bitcoin", "ethereum", "solana", "xrp", "hype", "doge", "bnb")
 
     @classmethod
     def _iter_updown_1h_human_slugs(
@@ -1193,9 +1227,7 @@ class MarketScanner:
         seen_ids: set[str] = set()
         hit_slugs = 0
         empty_slugs = 0
-        max_workers = max(1, min(20, len(slugs)))
-        pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="updown-slug")
-        future_to_slug = {pool.submit(_fetch_one, slug): slug for slug in slugs}
+        future_to_slug = {self._slug_fetch_pool.submit(_fetch_one, slug): slug for slug in slugs}
         try:
             for future in as_completed(future_to_slug):
                 parsed_batch = future.result()
@@ -1213,7 +1245,9 @@ class MarketScanner:
                 if limit is not None and len(markets) >= limit:
                     break
         finally:
-            pool.shutdown(wait=True, cancel_futures=True)
+            for future in future_to_slug:
+                if not future.done():
+                    future.cancel()
         if stats_key:
             self._set_slug_fetch_stats(
                 stats_key,
@@ -1324,9 +1358,8 @@ class MarketScanner:
         (e.g. ``bitcoin-up-or-down-may-17-2026-1am-et``).
 
         Polymarket discontinued the legacy ``*-updown-30m-{unix}`` family entirely; the
-        hourly product is the live replacement. All 5 assets we trade (btc/eth/sol/xrp/hype)
-        are listed at https://polymarket.com/crypto/hourly; doge/bnb are deferred per
-        _HOURLY_UPDOWN_ASSETS.
+        hourly product is the live replacement. The active hourly scanner universe is
+        defined by ``_HOURLY_UPDOWN_ASSETS``.
         """
         slugs = self._iter_updown_1h_human_slugs(look_ahead=look_ahead)
         markets = self._fetch_event_slug_markets(
@@ -1526,7 +1559,18 @@ class MarketScanner:
         """
         t_scan_start = time.perf_counter()
         logger.info("Scanner: sync network phase (thread) starting")
+        active_phase = self._active_sync_phase
+        if active_phase is not None and not active_phase.done():
+            logger.warning(
+                "Scanner: previous sync phase still running; skipping new network phase to avoid overlap"
+            )
+            result = self._empty_scan_result(sync_timeout=True)
+            result["scanner_meta"]["sync_phase_overlap_skipped"] = True
+            return result
         try:
+            loop = asyncio.get_running_loop()
+            sync_phase = loop.run_in_executor(self._sync_driver_pool, self._sync_network_phase)
+            self._active_sync_phase = sync_phase
             (
                 markets,
                 updown,
@@ -1538,7 +1582,7 @@ class MarketScanner:
                 look_ahead_5m,
                 look_ahead_1h,
             ) = await asyncio.wait_for(
-                asyncio.to_thread(self._sync_network_phase),
+                asyncio.shield(sync_phase),
                 timeout=self._scanner_sync_timeout + 2.0,
             )
         except asyncio.TimeoutError:
@@ -1548,7 +1592,12 @@ class MarketScanner:
                 elapsed_ms,
                 self._scanner_sync_timeout,
             )
-            return self._empty_scan_result(sync_timeout=True)
+            result = self._empty_scan_result(sync_timeout=True)
+            result["scanner_meta"]["sync_phase_elapsed_ms"] = elapsed_ms
+            return result
+        finally:
+            if self._active_sync_phase is not None and self._active_sync_phase.done():
+                self._active_sync_phase = None
 
         sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
         logger.info("Scanner: sync network phase finished in %dms", sync_ms)
@@ -1628,6 +1677,7 @@ class MarketScanner:
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
             "look_ahead_1h": look_ahead_1h,
+            "sync_phase_elapsed_ms": sync_ms,
             "updown_15m_count": len(opportunities.get("updown", [])),
             "updown_5m_count": len(opportunities.get("updown_5m", [])),
             "updown_1h_count": len(opportunities.get("updown_1h", [])),
@@ -1659,4 +1709,8 @@ class MarketScanner:
         """Close HTTP session"""
         if self.session and not self.session.closed:
             await self.session.close()
+        self._close_gamma_requests_sessions()
+        self._sync_driver_pool.shutdown(wait=False, cancel_futures=True)
+        self._sync_fetch_pool.shutdown(wait=False, cancel_futures=True)
+        self._slug_fetch_pool.shutdown(wait=False, cancel_futures=True)
         self._background_fetch_pool.shutdown(wait=False, cancel_futures=True)

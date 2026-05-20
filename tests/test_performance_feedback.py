@@ -82,6 +82,39 @@ def test_get_loosen_min_edge_mult_from_runtime():
     )
 
 
+def test_get_loosen_min_edge_mult_supports_new_alt_assets():
+    cfg = {
+        "performance_feedback": {"enabled": True},
+        "_runtime_feedback": {
+            "enabled": True,
+            "by_lane": {
+                "doge_macro|5m|up|bullish": {"min_edge_mult": 0.83},
+                "bnb_macro|15m|down|bearish": {"min_edge_mult": 0.79},
+            },
+        },
+    }
+    assert (
+        get_loosen_min_edge_mult(
+            "doge_macro",
+            cfg,
+            window="5m",
+            side="up",
+            regime="BULLISH",
+        )
+        == pytest.approx(0.83)
+    )
+    assert (
+        get_loosen_min_edge_mult(
+            "bnb_macro",
+            cfg,
+            window="15m",
+            side="down",
+            regime="BEARISH",
+        )
+        == pytest.approx(0.79)
+    )
+
+
 @patch("src.execution.performance_feedback.PerformanceTracker")
 def test_refresh_clamps_min_edge_mult(mock_pt):
     mock_inst = MagicMock()

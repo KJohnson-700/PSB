@@ -44,6 +44,8 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "eth_macro",
         "hype_macro",
         "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
         "weather",
     )
     per_lane: Dict[str, Any] = {}
@@ -72,7 +74,15 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
     ai_cfg = (cfg.get("ai") or {}).get("decision_layer") or {}
     composite = cfg.get("updown_composite") or {}
     # Alts first so dashboard/API consumers list macro lanes before BTC-only controls.
-    lanes = ("sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bitcoin")
+    lanes = (
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
+        "bitcoin",
+    )
     oracle_block_keys = {"oracle_missing", "oracle_stale", "oracle_basis_block"}
     control_prefixes = ("ai_decision_",)
     control_keys = {
@@ -166,7 +176,15 @@ def _decision_gate_digest(config: Dict[str, Any], ai_scan_stats: Dict[str, Any])
 def _buy_no_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
     """Dedicated BUY_NO suppression counters and last sample per strategy."""
     # Alts first so dashboard/API consumers list macro lanes before BTC-only controls.
-    lanes = ("sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bitcoin")
+    lanes = (
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
+        "bitcoin",
+    )
     per_lane: Dict[str, Dict[str, int]] = {}
     last_samples: Dict[str, Dict[str, Any]] = {}
     totals: Dict[str, int] = {}
@@ -234,6 +252,8 @@ def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "eth_macro",
         "hype_macro",
         "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
         "weather",
     )
     aliases = {
@@ -280,6 +300,8 @@ def _side_selection_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "eth_macro",
         "hype_macro",
         "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
     )
     per_lane: Dict[str, Dict[str, Any]] = {}
     aggregate = {"LONG": 0, "SHORT": 0, "unknown": 0}
