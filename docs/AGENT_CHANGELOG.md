@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-20 — Commands tab card reorder + custom-fullscreen header sizing
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** (1) Moved the **Configuration** panel and **API Usage** card from the top of the Commands tab to the bottom (after the Shutdown card) so Start commands / Backtest / Kill switch are the first thing visible when opening the tab. Done via in-place HTML reorder, no JS or ID changes. (2) Custom-fullscreen (`html.dashboard-fullscreen`) overrides for `.cmd-pnl-title` ("Live P&L Trace") and the new `h3.active-positions-title` ("Active Positions") — both pinned to 18px so they no longer balloon to the 30px global fullscreen h3 ramp. Positions-count badge inside the h3 also dropped to 0.65rem to match. Half-screen and native browser fullscreen are unaffected.
+
+**Why:** User feedback — Config + API Usage at the top of the Commands tab pushed the actually-used CLI snippets below the fold; and the two card headers looked oversized vs. the rest of the card body once the Enter Fullscreen button was used.
+
+**Restart:** Not required (dashboard CSS/markup only). Hard-reload the browser.
+
+---
+
 ## 2026-05-20 — BTC post-quant counter-trend flip + dashboard PnL/Exit-Timing gradient parity + Start Live brightness
 
 **[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** New helper `_maybe_quant_flip` (placed adjacent to `_calibrate_est_prob`) that flips the picked action when the raw quant probability clearly contradicts the HTF-picked side: `BUY_YES` → `BUY_NO` when `raw_est_prob < quant_disagree_flip_thresh` (default 0.48), and `BUY_NO` → `BUY_YES` when `raw_est_prob > 1 - thresh` (default 0.52). Respects `disable_buy_no_counter_trend` and `disable_buy_yes` flags. Wired in at both updown evaluation sites — the 5m path right after `raw_est_prob = quant.est_prob_up`, and the 15m/1h path right after `raw_est_prob = est_prob_up` is clamped — both before `_calibrate_est_prob` runs so calibration sees the corrected action. `side_source` becomes `btc_quant_disagree_flip` and `reason_parts` records `quant_flip=raw(X.XXX)<0.48` (or `>0.52`).

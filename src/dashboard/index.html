@@ -1208,6 +1208,10 @@
         /* Type ramp: 1.5× over compact .sh/h2 (18px) and h3 (20px) for fullscreen readability */
         html.dashboard-fullscreen h2{font-size:27px}
         html.dashboard-fullscreen h3{font-size:30px}
+        /* Shrink Live P&L Trace + Active Positions headers in custom fullscreen — they were oversized vs. the rest of the card */
+        html.dashboard-fullscreen .cmd-pnl-title,
+        html.dashboard-fullscreen h3.active-positions-title{font-size:18px;letter-spacing:.08em}
+        html.dashboard-fullscreen h3.active-positions-title #positions-count{font-size:0.65rem}
         html.dashboard-fullscreen .ops-mini-body{font-size:0.86rem;max-height:none;white-space:normal;line-height:1.45}
         html.dashboard-fullscreen .signal-row{font-size:13px}
         html.dashboard-fullscreen .signal-gates-grid>div{padding:12px}
@@ -1631,7 +1635,7 @@
         </div>
         <div id="positions-section" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="togglePositions()">
-                <h3 style="margin-bottom:0;">Active Positions <span id="positions-count" class="badge badge-blue" style="margin-left:6px;font-size:0.7rem;">0</span></h3>
+                <h3 class="active-positions-title" style="margin-bottom:0;">Active Positions <span id="positions-count" class="badge badge-blue" style="margin-left:6px;font-size:0.7rem;">0</span></h3>
                 <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9654;</span>
             </div>
             <div id="positions-body-wrap" style="margin-top:6px;display:none;">
@@ -2499,6 +2503,80 @@
          ═══════════════════════════════════════════════════════ -->
     <div id="view-commands" style="display:none;">
 
+    <div class="card cmd-ref" style="margin-bottom:16px;">
+        <h2 class="cmd-ref-lead">Start commands</h2>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Use these when you are <strong>not</strong> relying on the Command Center <strong>Start Live Test</strong> button (for example SSH into a server, local terminal only, or CI). The web UI button runs the same entrypoint class as <code>start.py</code> but keeps logs attached to the dashboard process.</p>
+        <p class="cmd-note">Run from the <strong>project root</strong> (folder that contains <code>src/</code> and <code>config/</code>). On Windows, use <code>py</code> instead of <code>python</code> if needed.</p>
+        <p class="cmd-note">Web UI: <code>http://127.0.0.1:8081</code> — port is <code>config/settings.yaml</code> → <code>dashboard.dashboard_port</code>.</p>
+
+        <h3>Paper trading + dashboard + AI</h3>
+        <p class="cmd-note">Default run: <strong>simulated orders</strong> (not <code>--live</code>). LLMs require <code>ai.enabled: true</code>, <code>ai.live_inferencing: true</code>, a non-empty <code>provider_chain</code> in <code>config/settings.yaml</code>, and provider keys in the repo <code>.env</code> or <code>config/secrets.env</code>. Use per-strategy <code>use_ai</code> in YAML to control which strategies call the model.</p>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python start.py">Copy</button>
+            <pre>python start.py</pre>
+        </div>
+        <p class="cmd-note">Equivalent: <code>python src/main.py --paper</code> (see <code>start.py</code> at repo root).</p>
+
+        <h3>Bot (paper / default dry-run)</h3>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py">Copy</button>
+            <pre>python src/main.py</pre>
+        </div>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --paper">Copy</button>
+            <pre>python src/main.py --paper</pre>
+        </div>
+
+        <h3>Dashboard only (no trading loop)</h3>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --dashboard-only">Copy</button>
+            <pre>python src/main.py --dashboard-only</pre>
+        </div>
+
+        <h3>Live trading</h3>
+        <p class="cmd-note">Requires typing <code>YES</code> at the prompt. Use only when you intend real orders.</p>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --live --confirm-live">Copy</button>
+            <pre>python src/main.py --live --confirm-live</pre>
+        </div>
+
+        <h3>Kill switch &amp; resume</h3>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --emergency-stop">Copy</button>
+            <pre>python src/main.py --emergency-stop</pre>
+        </div>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --resume-trading">Copy</button>
+            <pre>python src/main.py --resume-trading</pre>
+        </div>
+
+        <h3>Backtest (CLI)</h3>
+        <p class="cmd-note">Use this when the bot is <strong>not</strong> running, or as a separate scheduled job. If the bot is already running (any host — local, Docker, PaaS), use the <strong>Backtest</strong> tab instead so backtests run as a subprocess. Invoking <code>main.py --backtest</code> as the service entry point would replace the long-lived bot.</p>
+        <p class="cmd-note">Entry point forwards to <code>scripts/run_backtest.py</code>; extra args go after <code>--backtest</code>.</p>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --backtest --plan config/backtest_plan.yaml">Copy</button>
+            <pre>python src/main.py --backtest --plan config/backtest_plan.yaml</pre>
+        </div>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python scripts/run_backtest.py --help">Copy</button>
+            <pre>python scripts/run_backtest.py --help</pre>
+        </div>
+
+        <h3>Unit tests</h3>
+        <div class="cmd-row">
+            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python -m pytest tests/ -q">Copy</button>
+            <pre>python -m pytest tests/ -q</pre>
+        </div>
+    </div>
+
+    <div class="card cmd-ref" style="margin-bottom:16px;">
+        <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
+        <h3>Foreground terminal</h3>
+        <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
+        <h3>Emergency halt and resume</h3>
+        <p class="cmd-note">CLI copy-paste lives in <strong>Kill switch &amp; resume</strong> under <strong>Start commands</strong> above: <code>--emergency-stop</code> and <code>--resume-trading</code>.</p>
+    </div>
     <!-- Config Panel (collapsible) -->
     <div class="card collapsible" onclick="this.classList.toggle('open')" style="margin-top:16px;">
         <h2>Configuration</h2>
@@ -2618,80 +2696,6 @@
         </div>
     </div>
 
-    <div class="card cmd-ref" style="margin-bottom:16px;">
-        <h2 class="cmd-ref-lead">Start commands</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Use these when you are <strong>not</strong> relying on the Command Center <strong>Start Live Test</strong> button (for example SSH into a server, local terminal only, or CI). The web UI button runs the same entrypoint class as <code>start.py</code> but keeps logs attached to the dashboard process.</p>
-        <p class="cmd-note">Run from the <strong>project root</strong> (folder that contains <code>src/</code> and <code>config/</code>). On Windows, use <code>py</code> instead of <code>python</code> if needed.</p>
-        <p class="cmd-note">Web UI: <code>http://127.0.0.1:8081</code> — port is <code>config/settings.yaml</code> → <code>dashboard.dashboard_port</code>.</p>
-
-        <h3>Paper trading + dashboard + AI</h3>
-        <p class="cmd-note">Default run: <strong>simulated orders</strong> (not <code>--live</code>). LLMs require <code>ai.enabled: true</code>, <code>ai.live_inferencing: true</code>, a non-empty <code>provider_chain</code> in <code>config/settings.yaml</code>, and provider keys in the repo <code>.env</code> or <code>config/secrets.env</code>. Use per-strategy <code>use_ai</code> in YAML to control which strategies call the model.</p>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python start.py">Copy</button>
-            <pre>python start.py</pre>
-        </div>
-        <p class="cmd-note">Equivalent: <code>python src/main.py --paper</code> (see <code>start.py</code> at repo root).</p>
-
-        <h3>Bot (paper / default dry-run)</h3>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py">Copy</button>
-            <pre>python src/main.py</pre>
-        </div>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --paper">Copy</button>
-            <pre>python src/main.py --paper</pre>
-        </div>
-
-        <h3>Dashboard only (no trading loop)</h3>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --dashboard-only">Copy</button>
-            <pre>python src/main.py --dashboard-only</pre>
-        </div>
-
-        <h3>Live trading</h3>
-        <p class="cmd-note">Requires typing <code>YES</code> at the prompt. Use only when you intend real orders.</p>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --live --confirm-live">Copy</button>
-            <pre>python src/main.py --live --confirm-live</pre>
-        </div>
-
-        <h3>Kill switch &amp; resume</h3>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --emergency-stop">Copy</button>
-            <pre>python src/main.py --emergency-stop</pre>
-        </div>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --resume-trading">Copy</button>
-            <pre>python src/main.py --resume-trading</pre>
-        </div>
-
-        <h3>Backtest (CLI)</h3>
-        <p class="cmd-note">Use this when the bot is <strong>not</strong> running, or as a separate scheduled job. If the bot is already running (any host — local, Docker, PaaS), use the <strong>Backtest</strong> tab instead so backtests run as a subprocess. Invoking <code>main.py --backtest</code> as the service entry point would replace the long-lived bot.</p>
-        <p class="cmd-note">Entry point forwards to <code>scripts/run_backtest.py</code>; extra args go after <code>--backtest</code>.</p>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python src/main.py --backtest --plan config/backtest_plan.yaml">Copy</button>
-            <pre>python src/main.py --backtest --plan config/backtest_plan.yaml</pre>
-        </div>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python scripts/run_backtest.py --help">Copy</button>
-            <pre>python scripts/run_backtest.py --help</pre>
-        </div>
-
-        <h3>Unit tests</h3>
-        <div class="cmd-row">
-            <button type="button" class="btn-sm" onclick="copyDashboardCmd(this)" data-cmd="python -m pytest tests/ -q">Copy</button>
-            <pre>python -m pytest tests/ -q</pre>
-        </div>
-    </div>
-
-    <div class="card cmd-ref" style="margin-bottom:16px;">
-        <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
-        <h3>Foreground terminal</h3>
-        <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
-        <h3>Emergency halt and resume</h3>
-        <p class="cmd-note">CLI copy-paste lives in <strong>Kill switch &amp; resume</strong> under <strong>Start commands</strong> above: <code>--emergency-stop</code> and <code>--resume-trading</code>.</p>
-    </div>
     </div><!-- /view-commands -->
 
 </div><!-- /container -->
