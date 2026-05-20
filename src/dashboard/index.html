@@ -464,6 +464,308 @@
             .bt-hud-track.bt-hud-indet .bt-hud-fill{animation:none;width:42%!important;margin-left:20%!important;filter:none}
         }
 
+        /* ── Exit Timing HUD (under BTC chart) ── */
+        #exit-timing-hud{
+            position:relative;
+            margin-top:12px;
+            padding:12px 14px 10px;
+            border-radius:4px;
+            border:1px solid var(--border);
+            background:
+                radial-gradient(circle at 8% 0%, rgba(34,211,238,.10), transparent 55%),
+                linear-gradient(180deg, #04060c 0%, #02030a 100%);
+            color:var(--text);
+            overflow:hidden;
+        }
+        #exit-timing-hud::before{
+            content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(255,255,255,.025) 3px,transparent 4px);
+            mix-blend-mode:screen;
+        }
+        #exit-timing-hud .hud-head,
+        #exit-timing-hud .hud-body{position:relative;z-index:1}
+        #exit-timing-hud .hud-head{
+            display:flex;align-items:center;gap:10px;
+            margin-bottom:8px;padding-bottom:6px;
+            border-bottom:1px dashed rgba(34,211,238,.18);
+        }
+        #exit-timing-hud .hud-pulse{
+            width:6px;height:6px;border-radius:50%;
+            background:#22d3ee;box-shadow:0 0 8px #22d3ee;
+            animation:hudPulse 2s ease-in-out infinite;
+        }
+        #exit-timing-hud .hud-title{
+            font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;
+            text-transform:uppercase;letter-spacing:.18em;
+            color:var(--cy);text-shadow:0 0 8px rgba(34,211,238,.45);
+        }
+        #exit-timing-hud .hud-window{
+            margin-left:auto;
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            color:var(--text-muted);letter-spacing:.06em;
+            font-variant-numeric:tabular-nums;
+        }
+        #exit-timing-hud .hud-row{
+            display:grid;grid-template-columns:62px 1fr 130px;align-items:center;
+            gap:10px;padding:5px 0;
+            transition:opacity .18s ease;
+        }
+        #exit-timing-hud .hud-row[data-muted="1"]{opacity:.32}
+        #exit-timing-hud .hud-row[data-muted="1"] .hud-track{opacity:.4}
+        #exit-timing-hud .hud-chip{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;
+            letter-spacing:.1em;text-transform:uppercase;
+            padding:3px 6px;border-radius:3px;border:1px solid currentColor;
+            background:rgba(255,255,255,.02);
+            display:flex;align-items:center;justify-content:space-between;gap:6px;
+            cursor:pointer;user-select:none;
+            transition:filter .15s ease, transform .12s ease;
+        }
+        #exit-timing-hud .hud-chip:hover{filter:brightness(1.25)}
+        #exit-timing-hud .hud-chip:active{transform:scale(.97)}
+        #exit-timing-hud .hud-chip .hud-count{
+            font-size:9px;font-weight:500;opacity:.75;letter-spacing:0;
+        }
+        #exit-timing-hud .hud-track{
+            position:relative;height:20px;border-radius:2px;
+            background:#01020a;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.04), inset 0 2px 6px rgba(0,0,0,.55);
+            overflow:hidden;
+        }
+        #exit-timing-hud .hud-track::before{
+            content:'';position:absolute;left:0;right:0;top:50%;
+            height:1px;background:rgba(255,255,255,.06);
+        }
+        #exit-timing-hud .hud-track .hud-crosshair{
+            position:absolute;top:0;bottom:0;width:1px;
+            background:rgba(255,255,255,.55);
+            box-shadow:0 0 5px rgba(255,255,255,.45);
+            transform:translateX(-0.5px);
+            pointer-events:none;opacity:0;
+            transition:opacity .08s linear;
+        }
+        #exit-timing-hud .hud-track .hud-crosshair.on{opacity:.85}
+        #exit-timing-hud .hud-track .hud-spark{
+            position:absolute;left:0;right:0;top:0;bottom:0;
+            width:100%;height:100%;pointer-events:none;opacity:.5;
+        }
+        #exit-timing-hud .hud-tick{
+            position:absolute;top:3px;width:2px;height:14px;border-radius:1px;
+            transform:translateX(-1px);
+            cursor:pointer;
+            transition:transform .12s ease, filter .12s ease;
+        }
+        #exit-timing-hud .hud-tick:hover{transform:translateX(-1px) scaleY(1.18);filter:brightness(1.35)}
+        #exit-timing-hud .hud-tick.win{background:#4ade80;box-shadow:0 0 5px #4ade80}
+        #exit-timing-hud .hud-tick.loss{background:#f87171;box-shadow:0 0 5px #f87171}
+        #exit-timing-hud .hud-tick.flash{animation:hudTickFlash .8s ease-out}
+        @keyframes hudTickFlash{
+            0%{filter:brightness(2.4);box-shadow:0 0 14px currentColor,0 0 28px currentColor}
+            100%{filter:brightness(1);box-shadow:0 0 5px currentColor}
+        }
+        #exit-timing-hud .hud-stats{
+            font-family:'IBM Plex Mono',monospace;font-size:11px;
+            text-align:right;color:var(--text);letter-spacing:.04em;
+            font-variant-numeric:tabular-nums;
+        }
+        #exit-timing-hud .hud-stats .muted{color:var(--text-muted)}
+        #exit-timing-hud .hud-stats .pos{color:#4ade80}
+        #exit-timing-hud .hud-stats .neg{color:#f87171}
+        #exit-timing-hud .hud-empty{
+            padding:18px 4px;text-align:center;
+            font-style:italic;color:var(--text-muted);font-size:11px;
+            letter-spacing:.04em;
+        }
+        @keyframes hudPulse{0%,100%{opacity:1}50%{opacity:.5}}
+        @media (prefers-reduced-motion:reduce){
+            #exit-timing-hud .hud-pulse{animation:none}
+        }
+
+        /* ── Cross-Asset Macro Alignment ── */
+        #macro-align-section{
+            position:relative;
+            background:
+                radial-gradient(circle at 6% 0%, rgba(34,211,238,.10), transparent 55%),
+                radial-gradient(circle at 96% 100%, rgba(176,96,255,.08), transparent 50%),
+                linear-gradient(180deg, #04070e 0%, #02040a 100%);
+            border:1px solid var(--border);
+            overflow:hidden;
+        }
+        #macro-align-section::before{
+            content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+            background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,rgba(255,255,255,.022) 3px,transparent 4px);
+            mix-blend-mode:screen;
+        }
+        #macro-align-section > *{position:relative;z-index:1}
+        #macro-align-section .ma-hdr{
+            display:flex;justify-content:space-between;align-items:center;gap:14px;
+            padding-bottom:8px;margin-bottom:10px;
+            border-bottom:1px dashed rgba(34,211,238,.18);
+        }
+        #macro-align-section .ma-titlewrap{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+        #macro-align-section .ma-pulse{
+            width:8px;height:8px;border-radius:50%;background:#22d3ee;
+            box-shadow:0 0 10px #22d3ee, 0 0 22px rgba(34,211,238,.5);
+            animation:hudPulse 2s ease-in-out infinite;
+        }
+        #macro-align-section .ma-title{
+            font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;
+            text-transform:uppercase;letter-spacing:.18em;color:var(--cy);
+            text-shadow:0 0 8px rgba(34,211,238,.45);margin:0;
+        }
+        #macro-align-section .ma-sub{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            color:var(--text-muted);letter-spacing:.08em;font-variant-numeric:tabular-nums;
+        }
+        #macro-align-section .ma-toggle{
+            display:inline-flex;border:1px solid rgba(255,255,255,.08);
+            border-radius:3px;overflow:hidden;flex-shrink:0;
+        }
+        #macro-align-section .ma-tog{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;
+            padding:5px 12px;background:transparent;color:var(--text-muted);
+            border:none;cursor:pointer;text-transform:uppercase;
+            transition:background .15s ease, color .15s ease;
+        }
+        #macro-align-section .ma-tog + .ma-tog{border-left:1px solid rgba(255,255,255,.08)}
+        #macro-align-section .ma-tog:hover{color:var(--text)}
+        #macro-align-section .ma-tog.active{
+            background:rgba(34,211,238,.12);color:var(--cy);
+            text-shadow:0 0 6px rgba(34,211,238,.65);
+        }
+        #macro-align-section .ma-chips{
+            display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;
+        }
+        #macro-align-section .ma-chip{
+            font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;
+            letter-spacing:.08em;text-transform:uppercase;
+            display:inline-flex;align-items:center;gap:6px;
+            padding:4px 9px;border-radius:3px;border:1px solid;
+            background:rgba(255,255,255,.02);cursor:pointer;user-select:none;
+            transition:opacity .15s ease, filter .15s ease, transform .12s ease;
+        }
+        #macro-align-section .ma-chip:hover{filter:brightness(1.25)}
+        #macro-align-section .ma-chip:active{transform:scale(.96)}
+        #macro-align-section .ma-chip[data-on="0"]{opacity:.32;filter:saturate(.4)}
+        #macro-align-section .ma-chip[data-unavail="1"]{opacity:.28;cursor:not-allowed}
+        #macro-align-section .ma-chip .ma-chip-dash{
+            display:inline-block;width:10px;height:2px;background:currentColor;
+            box-shadow:0 0 4px currentColor;border-radius:1px;
+        }
+        #macro-align-section .ma-chip .ma-chip-meta{
+            font-size:9px;opacity:.75;letter-spacing:.04em;text-transform:none;
+        }
+        #macro-align-section .ma-chip .ma-chip-pct{
+            font-size:9px;font-variant-numeric:tabular-nums;letter-spacing:.02em;
+        }
+        #macro-align-section .ma-chip .ma-chip-pct.pos{color:#4ade80}
+        #macro-align-section .ma-chip .ma-chip-pct.neg{color:#f87171}
+        #macro-align-section .ma-chartwrap{
+            position:relative;width:100%;
+            background:#01020a;
+            border:1px solid rgba(255,255,255,.04);border-radius:4px;
+            box-shadow:inset 0 0 0 1px rgba(0,0,0,.5), inset 0 12px 30px rgba(0,0,0,.55);
+            overflow:hidden;
+            aspect-ratio: 1200 / 280;
+            min-height:240px;
+        }
+        #macro-align-section #macro-align-canvas{
+            display:block;width:100%;height:100%;
+        }
+        #macro-align-section .ma-bbl-layer{
+            position:absolute;inset:0;pointer-events:none;
+        }
+        #macro-align-section .ma-bbl{
+            position:absolute;transform:translate(-50%,-50%);pointer-events:auto;
+        }
+        #macro-align-section .ma-bbl-dot{
+            width:11px;height:11px;border-radius:50%;
+            background:radial-gradient(circle at 35% 35%, rgba(255,255,255,.55), currentColor 65%);
+            box-shadow:0 0 8px currentColor, 0 0 18px rgba(255,255,255,.18);
+            border:1px solid rgba(255,255,255,.35);
+            animation:hudPopIn .35s ease both;
+        }
+        #macro-align-section .ma-bbl-win{
+            width:14px;height:14px;border-radius:50%;
+            background:radial-gradient(circle at 35% 35%, #b4ffd6, #4ade80 55%, #00b35a);
+            box-shadow:0 0 10px #4ade80, 0 0 24px rgba(74,222,128,.55);
+            border:1.5px solid rgba(180,255,220,.55);
+            animation:hudPopIn .35s ease both;
+        }
+        #macro-align-section .ma-bbl-x{
+            width:18px;height:18px;display:block;
+            filter:drop-shadow(0 0 4px rgba(255,68,102,.9)) drop-shadow(0 0 8px rgba(255,68,102,.5));
+            animation:hudPopIn .35s ease both;
+        }
+        @keyframes hudPopIn{0%{transform:scale(0);opacity:0}55%{transform:scale(1.32);opacity:1}100%{transform:scale(1);opacity:1}}
+        #macro-align-section .ma-bbl-tip{
+            position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
+            background:rgba(0,0,0,.92);border:1px solid rgba(0,229,255,.35);
+            padding:6px 9px;border-radius:3px;
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            white-space:nowrap;color:var(--text);
+            opacity:0;pointer-events:none;transition:opacity .12s ease;
+            z-index:30;
+            box-shadow:0 0 14px rgba(34,211,238,.25);
+        }
+        #macro-align-section .ma-bbl:hover .ma-bbl-tip{opacity:1}
+        #macro-align-section .ma-crosshair{
+            position:absolute;top:0;bottom:0;width:1px;
+            background:rgba(0,229,255,.35);box-shadow:0 0 6px rgba(0,229,255,.5);
+            transform:translateX(-.5px);pointer-events:none;opacity:0;
+            transition:opacity .08s linear;
+        }
+        #macro-align-section .ma-crosshair.on{opacity:1}
+        #macro-align-section .ma-tooltip{
+            position:absolute;top:6px;background:rgba(0,0,0,.92);
+            border:1px solid rgba(0,229,255,.35);padding:7px 10px;border-radius:3px;
+            font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text);
+            white-space:nowrap;opacity:0;pointer-events:none;
+            transition:opacity .08s linear;z-index:25;
+            box-shadow:0 0 14px rgba(34,211,238,.18);
+            min-width:140px;
+        }
+        #macro-align-section .ma-tooltip.on{opacity:.98}
+        #macro-align-section .ma-tooltip .ma-tt-row{
+            display:flex;justify-content:space-between;gap:12px;line-height:1.55;
+        }
+        #macro-align-section .ma-tooltip .ma-tt-head{
+            color:var(--text-muted);font-size:9px;letter-spacing:.1em;
+            margin-bottom:4px;text-transform:uppercase;
+        }
+        #macro-align-section .ma-empty{
+            position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+            font-family:'IBM Plex Mono',monospace;font-size:11px;
+            color:var(--text-muted);font-style:italic;letter-spacing:.08em;
+            pointer-events:none;
+        }
+        #macro-align-section .ma-empty.hidden{display:none}
+        #macro-align-section .ma-foot{
+            margin-top:10px;display:flex;justify-content:space-between;align-items:center;
+            flex-wrap:wrap;gap:10px;
+            font-family:'IBM Plex Mono',monospace;font-size:10px;
+            color:var(--text-muted);letter-spacing:.05em;
+        }
+        #macro-align-section .ma-foot-meta{
+            color:rgba(80,80,130,.95);font-size:9px;letter-spacing:.16em;
+        }
+        #macro-align-section .ma-foot .ma-pair{
+            display:inline-flex;align-items:center;gap:5px;margin-right:12px;
+        }
+        #macro-align-section .ma-foot .ma-pair-dot{
+            width:6px;height:6px;border-radius:50%;display:inline-block;
+            box-shadow:0 0 6px currentColor;
+        }
+        #macro-align-section.candles-view .ma-chartwrap,
+        #macro-align-section.candles-view .ma-chips,
+        #macro-align-section.candles-view .ma-foot{display:none}
+        #macro-align-section.candles-view .ma-candles-hint{
+            display:block;padding:24px 16px;text-align:center;
+            font-family:'IBM Plex Mono',monospace;font-size:11px;
+            color:var(--text-muted);font-style:italic;letter-spacing:.08em;
+        }
+        #macro-align-section .ma-candles-hint{display:none}
+
         /* ── Test dots ── */
         .test-item{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px}
         .test-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
@@ -1160,7 +1462,44 @@
             <div id="tradingview_btc"></div>
             <div id="btc-trade-overlay" class="bbl-layer" aria-hidden="true"></div>
         </div>
+        <div id="exit-timing-hud" role="region" aria-label="Exit timing telemetry">
+            <div class="hud-head">
+                <span class="hud-pulse" aria-hidden="true"></span>
+                <span class="hud-title">Exit Timing // Strategy Rollup</span>
+                <span class="hud-window" id="exit-timing-hud-window">Window —</span>
+            </div>
+            <div class="hud-body" id="exit-timing-hud-body"></div>
+        </div>
         <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE watchlist: loading…</div>
+    </div>
+
+    <!-- Cross-Asset Macro Alignment — 7 normalized %-return lines + trade bubbles -->
+    <div class="card" data-aos="fade-up" id="macro-align-section" style="margin-bottom:16px;">
+        <div class="ma-hdr">
+            <div class="ma-titlewrap">
+                <span class="ma-pulse" aria-hidden="true"></span>
+                <h2 class="ma-title">Cross-Asset Macro Alignment</h2>
+                <span class="ma-sub" id="macro-align-updated">awaiting series…</span>
+            </div>
+            <div class="ma-toggle" role="tablist" aria-label="Chart view">
+                <button type="button" class="ma-tog active" data-view="macro" id="macro-align-tog-macro" role="tab" aria-selected="true">Macro Align</button>
+                <button type="button" class="ma-tog" data-view="candles" id="macro-align-tog-candles" role="tab" aria-selected="false">Candles</button>
+            </div>
+        </div>
+        <div class="ma-chips" id="macro-align-chips" role="toolbar" aria-label="Asset filters"></div>
+        <div class="ma-chartwrap" id="macro-align-chartwrap">
+            <canvas id="macro-align-canvas" width="1200" height="280"></canvas>
+            <div class="ma-bbl-layer" id="macro-align-bbls" aria-hidden="true"></div>
+            <div class="ma-crosshair" id="macro-align-crosshair" aria-hidden="true"></div>
+            <div class="ma-tooltip" id="macro-align-tooltip" role="status"></div>
+            <div class="ma-empty" id="macro-align-empty">Loading cross-asset series…</div>
+        </div>
+        <div class="ma-foot">
+            <span id="macro-align-foot-btc"></span>
+            <span id="macro-align-foot-pairs"></span>
+            <span class="ma-foot-meta">NORMALIZED · % FROM SESSION OPEN</span>
+        </div>
+        <div class="ma-candles-hint">Candles view active — see the BTC candle chart above. Switch back to <strong>Macro Align</strong> to see all 7 assets normalized.</div>
     </div>
 
     <!-- Operations Pipeline (scan_skip_digest + decision gates + ai_pipeline) -->
@@ -1548,7 +1887,6 @@
                         <option value="eth_macro">eth_macro</option>
                         <option value="hype_macro">hype_macro</option>
                         <option value="xrp_macro">xrp_macro</option>
-                        <option value="weather">weather</option>
                     </select>
                     <span id="trade-journey-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
                 </div>
@@ -1793,7 +2131,6 @@
                 <div class="tab" data-strat="eth_macro" onclick="switchScanTab('eth_macro')">ETH</div>
                 <div class="tab" data-strat="hype_macro" onclick="switchScanTab('hype_macro')">HYPE</div>
                 <div class="tab" data-strat="xrp_macro" onclick="switchScanTab('xrp_macro')">XRP</div>
-                <div class="tab" data-strat="weather" onclick="switchScanTab('weather')">Weather</div>
             </div>
             <div id="weather-scan-diag" style="display:none;padding:8px 4px 4px;"></div>
             <div class="scrollbox" id="scan-signals" style="min-height:100px;"></div>
@@ -3827,7 +4164,7 @@ function updateMetrics(d) {
     const tbody = document.querySelector('#strategy-table tbody');
     if (!tbody) return;
 
-    const _metricStrats = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'weather'];
+    const _metricStrats = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro'];
     const fp = _metricStrats.map(s => {
         const m = d[s] || {};
         return [
@@ -3851,9 +4188,9 @@ function updateMetrics(d) {
         return Math.floor(ago/3600) + 'h ago';
     }
 
-    const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', weather:'Event-based'};
-    const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', weather:'Independent'};
-    tbody.innerHTML = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'].map(s => {
+    const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', doge_macro:'Macro-based', bnb_macro:'Macro-based', weather:'Event-based'};
+    const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', doge_macro:'Correlated', bnb_macro:'Correlated', weather:'Independent'};
+    tbody.innerHTML = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map(s => {
         const m = d[s]||{};
         const pnlCls = (m.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
         const ageStr = m.last_cycle ? ` <span style="color:var(--text-muted);font-size:0.7rem;" title="${m.last_cycle}">${_cycleAge(m.last_cycle)}</span>` : '';
@@ -3907,7 +4244,7 @@ function renderScanSignals() {
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
         const hx = stratHex(s.strategy);
-        const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',weather:'WX'};
+        const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB',weather:'WX'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
@@ -4954,8 +5291,8 @@ function updateJournal(d) {
     // Strategy breakdown — always show all active strategies
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
-    const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
-    const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',weather:'WX'};
+    const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
+    const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB',weather:'WX'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
     // also include any extra historical strategies still present in old journals
@@ -5670,7 +6007,7 @@ async function toggleFullscreen() {
 }
 
 // ─── EXPOSURE MANAGER ────────────────────────────────────────
-const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'weather'];
+const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'doge', 'bnb'];
 const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', weather: 'Weather', event: 'Weather' };
 const tierColors = {FULL:'var(--green)',MODERATE:'var(--yellow)',MINIMAL:'var(--red)',PAUSED:'var(--red)',UNKNOWN:'var(--text-muted)'};
 
@@ -6102,7 +6439,7 @@ function updateLivePerf(d) {
 
     const stratDiv = $('live-perf-strats');
     if (stratDiv) {
-        const ACTIVE_PERF_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','weather'];
+        const ACTIVE_PERF_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
         const perfPairs = (d.by_strategy && typeof d.by_strategy === 'object')
             ? Object.entries(d.by_strategy).filter(([s]) => ACTIVE_PERF_STRATS.includes(s))
             : [];
@@ -6213,7 +6550,8 @@ function updateActionBreakdown(d) {
         { id: 'eth_macro', label: 'ETH' },
         { id: 'hype_macro', label: 'HYPE' },
         { id: 'xrp_macro', label: 'XRP' },
-        { id: 'weather', label: 'WX' },
+        { id: 'doge_macro', label: 'DOGE' },
+        { id: 'bnb_macro', label: 'BNB' },
     ];
     const byStrategy = (d && d.by_strategy) || {};
     const totalClosed = Number(d?.total_closed || 0);
@@ -6870,7 +7208,7 @@ async function _allocationCountsFromMetrics() {
 }
 
 // Canonical order — aligned with Strategy Performance table (#strategy-table).
-const PERFORMANCE_STRATS_ORDER = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'weather'];
+const PERFORMANCE_STRATS_ORDER = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro'];
 
 async function loadAllocationChart() {
     try {
@@ -7422,6 +7760,230 @@ let _btcChartWindowResizeHandler = null;
 let _btcTradeOverlayPoints = [];
 let _btcTradeOverlayCandles = [];
 let _btcTradeOverlayRaf = null;
+const _HUD_STRATS = [
+    { key: 'bitcoin',    label: 'BTC',  c: '#22d3ee' },
+    { key: 'sol_macro',  label: 'SOL',  c: '#a855f7' },
+    { key: 'eth_macro',  label: 'ETH',  c: '#fb923c' },
+    { key: 'hype_macro', label: 'HYPE', c: '#a78bfa' },
+    { key: 'xrp_macro',  label: 'XRP',  c: '#38bdf8' },
+    { key: 'doge_macro', label: 'DOGE', c: '#ff6ec7' },
+    { key: 'bnb_macro',  label: 'BNB',  c: '#f3ba2f' },
+];
+let _exitHudTradePoints = [];
+let _exitHudSubscribed = false;
+let _exitHudRaf = null;
+let _exitHudCrosshairRaf = null;
+let _exitHudWindow = { from: null, to: null };
+let _exitHudClickBound = false;
+const _HUD_MUTE_KEY = 'psb_dashboard_hud_mute';
+
+function _hudLoadMuted() {
+    try {
+        const raw = localStorage.getItem(_HUD_MUTE_KEY);
+        if (!raw) return new Set();
+        const arr = JSON.parse(raw);
+        return new Set(Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : []);
+    } catch (_) { return new Set(); }
+}
+function _hudSaveMuted(set) {
+    try { localStorage.setItem(_HUD_MUTE_KEY, JSON.stringify(Array.from(set))); } catch (_) {}
+}
+let _exitHudMuted = _hudLoadMuted();
+
+function _hudExitTimeSec(p) {
+    const c = Number(p && p.closed_at);
+    return Number.isFinite(c) && c > 0 ? c : null;
+}
+
+function _hudSparklinePath(ticks, span) {
+    // ticks: [{t, pnl}] sorted by t; returns SVG `d` attr for a 0..100 x, 0..100 y poly (y inverted)
+    if (!ticks.length) return '';
+    let cum = 0;
+    const cums = ticks.map(t => { cum += t.pnl; return cum; });
+    const minC = Math.min(0, ...cums);
+    const maxC = Math.max(0, ...cums);
+    const range = (maxC - minC) || 1;
+    const pts = ticks.map((t, i) => {
+        const x = ((t.t - _exitHudWindow.from) / span) * 100;
+        const y = 100 - ((cums[i] - minC) / range) * 100;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+    });
+    // Start the path at y=baseline (where cum=0) at x of first tick
+    const baselineY = 100 - ((0 - minC) / range) * 100;
+    const firstX = ((ticks[0].t - _exitHudWindow.from) / span) * 100;
+    return `M${firstX.toFixed(2)},${baselineY.toFixed(2)} L${pts.join(' L')}`;
+}
+
+function _hudFmtTime(sec) {
+    if (!Number.isFinite(sec)) return '—';
+    try { return new Date(sec * 1000).toLocaleString(); } catch (_) { return String(sec); }
+}
+
+function _renderExitTimingHud() {
+    const body = document.getElementById('exit-timing-hud-body');
+    const winEl = document.getElementById('exit-timing-hud-window');
+    if (!body) return;
+
+    const points = (_exitHudTradePoints || []).filter(p => p && _hudExitTimeSec(p) != null);
+
+    // Determine visible window: prefer chart's visible range, else dataset min→max.
+    let from = null, to = null;
+    try {
+        const vr = _btcChart && _btcChart.timeScale && _btcChart.timeScale().getVisibleRange();
+        if (vr && Number.isFinite(Number(vr.from)) && Number.isFinite(Number(vr.to))) {
+            from = Number(vr.from);
+            to = Number(vr.to);
+        }
+    } catch (_) {}
+    if (from == null || to == null) {
+        if (points.length) {
+            const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
+            from = Math.min(...times);
+            to = Math.max(...times);
+            if (from === to) { from -= 60; to += 60; }
+        }
+    }
+
+    _exitHudWindow = { from, to };
+
+    if (winEl) {
+        winEl.textContent = (from != null && to != null)
+            ? `Window ${_hudFmtTime(from)} → ${_hudFmtTime(to)}`
+            : 'Window —';
+    }
+
+    const inWindow = (points.length && from != null && to != null)
+        ? points.filter(p => {
+            const t = _hudExitTimeSec(p);
+            return t >= from && t <= to;
+        })
+        : [];
+
+    if (!inWindow.length) {
+        body.innerHTML = '<div class="hud-empty">No trade points yet — awaiting /api/journal/trade-points</div>';
+        return;
+    }
+
+    const span = Math.max(1, to - from);
+    const rowsHtml = _HUD_STRATS.map(strat => {
+        const rowPts = inWindow
+            .filter(p => p.strategy === strat.key)
+            .map(p => ({ p, t: _hudExitTimeSec(p), pnl: Number(p.pnl) || 0 }))
+            .sort((a, b) => a.t - b.t);
+        let wins = 0, losses = 0, sum = 0;
+        const ticksHtml = rowPts.map(({ p, t, pnl }) => {
+            const pct = Math.max(0, Math.min(100, ((t - from) / span) * 100));
+            const win = pnl >= 0;
+            if (win) wins++; else losses++;
+            sum += pnl;
+            const reason = String(p.exit_reason || '').slice(0, 40);
+            const pnlStr = (pnl >= 0 ? '+' : '−') + '$' + Math.abs(pnl).toFixed(2);
+            const tip = `${reason ? reason + '\n' : ''}${pnlStr} · ${_hudFmtTime(t)}`;
+            return `<span class="hud-tick ${win ? 'win' : 'loss'}" data-time="${t}" style="left:${pct.toFixed(3)}%" title="${_htmlEscape(tip)}"></span>`;
+        }).join('');
+        const sparkD = _hudSparklinePath(rowPts.map(r => ({ t: r.t, pnl: r.pnl })), span);
+        const sparkSvg = sparkD
+            ? `<svg class="hud-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${sparkD}" fill="none" stroke="${strat.c}" stroke-width="1" vector-effect="non-scaling-stroke" opacity=".85"/></svg>`
+            : '';
+        const total = rowPts.length;
+        const sumCls = sum >= 0 ? 'pos' : 'neg';
+        const sumStr = (sum >= 0 ? '+' : '−') + '$' + Math.abs(sum).toFixed(2);
+        const statsHtml = total
+            ? `<span>${wins}<span class="muted">W</span> / ${losses}<span class="muted">L</span> · <span class="${sumCls}">${sumStr}</span></span>`
+            : '<span class="muted">— / — · —</span>';
+        const mutedAttr = _exitHudMuted.has(strat.key) ? '1' : '0';
+        return `
+            <div class="hud-row" data-strat="${strat.key}" data-muted="${mutedAttr}">
+                <div class="hud-chip" data-strat="${strat.key}" role="button" tabindex="0" title="Click to mute/unmute" style="color:${strat.c};border-color:${strat.c}66;background:${strat.c}11">
+                    <span>${strat.label}</span><span class="hud-count">×${total}</span>
+                </div>
+                <div class="hud-track">
+                    ${sparkSvg}
+                    ${ticksHtml}
+                    <span class="hud-crosshair" aria-hidden="true"></span>
+                </div>
+                <div class="hud-stats">${statsHtml}</div>
+            </div>
+        `;
+    }).join('');
+
+    body.innerHTML = rowsHtml;
+}
+
+function _updateHudCrosshair(timeSec) {
+    const hud = document.getElementById('exit-timing-hud');
+    if (!hud) return;
+    const { from, to } = _exitHudWindow;
+    const lines = hud.querySelectorAll('.hud-crosshair');
+    if (!Number.isFinite(timeSec) || from == null || to == null || timeSec < from || timeSec > to) {
+        lines.forEach(el => el.classList.remove('on'));
+        return;
+    }
+    const pct = ((timeSec - from) / Math.max(1, to - from)) * 100;
+    lines.forEach(el => {
+        el.style.left = pct.toFixed(3) + '%';
+        el.classList.add('on');
+    });
+}
+
+function _hudHandleClick(ev) {
+    const chip = ev.target.closest('#exit-timing-hud .hud-chip');
+    if (chip) {
+        const key = chip.getAttribute('data-strat');
+        if (key) {
+            if (_exitHudMuted.has(key)) _exitHudMuted.delete(key);
+            else _exitHudMuted.add(key);
+            _hudSaveMuted(_exitHudMuted);
+            const row = chip.closest('.hud-row');
+            if (row) row.setAttribute('data-muted', _exitHudMuted.has(key) ? '1' : '0');
+        }
+        return;
+    }
+    const tick = ev.target.closest('#exit-timing-hud .hud-tick');
+    if (tick && _btcChart && _btcChart.timeScale) {
+        const t = Number(tick.getAttribute('data-time'));
+        if (Number.isFinite(t)) {
+            const { from, to } = _exitHudWindow;
+            const half = (from != null && to != null) ? Math.max(60, (to - from) / 2) : 3600;
+            try { _btcChart.timeScale().setVisibleRange({ from: t - half, to: t + half }); } catch (_) {}
+            tick.classList.remove('flash');
+            // Force reflow so the animation can restart
+            void tick.offsetWidth;
+            tick.classList.add('flash');
+        }
+    }
+}
+
+function _wireExitHudToChart() {
+    if (!_exitHudClickBound) {
+        const hud = document.getElementById('exit-timing-hud');
+        if (hud) {
+            hud.addEventListener('click', _hudHandleClick);
+            _exitHudClickBound = true;
+        }
+    }
+    if (_exitHudSubscribed || !_btcChart || !_btcChart.timeScale) return;
+    try {
+        _btcChart.timeScale().subscribeVisibleTimeRangeChange(() => {
+            if (_exitHudRaf) return;
+            _exitHudRaf = requestAnimationFrame(() => {
+                _exitHudRaf = null;
+                _renderExitTimingHud();
+            });
+        });
+        if (typeof _btcChart.subscribeCrosshairMove === 'function') {
+            _btcChart.subscribeCrosshairMove(param => {
+                const t = param && param.time != null ? Number(param.time) : null;
+                if (_exitHudCrosshairRaf) return;
+                _exitHudCrosshairRaf = requestAnimationFrame(() => {
+                    _exitHudCrosshairRaf = null;
+                    _updateHudCrosshair(t);
+                });
+            });
+        }
+        _exitHudSubscribed = true;
+    } catch (_) {}
+}
 let _btcChartDisplay = {
     ema: false,
     macd: false,
@@ -7726,7 +8288,7 @@ function initBTCChart() {
         _btcChartWindowResizeHandler = null;
     }
 
-    if (_btcChart) { _btcChart.remove(); _btcChart = null; _btcPriceLines = []; }
+    if (_btcChart) { _btcChart.remove(); _btcChart = null; _btcPriceLines = []; _exitHudSubscribed = false; }
 
     const initial = _btcChartMeasureBox(container);
     _btcChart = LightweightCharts.createChart(container, {
@@ -7960,6 +8522,429 @@ function _clipBtcPricePoints(arr) {
     return (arr || []).filter((p) => p && Number.isFinite(p.value) && p.value > 3000 && p.value < 2e6);
 }
 
+// ── Cross-Asset Macro Alignment chart ─────────────────────────────
+const _MA_VIEW_KEY = 'psb_macro_align_view';
+const _MA_HIDDEN_KEY = 'psb_macro_align_hidden';
+let _maState = {
+    interval: '15m',
+    limit: 120,
+    times: [],
+    assets: {},
+    order: [],
+    hidden: new Set(),
+    view: 'macro',
+    hover: null,
+    dpr: 1,
+    layout: { W: 1200, H: 280, ML: 8, MR: 72, MT: 14, MB: 26 },
+    lastFetch: 0,
+    tradePoints: [],
+};
+try {
+    const v = localStorage.getItem(_MA_VIEW_KEY);
+    if (v === 'candles' || v === 'macro') _maState.view = v;
+    const h = JSON.parse(localStorage.getItem(_MA_HIDDEN_KEY) || '[]');
+    if (Array.isArray(h)) _maState.hidden = new Set(h.filter(x => typeof x === 'string'));
+} catch (_) {}
+
+function _maSaveHidden() {
+    try { localStorage.setItem(_MA_HIDDEN_KEY, JSON.stringify(Array.from(_maState.hidden))); } catch (_) {}
+}
+function _maSaveView() {
+    try { localStorage.setItem(_MA_VIEW_KEY, _maState.view); } catch (_) {}
+}
+
+function _maRenderChips() {
+    const host = document.getElementById('macro-align-chips');
+    if (!host) return;
+    const order = _maState.order.length ? _maState.order : Object.keys(_maState.assets);
+    host.innerHTML = order.map(k => {
+        const a = _maState.assets[k] || {};
+        const on = a.available && !_maState.hidden.has(k);
+        const unavail = !a.available;
+        const color = a.color || '#888';
+        const m1h = a.m1h || 'NEUT';
+        const arrow = m1h === 'BULL' ? '↑' : m1h === 'BEAR' ? '↓' : '→';
+        const pctNum = (a.last_pct != null) ? Number(a.last_pct) : null;
+        const pctTxt = (pctNum != null && Number.isFinite(pctNum))
+            ? (pctNum >= 0 ? '+' : '') + pctNum.toFixed(2) + '%'
+            : (unavail ? 'awaiting candles' : '—');
+        const pctCls = pctNum != null && pctNum < 0 ? 'neg' : pctNum != null ? 'pos' : '';
+        const aria = on ? 'true' : 'false';
+        return `
+            <button type="button" class="ma-chip" role="switch" aria-checked="${aria}"
+                data-strat="${k}" data-on="${on ? 1 : 0}" data-unavail="${unavail ? 1 : 0}"
+                style="color:${color};border-color:${color}66;background:${color}11"
+                title="${unavail ? a.label + ' — awaiting candle endpoint' : 'Click to toggle ' + a.label + ' on the chart'}">
+                <span class="ma-chip-dash"></span>
+                <span>${a.label || k}</span>
+                <span class="ma-chip-meta">${arrow}&nbsp;${m1h}</span>
+                <span class="ma-chip-pct ${pctCls}">${pctTxt}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function _maComputeBounds(visibleKeys) {
+    const all = [];
+    for (const k of visibleKeys) {
+        const s = (_maState.assets[k] || {}).series || [];
+        for (const v of s) if (v != null && Number.isFinite(v)) all.push(v);
+    }
+    if (!all.length) return { yMin: -1, yMax: 1 };
+    const lo = Math.min(...all), hi = Math.max(...all);
+    const pad = Math.max(0.12, (hi - lo) * 0.12);
+    return { yMin: lo - pad, yMax: hi + pad };
+}
+
+function _maTimeLabel(ts) {
+    if (!Number.isFinite(ts)) return '';
+    const d = new Date(ts * 1000);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function _maDrawCanvas() {
+    const canvas = document.getElementById('macro-align-canvas');
+    const empty = document.getElementById('macro-align-empty');
+    if (!canvas) return;
+    const wrap = document.getElementById('macro-align-chartwrap');
+    const dpr = window.devicePixelRatio || 1;
+    _maState.dpr = dpr;
+    const rect = wrap ? wrap.getBoundingClientRect() : { width: 1200, height: 280 };
+    const cssW = Math.max(320, rect.width);
+    const cssH = Math.max(220, rect.height);
+    if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+    }
+    _maState.layout.W = cssW;
+    _maState.layout.H = cssH;
+    const { W, H, ML, MR, MT, MB } = _maState.layout;
+    const CW = W - ML - MR, CH = H - MT - MB;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const order = _maState.order.length ? _maState.order : Object.keys(_maState.assets);
+    const visibleKeys = order.filter(k => {
+        const a = _maState.assets[k];
+        return a && a.available && !_maState.hidden.has(k);
+    });
+    const N = _maState.times.length;
+    if (!N || !visibleKeys.length) {
+        if (empty) empty.classList.remove('hidden');
+        return;
+    }
+    if (empty) empty.classList.add('hidden');
+
+    const { yMin, yMax } = _maComputeBounds(visibleKeys);
+    const span = yMax - yMin || 1;
+    const xAt = i => ML + (i + 0.5) * (CW / N);
+    const yAt = v => MT + CH * (1 - (v - yMin) / span);
+
+    // Vertical grid
+    ctx.strokeStyle = 'rgba(0,229,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 9; i++) {
+        const x = ML + (CW / 9) * i;
+        ctx.beginPath(); ctx.moveTo(x, MT); ctx.lineTo(x, MT + CH); ctx.stroke();
+    }
+    // % gridlines + labels
+    const step = span > 10 ? 2 : span > 5 ? 1 : span > 2 ? 0.5 : 0.25;
+    ctx.font = '10px IBM Plex Mono,monospace';
+    ctx.textAlign = 'left';
+    for (let v = Math.ceil(yMin / step) * step; v <= yMax; v += step) {
+        const y = yAt(v);
+        const isZero = Math.abs(v) < 1e-6;
+        ctx.strokeStyle = isZero ? 'rgba(120,120,160,.35)' : 'rgba(0,229,255,0.055)';
+        ctx.setLineDash(isZero ? [3, 4] : []);
+        ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(W - MR, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = isZero ? 'rgba(170,170,210,.7)' : 'rgba(80,80,130,0.95)';
+        ctx.fillText((v >= 0 ? '+' : '') + v.toFixed(step < 1 ? 2 : 1) + '%', W - MR + 5, y + 3);
+    }
+
+    // Glow underlay + sharp line per visible asset
+    for (const k of visibleKeys) {
+        const a = _maState.assets[k];
+        const s = a.series || [];
+        const c = a.color || '#888';
+        // Path with gaps where v is null
+        const drawPath = (lineWidth, alpha) => {
+            ctx.strokeStyle = c;
+            ctx.globalAlpha = alpha;
+            ctx.lineWidth = lineWidth;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            let started = false;
+            for (let i = 0; i < s.length; i++) {
+                const v = s[i];
+                if (v == null || !Number.isFinite(v)) { started = false; continue; }
+                const x = xAt(i), y = yAt(v);
+                if (!started) { ctx.moveTo(x, y); started = true; }
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        };
+        drawPath(5, 0.18);
+        drawPath(k === 'bitcoin' ? 2.1 : 1.6, 1);
+    }
+    ctx.globalAlpha = 1;
+
+    // Right-edge asset tags
+    for (const k of visibleKeys) {
+        const a = _maState.assets[k];
+        const s = a.series || [];
+        let lastIdx = -1;
+        for (let i = s.length - 1; i >= 0; i--) {
+            if (s[i] != null && Number.isFinite(s[i])) { lastIdx = i; break; }
+        }
+        if (lastIdx < 0) continue;
+        const last = s[lastIdx];
+        const y = yAt(last);
+        const c = a.color || '#888';
+        const w = 56, h = 14;
+        const xL = W - MR - w - 2;
+        ctx.fillStyle = 'rgba(0,0,0,.78)';
+        ctx.strokeStyle = c;
+        ctx.lineWidth = 1;
+        ctx.fillRect(xL, y - h / 2, w, h);
+        ctx.strokeRect(xL, y - h / 2, w, h);
+        ctx.fillStyle = c;
+        ctx.font = '600 10px IBM Plex Mono,monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText((a.label || k) + ' ' + (last >= 0 ? '+' : '') + last.toFixed(2) + '%', xL + w / 2, y + 3.4);
+    }
+
+    // X-axis time labels
+    ctx.fillStyle = 'rgba(80,80,130,0.95)';
+    ctx.font = '10px IBM Plex Mono,monospace';
+    ctx.textAlign = 'center';
+    const xTicks = Math.min(8, Math.max(2, Math.floor(N / 10)));
+    for (let i = 0; i <= xTicks; i++) {
+        const idx = Math.round((i / xTicks) * (N - 1));
+        const lbl = _maTimeLabel(_maState.times[idx]);
+        ctx.fillText(lbl, xAt(idx), H - 8);
+    }
+}
+
+function _maRenderBubbles() {
+    const layer = document.getElementById('macro-align-bbls');
+    if (!layer) return;
+    const { W, H, ML, MR, MT, MB } = _maState.layout;
+    const CW = W - ML - MR, CH = H - MT - MB;
+    const N = _maState.times.length;
+    const order = _maState.order.length ? _maState.order : Object.keys(_maState.assets);
+    const visibleKeys = new Set(order.filter(k => {
+        const a = _maState.assets[k];
+        return a && a.available && !_maState.hidden.has(k);
+    }));
+    const { yMin, yMax } = _maComputeBounds([...visibleKeys]);
+    const span = yMax - yMin || 1;
+
+    if (!N || !visibleKeys.size) { layer.innerHTML = ''; return; }
+
+    // Pair each trade point to its asset's series index by closest time
+    const points = (_maState.tradePoints || []).filter(p => p && visibleKeys.has(p.strategy));
+    const html = points.map(p => {
+        const a = _maState.assets[p.strategy];
+        if (!a || !Array.isArray(a.series)) return '';
+        const tIn = Number(p.time) || 0;
+        const tOut = Number(p.closed_at) || tIn;
+        const drawT = tOut || tIn;
+        if (!drawT) return '';
+        // Find closest index in times grid
+        let bestI = -1, bestD = Infinity;
+        for (let i = 0; i < N; i++) {
+            const d = Math.abs(_maState.times[i] - drawT);
+            if (d < bestD) { bestD = d; bestI = i; }
+        }
+        if (bestI < 0) return '';
+        const v = a.series[bestI];
+        if (v == null || !Number.isFinite(v)) return '';
+        const xPct = ((ML + (bestI + 0.5) * (CW / N)) / W) * 100;
+        const yPct = ((MT + CH * (1 - (v - yMin) / span)) / H) * 100;
+        const pnl = Number(p.pnl) || 0;
+        const isLoss = pnl < 0;
+        const isWin = pnl >= 0 && p.closed_at;
+        const color = a.color;
+        const reason = String(p.exit_reason || '').slice(0, 40);
+        const pnlStr = (pnl >= 0 ? '+' : '−') + '$' + Math.abs(pnl).toFixed(2);
+        const tip = `${a.label} · ${p.closed_at ? '◀ exit' : '▶ entry'} @ ${v.toFixed(2)}%${reason ? '\n' + reason : ''}\n${pnlStr}`;
+        let inner;
+        if (isLoss) {
+            inner = `<svg class="ma-bbl-x" viewBox="0 0 18 18"><line x1="4" y1="4" x2="14" y2="14" stroke="#ff4466" stroke-width="2.6" stroke-linecap="round"/><line x1="14" y1="4" x2="4" y2="14" stroke="#ff4466" stroke-width="2.6" stroke-linecap="round"/></svg>`;
+        } else if (isWin) {
+            inner = `<div class="ma-bbl-win"></div>`;
+        } else {
+            inner = `<div class="ma-bbl-dot" style="color:${color}"></div>`;
+        }
+        return `<div class="ma-bbl" style="left:${xPct.toFixed(3)}%;top:${yPct.toFixed(3)}%" title="${_htmlEscape(tip)}">${inner}<div class="ma-bbl-tip">${_htmlEscape(tip).replace(/\n/g,'<br>')}</div></div>`;
+    }).join('');
+    layer.innerHTML = html;
+}
+
+function _maRenderFoot() {
+    const footBtc = document.getElementById('macro-align-foot-btc');
+    const footPairs = document.getElementById('macro-align-foot-pairs');
+    if (!footBtc || !footPairs) return;
+    const btc = _maState.assets.bitcoin || {};
+    const arrow = btc.m1h === 'BULL' ? '↑' : btc.m1h === 'BEAR' ? '↓' : '→';
+    const btcColor = btc.m1h === 'BULL' ? 'var(--gr,#00ff88)' : btc.m1h === 'BEAR' ? 'var(--re,#ff4466)' : 'var(--ye,#ffd700)';
+    footBtc.innerHTML = `BTC 1H ▸ <span style="color:${btcColor}">${arrow} ${btc.m1h || '—'}</span>`;
+    const order = _maState.order.length ? _maState.order : Object.keys(_maState.assets);
+    const pairs = order.filter(k => k !== 'bitcoin').map(k => {
+        const a = _maState.assets[k];
+        if (!a || !a.available) return '';
+        const align = a.align;
+        const dotColor = align == null ? 'var(--text-muted)' :
+            align >= 0.5 ? '#4ade80' : align < 0 ? '#f87171' : '#ffd700';
+        const arr = a.m1h === 'BULL' ? '↑' : a.m1h === 'BEAR' ? '↓' : '→';
+        const corrStr = a.corr != null ? a.corr.toFixed(2) : '—';
+        return `<span class="ma-pair" style="color:${a.color}">
+            <span class="ma-pair-dot" style="background:${dotColor};color:${dotColor}"></span>
+            ${a.label} ${arr}
+            <span style="color:var(--text-muted);margin-left:2px">r=${corrStr}</span>
+        </span>`;
+    }).filter(Boolean).join('');
+    footPairs.innerHTML = pairs;
+}
+
+function _maOnHover(ev) {
+    const wrap = document.getElementById('macro-align-chartwrap');
+    if (!wrap) return;
+    const { W, ML, MR } = _maState.layout;
+    const rect = wrap.getBoundingClientRect();
+    const px = ((ev.clientX - rect.left) / rect.width) * W;
+    const cross = document.getElementById('macro-align-crosshair');
+    const tip = document.getElementById('macro-align-tooltip');
+    if (px < ML || px > W - MR) {
+        if (cross) cross.classList.remove('on');
+        if (tip) tip.classList.remove('on');
+        _maState.hover = null;
+        return;
+    }
+    const N = _maState.times.length;
+    if (!N) return;
+    const CW = W - ML - MR;
+    const i = Math.max(0, Math.min(N - 1, Math.round((px - ML) / (CW / N) - 0.5)));
+    _maState.hover = i;
+    const xPctOfWrap = ((ML + (i + 0.5) * (CW / N)) / W) * 100;
+    if (cross) {
+        cross.style.left = xPctOfWrap.toFixed(3) + '%';
+        cross.classList.add('on');
+    }
+    if (tip) {
+        const order = _maState.order.length ? _maState.order : Object.keys(_maState.assets);
+        const visible = order.filter(k => {
+            const a = _maState.assets[k];
+            return a && a.available && !_maState.hidden.has(k);
+        });
+        const rows = visible.map(k => {
+            const a = _maState.assets[k];
+            const v = (a.series || [])[i];
+            if (v == null || !Number.isFinite(v)) return '';
+            const vStr = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+            return `<div class="ma-tt-row" style="color:${a.color}"><span>${a.label}</span><span>${vStr}</span></div>`;
+        }).join('');
+        const tsLbl = _maTimeLabel(_maState.times[i]);
+        tip.innerHTML = `<div class="ma-tt-head">BAR ${i + 1}/${N} · ${tsLbl}</div>${rows}`;
+        tip.classList.add('on');
+        // Position tooltip to the side that has more space
+        const onRight = xPctOfWrap < 50;
+        if (onRight) {
+            tip.style.left = `calc(${xPctOfWrap.toFixed(3)}% + 14px)`;
+            tip.style.right = 'auto';
+        } else {
+            tip.style.left = 'auto';
+            tip.style.right = `calc(${(100 - xPctOfWrap).toFixed(3)}% + 14px)`;
+        }
+    }
+}
+function _maOnLeave() {
+    const cross = document.getElementById('macro-align-crosshair');
+    const tip = document.getElementById('macro-align-tooltip');
+    if (cross) cross.classList.remove('on');
+    if (tip) tip.classList.remove('on');
+    _maState.hover = null;
+}
+
+function _maApplyView() {
+    const sec = document.getElementById('macro-align-section');
+    if (!sec) return;
+    sec.classList.toggle('candles-view', _maState.view === 'candles');
+    const togM = document.getElementById('macro-align-tog-macro');
+    const togC = document.getElementById('macro-align-tog-candles');
+    if (togM) { togM.classList.toggle('active', _maState.view === 'macro'); togM.setAttribute('aria-selected', _maState.view === 'macro'); }
+    if (togC) { togC.classList.toggle('active', _maState.view === 'candles'); togC.setAttribute('aria-selected', _maState.view === 'candles'); }
+}
+
+function _maBindOnce() {
+    if (_maBindOnce._bound) return;
+    _maBindOnce._bound = true;
+    const chips = document.getElementById('macro-align-chips');
+    if (chips) {
+        chips.addEventListener('click', ev => {
+            const btn = ev.target.closest('.ma-chip');
+            if (!btn) return;
+            if (btn.getAttribute('data-unavail') === '1') return;
+            const k = btn.getAttribute('data-strat');
+            if (!k) return;
+            if (_maState.hidden.has(k)) _maState.hidden.delete(k);
+            else _maState.hidden.add(k);
+            _maSaveHidden();
+            _maRenderChips();
+            _maDrawCanvas();
+            _maRenderBubbles();
+        });
+    }
+    const wrap = document.getElementById('macro-align-chartwrap');
+    if (wrap) {
+        wrap.addEventListener('mousemove', _maOnHover);
+        wrap.addEventListener('mouseleave', _maOnLeave);
+    }
+    const togM = document.getElementById('macro-align-tog-macro');
+    const togC = document.getElementById('macro-align-tog-candles');
+    if (togM) togM.addEventListener('click', () => { _maState.view = 'macro'; _maSaveView(); _maApplyView(); _maDrawCanvas(); _maRenderBubbles(); });
+    if (togC) togC.addEventListener('click', () => { _maState.view = 'candles'; _maSaveView(); _maApplyView(); });
+    window.addEventListener('resize', () => {
+        if (_maState.view !== 'macro') return;
+        _maDrawCanvas();
+        _maRenderBubbles();
+    });
+}
+
+async function loadMacroAlignChart() {
+    _maBindOnce();
+    _maApplyView();
+    try {
+        const r = await fetchT(`/api/macro_align/series?interval=${_maState.interval}&limit=${_maState.limit}`, 12000);
+        if (!r || !r.ok) return;
+        const data = await r.json();
+        if (!data || !data.assets) return;
+        _maState.times = Array.isArray(data.times) ? data.times.map(Number) : [];
+        _maState.assets = data.assets || {};
+        _maState.order = Array.isArray(data.order) ? data.order : Object.keys(_maState.assets);
+        _maState.lastFetch = Date.now();
+        // Pull latest trade-points if we have them from loadBTCChart's last call.
+        _maState.tradePoints = _exitHudTradePoints || [];
+        _maRenderChips();
+        if (_maState.view === 'macro') {
+            _maDrawCanvas();
+            _maRenderBubbles();
+        }
+        _maRenderFoot();
+        const upd = document.getElementById('macro-align-updated');
+        if (upd) {
+            const okCount = Object.values(_maState.assets).filter(a => a && a.available).length;
+            upd.textContent = `${okCount}/${Object.keys(_maState.assets).length} assets · updated ${new Date().toLocaleTimeString()}`;
+        }
+    } catch (e) {
+        console.error('macro_align error:', e);
+    }
+}
+
 async function loadBTCChart() {
     try {
         let _candles = null;
@@ -8002,6 +8987,9 @@ async function loadBTCChart() {
         ]);
         const d = ar?.ok ? await ar.json().catch(() => ({})) : {};
         const tradePoints = tr?.ok ? (await tr.json()).points || [] : [];
+        _exitHudTradePoints = tradePoints;
+        _renderExitTimingHud();
+        _wireExitHudToChart();
         const watchlist = wr?.ok ? (await wr.json()).watchlist || [] : [];
         const hasAnalysis = d && !d.error;
 
@@ -8075,6 +9063,8 @@ async function loadBTCChart() {
     if (typeof LightweightCharts !== 'undefined') {
         initBTCChart();
         _registerInterval(loadBTCChart, 20000);
+        loadMacroAlignChart();
+        _registerInterval(loadMacroAlignChart, 20000);
     } else {
         // Library still loading — retry in 500ms
         setTimeout(initChartWhenReady, 500);

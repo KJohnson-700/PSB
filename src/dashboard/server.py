@@ -569,9 +569,11 @@ ACTIVE_STRATEGY_NAMES = (
     "eth_macro",
     "hype_macro",
     "xrp_macro",
+    "doge_macro",
+    "bnb_macro",
     "weather",
 )
-CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP"}
+CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP", "DOGE", "BNB"}
 CRYPTO_BACKTEST_WINDOWS = (5, 15, 60)
 
 
@@ -617,6 +619,10 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             sym = "ETH"
         elif "hyperliquid" in ql or re.search(r"\bhype\b", ql) or "hype" in mid:
             sym = "HYPE"
+        elif "dogecoin" in ql or re.search(r"\bdoge\b", ql):
+            sym = "DOGE"
+        elif re.search(r"\bbnb\b", ql) or "binance coin" in ql:
+            sym = "BNB"
         elif "bitcoin" in ql or re.search(r"\bbtc\b", ql):
             sym = "BTC"
         elif "solana" in ql or re.search(r"\bsol\b", ql):
@@ -647,6 +653,10 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
             return "SOL_updown_1h"
         if "hype-up-or-down" in mid or "hyperliquid-up-or-down" in mid or "hype_updown_1h" in mid:
             return "HYPE_updown_1h"
+        if "doge-up-or-down" in mid or "dogecoin-up-or-down" in mid or "doge_updown_1h" in mid:
+            return "DOGE_updown_1h"
+        if "bnb-up-or-down" in mid or "binance-coin-up-or-down" in mid or "bnb_updown_1h" in mid:
+            return "BNB_updown_1h"
 
     if "eth-updown-30m" in mid or "eth_updown_30m" in mid:
         return "ETH_updown_30m"
@@ -671,6 +681,14 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
         return "XRP_updown_15m"
     if "xrp-updown-5m" in mid:
         return "XRP_updown_5m"
+    if "doge-updown-15m" in mid or "doge_updown_15m" in mid:
+        return "DOGE_updown_15m"
+    if "doge-updown-5m" in mid:
+        return "DOGE_updown_5m"
+    if "bnb-updown-15m" in mid or "bnb_updown_15m" in mid:
+        return "BNB_updown_15m"
+    if "bnb-updown-5m" in mid:
+        return "BNB_updown_5m"
 
     def _updown_sz_from_blob(s: str) -> str:
         if re.search(r"(^|[^0-9])(5m|5-m|updown-5m)([^0-9]|$)", s):
@@ -689,6 +707,10 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
         return f"HYPE_updown_{_updown_sz_from_blob(blob)}"
     if strategy == "xrp_macro":
         return f"XRP_updown_{_updown_sz_from_blob(blob)}"
+    if strategy == "doge_macro":
+        return f"DOGE_updown_{_updown_sz_from_blob(blob)}"
+    if strategy == "bnb_macro":
+        return f"BNB_updown_{_updown_sz_from_blob(blob)}"
     if strategy == "bitcoin":
         return f"BTC_updown_{_updown_sz_from_blob(blob)}"
 
@@ -3376,6 +3398,7 @@ async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] =
                 "exit_price": float(t.get("exit_price", t.get("current_price", 0)) or 0),
                 "pnl": float(t.get("pnl", 0) or 0),
                 "outcome": "win" if float(t.get("pnl", 0) or 0) >= 0 else "loss",
+                "exit_reason": t.get("exit_reason"),
             }
         )
     return {"points": points}
@@ -4405,6 +4428,256 @@ async def get_xrp_analysis():
     except Exception as e:
         logger.error(f"XRP analysis endpoint error: {e}", exc_info=True)
         return {"error": str(e)}
+
+
+# ─── CROSS-ASSET MACRO ALIGNMENT ──────────────────────────────────
+
+_MACRO_ALIGN_ASSETS = [
+    {"key": "bitcoin",    "symbol": "BTCUSDT",  "label": "BTC",  "color": "#22d3ee", "source": "binance"},
+    {"key": "sol_macro",  "symbol": "SOLUSDT",  "label": "SOL",  "color": "#a855f7", "source": "binance"},
+    {"key": "eth_macro",  "symbol": "ETHUSDT",  "label": "ETH",  "color": "#fb923c", "source": "binance"},
+    {"key": "hype_macro", "symbol": "HYPEUSDT", "label": "HYPE", "color": "#a78bfa", "source": "hyperliquid"},
+    {"key": "xrp_macro",  "symbol": "XRPUSDT",  "label": "XRP",  "color": "#38bdf8", "source": "binance"},
+    {"key": "doge_macro", "symbol": "DOGEUSDT", "label": "DOGE", "color": "#ff6ec7", "source": "binance"},
+    {"key": "bnb_macro",  "symbol": "BNBUSDT",  "label": "BNB",  "color": "#f3ba2f", "source": "binance"},
+]
+
+
+def _macro_pearson(a: List[float], b: List[float]) -> Optional[float]:
+    """Pearson correlation of two equal-length series; returns None if invalid."""
+    n = min(len(a), len(b))
+    if n < 5:
+        return None
+    aa = a[-n:]
+    bb = b[-n:]
+    ma = sum(aa) / n
+    mb = sum(bb) / n
+    sxy = sum((aa[i] - ma) * (bb[i] - mb) for i in range(n))
+    sxx = sum((aa[i] - ma) ** 2 for i in range(n))
+    syy = sum((bb[i] - mb) ** 2 for i in range(n))
+    denom = (sxx * syy) ** 0.5
+    if denom <= 1e-9:
+        return None
+    return max(-1.0, min(1.0, sxy / denom))
+
+
+_MACRO_ALIGN_STRAT_ATTRS = {
+    "BTCUSDT": ("bitcoin_strategy", "btc_service"),
+    "SOLUSDT": ("sol_macro_strategy", "sol_service"),
+    "ETHUSDT": ("eth_macro_strategy", "sol_service"),
+    "XRPUSDT": ("xrp_macro_strategy", "sol_service"),
+    "HYPEUSDT": ("hype_macro_strategy", "sol_service"),
+    "DOGEUSDT": ("doge_macro_strategy", "sol_service"),
+    "BNBUSDT": ("bnb_macro_strategy", "sol_service"),
+}
+
+# Lightweight singleton services for symbols the bot doesn't expose (e.g. before
+# DOGE/BNB strategies attach to bot_instance). One instance per symbol; reused
+# across requests so we don't re-init transport on every dashboard tick.
+_MACRO_ALIGN_FALLBACK_SVC: Dict[str, Any] = {}
+
+def _macro_align_get_svc(symbol: str, source: str):
+    """Return an existing service to fetch klines for `symbol` without spinning up new transports."""
+    if source == "hyperliquid":
+        # HYPE: try bot's hype service first (carries auth + warmed config)
+        if bot_instance and hasattr(bot_instance, "hype_macro_strategy"):
+            svc = getattr(bot_instance.hype_macro_strategy, "sol_service", None)
+            if svc is not None:
+                return svc
+        cached = _MACRO_ALIGN_FALLBACK_SVC.get(symbol)
+        if cached is not None:
+            return cached
+        from src.analysis.hyperliquid_hype_service import (
+            HyperliquidHypeService,
+            hyperliquid_kwargs_from_config,
+        )
+        hl = {}
+        try:
+            if CONFIG_PATH.exists():
+                with open(CONFIG_PATH) as f:
+                    root = yaml.safe_load(f) or {}
+                hl = hyperliquid_kwargs_from_config(root.get("hyperliquid"))
+        except Exception:
+            hl = {}
+        svc = HyperliquidHypeService(**hl)
+        _MACRO_ALIGN_FALLBACK_SVC[symbol] = svc
+        return svc
+
+    # Binance route: prefer the bot's pre-warmed service if attached.
+    attrs = _MACRO_ALIGN_STRAT_ATTRS.get(symbol)
+    if bot_instance and attrs:
+        strat_attr, svc_attr = attrs
+        strat = getattr(bot_instance, strat_attr, None)
+        if strat is not None:
+            svc = getattr(strat, svc_attr, None)
+            if svc is not None and hasattr(svc, "fetch_klines"):
+                return svc
+    cached = _MACRO_ALIGN_FALLBACK_SVC.get(symbol)
+    if cached is not None:
+        return cached
+    if symbol == "BTCUSDT":
+        svc = _get_btc_svc()
+    else:
+        from src.analysis.sol_btc_service import SOLBTCService
+        svc = SOLBTCService(alt_symbol=symbol)
+    _MACRO_ALIGN_FALLBACK_SVC[symbol] = svc
+    return svc
+
+
+def _macro_fetch_series_sync(symbol: str, source: str, interval: str, limit: int) -> List[Dict[str, Any]]:
+    """Fetch raw kline rows for one symbol; returns [{time, close}, ...]. Empty on failure.
+
+    Reuses bot_instance services when available so we ride the bot's existing
+    transport + caches instead of opening a new client per request.
+    """
+    try:
+        svc = _macro_align_get_svc(symbol, source)
+        if svc is None:
+            return []
+        if symbol == "BTCUSDT" and source != "hyperliquid":
+            # BTC service exposes fetch_klines(interval, limit) — no symbol arg.
+            df = svc.fetch_klines(interval=interval, limit=limit)
+        else:
+            df = svc.fetch_klines(symbol, interval=interval, limit=limit)
+        if df is None or df.empty:
+            return []
+        rows: List[Dict[str, Any]] = []
+        for _, r in df.iterrows():
+            try:
+                ts = int(r["open_time"].timestamp())
+                cl = float(r["close"])
+                if ts > 0 and cl > 0:
+                    rows.append({"time": ts, "close": cl})
+            except Exception:
+                continue
+        return rows
+    except Exception as e:
+        logger.warning(f"macro_align fetch failed for {symbol}/{source}: {e}")
+        return []
+
+
+_MACRO_ALIGN_CACHE: Dict[str, Any] = {"key": None, "data": None, "expires": 0.0}
+_MACRO_ALIGN_CACHE_TTL = 18.0  # seconds — just under the 20s dashboard refresh
+
+
+@app.get("/api/macro_align/series")
+async def get_macro_align_series(interval: str = "15m", limit: int = 120):
+    """Per-asset normalized % return series for the cross-asset macro alignment chart.
+
+    Returns a series of `(c - c0)/c0 * 100` for each of the 7 strategy assets, plus
+    derived 1H trend, Pearson correlation vs BTC, and last %.  Used by the live
+    macro-align panel to render 7 toggleable lines + trade bubbles.
+
+    Hot path: serves cached results within `_MACRO_ALIGN_CACHE_TTL` (~18s) so the
+    dashboard's 20s refresh never triggers a new external API call. Bot data is
+    untouched.
+    """
+    interval = interval if interval in ("5m", "15m", "30m", "1h", "4h") else "15m"
+    limit = max(20, min(int(limit), 240))
+
+    cache_key = f"{interval}:{limit}"
+    now = _time_mod.time()
+    if (
+        _MACRO_ALIGN_CACHE["key"] == cache_key
+        and _MACRO_ALIGN_CACHE["data"] is not None
+        and now < _MACRO_ALIGN_CACHE["expires"]
+    ):
+        return _MACRO_ALIGN_CACHE["data"]
+
+    tasks = [
+        asyncio.to_thread(_macro_fetch_series_sync, a["symbol"], a["source"], interval, limit)
+        for a in _MACRO_ALIGN_ASSETS
+    ]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Align all series to BTC's timestamp grid so % values share an x-axis.
+    btc_rows: List[Dict[str, Any]] = raw_results[0] if isinstance(raw_results[0], list) else []
+    btc_times = [r["time"] for r in btc_rows]
+    btc_index = {t: i for i, t in enumerate(btc_times)}
+    btc_norm: List[float] = []
+    if btc_rows:
+        c0 = float(btc_rows[0]["close"])
+        if c0 > 0:
+            btc_norm = [(float(r["close"]) - c0) / c0 * 100.0 for r in btc_rows]
+
+    assets_out: Dict[str, Any] = {}
+    for asset, rows in zip(_MACRO_ALIGN_ASSETS, raw_results):
+        meta = {
+            "label": asset["label"],
+            "color": asset["color"],
+            "source": asset["source"],
+            "available": False,
+            "series": [],
+            "last_pct": None,
+            "m1h": "NEUT",
+            "corr": None,
+            "align": None,
+        }
+        if not isinstance(rows, list) or not rows:
+            assets_out[asset["key"]] = meta
+            continue
+        c0 = float(rows[0]["close"])
+        if c0 <= 0:
+            assets_out[asset["key"]] = meta
+            continue
+        # Align to BTC's grid: produce one value per btc_time, or null if no bar at that ts.
+        if btc_times:
+            row_by_time = {r["time"]: r for r in rows}
+            series: List[Optional[float]] = []
+            last_pct: Optional[float] = None
+            for t in btc_times:
+                r = row_by_time.get(t)
+                if r is None:
+                    series.append(None)
+                else:
+                    pct = (float(r["close"]) - c0) / c0 * 100.0
+                    series.append(round(pct, 4))
+                    last_pct = pct
+        else:
+            series = [round((float(r["close"]) - c0) / c0 * 100.0, 4) for r in rows]
+            last_pct = series[-1] if series else None
+
+        # m1h: slope over the last ~4 hours of bars (interval-aware).
+        bars_per_hour = {"5m": 12, "15m": 4, "30m": 2, "1h": 1, "4h": 0.25}.get(interval, 4)
+        lookback = max(4, int(bars_per_hour * 4))
+        clean = [v for v in series if v is not None]
+        if len(clean) >= lookback:
+            delta = clean[-1] - clean[-lookback]
+            meta["m1h"] = "BULL" if delta > 0.15 else "BEAR" if delta < -0.15 else "NEUT"
+        # Pearson vs BTC over aligned overlap.
+        if btc_norm and any(v is not None for v in series):
+            paired_a, paired_b = [], []
+            for i, v in enumerate(series):
+                if v is None or i >= len(btc_norm):
+                    continue
+                paired_a.append(btc_norm[i])
+                paired_b.append(v)
+            meta["corr"] = round(_macro_pearson(paired_a, paired_b) or 0.0, 3) if len(paired_a) >= 5 else None
+            # align ≈ corr * sign-agreement of last-window trend
+            if meta["corr"] is not None and len(paired_a) >= lookback:
+                btc_dir = paired_a[-1] - paired_a[-lookback]
+                alt_dir = paired_b[-1] - paired_b[-lookback]
+                sign_match = 1.0 if (btc_dir >= 0) == (alt_dir >= 0) else -1.0
+                meta["align"] = round(abs(meta["corr"]) * sign_match, 3)
+
+        meta["available"] = True
+        meta["series"] = series
+        meta["last_pct"] = round(last_pct, 3) if last_pct is not None else None
+        assets_out[asset["key"]] = meta
+
+    payload = {
+        "interval": interval,
+        "limit": limit,
+        "times": btc_times,
+        "assets": assets_out,
+        "order": [a["key"] for a in _MACRO_ALIGN_ASSETS],
+        "cached_at": int(now),
+        "cache_ttl": int(_MACRO_ALIGN_CACHE_TTL),
+    }
+    _MACRO_ALIGN_CACHE["key"] = cache_key
+    _MACRO_ALIGN_CACHE["data"] = payload
+    _MACRO_ALIGN_CACHE["expires"] = now + _MACRO_ALIGN_CACHE_TTL
+    return payload
 
 
 # ─── CONFIG PANEL ─────────────────────────────────────────────────
