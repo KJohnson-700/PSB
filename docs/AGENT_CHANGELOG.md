@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-21 — Phase-1 calibration ship: DOGE/BNB/HYPE catalyst loosens + BTC disagreement override
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Shipped the first agreed calibration pass from the 2026-05-21 audit. `doge_macro.require_btc_catalyst_5m` and `bnb_macro.require_btc_catalyst_5m` now flip to `false`, and `hype_macro.require_btc_catalyst_15m_when_unconfirmed` now flips to `false`. This stays narrower than a blanket “all alts off BTC” change: only the lanes with already-profitable settled-reject cohorts were loosened.
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** Added a BTC-only, config-driven override for HTF-aligned `bias_quant_disagree` rejects on non-5m up/down lanes. The post-quant side flip was already symmetric in current code; the remaining starvation was happening later at the `lane_min_edge_bias_quant_disagree` reject path, so this pass softens that exact gate for moderate disagreement on 15m/1h while keeping 5m strict.
+
+**[`tests/test_bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin.py):** Added focused coverage proving the new BTC disagreement override admits a moderate bullish 15m-style gap and still refuses to relax the 5m lane.
+
+**Why:** Settled reject analysis supported immediate removal of BTC catalyst blockers on `doge 5m`, `bnb 5m`, and `hype 15m`, while BTC’s LONG starvation no longer matched the old “missing mirror flip” hypothesis. The smallest defensible code change was to keep the existing flip logic intact and make the later min-edge disagreement rejection configurable for the slower BTC lanes.
+
 ## 2026-05-20 — Probability diagnostics stack added, deferred repo queue logged
 
 **[`scripts/probability_diagnostics.py`](/Users/mainfolder/Documents/psb-main%201/scripts/probability_diagnostics.py):** Added a new offline diagnostics report over resolved paper exits that computes the current probability-evaluation stack in one place: reliability buckets, Murphy decomposition (`reliability`, `resolution`, `uncertainty`), Brier score against constant / market / empirical-table baselines, lane-level take-rate, and a small SVG reliability chart artifact. The empirical baseline is leave-one-out on `(strategy, window, yes_price_bucket)` with fallbacks to `(strategy, window)`, then `window`, then global so it stays useful on thin cohorts without cheating on the evaluated trade itself.

@@ -1342,11 +1342,15 @@ class PolyBot:
             for s in settled:
                 strat = s.get("strategy", "")
                 em = self._get_exposure_manager_for(strat)
-                em.record_trade(
-                    pnl=s["pnl"], strategy=strat, market_id=s.get("market_id", "")
+                window = str(s.get("window_size") or "") or _detect_window_from_question(
+                    str(s.get("market_question") or "")
                 )
-                mq = str(s.get("market_question") or "")
-                window = _detect_window_from_question(mq)
+                em.record_trade(
+                    pnl=s["pnl"],
+                    strategy=strat,
+                    market_id=s.get("market_id", ""),
+                    window_size=window,
+                )
                 self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
 
             crypto_settled = [
@@ -1433,12 +1437,13 @@ class PolyBot:
                     _tid = str(exit_decision.position_id or "")
                     trade_id_tail = _tid[-14:] if _tid else ""
                     em = self._get_exposure_manager_for(strat)
+                    window = str(getattr(pos, "window_size", "") or "") or _detect_window_from_question(mq)
                     em.record_trade(
                         pnl=exit_decision.unrealized_pnl,
                         strategy=strat,
                         market_id=exit_decision.market_id,
+                        window_size=window,
                     )
-                    window = _detect_window_from_question(mq)
                     self.kelly_sizer.record_outcome(strat, exit_decision.unrealized_pnl > 0, window)
                     exit_pnl = exit_decision.unrealized_pnl
                     self._apply_realized_pnl_to_bankroll(exit_pnl)

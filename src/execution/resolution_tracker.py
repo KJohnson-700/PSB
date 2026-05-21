@@ -188,12 +188,14 @@ class ResolutionTracker:
             settled.append({
                 "trade_id": trade_id,
                 "market_id": mid,
+                "market_question": pos.get("market_question", ""),
                 "strategy": strategy,
                 "action": action,
                 "outcome_won": outcome_won,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "pnl": pnl,
+                "window_size": str(pos.get("window_size") or ""),
                 "settled_at": datetime.now().isoformat(),
             })
 

@@ -294,35 +294,94 @@
         #status-badges{justify-content:flex-end}
         .controls{display:flex;gap:8px 10px;margin:9px 0;flex-wrap:wrap;align-items:center}
         #command-center-controls .btn-sm{padding:6px 11px;font-size:11px}
-        #command-center-controls{animation:cfChase 4.8s linear infinite 1s}
+        @property --cc-shine-pos { syntax: '<number>'; initial-value: 0; inherits: true; }
+        @property --cc-shine-on  { syntax: '<number>'; initial-value: 1; inherits: true; }
+        #command-center-controls{animation:ccBtnOrbit 2.8s linear infinite}
         #command-center-controls .abtn.cmd-sync-shine{
             position:relative;
-            overflow:hidden;
             isolation:isolate;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);
         }
         #command-center-controls .abtn.cmd-sync-shine::after{
             content:'';
-            position:absolute; inset:-1px;
+            position:absolute; inset:-2px;
             border-radius:inherit;
-            padding:1px;
+            padding:2px;
             pointer-events:none;
-            background:conic-gradient(
-                from calc(var(--shine-pos) * 1turn),
-                transparent 0deg 280deg,
-                color-mix(in srgb, currentColor 60%, transparent) 320deg,
-                currentColor 348deg,
-                #fff 358deg,
+            background: conic-gradient(
+                from calc(var(--cc-shine-pos) * 1turn),
+                transparent 0deg 268deg,
+                color-mix(in srgb, currentColor 72%, transparent) 312deg,
+                currentColor 342deg,
+                #fff 354deg,
                 currentColor 360deg
             );
             -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
                     mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
             -webkit-mask-composite: xor;
                     mask-composite: exclude;
-            opacity:var(--shine-on);
-            filter:drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
+            opacity:.88;
+            filter:drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor);
             transition:opacity .15s ease;
         }
-        #command-center-controls .abtn.cmd-sync-shine:disabled::after{opacity:0}
+        #paper-start-btn.cmd-sync-shine::before,
+        #real-live-start-btn.cmd-sync-shine::before{
+            content:'';
+            position:absolute;
+            inset:-1px;
+            border-radius:inherit;
+            pointer-events:none;
+            opacity:.22;
+            background:radial-gradient(circle at 18% 50%, color-mix(in srgb, currentColor 50%, transparent) 0%, transparent 58%);
+            filter:blur(3px);
+        }
+        #paper-start-btn.cmd-sync-shine::after,
+        #real-live-start-btn.cmd-sync-shine::after{
+            opacity:.95;
+            filter:drop-shadow(0 0 5px currentColor) drop-shadow(0 0 14px currentColor);
+        }
+        #live-stop-btn.cmd-sync-shine:disabled::after{opacity:0}
+        #live-stop-btn.cmd-sync-shine:disabled{
+            opacity:.58;
+            filter:none;
+            background:rgba(255,68,102,.06)!important;
+            border-color:rgba(255,68,102,.22)!important;
+            color:rgba(255,122,148,.58)!important;
+            box-shadow:none!important;
+        }
+        @keyframes ccBtnChase{
+            0%   { --cc-shine-pos: 0; --cc-shine-on: 0 }
+            2%   { --cc-shine-pos: 0; --cc-shine-on: 1 }
+            16%  { --cc-shine-pos: 1; --cc-shine-on: 1 }
+            19%  { --cc-shine-pos: 1; --cc-shine-on: 0 }
+            100% { --cc-shine-pos: 1; --cc-shine-on: 0 }
+        }
+        @keyframes ccBtnOrbit{
+            0%   { --cc-shine-pos: 0 }
+            100% { --cc-shine-pos: 1 }
+        }
+        @supports not (background: conic-gradient(from calc(var(--x,0) * 1turn), red, blue)) {
+            #command-center-controls .abtn.cmd-sync-shine::after{
+                background:linear-gradient(90deg, transparent 0%, transparent 60%, currentColor 82%, #fff 90%, currentColor 95%, transparent 100%);
+                background-size:220% 100%;
+                background-position:-120% 0;
+                animation:ccBtnChaseFallback 2.8s linear infinite;
+            }
+            #live-stop-btn.cmd-sync-shine:disabled::after{animation:none;opacity:0}
+            @keyframes ccBtnChaseFallback{
+                0%   { background-position:-120% 0; opacity:0 }
+                3%   { background-position:-120% 0; opacity:1 }
+                16%  { background-position:120% 0; opacity:1 }
+                19%  { background-position:120% 0; opacity:0 }
+                100% { background-position:120% 0; opacity:0 }
+            }
+        }
+        #loss-kill-toggle-btn{
+            background:rgba(255,166,0,.12)!important;
+            border-color:rgba(255,166,0,.42)!important;
+            color:#ffb347!important;
+        }
+        #loss-kill-toggle-btn:hover{box-shadow:0 0 14px rgba(255,166,0,.24)!important}
         .ops-mini{
             border:1px solid rgba(255,255,255,.08);
             border-radius:6px;
@@ -862,14 +921,6 @@
                 19%  { opacity:0 }
                 100% { background-position: 120% 0; opacity:0 }
             }
-            #command-center-controls{animation:none}
-            #command-center-controls .abtn.cmd-sync-shine::after{
-                background:linear-gradient(90deg, transparent 0%, transparent 60%, currentColor 82%, #fff 90%, currentColor 95%, transparent 100%);
-                background-size:220% 100%;
-                background-position:-120% 0;
-                animation:cfChaseFallback 4.8s linear infinite 1s;
-            }
-            #command-center-controls .abtn.cmd-sync-shine:disabled::after{animation:none;opacity:0}
         }
         #macro-align-section .ma-chip .ma-chip-dash{
             display:inline-block;width:10px;height:2px;background:currentColor;
@@ -1368,16 +1419,60 @@
         .ac{background:rgba(0,229,255,.07)!important;border-color:rgba(0,229,255,.35)!important;color:var(--cy)!important}
         .agh{background:rgba(255,255,255,.04)!important;border-color:rgba(255,255,255,.1)!important;color:var(--tm)!important}
 
-        /* Start Live Test — green at rgba(.1) reads dim vs red/yellow/blue at same alpha; bump fill + text */
-        #live-start-btn:not(:disabled){
+        /* Paper-start button matches the existing paper-mode indicator. */
+        #paper-start-btn:not(:disabled){
+            background:rgba(255,215,0,.16)!important;
+            border-color:var(--ye)!important;
+            color:var(--ye)!important;
+        }
+        #paper-start-btn:disabled{
+            opacity:1!important;
+            background:rgba(255,215,0,.10)!important;
+            border-color:rgba(255,215,0,.30)!important;
+            color:rgba(255,215,0,.58)!important;
+            box-shadow:inset 0 0 0 1px rgba(255,215,0,.08)!important;
+            filter:none!important;
+            cursor:not-allowed;
+        }
+        #paper-start-btn.cmd-sync-shine:disabled::after{
+            opacity:.72;
+        }
+        #paper-start-btn.cmd-sync-shine:disabled::before{opacity:.16}
+
+        /* Live start keeps the original green emphasis. */
+        #real-live-start-btn:not(:disabled){
             background:rgba(0,255,136,.28)!important;
+            border-color:var(--gr)!important;
             color:#c8ffde!important;
         }
-        #live-start-btn:disabled{
+        #real-live-start-btn:disabled{
             opacity:1!important;
             background:rgba(0,255,136,.18)!important;
             border-color:rgba(0,255,136,.45)!important;
             color:rgba(200,255,222,.72)!important;
+            box-shadow:inset 0 0 0 1px rgba(0,255,136,.08)!important;
+            filter:none!important;
+            cursor:not-allowed;
+        }
+        #real-live-start-btn.cmd-sync-shine:disabled::after{
+            opacity:.72;
+        }
+        #real-live-start-btn.cmd-sync-shine:disabled::before{opacity:.16}
+        #live-stop-btn:not(:disabled){
+            background:rgba(255,68,102,.12)!important;
+            border-color:var(--re)!important;
+            color:var(--re)!important;
+        }
+        #live-stop-btn.stop-resume:not(:disabled){
+            background:rgba(0,255,136,.12)!important;
+            border-color:var(--gr)!important;
+            color:var(--gr)!important;
+        }
+        #live-stop-btn:disabled{
+            opacity:.58!important;
+            background:rgba(255,68,102,.06)!important;
+            border-color:rgba(255,68,102,.22)!important;
+            color:rgba(255,122,148,.58)!important;
             box-shadow:none!important;
             filter:none!important;
             cursor:not-allowed;
@@ -1410,22 +1505,27 @@
         button.bdg-mq:hover{transform:none;filter:brightness(1.08)}
         button.bdg-mq:active{transform:none;filter:brightness(.96)}
         .bdg-mq.run{color:var(--gr);border-color:var(--gr);box-shadow:0 0 10px rgba(0,255,136,.5),inset 0 0 10px rgba(0,255,136,.15);animation:pulseRun 1.5s ease-in-out infinite}
-        .bdg-mq.off{color:var(--re);border-color:var(--re);box-shadow:0 0 10px rgba(255,68,102,.55),inset 0 0 10px rgba(255,68,102,.18);animation:pulseOff 1.3s ease-in-out infinite}
+        .bdg-mq.live-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
         .bdg-mq.paper-on{color:var(--ye);border-color:var(--ye);animation:pulsePaperMq 1.5s ease-in-out infinite}
         .bdg-mq.paper-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
-        .bdg-mq.kill-on{color:var(--ye);border-color:var(--ye);box-shadow:0 0 10px rgba(255,215,0,.38),inset 0 0 10px rgba(255,215,0,.12);animation:pulsePaperMq 1.6s ease-in-out infinite}
+        .bdg-mq.kill-on{color:#ffb347;border-color:rgba(255,166,0,.58);box-shadow:0 0 10px rgba(255,166,0,.38),inset 0 0 10px rgba(255,166,0,.12);animation:pulseKillMq 1.6s ease-in-out infinite}
         .bdg-mq.kill-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
+        .bdg-mq.kill-trigger{color:var(--re);border-color:var(--re);box-shadow:0 0 12px rgba(255,68,102,.65),inset 0 0 12px rgba(255,68,102,.2);animation:pulseLive 1.0s ease-in-out infinite}
         .bdg-mq.dead-on{color:#60a5fa;border-color:#3b82f6;box-shadow:0 0 10px rgba(59,130,246,.4),inset 0 0 10px rgba(59,130,246,.12);animation:pulseDeadMq 1.6s ease-in-out infinite}
         .bdg-mq.dead-off{color:var(--tm);border-color:rgba(255,255,255,.18);box-shadow:none;opacity:.65}
         .bdg-mq .mq-track{display:inline-block;white-space:nowrap;padding-left:100%;animation:mqScroll 5.6s linear infinite;text-shadow:0 0 6px currentColor}
-        .bdg-mq.off .mq-track{animation-duration:5.6s}
+        .bdg-mq.live-off .mq-track{animation-duration:7.0s;text-shadow:none}
         .bdg-mq.paper-on .mq-track{animation-duration:5.0s}
         .bdg-mq.paper-off .mq-track{animation-duration:7.0s;text-shadow:none}
-        .bdg-mq.kill-on .mq-track,.bdg-mq.dead-on .mq-track{animation-duration:5.0s}
+        .bdg-mq.kill-on .mq-track,.bdg-mq.kill-trigger .mq-track,.bdg-mq.dead-on .mq-track{animation-duration:5.0s}
         .bdg-mq.kill-off .mq-track,.bdg-mq.dead-off .mq-track{animation-duration:7.0s;text-shadow:none}
         @keyframes pulsePaperMq{
             0%,100%{box-shadow:0 0 6px rgba(255,215,0,.45),inset 0 0 8px rgba(255,215,0,.15)}
             50%{box-shadow:0 0 22px rgba(255,215,0,.95),inset 0 0 14px rgba(255,215,0,.35)}
+        }
+        @keyframes pulseKillMq{
+            0%,100%{box-shadow:0 0 6px rgba(255,166,0,.42),inset 0 0 8px rgba(255,166,0,.12)}
+            50%{box-shadow:0 0 22px rgba(255,166,0,.95),inset 0 0 14px rgba(255,166,0,.34)}
         }
         @keyframes pulseDeadMq{
             0%,100%{box-shadow:0 0 6px rgba(59,130,246,.4),inset 0 0 8px rgba(59,130,246,.12)}
@@ -1765,10 +1865,11 @@
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
-            <button class="abtn ag cmd-sync-shine" id="live-start-btn" onclick="startLiveBot()">Start Live Test</button>
-            <button class="abtn ar cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
-            <button class="abtn ay cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-switch-btn">Loss Kill Switch</button>
-            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-btn">Dead Zones</button>
+            <button class="abtn cmd-sync-shine" id="paper-start-btn" onclick="startBotMode('paper')">Start Paper Bot</button>
+            <button class="abtn cmd-sync-shine" id="real-live-start-btn" onclick="startBotMode('live')">Start Live Bot</button>
+            <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
+            <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn">Loss Kill Switch</button>
+            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn">Dead Zones</button>
             <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
@@ -4013,7 +4114,7 @@ function updateStatusBadgesAndKill(d) {
     const paperOn = !!d.dry_run;
     const liveExec = !!d.running && !paperOn;
     const liveLabel = liveExec ? 'LIVE ON' : 'LIVE OFF';
-    const liveCls = liveExec ? 'run' : 'off';
+    const liveCls = liveExec ? 'run' : 'live-off';
     const liveTitle = liveExec
         ? 'Live execution mode — real orders'
         : (d.running ? 'Bot is running in paper mode (no live execution)' : 'Bot is stopped');
@@ -4022,15 +4123,30 @@ function updateStatusBadgesAndKill(d) {
     const paperCls = paperOn ? 'paper-on' : 'paper-off';
     const paperTitle = paperOn ? 'Paper mode is active.' : 'Paper mode is inactive.';
     const paperBadge = `<span class="bdg-mq ${paperCls}" title="${paperTitle}"><span class="mq-track"><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span><span>${paperLabel}</span></span></span>`;
-    const lossKillOn = typeof d?.exposure?.loss_kill_switch_enabled === 'boolean'
-        ? !!d.exposure.loss_kill_switch_enabled
-        : !!operatorFlags.lossKillSwitchEnabled;
-    const lossKillLabel = lossKillOn ? 'LOSS KILL ON' : 'LOSS KILL OFF';
-    const lossKillCls = lossKillOn ? 'kill-on' : 'kill-off';
-    const lossKillTitle = lossKillOn
-        ? 'Loss kill switch is enabled. Click to disable.'
-        : 'Loss kill switch is disabled. Click to enable.';
-    const lossKillBadge = `<button type="button" class="bdg-mq ${lossKillCls}" id="loss-kill-switch-btn" onclick="toggleLossKillSwitch()" title="${lossKillTitle}"><span class="mq-track"><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span></span></button>`;
+    const lossKillOn = !!d?.exposure?.loss_kill_switch_enabled;
+    const latestLossTrigger = d.loss_pause_active && d.loss_pause_latest_trigger && typeof d.loss_pause_latest_trigger === 'object'
+        ? d.loss_pause_latest_trigger
+        : null;
+    const triggerLane = String(latestLossTrigger?.lane || '').trim().toUpperCase();
+    const triggerWindowRaw = String(latestLossTrigger?.window_size || '').trim();
+    const triggerWindow = /^\d+\s*m$/i.test(triggerWindowRaw)
+        ? triggerWindowRaw.toUpperCase()
+        : /^\d+$/i.test(triggerWindowRaw)
+            ? `${triggerWindowRaw}M`
+            : '';
+    const triggerLabel = triggerLane
+        ? `${triggerLane}${triggerWindow ? ` ${triggerWindow}` : ''} LOSS KILL`
+        : 'LOSS KILL TRIGGERED';
+    const lossKillLabel = latestLossTrigger
+        ? triggerLabel
+        : (lossKillOn ? 'LOSS KILL ON' : 'LOSS KILL OFF');
+    const lossKillCls = latestLossTrigger ? 'kill-trigger' : (lossKillOn ? 'kill-on' : 'kill-off');
+    const lossKillTitle = latestLossTrigger
+        ? `Loss-streak pause triggered${triggerLane ? ` for ${triggerLane}` : ''}${triggerWindow ? ` ${triggerWindow}` : ''}. Click to disable loss kill switch.`
+        : (lossKillOn
+            ? 'Loss kill switch is enabled. Click to disable.'
+            : 'Loss kill switch is disabled. Click to enable.');
+    const lossKillBadge = `<span class="bdg-mq ${lossKillCls}" title="${lossKillTitle}"><span class="mq-track"><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span></span></span>`;
     const deadZonesOn = typeof operatorFlags.deadZoneEnabled === 'boolean'
         ? !!operatorFlags.deadZoneEnabled
         : ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
@@ -4041,18 +4157,12 @@ function updateStatusBadgesAndKill(d) {
         ? 'Dead zones are enabled. Click to disable.'
         : 'Dead zones are disabled. Click to enable.';
     const deadZonesBadge = `<button type="button" class="bdg-mq ${deadZonesCls}" id="dead-zone-btn" onclick="toggleDeadZones()" title="${deadZonesTitle}"><span class="mq-track"><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span></span></button>`;
-    const lossPauseTitle = d.loss_pause_active
-        ? `Loss-streak lane pause active. Check Exposure Manager. Paused lanes: ${((d.loss_pause_lanes || []).join(', ') || 'unknown')}`
-        : 'No loss-streak lane pause is currently active.';
-    const lossPauseBadge = d.loss_pause_active
-        ? `<span class="badge badge-pause-flash" title="${String(lossPauseTitle).replace(/"/g, '&quot;')}">LOSS PAUSE</span>`
-        : '<span class="badge badge-muted" title="No loss-streak lane pause is currently active.">LOSS PAUSE</span>';
     const ai = d.ai || {};
     const aiTip = String(ai.reason || '').replace(/"/g, '&quot;').replace(/</g, '');
     const aiBadge = ai.ready
         ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
         : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${lossPauseBadge} ${aiBadge}`;
+    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${aiBadge}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
@@ -4125,9 +4235,11 @@ function applySSESnapshot(raw) {
         updateStatusBadgesAndKill({
             dry_run: raw.dry_run,
             running: raw.running,
+            exposure: raw.exposure || (lastStatusData ? lastStatusData.exposure : undefined),
             kill_switch_active: raw.kill_switch_active,
             loss_pause_active: raw.loss_pause_active,
             loss_pause_lanes: raw.loss_pause_lanes,
+            loss_pause_latest_trigger: raw.loss_pause_latest_trigger,
             can_trade: raw.can_trade,
             ai: raw.ai || {},
         });
@@ -4679,19 +4791,20 @@ function updateStatus(d) {
     applyHeroMetrics(d);
     updateCommandCenterDigests(d);
 
-    const startBtn = document.getElementById('live-start-btn');
+    const paperBtn = document.getElementById('paper-start-btn');
+    const liveBtn = document.getElementById('real-live-start-btn');
     const stopBtn = document.getElementById('live-stop-btn');
     const running = !!d?.running;
     const halted = !!d?.kill_switch_active;
-    if (startBtn) startBtn.disabled = running;
+    if (paperBtn) paperBtn.disabled = running;
+    if (liveBtn) liveBtn.disabled = running;
     if (stopBtn) {
         stopBtn.disabled = !running && !halted;
         stopBtn.textContent = halted ? 'Resume Trading' : 'Stop Trading';
         stopBtn.title = halted
             ? 'Clear the manual trading halt and allow new trades again'
             : 'Stop placing new trades while keeping scans and dashboard metrics running';
-        stopBtn.classList.toggle('ag', halted);
-        stopBtn.classList.toggle('ar', !halted);
+        stopBtn.classList.toggle('stop-resume', halted);
     }
 
     window._dashLastStatusForDeck = Object.assign({}, window._dashLastStatusForDeck || {}, d);
@@ -4972,35 +5085,58 @@ function dashPrivacyMotionOk() {
     return !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
-async function startLiveBot() {
-    const btn = document.getElementById('live-start-btn');
+async function startBotMode(mode) {
+    const modeNorm = (mode || 'paper').toLowerCase();
+    const btn = modeNorm === 'live'
+        ? document.getElementById('real-live-start-btn')
+        : document.getElementById('paper-start-btn');
     const stopBtn = document.getElementById('live-stop-btn');
     const status = document.getElementById('process-status');
+    const paperBtn = document.getElementById('paper-start-btn');
+    const liveBtn = document.getElementById('real-live-start-btn');
+    if (modeNorm === 'live') {
+        const phrase = window.prompt('Type LIVE to start the bot in live mode.');
+        if (phrase !== 'LIVE') {
+            status.textContent = 'Live start cancelled.';
+            status.style.color = 'var(--yellow)';
+            return;
+        }
+    }
     let showedOverlay = false;
     if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
         DashPrivacy.show('loading', {
-            banner: 'ORACLE · LIVE SUBPROCESS START',
-            detail: 'POST /api/live/start from this dashboard host: spawn main.py (paper) with repo root on PYTHONPATH. After the splash dismisses, confirm PID and green status in Command Center; check local logs or container logs if the child exits immediately.'
+            banner: modeNorm === 'live' ? 'ORACLE · LIVE START' : 'ORACLE · PAPER START',
+            detail: modeNorm === 'live'
+                ? 'POST /api/live/start?mode=live from this dashboard host: spawn main.py in live mode. Confirm PID and mode badges immediately after launch.'
+                : 'POST /api/live/start?mode=paper from this dashboard host: spawn main.py in paper mode. Confirm PID and paper badge after launch.'
         });
         showedOverlay = true;
     }
-    btn.disabled = true;
+    if (paperBtn) paperBtn.disabled = true;
+    if (liveBtn) liveBtn.disabled = true;
     try {
-        const r = await fetch('/api/live/start', {method:'POST', headers: dashAuthHeaders()});
+        const r = await fetch(`/api/live/start?mode=${encodeURIComponent(modeNorm)}`, {method:'POST', headers: dashAuthHeaders()});
         const d = await r.json();
         if (d.status === 'started') {
-            status.textContent = `Live bot started (PID ${d.pid})`;
+            const label = d.mode === 'live' ? 'Live' : 'Paper';
+            status.textContent = `${label} bot started (PID ${d.pid})`;
             status.style.color = 'var(--green)';
             stopBtn.disabled = false;
         } else if (d.status === 'already_running') {
-            status.textContent = `Live bot already running (PID ${d.pid})`;
+            status.textContent = `Bot already running (PID ${d.pid})`;
             status.style.color = 'var(--yellow)';
         } else {
             status.textContent = 'Error: ' + (d.message || d.status);
             status.style.color = 'var(--red)';
-            btn.disabled = false;
+            if (paperBtn) paperBtn.disabled = false;
+            if (liveBtn) liveBtn.disabled = false;
         }
-    } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; btn.disabled=false; }
+    } catch(e) {
+        status.textContent = 'Error: '+e;
+        status.style.color='var(--red)';
+        if (paperBtn) paperBtn.disabled = false;
+        if (liveBtn) liveBtn.disabled = false;
+    }
     finally {
         if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 480);
     }
@@ -5008,7 +5144,8 @@ async function startLiveBot() {
 
 async function stopLiveBot() {
     const btn = document.getElementById('live-stop-btn');
-    const startBtn = document.getElementById('live-start-btn');
+    const paperBtn = document.getElementById('paper-start-btn');
+    const liveBtn = document.getElementById('real-live-start-btn');
     const status = document.getElementById('process-status');
     const isResume = (lastStatusData && lastStatusData.kill_switch_active) || btn.textContent === 'Resume Trading';
     let showedOverlay = false;
@@ -5037,7 +5174,8 @@ async function stopLiveBot() {
             status.style.color = d.status === 'error' ? 'var(--red)' : 'var(--yellow)';
         }
         if (typeof fetchAll === 'function') await fetchAll();
-        if (startBtn) startBtn.disabled = Boolean(lastStatusData?.running);
+        if (paperBtn) paperBtn.disabled = Boolean(lastStatusData?.running);
+        if (liveBtn) liveBtn.disabled = Boolean(lastStatusData?.running);
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
     finally {
         if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);

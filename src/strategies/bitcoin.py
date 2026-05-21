@@ -226,6 +226,15 @@ class BitcoinStrategy:
         self._ai_hold_cache: Dict[str, float] = {}  # market_id → timestamp of HOLD
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)     # 5m default
         self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.bias_quant_disagree_override_enabled = bool(
+            self.config.get("bias_quant_disagree_override_enabled", False)
+        )
+        self.bias_quant_disagree_aligned_max_gap_non5m = float(
+            self.config.get("bias_quant_disagree_aligned_max_gap_non5m", 0.0) or 0.0
+        )
+        self.bias_quant_disagree_aligned_min_edge_non5m = float(
+            self.config.get("bias_quant_disagree_aligned_min_edge_non5m", 0.0) or 0.0
+        )
         self.macro_event_guard_enabled = bool(self.config.get("macro_event_guard_enabled", False))
         self.macro_event_guard_before_min = int(self.config.get("macro_event_guard_before_min", 30))
         self.macro_event_guard_after_min = int(self.config.get("macro_event_guard_after_min", 30))
@@ -319,6 +328,51 @@ class BitcoinStrategy:
         if not lane_id:
             return raw_est_prob
         return float(cal.calibrate(lane_id, raw_est_prob))
+
+    def _maybe_bias_quant_disagree_override(
+        self,
+        *,
+        is_updown: bool,
+        window_size: str,
+        action: str,
+        htf_bias: Optional[str],
+        yes_price: float,
+        raw_est_prob: Optional[float],
+        edge: float,
+        reason_parts: list,
+    ) -> bool:
+        """Allow moderate HTF-aligned disagreement on slower BTC lanes."""
+        if (
+            not self.bias_quant_disagree_override_enabled
+            or not is_updown
+            or window_size == "5m"
+            or raw_est_prob is None
+            or htf_bias not in {"BULLISH", "BEARISH"}
+        ):
+            return False
+
+        aligned_with_bias = (
+            (htf_bias == "BULLISH" and action == "BUY_YES")
+            or (htf_bias == "BEARISH" and action == "BUY_NO")
+        )
+        if not aligned_with_bias:
+            return False
+
+        gap = (
+            float(yes_price) - float(raw_est_prob)
+            if action == "BUY_YES"
+            else float(raw_est_prob) - float(yes_price)
+        )
+        if gap < 0:
+            return False
+        if gap > self.bias_quant_disagree_aligned_max_gap_non5m:
+            return False
+        if edge < self.bias_quant_disagree_aligned_min_edge_non5m:
+            return False
+
+        reason_parts.append(f"bias_quant_override_gap={gap:.3f}")
+        reason_parts.append(f"bias_quant_override_edge={edge:.3f}")
+        return True
 
     def _score_neutral_15m_candidate(
         self,
@@ -2320,67 +2374,89 @@ class BitcoinStrategy:
                     _bias_quant_disagree = float(raw_est_prob) < float(yes_price)
                 elif htf_bias == "BEARISH":
                     _bias_quant_disagree = float(raw_est_prob) > float(yes_price)
-                _skip_reason = (
-                    "lane_min_edge_bias_quant_disagree"
-                    if _bias_quant_disagree
-                    else "lane_min_edge"
-                )
-                _bump_skip(_skip_reason)
-                log_rejected_candidate(
-                    strategy=self._signal_strategy_name,
-                    window=_updown_tf if is_updown else "15m",
-                    side=allowed_side,
-                    action=action,
-                    reason=_skip_reason,
-                    market=market,
-                    yes_price=yes_price,
-                    est_prob_up=estimated_prob,
-                    htf_bias=htf_bias,
-                    context={
-                        "edge": round(float(edge), 6),
-                        "effective_min_edge": round(float(effective_min_edge), 6),
-                        "raw_est_prob": round(float(raw_est_prob), 6),
-                        "estimated_prob": round(float(estimated_prob), 6),
-                        "confidence": round(float(confidence), 6),
-                        "side_source": side_source,
-                        "bias_quant_disagree": bool(_bias_quant_disagree),
-                        **build_market_context(
-                            asset_spot=ta.current_price,
-                            btc_spot=ta.current_price,
-                            rsi_14=ta.rsi_14,
-                            atr_14=getattr(ta.trend_sabre, "atr", None),
-                        ),
-                    },
-                    probe_variants=build_threshold_probe_variants(
-                        metric_name="min_edge",
-                        observed_value=float(edge),
-                        baseline_threshold=float(effective_min_edge),
-                    ),
-                    policy_version="lane_min_edge_v1",
-                )
-                if action == "BUY_NO":
-                    _record_buy_no_skip(
-                        market=market,
-                        skip_reason="lane_min_edge",
+                if (
+                    _bias_quant_disagree
+                    and self._maybe_bias_quant_disagree_override(
+                        is_updown=is_updown,
+                        window_size=_updown_tf if is_updown else "15m",
+                        action=action,
+                        htf_bias=htf_bias,
                         yes_price=yes_price,
+                        raw_est_prob=raw_est_prob,
                         edge=edge,
-                        effective_min_edge=effective_min_edge,
-                        rsi=ta.rsi_14,
-                        htf_bias_value=htf_bias,
-                        signal_reason=" | ".join(reason_parts),
-                        window_size=_updown_tf if is_updown else "threshold",
+                        reason_parts=reason_parts,
                     )
-                if not is_updown:
-                    _mkt_type = "threshold"
-                elif htf_bias == "NEUTRAL":
-                    _mkt_type = f"updown_{_updown_tf}_neutral"
+                ):
+                    logger.info(
+                        "  BTC allow '%s' %s — HTF-aligned bias/quant disagreement override "
+                        "(edge=%.4f < min=%.4f)",
+                        market.question[:45],
+                        action,
+                        edge,
+                        effective_min_edge,
+                    )
                 else:
-                    _mkt_type = f"updown_{_updown_tf}"
-                logger.info(
-                    f"  BTC skip '{market.question[:45]}' {action} "
-                    f"edge={edge:.4f} < min={effective_min_edge} | {_mkt_type}"
-                )
-                continue
+                    _skip_reason = (
+                        "lane_min_edge_bias_quant_disagree"
+                        if _bias_quant_disagree
+                        else "lane_min_edge"
+                    )
+                    _bump_skip(_skip_reason)
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason=_skip_reason,
+                        market=market,
+                        yes_price=yes_price,
+                        est_prob_up=estimated_prob,
+                        htf_bias=htf_bias,
+                        context={
+                            "edge": round(float(edge), 6),
+                            "effective_min_edge": round(float(effective_min_edge), 6),
+                            "raw_est_prob": round(float(raw_est_prob), 6),
+                            "estimated_prob": round(float(estimated_prob), 6),
+                            "confidence": round(float(confidence), 6),
+                            "side_source": side_source,
+                            "bias_quant_disagree": bool(_bias_quant_disagree),
+                            **build_market_context(
+                                asset_spot=ta.current_price,
+                                btc_spot=ta.current_price,
+                                rsi_14=ta.rsi_14,
+                                atr_14=getattr(ta.trend_sabre, "atr", None),
+                            ),
+                        },
+                        probe_variants=build_threshold_probe_variants(
+                            metric_name="min_edge",
+                            observed_value=float(edge),
+                            baseline_threshold=float(effective_min_edge),
+                        ),
+                        policy_version="lane_min_edge_v1",
+                    )
+                    if action == "BUY_NO":
+                        _record_buy_no_skip(
+                            market=market,
+                            skip_reason="lane_min_edge",
+                            yes_price=yes_price,
+                            edge=edge,
+                            effective_min_edge=effective_min_edge,
+                            rsi=ta.rsi_14,
+                            htf_bias_value=htf_bias,
+                            signal_reason=" | ".join(reason_parts),
+                            window_size=_updown_tf if is_updown else "threshold",
+                        )
+                    if not is_updown:
+                        _mkt_type = "threshold"
+                    elif htf_bias == "NEUTRAL":
+                        _mkt_type = f"updown_{_updown_tf}_neutral"
+                    else:
+                        _mkt_type = f"updown_{_updown_tf}"
+                    logger.info(
+                        f"  BTC skip '{market.question[:45]}' {action} "
+                        f"edge={edge:.4f} < min={effective_min_edge} | {_mkt_type}"
+                    )
+                    continue
 
             _is_neutral_15m = is_updown and _updown_tf != "5m" and htf_bias == "NEUTRAL"
             if _is_neutral_15m:

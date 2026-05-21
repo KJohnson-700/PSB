@@ -217,6 +217,9 @@ def test_dashboard_contains_operator_toggle_buttons():
     assert "loss_kill_switch_enabled" in html
     assert "LOSS KILL ON" in html or "LOSS KILL OFF" in html
     assert "DEAD ZONES ON" in html or "DEAD ZONES OFF" in html
+    assert ">Loss Kill Switch</button>" in html
+    assert "kill-trigger" in html
+    assert "live-off" in html
 
 
 def test_action_breakdown_backend_includes_doge_and_bnb():
@@ -476,6 +479,66 @@ def test_dashboard_status_handles_bootstrap_shim(monkeypatch):
     assert isinstance(data.get("ts"), int) and data["ts"] > 1700000000
 
 
+def test_dashboard_status_exposes_latest_loss_kill_trigger(monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class _Mgr:
+        lane_name = "SOL"
+        loss_kill_switch_enabled = True
+
+        def get_status(self):
+            return {
+                "paused": True,
+                "pause_reason": "3 consecutive losses",
+                "last_loss_kill_trigger": {
+                    "lane": "SOL",
+                    "window_size": "15m",
+                    "reason": "3 consecutive losses",
+                    "timestamp": "2026-05-21T12:00:00",
+                },
+            }
+
+    bot = type(
+        "Bot",
+        (),
+        {
+            "running": True,
+            "config": {"trading": {"dry_run": True}, "exposure": {"loss_kill_switch_enabled": True}},
+            "journal": type("Journal", (), {"get_summary": staticmethod(lambda: {})})(),
+            "bankroll": 500.0,
+            "risk_manager": type(
+                "Risk",
+                (),
+                {
+                    "active_positions": {},
+                    "can_trade": staticmethod(lambda: (True, "")),
+                    "get_portfolio_summary": staticmethod(lambda _bankroll: None),
+                },
+            )(),
+            "ai_agent": type("AI", (), {"api_keys": {}})(),
+            "btc_exposure_manager": _Mgr(),
+            "sol_exposure_manager": _Mgr(),
+            "eth_exposure_manager": None,
+            "hype_exposure_manager": None,
+            "xrp_exposure_manager": None,
+            "doge_exposure_manager": None,
+            "bnb_exposure_manager": None,
+            "weather_exposure_manager": None,
+            "event_exposure_manager": None,
+        },
+    )()
+    monkeypatch.setattr(dashboard_server, "bot_instance", bot)
+
+    r = TestClient(dashboard_server.app).get("/api/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["loss_pause_active"] is True
+    assert data["loss_pause_latest_trigger"]["lane"] == "SOL"
+    assert data["loss_pause_latest_trigger"]["window_size"] == "15m"
+
+
 def test_resolve_bankroll_snapshot_preserves_real_zero(tmp_path):
     from src.dashboard.server import _resolve_bankroll_snapshot
 
@@ -568,6 +631,36 @@ def test_config_post_accepts_updown_stop_loss_pct_with_auth(monkeypatch, tmp_pat
     )
     assert r.status_code == 200
     assert "updown_stop_loss_pct: 0.18" in config_path.read_text(encoding="utf-8")
+
+
+def test_config_get_overlays_effective_runtime_loss_kill_switch(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        "exposure:\n  loss_kill_switch_enabled: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        dashboard_server,
+        "bot_instance",
+        SimpleNamespace(
+            config={"exposure": {"loss_kill_switch_enabled": False}},
+            risk_manager=object(),
+            journal=object(),
+            btc_exposure_manager=SimpleNamespace(loss_kill_switch_enabled=True),
+        ),
+    )
+
+    r = TestClient(dashboard_server.app).get("/api/config")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["exposure"]["loss_kill_switch_enabled"] is True
+    assert payload["exposure"]["_runtime_source"] == "bot"
 
 
 def test_config_post_preserves_nested_window_lane_overrides(monkeypatch, tmp_path):

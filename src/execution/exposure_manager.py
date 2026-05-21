@@ -48,6 +48,7 @@ class TradeResult:
     pnl: float
     strategy: str
     market_id: str
+    window_size: str = ""
 
 
 @dataclass
@@ -127,6 +128,7 @@ class ExposureManager:
         self._current_tier: ExposureTier = ExposureTier.FULL
         self._last_conditions: Optional[MarketConditions] = None
         self._on_pause_ai_callback: Optional[Callable] = None
+        self._last_loss_kill_trigger: Optional[Dict[str, Any]] = None
 
     def reload_from_config(self, exposure_config: Dict[str, Any]) -> None:
         """Refresh sizing, kill-switch, and condition thresholds from YAML/dashboard.
@@ -331,13 +333,20 @@ class ExposureManager:
     # Trade Result Tracking
     # ──────────────────────────────────────────────────────────────
 
-    def record_trade(self, pnl: float, strategy: str = "", market_id: str = ""):
+    def record_trade(
+        self,
+        pnl: float,
+        strategy: str = "",
+        market_id: str = "",
+        window_size: str = "",
+    ):
         """Record a completed trade result. Triggers lane pause if needed."""
         result = TradeResult(
             timestamp=datetime.now(),
             pnl=pnl,
             strategy=strategy,
             market_id=market_id,
+            window_size=str(window_size or ""),
         )
         self._recent_trades.append(result)
 
@@ -352,7 +361,8 @@ class ExposureManager:
 
             if self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
                 self._trigger_pause(
-                    f"{self._consecutive_losses} consecutive losses"
+                    f"{self._consecutive_losses} consecutive losses",
+                    window_size=str(window_size or ""),
                 )
             elif not self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
                 logger.info(f"Exposure: Loss-streak lane pause disabled — would pause at {self._consecutive_losses} losses")
@@ -361,12 +371,19 @@ class ExposureManager:
                 logger.info(f"Exposure: Win recorded ({pnl:+.2f}), resetting loss streak")
             self._consecutive_losses = 0
 
-    def _trigger_pause(self, reason: str):
+    def _trigger_pause(self, reason: str, *, window_size: str = ""):
         """Activate the loss-streak lane pause."""
         self._paused = True
         self._pause_reason = reason
         self._pause_start = datetime.now()
         self._cycles_since_pause = 0
+        window_norm = str(window_size or "").strip()
+        self._last_loss_kill_trigger = {
+            "lane": str(self.lane_name or "UNKNOWN"),
+            "window_size": window_norm,
+            "reason": reason,
+            "timestamp": self._pause_start.isoformat(),
+        }
 
         if self.is_paper:
             logger.warning(
@@ -408,6 +425,7 @@ class ExposureManager:
         self._pause_reason = ""
         self._cycles_since_pause = 0
         self._consecutive_losses = 0  # Reset on unpause
+        self._last_loss_kill_trigger = None
         logger.info(f"EXPOSURE RESUMED: {reason}")
 
     # ──────────────────────────────────────────────────────────────
@@ -426,6 +444,7 @@ class ExposureManager:
         self._pause_reason = ""
         self._cycles_since_pause = 0
         self._consecutive_losses = 0
+        self._last_loss_kill_trigger = None
         logger.info("Exposure: MANUAL RESUME — all clear")
 
     def reset_for_new_paper_session(self):
@@ -439,6 +458,7 @@ class ExposureManager:
         self._manual_pause = False
         self._current_tier = ExposureTier.FULL
         self._last_conditions = None
+        self._last_loss_kill_trigger = None
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -498,6 +518,7 @@ class ExposureManager:
                 'volume_ratio': self._last_conditions.volume_ratio if self._last_conditions else 0,
                 'trend_strength': self._last_conditions.trend_strength if self._last_conditions else 0,
             } if self._last_conditions else {},
+            'last_loss_kill_trigger': dict(self._last_loss_kill_trigger) if self._last_loss_kill_trigger else None,
         }
 
     @staticmethod

@@ -78,3 +78,23 @@ def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
 
     assert first_tier == ExposureTier.PAUSED
     assert second_tier != ExposureTier.PAUSED
+
+
+def test_loss_kill_trigger_records_latest_lane_context() -> None:
+    cfg = {
+        "exposure": {
+            "loss_kill_switch_enabled": True,
+            "max_consecutive_losses": 1,
+            "pause_cycles": 2,
+        }
+    }
+    mgr = ExposureManager(cfg, is_paper=True, lane_name="DOGE")
+    mgr.record_trade(-1.0, strategy="doge_macro", market_id="m1", window_size="5m")
+
+    status = mgr.get_status()
+    trigger = status["last_loss_kill_trigger"]
+    assert status["paused"] is True
+    assert trigger is not None
+    assert trigger["lane"] == "DOGE"
+    assert trigger["window_size"] == "5m"
+    assert "consecutive losses" in trigger["reason"]

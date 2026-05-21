@@ -765,7 +765,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-20-dashboard-action-breakdown-doge-bnb",
+        "dashboard_ui_rev": "2026-05-21-command-center-start-shine-cache-bust",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -1087,9 +1087,15 @@ def _dashboard_html_with_injections() -> str:
 async def get_dashboard():
     """Serves the main dashboard HTML page (always fresh reload)."""
     try:
-        return HTMLResponse(content=_dashboard_html_with_injections())
+        return HTMLResponse(
+            content=_dashboard_html_with_injections(),
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
     except FileNotFoundError:
-        return HTMLResponse(content="<h1>Dashboard file not found.</h1>")
+        return HTMLResponse(
+            content="<h1>Dashboard file not found.</h1>",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
 
 
 # ─── HEALTH (container / PaaS uptime check) ──────────────────────
@@ -1210,6 +1216,8 @@ async def sse_stream(request: Request):
                     can_trade, _reason = bot.risk_manager.can_trade()
                     if kill_switch_active:
                         can_trade = False
+                    exposure_payload = _effective_exposure_section(bot.config)
+                    loss_pause_payload = _loss_streak_pause_summary()
                     _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
                     ai_payload = compute_ai_status(bot.config, _ai_keys)
                     try:
@@ -1232,6 +1240,8 @@ async def sse_stream(request: Request):
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
                     can_trade = False
+                    exposure_payload = _effective_exposure_section(cfg_disk)
+                    loss_pause_payload = {"active": False, "lanes": [], "latest_trigger": None}
                     ai_payload = compute_ai_status(cfg_disk, None)
                     try:
                         from src.ops_pulse import _decision_gate_digest
@@ -1280,6 +1290,10 @@ async def sse_stream(request: Request):
                     "running": bot.running if bot else False,
                     "kill_switch_active": kill_switch_active,
                     "dry_run": dry_run,
+                    "exposure": exposure_payload,
+                    "loss_pause_active": bool(loss_pause_payload.get("active", False)),
+                    "loss_pause_lanes": list(loss_pause_payload.get("lanes", []) or []),
+                    "loss_pause_latest_trigger": loss_pause_payload.get("latest_trigger"),
                     "can_trade": can_trade,
                     "ai": ai_payload,
                     "session_id": session_id,
@@ -1626,10 +1640,12 @@ async def get_status():
             "running": getattr(bot, "running", False),
             "mode": "paper" if dry_run else "live",
             "dry_run": dry_run,
+            "exposure": _effective_exposure_section(bot.config),
             "kill_switch_active": kill_switch_active,
             "loss_pause_active": _loss_pause.get("active", False),
             "loss_pause_count": _loss_pause.get("count", 0),
             "loss_pause_lanes": _loss_pause.get("lanes", []),
+            "loss_pause_latest_trigger": _loss_pause.get("latest_trigger"),
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
             "bankroll": bankroll,
@@ -1714,10 +1730,12 @@ async def get_status():
         "running": False,
         "mode": "paper" if dry_run else "live",
         "dry_run": dry_run,
+        "exposure": _effective_exposure_section(cfg_disk),
         "kill_switch_active": kill_switch_active,
         "loss_pause_active": False,
         "loss_pause_count": 0,
         "loss_pause_lanes": [],
+        "loss_pause_latest_trigger": None,
         "can_trade": False,
         "can_trade_reason": "Bot not running",
         "bankroll": bankroll_payload.get("bankroll"),
@@ -2134,25 +2152,33 @@ async def get_bot_status():
 
 
 @app.post("/api/live/start")
-async def start_live_bot(request: Request):
-    """Start the live bot as a background subprocess."""
+async def start_live_bot(request: Request, mode: str = "paper"):
+    """Start the bot as a background subprocess in explicit paper/live mode."""
     global _bot_process
     _check_auth(request)
 
     if _bot_process is not None and _bot_process.poll() is None:
         return {"status": "already_running", "pid": _bot_process.pid}
 
+    mode_norm = str(mode or "paper").strip().lower()
+    if mode_norm not in {"paper", "live"}:
+        return {"status": "error", "message": f"Unsupported mode: {mode}"}
+
+    args = [sys.executable, str(PROJECT_ROOT / "src" / "main.py")]
+    if mode_norm == "live":
+        args.extend(["--live", "--confirm-live"])
+    else:
+        args.append("--paper")
+
     try:
         _bot_process = subprocess.Popen(
-            [sys.executable, str(PROJECT_ROOT / "src" / "main.py")],
+            args,
             cwd=str(PROJECT_ROOT),
             env=_safe_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            stdin=subprocess.DEVNULL,
         )
-        logger.info(f"Live bot started with PID {_bot_process.pid}")
-        return {"status": "started", "pid": _bot_process.pid}
+        logger.info("Bot started with PID %s in %s mode", _bot_process.pid, mode_norm)
+        return {"status": "started", "pid": _bot_process.pid, "mode": mode_norm}
     except Exception as e:
         logger.error(f"Failed to start live bot: {e}")
         return {"status": "error", "message": str(e)}
@@ -3956,6 +3982,8 @@ def _all_exposure_managers():
         "eth_exposure_manager",
         "hype_exposure_manager",
         "xrp_exposure_manager",
+        "doge_exposure_manager",
+        "bnb_exposure_manager",
         "weather_exposure_manager",
         "event_exposure_manager",
     ):
@@ -3969,11 +3997,22 @@ def _all_exposure_managers():
 def _loss_streak_pause_summary() -> Dict[str, Any]:
     """Return whether any exposure manager is paused by consecutive losses."""
     paused_lanes: List[str] = []
+    latest_trigger: Optional[Dict[str, Any]] = None
     for mgr in _all_exposure_managers():
         try:
             st = mgr.get_status()
         except Exception:
             continue
+        trigger = st.get("last_loss_kill_trigger") if isinstance(st, dict) else None
+        if isinstance(trigger, dict) and trigger:
+            ts = str(trigger.get("timestamp") or "")
+            if latest_trigger is None or ts > str(latest_trigger.get("timestamp") or ""):
+                latest_trigger = {
+                    "lane": str(trigger.get("lane") or getattr(mgr, "lane_name", "") or "unknown"),
+                    "window_size": str(trigger.get("window_size") or ""),
+                    "reason": str(trigger.get("reason") or ""),
+                    "timestamp": ts,
+                }
         if not bool(st.get("paused")):
             continue
         reason = str(st.get("pause_reason") or "")
@@ -3985,7 +4024,26 @@ def _loss_streak_pause_summary() -> Dict[str, Any]:
         "active": bool(paused_lanes),
         "count": len(paused_lanes),
         "lanes": paused_lanes,
+        "latest_trigger": latest_trigger,
     }
+
+
+def _effective_exposure_section(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Return exposure config overlaid with the running bot's effective state.
+
+    The bot may apply a process-start env override for ``loss_kill_switch_enabled``.
+    When that happens, the dashboard must reflect the runtime truth instead of the
+    YAML snapshot, otherwise the button can show OFF while the bot is actually ON.
+    """
+    base = dict((config or {}).get("exposure") or {})
+    bot = _full_bot_instance()
+    mgr = getattr(bot, "btc_exposure_manager", None) if bot else None
+    if mgr is not None and hasattr(mgr, "loss_kill_switch_enabled"):
+        base["loss_kill_switch_enabled"] = bool(mgr.loss_kill_switch_enabled)
+        base["_runtime_source"] = "bot"
+    else:
+        base["_runtime_source"] = "config"
+    return base
 
 
 EXPOSURE_LANE_TO_ATTR = {
@@ -3994,6 +4052,8 @@ EXPOSURE_LANE_TO_ATTR = {
     "eth": "eth_exposure_manager",
     "hype": "hype_exposure_manager",
     "xrp": "xrp_exposure_manager",
+    "doge": "doge_exposure_manager",
+    "bnb": "bnb_exposure_manager",
     "weather": "weather_exposure_manager",
     "event": "weather_exposure_manager",  # backward-compatible alias
 }
@@ -4024,6 +4084,8 @@ async def get_exposure_status():
         ("eth", "eth_exposure_manager"),
         ("hype", "hype_exposure_manager"),
         ("xrp", "xrp_exposure_manager"),
+        ("doge", "doge_exposure_manager"),
+        ("bnb", "bnb_exposure_manager"),
         ("weather", "weather_exposure_manager"),
     )
     out: Dict[str, Any] = {}
@@ -4713,12 +4775,14 @@ async def get_macro_align_series(interval: str = "15m", limit: int = 120):
 
 @app.get("/api/config")
 async def get_config():
-    """Return current settings.yaml as JSON."""
+    """Return current settings.yaml as JSON, overlaid with effective runtime flags."""
     if not CONFIG_PATH.exists():
         raise HTTPException(status_code=404, detail="settings.yaml not found")
     try:
         with open(CONFIG_PATH) as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f) or {}
+        config["exposure"] = _effective_exposure_section(config)
+        return config
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

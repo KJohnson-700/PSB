@@ -116,6 +116,58 @@ def test_bitcoin_updown_edge_cap_uses_window_and_side_override():
     assert strat._max_edge_cap_for_updown(window_label="15m", side="SHORT") == pytest.approx(0.12)
 
 
+def test_bitcoin_bias_quant_disagree_override_allows_moderate_non5m_long_gap():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "bias_quant_disagree_override_enabled": True,
+            "bias_quant_disagree_aligned_max_gap_non5m": 0.10,
+            "bias_quant_disagree_aligned_min_edge_non5m": -0.10,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    reason_parts = []
+    allowed = strat._maybe_bias_quant_disagree_override(
+        is_updown=True,
+        window_size="15m",
+        action="BUY_YES",
+        htf_bias="BULLISH",
+        yes_price=0.58,
+        raw_est_prob=0.50,
+        edge=-0.08,
+        reason_parts=reason_parts,
+    )
+
+    assert allowed is True
+    assert any("bias_quant_override_gap=" in part for part in reason_parts)
+
+
+def test_bitcoin_bias_quant_disagree_override_keeps_5m_strict():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "bias_quant_disagree_override_enabled": True,
+            "bias_quant_disagree_aligned_max_gap_non5m": 0.10,
+            "bias_quant_disagree_aligned_min_edge_non5m": -0.10,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+
+    allowed = strat._maybe_bias_quant_disagree_override(
+        is_updown=True,
+        window_size="5m",
+        action="BUY_YES",
+        htf_bias="BULLISH",
+        yes_price=0.58,
+        raw_est_prob=0.50,
+        edge=-0.08,
+        reason_parts=[],
+    )
+
+    assert allowed is False
+
+
 def _make_ta(
     price=75000,
     sabre_trend=1,  # 1=bull, -1=bear

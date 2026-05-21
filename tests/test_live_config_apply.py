@@ -1,6 +1,7 @@
 """Tests for live dashboard config updates on a running bot."""
 
 import asyncio
+import os
 from unittest.mock import MagicMock
 
 from src.main import PolyBot
@@ -118,6 +119,46 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.bnb_macro_strategy.lane_calibrator is bot.lane_calibrator
 
 
+def test_apply_config_updates_does_not_mutate_exposure_env_override(monkeypatch):
+    bot = PolyBot.__new__(PolyBot)
+    bot.config = {
+        "ai": {"enabled": True},
+        "trading": {"dry_run": True},
+        "strategies": {
+            "bitcoin": {"enabled": True},
+            "sol_macro": {"enabled": True},
+            "eth_macro": {"enabled": True},
+            "hype_macro": {"enabled": True},
+            "xrp_macro": {"enabled": True},
+            "doge_macro": {"enabled": True},
+            "bnb_macro": {"enabled": True},
+            "weather": {"enabled": False},
+        },
+        "exposure": {"loss_kill_switch_enabled": True},
+        "polymarket": {},
+    }
+    bot.ai_agent = _FakeAIAgent()
+    bot.notifier = _FakeNotifier()
+    bot.market_scanner = _FakeScanner()
+    bot.btc_exposure_manager = _FakeExposureManager()
+    bot.sol_exposure_manager = _FakeExposureManager()
+    bot.eth_exposure_manager = _FakeExposureManager()
+    bot.hype_exposure_manager = _FakeExposureManager()
+    bot.xrp_exposure_manager = _FakeExposureManager()
+    bot.doge_exposure_manager = _FakeExposureManager()
+    bot.bnb_exposure_manager = _FakeExposureManager()
+    bot.weather_exposure_manager = _FakeExposureManager()
+    bot.event_exposure_manager = bot.weather_exposure_manager
+    bot._dead_zone_skip_callback = lambda **kwargs: None
+    bot.kelly_sizer = None
+    bot.lane_calibrator = object()
+    monkeypatch.setenv("EXPOSURE_LOSS_KILL_SWITCH_ENABLED", "true")
+
+    bot.apply_config_updates({"exposure": {"loss_kill_switch_enabled": False}})
+
+    assert os.environ["EXPOSURE_LOSS_KILL_SWITCH_ENABLED"] == "true"
+
+
 def test_lane_calibration_mode_follows_dry_run_toggle():
     bot = PolyBot.__new__(PolyBot)
     bot.config = {
@@ -225,6 +266,6 @@ def test_run_resolution_check_records_kelly_outcome_for_settled_trade():
     asyncio.run(bot._run_resolution_check())
 
     exposure_manager.record_trade.assert_called_once_with(
-        pnl=4.0, strategy="bitcoin", market_id="m1"
+        pnl=4.0, strategy="bitcoin", market_id="m1", window_size="5m"
     )
     bot.kelly_sizer.record_outcome.assert_called_once_with("bitcoin", True, "5m")

@@ -130,7 +130,10 @@ def check_dashboard_index():
         ]
     names = [x.strip() for x in m.group(1).split(",")]
     block = m.group(2)
-    fetches = len(re.findall(r"\bfetch\(", block))
+    # The dashboard uses fetchT(...) as its timeout-wrapped network helper in
+    # fetchAll(); count both wrapped and raw fetch calls so this guard tracks the
+    # actual Promise.all fan-out instead of flagging false failures.
+    fetches = len(re.findall(r"\bfetchT?\(", block))
     if len(names) != fetches:
         return [
             f"Dashboard fetchAll: {len(names)} destructured vars vs {fetches} fetch() calls in Promise.all — fix index.html (dashboard will throw ReferenceError)."

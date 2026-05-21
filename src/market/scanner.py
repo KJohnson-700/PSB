@@ -4,6 +4,7 @@ Fetches market data from Polymarket Gamma REST API (bulk /markets and slug/event
 Historical note: GraphQL primary was removed; Gamma is the live list source.
 """
 import asyncio
+import inspect
 import json
 import logging
 import re
@@ -549,7 +550,27 @@ class MarketScanner:
         call_n = max(1, int(scan_call_count or 1))
         return ((call_n - 1) % every_n) == 0
 
-    def _sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+    def _invoke_sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        List[Market],
+        int,
+        int,
+        int,
+    ]:
+        sync_fn = self._sync_network_phase
+        try:
+            params = inspect.signature(sync_fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if not params:
+            return sync_fn()
+        return sync_fn(refresh_updown_1h)
+
+    def _sync_network_phase(self, refresh_updown_1h: bool = True) -> Tuple[
         List[Market],
         List[Market],
         List[Market],
@@ -1623,8 +1644,7 @@ class MarketScanner:
             refresh_updown_1h = self._should_refresh_updown_1h(self._scan_call_count)
             sync_phase = loop.run_in_executor(
                 self._sync_driver_pool,
-                self._sync_network_phase,
-                refresh_updown_1h,
+                lambda: self._invoke_sync_network_phase(refresh_updown_1h),
             )
             self._active_sync_phase = sync_phase
             (
