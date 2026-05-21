@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-05-20 — Probability diagnostics stack added, deferred repo queue logged
+
+**[`scripts/probability_diagnostics.py`](/Users/mainfolder/Documents/psb-main%201/scripts/probability_diagnostics.py):** Added a new offline diagnostics report over resolved paper exits that computes the current probability-evaluation stack in one place: reliability buckets, Murphy decomposition (`reliability`, `resolution`, `uncertainty`), Brier score against constant / market / empirical-table baselines, lane-level take-rate, and a small SVG reliability chart artifact. The empirical baseline is leave-one-out on `(strategy, window, yes_price_bucket)` with fallbacks to `(strategy, window)`, then `window`, then global so it stays useful on thin cohorts without cheating on the evaluated trade itself.
+
+**[`src/analysis/time_aware_split.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/time_aware_split.py):** Added a dependency-free chronological split helper with a backward purge window. This is intentionally narrow: it does not introduce a full training stack, it just gives future supervised calibration/modeling code a leakage-aware default instead of ad hoc random splits.
+
+**[`docs/CALIBRATION_TOOLING_QUEUE.md`](/Users/mainfolder/Documents/psb-main%201/docs/CALIBRATION_TOOLING_QUEUE.md):** Logged the agreed queue in-repo. Items 1-4 are marked implemented now; pooled isotonic and selection-bias extensions are queued to revisit once the new diagnostics are in regular use; meta-labeling, `river`, Optuna, and endpoint-forecasting stacks are explicitly marked as review-soon but not added yet.
+
+**[`tests/test_probability_diagnostics.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_probability_diagnostics.py), [`tests/test_time_aware_split.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_time_aware_split.py):** Added regression coverage for the new report outputs, artifact writing, and time-aware fold behavior.
+
+**Why:** The current repo already had lane calibration bookkeeping and lightweight journal summaries, but it did not have one canonical offline report for “does the probability model beat constant, market, or an empirical conditioned baseline?” nor a standard leakage-aware split helper for the next supervised step. This pass adds the measurement layer first and parks the higher-complexity repo ideas in a visible queue instead of in chat history.
+
+## 2026-05-20 — HYPE/XRP ghost-backed admission loosens
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Loosened the most supported HYPE/XRP admission bottlenecks from the settled ghost ledger. `hype_macro.min_liquidity` was reduced `500 -> 300`; HYPE 15m up lane `entry_policy.window_side_overrides.15m.up.min_edge` moved `0.09 -> 0.08`; and HYPE 15m admission window widened `entry_window_15m_max 32 -> 36` (with matching 15m policy window max updates). On XRP, `xrp_macro.min_liquidity` moved `1000 -> 750`, and `xrp_macro.oracle_max_basis_bps` moved `10 -> 15`.
+
+**Why:** The current settled ghost report showed the clearest missed-EV on `hype_macro|1h|BUY_YES|liquidity`, `hype_macro|15m|BUY_YES|lane_entry_window`, `hype_macro|15m|BUY_YES|lane_min_edge`, `xrp_macro|1h|BUY_YES|liquidity`, and `xrp_macro|15m|BUY_YES|oracle_basis_block`. The goal of this pass is straightforward: increase live trade throughput and collect more decision data, while keeping the loosens limited to the gate families with the strongest settled support.
+
+**Expected outcome:** More HYPE 1h / 15m BUY_YES admissions, fewer XRP rejects on fresh basis overshoots and thinner books, and a higher overnight paper trade count without a broad removal of guardrails.
+
+**Follow-up:** `sol_macro` received the same style of throughput-focused loosen after a follow-up settled ghost review showed `sol_macro|1h|BUY_YES|liquidity` and `sol_macro|15m|BUY_YES|lane_entry_window` as the cleanest missed-EV families. `sol_macro.min_liquidity` moved `1000 -> 750`, and SOL 15m admission widened `entry_window_15m_max 28 -> 32` at both the top-level lane config and the 15m policy override.
+
+**1h starvation pass:** Investigated `doge_macro`, `eth_macro`, `xrp_macro`, `sol_macro`, and `bnb_macro` hourly starvation from recent reject logs plus settled ghost gates. The main fixes were lane-specific 1h admission loosens rather than a single global toggle: every affected asset now admits the full 1h candle lifecycle in policy (`entry_window_min/max: 0.0 -> 60.0`), `eth_macro` now has `eth_follow_1h_min_adj: 0.02` and `oracle_basis_relax_max_bps: 15.0`, `xrp_macro` now allows `1h` long entries up to `entry_price_max: 0.58` and uses `oracle_basis_relax_max_bps: 15.0`, `sol_macro` now uses `oracle_basis_relax_max_bps: 15.0` with a softer shared `iql_15m_hist_floor: 0.06`, and bootstrap `doge_macro` / `bnb_macro` both moved `min_liquidity 1000 -> 750` plus `oracle_basis_relax_max_bps: 15.0`.
+
 ## 2026-05-20 — Commands tab card reorder + custom-fullscreen header sizing
 
 **[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** (1) Moved the **Configuration** panel and **API Usage** card from the top of the Commands tab to the bottom (after the Shutdown card) so Start commands / Backtest / Kill switch are the first thing visible when opening the tab. Done via in-place HTML reorder, no JS or ID changes. (2) Custom-fullscreen (`html.dashboard-fullscreen`) overrides for `.cmd-pnl-title` ("Live P&L Trace") and the new `h3.active-positions-title` ("Active Positions") — both pinned to 18px so they no longer balloon to the 30px global fullscreen h3 ramp. Positions-count badge inside the h3 also dropped to 0.65rem to match. Half-screen and native browser fullscreen are unaffected.
