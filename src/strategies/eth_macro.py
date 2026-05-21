@@ -31,6 +31,7 @@ from src.execution.performance_feedback import (
     get_loosen_min_edge_mult,
 )
 from src.analysis.rejected_candidate_log import (
+    build_market_context,
     build_range_probe_variants,
     build_threshold_probe_variants,
     build_upper_cap_probe_variants,
@@ -728,6 +729,15 @@ class ETHMacroStrategy(SolMacroStrategy):
             policy_version: Optional[str] = None,
             stage: Optional[str] = None,
         ) -> None:
+            merged_context: Dict[str, Any] = dict(context or {})
+            merged_context.update(
+                build_market_context(
+                    asset_spot=getattr(eth, "current_price", None),
+                    btc_spot=getattr(corr, "btc_price", None),
+                    rsi_14=getattr(eth, "rsi_14", None),
+                    atr_14=getattr(eth, "atr_14", None),
+                )
+            )
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -738,7 +748,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 yes_price=yes_price,
                 est_prob_up=est_prob_up,
                 htf_bias=htf_bias,
-                context=context or {},
+                context=merged_context,
                 probe_variants=probe_variants or [],
                 policy_version=policy_version,
                 stage=stage,
@@ -1097,21 +1107,30 @@ class ETHMacroStrategy(SolMacroStrategy):
             if rsi_soft_penalty > 0:
                 reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
                 _sample("rsi_soft_penalty", rsi_soft_penalty)
-            if self._oracle_basis_blocks_entry(eth.oracle_basis_bps):
-                _bump_skip("oracle_basis_block")
+            oracle_validation = self._validate_updown_oracle(eth)
+            if not oracle_validation.passed:
+                _bump_skip(oracle_validation.reason)
                 _log_skip_reject(
                     market=market,
                     window=_updown_tf,
                     side=market_allowed_side,
                     action=action,
-                    reason="oracle_basis_block",
+                    reason=oracle_validation.reason,
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
                     context={
                         "oracle_basis_bps": (
-                            float(eth.oracle_basis_bps)
-                            if eth.oracle_basis_bps is not None
+                            float(oracle_validation.basis_bps)
+                            if oracle_validation.basis_bps is not None
                             else None
+                        ),
+                        "oracle_freshness_sec": (
+                            float(oracle_validation.freshness_sec)
+                            if oracle_validation.freshness_sec is not None
+                            else None
+                        ),
+                        "oracle_max_age_sec": float(
+                            self.config.get("oracle_max_age_sec", 0.0) or 0.0
                         ),
                         "oracle_max_basis_bps": float(
                             self.config.get("oracle_max_basis_bps", 0.0) or 0.0
@@ -1119,12 +1138,16 @@ class ETHMacroStrategy(SolMacroStrategy):
                     },
                     probe_variants=build_upper_cap_probe_variants(
                         metric_name="oracle_basis_abs_bps",
-                        observed_value=abs(float(eth.oracle_basis_bps or 0.0)),
+                        observed_value=abs(float(oracle_validation.basis_bps or 0.0)),
                         baseline_cap=float(self.config.get("oracle_max_basis_bps", 0.0) or 0.0),
                         relax_steps=[2.0, 5.0, 10.0],
                         tighten_steps=[2.0, 5.0],
+                    ) if oracle_validation.reason == "oracle_basis_block" else [],
+                    policy_version=(
+                        "oracle_basis_block_v1"
+                        if oracle_validation.reason == "oracle_basis_block"
+                        else f"{oracle_validation.reason}_v1"
                     ),
-                    policy_version="oracle_basis_block_v1",
                     stage="oracle",
                 )
                 continue
@@ -1156,7 +1179,16 @@ class ETHMacroStrategy(SolMacroStrategy):
                         yes_price=yes_price, est_prob_up=est_prob_up,
                         htf_bias=primary_htf_bias,
                         stage="signal_strength_5m",
-                        context={"btc_impulse": float(btc_impulse), "btc_reasons": list(btc_reasons)},
+                        context={
+                            "btc_impulse": float(btc_impulse),
+                            "btc_reasons": list(btc_reasons),
+                            **build_market_context(
+                                asset_spot=eth.current_price,
+                                btc_spot=corr.btc_price,
+                                rsi_14=eth.rsi_14,
+                                atr_14=eth.atr_14,
+                            ),
+                        },
                     )
                     continue
                 eth_5m_adj, eth_reasons = self._eth_5m_macd_score(
@@ -1174,6 +1206,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                         context={
                             "eth_5m_adj": float(eth_5m_adj),
                             "min_required": float(self.eth_follow_5m_min_adj),
+                            **build_market_context(
+                                asset_spot=eth.current_price,
+                                btc_spot=corr.btc_price,
+                                rsi_14=eth.rsi_14,
+                                atr_14=eth.atr_14,
+                            ),
                         },
                     )
                     continue
@@ -1214,7 +1252,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 yes_price=yes_price, est_prob_up=est_prob_up,
                                 htf_bias=primary_htf_bias,
                                 stage="signal_strength_1h",
-                                context={},
+                                context=build_market_context(
+                                    asset_spot=eth.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=eth.rsi_14,
+                                    atr_14=eth.atr_14,
+                                ),
                             )
                             continue
                     eth_1h_adj, eth_reasons = self._eth_1h_follow_score(
@@ -1238,6 +1281,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                             context={
                                 "eth_1h_adj": float(eth_1h_adj),
                                 "min_required": float(eth_1h_min_adj),
+                                **build_market_context(
+                                    asset_spot=eth.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=eth.rsi_14,
+                                    atr_14=eth.atr_14,
+                                ),
                             },
                         )
                         continue
@@ -1292,7 +1341,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 yes_price=yes_price, est_prob_up=est_prob_up,
                                 htf_bias=primary_htf_bias,
                                 stage="signal_strength_15m",
-                                context={},
+                                context=build_market_context(
+                                    asset_spot=eth.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=eth.rsi_14,
+                                    atr_14=eth.atr_14,
+                                ),
                             )
                             continue
                     eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
@@ -1316,6 +1370,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 "base_min_required": float(self.eth_follow_15m_min_adj),
                                 "lane_specific_relaxation": bool(
                                     required_eth_15m_adj != self.eth_follow_15m_min_adj
+                                ),
+                                **build_market_context(
+                                    asset_spot=eth.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=eth.rsi_14,
+                                    atr_14=eth.atr_14,
                                 ),
                             },
                             probe_variants=build_threshold_probe_variants(
@@ -1765,6 +1825,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                         "confidence": round(float(confidence), 6),
                         "side_source": side_source,
                         "rsi_soft_penalty": round(float(rsi_soft_penalty), 6),
+                        **build_market_context(
+                            asset_spot=eth.current_price,
+                            btc_spot=corr.btc_price,
+                            rsi_14=eth.rsi_14,
+                            atr_14=eth.atr_14,
+                        ),
                     },
                     probe_variants=build_threshold_probe_variants(
                         metric_name="min_edge",

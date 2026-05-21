@@ -88,6 +88,7 @@ from src.analysis.btc_1h_regime import (
 )
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.rejected_candidate_log import (
+    build_market_context,
     build_range_probe_variants,
     build_threshold_probe_variants,
     build_upper_cap_probe_variants,
@@ -564,6 +565,9 @@ class SolMacroStrategy:
         # is calm. Default True to unblock dead BUY_NO admissions. Set False to revert.
         self.flat_btc_alt_aligned_bypass = bool(
             self.config.get("flat_btc_alt_aligned_bypass", True)
+        )
+        self.flat_btc_only_blocks_when_alt_neutral = bool(
+            self.config.get("flat_btc_only_blocks_when_alt_neutral", False)
         )
         # BTC 1H close vs SMA(20): scales min_edge bars and size for RANGE/BEAR chop / downtrends.
         self._btc_1h_regime_gates: Dict[str, Any] = dict(
@@ -1066,6 +1070,24 @@ class SolMacroStrategy:
             if tightened_edge > effective_min_edge:
                 return True, tightened_edge, f"late_window_edge>={tightened_edge:.3f}"
         return True, effective_min_edge, None
+
+    def _flat_btc_gate_bypassed(
+        self,
+        *,
+        action: str,
+        alt_1h_trend: Optional[str],
+    ) -> bool:
+        """Return True when a native alt 1h bias should bypass the flat-BTC hard skip."""
+        alt_h1 = str(alt_1h_trend or "NEUTRAL").upper()
+        if self.flat_btc_only_blocks_when_alt_neutral:
+            return alt_h1 in {"BULLISH", "BEARISH"}
+        if not self.flat_btc_alt_aligned_bypass:
+            return False
+        if action == "BUY_NO" and alt_h1 == "BEARISH":
+            return True
+        if action == "BUY_YES" and alt_h1 == "BULLISH":
+            return True
+        return False
 
     def _resolve_rsi_gate(self, action: str, rsi: float) -> tuple[bool, float]:
         """Return (hard_block, est_prob_delta) for RSI-based suppression policy."""
@@ -1974,6 +1996,15 @@ class SolMacroStrategy:
             policy_version: Optional[str] = None,
             stage: Optional[str] = None,
         ) -> None:
+            merged_context: Dict[str, Any] = dict(context or {})
+            merged_context.update(
+                build_market_context(
+                    asset_spot=getattr(sol, "current_price", None),
+                    btc_spot=getattr(corr, "btc_price", None),
+                    rsi_14=getattr(sol, "rsi_14", None),
+                    atr_14=getattr(sol, "atr_14", None),
+                )
+            )
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -1984,7 +2015,7 @@ class SolMacroStrategy:
                 yes_price=yes_price,
                 est_prob_up=est_prob_up,
                 htf_bias=htf_bias,
-                context=context or {},
+                context=merged_context,
                 probe_variants=probe_variants or [],
                 policy_version=policy_version,
                 stage=stage,
@@ -2336,13 +2367,10 @@ class SolMacroStrategy:
                     # quiet but the alt's own 1h trend matches the intended direction.
                     # Resurrects the BUY_NO short side in bear markets where BTC is flat
                     # but the alt is independently trending down.
-                    _alt_aligned_bypass = False
-                    if self.flat_btc_alt_aligned_bypass:
-                        _alt_h1 = getattr(mtt, "h1_trend", "NEUTRAL")
-                        if action == "BUY_NO" and _alt_h1 == "BEARISH":
-                            _alt_aligned_bypass = True
-                        elif action == "BUY_YES" and _alt_h1 == "BULLISH":
-                            _alt_aligned_bypass = True
+                    _alt_aligned_bypass = self._flat_btc_gate_bypassed(
+                        action=action,
+                        alt_1h_trend=getattr(mtt, "h1_trend", "NEUTRAL"),
+                    )
                     if (
                         _btc_move_for_gate < _btc_min_move_pct
                         and not corr.btc_spike_detected
@@ -2567,6 +2595,12 @@ class SolMacroStrategy:
                             context={
                                 "btc_spike": bool(corr.btc_spike_detected),
                                 "lag_opportunity": bool(corr.lag_opportunity),
+                                **build_market_context(
+                                    asset_spot=sol.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=sol.rsi_14,
+                                    atr_14=sol.atr_14,
+                                ),
                             },
                         )
                         logger.info(
@@ -2620,6 +2654,12 @@ class SolMacroStrategy:
                             context={
                                 "correlation_1h": float(corr.correlation_1h),
                                 "floor": float(self.sell_5m_min_corr),
+                                **build_market_context(
+                                    asset_spot=sol.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=sol.rsi_14,
+                                    atr_14=sol.atr_14,
+                                ),
                             },
                         )
                         logger.info(
@@ -2647,6 +2687,12 @@ class SolMacroStrategy:
                                 "min_required": float(_min_req),
                                 "macd_5m_crossover": str(getattr(macd_5m, "crossover", "")),
                                 "macd_5m_histogram": float(getattr(macd_5m, "histogram", 0.0) or 0.0),
+                                **build_market_context(
+                                    asset_spot=sol.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=sol.rsi_14,
+                                    atr_14=sol.atr_14,
+                                ),
                             },
                         )
                         logger.info(
@@ -2784,6 +2830,12 @@ class SolMacroStrategy:
                                 "macd_15m_histogram": float(getattr(sol.macd_15m, "histogram", 0.0) or 0.0),
                                 "macd_15m_crossover": str(getattr(sol.macd_15m, "crossover", "")),
                                 "iql_15m_hist_floor": float(self.iql_15m_hist_floor),
+                                **build_market_context(
+                                    asset_spot=sol.current_price,
+                                    btc_spot=corr.btc_price,
+                                    rsi_14=sol.rsi_14,
+                                    atr_14=sol.atr_14,
+                                ),
                             },
                         )
                         logger.info(
@@ -2842,6 +2894,12 @@ class SolMacroStrategy:
                                     "btc_spike": bool(corr.btc_spike_detected),
                                     "lag_opportunity": bool(corr.lag_opportunity),
                                     "ltf_strength": float(ltf_strength),
+                                    **build_market_context(
+                                        asset_spot=sol.current_price,
+                                        btc_spot=corr.btc_price,
+                                        rsi_14=sol.rsi_14,
+                                        atr_14=sol.atr_14,
+                                    ),
                                 },
                             )
                             logger.info(
@@ -3593,6 +3651,12 @@ class SolMacroStrategy:
                         "confidence": round(float(confidence), 6),
                         "side_source": side_source,
                         "rsi_soft_penalty": round(float(rsi_soft_penalty), 6),
+                        **build_market_context(
+                            asset_spot=sol.current_price,
+                            btc_spot=corr.btc_price,
+                            rsi_14=sol.rsi_14,
+                            atr_14=sol.atr_14,
+                        ),
                     },
                     probe_variants=build_threshold_probe_variants(
                         metric_name="min_edge",

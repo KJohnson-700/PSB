@@ -5,6 +5,11 @@ Purpose: answer the question "is my winning direction being unfairly blocked?" b
 capturing enough information about each rejected candidate to later settle a
 hypothetical outcome from market resolution data.
 
+Schema version 4 (2026-05-20): records now carry ``asset_spot``, ``btc_spot``,
+``rsi_14``, and ``atr_14`` inside ``context`` when callers supply them via
+``build_market_context``. Schema is additive — readers that ignore unknown keys
+keep working against v3 records too.
+
 This module is write-only and best-effort: failures degrade silently with a warning
 and never propagate into the strategy path. There is no behavior side-effect.
 """
@@ -13,14 +18,62 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from src.analysis.calibration_buckets import build_bucket_tags
 
 logger = logging.getLogger(__name__)
+
+# Raise the soft file-descriptor limit on import. macOS defaults to 256 which is
+# easily exhausted by upstream HTTP clients leaking connections (see CLOSE_WAIT
+# sockets), and when that happens this logger is the first writer to surface
+# EMFILE — silently dropping ghost-trade records needed for diagnosis.
+try:
+    import resource
+
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if _soft < _hard or _hard == resource.RLIM_INFINITY:
+        _target = 10240 if _hard == resource.RLIM_INFINITY else _hard
+        if _soft < _target:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (_target, _hard))
+except (ImportError, ValueError, OSError) as _rlimit_exc:  # pragma: no cover
+    logger.debug("rejected_candidate_log: could not raise RLIMIT_NOFILE: %s", _rlimit_exc)
+
+# In-memory fallback buffer for records that failed to append (typically due to
+# transient EMFILE). Flushed opportunistically on the next successful write.
+_PENDING_BUFFER_MAX = 4096
+_pending_buffer: Deque[tuple] = deque(maxlen=_PENDING_BUFFER_MAX)
+_pending_lock = threading.Lock()
+
+
+def _append_line(path: Path, line: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
+def _flush_pending() -> None:
+    """Best-effort drain of buffered records. Stops on first OSError."""
+    while True:
+        with _pending_lock:
+            if not _pending_buffer:
+                return
+            path, line = _pending_buffer[0]
+        try:
+            _append_line(Path(path), line)
+        except OSError:
+            return
+        with _pending_lock:
+            if _pending_buffer and _pending_buffer[0] == (path, line):
+                _pending_buffer.popleft()
 
 DEFAULT_CALIBRATION_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "calibration"
@@ -195,6 +248,39 @@ def build_range_probe_variants(
     return variants
 
 
+def build_market_context(
+    *,
+    asset_spot: Optional[float] = None,
+    btc_spot: Optional[float] = None,
+    rsi_14: Optional[float] = None,
+    atr_14: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Standard market-condition fields for the rejection `context` dict.
+
+    Merge the return value into the per-site `context` kwarg of
+    `log_rejected_candidate` so every record carries asset spot, BTC spot,
+    RSI(14), and ATR(14) at the moment of rejection. Skips fields whose
+    value is None or non-numeric; never raises.
+    """
+    out: Dict[str, Any] = {}
+    for key, val in (
+        ("asset_spot", asset_spot),
+        ("btc_spot", btc_spot),
+        ("rsi_14", rsi_14),
+        ("atr_14", atr_14),
+    ):
+        if val is None:
+            continue
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(num):
+            continue
+        out[key] = round(num, 6)
+    return out
+
+
 def log_rejected_candidate(
     *,
     strategy: str,
@@ -278,11 +364,14 @@ def log_rejected_candidate(
             regime_tag=primary_bias,
             gate_reason=gate_reason_text,
             gate_stage=gate_stage_text,
+            rsi=record_context.get("rsi_14"),
+            atr=record_context.get("atr_14"),
+            asset_spot=record_context.get("asset_spot"),
         )
 
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "schema_version": 3,
+            "schema_version": 4,
             "strategy": strategy,
             "window": window,
             "side": side,
@@ -324,17 +413,33 @@ def log_rejected_candidate(
 
     path = Path(log_path) if log_path is not None else DEFAULT_REJECTED_LOG
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, separators=(",", ":")) + "\n"
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-        try:
-            os.write(fd, line.encode("utf-8"))
-        finally:
-            os.close(fd)
-        return True
-    except OSError as exc:
-        logger.warning("rejected_candidate_log append failed (%s): %s", path, exc)
-        return False
     except (TypeError, ValueError) as exc:
         logger.warning("rejected_candidate_log serialize failed: %s; record=%r", exc, record)
+        return False
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("rejected_candidate_log mkdir failed (%s): %s", path.parent, exc)
+
+    # Opportunistically drain any records that failed previously.
+    if _pending_buffer:
+        _flush_pending()
+
+    try:
+        _append_line(path, line)
+        return True
+    except OSError as exc:
+        with _pending_lock:
+            dropped = len(_pending_buffer) >= _PENDING_BUFFER_MAX
+            _pending_buffer.append((str(path), line))
+            pending_n = len(_pending_buffer)
+        logger.warning(
+            "rejected_candidate_log append failed (%s): %s; buffered=%d%s",
+            path,
+            exc,
+            pending_n,
+            " (overflow: oldest dropped)" if dropped else "",
+        )
         return False

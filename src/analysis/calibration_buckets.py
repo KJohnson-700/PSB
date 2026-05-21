@@ -119,6 +119,35 @@ def gate_family_bucket(gate_reason: Any, gate_stage: Any = None) -> str:
     return ""
 
 
+def rsi_bucket(rsi: Any) -> str:
+    val = _coerce_float(rsi)
+    if val is None:
+        return ""
+    if val < 35.0:
+        return "low"
+    if val <= 65.0:
+        return "mid"
+    return "high"
+
+
+def atr_bucket(atr: Any, asset_spot: Any) -> str:
+    """ATR as a fraction of spot — keeps the bucket comparable across assets.
+
+    Bands: <0.5% spot = low (calm), 0.5–1.5% = mid, >1.5% = high (volatile).
+    Returns "" when either ATR or spot is missing/non-positive.
+    """
+    a = _coerce_float(atr)
+    s = _coerce_float(asset_spot)
+    if a is None or s is None or s <= 0.0 or a < 0.0:
+        return ""
+    pct = a / s
+    if pct < 0.005:
+        return "low"
+    if pct <= 0.015:
+        return "mid"
+    return "high"
+
+
 def build_bucket_tags(
     *,
     edge: Any = None,
@@ -128,6 +157,9 @@ def build_bucket_tags(
     regime_tag: Any = None,
     gate_reason: Any = None,
     gate_stage: Any = None,
+    rsi: Any = None,
+    atr: Any = None,
+    asset_spot: Any = None,
 ) -> Dict[str, str]:
     return {
         "edge_bucket": edge_bucket(edge),
@@ -136,4 +168,6 @@ def build_bucket_tags(
         "side_source_bucket": side_source_bucket(side_source),
         "regime_tag_bucket": regime_tag_bucket(regime_tag),
         "gate_family_bucket": gate_family_bucket(gate_reason, gate_stage),
+        "rsi_bucket": rsi_bucket(rsi),
+        "atr_bucket": atr_bucket(atr, asset_spot),
     }

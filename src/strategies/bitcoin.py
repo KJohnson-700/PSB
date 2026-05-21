@@ -43,6 +43,7 @@ from src.analysis.ai_decision_broker import (
     STATE_PENDING as _BROKER_STATE_PENDING,
 )
 from src.analysis.rejected_candidate_log import (
+    build_market_context,
     build_threshold_probe_variants,
     log_rejected_candidate,
 )
@@ -1446,6 +1447,12 @@ class BitcoinStrategy:
                                 "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
                                 "macd_4h_above_zero": bool(macd_4h.above_zero),
                                 "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                **build_market_context(
+                                    asset_spot=ta.current_price,
+                                    btc_spot=ta.current_price,
+                                    rsi_14=ta.rsi_14,
+                                    atr_14=getattr(ta.trend_sabre, "atr", None),
+                                ),
                             },
                             probe_variants=build_threshold_probe_variants(
                                 metric_name="hist_support_count",
@@ -1589,6 +1596,12 @@ class BitcoinStrategy:
                                     "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
                                     "macd_4h_above_zero": bool(macd_4h.above_zero),
                                     "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                    **build_market_context(
+                                        asset_spot=ta.current_price,
+                                        btc_spot=ta.current_price,
+                                        rsi_14=ta.rsi_14,
+                                        atr_14=getattr(ta.trend_sabre, "atr", None),
+                                    ),
                                 },
                                 probe_variants=build_threshold_probe_variants(
                                     metric_name="hist_support_count",
@@ -2331,6 +2344,12 @@ class BitcoinStrategy:
                         "confidence": round(float(confidence), 6),
                         "side_source": side_source,
                         "bias_quant_disagree": bool(_bias_quant_disagree),
+                        **build_market_context(
+                            asset_spot=ta.current_price,
+                            btc_spot=ta.current_price,
+                            rsi_14=ta.rsi_14,
+                            atr_14=getattr(ta.trend_sabre, "atr", None),
+                        ),
                     },
                     probe_variants=build_threshold_probe_variants(
                         metric_name="min_edge",
