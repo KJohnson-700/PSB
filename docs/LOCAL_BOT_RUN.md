@@ -21,6 +21,8 @@ cd "/path/to/psb-main 1"   # repo root; quote if the path contains a space
 
 (`start.py` with no mode flag also defaults to `--paper`.)
 
+`start.py` now acts as a lightweight local supervisor: if the child bot process dies without writing a clean shutdown marker, it restarts automatically and leaves the last known phase in `data/runtime/bot_runtime_status.json`. Fatal Python signal dumps append to `data/runtime/polybot_fault.log`.
+
 ## Stop
 
 - In the terminal where the bot is running: **Ctrl+C**.

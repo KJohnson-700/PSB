@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-21 — ETH high-edge cap moved from skip to sizing clamp
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `max_edge_updown` no longer rejects ETH entries with `edge_above_cap`. ETH now keeps the trade admissible and caps only the Kelly sizing input used for position sizing (`size_edge_cap=...` added to reason/log context). Backtest parity for the shared engine was updated in [src/backtest/updown_engine.py](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py).
+- **Why:** The same ghost pattern affecting BTC and SOL-family shorts applies here conceptually: high computed edge was being treated as proof the move was “already gone,” but in practice it was also suppressing otherwise valid entries before the risk layer could size them appropriately.
+- **Hypothesis:** ETH should admit more strong-edge setups without allowing edge inflation to create oversized positions; the size cap should absorb that risk instead of the gate discarding the trade.
+- **Expected outcome:** ETH skip telemetry should no longer report `edge_above_cap`; any change in WR / expectancy must be judged on the next ≥15 closed ETH trades, not on ghosts alone.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-13 — BUY_NO macro-leg audit fix: block SHORT when macro leg is positive
 
 - **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `block_counter_macro_leg_updown` now applies symmetrically for ETH up/down entries: LONG blocks when `macro_leg < updown_macro_leg_min_for_long`; SHORT / `BUY_NO` blocks when `macro_leg > updown_macro_leg_max_for_short`. Added `strategies.eth_macro.updown_macro_leg_max_for_short: 0.0` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Also clarified comments around neutral ETH fallback and disabled per-market 1H alignment behavior, and widened the shared `_buy_no_ltf_override` type hint so ETH's alt-TA reuse is explicit.

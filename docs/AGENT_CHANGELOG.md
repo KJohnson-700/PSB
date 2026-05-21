@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-21 — Local bot crash forensics + supervised restart
+
+**[`start.py`](/Users/mainfolder/Documents/psb-main%201/start.py):** Reworked the local launcher into a small parent supervisor. It now spawns the actual bot as a child process, forwards `Ctrl+C` cleanly, and automatically restarts the child after any unclean exit instead of leaving the overnight session dead.
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** Added a persistent runtime status breadcrumb at `data/runtime/bot_runtime_status.json` and armed Python `faulthandler` to append fatal-signal stack dumps to `data/runtime/polybot_fault.log`. The main loop now records coarse phases such as `scanner_sync`, `strategy_scans_running`, `resolution_and_calibration`, and `shutdown_complete`, so a hard mid-cycle death leaves a concrete last-known phase even when no Python exception is logged.
+
+**[`docs/LOCAL_BOT_RUN.md`](/Users/mainfolder/Documents/psb-main%201/docs/LOCAL_BOT_RUN.md):** Documented the supervised local start path and the new runtime artifacts used for overnight crash triage.
+
+**Why:** Recent local overnight failures ended mid-cycle with no traceback, no shutdown banner, and stale `ops_pulse` state. That pattern is consistent with a hard process death outside normal Python exception handling. This ship does not assume the process will stay alive; it preserves better evidence on the next crash and auto-recovers the local bot instead of leaving it silently down.
+
 ## 2026-05-21 — Phase-1 calibration ship: DOGE/BNB/HYPE catalyst loosens + BTC disagreement override
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Shipped the first agreed calibration pass from the 2026-05-21 audit. `doge_macro.require_btc_catalyst_5m` and `bnb_macro.require_btc_catalyst_5m` now flip to `false`, and `hype_macro.require_btc_catalyst_15m_when_unconfirmed` now flips to `false`. This stays narrower than a blanket “all alts off BTC” change: only the lanes with already-profitable settled-reject cohorts were loosened.

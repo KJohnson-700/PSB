@@ -3209,13 +3209,14 @@ class UpdownBacktestEngine:
                 )
                 or 0.0
             )
-            if max_edge_updown > 0 and edge > max_edge_updown:
-                _bump_skip("edge_above_cap")
-                current += step_td
-                continue
+            sizing_edge = (
+                min(edge, max_edge_updown)
+                if max_edge_updown > 0 and edge > max_edge_updown
+                else edge
+            )
 
             # Position size
-            size = self._size_position(bankroll, edge) * max(0.0, lane_policy.size_multiplier)
+            size = self._size_position(bankroll, sizing_edge) * max(0.0, lane_policy.size_multiplier)
             if size <= 0 or bankroll < size:
                 _bump_skip("size_rejected")
                 current += step_td

@@ -805,7 +805,7 @@ def test_backtest_entry_band_uses_lane_policy_yes_mid_not_sampled_fill():
     assert result.skip_counts.get("entry_price_band", 0) == 0
 
 
-def test_backtest_counts_edge_above_cap_skips():
+def test_backtest_caps_edge_for_sizing_but_still_enters():
     cfg = _config()
     cfg["strategies"]["bitcoin"]["max_edge_updown"] = 0.12
     cfg["strategies"]["bitcoin"]["entry_timing_window_15m_min"] = 2.0
@@ -816,6 +816,17 @@ def test_backtest_counts_edge_above_cap_skips():
     engine._get_htf_bias = lambda *args, **kwargs: "BULLISH"
     engine._ltf_strength = lambda *args, **kwargs: (False, 0.0)
     engine._edge_15m = lambda *args, **kwargs: (0.68, 0.7)
+    engine._sample_entry_price = lambda: 0.50
+    engine._yes_mid_at_eval = lambda **kwargs: 0.50
+    engine._yes_mid_at_window_open = engine._yes_mid_at_eval
+    engine._settle_updown_with_live_exit_proxy = lambda **kwargs: (
+        5.0,
+        "WIN",
+        1.0,
+        100.0,
+        100.1,
+        "settlement_yes",
+    )
 
     result = engine.run(
         data=_ohlcv_fixture(),
@@ -825,8 +836,8 @@ def test_backtest_counts_edge_above_cap_skips():
         symbol="BTC",
     )
 
-    assert result.windows_entered == 0
-    assert result.skip_counts.get("edge_above_cap", 0) > 0
+    assert result.windows_entered > 0
+    assert result.skip_counts.get("edge_above_cap", 0) == 0
 
 
 def test_1h_backtest_uses_1h_entry_window_not_15m_window():

@@ -20,7 +20,6 @@ def test_updown_market_loop_early_continues_are_counted() -> None:
         "low_corr_suppressed",
         "lane_min_edge",
         "lane_price_band",
-        "edge_above_cap",
         "lane_size_too_small",
     )
     for reason in required_skip_reasons:

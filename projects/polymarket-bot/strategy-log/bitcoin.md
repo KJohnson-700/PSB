@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-21 — BTC high-edge cap moved from admission veto to sizing clamp
+
+- **What changed:** In [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), `max_edge_updown` no longer rejects BTC up/down entries with `edge_above_cap`. BTC now keeps the trade admissible and clamps only the Kelly sizing input to the configured edge cap (`size_edge_cap=...` in reason/log context). Backtest parity was updated in [src/backtest/updown_engine.py](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py) so simulated BTC entries now behave the same way.
+- **Why:** Ghost review showed the cap was acting as an entry blocker on some of the strongest-looking and correctly directed BTC shorts rather than as a true quality filter. High edge should change position size, not automatically veto the trade.
+- **Hypothesis:** BTC should admit more high-conviction 5m/15m/1h setups while still preventing oversized Kelly sizing when the probability model prints extreme edge.
+- **Expected outcome:** `edge_above_cap` should disappear from BTC skip telemetry; BTC signal counts should rise in the previously blocked high-edge bucket; PnL impact depends on whether those high-edge ghosts continue to resolve favorably out of sample.
+- **Actual outcome:** `pending` (need ≥15 closed BTC trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-12 — Dashboard Live tab: stacked crypto layout + less poll flicker (UI only)
 
 - **What changed:** Repository dashboard stacks live crypto cards (full-width column), coalesces live ticker refresh, and dedupes some Command Center DOM updates. **No** `bitcoin` strategy code or `config/settings.yaml` changes in the same ship bundle.

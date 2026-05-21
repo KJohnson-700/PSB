@@ -4,6 +4,8 @@ PolyBot AI - Polymarket Trading Bot
 """
 
 import asyncio
+import faulthandler
+import json
 import logging
 import os
 import re
@@ -75,6 +77,70 @@ from src.terminal_banners import print_shutdown_banner, print_startup_banner
 
 # Manual global stop: if this file exists, the bot will not place new trades (paper or live).
 KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITCH"
+RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
+RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
+FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
+_FAULT_HANDLER_STREAM = None
+
+
+def _init_fault_handler() -> None:
+    """Persist fatal-signal Python tracebacks for post-mortem debugging."""
+    global _FAULT_HANDLER_STREAM
+    if _FAULT_HANDLER_STREAM is not None:
+        return
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        _FAULT_HANDLER_STREAM = FAULT_LOG_FILE.open("a", encoding="utf-8")
+        _FAULT_HANDLER_STREAM.write(
+            f"\n=== fault-handler armed {datetime.now(timezone.utc).isoformat()} pid={os.getpid()} ===\n"
+        )
+        _FAULT_HANDLER_STREAM.flush()
+        faulthandler.enable(file=_FAULT_HANDLER_STREAM, all_threads=True)
+    except Exception as exc:
+        logging.warning("Failed to initialize fault handler: %s", exc)
+
+
+def _read_runtime_status() -> Dict[str, Any]:
+    try:
+        return json.loads(RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_runtime_status(
+    *,
+    phase: str,
+    session_id: Optional[str] = None,
+    clean_shutdown: Optional[bool] = None,
+    detail: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Best-effort runtime breadcrumb for external supervision and crash triage."""
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        payload = _read_runtime_status()
+        payload.update(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "pid": os.getpid(),
+                "phase": phase,
+                "argv": sys.argv[1:],
+            }
+        )
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if clean_shutdown is not None:
+            payload["clean_shutdown"] = bool(clean_shutdown)
+        if detail is not None:
+            payload["detail"] = detail
+        if extra:
+            payload.update(extra)
+        RUNTIME_STATUS_FILE.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logging.debug("runtime status write failed: %s", exc)
 
 
 def _compute_trading_cycle_sleep(
@@ -1191,6 +1257,12 @@ class PolyBot:
     async def start(self):
         """Start the trading bot"""
         self.running = True
+        _write_runtime_status(
+            phase="bot_start",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+            extra={"mode": "paper" if self.config.get("trading", {}).get("dry_run", True) else "live"},
+        )
         logging.info("=" * 50)
         logging.info("PolyBot AI Starting...")
         logging.info(
@@ -1224,6 +1296,11 @@ class PolyBot:
             )
 
         # Single trading loop (scan, legacy strategies if enabled, crypto, resolution) + daily coach
+        _write_runtime_status(
+            phase="loops_running",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         await asyncio.gather(
             self._unified_trading_loop(),
             self._daily_coach_loop(),
@@ -1532,6 +1609,12 @@ class PolyBot:
         No separate fast loop — `trading.cycle_interval_sec` controls cadence (default 120s).
         """
         logging.info("Starting trading cycle...")
+        _write_runtime_status(
+            phase="cycle_start",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+            extra={"cycle_count": int(self._unified_cycle_count or 0)},
+        )
 
         from src.ops_pulse import log_ops_pulse
 
@@ -1568,6 +1651,11 @@ class PolyBot:
                     "performance_feedback refresh failed: %s", e, exc_info=True
                 )
 
+        _write_runtime_status(
+            phase="scanner_sync",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])
         weather_snapshot_markets = opportunities.get("weather", [])
@@ -1756,6 +1844,12 @@ class PolyBot:
             )
 
         scan_started = time.perf_counter()
+        _write_runtime_status(
+            phase="strategy_scans_running",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+            extra={"strategy_task_count": len(strategy_tasks)},
+        )
         scan_results = await asyncio.gather(
             *strategy_tasks,
             return_exceptions=True,
@@ -2065,6 +2159,11 @@ class PolyBot:
         self.last_signal_counts["weather"] = 0
         self.last_ai_scan_stats["weather"] = {}
 
+        _write_runtime_status(
+            phase="resolution_and_calibration",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         try:
             async with self._execution_lock:
                 await self._run_resolution_check(label="[TRADING]")
@@ -2080,6 +2179,12 @@ class PolyBot:
         daily = self.risk_manager.daily_trades
         logging.info(
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{self.risk_manager.max_trades_per_day}"
+        )
+        _write_runtime_status(
+            phase="cycle_complete",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+            extra={"open_positions": positions, "daily_trades": daily},
         )
         log_ops_pulse(self, "main")
 
@@ -2914,6 +3019,11 @@ class PolyBot:
     async def shutdown(self):
         """Shutdown the bot gracefully"""
         logging.info("Shutting down PolyBot...")
+        _write_runtime_status(
+            phase="shutdown_start",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         self.running = False
 
         await self.market_scanner.close()
@@ -2930,10 +3040,20 @@ class PolyBot:
             self._dashboard_server.should_exit = True
 
         logging.info("PolyBot shutdown complete")
+        _write_runtime_status(
+            phase="shutdown_complete",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=True,
+        )
 
     def stop(self):
         """Stop the bot"""
         self.running = False
+        _write_runtime_status(
+            phase="stop_requested",
+            session_id=getattr(self.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         if self._dashboard_server:
             self._dashboard_server.should_exit = True
 
@@ -3190,10 +3310,17 @@ def _parse_run_args():
 
 async def main():
     """Main entry point"""
+    _init_fault_handler()
     load_project_dotenv(Path(__file__).resolve().parent.parent)
+    _write_runtime_status(phase="bootstrap", clean_shutdown=False)
 
     dry_run, run_bot = _parse_run_args()
     if not run_bot:
+        _write_runtime_status(
+            phase="cli_noop",
+            clean_shutdown=True,
+            detail="management command completed without starting bot",
+        )
         return
 
     if "--backtest" in sys.argv:
@@ -3236,6 +3363,11 @@ async def main():
 
     # Now that environment is loaded, we can initialize the bot
     bot = PolyBot()
+    _write_runtime_status(
+        phase="bot_initialized",
+        session_id=getattr(bot.journal, "session_id", None),
+        clean_shutdown=False,
+    )
     if dry_run is not None:
         bot.config.setdefault("trading", {})["dry_run"] = dry_run
 
@@ -3309,6 +3441,11 @@ async def main():
     # Dashboard-only mode: serve dashboard + backtests, no trading loop
     if "--dashboard-only" in sys.argv:
         logging.info("Dashboard-only mode — trading disabled. Run backtests from the dashboard.")
+        _write_runtime_status(
+            phase="dashboard_only_idle",
+            session_id=getattr(bot.journal, "session_id", None),
+            clean_shutdown=False,
+        )
         try:
             while True:
                 await asyncio.sleep(30)
@@ -3321,6 +3458,12 @@ async def main():
 
     def signal_handler(sig, frame):
         bot._terminal_shutdown_sig = sig
+        _write_runtime_status(
+            phase="signal_received",
+            session_id=getattr(bot.journal, "session_id", None),
+            clean_shutdown=False,
+            detail=str(sig),
+        )
         logging.info("Received shutdown signal — cancelling tasks...")
         bot.stop()
         # Cancel all running asyncio tasks so sleeping loops wake up immediately

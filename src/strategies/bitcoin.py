@@ -2585,33 +2585,22 @@ class BitcoinStrategy:
                     reason_parts.append(f"ai_decision={ai_decision.source}")
 
             # ── Edge cap for updown markets ──
-            # Live data: edge >0.12 on 15m/5m updown = 27% WR. The probability model
-            # inflates edge when BTC is far from the 15m threshold — a large computed
-            # edge means BTC has ALREADY moved, not that it WILL move. Cap it.
+            # Treat high edge as a sizing issue, not an admission veto. Keep the
+            # trade if the rest of the lane passes, but clamp Kelly sizing input
+            # so inflated edge estimates cannot create oversized positions.
+            sizing_edge = edge
             if is_updown:
                 _max_edge_updown = self._max_edge_cap_for_updown(
                     window_label=_updown_tf,
                     side=effective_side,
                 )
-                if edge > _max_edge_updown:
-                    _bump_skip("edge_above_cap")
-                    if action == "BUY_NO":
-                        _record_buy_no_skip(
-                            market=market,
-                            skip_reason="edge_above_cap",
-                            yes_price=yes_price,
-                            edge=edge,
-                            effective_min_edge=effective_min_edge,
-                            rsi=ta.rsi_14,
-                            htf_bias_value=htf_bias,
-                            signal_reason=" | ".join(reason_parts),
-                            window_size=_updown_tf if is_updown else "15m",
-                        )
+                if _max_edge_updown > 0 and edge > _max_edge_updown:
+                    sizing_edge = _max_edge_updown
+                    reason_parts.append(f"size_edge_cap={_max_edge_updown:.3f}")
                     logger.info(
-                        f"  BTC skip '{market.question[:45]}' {action} "
-                        f"edge={edge:.4f} > max={_max_edge_updown} updown cap (inflated signal)"
+                        f"  BTC sizing cap '{market.question[:45]}' {action} "
+                        f"edge={edge:.4f} -> size_edge={sizing_edge:.4f} (max={_max_edge_updown})"
                     )
-                    continue
 
                 # Updown-specific entry price band — symmetric around 0.50.
                 # self.entry_price_min/max are for directional threshold markets (0.10-0.90).
@@ -2660,7 +2649,7 @@ class BitcoinStrategy:
                 logger.error("Bitcoin strategy: KellySizer unavailable — skipping entry sizing")
                 continue
             raw_size = self.kelly_sizer.size_from_edge(
-                self._signal_strategy_name, bankroll, edge
+                self._signal_strategy_name, bankroll, sizing_edge
             )
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")

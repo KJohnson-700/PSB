@@ -1915,67 +1915,24 @@ class ETHMacroStrategy(SolMacroStrategy):
                 continue
 
             max_edge_updown = float(self.config.get("max_edge_updown", 0.15))
-            if edge > max_edge_updown:
-                _bump_skip("edge_above_cap")
-                _log_skip_reject(
-                    market=market,
-                    window=_updown_tf,
-                    side=market_allowed_side,
-                    action=action,
-                    reason="edge_above_cap",
-                    yes_price=yes_price,
-                    est_prob_up=estimated_prob if "estimated_prob" in locals() else 0.50,
-                    htf_bias=primary_htf_bias,
-                    stage="edge_cap",
-                    context={
-                        "edge": round(float(edge), 6),
-                        "max_edge_updown": float(max_edge_updown),
-                        "effective_min_edge": round(float(effective_min_edge), 6),
-                    },
+            sizing_edge = edge
+            if max_edge_updown > 0 and edge > max_edge_updown:
+                sizing_edge = max_edge_updown
+                reason_parts.append(f"size_edge_cap={max_edge_updown:.3f}")
+                logger.info(
+                    "  ETH sizing cap '%s...' edge=%.4f -> size_edge=%.4f (max=%.4f)",
+                    market.question[:40],
+                    edge,
+                    sizing_edge,
+                    max_edge_updown,
                 )
-                if action == "BUY_NO":
-                    self._emit_buy_no_skip(
-                        market=market,
-                        bankroll=bankroll,
-                        payload=self._make_buy_no_skip_payload(
-                            market=market,
-                            skip_reason="edge_above_cap",
-                            window_size=_updown_tf,
-                            yes_price=yes_price,
-                            edge=edge,
-                            effective_min_edge=effective_min_edge,
-                            rsi=eth.rsi_14,
-                            htf_bias=btc_htf_bias,
-                            signal_reason=" | ".join(r for r in reason_parts if r),
-                            alt_1h_trend=mtt.h1_trend,
-                        ),
-                        counts=buy_no_skip_counts,
-                        last_sample=last_buy_no_skip_sample,
-                    )
-                await _observe_structural_reject(
-                    market=market,
-                    window=_updown_tf,
-                    side=market_allowed_side,
-                    action=action,
-                    reason="edge_above_cap",
-                    yes_price=yes_price,
-                    quant_edge=edge,
-                    quant_threshold=max_edge_updown,
-                    htf_bias=primary_htf_bias,
-                    context_lines=[
-                        f"quant_edge={float(edge):.4f}",
-                        f"max_edge_updown={float(max_edge_updown):.4f}",
-                    ],
-                    metadata={"max_edge_updown": float(max_edge_updown)},
-                )
-                continue
 
             if not self.kelly_sizer:
                 _bump_skip("kelly_unavailable")
                 logger.error("ETH strategy: KellySizer unavailable — skipping entry sizing")
                 continue
             raw_size = self.kelly_sizer.size_from_edge(
-                self._signal_strategy_name, bankroll, edge
+                self._signal_strategy_name, bankroll, sizing_edge
             )
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
                 raw_size *= self._regime_size_mult(btc_1h_regime)
