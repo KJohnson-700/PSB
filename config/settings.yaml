@@ -52,6 +52,9 @@ hyperliquid:
 trading:
   # Single trading loop: scan, exits, crypto strategies, resolution (seconds). Was 300s main + 120s crypto; now one cadence.
   cycle_interval_sec: 60
+  # Hourly crypto Up/Down products do not need to be rescanned every minute.
+  # Run them every N unified cycles while 5m / 15m products still scan each cycle.
+  crypto_hourly_scan_every_n_cycles: 3
   # If one cycle runs longer than `cycle_interval_sec`, wait this many seconds before
   # starting the next cycle. This avoids zero-sleep hammering without skipping a full slot.
   overrun_recovery_sleep_sec: 5
@@ -539,7 +542,7 @@ strategies:
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     # LLM tiebreaker for marginal edge; false = skip marginal AI branch.
     use_ai: true                 # Re-enabled: lag signal stripped from updown markets, AI re-enabled
-    min_liquidity: 1000           # Lowered: 15m updown markets have ~$1.5k-$22k liquidity
+    min_liquidity: 750            # 2026-05-20 ghost audit: 1h BUY_YES liquidity rejects were negative-net; reopen thinner SOL books
     min_edge: 0.09                # 15m: align with XRP/ETH; pair with min_edge_15m_when_ltf_unconfirmed (was implicit 0.10 stack)
     min_edge_5m: 0.085            # raised from 0.07 (2026-05-06) — 5m bleed mitigation; tighten marginal admissions
     hard_min_edge: 0.07           # keep aligned with 5m floor; avoid blocking valid 5m edges
@@ -576,7 +579,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
-    oracle_basis_relax_max_bps: 12.0  # Prevent full-asset lockout on tiny fresh basis overshoots (~10.6bps vs 10.0 cap)
+    oracle_basis_relax_max_bps: 15.0  # 2026-05-20 1h starvation pass: fresh basis overshoots were still blocking SOL hourly admissions
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.10
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
@@ -620,7 +623,7 @@ strategies:
     # IQL: MACD histogram is in raw price units; 0.03 was far too tight for SOL (~$84).
     # 0.15 ≈ same order as typical SOL 15m hist on meaningful moves; keeps filter on vs disabling IQL entirely.
     iql_15m_enabled: true
-    iql_15m_hist_floor: 0.08      # 2026-05-13 local live starvation fix: soften 15m IQL floor after repeated near-miss rejects
+    iql_15m_hist_floor: 0.06      # 2026-05-20 1h starvation pass: shared longer-cycle IQL gate was still overblocking hourly SOL
     # UTC hours to block for updown markets
     # 2026-04-21 scope-back (Tier A only): keep only hours with strong backtest
     # evidence (n ≥ ~500) at materially negative expectancy; remove live-sample
@@ -649,7 +652,7 @@ strategies:
     # Main loop runs on fixed cadence; keep the window wide enough to survive scanner/API latency.
     # May 2026: cap 15m max — paper showed thin-edge entries with huge mins_left → time-stop bleed.
     entry_window_15m_min: 1.0     # widened from 2.0 (2026-05-06) — 15m starvation, outside_entry_window dominant skip
-    entry_window_15m_max: 28.0    # 2026-05-13 local live starvation fix: widen admitted 15m listing window for 60s scan cadence
+    entry_window_15m_max: 32.0    # 2026-05-20 ghost audit: modestly widen 15m admission to recover starved BUY_YES entries
     # Far from expiry (high mins_left): add up to ramp_max_add to min_edge to avoid long-dwell time stops.
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
@@ -693,27 +696,27 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 28.0
+            entry_window_max: 32.0
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 28.0
+            entry_window_max: 32.0
         # 1h hourly product (replaces deprecated 30m); wide window until tuned.
         1h:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
 
     # ── BTC minimum dollar move required before entering ──
     # BTC must have moved at least this many dollars in the relevant window.
@@ -824,7 +827,9 @@ strategies:
     eth_follow_15m_hist_min: 0.02 # lowered from 0.03 (2026-05-06) — 15m starvation; only ETH 15m-exclusive lever
     eth_follow_15m_min_adj: 0.04  # default/base threshold; lane-specific overrides below can relax without global widening
     eth_follow_15m_min_adj_short: 0.03  # ghost-settled miss signal: reopen only ETH 15m short weak-confirm lane this phase
+    eth_follow_1h_min_adj: 0.02   # 2026-05-20 1h starvation pass: weak-confirm was blocking too many hourly ETH longs
     oracle_max_basis_bps: 10.0    # Use ETH/USD Chainlink as a hard veto when exchange spot drifts too far from resolution source
+    oracle_basis_relax_max_bps: 15.0  # 2026-05-20 1h starvation pass: allow modest fresh-basis overshoots instead of hard-skipping ETH 1h
     min_lag_magnitude_pct: 0.30   # Lowered from 0.40: ETH has higher BTC correlation than SOL; tighter lag threshold
     # UTC hours to block — ETH-specific from backtest (Mar 1 - Apr 9 2026, 807 trades)
     # Previous [18, 22] was copy-pasted from SOL config — WRONG for ETH (H22=+$31.18 for ETH!)
@@ -896,14 +901,14 @@ strategies:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -948,7 +953,7 @@ strategies:
     enabled: true
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
-    min_liquidity: 500            # 2026-05-13 local live starvation fix: HYPE books are thinner than SOL/ETH; stop dropping most candidates on liquidity
+    min_liquidity: 300            # 2026-05-20 ghost audit: 1h BUY_YES liquidity rejects were strongly missed-EV; reopen thinner HYPE books
     min_liquidity_buy_no: 300     # 2026-05-18 HYPE 5m BUY_NO starvation fix: shorts land on thinner books than longs; loosen only the short-side floor
     min_edge: 0.09                # sol_macro parity
     min_edge_buy_no: 0.08         # added 2026-05-06 — mirror xrp_macro candidate A; addresses 48% of HYPE BUY_NO edge_below_min skips
@@ -1011,7 +1016,7 @@ strategies:
     look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 32.0    # 2026-05-13 local live starvation fix: HYPE listings are showing up too early for the current admitted band
+    entry_window_15m_max: 36.0    # 2026-05-20 ghost audit: modestly widen 15m admission to recover starved BUY_YES entries
     entry_window_5m_min: 0.0
     entry_window_5m_max: 5.5
     entry_window_auto_align: true
@@ -1041,17 +1046,17 @@ strategies:
             entry_window_max: 5.5
         15m:
           up:
-            min_edge: 0.09
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 32.0
+            entry_window_max: 36.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 32.0
+            entry_window_max: 36.0
         # 1h hourly product (replaces deprecated 30m); wide window until tuned.
         1h:
           up:
@@ -1111,7 +1116,7 @@ strategies:
     dead_zone_enabled: false   # A/B: disabled in config; code default remains true if key is missing
     use_ai: true
     use_ai_updown: true
-    min_liquidity: 1000
+    min_liquidity: 750            # 2026-05-20 ghost audit: 1h BUY_YES liquidity rejects were negative-net; loosen without dropping to HYPE levels
     min_edge: 0.09               # 2026-04-24: raised from 0.08 — match SOL floor; no live track record yet
     min_edge_5m: 0.085           # raised from 0.07 (2026-05-08) — XRP 5m remains negative in live and stored backtest data
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1126,8 +1131,8 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
-    oracle_max_basis_bps: 10.0
-    oracle_basis_relax_max_bps: 12.0  # Session fix 2026-05-19: match SOL fresh-basis tolerance so tiny XRP overshoots do not fully starve live scans
+    oracle_max_basis_bps: 15.0    # 2026-05-20 ghost audit: 15m BUY_YES oracle-basis rejects supported a fresh-basis relax
+    oracle_basis_relax_max_bps: 15.0  # 2026-05-20 1h starvation pass: XRP hourly fresh-basis rejects were still missed-EV
     entry_timing_window_15m_min: 2.0   # align with quant band; 60s cycle + latency
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -1240,15 +1245,15 @@ strategies:
           up:
             min_edge: 0.09
             entry_price_min: 0.42
-            entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 60.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1269,7 +1274,7 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
-    min_liquidity: 1000
+    min_liquidity: 750
     min_edge: 0.09               # Bootstrap parity with xrp_macro until DOGE-specific settled data exists
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1283,6 +1288,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_basis_relax_max_bps: 15.0
     oracle_stale_basis_relax_max_bps: 75.0   # 2026-05-19: DOGE Chainlink feed is Arbitrum-only with a slow heartbeat; accept stale prints only when exchange basis stays tight
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
@@ -1381,14 +1387,14 @@ strategies:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1409,7 +1415,7 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
-    min_liquidity: 1000
+    min_liquidity: 750
     min_liquidity_buy_no: 300    # 2026-05-19: keep long-side floor intact, but unblock thin-book BNB shorts that are settling correctly
     min_edge: 0.09               # Bootstrap parity with xrp_macro until BNB-specific settled data exists
     min_edge_5m: 0.085
@@ -1424,6 +1430,7 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 10.0
+    oracle_basis_relax_max_bps: 15.0
     oracle_stale_basis_relax_max_bps: 75.0   # 2026-05-19: BNB Chainlink feed is Arbitrum-only with a slow heartbeat; accept stale prints only when exchange basis stays tight
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
@@ -1522,14 +1529,14 @@ strategies:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
-            entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_min: 0.0
+            entry_window_max: 60.0
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0

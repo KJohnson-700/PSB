@@ -495,6 +495,30 @@ def test_sol_tuning_size_multiplier_uses_lane_config():
     assert strategy.tuning_size_multiplier == 0.6
 
 
+def test_flat_btc_gate_bypass_can_use_any_directional_alt_bias():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["flat_btc_only_blocks_when_alt_neutral"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BULLISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_NO", alt_1h_trend="BEARISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_NO", alt_1h_trend="BULLISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BEARISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="NEUTRAL") is False
+
+
+def test_flat_btc_gate_bypass_legacy_mode_still_requires_alignment():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["flat_btc_only_blocks_when_alt_neutral"] = False
+    cfg["strategies"]["sol_macro"]["flat_btc_alt_aligned_bypass"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BULLISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_NO", alt_1h_trend="BEARISH") is True
+    assert strategy._flat_btc_gate_bypassed(action="BUY_NO", alt_1h_trend="BULLISH") is False
+    assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BEARISH") is False
+
+
 def test_macro_oracle_feed_map_covers_all_crypto_lanes():
     assert ORACLE_FEEDS["SOLUSDT"][0] == "polygon"
     assert ORACLE_FEEDS["ETHUSDT"][0] == "polygon"

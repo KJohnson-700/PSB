@@ -20,7 +20,12 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.market.scanner import MarketScanner, Market, is_crypto_updown_market
+from src.market.scanner import (
+    MarketScanner,
+    Market,
+    is_crypto_updown_market,
+    resolved_updown_window_minutes,
+)
 from src.market.price_collector import PriceCollector
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
@@ -173,6 +178,39 @@ def _filter_short_horizon(markets, config: Dict) -> list:
         elif _in_resolution_window(m, max_days, min_hours):
             result.append(m)
     return result
+
+
+def _is_hourly_crypto_market(market) -> bool:
+    """True for crypto Up/Down products whose active trade window is hourly."""
+    if not _is_crypto_market(market):
+        return False
+    try:
+        return resolved_updown_window_minutes(market) >= 60
+    except Exception:
+        return False
+
+
+def _should_include_hourly_crypto_markets(config: Dict, cycle_number: int) -> bool:
+    """Throttle hourly crypto scans to every N unified cycles.
+
+    The local loop runs every 60s by default, while hourly products do not need
+    a full rescan every minute. ``1`` disables throttling.
+    """
+    trading_cfg = (config.get("trading", {}) or {})
+    raw = trading_cfg.get("crypto_hourly_scan_every_n_cycles", 3)
+    try:
+        every_n = max(1, int(raw))
+    except (TypeError, ValueError):
+        every_n = 3
+    cycle_n = max(1, int(cycle_number or 1))
+    return ((cycle_n - 1) % every_n) == 0
+
+
+def _filter_crypto_hourly_markets(markets, include_hourly: bool) -> list:
+    """Optionally drop hourly crypto markets from the active scan universe."""
+    if include_hourly:
+        return list(markets)
+    return [m for m in markets if not _is_hourly_crypto_market(m)]
 
 
 def _filter_weather_markets(markets, config: Dict) -> list:
@@ -495,6 +533,7 @@ class PolyBot:
                 self.bankroll = _initial_bankroll
         _cint = self.config.get("trading", {}).get("cycle_interval_sec", 120)
         self.scan_interval = max(30, int(_cint))  # single unified loop: scan + crypto + exits
+        self._unified_cycle_count = 0
         _recovery_sleep = (
             self.config.get("trading", {}).get("overrun_recovery_sleep_sec")
         )
@@ -1203,6 +1242,7 @@ class PolyBot:
         await asyncio.sleep(30)
         while self.running:
             try:
+                self._unified_cycle_count += 1
                 cycle_started = time.monotonic()
                 await self._unified_cycle()
                 elapsed = time.monotonic() - cycle_started
@@ -1574,6 +1614,15 @@ class PolyBot:
         available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
         weather_available = [m for m in weather_snapshot_markets if m.id not in held_market_ids]
         short_horizon = _filter_short_horizon(available_markets, self.config)
+        self._unified_cycle_count = max(1, int(self._unified_cycle_count or 0))
+        include_hourly_crypto = _should_include_hourly_crypto_markets(
+            self.config,
+            self._unified_cycle_count,
+        )
+        strategy_markets = _filter_crypto_hourly_markets(
+            short_horizon,
+            include_hourly=include_hourly_crypto,
+        )
         weather_fallback_markets = (
             available_markets if _weather_general_scan_enabled(self.config) else []
         )
@@ -1591,11 +1640,14 @@ class PolyBot:
             }
         )
         logging.info(
-            "Markets: %d total, %d held, %d available, %d in resolution window | weather: dedicated=%d available=%d filtered=%d",
+            "Markets: %d total, %d held, %d available, %d in resolution window, %d strategy-scan | hourly_crypto=%s cycle=%d | weather: dedicated=%d available=%d filtered=%d",
             len(high_liquidity),
             len(held_market_ids),
             len(available_markets),
             len(short_horizon),
+            len(strategy_markets),
+            "included" if include_hourly_crypto else "skipped",
+            self._unified_cycle_count,
             len(weather_snapshot_markets),
             len(weather_available),
             len(weather_markets),
@@ -1620,14 +1672,14 @@ class PolyBot:
             _time_strategy_scan(
                 "bitcoin",
                 self.bitcoin_strategy.scan_and_analyze(
-                    markets=short_horizon,
+                    markets=strategy_markets,
                     bankroll=self.bankroll,
                 ),
             ),
             _time_strategy_scan(
                 "sol_macro",
                 self.sol_macro_strategy.scan_and_analyze(
-                    markets=short_horizon,
+                    markets=strategy_markets,
                     bankroll=self.bankroll,
                 ),
             ),
@@ -1640,7 +1692,7 @@ class PolyBot:
                 _time_strategy_scan(
                     "eth_macro",
                     self.eth_macro_strategy.scan_and_analyze(
-                        markets=short_horizon,
+                        markets=strategy_markets,
                         bankroll=self.bankroll,
                     ),
                 )
@@ -1653,7 +1705,7 @@ class PolyBot:
                 _time_strategy_scan(
                     "hype_macro",
                     self.hype_macro_strategy.scan_and_analyze(
-                        markets=short_horizon,
+                        markets=strategy_markets,
                         bankroll=self.bankroll,
                     ),
                 )
@@ -1666,7 +1718,7 @@ class PolyBot:
                 _time_strategy_scan(
                     "xrp_macro",
                     self.xrp_macro_strategy.scan_and_analyze(
-                        markets=short_horizon,
+                        markets=strategy_markets,
                         bankroll=self.bankroll,
                     ),
                 )
@@ -1679,7 +1731,7 @@ class PolyBot:
                 _time_strategy_scan(
                     "doge_macro",
                     self.doge_macro_strategy.scan_and_analyze(
-                        markets=short_horizon,
+                        markets=strategy_markets,
                         bankroll=self.bankroll,
                     ),
                 )
@@ -1692,7 +1744,7 @@ class PolyBot:
                 _time_strategy_scan(
                     "bnb_macro",
                     self.bnb_macro_strategy.scan_and_analyze(
-                        markets=short_horizon,
+                        markets=strategy_markets,
                         bankroll=self.bankroll,
                     ),
                 )

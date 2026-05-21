@@ -917,6 +917,15 @@ def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 _KELLY_STRATEGY_KEYS = ACTIVE_STRATEGY_NAMES
 
 
+def _empty_kelly_window_stats() -> Dict[str, Dict[str, Any]]:
+    return {
+        "5m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+        "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+        "30m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+        "1h": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+    }
+
+
 def _kelly_state_payload() -> Dict[str, Any]:
     """Streak + effective Kelly fraction + per-window breakdown — live from bot when connected."""
     ks = getattr(bot_instance, "kelly_sizer", None) if bot_instance else None
@@ -928,7 +937,11 @@ def _kelly_state_payload() -> Dict[str, Any]:
             }
             for k in _KELLY_STRATEGY_KEYS
         }
-        window_stats = ks.get_all_window_stats()
+        raw_window_stats = ks.get_all_window_stats()
+        window_stats = {
+            k: (raw_window_stats.get(k) if isinstance(raw_window_stats.get(k), dict) else _empty_kelly_window_stats())
+            for k in _KELLY_STRATEGY_KEYS
+        }
         base["_window_stats"] = window_stats
         return base
     cfg: Dict = {}
@@ -944,15 +957,7 @@ def _kelly_state_payload() -> Dict[str, Any]:
         sc = st.get(k) if isinstance(st.get(k), dict) else {}
         base = float(sc.get("kelly_fraction", 0.15))
         out[k] = {"streak": 0, "fraction": round(base, 4)}
-    out["_window_stats"] = {
-        k: {
-            "5m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
-            "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
-            "30m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
-            "1h": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
-        }
-        for k in _KELLY_STRATEGY_KEYS
-    }
+    out["_window_stats"] = {k: _empty_kelly_window_stats() for k in _KELLY_STRATEGY_KEYS}
     return out
 
 

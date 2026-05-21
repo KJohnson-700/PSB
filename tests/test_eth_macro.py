@@ -394,6 +394,85 @@ def test_eth_oracle_basis_block_is_logged_to_rejected_candidates():
     )
 
 
+def test_eth_scan_uses_relaxed_oracle_basis_policy():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "dead_zone_enabled": False,
+            "use_ai": False,
+            "use_ai_updown": False,
+            "min_liquidity": 1,
+            "min_edge": 0.03,
+            "entry_window_auto_align": False,
+            "oracle_max_basis_bps": 10.0,
+            "oracle_basis_relax_max_bps": 12.0,
+        }
+    )
+    ai = MagicMock()
+    ai.research_narrative_enabled.return_value = False
+    ai.research_narrative_max_calls_per_scan.return_value = 0
+    ai.research_narrative_min_confidence.return_value = 1.0
+    kelly = MagicMock()
+    kelly.size_from_edge.return_value = 10.0
+    strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=kelly)
+    strat._get_btc_htf_bias = MagicMock(return_value="BEARISH")
+
+    eth_ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            current_price=3503.85,
+            chainlink_price=3500.0,
+            chainlink_updated_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+            oracle_basis_bps=11.0,
+            rsi_14=38.0,
+            macd_15m=MACDResult(histogram=-0.05, histogram_rising=False),
+            macd_5m=MACDResult(histogram=-0.02, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(
+            btc_price=100000.0,
+            btc_move_5m_pct=-0.10,
+            btc_move_15m_pct=-0.20,
+            correlation_1h=0.8,
+            sol_trend="BEARISH",
+        ),
+        multi_tf=MultiTimeframeTrend(h1_trend="BEARISH"),
+    )
+    btc_ta = TechnicalAnalysis(
+        current_price=100000.0,
+        macd_1h=MACDResult(histogram=-20.0, histogram_rising=False),
+        macd_15m=MACDResult(histogram=-0.05, histogram_rising=False),
+        candle_momentum=CandleMomentum(
+            m15_direction="DRIFT_DOWN",
+            m5_direction="DRIFT_DOWN",
+            m5_move_pct=-0.1,
+        ),
+    )
+    strat.sol_service.get_full_analysis = MagicMock(return_value=eth_ta)
+    strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
+
+    market = Market(
+        id="eth15_oracle_relaxed",
+        question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
+        description="ETH 15m relaxed oracle test market",
+        volume=1000.0,
+        liquidity=1000.0,
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.02,
+        end_date=datetime.now(timezone.utc) + timedelta(minutes=14),
+        token_id_yes="yes",
+        token_id_no="no",
+        group_item_title="Ethereum Up or Down",
+        slug="eth-updown-15m-1770000002",
+    )
+
+    with patch("src.strategies.eth_macro.log_rejected_candidate") as mock_log:
+        signals = run_async(strat.scan_and_analyze([market], bankroll=10000.0))
+
+    assert len(signals) == 1
+    assert signals[0].action == "BUY_NO"
+    mock_log.assert_not_called()
+
+
 def test_eth_lane_entry_window_is_logged_to_rejected_candidates():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(

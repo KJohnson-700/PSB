@@ -6452,6 +6452,27 @@ function clearCommandCenterPnlChart() {
     }
 }
 
+function _commandCenterPnlDomain(values, baseline, minimumVisualRange = 25) {
+    const deltaValues = values.map((v) => v - baseline);
+    const minSeen = Math.min(...deltaValues);
+    const maxSeen = Math.max(...deltaValues);
+    const crossedNegative = minSeen < 0;
+    if (!crossedNegative) {
+        return {
+            min: baseline,
+            max: Math.max(...values, baseline + minimumVisualRange),
+            crossedNegative: false,
+        };
+    }
+    const downRoom = Math.max(Math.abs(minSeen) * 1.2, minimumVisualRange);
+    const upRoom = Math.max(Math.abs(maxSeen) * 1.2, minimumVisualRange);
+    return {
+        min: baseline - downRoom,
+        max: baseline + upRoom,
+        crossedNegative: true,
+    };
+}
+
 function renderCommandCenterPnlChart() {
     try {
         const state = window._commandCenterPnlState;
@@ -6480,16 +6501,10 @@ function renderCommandCenterPnlChart() {
 
         const last = values[values.length - 1];
         const baseline = Number.isFinite(state.baselineEquity) ? Number(state.baselineEquity) : values[0];
-        const deltaValues = values.map((v) => v - baseline);
         const lastDelta = last - baseline;
-        const minSeen = Math.min(...deltaValues);
-        const maxSeen = Math.max(...deltaValues);
-        const observedMag = Math.max(Math.abs(minSeen), Math.abs(maxSeen));
-        const floor = Math.max(observedMag * 1.2, 25);
-        const downRoom = Math.max(Math.abs(minSeen) * 1.2, floor);
-        const upRoom = Math.max(Math.abs(maxSeen) * 1.2, floor);
-        const min = baseline - downRoom;
-        const max = baseline + upRoom;
+        const domain = _commandCenterPnlDomain(values, baseline, 25);
+        const min = domain.min;
+        const max = domain.max;
         const span = Math.max(1, max - min);
         const signEps = 0.005;
         const isFlat = Math.abs(lastDelta) <= signEps;

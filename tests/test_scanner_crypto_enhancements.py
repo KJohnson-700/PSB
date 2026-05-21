@@ -60,6 +60,14 @@ def test_resolve_updown_lookahead_includes_doge_and_bnb_configs():
     assert scanner._resolve_updown_lookahead() == (11, 9, 8)
 
 
+def test_hourly_scanner_refresh_cadence_defaults_to_every_third_call():
+    scanner = MarketScanner(_config())
+    assert scanner._should_refresh_updown_1h(1) is True
+    assert scanner._should_refresh_updown_1h(2) is False
+    assert scanner._should_refresh_updown_1h(3) is False
+    assert scanner._should_refresh_updown_1h(4) is True
+
+
 def test_parse_gamma_event_market_accepts_array_fields():
     market = MarketScanner._parse_gamma_event_market(
         {

@@ -413,6 +413,9 @@ class MarketScanner:
         self._gamma_sessions_lock = Lock()
         self._gamma_sessions: set[requests.Session] = set()
         self._active_sync_phase: Optional[asyncio.Future] = None
+        self._scan_call_count = 0
+        self._updown_1h_cache: List[Market] = []
+        self._updown_1h_cache_updated_at: Optional[datetime] = None
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
@@ -477,6 +480,7 @@ class MarketScanner:
                 pool_connections=32,
                 pool_maxsize=32,
                 max_retries=0,
+                pool_block=True,
             )
             session.mount("https://", adapter)
             session.mount("http://", adapter)
@@ -532,7 +536,20 @@ class MarketScanner:
         # blocks still carry weather flags.
         return False
 
-    def _sync_network_phase(self) -> Tuple[
+    def _resolve_hourly_crypto_scan_every_n_cycles(self) -> int:
+        trading_cfg = (self.config.get("trading", {}) or {})
+        raw = trading_cfg.get("crypto_hourly_scan_every_n_cycles", 3)
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return 3
+
+    def _should_refresh_updown_1h(self, scan_call_count: int) -> bool:
+        every_n = self._resolve_hourly_crypto_scan_every_n_cycles()
+        call_n = max(1, int(scan_call_count or 1))
+        return ((call_n - 1) % every_n) == 0
+
+    def _sync_network_phase(self, refresh_updown_1h: bool) -> Tuple[
         List[Market],
         List[Market],
         List[Market],
@@ -560,24 +577,27 @@ class MarketScanner:
             "gamma": lambda: self._fetch_markets_gamma(limit=200),
             "updown": lambda: self.fetch_updown_markets(look_ahead=look_ahead_15m),
             "updown_5m": lambda: self.fetch_updown_5m_markets(look_ahead=look_ahead_5m),
-            "updown_1h": lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h),
         }
+        if refresh_updown_1h:
+            tasks["updown_1h"] = lambda: self.fetch_updown_1h_markets(look_ahead=look_ahead_1h)
         if fetch_hype:
             tasks["hype_alt"] = lambda: self.fetch_hype_alt_updown_markets(limit=100)
 
         results: Dict[str, Any] = {}
+        failed_fetches: set[str] = set()
+        completed_fetches: set[str] = set()
         futures = {self._sync_fetch_pool.submit(fn): name for name, fn in tasks.items()}
-        timed_out = False
         try:
             for future in as_completed(futures, timeout=self._scanner_sync_timeout):
                 name = futures[future]
+                completed_fetches.add(name)
                 try:
                     results[name] = future.result() or []
                 except Exception as e:
                     logger.error(f"{name} fetch error: {e}")
+                    failed_fetches.add(name)
                     results[name] = []
         except FuturesTimeoutError:
-            timed_out = True
             unfinished = [name for future, name in futures.items() if not future.done()]
             logger.warning(
                 "Scanner: partial sync timeout after %.1fs; returning completed sources only. unfinished=%s",
@@ -600,11 +620,32 @@ class MarketScanner:
         else:
             updown_15m = up_pair if isinstance(up_pair, list) else []
 
+        updown_1h_markets: List[Market]
+        if refresh_updown_1h:
+            hourly_failed = (
+                "updown_1h" in failed_fetches or "updown_1h" not in completed_fetches
+            )
+            if hourly_failed and self._updown_1h_cache:
+                logger.warning(
+                    "Scanner: reusing cached hourly updown markets after live 1h fetch failure/timeout"
+                )
+                updown_1h_markets = list(self._updown_1h_cache)
+            else:
+                updown_1h_markets = results.get("updown_1h", []) or []
+                self._updown_1h_cache = list(updown_1h_markets)
+                self._updown_1h_cache_updated_at = datetime.now(timezone.utc)
+        else:
+            updown_1h_markets = list(self._updown_1h_cache)
+            if updown_1h_markets:
+                logger.info(
+                    "Scanner: reusing cached hourly updown markets (skip cadence active)"
+                )
+
         return (
             results.get("gamma", []),
             updown_15m,
             results.get("updown_5m", []),
-            results.get("updown_1h", []) or [],
+            updown_1h_markets,
             results.get("hype_alt", []),
             weather_snapshot,
             look_ahead_15m,
@@ -1578,7 +1619,13 @@ class MarketScanner:
             return result
         try:
             loop = asyncio.get_running_loop()
-            sync_phase = loop.run_in_executor(self._sync_driver_pool, self._sync_network_phase)
+            self._scan_call_count += 1
+            refresh_updown_1h = self._should_refresh_updown_1h(self._scan_call_count)
+            sync_phase = loop.run_in_executor(
+                self._sync_driver_pool,
+                self._sync_network_phase,
+                refresh_updown_1h,
+            )
             self._active_sync_phase = sync_phase
             (
                 markets,
@@ -1686,6 +1733,7 @@ class MarketScanner:
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
             "look_ahead_1h": look_ahead_1h,
+            "updown_1h_source": "live" if refresh_updown_1h else "cache",
             "sync_phase_elapsed_ms": sync_ms,
             "updown_15m_count": len(opportunities.get("updown", [])),
             "updown_5m_count": len(opportunities.get("updown_5m", [])),

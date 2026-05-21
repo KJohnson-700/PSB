@@ -245,6 +245,60 @@ def test_kelly_backend_includes_doge_and_bnb():
     assert '"bnb_macro"' in server
 
 
+def test_command_center_pnl_chart_uses_bottom_anchor_until_negative():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "function _commandCenterPnlDomain(values, baseline, minimumVisualRange = 25)" in html
+    assert "const crossedNegative = minSeen < 0;" in html
+    assert "min: baseline," in html
+    assert "max: Math.max(...values, baseline + minimumVisualRange)," in html
+    assert "const downRoom = Math.max(Math.abs(minSeen) * 1.2, minimumVisualRange);" in html
+    assert "const upRoom = Math.max(Math.abs(maxSeen) * 1.2, minimumVisualRange);" in html
+    assert "const domain = _commandCenterPnlDomain(values, baseline, 25);" in html
+    assert "const floor = Math.max(observedMag * 1.2, 25);" not in html
+
+
+def test_kelly_sizer_defaults_include_doge_and_bnb():
+    from src.analysis.kelly_sizer import KellySizer
+
+    ks = KellySizer({"strategies": {}})
+    assert ks.get_asset_config("doge_macro") is not None
+    assert ks.get_asset_config("bnb_macro") is not None
+    assert "doge_macro" in ks.get_all_window_stats()
+    assert "bnb_macro" in ks.get_all_window_stats()
+
+
+def test_kelly_payload_pads_missing_live_strategies(monkeypatch):
+    from src.dashboard import server as dashboard_server
+
+    class LegacyKellySizer:
+        def get_current_streak(self, strategy):
+            return 0
+
+        def get_kelly_fraction(self, strategy):
+            return 0.15
+
+        def get_all_window_stats(self):
+            return {
+                "bitcoin": {
+                    "5m": {"streak": 1, "wins": 1, "losses": 0, "wr": 100.0, "trades": 1},
+                    "15m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+                    "30m": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+                    "1h": {"streak": 0, "wins": 0, "losses": 0, "wr": 0.0, "trades": 0},
+                }
+            }
+
+    fake_bot = type("Bot", (), {"kelly_sizer": LegacyKellySizer()})()
+    monkeypatch.setattr(dashboard_server, "bot_instance", fake_bot)
+
+    payload = dashboard_server._kelly_state_payload()
+    assert "doge_macro" in payload
+    assert "bnb_macro" in payload
+    assert "doge_macro" in payload["_window_stats"]
+    assert "bnb_macro" in payload["_window_stats"]
+    assert payload["_window_stats"]["doge_macro"]["1h"]["trades"] == 0
+    assert payload["_window_stats"]["bnb_macro"]["15m"]["wr"] == 0.0
+
+
 def test_dashboard_crypto_backtest_select_includes_all_bundle():
     html = INDEX.read_text(encoding="utf-8")
     assert "ALL-" in html and "BTC,SOL,ETH,XRP,HYPE bundle" in html
