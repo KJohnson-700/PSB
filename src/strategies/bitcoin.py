@@ -49,7 +49,10 @@ from src.analysis.rejected_candidate_log import (
 )
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
-from src.analysis.btc_1h_regime import classify_btc_1h_sma_regime
+from src.analysis.btc_1h_regime import (
+    DEFAULT_SIZE_MULT,
+    classify_btc_1h_sma_regime,
+)
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
 from src.analysis.lane_entry_policy import (
@@ -962,6 +965,11 @@ class BitcoinStrategy:
         sma = ta.sma_1h_20
         band = float(cfg.get("range_band_pct", 0.0012))
         return classify_btc_1h_sma_regime(price, sma, band)
+
+    def _regime_size_mult(self, regime: str) -> float:
+        cfg = self._btc_1h_regime_gates.get("size_mult") or {}
+        base = DEFAULT_SIZE_MULT.get(regime, 1.0)
+        return float(cfg.get(regime, base))
 
     def _estimate_probability(
         self,
@@ -2703,6 +2711,9 @@ class BitcoinStrategy:
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")
                 continue
+
+            if self._btc_1h_regime_gates.get("enabled", False):
+                raw_size *= self._regime_size_mult(btc_1h_regime)
 
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier

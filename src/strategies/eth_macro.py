@@ -458,6 +458,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         return base_side, "hybrid_alt_first"
 
     async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
+        _phase_t0 = time.perf_counter()
         if not self.enabled:
             self._record_eth_abort("strategy_disabled")
             return []
@@ -863,6 +864,7 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
+        _phase_t_preloop = time.perf_counter()
         for market in eth_markets:
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
@@ -2103,8 +2105,20 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             signals.append(signal)
 
+        _phase_t_postloop = time.perf_counter()
         if observer_tasks:
             await asyncio.wait(observer_tasks, timeout=0.01)
+
+        _phase_setup_ms = int((_phase_t_preloop - _phase_t0) * 1000)
+        _phase_loop_ms = int((_phase_t_postloop - _phase_t_preloop) * 1000)
+        _phase_n = max(len(eth_markets), 1)
+        logger.info(
+            "ETH Macro PHASE_TIMING setup=%dms loop=%dms markets=%d per_market_avg=%dms",
+            _phase_setup_ms,
+            _phase_loop_ms,
+            len(eth_markets),
+            int(_phase_loop_ms / _phase_n),
+        )
 
         gate_distributions = {k: _summarize(v) for k, v in gate_samples.items()}
         if gate_samples:
