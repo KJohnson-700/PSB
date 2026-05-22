@@ -33,8 +33,8 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 REPO_ROOT = Path(__file__).resolve().parent
-CHILD_ENV_FLAG = "PSB_SUPERVISED_CHILD"
 RUNTIME_STATUS_FILE = REPO_ROOT / "data" / "runtime" / "bot_runtime_status.json"
+MAIN_SCRIPT = REPO_ROOT / "src" / "main.py"
 
 # Ensure project root is importable
 sys.path.insert(0, str(REPO_ROOT))
@@ -59,7 +59,7 @@ def _read_runtime_status() -> dict:
 
 
 def _child_command(args: Optional[list[str]] = None) -> list[str]:
-    return [sys.executable, str(Path(__file__).resolve()), *_normalized_args(args or sys.argv[1:])]
+    return [sys.executable, str(MAIN_SCRIPT), *_normalized_args(args or sys.argv[1:])]
 
 
 def _dashboard_bind_target() -> Optional[tuple[str, int]]:
@@ -114,13 +114,6 @@ def _preflight_dashboard_port(args: list[str]) -> bool:
     return False
 
 
-def _run_child() -> int:
-    from src.main import main
-
-    asyncio.run(main())
-    return 0
-
-
 def _supervise() -> int:
     restart_delay = 5
     stop_requested = False
@@ -138,7 +131,6 @@ def _supervise() -> int:
                 )
                 return 98
         env = dict(os.environ)
-        env[CHILD_ENV_FLAG] = "1"
         started_at = time.time()
         child = subprocess.Popen(_child_command(args), env=env)
         print(f"[supervisor] started child pid={child.pid} args={' '.join(args)}")
@@ -185,10 +177,11 @@ def _supervise() -> int:
 
 if __name__ == "__main__":
     sys.argv = [sys.argv[0], *_normalized_args(sys.argv[1:])]
-    if os.environ.get(CHILD_ENV_FLAG) == "1":
-        raise SystemExit(_run_child())
     if any(flag in sys.argv[1:] for flag in ONE_SHOT_FLAGS):
-        raise SystemExit(_run_child())
+        from src.main import main
+
+        asyncio.run(main())
+        raise SystemExit(0)
     if not _preflight_dashboard_port(sys.argv[1:]):
         raise SystemExit(98)
     raise SystemExit(_supervise())
