@@ -738,6 +738,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                     atr_14=getattr(eth, "atr_14", None),
                 )
             )
+            if "btc_1h_regime" in locals():
+                merged_context["btc_1h_regime"] = btc_1h_regime
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -752,6 +754,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 probe_variants=probe_variants or [],
                 policy_version=policy_version,
                 stage=stage,
+                btc_1h_regime=btc_1h_regime if "btc_1h_regime" in locals() else None,
             )
 
         observer_tasks: List[asyncio.Task] = []
@@ -2010,12 +2013,29 @@ class ETHMacroStrategy(SolMacroStrategy):
                 rsi=round(eth.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
                 side_source=side_source,
+                convergence_score=(
+                    round(float(entry_convergence_score), 4)
+                    if "entry_convergence_score" in locals() and entry_convergence_score is not None
+                    else None
+                ),
+                entry_volatility=round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
                 oracle_basis_bps=(
                     round(float(eth.oracle_basis_bps), 2)
                     if eth.oracle_basis_bps is not None
                     else None
                 ),
                 indicator_snapshot={
+                    "composite_score": (
+                        round(float(entry_composite_score), 4)
+                        if "entry_composite_score" in locals() and entry_composite_score is not None
+                        else None
+                    ),
+                    "convergence_score": (
+                        round(float(entry_convergence_score), 4)
+                        if "entry_convergence_score" in locals() and entry_convergence_score is not None
+                        else None
+                    ),
+                    "entry_volatility": round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
                     "btc_4h_bias": btc_htf_details["bias"] if btc_htf_details else None,
                     "btc_4h_raw_bias": btc_htf_details["raw_bias"] if btc_htf_details else None,
                     "btc_4h_sabre_vote": btc_htf_details["sabre_vote"] if btc_htf_details else None,

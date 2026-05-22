@@ -40,6 +40,12 @@ trading:
     enabled: false
     btc_break_above_usd: 80000
     btc_break_below_usd: 75000
+  market_regime_gate:
+    enabled: true
+    regime_log: data/calibration/market_regime.jsonl
+    max_snapshot_age_sec: 1800
+    deadzone_min_convergence: 0.55
+    block_missing_convergence_in_deadzone: true
   exit_rules:
     enabled: true
     take_profit_pct: 0.5
@@ -49,6 +55,16 @@ trading:
     updown_exit_window_mins: 2.25
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.2
+    dynamic_stop_enabled: true
+    dynamic_stop_bull_mult: 0.95
+    dynamic_stop_range_mult: 1.05
+    dynamic_stop_bear_mult: 1.15
+    dynamic_stop_high_vol_mult: 1.15
+    dynamic_stop_volatility_threshold: 0.02
+    dynamic_stop_low_convergence_mult: 1.1
+    dynamic_stop_high_convergence_mult: 0.95
+    dynamic_stop_low_convergence_threshold: 0.55
+    dynamic_stop_high_convergence_threshold: 0.75
     updown_exit_window_max_fraction: 0.5
     updown_high_entry_threshold: 0.6
     updown_stop_cents_high_entry: 0.02
@@ -1284,6 +1300,8 @@ updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
   low_confidence_min_score: 0.66
+  regime_action_gate_enabled: true
+  regime_action_min_convergence: 0.55
 ai:
   prompt_version: lane-feedback-v1
   policy_version: decision-layer-v1

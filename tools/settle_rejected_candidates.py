@@ -29,8 +29,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 try:
     from src.analysis.lane_calibration import LaneCalibrator  # noqa: E402
+    from src.analysis.ghost_calibration import (  # noqa: E402
+        DEFAULT_REGIME_LOG,
+        REGIME_MATCH_MAX_AGE_SEC,
+        enrich_with_regime,
+        load_regime_snapshots,
+    )
 except Exception:  # noqa: BLE001 — calibrator optional; settling still works
     LaneCalibrator = None  # type: ignore
+    DEFAULT_REGIME_LOG = REPO_ROOT / "data" / "calibration" / "market_regime.jsonl"  # type: ignore
+    REGIME_MATCH_MAX_AGE_SEC = 30 * 60  # type: ignore
+    enrich_with_regime = None  # type: ignore
+    load_regime_snapshots = None  # type: ignore
 REJECTED_LOG = REPO_ROOT / "data" / "calibration" / "rejected_candidates.jsonl"
 SETTLED_LOG = REPO_ROOT / "data" / "calibration" / "rejected_candidates_settled.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
@@ -134,6 +144,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="Don't write settled records")
     ap.add_argument("--input", default=str(REJECTED_LOG))
     ap.add_argument("--output", default=str(SETTLED_LOG))
+    ap.add_argument("--regime-log", type=Path, default=DEFAULT_REGIME_LOG)
+    ap.add_argument("--regime-max-age-sec", type=float, default=REGIME_MATCH_MAX_AGE_SEC)
     ap.add_argument("--throttle", type=float, default=0.1, help="Sleep between API calls (s)")
     args = ap.parse_args()
 
@@ -143,6 +155,7 @@ def main():
         return 0
 
     settled_ids = load_settled_ids(out_path)
+    regime_snapshots = load_regime_snapshots(args.regime_log) if load_regime_snapshots else []
     cache: Dict[str, Optional[str]] = {}
     now = datetime.now(timezone.utc)
 
@@ -151,6 +164,8 @@ def main():
     skipped_no_market_id = 0
     skipped_unresolved = 0
     settled_new = 0
+    regime_matched = 0
+    regime_unmatched = 0
     settle_records = []
 
     with open(in_path) as f:
@@ -215,8 +230,27 @@ def main():
                 "no_price": rec.get("no_price"),
                 "est_prob_up": rec.get("est_prob_up"),
                 "htf_bias": rec.get("htf_bias"),
+                "btc_1h_regime": rec.get("btc_1h_regime"),
                 "context": rec.get("context", {}),
+                "convergence_score": rec.get("convergence_score"),
+                "convergence_probe_count": rec.get("convergence_probe_count"),
+                "convergence_pass_count": rec.get("convergence_pass_count"),
+                "convergence_fail_count": rec.get("convergence_fail_count"),
+                "convergence_narrow_pass_count": rec.get("convergence_narrow_pass_count"),
+                "convergence_strong_pass_count": rec.get("convergence_strong_pass_count"),
+                "edge_quality": rec.get("edge_quality"),
+                "component_mean_quality": rec.get("component_mean_quality"),
             }
+            if enrich_with_regime is not None:
+                settled_rec = enrich_with_regime(
+                    settled_rec,
+                    regime_snapshots,
+                    max_age_sec=args.regime_max_age_sec,
+                )
+                if settled_rec.get("regime_source") == "market_regime":
+                    regime_matched += 1
+                else:
+                    regime_unmatched += 1
             settle_records.append(settled_rec)
             settled_new += 1
 
@@ -267,6 +301,8 @@ def main():
     print(f"  no market_id    : {skipped_no_market_id}")
     print(f"  unresolved/api  : {skipped_unresolved}")
     print(f"  newly settled   : {settled_new}{'  (dry-run, not written)' if args.dry_run else ''}")
+    print(f"  regime matched  : {regime_matched}")
+    print(f"  regime unmatched: {regime_unmatched}")
 
     # Quick diagnostic on what's been settled so far
     if settle_records or out_path.exists():

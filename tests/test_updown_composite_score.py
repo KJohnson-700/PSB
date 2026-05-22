@@ -176,3 +176,65 @@ def test_lane_floors_rank_btc_neutral_and_stricter_floors():
     assert btc_neutral.floor > default.floor
     assert strict_floor.floor > btc_neutral.floor
     assert strict_floor.passed is False
+
+
+def test_btc_regime_action_gate_blocks_weak_chase_entries() -> None:
+    oracle = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.01,
+        oracle_updated_at=datetime.now(timezone.utc),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+
+    score = score_updown_candidate(
+        edge=0.075,
+        min_edge=0.09,
+        quant_confidence=0.52,
+        micro_momentum=0.45,
+        timeframe_alignment=0.45,
+        oracle=oracle,
+        minutes_to_resolution=8.0,
+        yes_price=0.54,
+        floor=0.50,
+        action="BUY_YES",
+        btc_1h_regime="BULL",
+        regime_action_gate_enabled=True,
+        regime_action_min_convergence=0.55,
+    )
+
+    assert score.passed is False
+    assert score.reason == "btc_regime_action_block"
+    assert score.components["btc_1h_regime_alignment"] == 0.25
+
+
+def test_btc_regime_action_gate_allows_strong_convergence_chase_entries() -> None:
+    oracle = validate_oracle_reference(
+        oracle_price=100.0,
+        exchange_spot=100.01,
+        oracle_updated_at=datetime.now(timezone.utc),
+        max_age_sec=180,
+        max_basis_bps=10.0,
+        require_oracle=True,
+    )
+
+    score = score_updown_candidate(
+        edge=0.13,
+        min_edge=0.09,
+        quant_confidence=0.80,
+        micro_momentum=0.90,
+        timeframe_alignment=0.90,
+        oracle=oracle,
+        minutes_to_resolution=8.0,
+        yes_price=0.50,
+        floor=0.62,
+        action="BUY_NO",
+        btc_1h_regime="BEAR",
+        regime_action_gate_enabled=True,
+        regime_action_min_convergence=0.55,
+    )
+
+    assert score.passed is True
+    assert score.reason == "composite_ok"
+    assert score.convergence_score >= 0.55

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Optional
+import math
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class CompositeScore:
     passed: bool
     floor: float
     components: Dict[str, float]
+    convergence_score: float
     reason: str
 
 
@@ -39,6 +41,18 @@ WEIGHTS: Dict[str, float] = {
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
+
+
+def convergence_score_from_components(components: Dict[str, float]) -> float:
+    """Consensus-style quality score: rewards broad agreement, penalizes dispersion."""
+    vals = [_clamp(v) for v in components.values()]
+    if not vals:
+        return 0.0
+    mean = sum(vals) / len(vals)
+    strong_share = sum(1 for v in vals if v >= 0.65) / len(vals)
+    variance = sum((v - mean) ** 2 for v in vals) / len(vals)
+    std_penalty = min(0.25, math.sqrt(variance))
+    return _clamp((0.60 * mean) + (0.40 * strong_share) - std_penalty)
 
 
 def _freshness_seconds(updated_at: datetime, now: Optional[datetime]) -> float:
@@ -185,6 +199,10 @@ def score_updown_candidate(
     minutes_to_resolution: float,
     yes_price: float,
     floor: float,
+    action: Optional[str] = None,
+    btc_1h_regime: Optional[str] = None,
+    regime_action_gate_enabled: bool = False,
+    regime_action_min_convergence: float = 0.55,
 ) -> CompositeScore:
     """Return an auditable 0-1 candidate quality score before AI/sizing."""
     min_edge_f = max(0.0001, float(min_edge))
@@ -216,12 +234,44 @@ def score_updown_candidate(
         "market_price_quality": market_price_quality,
     }
     score = sum(components[name] * weight for name, weight in WEIGHTS.items())
+    chase_regime = False
+    regime = str(btc_1h_regime or "").upper()
+    side = str(action or "").upper()
+    if regime in {"BULL", "RANGE", "BEAR"} and side in {"BUY_YES", "BUY_NO"}:
+        # Treat same-side BTC 1H trend entries as lower-quality unless other gates agree.
+        # This avoids "chasing" in extended regimes while allowing strong consensus through.
+        if (regime == "BULL" and side == "BUY_YES") or (
+            regime == "BEAR" and side == "BUY_NO"
+        ):
+            regime_quality = 0.25
+            chase_regime = True
+        elif regime == "RANGE":
+            regime_quality = 0.55
+        else:
+            regime_quality = 0.85
+        components["btc_1h_regime_alignment"] = regime_quality
+        score = (0.90 * score) + (0.10 * regime_quality)
     score = _clamp(score)
+    convergence_score = convergence_score_from_components(components)
     floor_f = _clamp(floor)
+    if (
+        regime_action_gate_enabled
+        and chase_regime
+        and convergence_score < float(regime_action_min_convergence)
+    ):
+        return CompositeScore(
+            score=score,
+            passed=False,
+            floor=floor_f,
+            components=components,
+            convergence_score=convergence_score,
+            reason="btc_regime_action_block",
+        )
     return CompositeScore(
         score=score,
         passed=score >= floor_f,
         floor=floor_f,
         components=components,
+        convergence_score=convergence_score,
         reason="composite_ok" if score >= floor_f else "composite_score_below_floor",
     )

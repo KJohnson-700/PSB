@@ -95,6 +95,113 @@ STAGE_LANE_MIN_EDGE = "lane_min_edge"
 STAGE_EDGE_CAP = "edge_cap"
 
 
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _probe_quality(variant: Dict[str, Any]) -> Optional[float]:
+    margin_raw = variant.get("margin")
+    if margin_raw is None:
+        return None
+    try:
+        margin = float(margin_raw)
+    except (TypeError, ValueError):
+        return None
+
+    scale = 0.0
+    try:
+        if variant.get("threshold") is not None:
+            scale = abs(float(variant.get("threshold") or 0.0))
+        elif (
+            variant.get("threshold_min") is not None
+            and variant.get("threshold_max") is not None
+        ):
+            low = float(variant.get("threshold_min") or 0.0)
+            high = float(variant.get("threshold_max") or 0.0)
+            scale = abs(high - low)
+    except (TypeError, ValueError):
+        scale = 0.0
+    scale = max(scale, 0.01)
+    return _clamp01(0.5 + 0.5 * (margin / scale))
+
+
+def compute_convergence_telemetry(
+    *,
+    probe_variants: Optional[List[Dict[str, Any]]] = None,
+    edge: Optional[float] = None,
+    effective_min_edge: Optional[float] = None,
+    composite_score: Optional[float] = None,
+    composite_components: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a compact convergence summary from gate margins or composite components."""
+    baseline = [
+        probe
+        for probe in (probe_variants or [])
+        if isinstance(probe, dict) and str(probe.get("kind") or "") == "baseline"
+    ]
+    qualities: List[float] = []
+    pass_count = 0
+    fail_count = 0
+    narrow_pass_count = 0
+    strong_pass_count = 0
+    for probe in baseline:
+        quality = _probe_quality(probe)
+        if quality is None:
+            continue
+        qualities.append(quality)
+        if bool(probe.get("would_pass")):
+            pass_count += 1
+            if quality >= 0.75:
+                strong_pass_count += 1
+            elif quality <= 0.60:
+                narrow_pass_count += 1
+        else:
+            fail_count += 1
+
+    edge_quality: Optional[float] = None
+    try:
+        if edge is not None and effective_min_edge is not None:
+            denom = max(abs(float(effective_min_edge)), 0.0001)
+            edge_quality = _clamp01(float(edge) / denom)
+            qualities.append(edge_quality)
+    except (TypeError, ValueError):
+        edge_quality = None
+
+    component_mean: Optional[float] = None
+    if composite_components:
+        vals: List[float] = []
+        for value in composite_components.values():
+            try:
+                vals.append(_clamp01(float(value)))
+            except (TypeError, ValueError):
+                continue
+        if vals:
+            component_mean = round(sum(vals) / len(vals), 6)
+            qualities.append(component_mean)
+
+    score: Optional[float]
+    if composite_score is not None:
+        try:
+            score = _clamp01(float(composite_score))
+            qualities.append(score)
+        except (TypeError, ValueError):
+            score = None
+    else:
+        score = None
+
+    convergence_score = round(sum(qualities) / len(qualities), 6) if qualities else None
+    return {
+        "convergence_score": convergence_score,
+        "convergence_probe_count": len(baseline),
+        "convergence_pass_count": pass_count,
+        "convergence_fail_count": fail_count,
+        "convergence_narrow_pass_count": narrow_pass_count,
+        "convergence_strong_pass_count": strong_pass_count,
+        "edge_quality": round(edge_quality, 6) if edge_quality is not None else None,
+        "component_mean_quality": component_mean,
+    }
+
+
 def build_threshold_probe_variants(
     *,
     metric_name: str,
@@ -308,6 +415,8 @@ def log_rejected_candidate(
     calibrated_est_prob: Optional[float] = None,
     gate_reason: Optional[str] = None,
     gate_stage: Optional[str] = None,
+    btc_1h_regime: Optional[str] = None,
+    convergence_score: Optional[float] = None,
 ) -> bool:
     """Append one ghost-trade record. Returns True on success.
 
@@ -368,10 +477,22 @@ def log_rejected_candidate(
             atr=record_context.get("atr_14"),
             asset_spot=record_context.get("asset_spot"),
         )
+        convergence = compute_convergence_telemetry(
+            probe_variants=probe_variants,
+            edge=record_context.get("edge"),
+            effective_min_edge=effective_min_edge_val,
+            composite_score=convergence_score,
+            composite_components=record_context.get("composite_components"),
+        )
+        btc_1h_regime_text = str(
+            btc_1h_regime
+            or record_context.get("btc_1h_regime")
+            or ""
+        ).strip()
 
         record = {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "schema_version": 4,
+            "schema_version": 5,
             "strategy": strategy,
             "window": window,
             "side": side,
@@ -389,6 +510,7 @@ def log_rejected_candidate(
             "no_price": float(getattr(market, "no_price", 0.0) or 0.0),
             "est_prob_up": float(est_prob_up) if est_prob_up is not None else None,
             "htf_bias": htf_bias,
+            "btc_1h_regime": btc_1h_regime_text or None,
             "context": record_context,
             "probe_variants": probe_variants or [],
             "policy_version": str(policy_version or "").strip(),
@@ -405,6 +527,7 @@ def log_rejected_candidate(
             "calibrated_est_prob": calibrated_est_prob_val,
             "gate_reason": gate_reason_text,
             "gate_stage": gate_stage_text,
+            **convergence,
             **bucket_tags,
         }
     except (TypeError, ValueError, AttributeError) as exc:

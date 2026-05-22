@@ -8,6 +8,44 @@
 
 ---
 
+## 2026-05-21 — Ghost historical metadata reconstruction closed
+
+**[`tools/reconstruct_ghost_metadata.py`](/Users/mainfolder/Documents/psb-main%201/tools/reconstruct_ghost_metadata.py):** Added an operator reconstruction pass for settled ghost rows written before BTC 1H regime and convergence telemetry existed. The tool extends BTC 15m OHLCV through the settled ghost window, resamples completed 1H candles without lookahead, classifies `btc_1h_regime`, reconstructs `convergence_score` from copied probe/edge metadata when available, falls back to explicit reason-prior scores when old rows lack probes, writes a timestamped backup, and emits a JSON coverage report.
+
+**[`data/calibration/rejected_candidates_settled.jsonl`](/Users/mainfolder/Documents/psb-main%201/data/calibration/rejected_candidates_settled.jsonl):** Rewritten in place from `122,878` settled ghost rows. Post-run coverage is `0` missing `btc_1h_regime` and `0` missing `convergence_score`; BTC regime counts are `BULL=71,417`, `RANGE=29,211`, `BEAR=22,250`, all sourced from `ohlcv_15m_resample`. Convergence sources are `probe=62,534`, `probe_edge=3,255`, `edge=206`, and `reason_prior=56,883`.
+
+**[`tests/test_reconstruct_ghost_metadata.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_reconstruct_ghost_metadata.py):** Added regression coverage for no-lookahead BTC 1H lookup, probe/edge convergence reconstruction, and fallback behavior guaranteeing rows do not remain unlabeled.
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_market_regime_gate.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_market_regime_gate.py):** Added the live market-regime deadzone execution gate. When `trading.market_regime_gate.enabled` is true, active/signal regimes pass, but `combined_regime=deadzone*` blocks entries whose `convergence_score` is missing or below `deadzone_min_convergence` (`0.55` default). Allowed entries and blocked skips both carry regime metadata into journal extras through the existing lane metadata path.
+
+**[`src/analysis/updown_composite_score.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/updown_composite_score.py), [`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):** Priority-2 regime/composite loop is now wired at entry. Composite scoring accepts `action` + `btc_1h_regime`, adds `btc_1h_regime_alignment`, and blocks weak same-direction regime-chase entries (`BUY_YES` in `BULL`, `BUY_NO` in `BEAR`) when convergence is below `updown_composite.regime_action_min_convergence` (`0.55` default). Strong-convergence entries are allowed through.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/execution/updown_exit_shared.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py), [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py):** Priority-3 stop-loss loop is active in config. `dynamic_stop_enabled: true` now explicitly applies BTC 1H regime, entry volatility, and convergence multipliers to the adverse up/down percentage stop: `BULL=0.95x`, `RANGE=1.05x`, `BEAR=1.15x`, high volatility `1.15x`, low convergence `1.10x`, high convergence `0.95x`. Live exits already consume `entry_signal.btc_1h_regime`, `entry_signal.entry_volatility`, and `entry_signal.convergence_score`; tests now assert the dynamic policy is parsed and applied.
+
+**Why:** The previous ghost-mode work only made future rows and report joins better; it did not close the historical settled ledger. This pass closes the actual analysis loop so `ghost_gate_report.py` can segment the current settled ghost population by BTC regime and convergence instead of reporting `unknown`.
+
+## 2026-05-21 — Ghost regime enrichment completed
+
+**[`src/analysis/ghost_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ghost_calibration.py):** Added timestamp-based market-regime enrichment for newly settled rejected candidates. Settled ghost rows now carry `price_regime`, `polymarket_regime`, `combined_regime`, `regime_ts`, `regime_match_age_sec`, and `regime_source` when a nearby `market_regime.jsonl` snapshot exists. Added a reusable backfill function for existing settled ghost logs.
+
+**[`tools/backfill_ghost_regimes.py`](/Users/mainfolder/Documents/psb-main%201/tools/backfill_ghost_regimes.py), [`tools/ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tools/ghost_gate_report.py), [`tools/settle_rejected_candidates.py`](/Users/mainfolder/Documents/psb-main%201/tools/settle_rejected_candidates.py):** Added an operator backfill command, report-time regime enrichment, regime filters, regime/gate aggregation, and deadzone-specific report sections. The standalone settlement CLI now stamps the same regime labels as the runtime settlement path.
+
+**[`tools/enhanced_price_tracker.py`](/Users/mainfolder/Documents/psb-main%201/tools/enhanced_price_tracker.py), [`tools/ccxt_price_tracker.py`](/Users/mainfolder/Documents/psb-main%201/tools/ccxt_price_tracker.py):** Removed hardcoded repo paths and corrected tracker wording so regime snapshots are clearly produced by trackers and joined by settlement/report tooling.
+
+**[`tests/test_ghost_calibration.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ghost_calibration.py), [`tests/test_ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ghost_gate_report.py):** Added regression coverage for settle-time enrichment, backfill behavior, report-time enrichment, and regime/deadzone report buckets.
+
+**Why:** Regime snapshots were being written but never consumed by the live ghost settlement path or ghost analysis report. This completes the missing join so ghost outcomes can be segmented by market regime instead of remaining analytically blind to deadzone/signal conditions.
+
+## 2026-05-21 — Ghost BTC-regime/convergence metadata + dynamic updown stops
+
+**[`src/analysis/rejected_candidate_log.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/rejected_candidate_log.py), [`src/analysis/updown_composite_score.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/updown_composite_score.py):** Rejected ghosts now compute a margin-aware `convergence_score` from baseline probe variants plus edge quality, and composite-scored live up/down candidates now expose a separate convergence/consensus score instead of only a flat composite pass/fail.
+
+**[`src/execution/updown_exit_shared.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py), [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py):** Up/down percentage stops now support entry-aware dynamic widening/tightening based on stored `btc_1h_regime`, entry volatility, and convergence score. Fresh positions and journal-resumed positions now both carry enough entry metadata for the shared exit helper to make the same adjustment.
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`tools/backfill_ghost_regimes.py`](/Users/mainfolder/Documents/psb-main%201/tools/backfill_ghost_regimes.py), [`tools/ghost_gate_report.py`](/Users/mainfolder/Documents/psb-main%201/tools/ghost_gate_report.py):** New entries and rejected ghosts now persist `btc_1h_regime`, `convergence_score`, and entry-volatility metadata where available; the ghost report adds BTC-1H and convergence bucket slices; and the backfill tool now copies historical rejected-candidate metadata into settled ghosts when the source rejected row still exists.
+
+**Why:** Market-regime segmentation alone did not solve the narrower audit gap around BTC 1H tape state, weak-vs-strong gate agreement, and stop-loss damage. This pass makes those signals visible in ghost data and usable in live exit behavior without introducing a separate modeling stack.
+
 ## 2026-05-21 — Local bot crash forensics + supervised restart
 
 **[`start.py`](/Users/mainfolder/Documents/psb-main%201/start.py):** Reworked the local launcher into a small parent supervisor. It now spawns the actual bot as a child process, forwards `Ctrl+C` cleanly, and automatically restarts the child after any unclean exit instead of leaving the overnight session dead.

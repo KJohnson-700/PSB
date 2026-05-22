@@ -50,6 +50,16 @@ class UpdownExitGlobals:
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
     updown_in_profit_stop_tighten_to_pct: float
+    dynamic_stop_enabled: bool
+    dynamic_stop_bull_mult: float
+    dynamic_stop_range_mult: float
+    dynamic_stop_bear_mult: float
+    dynamic_stop_high_vol_mult: float
+    dynamic_stop_volatility_threshold: float
+    dynamic_stop_low_convergence_mult: float
+    dynamic_stop_high_convergence_mult: float
+    dynamic_stop_low_convergence_threshold: float
+    dynamic_stop_high_convergence_threshold: float
     updown_lane_overrides: Dict[str, Dict[str, float]]
     updown_overrides: Dict[str, Dict[str, float]]
 
@@ -66,6 +76,16 @@ class UpdownResolvedExitParams:
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
     updown_in_profit_stop_tighten_to_pct: float
+    dynamic_stop_enabled: bool
+    dynamic_stop_bull_mult: float
+    dynamic_stop_range_mult: float
+    dynamic_stop_bear_mult: float
+    dynamic_stop_high_vol_mult: float
+    dynamic_stop_volatility_threshold: float
+    dynamic_stop_low_convergence_mult: float
+    dynamic_stop_high_convergence_mult: float
+    dynamic_stop_low_convergence_threshold: float
+    dynamic_stop_high_convergence_threshold: float
 
 
 _UPDOWN_EXIT_PARAM_KEYS = frozenset(
@@ -80,6 +100,16 @@ _UPDOWN_EXIT_PARAM_KEYS = frozenset(
         "updown_high_entry_threshold",
         "updown_in_profit_stop_trigger_pct",
         "updown_in_profit_stop_tighten_to_pct",
+        "dynamic_stop_enabled",
+        "dynamic_stop_bull_mult",
+        "dynamic_stop_range_mult",
+        "dynamic_stop_bear_mult",
+        "dynamic_stop_high_vol_mult",
+        "dynamic_stop_volatility_threshold",
+        "dynamic_stop_low_convergence_mult",
+        "dynamic_stop_high_convergence_mult",
+        "dynamic_stop_low_convergence_threshold",
+        "dynamic_stop_high_convergence_threshold",
     }
 )
 
@@ -146,6 +176,26 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         ),
         updown_in_profit_stop_tighten_to_pct=float(
             ec.get("updown_in_profit_stop_tighten_to_pct", 0.0) or 0.0
+        ),
+        dynamic_stop_enabled=bool(ec.get("dynamic_stop_enabled", True)),
+        dynamic_stop_bull_mult=float(ec.get("dynamic_stop_bull_mult", 0.95) or 0.95),
+        dynamic_stop_range_mult=float(ec.get("dynamic_stop_range_mult", 1.05) or 1.05),
+        dynamic_stop_bear_mult=float(ec.get("dynamic_stop_bear_mult", 1.15) or 1.15),
+        dynamic_stop_high_vol_mult=float(ec.get("dynamic_stop_high_vol_mult", 1.15) or 1.15),
+        dynamic_stop_volatility_threshold=float(
+            ec.get("dynamic_stop_volatility_threshold", 0.02) or 0.02
+        ),
+        dynamic_stop_low_convergence_mult=float(
+            ec.get("dynamic_stop_low_convergence_mult", 1.10) or 1.10
+        ),
+        dynamic_stop_high_convergence_mult=float(
+            ec.get("dynamic_stop_high_convergence_mult", 0.95) or 0.95
+        ),
+        dynamic_stop_low_convergence_threshold=float(
+            ec.get("dynamic_stop_low_convergence_threshold", 0.55) or 0.55
+        ),
+        dynamic_stop_high_convergence_threshold=float(
+            ec.get("dynamic_stop_high_convergence_threshold", 0.75) or 0.75
         ),
         updown_lane_overrides=lane_overrides,
         updown_overrides=_normalize_strategy_overrides(ec.get("updown_overrides") or {}),
@@ -227,6 +277,16 @@ def resolve_updown_exit_params_for_position(
         "updown_high_entry_threshold": g.updown_high_entry_threshold,
         "updown_in_profit_stop_trigger_pct": g.updown_in_profit_stop_trigger_pct,
         "updown_in_profit_stop_tighten_to_pct": g.updown_in_profit_stop_tighten_to_pct,
+        "dynamic_stop_enabled": g.dynamic_stop_enabled,
+        "dynamic_stop_bull_mult": g.dynamic_stop_bull_mult,
+        "dynamic_stop_range_mult": g.dynamic_stop_range_mult,
+        "dynamic_stop_bear_mult": g.dynamic_stop_bear_mult,
+        "dynamic_stop_high_vol_mult": g.dynamic_stop_high_vol_mult,
+        "dynamic_stop_volatility_threshold": g.dynamic_stop_volatility_threshold,
+        "dynamic_stop_low_convergence_mult": g.dynamic_stop_low_convergence_mult,
+        "dynamic_stop_high_convergence_mult": g.dynamic_stop_high_convergence_mult,
+        "dynamic_stop_low_convergence_threshold": g.dynamic_stop_low_convergence_threshold,
+        "dynamic_stop_high_convergence_threshold": g.dynamic_stop_high_convergence_threshold,
     }
     params.update(g.updown_lane_overrides.get(lane, {}))
     params.update({k: v for k, v in strategy_cfg.items() if k in _UPDOWN_EXIT_PARAM_KEYS})
@@ -249,6 +309,16 @@ def resolve_updown_exit_params_for_position(
         updown_high_entry_threshold=float(params["updown_high_entry_threshold"]),
         updown_in_profit_stop_trigger_pct=float(params["updown_in_profit_stop_trigger_pct"]),
         updown_in_profit_stop_tighten_to_pct=float(params["updown_in_profit_stop_tighten_to_pct"]),
+        dynamic_stop_enabled=bool(params["dynamic_stop_enabled"]),
+        dynamic_stop_bull_mult=float(params["dynamic_stop_bull_mult"]),
+        dynamic_stop_range_mult=float(params["dynamic_stop_range_mult"]),
+        dynamic_stop_bear_mult=float(params["dynamic_stop_bear_mult"]),
+        dynamic_stop_high_vol_mult=float(params["dynamic_stop_high_vol_mult"]),
+        dynamic_stop_volatility_threshold=float(params["dynamic_stop_volatility_threshold"]),
+        dynamic_stop_low_convergence_mult=float(params["dynamic_stop_low_convergence_mult"]),
+        dynamic_stop_high_convergence_mult=float(params["dynamic_stop_high_convergence_mult"]),
+        dynamic_stop_low_convergence_threshold=float(params["dynamic_stop_low_convergence_threshold"]),
+        dynamic_stop_high_convergence_threshold=float(params["dynamic_stop_high_convergence_threshold"]),
     )
 
 
@@ -276,8 +346,48 @@ def effective_updown_stop_loss_pct(
     peak_pnl_pct: Optional[float] = None,
     in_profit_trigger_pct: float,
     tighten_to_pct: float,
+    dynamic_stop_enabled: bool = False,
+    btc_1h_regime: Optional[str] = None,
+    entry_volatility: Optional[float] = None,
+    convergence_score: Optional[float] = None,
+    dynamic_stop_bull_mult: float = 1.0,
+    dynamic_stop_range_mult: float = 1.0,
+    dynamic_stop_bear_mult: float = 1.0,
+    dynamic_stop_high_vol_mult: float = 1.0,
+    dynamic_stop_volatility_threshold: float = 0.0,
+    dynamic_stop_low_convergence_mult: float = 1.0,
+    dynamic_stop_high_convergence_mult: float = 1.0,
+    dynamic_stop_low_convergence_threshold: float = 0.0,
+    dynamic_stop_high_convergence_threshold: float = 1.0,
 ) -> float:
     """In-profit tightening of the adverse percentage stop (live semantics)."""
+    effective_base = float(base_pct)
+    if dynamic_stop_enabled:
+        regime = str(btc_1h_regime or "").upper()
+        if regime == "BULL":
+            effective_base *= float(dynamic_stop_bull_mult)
+        elif regime == "RANGE":
+            effective_base *= float(dynamic_stop_range_mult)
+        elif regime == "BEAR":
+            effective_base *= float(dynamic_stop_bear_mult)
+        try:
+            if (
+                entry_volatility is not None
+                and float(entry_volatility) >= float(dynamic_stop_volatility_threshold)
+            ):
+                effective_base *= float(dynamic_stop_high_vol_mult)
+        except (TypeError, ValueError):
+            pass
+        try:
+            if convergence_score is not None:
+                c = float(convergence_score)
+                if c < float(dynamic_stop_low_convergence_threshold):
+                    effective_base *= float(dynamic_stop_low_convergence_mult)
+                elif c >= float(dynamic_stop_high_convergence_threshold):
+                    effective_base *= float(dynamic_stop_high_convergence_mult)
+        except (TypeError, ValueError):
+            pass
+
     trigger_pnl_pct = (
         max(float(pnl_pct), float(peak_pnl_pct))
         if peak_pnl_pct is not None
@@ -286,10 +396,10 @@ def effective_updown_stop_loss_pct(
     if (
         in_profit_trigger_pct > 0
         and trigger_pnl_pct >= in_profit_trigger_pct
-        and 0 < tighten_to_pct < base_pct
+        and 0 < tighten_to_pct < effective_base
     ):
         return float(tighten_to_pct)
-    return float(base_pct)
+    return float(effective_base)
 
 
 def adverse_for_updown_cents_time_stop(

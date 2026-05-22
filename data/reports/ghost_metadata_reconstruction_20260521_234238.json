@@ -1,0 +1,27 @@
+{
+  "backup": "/Users/mainfolder/Documents/psb-main 1/data/calibration/rejected_candidates_settled.jsonl.bak-20260521_234236",
+  "btc_1h_regime_added": 122878,
+  "btc_1h_regime_counts": {
+    "BEAR": 22250,
+    "BULL": 71417,
+    "RANGE": 29211
+  },
+  "btc_hourly_rows": 220,
+  "convergence_added": 122878,
+  "convergence_sources": {
+    "edge": 206,
+    "probe": 62534,
+    "probe_edge": 3255,
+    "reason_prior": 56883
+  },
+  "copied_rejected_metadata": 101220,
+  "dry_run": false,
+  "input": "/Users/mainfolder/Documents/psb-main 1/data/calibration/rejected_candidates_settled.jsonl",
+  "missing_btc_1h_regime_after": 0,
+  "missing_convergence_after": 0,
+  "output": "/Users/mainfolder/Documents/psb-main 1/data/calibration/rejected_candidates_settled.jsonl",
+  "regime_sources": {
+    "ohlcv_15m_resample": 122878
+  },
+  "rows": 122878
+}

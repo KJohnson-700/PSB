@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from src.analysis import ghost_calibration as gc
 from tools.ghost_gate_report import (
     aggregate_gates,
     aggregate_lanes,
     aggregate_probes,
+    aggregate_regime_gates,
+    aggregate_regimes,
     build_probe_relax_recommendations,
     build_report,
+    enrich_rows_from_regime_log,
 )
+
+from tests.test_ghost_calibration import _write_jsonl
 
 
 def test_ghost_gate_report_aggregates_lane_and_gate_value() -> None:
@@ -46,6 +50,83 @@ def test_ghost_gate_report_aggregates_lane_and_gate_value() -> None:
     assert gate_rows[0]["reason"] == "eth_15m_weak_confirm"
     assert gate_rows[0]["net_gate_value_pct"] == 0.2
     assert 0.0 <= gate_rows[0]["win_rate_ci_low"] <= gate_rows[0]["win_rate_ci_high"] <= 1.0
+
+
+def test_ghost_gate_report_aggregates_regime_buckets() -> None:
+    rows = [
+        {
+            "lane_id": "bitcoin|15m|up|neutral|rejected",
+            "strategy": "bitcoin",
+            "window": "15m",
+            "action": "BUY_YES",
+            "reason": "lane_min_edge",
+            "win": True,
+            "realized_pct": 0.5,
+            "price_regime": "flat",
+            "polymarket_regime": "deadzone",
+            "combined_regime": "deadzone_confirmed",
+            "btc_1h_regime": "BEAR",
+            "convergence_score": 0.41,
+        },
+        {
+            "lane_id": "bitcoin|15m|up|neutral|rejected",
+            "strategy": "bitcoin",
+            "window": "15m",
+            "action": "BUY_YES",
+            "reason": "lane_min_edge",
+            "win": False,
+            "realized_pct": -1.0,
+            "price_regime": "flat",
+            "polymarket_regime": "deadzone",
+            "combined_regime": "deadzone_confirmed",
+            "btc_1h_regime": "BEAR",
+            "convergence_score": 0.44,
+        },
+    ]
+
+    regime_rows = aggregate_regimes(rows)
+    regime_gate_rows = aggregate_regime_gates(rows)
+    report = build_report(rows)
+
+    assert regime_rows[0]["regime_key"] == "flat|deadzone|deadzone_confirmed"
+    assert regime_rows[0]["n"] == 2
+    assert regime_gate_rows[0]["regime_gate_key"] == (
+        "deadzone_confirmed|bitcoin|15m|BUY_YES|lane_min_edge"
+    )
+    assert report["btc_regimes"][0]["btc_1h_regime"] == "BEAR"
+    assert report["convergence"][0]["convergence_bucket"] == "low"
+    assert report["deadzone_gates"][0]["combined_regime"] == "deadzone_confirmed"
+
+
+def test_ghost_gate_report_can_enrich_rows_from_regime_log(tmp_path) -> None:
+    regime = tmp_path / "market_regime.jsonl"
+    _write_jsonl(
+        regime,
+        [
+            {
+                "ts": "2026-05-16T14:01:00+00:00",
+                "price_regime": "flat",
+                "polymarket_regime": "deadzone",
+                "combined_regime": "deadzone_confirmed",
+            }
+        ],
+    )
+    rows = [
+        {
+            "ts": "2026-05-16T14:00:30+00:00",
+            "strategy": "bitcoin",
+            "window": "15m",
+            "action": "BUY_YES",
+            "reason": "lane_min_edge",
+            "win": True,
+            "realized_pct": 0.5,
+        }
+    ]
+
+    enriched = enrich_rows_from_regime_log(rows, regime_path=regime, max_age_sec=120)
+
+    assert enriched[0]["combined_regime"] == "deadzone_confirmed"
+    assert enriched[0]["regime_source"] == "market_regime"
 
 
 def test_ghost_gate_report_probe_variants_only_count_would_pass_rows() -> None:

@@ -6,7 +6,7 @@ Order execution and risk management
 import asyncio
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 try:
@@ -76,6 +76,9 @@ class Position:
     # CLOB outcome token ids (from market clobTokenIds); used for book/mid by token and dashboard.
     token_id_yes: str = ""
     token_id_no: str = ""
+    edge: float = 0.0
+    confidence: float = 0.0
+    entry_signal: Dict[str, Any] = field(default_factory=dict)
 
 
 class CLOBClient:

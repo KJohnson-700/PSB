@@ -63,6 +63,7 @@ from src.analysis.calibration_log import (
     build_record_from_closed_trade,
 )
 from src.analysis.ghost_calibration import (
+    DEFAULT_REGIME_LOG,
     build_ghost_calibration_status,
     settle_rejected_candidates,
 )
@@ -81,6 +82,47 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
 _FAULT_HANDLER_STREAM = None
+
+
+def market_regime_gate_decision(
+    *,
+    gate_config: Dict[str, Any],
+    latest_regime: Optional[Dict[str, Any]],
+    convergence_score: Optional[float],
+) -> tuple[bool, str, Dict[str, Any]]:
+    """Block weak-convergence entries only when the tracker says deadzone."""
+    if not bool(gate_config.get("enabled", False)):
+        return True, "disabled", {}
+    if not latest_regime:
+        return True, "no_regime_snapshot", {}
+
+    combined = str(latest_regime.get("combined_regime") or "")
+    poly = str(latest_regime.get("polymarket_regime") or "")
+    price = str(latest_regime.get("price_regime") or "")
+    extra = {
+        "price_regime": price or None,
+        "polymarket_regime": poly or None,
+        "combined_regime": combined or None,
+        "regime_ts": latest_regime.get("ts"),
+        "regime_source": "market_regime",
+    }
+    if not combined.startswith("deadzone"):
+        return True, "not_deadzone", extra
+
+    threshold = float(gate_config.get("deadzone_min_convergence", 0.55) or 0.55)
+    block_missing = bool(gate_config.get("block_missing_convergence_in_deadzone", True))
+    try:
+        score = float(convergence_score) if convergence_score is not None else None
+    except (TypeError, ValueError):
+        score = None
+    extra["convergence_score"] = score
+    extra["deadzone_min_convergence"] = threshold
+
+    if score is None and block_missing:
+        return False, "market_deadzone_missing_convergence", extra
+    if score is not None and score < threshold:
+        return False, "market_deadzone_low_convergence", extra
+    return True, "deadzone_convergence_ok", extra
 
 
 def _init_fault_handler() -> None:
@@ -971,11 +1013,11 @@ class PolyBot:
                     pnl=pos_data.get("pnl", 0),
                     opened_at=opened_at,
                     end_date=end_date,
-                    strategy=pos_data.get("strategy", "unknown"),
-                    entry_leg=infer_entry_leg(pos_data),
-                    window_size=str(
-                        pos_data.get("window_size")
-                        or (pos_data.get("entry_signal") or {}).get("window_size")
+                strategy=pos_data.get("strategy", "unknown"),
+                entry_leg=infer_entry_leg(pos_data),
+                window_size=str(
+                    pos_data.get("window_size")
+                    or (pos_data.get("entry_signal") or {}).get("window_size")
                         or ""
                     ),
                     peak_token_price=float(
@@ -985,6 +1027,9 @@ class PolyBot:
                     ),
                     token_id_yes=str(pos_data.get("token_id_yes") or ""),
                     token_id_no=str(pos_data.get("token_id_no") or ""),
+                    edge=float(pos_data.get("edge", 0.0) or 0.0),
+                    confidence=float(pos_data.get("confidence", 0.0) or 0.0),
+                    entry_signal=dict(pos_data.get("entry_signal") or {}),
                 )
                 # Add directly to dict — do NOT call add_position() as it increments daily_trades
                 self.risk_manager.active_positions[position.position_id] = position
@@ -2363,6 +2408,88 @@ class PolyBot:
         )
         return False
 
+    def _load_latest_market_regime_snapshot(self) -> Optional[Dict[str, Any]]:
+        cfg = (
+            (self.config.get("trading") or {}).get("market_regime_gate")
+            if isinstance(self.config.get("trading"), dict)
+            else {}
+        ) or {}
+        path = Path(cfg.get("regime_log") or DEFAULT_REGIME_LOG)
+        if not path.exists():
+            return None
+        last: Optional[Dict[str, Any]] = None
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict):
+                        last = obj
+        except OSError as exc:
+            logging.warning("market regime gate could not read %s: %s", path, exc)
+            return None
+        if not last:
+            return None
+
+        max_age_sec = float(cfg.get("max_snapshot_age_sec", 1800) or 1800)
+        try:
+            ts = datetime.fromisoformat(str(last.get("ts")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = abs((datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            return None
+        if age > max_age_sec:
+            return None
+        last["regime_match_age_sec"] = round(age, 3)
+        return last
+
+    def _check_market_regime_execution(
+        self,
+        *,
+        strategy: str,
+        signal: Any,
+        lane_meta: Dict[str, Any],
+    ) -> bool:
+        gate_config = ((self.config.get("trading") or {}).get("market_regime_gate") or {})
+        latest = self._load_latest_market_regime_snapshot()
+        allowed, reason, regime_extra = market_regime_gate_decision(
+            gate_config=gate_config,
+            latest_regime=latest,
+            convergence_score=getattr(signal, "convergence_score", None),
+        )
+        if regime_extra:
+            lane_meta.update(regime_extra)
+        if allowed:
+            return True
+
+        self.journal.log_skip(
+            signal.market_id,
+            signal.market_question,
+            strategy,
+            reason,
+            self.bankroll,
+            extra=self._lane_skip_extra(
+                lane_meta=lane_meta,
+                signal_reason=getattr(signal, "reason", None),
+                skip_reason=reason,
+            ),
+        )
+        logging.warning(
+            "%s market-regime execution blocked: %s combined=%s convergence=%s threshold=%s",
+            strategy,
+            reason,
+            regime_extra.get("combined_regime"),
+            regime_extra.get("convergence_score"),
+            regime_extra.get("deadzone_min_convergence"),
+        )
+        return False
+
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
         async with self._execution_lock:
@@ -2390,6 +2517,12 @@ class PolyBot:
             lane_meta=lane_meta,
             market_id=signal.market_id,
             market_question=signal.market_question,
+        ):
+            return
+        if not self._check_market_regime_execution(
+            strategy="bitcoin",
+            signal=signal,
+            lane_meta=lane_meta,
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
@@ -2510,6 +2643,15 @@ class PolyBot:
                 window_size=str(getattr(signal, "window_size", "") or ""),
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
+                edge=float(signal.edge or 0.0),
+                confidence=float(signal.confidence or 0.0),
+                entry_signal={
+                    "window_size": signal.window_size,
+                    "htf_bias": signal.htf_bias,
+                    "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
+                    "convergence_score": getattr(signal, "convergence_score", None),
+                    "entry_volatility": getattr(signal, "entry_volatility", None),
+                },
             )
             self.risk_manager.add_position(position)
 
@@ -2533,6 +2675,7 @@ class PolyBot:
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
+                    "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
                     "btc_htf": signal.htf_bias,   # alias expected by journal analysis
                     "macro_leg": None,             # bitcoin path has no alt-lag leg
                     "ai_used": signal.ai_used,
@@ -2549,6 +2692,8 @@ class PolyBot:
                     "rsi": signal.rsi,
                     "side_source": getattr(signal, "side_source", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "convergence_score": getattr(signal, "convergence_score", None),
+                    "entry_volatility": getattr(signal, "entry_volatility", None),
                     "entry_policy": getattr(signal, "entry_policy", None),
                     "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
                     "probability_model": "indicator_score_v1",
@@ -2618,6 +2763,12 @@ class PolyBot:
             lane_meta=lane_meta,
             market_id=signal.market_id,
             market_question=signal.market_question,
+        ):
+            return
+        if not self._check_market_regime_execution(
+            strategy=strat,
+            signal=signal,
+            lane_meta=lane_meta,
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
@@ -2741,6 +2892,15 @@ class PolyBot:
                 window_size=str(getattr(signal, "window_size", "") or ""),
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
+                edge=float(signal.edge or 0.0),
+                confidence=float(signal.confidence or 0.0),
+                entry_signal={
+                    "window_size": signal.window_size,
+                    "htf_bias": signal.htf_bias,
+                    "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
+                    "convergence_score": getattr(signal, "convergence_score", None),
+                    "entry_volatility": getattr(signal, "entry_volatility", None),
+                },
             )
             self.risk_manager.add_position(position)
 
@@ -2782,6 +2942,8 @@ class PolyBot:
                     "corr_1h": signal.corr_1h,
                     "side_source": getattr(signal, "side_source", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
+                    "convergence_score": getattr(signal, "convergence_score", None),
+                    "entry_volatility": getattr(signal, "entry_volatility", None),
                     "entry_policy": getattr(signal, "entry_policy", None),
                     "indicator_snapshot": getattr(signal, "indicator_snapshot", None),
                     "probability_model": "indicator_score_v1",

@@ -96,6 +96,7 @@ class BitcoinSignal(BaseModel):
     reason: str = Field(default="", description="Why this signal was generated")
     # Coach features — logged to journal extra dict for pattern analysis
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
+    btc_1h_regime: Optional[str] = Field(None, description="BTC 1H vs SMA(20) bucket: BULL/RANGE/BEAR")
     window_size: Optional[str] = Field(None, description="Market window: 5m or 15m")
     hour_utc: Optional[int] = Field(None, description="UTC hour at entry time")
     est_prob: Optional[float] = Field(None, description="Estimated prob of YES at entry (key diagnostic)")
@@ -114,6 +115,8 @@ class BitcoinSignal(BaseModel):
         None,
         description="Resolved lane-specific entry policy used for this signal",
     )
+    convergence_score: Optional[float] = Field(None, description="Entry-quality consensus score")
+    entry_volatility: Optional[float] = Field(None, description="ATR-style volatility fraction at entry")
 
 
 # Patterns to detect Bitcoin price markets
@@ -383,6 +386,8 @@ class BitcoinStrategy:
         ltf_strength: float,
         minutes_left: float,
         yes_price: float,
+        action: Optional[str] = None,
+        btc_1h_regime: Optional[str] = None,
     ):
         return score_updown_candidate(
             edge=edge,
@@ -401,6 +406,14 @@ class BitcoinStrategy:
             minutes_to_resolution=minutes_left,
             yes_price=yes_price,
             floor=self.neutral_15m_min_composite_score,
+            action=action,
+            btc_1h_regime=btc_1h_regime,
+            regime_action_gate_enabled=bool(
+                self.updown_composite_cfg.get("regime_action_gate_enabled", True)
+            ),
+            regime_action_min_convergence=float(
+                self.updown_composite_cfg.get("regime_action_min_convergence", 0.55)
+            ),
         )
 
     async def _ai_kill_switch_analysis(self, reason: str, loss_count: int) -> None:
@@ -1496,7 +1509,9 @@ class BitcoinStrategy:
                             yes_price=yes_price,
                             est_prob_up=0.50,
                             htf_bias=htf_bias,
+                            btc_1h_regime=btc_1h_regime if ta else None,
                             context={
+                                "btc_1h_regime": btc_1h_regime if ta else None,
                                 "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
                                 "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
                                 "macd_4h_above_zero": bool(macd_4h.above_zero),
@@ -1645,7 +1660,9 @@ class BitcoinStrategy:
                                 strategy="bitcoin", window=window_label, side="LONG", action=action,
                                 reason=f"hist_gate_{window_label}_long_reject", market=market,
                                 yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                btc_1h_regime=btc_1h_regime if ta else None,
                                 context={
+                                    "btc_1h_regime": btc_1h_regime if ta else None,
                                     "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
                                     "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
                                     "macd_4h_above_zero": bool(macd_4h.above_zero),
@@ -2412,7 +2429,9 @@ class BitcoinStrategy:
                         yes_price=yes_price,
                         est_prob_up=estimated_prob,
                         htf_bias=htf_bias,
+                        btc_1h_regime=btc_1h_regime if ta else None,
                         context={
+                            "btc_1h_regime": btc_1h_regime if ta else None,
                             "edge": round(float(edge), 6),
                             "effective_min_edge": round(float(effective_min_edge), 6),
                             "raw_est_prob": round(float(raw_est_prob), 6),
@@ -2458,6 +2477,8 @@ class BitcoinStrategy:
                     )
                     continue
 
+            entry_convergence_score = None
+            entry_composite_score = None
             _is_neutral_15m = is_updown and _updown_tf != "5m" and htf_bias == "NEUTRAL"
             if _is_neutral_15m:
                 composite = self._score_neutral_15m_candidate(
@@ -2467,8 +2488,12 @@ class BitcoinStrategy:
                     ltf_strength=ltf_strength,
                     minutes_left=_mins_left,
                     yes_price=yes_price,
+                    action=action,
+                    btc_1h_regime=btc_1h_regime if ta else None,
                 )
                 _sample("composite_score", composite.score)
+                entry_convergence_score = composite.convergence_score
+                entry_composite_score = composite.score
                 reason_parts.append(f"composite={composite.score:.3f}")
                 if not composite.passed:
                     _bump_skip(composite.reason)
@@ -2686,7 +2711,6 @@ class BitcoinStrategy:
             order_price = max(0.01, min(0.99, order_price))
 
             reason = " | ".join(reason_parts)
-
             # Reconstruct est_prob from edge + yes_price for journal logging.
             # BUY_YES:  edge = est_prob - yes_price  → est_prob = edge + yes_price
             # BUY_NO: edge = yes_price - est_prob  → est_prob = yes_price - edge
@@ -2713,6 +2737,7 @@ class BitcoinStrategy:
                 ai_used=ai_used,
                 reason=reason,
                 htf_bias=htf_bias,
+                btc_1h_regime=btc_1h_regime if ta else None,
                 window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
                 est_prob=_signal_est_prob,
@@ -2720,8 +2745,31 @@ class BitcoinStrategy:
                 rsi=round(ta.rsi_14, 1),
                 side_source=side_source,
                 oracle_basis_bps=None,
+                convergence_score=(
+                    round(float(entry_convergence_score), 4)
+                    if entry_convergence_score is not None
+                    else None
+                ),
+                entry_volatility=round(
+                    float((getattr(ta.trend_sabre, "atr", 0.0) or 0.0) / max(float(ta.current_price or 1.0), 1.0)),
+                    6,
+                ),
                 entry_policy=entry_policy_meta,
                 indicator_snapshot={
+                    "composite_score": (
+                        round(float(entry_composite_score), 4)
+                        if entry_composite_score is not None
+                        else None
+                    ),
+                    "convergence_score": (
+                        round(float(entry_convergence_score), 4)
+                        if entry_convergence_score is not None
+                        else None
+                    ),
+                    "entry_volatility": round(
+                        float((getattr(ta.trend_sabre, "atr", 0.0) or 0.0) / max(float(ta.current_price or 1.0), 1.0)),
+                        6,
+                    ),
                     "btc_4h_histogram": round(float(macd_4h.histogram or 0.0), 4),
                     "btc_4h_histogram_rising": bool(macd_4h.histogram_rising),
                     "btc_1h_histogram": round(float(ta.macd_1h.histogram or 0.0), 4),

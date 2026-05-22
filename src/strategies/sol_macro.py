@@ -193,6 +193,8 @@ class SolMacroSignal(BaseModel):
         None,
         description="Resolved lane-specific entry policy used for this signal",
     )
+    convergence_score: Optional[float] = Field(None, description="Entry-quality consensus score")
+    entry_volatility: Optional[float] = Field(None, description="ATR-style volatility fraction at entry")
     reason: str = Field(default="", description="Why this signal was generated")
     strategy_name: str = Field(default="sol_macro", description="Journal/risk strategy key")
     alt_asset_code: str = Field(
@@ -1171,6 +1173,8 @@ class SolMacroStrategy:
         minutes_left: float,
         yes_price: float,
         lane: str,
+        action: Optional[str] = None,
+        btc_1h_regime: Optional[str] = None,
     ) -> CompositeScore:
         return score_updown_candidate(
             edge=edge,
@@ -1182,6 +1186,14 @@ class SolMacroStrategy:
             minutes_to_resolution=minutes_left,
             yes_price=yes_price,
             floor=self._updown_composite_floor(lane=lane, quant_confidence=confidence),
+            action=action,
+            btc_1h_regime=btc_1h_regime,
+            regime_action_gate_enabled=bool(
+                self.updown_composite_cfg.get("regime_action_gate_enabled", True)
+            ),
+            regime_action_min_convergence=float(
+                self.updown_composite_cfg.get("regime_action_min_convergence", 0.55)
+            ),
         )
 
     def _extract_direction(self, question: str) -> str:
@@ -2005,6 +2017,8 @@ class SolMacroStrategy:
                     atr_14=getattr(sol, "atr_14", None),
                 )
             )
+            if btc_1h_regime is not None:
+                merged_context["btc_1h_regime"] = btc_1h_regime
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -2019,6 +2033,7 @@ class SolMacroStrategy:
                 probe_variants=probe_variants or [],
                 policy_version=policy_version,
                 stage=stage,
+                btc_1h_regime=btc_1h_regime,
             )
 
         observer_tasks: List[asyncio.Task] = []
@@ -3700,6 +3715,8 @@ class SolMacroStrategy:
                 )
                 continue
 
+            entry_convergence_score = None
+            entry_composite_score = None
             _updown_lane = "default"
             if is_updown:
                 _tf_alignment = 1.0 if mtt.aligned else (0.70 if mtt.h1_trend == macro_trend else 0.35)
@@ -3713,8 +3730,12 @@ class SolMacroStrategy:
                     minutes_left=_eval_left,
                     yes_price=yes_price,
                     lane=_updown_lane,
+                    action=action,
+                    btc_1h_regime=btc_1h_regime,
                 )
                 _sample("composite_score", composite.score)
+                entry_convergence_score = composite.convergence_score
+                entry_composite_score = composite.score
                 reason_parts.append(f"composite={composite.score:.3f}")
                 if not composite.passed:
                     _bump_skip(composite.reason)
@@ -4020,8 +4041,25 @@ class SolMacroStrategy:
                     if sol.oracle_basis_bps is not None
                     else None
                 ),
+                convergence_score=(
+                    round(float(entry_convergence_score), 4)
+                    if entry_convergence_score is not None
+                    else None
+                ),
+                entry_volatility=round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
                 entry_policy=entry_policy_meta,
                 indicator_snapshot={
+                    "composite_score": (
+                        round(float(entry_composite_score), 4)
+                        if entry_composite_score is not None
+                        else None
+                    ),
+                    "convergence_score": (
+                        round(float(entry_convergence_score), 4)
+                        if entry_convergence_score is not None
+                        else None
+                    ),
+                    "entry_volatility": round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
                     "alt_1h_histogram": round(float(sol.macd_1h.histogram or 0.0), 4),
                     "alt_1h_histogram_rising": bool(sol.macd_1h.histogram_rising),
                     "alt_15m_histogram": round(float(sol.macd_15m.histogram or 0.0), 4),

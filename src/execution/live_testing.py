@@ -219,6 +219,7 @@ class PositionExitManager:
                 if pos.entry_price > 0
                 else 0.0
             )
+            entry_signal = dict(getattr(pos, "entry_signal", {}) or {})
 
             # Check exit conditions
             reason = None
@@ -251,6 +252,23 @@ class PositionExitManager:
                     peak_pnl_pct=peak_pnl_pct,
                     in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
                     tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
+                    dynamic_stop_enabled=resolved.dynamic_stop_enabled,
+                    btc_1h_regime=entry_signal.get("btc_1h_regime"),
+                    entry_volatility=entry_signal.get("entry_volatility"),
+                    convergence_score=(
+                        entry_signal.get("convergence_score")
+                        if entry_signal.get("convergence_score") is not None
+                        else getattr(pos, "confidence", None)
+                    ),
+                    dynamic_stop_bull_mult=resolved.dynamic_stop_bull_mult,
+                    dynamic_stop_range_mult=resolved.dynamic_stop_range_mult,
+                    dynamic_stop_bear_mult=resolved.dynamic_stop_bear_mult,
+                    dynamic_stop_high_vol_mult=resolved.dynamic_stop_high_vol_mult,
+                    dynamic_stop_volatility_threshold=resolved.dynamic_stop_volatility_threshold,
+                    dynamic_stop_low_convergence_mult=resolved.dynamic_stop_low_convergence_mult,
+                    dynamic_stop_high_convergence_mult=resolved.dynamic_stop_high_convergence_mult,
+                    dynamic_stop_low_convergence_threshold=resolved.dynamic_stop_low_convergence_threshold,
+                    dynamic_stop_high_convergence_threshold=resolved.dynamic_stop_high_convergence_threshold,
                 )
 
                 # TP: exit early when price spikes strongly in our favour rather than

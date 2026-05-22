@@ -20,7 +20,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import requests
 
@@ -31,8 +31,34 @@ DEFAULT_CALIBRATION_DIR = (
 )
 DEFAULT_REJECTED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates.jsonl"
 DEFAULT_SETTLED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates_settled.jsonl"
+DEFAULT_REGIME_LOG = DEFAULT_CALIBRATION_DIR / "market_regime.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
 RESOLVED_BUFFER_SEC = 90
+REGIME_MATCH_MAX_AGE_SEC = 30 * 60
+REGIME_FIELDS = (
+    "price_regime",
+    "polymarket_regime",
+    "combined_regime",
+    "regime_ts",
+    "regime_match_age_sec",
+    "regime_source",
+)
+REGIME_LABEL_FIELDS = ("price_regime", "polymarket_regime", "combined_regime")
+REJECTED_COPY_FIELDS = (
+    "btc_1h_regime",
+    "context",
+    "probe_variants",
+    "policy_version",
+    "feature_hash",
+    "convergence_score",
+    "convergence_probe_count",
+    "convergence_pass_count",
+    "convergence_fail_count",
+    "convergence_narrow_pass_count",
+    "convergence_strong_pass_count",
+    "edge_quality",
+    "component_mean_quality",
+)
 
 
 def ghost_id(rec: Dict[str, Any]) -> str:
@@ -65,6 +91,182 @@ def _load_settled_ids(path: Path) -> set[str]:
         for obj in _iter_jsonl(path)
         if obj.get("ghost_id")
     }
+
+
+def _load_rejected_by_id(path: Path) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in _iter_jsonl(path) or []:
+        out[ghost_id(row)] = row
+    return out
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def load_regime_snapshots(path: Path = DEFAULT_REGIME_LOG) -> List[Dict[str, Any]]:
+    """Load market-regime snapshots sorted by timestamp."""
+    snapshots: List[Dict[str, Any]] = []
+    for row in _iter_jsonl(path) or []:
+        ts = _parse_dt(row.get("ts"))
+        if ts is None:
+            continue
+        snapshots.append({**row, "_parsed_ts": ts})
+    snapshots.sort(key=lambda row: row["_parsed_ts"])
+    return snapshots
+
+
+def _nearest_regime_snapshot(
+    target_ts: datetime,
+    snapshots: Sequence[Dict[str, Any]],
+    *,
+    max_age_sec: float = REGIME_MATCH_MAX_AGE_SEC,
+) -> Optional[Dict[str, Any]]:
+    if not snapshots:
+        return None
+
+    lo = 0
+    hi = len(snapshots)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        snap_ts = snapshots[mid].get("_parsed_ts")
+        if not isinstance(snap_ts, datetime) or snap_ts < target_ts:
+            lo = mid + 1
+        else:
+            hi = mid
+
+    best: Optional[Dict[str, Any]] = None
+    best_age: Optional[float] = None
+    for idx in (lo - 1, lo):
+        if idx < 0 or idx >= len(snapshots):
+            continue
+        snap = snapshots[idx]
+        snap_ts = snap.get("_parsed_ts")
+        if not isinstance(snap_ts, datetime):
+            continue
+        age = abs((target_ts - snap_ts).total_seconds())
+        if age <= max_age_sec and (best_age is None or age < best_age):
+            best = snap
+            best_age = age
+    return best
+
+
+def enrich_with_regime(
+    row: Dict[str, Any],
+    snapshots: Sequence[Dict[str, Any]],
+    *,
+    max_age_sec: float = REGIME_MATCH_MAX_AGE_SEC,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Return row with nearest market-regime labels for the ghost timestamp."""
+    if not force and any(row.get(field) for field in REGIME_LABEL_FIELDS):
+        return row
+
+    out = dict(row)
+    target_ts = _parse_dt(out.get("ts"))
+    if target_ts is None:
+        out.setdefault("regime_source", "missing_ts")
+        return out
+
+    snap = _nearest_regime_snapshot(target_ts, snapshots, max_age_sec=max_age_sec)
+    if snap is None:
+        out["regime_source"] = "unmatched"
+        return out
+
+    snap_ts = snap["_parsed_ts"]
+    out["price_regime"] = snap.get("price_regime")
+    out["polymarket_regime"] = snap.get("polymarket_regime")
+    out["combined_regime"] = snap.get("combined_regime")
+    out["regime_ts"] = snap.get("ts")
+    out["regime_match_age_sec"] = round(abs((target_ts - snap_ts).total_seconds()), 3)
+    out["regime_source"] = "market_regime"
+    return out
+
+
+def backfill_settled_regimes(
+    *,
+    input_path: Path = DEFAULT_SETTLED_LOG,
+    output_path: Optional[Path] = None,
+    regime_path: Path = DEFAULT_REGIME_LOG,
+    rejected_path: Path = DEFAULT_REJECTED_LOG,
+    max_age_sec: float = REGIME_MATCH_MAX_AGE_SEC,
+    force: bool = False,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Backfill regime labels onto settled ghost rows."""
+    target_path = output_path or input_path
+    summary = {
+        "input_exists": input_path.exists(),
+        "regime_exists": regime_path.exists(),
+        "rows": 0,
+        "matched": 0,
+        "unmatched": 0,
+        "already_labelled": 0,
+        "rejected_metadata_copied": 0,
+        "written": 0,
+    }
+    if not input_path.exists():
+        return summary
+
+    snapshots = load_regime_snapshots(regime_path)
+    rejected_lookup = _load_rejected_by_id(rejected_path) if rejected_path.exists() else {}
+    rows: List[Dict[str, Any]] = []
+    for row in _iter_jsonl(input_path) or []:
+        summary["rows"] += 1
+        was_labelled = any(row.get(field) for field in REGIME_LABEL_FIELDS)
+        rejected_src = rejected_lookup.get(str(row.get("ghost_id") or ""))
+        metadata_copied = False
+        enriched_row = dict(row)
+        if rejected_src:
+            for field in REJECTED_COPY_FIELDS:
+                if force or not enriched_row.get(field):
+                    if rejected_src.get(field) is not None:
+                        enriched_row[field] = rejected_src.get(field)
+                        metadata_copied = True
+        if metadata_copied:
+            summary["rejected_metadata_copied"] += 1
+        if was_labelled and not force and not metadata_copied:
+            summary["already_labelled"] += 1
+            rows.append(enriched_row)
+            continue
+        enriched = enrich_with_regime(
+            enriched_row,
+            snapshots,
+            max_age_sec=max_age_sec,
+            force=force,
+        )
+        if enriched.get("regime_source") == "market_regime":
+            summary["matched"] += 1
+        else:
+            summary["unmatched"] += 1
+        rows.append(enriched)
+
+    if dry_run:
+        return summary
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_TRUNC | os.O_CREAT, 0o644)
+    try:
+        for row in rows:
+            clean = {k: v for k, v in row.items() if k != "_parsed_ts"}
+            os.write(
+                fd,
+                (json.dumps(clean, separators=(",", ":")) + "\n").encode("utf-8"),
+            )
+            summary["written"] += 1
+    finally:
+        os.close(fd)
+    os.replace(tmp_path, target_path)
+    return summary
 
 
 def fetch_resolution(
@@ -157,6 +359,8 @@ def settle_rejected_candidates(
     *,
     input_path: Path = DEFAULT_REJECTED_LOG,
     output_path: Path = DEFAULT_SETTLED_LOG,
+    regime_path: Path = DEFAULT_REGIME_LOG,
+    regime_max_age_sec: float = REGIME_MATCH_MAX_AGE_SEC,
     now: Optional[datetime] = None,
     dry_run: bool = False,
     throttle_sec: float = 0.0,
@@ -172,12 +376,15 @@ def settle_rejected_candidates(
         "no_market_id": 0,
         "unresolved_or_api": 0,
         "newly_settled": 0,
+        "regime_matched": 0,
+        "regime_unmatched": 0,
         "written": 0,
     }
     if not input_path.exists():
         return summary
 
     settled_ids = _load_settled_ids(output_path)
+    regime_snapshots = load_regime_snapshots(regime_path)
     cache: Dict[str, Optional[str]] = {}
     settle_records: List[Dict[str, Any]] = []
     ts_now = now or datetime.now(timezone.utc)
@@ -224,31 +431,48 @@ def settle_rejected_candidates(
             ),
             outcome=outcome,
         )
-        settle_records.append(
-            {
-                "ghost_id": gid,
-                "settled_at": ts_now.isoformat(),
-                "outcome": outcome,
-                **wb,
-                "ts": rec.get("ts"),
-                "lane_id": rec.get("lane_id"),
-                "strategy": rec.get("strategy"),
-                "window": rec.get("window"),
-                "side": rec.get("side"),
-                "action": rec.get("action"),
-                "reason": rec.get("reason"),
-                "market_id": market_id,
-                "market_question": rec.get("market_question"),
-                "yes_price": rec.get("yes_price"),
-                "no_price": rec.get("no_price"),
-                "est_prob_up": rec.get("est_prob_up"),
-                "htf_bias": rec.get("htf_bias"),
-                "context": rec.get("context", {}),
-                "probe_variants": rec.get("probe_variants", []),
-                "policy_version": rec.get("policy_version"),
-                "feature_hash": rec.get("feature_hash"),
-            }
+        settled_rec = {
+            "ghost_id": gid,
+            "settled_at": ts_now.isoformat(),
+            "outcome": outcome,
+            **wb,
+            "ts": rec.get("ts"),
+            "lane_id": rec.get("lane_id"),
+            "strategy": rec.get("strategy"),
+            "window": rec.get("window"),
+            "side": rec.get("side"),
+            "action": rec.get("action"),
+            "reason": rec.get("reason"),
+            "market_id": market_id,
+            "market_question": rec.get("market_question"),
+            "yes_price": rec.get("yes_price"),
+            "no_price": rec.get("no_price"),
+            "est_prob_up": rec.get("est_prob_up"),
+            "htf_bias": rec.get("htf_bias"),
+            "btc_1h_regime": rec.get("btc_1h_regime"),
+            "context": rec.get("context", {}),
+            "probe_variants": rec.get("probe_variants", []),
+            "policy_version": rec.get("policy_version"),
+            "feature_hash": rec.get("feature_hash"),
+            "convergence_score": rec.get("convergence_score"),
+            "convergence_probe_count": rec.get("convergence_probe_count"),
+            "convergence_pass_count": rec.get("convergence_pass_count"),
+            "convergence_fail_count": rec.get("convergence_fail_count"),
+            "convergence_narrow_pass_count": rec.get("convergence_narrow_pass_count"),
+            "convergence_strong_pass_count": rec.get("convergence_strong_pass_count"),
+            "edge_quality": rec.get("edge_quality"),
+            "component_mean_quality": rec.get("component_mean_quality"),
+        }
+        settled_rec = enrich_with_regime(
+            settled_rec,
+            regime_snapshots,
+            max_age_sec=regime_max_age_sec,
         )
+        if settled_rec.get("regime_source") == "market_regime":
+            summary["regime_matched"] += 1
+        else:
+            summary["regime_unmatched"] += 1
+        settle_records.append(settled_rec)
         summary["newly_settled"] += 1
 
     if not dry_run and settle_records:
