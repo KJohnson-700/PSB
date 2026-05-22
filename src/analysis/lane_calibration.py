@@ -186,10 +186,16 @@ class LaneCalibrator:
     def _shrunk_alpha(self, p: LanePosterior) -> float:
         """Blend ``alpha_ewma`` toward identity (1.0) when sample is small."""
         if p.n >= SHRINK_N:
-            return self._clamp(p.alpha_ewma, ALPHA_CLAMP_LO, ALPHA_CLAMP_HI)
+            # Asymmetric clamp: positive alpha (over-predicting YES) capped at 1.0x;
+            # negative alpha (under-predicting YES) allowed up to 2.5x.
+            if p.alpha_ewma < 1.0:
+                return 1.0
+            return self._clamp(p.alpha_ewma, 1.0, ALPHA_CLAMP_HI)
         w = p.n / SHRINK_N
         blended = w * p.alpha_ewma + (1.0 - w) * 1.0
-        return self._clamp(blended, ALPHA_CLAMP_LO, ALPHA_CLAMP_HI)
+        if blended < 1.0:
+            return 1.0
+        return self._clamp(blended, 1.0, ALPHA_CLAMP_HI)
 
     # ---------------------------------------------------------------- API
 
