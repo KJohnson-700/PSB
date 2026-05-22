@@ -18,10 +18,14 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
+
+import yaml
 
 # Force UTF-8 on Windows so box-drawing chars don't crash the console
 if sys.platform == "win32":
@@ -35,12 +39,16 @@ RUNTIME_STATUS_FILE = REPO_ROOT / "data" / "runtime" / "bot_runtime_status.json"
 # Ensure project root is importable
 sys.path.insert(0, str(REPO_ROOT))
 
-# Default to paper mode when no mode flag provided
-_flags = sys.argv[1:]
-if not any(f in _flags for f in ("--paper", "--live", "--dashboard-only")):
-    sys.argv.append("--paper")
-
 ONE_SHOT_FLAGS = {"--backtest", "--emergency-stop", "--resume-trading"}
+MODE_FLAGS = ("--paper", "--live", "--dashboard-only")
+
+
+def _normalized_args(args: list[str]) -> list[str]:
+    """Default to paper mode when no mode flag is provided."""
+    out = list(args)
+    if not any(flag in out for flag in MODE_FLAGS):
+        out.append("--paper")
+    return out
 
 
 def _read_runtime_status() -> dict:
@@ -50,8 +58,60 @@ def _read_runtime_status() -> dict:
         return {}
 
 
-def _child_command() -> list[str]:
-    return [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
+def _child_command(args: Optional[list[str]] = None) -> list[str]:
+    return [sys.executable, str(Path(__file__).resolve()), *_normalized_args(args or sys.argv[1:])]
+
+
+def _dashboard_bind_target() -> Optional[tuple[str, int]]:
+    """Return local dashboard connect target, or None when preflight should not run."""
+    if os.environ.get("PORT"):
+        return None
+    try:
+        cfg = yaml.safe_load((REPO_ROOT / "config" / "settings.yaml").read_text()) or {}
+    except Exception:
+        cfg = {}
+    dashboard = cfg.get("dashboard") or {}
+    if dashboard.get("enabled") is False:
+        return None
+    host = str(dashboard.get("host") or "127.0.0.1")
+    port = int(dashboard.get("dashboard_port") or 8081)
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+    return connect_host, port
+
+
+def _port_accepts(host: str, port: int, *, timeout: float = 0.4) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_for_port_release(host: str, port: int, *, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _port_accepts(host, port):
+            return True
+        time.sleep(0.25)
+    return not _port_accepts(host, port)
+
+
+def _preflight_dashboard_port(args: list[str]) -> bool:
+    """Refuse duplicate local starts instead of spawning into an address-in-use loop."""
+    if any(flag in args for flag in ONE_SHOT_FLAGS):
+        return True
+    target = _dashboard_bind_target()
+    if target is None:
+        return True
+    host, port = target
+    if not _port_accepts(host, port):
+        return True
+    print(
+        f"[supervisor] dashboard port already in use at {host}:{port}; "
+        "stop the existing bot first or choose a different dashboard.dashboard_port.",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _run_child() -> int:
@@ -64,13 +124,24 @@ def _run_child() -> int:
 def _supervise() -> int:
     restart_delay = 5
     stop_requested = False
+    args = _normalized_args(sys.argv[1:])
 
     while True:
+        target = _dashboard_bind_target()
+        if target is not None:
+            host, port = target
+            if not _wait_for_port_release(host, port, timeout=10.0):
+                print(
+                    f"[supervisor] dashboard port still in use at {host}:{port}; "
+                    "not spawning another child.",
+                    file=sys.stderr,
+                )
+                return 98
         env = dict(os.environ)
         env[CHILD_ENV_FLAG] = "1"
         started_at = time.time()
-        child = subprocess.Popen(_child_command(), env=env)
-        print(f"[supervisor] started child pid={child.pid} args={' '.join(sys.argv[1:])}")
+        child = subprocess.Popen(_child_command(args), env=env)
+        print(f"[supervisor] started child pid={child.pid} args={' '.join(args)}")
 
         try:
             exit_code = child.wait()
@@ -113,8 +184,11 @@ def _supervise() -> int:
 
 
 if __name__ == "__main__":
+    sys.argv = [sys.argv[0], *_normalized_args(sys.argv[1:])]
     if os.environ.get(CHILD_ENV_FLAG) == "1":
         raise SystemExit(_run_child())
     if any(flag in sys.argv[1:] for flag in ONE_SHOT_FLAGS):
         raise SystemExit(_run_child())
+    if not _preflight_dashboard_port(sys.argv[1:]):
+        raise SystemExit(98)
     raise SystemExit(_supervise())
