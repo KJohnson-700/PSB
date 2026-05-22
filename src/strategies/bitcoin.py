@@ -273,6 +273,7 @@ class BitcoinStrategy:
         side_source: str,
         raw_est_prob: Optional[float],
         reason_parts: list,
+        mom: Any = None,
     ):
         # Post-quant counter-trend flip. The pre-quant counter-trend gate (1335-1339)
         # only listens to 4H MACD histogram. When the quant model itself contradicts
@@ -286,11 +287,29 @@ class BitcoinStrategy:
         except (TypeError, ValueError):
             thresh = 0.48
         upper = 1.0 - thresh
+
+        # Momentum-confirmation guard for counter-trend flips.
+        # Live audit 2026-05-21: bitcoin|15m|down|bullish|predict_window (n=20, 25% WR, -$25.78)
+        # was the worst BUY_NO lane and all 20 had side_source=btc_quant_disagree_flip with
+        # no early-candle momentum support. Sibling drift/standard lanes with the same flip
+        # were profitable. The flip mechanism is sound; it just needs momentum alignment
+        # before honoring the quant signal against the HTF bias.
+        require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
+        m15_dir = getattr(mom, "m15_direction", None) if mom is not None else None
+        m5_dir = getattr(mom, "m5_direction", None) if mom is not None else None
+        down_aligned = m15_dir in ("SPIKE_DOWN", "DRIFT_DOWN") or m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN")
+        up_aligned = m15_dir in ("SPIKE_UP", "DRIFT_UP") or m5_dir in ("SPIKE_UP", "DRIFT_UP")
+
         if (
             action == "BUY_YES"
             and raw_est_prob < thresh
             and not self.config.get("disable_buy_no_counter_trend", False)
         ):
+            if require_mom and mom is not None and not down_aligned:
+                reason_parts.append(
+                    f"quant_flip_suppressed=no_down_momentum(raw={raw_est_prob:.3f})"
+                )
+                return action, direction, effective_side, side_source
             reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})<{thresh:.2f}")
             return "BUY_NO", "DOWN", "SHORT", "btc_quant_disagree_flip"
         if (
@@ -298,6 +317,11 @@ class BitcoinStrategy:
             and raw_est_prob > upper
             and not self.config.get("disable_buy_yes", False)
         ):
+            if require_mom and mom is not None and not up_aligned:
+                reason_parts.append(
+                    f"quant_flip_suppressed=no_up_momentum(raw={raw_est_prob:.3f})"
+                )
+                return action, direction, effective_side, side_source
             reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})>{upper:.2f}")
             return "BUY_YES", "UP", "LONG", "btc_quant_disagree_flip"
         return action, direction, effective_side, side_source
@@ -1574,7 +1598,7 @@ class BitcoinStrategy:
                     raw_est_prob = quant.est_prob_up
                     action, direction, effective_side, side_source = self._maybe_quant_flip(
                         action, direction, effective_side, side_source,
-                        raw_est_prob, reason_parts,
+                        raw_est_prob, reason_parts, mom=mom,
                     )
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
@@ -1763,7 +1787,7 @@ class BitcoinStrategy:
                     raw_est_prob = est_prob_up
                     action, direction, effective_side, side_source = self._maybe_quant_flip(
                         action, direction, effective_side, side_source,
-                        raw_est_prob, reason_parts,
+                        raw_est_prob, reason_parts, mom=mom,
                     )
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,

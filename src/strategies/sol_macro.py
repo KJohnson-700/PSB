@@ -666,25 +666,25 @@ class SolMacroStrategy:
         Required for ALL SHORT paths: bear-regime default AND bull-regime dip exception.
 
         Two firing paths, OR-combined (additive):
-          1. 5m/15m + RSI + BTC-5m (gated by buy_no_ltf_override_enabled)
-          2. Alt 4H MACD histogram declining (gated by buy_no_4h_hist_override_enabled);
-             mirrors bitcoin.py:1233-1243 counter-trend trigger.
+          1. 5m/15m + RSI alt-native (gated by buy_no_ltf_override_enabled).
+             2026-05-22: removed BTC-5m co-condition; per "alts decided by alt-native"
+             rule, BTC must not gate admission. BTC 5m is now logged as diagnostic only.
+          2. Alt 4H MACD histogram declining (gated by buy_no_4h_hist_override_enabled).
         """
         if not self.buy_no_ltf_override_enabled and not self.buy_no_4h_hist_override_enabled:
             return False, "disabled"
         sol = ta.sol
         corr = ta.correlation
 
-        bearish_15m = bearish_5m = rsi_ok = btc_ok = False
+        bearish_15m = bearish_5m = rsi_ok = False
         if self.buy_no_ltf_override_enabled:
             bearish_15m = macd_bearish_momentum_ok(sol.macd_15m)
             bearish_5m = macd_bearish_momentum_ok(sol.macd_5m)
             rsi_ok = float(sol.rsi_14 or 50.0) <= self.buy_no_ltf_override_rsi_max
-            btc_ok = float(corr.btc_move_5m_pct or 0.0) <= self.buy_no_ltf_override_max_btc_5m_pct
-            if bearish_15m and bearish_5m and rsi_ok and btc_ok:
+            if bearish_15m and bearish_5m and rsi_ok:
                 return True, (
-                    f"bearish_ltf_override: 15m+5m bearish, RSI={sol.rsi_14:.1f}, "
-                    f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+                    f"bearish_ltf_override: 15m+5m bearish, RSI={sol.rsi_14:.1f} "
+                    f"[diag BTC5m={corr.btc_move_5m_pct:+.3f}%]"
                 )
 
         if self.buy_no_4h_hist_override_enabled:
@@ -703,8 +703,6 @@ class SolMacroStrategy:
                 missing.append("5m_not_bearish")
             if not rsi_ok:
                 missing.append(f"rsi>{self.buy_no_ltf_override_rsi_max:.1f}")
-            if not btc_ok:
-                missing.append(f"btc5m>{self.buy_no_ltf_override_max_btc_5m_pct:+.3f}%")
         if self.buy_no_4h_hist_override_enabled:
             missing.append("4h_hist_not_declining")
         return False, ",".join(missing)
@@ -716,25 +714,24 @@ class SolMacroStrategy:
         Mirrors _bearish_dip_ltf_ok with inverted thresholds.
 
         Two firing paths, OR-combined (additive):
-          1. 5m/15m + RSI + BTC-5m (gated by buy_yes_ltf_override_enabled)
-          2. Alt 4H MACD histogram rising (gated by buy_yes_4h_hist_override_enabled);
-             symmetric mirror of the BUY_NO 4H-hist override.
+          1. 5m/15m + RSI alt-native (gated by buy_yes_ltf_override_enabled).
+             2026-05-22: removed BTC-5m co-condition; alt-native rule.
+          2. Alt 4H MACD histogram rising (gated by buy_yes_4h_hist_override_enabled).
         """
         if not self.buy_yes_ltf_override_enabled and not self.buy_yes_4h_hist_override_enabled:
             return False, "disabled"
         sol = ta.sol
         corr = ta.correlation
 
-        bullish_15m = bullish_5m = rsi_ok = btc_ok = False
+        bullish_15m = bullish_5m = rsi_ok = False
         if self.buy_yes_ltf_override_enabled:
             bullish_15m = macd_bullish_momentum_ok(sol.macd_15m)
             bullish_5m = macd_bullish_momentum_ok(sol.macd_5m)
             rsi_ok = float(sol.rsi_14 or 50.0) >= self.buy_yes_ltf_override_rsi_min
-            btc_ok = float(corr.btc_move_5m_pct or 0.0) >= self.buy_yes_ltf_override_min_btc_5m_pct
-            if bullish_15m and bullish_5m and rsi_ok and btc_ok:
+            if bullish_15m and bullish_5m and rsi_ok:
                 return True, (
-                    f"bullish_ltf_override: 15m+5m bullish, RSI={sol.rsi_14:.1f}, "
-                    f"BTC5m={corr.btc_move_5m_pct:+.3f}%"
+                    f"bullish_ltf_override: 15m+5m bullish, RSI={sol.rsi_14:.1f} "
+                    f"[diag BTC5m={corr.btc_move_5m_pct:+.3f}%]"
                 )
 
         if self.buy_yes_4h_hist_override_enabled:
@@ -753,8 +750,6 @@ class SolMacroStrategy:
                 missing.append("5m_not_bullish")
             if not rsi_ok:
                 missing.append(f"rsi<{self.buy_yes_ltf_override_rsi_min:.1f}")
-            if not btc_ok:
-                missing.append(f"btc5m<{self.buy_yes_ltf_override_min_btc_5m_pct:+.3f}%")
         if self.buy_yes_4h_hist_override_enabled:
             missing.append("4h_hist_not_rising")
         return False, ",".join(missing)
@@ -1619,19 +1614,13 @@ class SolMacroStrategy:
             elif rsi > 70: rsi_adj =  0.04   # Overbought crash potential
             # Removed: mirror of removed UP bonus
 
-        # BTC-SOL lag — secondary confirmer (reduced weight)
-        # Live data: lag=None = 63% WR, lag=value = 50% WR.
-        # Lag arrives after market partially prices in the move.
-        # Keep as small nudge for threshold markets only; updown markets
-        # apply their own lag adjustment in the scan loop.
+        # BTC-alt lag — REMOVED from alt est_prob calculation 2026-05-22.
+        # Per "alts decided by alt-native indicators" rule, BTC lag must not
+        # adjust alt edge. The prior nudge was data-supported as harmful anyway
+        # (live: lag=None = 63% WR, lag=value = 50% WR — lag arrives after the
+        # market has already priced in the move). Kept as zero for downstream
+        # arithmetic compatibility.
         lag_adj = 0.0
-        corr = ta.correlation
-        if corr.lag_opportunity:
-            if (direction == "UP" and corr.opportunity_direction == "LONG") or \
-               (direction == "DOWN" and corr.opportunity_direction == "SHORT"):
-                lag_adj = min(0.04, abs(corr.opportunity_magnitude) * 0.25)
-            else:
-                lag_adj = -0.02
 
         # ATR-based volatility context
         vol_adj = 0.0
@@ -1803,48 +1792,34 @@ class SolMacroStrategy:
             if not has_updown:
                 logger.info(f"{_brand} strategy: BTC+ALT HTF neutral — sitting out")
                 return []
-            # NEUTRAL alt HTF with updown markets: use alt LTF first.
-            # BTC spike/lag is fallback context only when the alt has no usable HTF side.
-            # Track these trades separately via NEUTRAL_MACRO tag in reason_parts.
+            # NEUTRAL alt HTF: alt-native side ONLY.
+            # 2026-05-21 audit: BTC spike-direction and lag opportunity_direction were
+            # previously allowed to set allowed_side here; that's BTC literally deciding
+            # the alt's direction, which violates "alts decided by alt-native indicators."
+            # BTC spike/lag remain useful for diagnostic logging and downstream catalyst
+            # gating, but they must not pick the alt side. If the alt's own 1h trend has
+            # no bias, sit out.
+            allowed_side = (
+                "LONG" if corr.sol_trend == "BULLISH"
+                else "SHORT" if corr.sol_trend == "BEARISH"
+                else None
+            )
+            _btc_ctx_bits = []
             if corr.btc_spike_detected:
-                # BTC spike but alt hasn't moved → trade the catch-up direction
-                allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
-                logger.info(
-                    f"{_brand}: Macro NEUTRAL, BTC spike detected ({corr.btc_move_5m_pct:+.2f}%). "
-                    f"Trading {_alt_label} catch-up: {allowed_side}"
+                _btc_ctx_bits.append(f"BTC spike {corr.btc_move_5m_pct:+.2f}%")
+            if corr.lag_opportunity:
+                _btc_ctx_bits.append(
+                    f"BTC lag dir={corr.opportunity_direction} mag={abs(corr.opportunity_magnitude):.2f}%"
                 )
-            elif corr.lag_opportunity:
-                _min_lag_mag = self.config.get("min_lag_magnitude_pct", 0.30)
-                _lag_mag = abs(corr.opportunity_magnitude)
-                if _lag_mag >= _min_lag_mag:
-                    allowed_side = corr.opportunity_direction
-                    logger.info(
-                        f"{_brand}: Macro NEUTRAL, strong lag ({_lag_mag:.2f}%) — "
-                        f"using lag direction: {allowed_side}"
-                    )
-                else:
-                    # Weak lag during NEUTRAL — allow but use alt's own 1H bias as direction
-                    allowed_side = "LONG" if corr.sol_trend == "BULLISH" else "SHORT" if corr.sol_trend == "BEARISH" else None
-                    if allowed_side is None:
-                        logger.info(f"{_brand}: Macro NEUTRAL, weak lag, no {_alt_label} bias — sitting out")
-                        return []
-                    logger.info(
-                        f"{_brand}: Macro NEUTRAL, weak lag — using {_alt_label} 1H bias: {allowed_side}"
-                    )
-            else:
-                # No lag, no spike — alt-only direction is weak in chop; optional hard skip.
-                if self.neutral_macro_require_spike_or_lag:
-                    logger.info(
-                        f"{_brand}: Macro NEUTRAL, no BTC spike/lag — sitting out "
-                        f"(neutral_macro_require_spike_or_lag)"
-                    )
-                    return []
-                # No lag, no spike — use alt's own 1H trend as direction
-                allowed_side = "LONG" if corr.sol_trend == "BULLISH" else "SHORT" if corr.sol_trend == "BEARISH" else None
-                if allowed_side is None:
-                    logger.info(f"{_brand}: Macro NEUTRAL, no lag, no {_alt_label} bias — sitting out")
-                    return []
-                logger.info(f"{_brand}: Macro NEUTRAL, no lag — using {_alt_label} 1H bias: {allowed_side}")
+            _btc_ctx = f" [diagnostic: {', '.join(_btc_ctx_bits)}]" if _btc_ctx_bits else ""
+            if allowed_side is None:
+                logger.info(
+                    f"{_brand}: Macro NEUTRAL, no {_alt_label} 1H bias — sitting out{_btc_ctx}"
+                )
+                return []
+            logger.info(
+                f"{_brand}: Macro NEUTRAL, using {_alt_label} 1H bias: {allowed_side}{_btc_ctx}"
+            )
         else:
             # BULLISH or BEARISH alt macro — alt HTF is primary; BTC is secondary.
             # Four-path resolver gates BOTH directions with LTF momentum when its feature
@@ -2180,6 +2155,77 @@ class SolMacroStrategy:
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
             primary_htf_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
+
+            # Alt-native momentum guards for BUY_NO + BUY_YES (mirrors ETH patch at
+            # eth_macro.py:898). 2026-05-21 audit: bearish_dip_default and
+            # bullish_rally_default in the additive side resolver admit without LTF
+            # momentum confirmation. The *_exception paths already require alt MACD
+            # (15m+5m); the defaults do not. Closes the same structural gap ETH had,
+            # symmetric for both sides. Uses the alt's own MACD only — BTC is not
+            # consulted here. Opt-out via config.
+            if (
+                action == "BUY_NO"
+                and self.config.get("buy_no_require_alt_momentum_confirm", True)
+            ):
+                _alt_bear_confirmed = (
+                    sol.macd_5m.crossover == "BEARISH_CROSS"
+                    or (sol.macd_5m.histogram < 0 and not sol.macd_5m.histogram_rising)
+                    or sol.macd_15m.crossover == "BEARISH_CROSS"
+                    or (sol.macd_15m.histogram < 0 and not sol.macd_15m.histogram_rising)
+                )
+                if not _alt_bear_confirmed:
+                    _bump_skip("buy_no_no_alt_momentum_confirm")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="buy_no_no_alt_momentum_confirm",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_macd_5m_hist": float(sol.macd_5m.histogram or 0.0),
+                            "alt_macd_5m_rising": bool(sol.macd_5m.histogram_rising),
+                            "alt_macd_5m_crossover": sol.macd_5m.crossover,
+                            "alt_macd_15m_hist": float(sol.macd_15m.histogram or 0.0),
+                            "alt_macd_15m_rising": bool(sol.macd_15m.histogram_rising),
+                            "alt_macd_15m_crossover": sol.macd_15m.crossover,
+                            "side_source": side_source if "side_source" in locals() else None,
+                        },
+                    )
+                    continue
+            if (
+                action == "BUY_YES"
+                and self.config.get("buy_yes_require_alt_momentum_confirm", True)
+            ):
+                _alt_bull_confirmed = (
+                    sol.macd_5m.crossover == "BULLISH_CROSS"
+                    or (sol.macd_5m.histogram > 0 and sol.macd_5m.histogram_rising)
+                    or sol.macd_15m.crossover == "BULLISH_CROSS"
+                    or (sol.macd_15m.histogram > 0 and sol.macd_15m.histogram_rising)
+                )
+                if not _alt_bull_confirmed:
+                    _bump_skip("buy_yes_no_alt_momentum_confirm")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="buy_yes_no_alt_momentum_confirm",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_macd_5m_hist": float(sol.macd_5m.histogram or 0.0),
+                            "alt_macd_5m_rising": bool(sol.macd_5m.histogram_rising),
+                            "alt_macd_5m_crossover": sol.macd_5m.crossover,
+                            "alt_macd_15m_hist": float(sol.macd_15m.histogram or 0.0),
+                            "alt_macd_15m_rising": bool(sol.macd_15m.histogram_rising),
+                            "alt_macd_15m_crossover": sol.macd_15m.crossover,
+                            "side_source": side_source if "side_source" in locals() else None,
+                        },
+                    )
+                    continue
+
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf if is_updown else "15m",
                 action=action,
@@ -2281,12 +2327,11 @@ class SolMacroStrategy:
                     tf=_updown_tf,
                 )
 
-                # ── BTC minimum dollar move before entering ──
-                # Require BTC to have moved a minimum $ amount to confirm directional momentum.
-                # Bypass for low-correlation assets — if BTC is not driving this asset,
-                # requiring BTC movement incorrectly suppresses valid alt-independent signals.
-                _btc_corr = corr.correlation_1h
-                _low_corr_btc_bypass = float(self.config.get("btc_min_move_low_corr_threshold", 0.30))
+                # 2026-05-22: btc_min_move_dollars gate REMOVED. Previously skipped alt
+                # updown entries when BTC hadn't moved enough in dollars (BTC deciding
+                # alt admission, with a partial low-correlation bypass). Per "alts
+                # decided by alt-native indicators", BTC volatility must not gate alt
+                # entry. Diagnostic-only.
                 _btc_price = corr.btc_price or 0.0
                 _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
                 _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
@@ -2297,18 +2342,7 @@ class SolMacroStrategy:
                     _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
-                    if _btc_corr < _low_corr_btc_bypass:
-                        logger.debug(
-                            f"  {_brand} btc_min_move bypassed (corr={_btc_corr:.2f} < {_low_corr_btc_bypass}) "
-                            f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
-                        )
-                    else:
-                        _bump_skip("btc_min_move_dollars")
-                        logger.debug(
-                            f"  {_brand} skip '{market.question[:40]}' — "
-                            f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
-                        )
-                        continue
+                    reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
 
                 # Skip windows where price has already drifted far from 50/50
                 _sample("entry_price", yes_price)
@@ -2365,6 +2399,12 @@ class SolMacroStrategy:
                         continue
                     reason_parts.append("corr_degraded")
 
+                # 2026-05-22: require_btc_volatility_gate previously skipped alt trades
+                # when BTC was below a volatility floor (BTC deciding alt admission).
+                # Per "alts decided by alt-native indicators" rule, BTC volatility must
+                # not gate alt entry. The flag is preserved for back-compat but is now
+                # diagnostic-only: low BTC volatility is logged in reason_parts and
+                # surfaces in scan diagnostics, never blocks.
                 if self.require_btc_volatility_gate:
                     _abs_btc_move_5m = abs(float(corr.btc_move_5m_pct))
                     _abs_btc_move_15m = abs(float(corr.btc_move_15m_pct))
@@ -2378,45 +2418,10 @@ class SolMacroStrategy:
                         if is_5m
                         else max(_abs_btc_move_5m, _abs_btc_move_15m)
                     )
-                    # Alt-aligned bypass: don't suppress alt-driven setups when BTC is
-                    # quiet but the alt's own 1h trend matches the intended direction.
-                    # Resurrects the BUY_NO short side in bear markets where BTC is flat
-                    # but the alt is independently trending down.
-                    _alt_aligned_bypass = self._flat_btc_gate_bypassed(
-                        action=action,
-                        alt_1h_trend=getattr(mtt, "h1_trend", "NEUTRAL"),
-                    )
-                    if (
-                        _btc_move_for_gate < _btc_min_move_pct
-                        and not corr.btc_spike_detected
-                        and not corr.lag_opportunity
-                        and not _alt_aligned_bypass
-                    ):
-                        _bump_skip("flat_btc_no_lag")
-                        if action == "BUY_NO":
-                            self._emit_buy_no_skip(
-                                market=market,
-                                bankroll=bankroll,
-                                payload=self._make_buy_no_skip_payload(
-                                    market=market,
-                                    skip_reason="flat_btc_no_lag",
-                                    window_size=_updown_tf if is_updown else "15m",
-                                    yes_price=yes_price,
-                                    edge=0.0,
-                                    effective_min_edge=0.0,
-                                    rsi=sol.rsi_14,
-                                    htf_bias=primary_htf_bias,
-                                    signal_reason=" | ".join(reason_parts),
-                                    alt_1h_trend=mtt.h1_trend,
-                                ),
-                                counts=buy_no_skip_counts,
-                                last_sample=last_buy_no_skip_sample,
-                            )
-                        logger.info(
-                            f"  {_brand} skip '{market.question[:40]}' — BTC move {_btc_move_for_gate:.3f}% "
-                            f"< {_btc_min_move_pct:.3f}% and no spike/lag"
+                    if _btc_move_for_gate < _btc_min_move_pct:
+                        reason_parts.append(
+                            f"diag_flat_btc({_btc_move_for_gate:.3f}%<{_btc_min_move_pct:.3f}%)"
                         )
-                        continue
 
                 # Alt 1H context is diagnostic-only here. Keep logging the disagreement so
                 # scans remain explainable, but do not block either side on this signal.
@@ -2596,33 +2601,17 @@ class SolMacroStrategy:
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
 
-                    # BTC catalyst gate: require spike or lag in 5m markets to avoid flat-market guesses
-                    _require_catalyst_5m = bool(self.config.get("require_btc_catalyst_5m", False))
-                    if _require_catalyst_5m and not corr.lag_opportunity and not corr.btc_spike_detected:
-                        _bump_skip("no_btc_catalyst_5m")
-                        log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="5m",
-                            side=allowed_side, action=action,
-                            reason="no_btc_catalyst_5m", market=market,
-                            yes_price=yes_price, est_prob_up=est_prob_up,
-                            htf_bias=primary_htf_bias,
-                            stage="btc_catalyst_5m",
-                            context={
-                                "btc_spike": bool(corr.btc_spike_detected),
-                                "lag_opportunity": bool(corr.lag_opportunity),
-                                **build_market_context(
-                                    asset_spot=sol.current_price,
-                                    btc_spot=corr.btc_price,
-                                    rsi_14=sol.rsi_14,
-                                    atr_14=sol.atr_14,
-                                ),
-                            },
+                    # 2026-05-22: require_btc_catalyst_5m gate REMOVED.
+                    # Previously this skipped 5m alt entries unless BTC was spiking or
+                    # had a lag opportunity — i.e. BTC was deciding whether the alt
+                    # trade could happen. Per "alts decided by alt-native indicators",
+                    # admission must not depend on BTC state. The `require_btc_catalyst_5m`
+                    # config key is now vestigial; BTC spike/lag still appear in scan
+                    # diagnostics for observability.
+                    if bool(self.config.get("require_btc_catalyst_5m", False)):
+                        reason_parts.append(
+                            f"diag_btc_catalyst(spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
                         )
-                        logger.info(
-                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"no BTC catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
-                        )
-                        continue
 
                     # 5m MACD — primary entry signal for 5m markets
                     # ta.sol.macd_5m exists on SOLAnalysis
@@ -2893,35 +2882,18 @@ class SolMacroStrategy:
                                 f"(hist={_macd_1h.histogram:.4f})"
                             )
 
-                    # When no LTF confirmation, require a BTC catalyst to avoid pure macro-guess entries
-                    if ltf_strength == 0.0:
-                        _require_cat_15m = bool(self.config.get("require_btc_catalyst_15m_when_unconfirmed", False))
-                        if _require_cat_15m and not corr.lag_opportunity and not corr.btc_spike_detected:
-                            _bump_skip("no_btc_catalyst_15m_unconfirmed")
-                            log_rejected_candidate(
-                                strategy=self._signal_strategy_name, window=window_label,
-                                side=allowed_side, action=action,
-                                reason="no_btc_catalyst_15m_unconfirmed", market=market,
-                                yes_price=yes_price, est_prob_up=est_prob_up,
-                                htf_bias=primary_htf_bias,
-                                stage="btc_catalyst_5m",
-                                context={
-                                    "btc_spike": bool(corr.btc_spike_detected),
-                                    "lag_opportunity": bool(corr.lag_opportunity),
-                                    "ltf_strength": float(ltf_strength),
-                                    **build_market_context(
-                                        asset_spot=sol.current_price,
-                                        btc_spot=corr.btc_price,
-                                        rsi_14=sol.rsi_14,
-                                        atr_14=sol.atr_14,
-                                    ),
-                                },
-                            )
-                            logger.info(
-                                f"  {_alt_label} [{window_label}] skip '{market.question[:40]}' — "
-                                f"no LTF + no catalyst (spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
-                            )
-                            continue
+                    # 2026-05-22: require_btc_catalyst_15m_when_unconfirmed REMOVED.
+                    # Previously, when LTF was unconfirmed, skipped 15m alt entries
+                    # unless BTC was spiking or had a lag opportunity (BTC gating
+                    # admission). Per "alts decided by alt-native indicators", removed.
+                    # Vestigial config key logged as diagnostic only.
+                    if ltf_strength == 0.0 and bool(
+                        self.config.get("require_btc_catalyst_15m_when_unconfirmed", False)
+                    ):
+                        reason_parts.append(
+                            f"diag_btc_catalyst_unconfirmed(spike={corr.btc_spike_detected} "
+                            f"lag={corr.lag_opportunity})"
+                        )
 
                     # LTF confirmation — PRIMARY probability driver (increased from 0.18)
                     ltf_adj = ltf_strength * ltf_weight

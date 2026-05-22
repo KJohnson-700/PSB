@@ -581,53 +581,31 @@ class ETHMacroStrategy(SolMacroStrategy):
                         _short_override_reason,
                     )
         else:
+            # ETH 1H NEUTRAL: alt has no usable bias → sit out.
+            # 2026-05-21 audit: previously this block had THREE BTC-decides-side
+            # paths (BTC spike → catch-up side, lag_opportunity → opportunity_direction,
+            # and btc_htf_bias → LONG/SHORT fallback). All violated the "alts decided
+            # by alt-native indicators" rule. BTC spike/lag/HTF stay useful as
+            # diagnostic context but must not pick ETH's side.
+            _btc_ctx_bits = []
             if corr.btc_spike_detected:
-                allowed_side = "LONG" if corr.btc_move_5m_pct > 0 else "SHORT"
-                skip_btc_follow_1h = True
-                logger.info(
-                    "ETH Macro: ETH 1H NEUTRAL, BTC spike (%+.2f%%) — fallback catch-up side %s",
-                    corr.btc_move_5m_pct,
-                    allowed_side,
+                _btc_ctx_bits.append(f"BTC spike {corr.btc_move_5m_pct:+.2f}%")
+            if corr.lag_opportunity:
+                _btc_ctx_bits.append(
+                    f"BTC lag dir={corr.opportunity_direction} mag={abs(corr.opportunity_magnitude):.2f}%"
                 )
-            elif corr.lag_opportunity:
-                _min_lag_mag = float(self.config.get("min_lag_magnitude_pct", 0.30))
-                _lag_mag = abs(corr.opportunity_magnitude)
-                if _lag_mag >= _min_lag_mag:
-                    allowed_side = corr.opportunity_direction
-                    skip_btc_follow_1h = True
-                    logger.info(
-                        "ETH Macro: ETH 1H NEUTRAL, lag opp mag=%.2f%% — fallback side %s",
-                        _lag_mag,
-                        allowed_side,
-                    )
-                else:
-                    logger.info(
-                        "ETH Macro: ETH 1H NEUTRAL, weak lag — sitting out"
-                    )
-                    self._record_eth_abort(
-                        "neutral_weak_lag_no_alt_bias",
-                        {"markets_considered": len(eth_markets)},
-                    )
-                    return []
-            elif (
-                btc_htf_bias in ("BULLISH", "BEARISH")
-                and not self.neutral_macro_require_spike_or_lag
-            ):
-                allowed_side = "LONG" if btc_htf_bias == "BULLISH" else "SHORT"
-                logger.info(
-                    "ETH Macro: ETH 1H NEUTRAL — BTC HTF fallback side %s",
-                    allowed_side,
-                )
-            else:
-                logger.info(
-                    "ETH Macro: ETH 1H NEUTRAL, no BTC spike/lag "
-                    "(neutral_macro_require_spike_or_lag) — sitting out"
-                )
-                self._record_eth_abort(
-                    "neutral_macro_no_catalyst",
-                    {"markets_considered": len(eth_markets)},
-                )
-                return []
+            if btc_htf_bias in ("BULLISH", "BEARISH"):
+                _btc_ctx_bits.append(f"BTC HTF={btc_htf_bias}")
+            _btc_ctx = f" [diagnostic: {', '.join(_btc_ctx_bits)}]" if _btc_ctx_bits else ""
+            logger.info(
+                "ETH Macro: ETH 1H NEUTRAL — sitting out (alt-native only)%s",
+                _btc_ctx,
+            )
+            self._record_eth_abort(
+                "neutral_alt_no_bias",
+                {"markets_considered": len(eth_markets), "btc_ctx": _btc_ctx},
+            )
+            return []
 
         if (
             btc_ta
@@ -897,6 +875,79 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
+
+            # ETH-native momentum guards for BUY_NO + BUY_YES (mirrors BTC quant_flip).
+            # Live audit 2026-05-21: alt_1h_legacy_btc_mode BUY_NO entries in
+            # bearish__bearish__bull regime lost -$26.37 across 37 trades (27% WR)
+            # because ETH's alt-derived BEARISH view fired without ETH-native price
+            # confirmation. Per rule "alts decided by alt-native indicators": require
+            # ETH MACD (5m or 15m) to confirm the direction before admitting either
+            # side. Symmetric guard added so BUY_YES has the same protection even
+            # though the live evidence was BUY_NO-heavy this week. BTC is intentionally
+            # not consulted here.
+            if (
+                action == "BUY_NO"
+                and self.config.get("buy_no_require_eth_momentum_confirm", True)
+            ):
+                _eth_bear_confirmed = (
+                    eth.macd_5m.crossover == "BEARISH_CROSS"
+                    or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
+                    or eth.macd_15m.crossover == "BEARISH_CROSS"
+                    or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
+                )
+                if not _eth_bear_confirmed:
+                    _bump_skip("buy_no_no_eth_momentum_confirm")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason="buy_no_no_eth_momentum_confirm",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "eth_macd_5m_hist": float(eth.macd_5m.histogram or 0.0),
+                            "eth_macd_5m_rising": bool(eth.macd_5m.histogram_rising),
+                            "eth_macd_5m_crossover": eth.macd_5m.crossover,
+                            "eth_macd_15m_hist": float(eth.macd_15m.histogram or 0.0),
+                            "eth_macd_15m_rising": bool(eth.macd_15m.histogram_rising),
+                            "eth_macd_15m_crossover": eth.macd_15m.crossover,
+                            "side_source": side_source,
+                        },
+                    )
+                    continue
+            if (
+                action == "BUY_YES"
+                and self.config.get("buy_yes_require_eth_momentum_confirm", True)
+            ):
+                _eth_bull_confirmed = (
+                    eth.macd_5m.crossover == "BULLISH_CROSS"
+                    or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
+                    or eth.macd_15m.crossover == "BULLISH_CROSS"
+                    or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
+                )
+                if not _eth_bull_confirmed:
+                    _bump_skip("buy_yes_no_eth_momentum_confirm")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason="buy_yes_no_eth_momentum_confirm",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "eth_macd_5m_hist": float(eth.macd_5m.histogram or 0.0),
+                            "eth_macd_5m_rising": bool(eth.macd_5m.histogram_rising),
+                            "eth_macd_5m_crossover": eth.macd_5m.crossover,
+                            "eth_macd_15m_hist": float(eth.macd_15m.histogram or 0.0),
+                            "eth_macd_15m_rising": bool(eth.macd_15m.histogram_rising),
+                            "eth_macd_15m_crossover": eth.macd_15m.crossover,
+                            "side_source": side_source,
+                        },
+                    )
+                    continue
+
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf,
                 action=action,
@@ -978,8 +1029,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 )
                 continue
 
-            _btc_corr = corr.correlation_1h
-            _low_corr_btc_bypass = float(self.config.get("btc_min_move_low_corr_threshold", 0.30))
+            # 2026-05-22: btc_min_move_dollars gate REMOVED. Previously skipped ETH
+            # entries when BTC hadn't moved enough in dollars (BTC deciding ETH
+            # admission, with a partial alt-aligned bypass). Per "alts decided by
+            # alt-native indicators", BTC volatility must not gate ETH entry.
+            # Diagnostic-only: log low-BTC-move context in reason_parts.
             _btc_price = corr.btc_price or 0.0
             _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
             _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
@@ -989,28 +1043,8 @@ class ETHMacroStrategy(SolMacroStrategy):
             else:
                 _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                 _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
-            # Alt-aligned bypass: when ETH itself has a 1h trend matching the intended
-            # side, don't require BTC to move. The BTC-move gate is a noise filter for
-            # BTC-derived signals; alt-driven setups should be allowed through.
-            _alt_aligned_bypass = False
-            if getattr(self, "flat_btc_alt_aligned_bypass", True):
-                if allowed_side == "SHORT" and alt_1h_trend == "BEARISH":
-                    _alt_aligned_bypass = True
-                elif allowed_side == "LONG" and alt_1h_trend == "BULLISH":
-                    _alt_aligned_bypass = True
-            if _btc_price > 0 and _btc_move < _btc_min_move and not _alt_aligned_bypass:
-                if _btc_corr < _low_corr_btc_bypass:
-                    logger.debug(
-                        f"  ETH btc_min_move bypassed (corr={_btc_corr:.2f} < {_low_corr_btc_bypass}) "
-                        f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
-                    )
-                else:
-                    _bump_skip("btc_min_move_dollars")
-                    logger.debug(
-                        f"  ETH skip '{market.question[:40]}' — "
-                        f"BTC moved ${_btc_move:.0f} < min ${_btc_min_move:.0f}"
-                    )
-                    continue
+            if _btc_price > 0 and _btc_move < _btc_min_move:
+                reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
 
             _sample("entry_price", yes_price)
             if yes_price < 0.20 or yes_price > 0.80:
@@ -1869,17 +1903,13 @@ class ETHMacroStrategy(SolMacroStrategy):
                     )
                 continue
 
-            # Centered-price gate: near 50/50 entries need a BTC catalyst and a higher edge bar.
+            # Centered-price gate: near 50/50 entries need a higher edge bar.
+            # 2026-05-22: BTC catalyst requirement (center_price_requires_catalyst)
+            # REMOVED — was gating ETH admission on BTC spike/lag. The higher
+            # min-edge bar for centered prices remains (alt-native edge check).
             if self.center_price_band > 0:
                 _is_centered = abs(yes_price - 0.50) <= self.center_price_band
                 if _is_centered:
-                    if (
-                        self.center_price_requires_catalyst
-                        and not corr.lag_opportunity
-                        and not corr.btc_spike_detected
-                    ):
-                        _bump_skip("centered_price_no_catalyst")
-                        continue
                     _center_min_edge = max(effective_min_edge, self.min_edge_when_centered)
                     if edge < _center_min_edge:
                         _bump_skip("centered_price_edge_below_min")
