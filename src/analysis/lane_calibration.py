@@ -54,6 +54,13 @@ PRIOR_B = 3.0
 DEV_FLOOR = 0.005          # |stated_prob - 0.5| guard before computing a_obs
 SCHEMA_VERSION = 1
 
+# β_mean veto: lanes with established losing history get forced to 0.5
+# (zero edge → rejected by lane_min_edge) regardless of α magnitude.
+# Defaults target the death-spiral pattern: high α + low β_mean from
+# directionally-wrong calibration drift. Override via constructor.
+BETA_VETO_MAX_MEAN = 0.40
+BETA_VETO_MIN_N = 30
+
 
 @dataclass
 class LanePosterior:
@@ -84,10 +91,24 @@ class LaneCalibrator:
         *,
         shadow_mode: bool = True,
         min_samples_to_apply: int = 0,
+        beta_veto_max_mean: float = BETA_VETO_MAX_MEAN,
+        beta_veto_min_n: int = BETA_VETO_MIN_N,
+        per_lane_thresholds_enabled: bool = False,
+        per_lane_thresholds: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         self.path: Path = Path(path) if path is not None else DEFAULT_POSTERIORS_PATH
         self.shadow_mode: bool = bool(shadow_mode)
         self.min_samples_to_apply: int = max(0, int(min_samples_to_apply or 0))
+        # β_mean veto thresholds. Set max_mean=0.0 or min_n<=0 to disable.
+        self.beta_veto_max_mean: float = float(beta_veto_max_mean)
+        self.beta_veto_min_n: int = int(beta_veto_min_n)
+        # Per-lane threshold overrides derived from ghost data. Off by default
+        # — the operator inspects the recommendations (lane_thresholds.json)
+        # and flips per_lane_thresholds_enabled to True when satisfied.
+        self.per_lane_thresholds_enabled: bool = bool(per_lane_thresholds_enabled)
+        self.per_lane_thresholds: Dict[str, Dict[str, Any]] = dict(
+            per_lane_thresholds or {}
+        )
         self._posteriors: Dict[str, LanePosterior] = {}
         self._load()
 
@@ -183,19 +204,68 @@ class LaneCalibrator:
             return hi
         return value
 
+    def _beta_mean(self, p: LanePosterior) -> float:
+        """Posterior Beta mean = realized win rate proxy."""
+        total = p.beta_a + p.beta_b
+        if total <= 0:
+            return PRIOR_A / (PRIOR_A + PRIOR_B)
+        return p.beta_a / total
+
+    def _is_vetoed(self, p: Optional[LanePosterior]) -> bool:
+        """Lane has enough samples AND realized WR below the veto floor.
+
+        Note: this signature can't see lane_id, so it only checks the
+        live-β floor. Per-lane overrides are applied separately via
+        ``_is_vetoed_for_lane`` which DOES have the key.
+        """
+        if p is None or p.n <= 0:
+            return False
+        if self.beta_veto_min_n <= 0 or self.beta_veto_max_mean <= 0.0:
+            return False
+        if p.n < self.beta_veto_min_n:
+            return False
+        return self._beta_mean(p) < self.beta_veto_max_mean
+
+    def _is_vetoed_for_lane(self, lane_id: str) -> bool:
+        """Per-lane-aware veto check. Consults ghost-derived overrides when
+        ``per_lane_thresholds_enabled`` is True; otherwise behaves identically
+        to ``_is_vetoed``.
+
+        Three outcomes per lane when per-lane mode is on:
+          1. Override marks lane as ``veto_recommended: True`` → VETO
+             (regardless of live β state — ghost says this lane loses)
+          2. Override exists with custom ``recommended_max_mean`` → use that
+             instead of the global floor against live β
+          3. No override → fall back to global β-veto check
+        """
+        p = self._posteriors.get(lane_id)
+        if not self.per_lane_thresholds_enabled:
+            return self._is_vetoed(p)
+        override = self.per_lane_thresholds.get(lane_id)
+        if override is None:
+            return self._is_vetoed(p)
+        # Hard veto if ghost data flags this lane explicitly.
+        if bool(override.get("veto_recommended")):
+            return True
+        # Otherwise apply a (possibly per-lane) β floor against live data.
+        if p is None or p.n <= 0:
+            return False
+        max_mean = float(
+            override.get("recommended_max_mean", self.beta_veto_max_mean)
+        )
+        if max_mean <= 0.0:
+            return False
+        if p.n < self.beta_veto_min_n:
+            return False
+        return self._beta_mean(p) < max_mean
+
     def _shrunk_alpha(self, p: LanePosterior) -> float:
         """Blend ``alpha_ewma`` toward identity (1.0) when sample is small."""
         if p.n >= SHRINK_N:
-            # Asymmetric clamp: positive alpha (over-predicting YES) capped at 1.0x;
-            # negative alpha (under-predicting YES) allowed up to 2.5x.
-            if p.alpha_ewma < 1.0:
-                return 1.0
-            return self._clamp(p.alpha_ewma, 1.0, ALPHA_CLAMP_HI)
+            return self._clamp(p.alpha_ewma, ALPHA_CLAMP_LO, ALPHA_CLAMP_HI)
         w = p.n / SHRINK_N
         blended = w * p.alpha_ewma + (1.0 - w) * 1.0
-        if blended < 1.0:
-            return 1.0
-        return self._clamp(blended, 1.0, ALPHA_CLAMP_HI)
+        return self._clamp(blended, ALPHA_CLAMP_LO, ALPHA_CLAMP_HI)
 
     # ---------------------------------------------------------------- API
 
@@ -209,6 +279,48 @@ class LaneCalibrator:
         if p.n < self.min_samples_to_apply:
             return 1.0
         return self._shrunk_alpha(p)
+
+    def is_vetoed(self, lane_id: str) -> bool:
+        """Public veto check. True if lane has established losing WR.
+
+        When ``per_lane_thresholds_enabled`` is True, also consults the
+        ghost-derived per-lane overrides loaded from ``lane_thresholds.json``.
+        """
+        if not lane_id:
+            return False
+        return self._is_vetoed_for_lane(lane_id)
+
+    def record_ghost(
+        self,
+        lane_id: str,
+        win: bool,
+        *,
+        weight: float = 0.5,
+    ) -> None:
+        """Partial-weight β update from a settled ghost (would-have-been) outcome.
+
+        Self-healing path for β-vetoed lanes: vetoed lanes stop getting live
+        trades, so β would freeze and the veto would persist indefinitely. By
+        feeding ghost outcomes at a reduced weight (default 0.5x of a live
+        trade), vetoed lanes can climb back above the veto threshold if their
+        would-have-been WR genuinely recovers — but ghost data can't dominate
+        live data 1:1 because there's no slippage / fills / exit-timing risk.
+
+        No α update — ghost records don't carry the stated_est_prob /
+        realized_pct pair in the same form. Only β moves.
+        """
+        lane = str(lane_id or "").strip()
+        if not lane:
+            return
+        w = max(0.0, float(weight))
+        if w <= 0.0:
+            return
+        p = self._posteriors.setdefault(lane, LanePosterior.fresh())
+        if win:
+            p.beta_a += w
+        else:
+            p.beta_b += w
+        p.n = int(p.n)  # n counts only live trades; ghost contributes to β not n
 
     def raw_alpha(self, lane_id: str) -> Optional[float]:
         """The unshrunk, unclamped EWMA value (or None if no samples)."""
@@ -229,6 +341,7 @@ class LaneCalibrator:
                 "beta_b": PRIOR_B,
                 "beta_mean": PRIOR_A / (PRIOR_A + PRIOR_B),
                 "min_samples_to_apply": self.min_samples_to_apply,
+                "vetoed": False,
             }
         return {
             "n": p.n,
@@ -236,8 +349,9 @@ class LaneCalibrator:
             "alpha_raw": p.alpha_ewma,
             "beta_a": p.beta_a,
             "beta_b": p.beta_b,
-            "beta_mean": p.beta_a / (p.beta_a + p.beta_b),
+            "beta_mean": self._beta_mean(p),
             "min_samples_to_apply": self.min_samples_to_apply,
+            "vetoed": self._is_vetoed(p),
         }
 
     def calibrate(self, lane_id: str, raw_est_prob: float) -> float:
@@ -250,6 +364,11 @@ class LaneCalibrator:
         try:
             p_raw = float(raw_est_prob)
         except (TypeError, ValueError):
+            return 0.5
+        # β_mean veto runs regardless of shadow_mode — lanes with established
+        # losing WR get forced to 0.5 (zero edge → lane_min_edge reject) until
+        # WR recovers. Breaks the α-inflation death spiral on hot losers.
+        if self.is_vetoed(lane_id):
             return 0.5
         if self.shadow_mode:
             return p_raw

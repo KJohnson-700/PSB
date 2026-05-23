@@ -390,11 +390,13 @@ class RiskManager:
             return False, "Emergency stop activated"
         if self._should_reset_daily():
             self._reset_daily()
-        if (
-            self.bankroll > 0
-            and self.daily_pnl < -self.bankroll * self.daily_loss_limit
-        ):
-            return False, f"Daily loss limit reached: {self.daily_pnl:.2f}"
+        # Only enforce daily loss limit in live trading — paper/ghost sessions need the data
+        if not self.config.get("trading", {}).get("dry_run", True):
+            if (
+                self.bankroll > 0
+                and self.daily_pnl < -self.bankroll * self.daily_loss_limit
+            ):
+                return False, f"Daily loss limit reached: {self.daily_pnl:.2f}"
         if self.daily_trades >= self.max_trades_per_day:
             return False, "Daily trade limit reached"
 

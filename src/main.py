@@ -719,21 +719,121 @@ class PolyBot:
         min_samples_live = max(
             0, int(cal_cfg.get("min_samples_to_apply_live", 15) or 0)
         )
+        # β_mean veto thresholds — config-overridable. Defaults set in
+        # lane_calibration.py (max_mean=0.40, min_n=30). Set max_mean=0 or
+        # min_n=0 in config to disable.
+        from src.analysis.lane_calibration import (
+            BETA_VETO_MAX_MEAN as _DEFAULT_BETA_VETO_MAX_MEAN,
+            BETA_VETO_MIN_N as _DEFAULT_BETA_VETO_MIN_N,
+        )
+        beta_veto_max_mean = float(
+            cal_cfg.get("beta_veto_max_mean", _DEFAULT_BETA_VETO_MAX_MEAN)
+        )
+        beta_veto_min_n = int(
+            cal_cfg.get("beta_veto_min_n", _DEFAULT_BETA_VETO_MIN_N) or 0
+        )
+        # Per-lane threshold overrides (ghost-derived). Off by default —
+        # operator inspects lane_thresholds.json then flips
+        # `lane_calibration.per_lane_thresholds.enabled: true` in config.
+        plt_cfg = (cal_cfg.get("per_lane_thresholds") or {})
+        plt_enabled = bool(plt_cfg.get("enabled", False))
+        per_lane_thresholds: Dict[str, Any] = {}
+        if plt_enabled:
+            try:
+                from src.analysis.lane_thresholds import (
+                    load_lane_thresholds,
+                    DEFAULT_THRESHOLDS_PATH,
+                )
+                path_str = plt_cfg.get("path") or str(DEFAULT_THRESHOLDS_PATH)
+                per_lane_thresholds = load_lane_thresholds(Path(path_str))
+                logging.info(
+                    "lane_calibration: per-lane overrides ENABLED, loaded %d entries",
+                    len(per_lane_thresholds),
+                )
+            except Exception as exc:  # noqa: BLE001 — init must not block startup
+                logging.warning(
+                    "lane_calibration: per-lane override load failed: %s", exc
+                )
+                per_lane_thresholds = {}
         try:
             return LaneCalibrator(
                 shadow_mode=shadow,
                 min_samples_to_apply=(0 if shadow else min_samples_live),
+                beta_veto_max_mean=beta_veto_max_mean,
+                beta_veto_min_n=beta_veto_min_n,
+                per_lane_thresholds_enabled=plt_enabled,
+                per_lane_thresholds=per_lane_thresholds,
             )
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)
             return LaneCalibrator(shadow_mode=True, min_samples_to_apply=0)
 
     def _refresh_ghost_calibration_state(self, *, force: bool = False) -> None:
-        """Auto-settle rejected candidates and publish a runtime status snapshot."""
+        """Auto-settle rejected candidates and publish a runtime status snapshot.
+
+        Passes the calibrator into ``settle_rejected_candidates`` so newly-settled
+        ghosts feed β at reduced weight — the self-healing path for β-vetoed
+        lanes. Weight is config-overridable via ``lane_calibration.ghost_weight``
+        (default 0.5).
+        """
         now_mono = time.monotonic()
         if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 60.0:
             return
-        settle_summary = settle_rejected_candidates()
+        cal_cfg = (self.config.get("lane_calibration") or {})
+        ghost_weight = float(cal_cfg.get("ghost_weight", 0.5) or 0.0)
+        cal = getattr(self, "lane_calibrator", None)
+        settle_summary = settle_rejected_candidates(
+            calibrator=cal,
+            ghost_weight=ghost_weight,
+        )
+        # Persist β/α updates so the self-heal survives restarts.
+        if cal is not None and settle_summary.get("ghost_beta_updates", 0) > 0:
+            try:
+                cal._flush()
+            except Exception as _fe:  # noqa: BLE001 — telemetry only
+                logging.warning("calibrator flush after ghost-feed skipped: %s", _fe)
+        # Periodic per-lane threshold recompute (gated by config; default off).
+        # Reruns the ghost-derived threshold derivation, writes lane_thresholds.json,
+        # and hot-reloads it into the calibrator. Independent of whether the
+        # overrides are *applied* — derivation can run for inspection-only mode.
+        plt_cfg = (cal_cfg.get("per_lane_thresholds") or {})
+        if bool(plt_cfg.get("recompute_on_settle", False)) and settle_summary.get(
+            "ghost_beta_updates", 0
+        ) >= int(plt_cfg.get("recompute_min_new_settles", 25) or 25):
+            try:
+                from src.analysis.lane_thresholds import (
+                    compute_lane_thresholds,
+                    write_lane_thresholds,
+                    load_lane_thresholds,
+                    DEFAULT_THRESHOLDS_PATH,
+                )
+                payload = compute_lane_thresholds(
+                    min_bucket_n=int(plt_cfg.get("min_bucket_n", 100) or 100),
+                    wr_veto_threshold=float(
+                        plt_cfg.get("wr_veto_threshold", 0.40) or 0.40
+                    ),
+                    recommended_max_mean=float(
+                        plt_cfg.get("recommended_max_mean", 0.40) or 0.40
+                    ),
+                )
+                tpath = Path(plt_cfg.get("path") or str(DEFAULT_THRESHOLDS_PATH))
+                write_lane_thresholds(payload, path=tpath)
+                # Hot-reload into the live calibrator only if overrides are
+                # actually enabled — otherwise just write the file for review.
+                if bool(plt_cfg.get("enabled", False)) and cal is not None:
+                    cal.per_lane_thresholds = load_lane_thresholds(tpath)
+                    logging.info(
+                        "lane_thresholds recomputed and hot-reloaded "
+                        "(%d lanes)", len(cal.per_lane_thresholds)
+                    )
+                else:
+                    logging.info(
+                        "lane_thresholds recomputed (inspection-only mode, "
+                        "%d lane buckets); enable via config to apply",
+                        len(payload.get("thresholds", {})),
+                    )
+            except Exception as _te:  # noqa: BLE001 — telemetry only
+                logging.warning("lane_thresholds recompute skipped: %s", _te)
         status = build_ghost_calibration_status()
         status["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
         status["last_settle_summary"] = settle_summary
@@ -741,10 +841,12 @@ class PolyBot:
         self._last_ghost_calibration_refresh_monotonic = now_mono
         if settle_summary.get("newly_settled", 0):
             logging.info(
-                "Rejected-candidate tracker settled %s new candidates (unresolved=%s total_settled=%s)",
+                "Rejected-candidate tracker settled %s new candidates "
+                "(unresolved=%s total_settled=%s ghost_β_updates=%s)",
                 settle_summary.get("newly_settled", 0),
                 status.get("unresolved", 0),
                 status.get("total_settled", 0),
+                settle_summary.get("ghost_beta_updates", 0),
             )
 
     def _validate_lane_calibration_runtime(self) -> None:
@@ -1437,6 +1539,53 @@ class PolyBot:
             return self.bnb_exposure_manager
         return getattr(self, "weather_exposure_manager", self.event_exposure_manager)
 
+    def _log_closed_trade_for_calibration(self, trade_id: str) -> None:
+        """Write a calibration-log row + update lane posteriors for one closed trade.
+
+        Best-effort; never raises into the caller. Used by both the take-profit/
+        stop-loss exit path and the market-resolution exit path so trades.jsonl
+        never undercounts vs the paper-session summary.
+        """
+        try:
+            closed_row = next(
+                (
+                    t
+                    for t in reversed(self.journal.closed_trades)
+                    if t.get("trade_id") == trade_id
+                ),
+                None,
+            )
+            if closed_row is None:
+                return
+            record = build_record_from_closed_trade(
+                closed_row, session_id=self.journal.session_id
+            )
+            cal = getattr(self, "lane_calibrator", None)
+            if cal is not None:
+                try:
+                    snap = cal.record(
+                        lane_id=record.get("lane_id") or "",
+                        stated_est_prob=record.get("stated_est_prob"),
+                        realized_pct=record.get("realized_pct") or 0.0,
+                        win=bool(record.get("win")),
+                    )
+                    record["posterior_n"] = snap.get("n")
+                    record["posterior_mean"] = round(
+                        snap.get("beta_mean") or 0.0, 6
+                    )
+                    record["alpha_used"] = round(snap.get("alpha") or 1.0, 6)
+                    record["alpha_raw"] = (
+                        round(snap["alpha_raw"], 6)
+                        if snap.get("alpha_raw") is not None
+                        else None
+                    )
+                    record["shadow_mode"] = bool(cal.shadow_mode)
+                except Exception as _pe:  # noqa: BLE001
+                    logging.warning("lane_calibrator.record skipped: %s", _pe)
+            append_calibration_record(record)
+        except Exception as _cal_exc:  # noqa: BLE001 — telemetry only
+            logging.warning("calibration_log skipped: %s", _cal_exc)
+
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
         """Apply realized PnL to paper/live bankroll with a hard floor at zero."""
         self.bankroll = max(0.0, float(self.bankroll) + float(pnl))
@@ -1474,6 +1623,10 @@ class PolyBot:
                     window_size=window,
                 )
                 self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
+                # Phase 0 calibration log + Phase 6 posterior update for
+                # market-resolution exits. Without this, trades.jsonl
+                # silently undercounts vs the paper-session summary.
+                self._log_closed_trade_for_calibration(s.get("trade_id", ""))
 
             crypto_settled = [
                 s
@@ -1575,56 +1728,7 @@ class PolyBot:
                         bankroll=self.bankroll,
                         reason=exit_decision.reason,
                     )
-                    # Phase 0 calibration log + Phase 6 posterior update — best-effort,
-                    # never raises. Locate the just-closed trade by id (defensive vs
-                    # the latest append in case concurrent exits land out of order
-                    # despite the execution lock).
-                    try:
-                        closed_row = next(
-                            (
-                                t
-                                for t in reversed(self.journal.closed_trades)
-                                if t.get("trade_id") == exit_decision.position_id
-                            ),
-                            None,
-                        )
-                        if closed_row is not None:
-                            record = build_record_from_closed_trade(
-                                closed_row, session_id=self.journal.session_id
-                            )
-                            # Phase 6 shadow: update per-lane posteriors. The
-                            # ``record()`` call runs even in shadow mode; only
-                            # ``calibrate()`` is gated. Snapshot returned data
-                            # populates the calibration-log row's telemetry.
-                            cal = getattr(self, "lane_calibrator", None)
-                            if cal is not None:
-                                try:
-                                    snap = cal.record(
-                                        lane_id=record.get("lane_id") or "",
-                                        stated_est_prob=record.get("stated_est_prob"),
-                                        realized_pct=record.get("realized_pct") or 0.0,
-                                        win=bool(record.get("win")),
-                                    )
-                                    record["posterior_n"] = snap.get("n")
-                                    record["posterior_mean"] = round(
-                                        snap.get("beta_mean") or 0.0, 6
-                                    )
-                                    record["alpha_used"] = round(
-                                        snap.get("alpha") or 1.0, 6
-                                    )
-                                    record["alpha_raw"] = (
-                                        round(snap["alpha_raw"], 6)
-                                        if snap.get("alpha_raw") is not None
-                                        else None
-                                    )
-                                    record["shadow_mode"] = bool(cal.shadow_mode)
-                                except Exception as _pe:  # noqa: BLE001
-                                    logging.warning(
-                                        "lane_calibrator.record skipped: %s", _pe
-                                    )
-                            append_calibration_record(record)
-                    except Exception as _cal_exc:  # noqa: BLE001 — telemetry only
-                        logging.warning("calibration_log skipped: %s", _cal_exc)
+                    self._log_closed_trade_for_calibration(exit_decision.position_id)
                     if exit_decision.position_id in self.risk_manager.active_positions:
                         del self.risk_manager.active_positions[
                             exit_decision.position_id

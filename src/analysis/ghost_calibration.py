@@ -355,6 +355,47 @@ def compute_would_be(
     }
 
 
+def _ghost_to_live_lane_keys(rec: Dict[str, Any]) -> List[str]:
+    """Map a rejected/ghost record's lane_id to the live lane_id key(s) that
+    self-healing should update.
+
+    Ghost records carry lane_id like ``bitcoin|5m|down|bearish|rejected`` or
+    ``sol_macro|5m|down|bearish|rejected`` (single-segment regime tag, family
+    always ``rejected``). Live trades use ``bitcoin|5m|down|bearish|standard``
+    (BTC: single-segment regime, varied family) or
+    ``sol_macro|5m|down|bearish__bearish__bull|standard`` (alt: 3-segment
+    regime, varied family).
+
+    Returns the list of candidate live lane_ids the ghost outcome should be
+    applied to. Family is always ``standard`` (the dominant admission path);
+    BTC keeps the single-segment regime; alts get a 3-segment regime built
+    from the record's ``htf_bias`` + ``btc_1h_regime``. If insufficient
+    metadata, returns an empty list (skip the update).
+    """
+    lid = str(rec.get("lane_id") or "")
+    parts = lid.split("|")
+    if len(parts) < 5:
+        return []
+    strategy, window, direction, _ghost_regime, _ghost_family = parts[:5]
+    if not strategy or not window or not direction:
+        return []
+    if strategy == "bitcoin":
+        # BTC live keys: bitcoin|<window>|<direction>|<single_regime>|standard
+        regime = (_ghost_regime or "unknown").lower()
+        return [f"bitcoin|{window}|{direction}|{regime}|standard"]
+    # Alts: need 3-segment regime tag <alt_1h>__<alt_4h>__<btc>
+    htf = str(rec.get("htf_bias") or "").strip().lower()
+    btc_regime_raw = rec.get("btc_1h_regime")
+    btc = str(btc_regime_raw or "").strip().lower() if btc_regime_raw else ""
+    if not htf or not btc:
+        return []
+    # Heuristic: assume alt 4H tracks alt 1H. Live keys we saw in trades:
+    # sol_macro|5m|down|bearish__bearish__bull|standard — alt_1h=bearish,
+    # alt_4h=bearish, btc=bull. Build same shape.
+    composite = f"{htf}__{htf}__{btc}"
+    return [f"{strategy}|{window}|{direction}|{composite}|standard"]
+
+
 def settle_rejected_candidates(
     *,
     input_path: Path = DEFAULT_REJECTED_LOG,
@@ -364,10 +405,18 @@ def settle_rejected_candidates(
     now: Optional[datetime] = None,
     dry_run: bool = False,
     throttle_sec: float = 0.0,
+    calibrator: Optional[Any] = None,
+    ghost_weight: float = 0.5,
 ) -> Dict[str, Any]:
     """Settle any newly resolvable ghost candidates.
 
     Idempotent: previously settled rows are skipped via ``ghost_id``.
+
+    When ``calibrator`` is supplied, each newly-settled record's would-have-been
+    outcome is fed to ``calibrator.record_ghost(lane_id, win, weight=ghost_weight)``
+    so β-vetoed lanes can self-heal from observation alone. Default weight is
+    0.5x of a live trade — ghost outcomes lack slippage/fills, so they
+    shouldn't dominate β 1:1 with real trades.
     """
     summary = {
         "input_exists": input_path.exists(),
@@ -379,6 +428,7 @@ def settle_rejected_candidates(
         "regime_matched": 0,
         "regime_unmatched": 0,
         "written": 0,
+        "ghost_beta_updates": 0,
     }
     if not input_path.exists():
         return summary
@@ -475,6 +525,25 @@ def settle_rejected_candidates(
         settle_records.append(settled_rec)
         summary["newly_settled"] += 1
 
+        # Self-healing: feed ghost outcome into calibrator β at reduced weight,
+        # translated to the LIVE lane_id key(s) so the veto check can actually
+        # see the updates. Lets β-vetoed lanes climb back above the veto
+        # threshold if their would-have-been WR recovers, without re-exposing
+        # capital. Translation is heuristic (alt 4H assumed == alt 1H) — when
+        # metadata is missing, the update is skipped.
+        if calibrator is not None:
+            try:
+                win_val = wb.get("win") if isinstance(wb, dict) else None
+                if isinstance(win_val, bool):
+                    live_keys = _ghost_to_live_lane_keys(rec)
+                    for live_lane_id in live_keys:
+                        calibrator.record_ghost(
+                            live_lane_id, win_val, weight=ghost_weight
+                        )
+                        summary["ghost_beta_updates"] += 1
+            except Exception as _gpe:  # noqa: BLE001 — telemetry must not block settle
+                logger.warning("ghost calibrator update skipped: %s", _gpe)
+
     if not dry_run and settle_records:
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,6 +603,40 @@ def build_ghost_calibration_status(
         reverse=True,
     )[:10]
     total_decided = wins + losses
+
+    # BTC 1H regime breakdown
+    regime_stats: Dict[str, Dict[str, Any]] = {}
+    for rec in settled:
+        regime = str(rec.get("btc_1h_regime") or "UNKNOWN")
+        bucket = regime_stats.setdefault(regime, {"wins": 0, "losses": 0, "n": 0})
+        bucket["n"] += 1
+        if rec.get("win") is True:
+            bucket["wins"] += 1
+        elif rec.get("win") is False:
+            bucket["losses"] += 1
+    regime_breakdown = {}
+    for regime, stats in sorted(regime_stats.items()):
+        decided = stats["wins"] + stats["losses"]
+        regime_breakdown[regime] = {
+            "n": stats["n"],
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "win_rate": round(stats["wins"] / decided, 4) if decided else None,
+        }
+
+    # Convergence score breakdown
+    conv_buckets = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    for rec in settled:
+        score = rec.get("convergence_score")
+        if score is None:
+            conv_buckets["none"] += 1
+        elif score >= 0.6:
+            conv_buckets["high"] += 1
+        elif score >= 0.4:
+            conv_buckets["medium"] += 1
+        else:
+            conv_buckets["low"] += 1
+
     return {
         "rejected_log_exists": rejected_path.exists(),
         "settled_log_exists": settled_path.exists(),
@@ -547,4 +650,6 @@ def build_ghost_calibration_status(
         "top_reason_action": {
             key: value for key, value in ordered
         },
+        "btc_1h_regime_breakdown": regime_breakdown,
+        "convergence_score_breakdown": conv_buckets,
     }

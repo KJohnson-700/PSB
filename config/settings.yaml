@@ -197,6 +197,30 @@ lane_calibration:
   paper_shadow_mode: true
   live_shadow_mode: false
   min_samples_to_apply_live: 15
+  # LIVE β-VETO DISABLED 2026-05-23 — operator request: turn off live
+  # calibration's decision impact while ghost-derived per-lane thresholds
+  # are being computed and reviewed. With max_mean=0, _is_vetoed always
+  # returns False, calibrate() never forces 0.5, and all entries use raw
+  # model probability. β/α tracking + ghost feed still run passively so
+  # data keeps accumulating for the per-lane derivation. Re-enable by
+  # setting back to 0.40 once per-lane overrides are ready.
+  beta_veto_max_mean: 0
+  beta_veto_min_n: 30
+  per_lane_thresholds:
+    # ENABLED 2026-05-23 — flipped on to apply ghost-derived per-lane vetoes
+    # at admission. 11 loser cells identified (matches the 5 in your pending
+    # memo + 6 more). The bot will skip these specific lanes regardless of
+    # live β state, closing the death-spiral on bitcoin|5m, sol|5m, etc.
+    enabled: true
+    # Auto-refresh lane_thresholds.json after each ghost-settle cycle so the
+    # set of vetoed lanes stays current. Without this, the veto set freezes
+    # at whatever was computed at bot-startup.
+    recompute_on_settle: true
+    recompute_min_new_settles: 25
+    min_bucket_n: 100
+    wr_veto_threshold: 0.4
+    recommended_max_mean: 0.4
+    path: data/calibration/lane_thresholds.json
 entry_policy:
   defaults:
     enabled: true
@@ -240,7 +264,7 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     min_liquidity: 1000
-    min_edge: 0.1
+    min_edge: 0.09
     min_edge_5m: 0.08
     min_edge_15m_neutral: 0.12
     neutral_15m_min_quant_confidence: 0.58
@@ -302,7 +326,7 @@ strategies:
             entry_window_max: 5.5
         15m:
           up:
-            min_edge: 0.1
+            min_edge: 0.09
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -317,7 +341,7 @@ strategies:
             entry_window_max: 19.0
         1h:
           up:
-            min_edge: 0.1
+            min_edge: 0.09
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -403,6 +427,8 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     min_liquidity: 750
+    min_liquidity_1h: 400
+    min_liquidity_1h_buy_no: 400
     min_edge: 0.09
     min_edge_5m: 0.085
     hard_min_edge: 0.07
@@ -725,8 +751,10 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
-    min_liquidity: 300
+    min_liquidity: 100
     min_liquidity_buy_no: 300
+    min_liquidity_1h: 100
+    min_liquidity_1h_buy_no: 200
     min_edge: 0.09
     min_edge_buy_no: 0.08
     min_edge_5m: 0.07
@@ -755,7 +783,8 @@ strategies:
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
-    oracle_max_basis_bps: 18.0
+    oracle_max_basis_bps: 25.0
+    oracle_basis_relax_max_bps: 30.0
     oracle_stale_basis_relax_max_bps: 75.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.1
@@ -778,7 +807,7 @@ strategies:
     look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 36.0
+    entry_window_15m_max: 45.0
     entry_window_5m_min: 0.0
     entry_window_5m_max: 5.5
     entry_window_auto_align: true
@@ -812,7 +841,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 36.0
+            entry_window_max: 45.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
@@ -875,7 +904,9 @@ strategies:
     use_ai: true
     use_ai_updown: true
     min_liquidity: 750
-    min_edge: 0.09
+    min_liquidity_1h: 400
+    min_liquidity_1h_buy_no: 400
+    min_edge: 0.085
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
@@ -962,7 +993,7 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.085
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -977,7 +1008,7 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            min_edge: 0.085
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
@@ -990,7 +1021,7 @@ strategies:
             entry_window_max: 16.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.085
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1021,6 +1052,8 @@ strategies:
     use_ai: true
     use_ai_updown: true
     min_liquidity: 750
+    min_liquidity_1h: 250
+    min_liquidity_1h_buy_no: 250
     min_edge: 0.09
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1162,6 +1195,8 @@ strategies:
     use_ai_updown: true
     min_liquidity: 750
     min_liquidity_buy_no: 300
+    min_liquidity_1h: 250
+    min_liquidity_1h_buy_no: 250
     min_edge: 0.09
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1176,6 +1211,8 @@ strategies:
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 18.0
     oracle_basis_relax_max_bps: 22.0
+    oracle_max_basis_bps_15m_buy_yes: 23.0
+    oracle_basis_relax_max_bps_15m_buy_yes: 27.0
     oracle_stale_basis_relax_max_bps: 75.0
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
@@ -1351,7 +1388,7 @@ ai:
     enabled: true
     min_confidence: 0.6
     hard_skip_if_unavailable_on_enforced: true
-    use_shadow_portfolio: false
+    use_shadow_portfolio: true
     enforced_lanes:
       bitcoin:
       - neutral_15m
@@ -1457,13 +1494,13 @@ backtest:
     default_bps: 25
     use_spread_when_available: true
   fee_bps: 0
-  min_edge_btc_15m: 0.1
+  min_edge_btc_15m: 0.09
   min_edge_btc_5m: 0.08
   min_edge_sol_15m: 0.09
   min_edge_sol_5m: 0.085
   min_edge_eth_15m: 0.09
   min_edge_eth_5m: 0.1
-  min_edge_xrp_15m: 0.09
+  min_edge_xrp_15m: 0.085
   min_edge_xrp_5m: 0.085
   min_edge_hype_15m: 0.09
   min_edge_hype_5m: 0.07
