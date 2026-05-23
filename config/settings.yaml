@@ -426,6 +426,15 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
+    # 2026-05-23: per-(side,window) allowlist. Only cells where ghost
+    # counterfactual WR < 0.45 on n>1k get the guard. Empty/missing = off.
+    # - BUY_YES 15m: counterfactual WR 39.1% (n=1722) — guard saves us.
+    # - BUY_NO  1h : counterfactual WR 40.2% (n=1274) — guard saves us.
+    # Everything else off: BUY_YES alt 1h LONG counterfactuals were 78-91% WR
+    # (sol/doge/xrp/bnb), guard was destroying that edge.
+    alt_momentum_confirm:
+      buy_yes: ["15m"]
+      buy_no: ["1h"]
     min_liquidity: 750
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400

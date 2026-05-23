@@ -2156,16 +2156,17 @@ class SolMacroStrategy:
             direction = "UP" if allowed_side == "LONG" else "DOWN"
             primary_htf_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
 
-            # Alt-native momentum guards for BUY_NO + BUY_YES (mirrors ETH patch at
-            # eth_macro.py:898). 2026-05-21 audit: bearish_dip_default and
-            # bullish_rally_default in the additive side resolver admit without LTF
-            # momentum confirmation. The *_exception paths already require alt MACD
-            # (15m+5m); the defaults do not. Closes the same structural gap ETH had,
-            # symmetric for both sides. Uses the alt's own MACD only — BTC is not
-            # consulted here. Opt-out via config.
+            # Alt-native momentum guards. 2026-05-23 ghost-counterfactual review:
+            # default-on guards were over-pruning (blocking trades that would have
+            # won 47-52% aggregate; 78-91% on alt 1h LONG cells). Now an explicit
+            # per-(side, window) allowlist via `alt_momentum_confirm:
+            # {buy_yes: [...], buy_no: [...]}`. Empty/missing = guard off for that
+            # side. Uses the alt's own MACD only — BTC is not consulted.
+            _alt_mc_cfg = self.config.get("alt_momentum_confirm") or {}
+            _alt_mc_window = _updown_tf if is_updown else "15m"
             if (
                 action == "BUY_NO"
-                and self.config.get("buy_no_require_alt_momentum_confirm", True)
+                and _alt_mc_window in (_alt_mc_cfg.get("buy_no") or [])
             ):
                 _alt_bear_confirmed = (
                     sol.macd_5m.crossover == "BEARISH_CROSS"
@@ -2196,7 +2197,7 @@ class SolMacroStrategy:
                     continue
             if (
                 action == "BUY_YES"
-                and self.config.get("buy_yes_require_alt_momentum_confirm", True)
+                and _alt_mc_window in (_alt_mc_cfg.get("buy_yes") or [])
             ):
                 _alt_bull_confirmed = (
                     sol.macd_5m.crossover == "BULLISH_CROSS"

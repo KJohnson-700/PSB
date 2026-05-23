@@ -878,18 +878,15 @@ class ETHMacroStrategy(SolMacroStrategy):
             action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
 
-            # ETH-native momentum guards for BUY_NO + BUY_YES (mirrors BTC quant_flip).
-            # Live audit 2026-05-21: alt_1h_legacy_btc_mode BUY_NO entries in
-            # bearish__bearish__bull regime lost -$26.37 across 37 trades (27% WR)
-            # because ETH's alt-derived BEARISH view fired without ETH-native price
-            # confirmation. Per rule "alts decided by alt-native indicators": require
-            # ETH MACD (5m or 15m) to confirm the direction before admitting either
-            # side. Symmetric guard added so BUY_YES has the same protection even
-            # though the live evidence was BUY_NO-heavy this week. BTC is intentionally
-            # not consulted here.
+            # ETH-native momentum guards. 2026-05-23 ghost-counterfactual review:
+            # default-on guards were breakeven-to-harmful (BUY_NO n=9826 WR=48%,
+            # 1h SHORT specifically WR=62% — guard blocking winners). Now an
+            # explicit per-(side, window) allowlist via `eth_momentum_confirm:
+            # {buy_yes: [...], buy_no: [...]}`. Empty/missing = guard off.
+            _eth_mc_cfg = self.config.get("eth_momentum_confirm") or {}
             if (
                 action == "BUY_NO"
-                and self.config.get("buy_no_require_eth_momentum_confirm", True)
+                and _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
             ):
                 _eth_bear_confirmed = (
                     eth.macd_5m.crossover == "BEARISH_CROSS"
@@ -920,7 +917,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     continue
             if (
                 action == "BUY_YES"
-                and self.config.get("buy_yes_require_eth_momentum_confirm", True)
+                and _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
             ):
                 _eth_bull_confirmed = (
                     eth.macd_5m.crossover == "BULLISH_CROSS"
