@@ -197,10 +197,10 @@ lane_calibration:
   paper_shadow_mode: true
   live_shadow_mode: false
   min_samples_to_apply_live: 15
-  beta_veto_max_mean: 0.4
+  beta_veto_max_mean: 0
   beta_veto_min_n: 30
   per_lane_thresholds:
-    enabled: true
+    enabled: false
     recompute_on_settle: false
     recompute_min_new_settles: 25
     min_bucket_n: 100

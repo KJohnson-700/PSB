@@ -151,7 +151,9 @@ def test_buy_no_ltf_override_rejects_weak_bearish_noise():
     assert allowed is False
     assert "5m_not_bearish" in reason
     assert "rsi>45.0" in reason
-    assert "btc5m>+0.000%" in reason
+    # 2026-05-22 alt-native rule: BTC 5m is diagnostic, not a SOL admission
+    # co-condition. Rejection text should only list missing SOL-native pieces.
+    assert "btc5m" not in reason.lower()
 
 
 def _make_ta_bullish_rally() -> SOLTechnicalAnalysis:
@@ -1258,8 +1260,8 @@ class TestSOLEdgeCalculation(unittest.TestCase):
         )
         self.assertLess(prob, 0.50)
 
-    def test_lag_opportunity_boosts_probability(self):
-        """BTC-SOL lag in our direction increases edge."""
+    def test_lag_opportunity_does_not_change_alt_probability(self):
+        """BTC-SOL lag is context only; alt probability stays alt-native."""
         ta = _make_bullish_ta()
         prob_with_lag = self.strategy._estimate_probability(
             sol_price=135.50,
@@ -1281,7 +1283,7 @@ class TestSOLEdgeCalculation(unittest.TestCase):
             ltf_strength=0.5,
             timing_bonus=0.05,
         )
-        self.assertGreater(prob_with_lag, prob_without_lag)
+        self.assertEqual(prob_with_lag, prob_without_lag)
 
     def test_overbought_rsi_penalizes_up(self):
         """RSI > 75 should reduce UP probability."""
