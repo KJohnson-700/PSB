@@ -1355,11 +1355,14 @@ ai:
   consensus_enabled: false
   consensus_min_agree: 2
   provider_chain:
-  - name: kimi_decision
-    type: openai
-    base_url: https://api.moonshot.ai/v1
-    model: kimi-k2.6
-    api_key_secret: MOONSHOT_API_KEY
+  - name: kimi_coding
+    type: kimi_coding
+    base_url: https://api.kimi.com/coding/v1
+    model: kimi-for-coding
+    credentials_path: ~/.kimi/credentials/kimi-code.json
+    device_id_path: ~/.kimi/device_id
+    user_agent: KimiCLI/1.44.0
+    cli_version: 1.44.0
     json_mode: true
     timeout_seconds: 90
     cooldown_on_429_seconds: 90

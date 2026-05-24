@@ -22,9 +22,14 @@ import collections
 import hashlib
 import json
 import logging
+import os
+import platform
 import random
 import re
+import socket
+import tempfile
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -248,6 +253,7 @@ OUTPUT (machine-parseable — follow exactly):
         self._last_call_time = 0.0
         self._min_call_gap = self.config.get('min_call_gap', 1.5)  # seconds between API calls
         self._rate_lock: Optional[asyncio.Lock] = None  # Created lazily inside event loop
+        self._kimi_oauth_lock: Optional[asyncio.Lock] = None
         # Backpressure: cap how many callers may queue on the rate-limit lock.
         # With min_call_gap=2.0 and depth=6, worst-case wait ≈ 12s (safely under
         # the 15s decision and 20s observer timeouts). Excess callers fail fast.
@@ -289,6 +295,25 @@ OUTPUT (machine-parseable — follow exactly):
         self._file_cache: Dict[str, tuple[tuple[int, int], Any]] = {}
         # Round-robin first model for OpenRouter free tier (spread per-model limits).
         self._openrouter_model_rr: Dict[str, int] = {}
+
+    @staticmethod
+    def _is_kimi_coding_provider(provider_config: Optional[Dict[str, Any]]) -> bool:
+        return str((provider_config or {}).get("type") or "").strip() == "kimi_coding"
+
+    def _api_key_for_provider(
+        self,
+        provider_config: Dict[str, Any],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return provider credential token or a missing-secret name."""
+        if provider_config.get("local", False):
+            return "local", None
+        if self._is_kimi_coding_provider(provider_config):
+            return "oauth", None
+        api_key_name = provider_config.get("api_key_secret")
+        api_key = self.api_keys.get(api_key_name)
+        if api_key:
+            return api_key, None
+        return None, str(api_key_name) if api_key_name else None
 
     def refresh_from_config(self, ai_cfg: Dict[str, Any]) -> None:
         """
@@ -734,14 +759,10 @@ OUTPUT (machine-parseable — follow exactly):
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
             model = provider_config.get("model")
-            api_key_name = provider_config.get("api_key_secret")
-            api_key = self.api_keys.get(api_key_name)
+            api_key, missing_name = self._api_key_for_provider(provider_config)
             if not api_key:
-                if provider_config.get("local", False):
-                    api_key = "local"
-                else:
-                    provider_errors.append(f"{provider_name}=MissingAPIKey:{api_key_name}")
-                    continue
+                provider_errors.append(f"{provider_name}=MissingAPIKey:{missing_name}")
+                continue
 
             analysis_function = getattr(self, f"_analyze_with_{provider_type}", None)
             if not analysis_function:
@@ -950,14 +971,10 @@ OUTPUT (machine-parseable — follow exactly):
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
             model = provider_config.get("model")
-            api_key_name = provider_config.get("api_key_secret")
-            api_key = self.api_keys.get(api_key_name)
+            api_key, missing_name = self._api_key_for_provider(provider_config)
             if not api_key:
-                if provider_config.get("local", False):
-                    api_key = "local"
-                else:
-                    provider_errors.append(f"{provider_name}=MissingAPIKey:{api_key_name}")
-                    continue
+                provider_errors.append(f"{provider_name}=MissingAPIKey:{missing_name}")
+                continue
 
             analysis_function = getattr(self, f"_analyze_with_{provider_type}", None)
             if not analysis_function:
@@ -2331,17 +2348,13 @@ OUTPUT (machine-parseable — follow exactly):
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
             model = provider_config.get("model")
-            api_key_name = provider_config.get("api_key_secret")
-            api_key = self.api_keys.get(api_key_name)
+            api_key, missing_name = self._api_key_for_provider(provider_config)
 
             if not api_key:
-                if provider_config.get("local", False):
-                    api_key = "local"
-                else:
-                    err = f"{provider_name}=MissingAPIKey:{api_key_name}"
-                    provider_errors.append(err)
-                    logger.warning(f"API key '{api_key_name}' not found for provider '{provider_name}'. Skipping.")
-                    continue
+                err = f"{provider_name}=MissingAPIKey:{missing_name}"
+                provider_errors.append(err)
+                logger.warning(f"API key '{missing_name}' not found for provider '{provider_name}'. Skipping.")
+                continue
 
             logger.info(f"Attempting analysis with provider: {provider_name} (Model: {model})")
 
@@ -2427,7 +2440,7 @@ OUTPUT (machine-parseable — follow exactly):
         """Call all providers with keys in parallel; return only if >= consensus_min_agree agree on same action."""
         providers_with_keys = []
         for pc in self.provider_chain:
-            api_key = self.api_keys.get(pc.get("api_key_secret"))
+            api_key, _missing_name = self._api_key_for_provider(pc)
             if api_key and getattr(self, f"_analyze_with_{pc.get('type')}", None):
                 providers_with_keys.append(pc)
 
@@ -2461,7 +2474,7 @@ OUTPUT (machine-parseable — follow exactly):
                         user_prompt,
                         market_id,
                         model_for_call,
-                        self.api_keys[pc["api_key_secret"]],
+                        self._api_key_for_provider(pc)[0] or "",
                         pc,
                         anchor_yes_price,
                     ),
@@ -2503,7 +2516,7 @@ OUTPUT (machine-parseable — follow exactly):
     ) -> Optional[AIAnalysis]:
         """Original chain fallback (first successful provider)."""
         for provider_config in self.provider_chain:
-            api_key = self.api_keys.get(provider_config.get("api_key_secret"))
+            api_key, _missing_name = self._api_key_for_provider(provider_config)
             if not api_key:
                 continue
             provider_type = provider_config.get("type")
@@ -2558,6 +2571,260 @@ Remember: The market price may be wrong due to sentiment, bias, or incomplete in
 Reply with only the JSON object required by the system message (four keys: reasoning, confidence_score, estimated_probability, recommendation)."""
         
         return prompt
+
+    @staticmethod
+    def _expand_user_path(raw: str) -> Path:
+        return Path(os.path.expandvars(os.path.expanduser(raw)))
+
+    @staticmethod
+    def _kimi_code_device_model() -> str:
+        system = platform.system()
+        arch = platform.machine() or ""
+        if system == "Darwin":
+            version = platform.mac_ver()[0] or platform.release()
+            return f"macOS {version} {arch}".strip()
+        if system:
+            version = platform.release()
+            return f"{system} {version} {arch}".strip()
+        return "Unknown"
+
+    @staticmethod
+    def _ascii_header_value(value: str, *, fallback: str = "unknown") -> str:
+        try:
+            value.encode("ascii")
+            return value.strip()
+        except UnicodeEncodeError:
+            sanitized = value.encode("ascii", errors="ignore").decode("ascii").strip()
+            return sanitized or fallback
+
+    def _kimi_code_common_headers(self, provider_config: Dict[str, Any]) -> Dict[str, str]:
+        device_id_path = self._expand_user_path(
+            str(provider_config.get("device_id_path") or "~/.kimi/device_id")
+        )
+        device_id = ""
+        with suppress(OSError):
+            device_id = device_id_path.read_text(encoding="utf-8").strip()
+        headers = {
+            "User-Agent": str(provider_config.get("user_agent") or "KimiCLI/1.44.0"),
+            "X-Msh-Platform": "kimi_cli",
+            "X-Msh-Version": str(provider_config.get("cli_version") or "1.44.0"),
+            "X-Msh-Device-Name": platform.node() or socket.gethostname(),
+            "X-Msh-Device-Model": self._kimi_code_device_model(),
+            "X-Msh-Os-Version": platform.version(),
+            "X-Msh-Device-Id": device_id,
+        }
+        custom = provider_config.get("default_headers")
+        if isinstance(custom, dict):
+            headers.update({str(k): str(v) for k, v in custom.items()})
+        return {
+            key: self._ascii_header_value(value)
+            for key, value in headers.items()
+            if value
+        }
+
+    async def _kimi_code_access_token(
+        self,
+        provider_config: Dict[str, Any],
+        *,
+        force_refresh: bool = False,
+    ) -> str:
+        """Load and refresh the Kimi Code CLI OAuth token without exposing it in config."""
+        if self._kimi_oauth_lock is None:
+            self._kimi_oauth_lock = asyncio.Lock()
+        async with self._kimi_oauth_lock:
+            credentials_path = self._expand_user_path(
+                str(provider_config.get("credentials_path") or "~/.kimi/credentials/kimi-code.json")
+            )
+            try:
+                payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Kimi Code OAuth credentials unavailable at {credentials_path}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("Kimi Code OAuth credentials are malformed")
+
+            expires_at = float(payload.get("expires_at") or 0.0)
+            refresh_window = float(provider_config.get("refresh_window_seconds") or 300.0)
+            access_token = str(payload.get("access_token") or "")
+            if access_token and not force_refresh and expires_at > time.time() + refresh_window:
+                return access_token
+
+            refresh_token = str(payload.get("refresh_token") or "")
+            if not refresh_token:
+                raise RuntimeError("Kimi Code OAuth refresh token missing")
+
+            import aiohttp
+
+            auth_host = str(provider_config.get("auth_host") or "https://auth.kimi.com").rstrip("/")
+            client_id = str(
+                provider_config.get("client_id")
+                or "17e5f671-d194-4dfb-9706-5516cb48c098"
+            )
+            data = {
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            }
+            timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    f"{auth_host}/api/oauth/token",
+                    data=data,
+                    headers=self._kimi_code_common_headers(provider_config),
+                ) as response:
+                    response_payload = await response.json(content_type=None)
+                    status = response.status
+
+            if status != 200:
+                detail = (
+                    response_payload.get("error_description")
+                    if isinstance(response_payload, dict)
+                    else None
+                )
+                raise RuntimeError(
+                    f"Kimi Code OAuth refresh failed HTTP {status}: {detail or response_payload}"
+                )
+            if not isinstance(response_payload, dict):
+                raise RuntimeError("Kimi Code OAuth refresh returned malformed response")
+
+            expires_in = float(response_payload.get("expires_in") or 900.0)
+            refreshed = {
+                "access_token": str(response_payload["access_token"]),
+                "refresh_token": str(response_payload["refresh_token"]),
+                "token_type": str(response_payload.get("token_type") or "Bearer"),
+                "expires_in": expires_in,
+                "scope": str(response_payload.get("scope") or "kimi-code"),
+                "expires_at": time.time() + expires_in,
+            }
+            credentials_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(dir=credentials_path.parent, suffix=".tmp")
+            try:
+                raw = json.dumps(refreshed, ensure_ascii=False).encode("utf-8")
+                written = os.write(fd, raw)
+                if written != len(raw):
+                    raise OSError(f"Short write: {written}/{len(raw)} bytes")
+                os.fsync(fd)
+                os.close(fd)
+                fd = -1
+                with suppress(OSError):
+                    os.chmod(tmp_path, 0o600)
+                os.replace(tmp_path, credentials_path)
+            finally:
+                if fd >= 0:
+                    with suppress(OSError):
+                        os.close(fd)
+                with suppress(OSError):
+                    os.unlink(tmp_path)
+            return refreshed["access_token"]
+
+    async def _analyze_with_kimi_coding(
+        self,
+        prompt: str,
+        market_id: str,
+        model: str,
+        api_key: str,
+        provider_config: Optional[Dict[str, Any]] = None,
+        anchor_yes_price: float = 0.0,
+        response_parser: Optional[Callable[[str, str, float], Any]] = None,
+        system_prompt: Optional[str] = None,
+    ) -> Optional[AIAnalysis]:
+        """Call the Kimi Code CLI OAuth gateway, not the Moonshot billing API."""
+        if openai is None:
+            raise ImportError("openai package is not installed")
+        pc = provider_config or {}
+        provider_label = str(pc.get("name") or "kimi_coding")
+        base_url = str(pc.get("base_url") or "https://api.kimi.com/coding/v1")
+        call_timeout = self._provider_timeout(pc)
+        parser = response_parser or self._parse_response
+        models = self._models_for_provider(pc, model)
+        if not models:
+            logger.warning("Kimi Code provider has no model configured — skipping.")
+            return None
+
+        last_err: Optional[BaseException] = None
+        for m in models:
+            for force_refresh in (False, True):
+                access_token = await self._kimi_code_access_token(
+                    pc,
+                    force_refresh=force_refresh,
+                )
+                headers = self._kimi_code_common_headers(pc)
+                client = openai.AsyncOpenAI(
+                    api_key=access_token,
+                    base_url=base_url,
+                    default_headers=headers,
+                    max_retries=0,
+                )
+                try:
+                    for use_json_mode in (bool(pc.get("json_mode", True)), False):
+                        kwargs: Dict[str, Any] = dict(
+                            model=m,
+                            messages=[
+                                {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
+                                {"role": "user", "content": prompt},
+                            ],
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
+                        if use_json_mode:
+                            kwargs["response_format"] = {"type": "json_object"}
+                        start_time = time.time()
+                        try:
+                            response = await asyncio.wait_for(
+                                client.chat.completions.create(**kwargs),
+                                timeout=call_timeout,
+                            )
+                        except Exception as exc:
+                            status_code = getattr(exc, "status_code", None)
+                            if status_code == 400 and use_json_mode:
+                                last_err = exc
+                                continue
+                            raise
+
+                        content = response.choices[0].message.content or ""
+                        usage = getattr(response, "usage", None)
+                        latency = time.time() - start_time
+                        if usage:
+                            self.usage_tracker.record_usage(
+                                provider="kimi_coding",
+                                model=m,
+                                input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                                output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                                latency=latency,
+                            )
+                        try:
+                            return parser(content, market_id, anchor_yes_price)
+                        except AIResponseValidationError as exc:
+                            logger.warning(
+                                "Kimi Code: schema/parse error model=%s: %s — trying next.",
+                                m,
+                                exc,
+                            )
+                            last_err = exc
+                            break
+                except Exception as exc:
+                    last_err = exc
+                    status_code = getattr(exc, "status_code", None)
+                    if status_code == 401 and not force_refresh:
+                        logger.warning(
+                            "Kimi Code returned 401 for %s; refreshing OAuth token once.",
+                            provider_label,
+                        )
+                        continue
+                    logger.warning(
+                        "Kimi Code error model=%s: %s: %s",
+                        m,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    break
+                finally:
+                    await _close_async_client_quietly(client)
+
+        if last_err:
+            raise last_err
+        return None
     
     async def _analyze_with_openai(
         self,

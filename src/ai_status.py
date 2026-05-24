@@ -31,10 +31,21 @@ def compute_ai_status(
             return v is not None and str(v).strip() != ""
         return bool(os.getenv(name))
 
+    def _has_kimi_code_oauth(provider: Dict[str, Any]) -> bool:
+        raw = provider.get("credentials_path") or "~/.kimi/credentials/kimi-code.json"
+        path = os.path.expandvars(os.path.expanduser(str(raw)))
+        return os.path.exists(path)
+
     # Provider chain is fallthrough: need at least one callable provider (key or local).
     for p in chain:
         if p.get("local"):
             usable += 1
+            continue
+        if str(p.get("type") or "") == "kimi_coding":
+            if _has_kimi_code_oauth(p):
+                usable += 1
+            else:
+                missing.append("KIMI_CODE_OAUTH")
             continue
         sec = p.get("api_key_secret")
         if not sec:

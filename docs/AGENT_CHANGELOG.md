@@ -8,6 +8,14 @@
 
 ---
 
+## 2026-05-24 — Kimi Code OAuth decision provider corrected
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Replaced the normal Moonshot OpenAI-compatible decision entry with a dedicated `kimi_coding` provider that reads the local Kimi Code OAuth credentials from `~/.kimi/credentials/kimi-code.json`, refreshes through `https://auth.kimi.com/api/oauth/token`, and calls `https://api.kimi.com/coding/v1` with the Kimi CLI `X-Msh-*` headers and `model: kimi-for-coding`.
+
+**[`src/ai_status.py`](/Users/mainfolder/Documents/psb-main%201/src/ai_status.py), [`tests/test_ai_status.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_status.py):** AI readiness now treats the Kimi Code OAuth file as the callable credential for `type: kimi_coding` instead of requiring `MOONSHOT_API_KEY`. Shadow/research remains pinned to MiniMax and Ollama remains final local fallback.
+
+**Why:** The previous `kimi_decision` entry targeted the separate Moonshot billing API and could fail with account/balance errors even though the operator's Kimi Code CLI account was valid. The live probe now succeeds against `kimi_coding` without printing or storing tokens in repo config.
+
 ## 2026-05-24 — Baseline recovery beta veto disabled
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Corrected the May 22 baseline recovery guardrails after reviewing the operator handoff. `lane_calibration.beta_veto_max_mean` is now `0` and `lane_calibration.per_lane_thresholds.enabled` is now `false`, matching `docs/baselines/2026-05-22_baseline.md` Tier 1 recovery guidance and the known-good `2791e48` config posture.

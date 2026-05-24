@@ -59,6 +59,44 @@ def test_compute_ai_ready_local_provider_without_keys():
     assert st["ready"] is True
 
 
+def test_compute_ai_ready_kimi_coding_oauth(tmp_path):
+    creds = tmp_path / "kimi-code.json"
+    creds.write_text("{}", encoding="utf-8")
+    cfg = {
+        "ai": {
+            "enabled": True,
+            "provider_chain": [
+                {
+                    "name": "kimi_coding",
+                    "type": "kimi_coding",
+                    "credentials_path": str(creds),
+                },
+            ],
+        }
+    }
+    st = compute_ai_status(cfg, {})
+    assert st["ready"] is True
+    assert st["missing_keys"] == []
+
+
+def test_compute_ai_missing_kimi_coding_oauth(tmp_path):
+    cfg = {
+        "ai": {
+            "enabled": True,
+            "provider_chain": [
+                {
+                    "name": "kimi_coding",
+                    "type": "kimi_coding",
+                    "credentials_path": str(tmp_path / "missing.json"),
+                },
+            ],
+        }
+    }
+    st = compute_ai_status(cfg, {})
+    assert st["ready"] is False
+    assert st["missing_keys"] == ["KIMI_CODE_OAUTH"]
+
+
 def test_format_ai_log_line():
     st = {"ready": True, "reason": "ok", "chain_count": 1, "missing_keys": []}
     line = format_ai_log_line(st)
