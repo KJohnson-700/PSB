@@ -1421,8 +1421,8 @@ ai:
     max_calls_per_scan: 1
     min_confidence_to_log: 0.6
     log_jsonl: true
-    provider_name: ollama_local
-    model_override: qwen2.5:14b
+    provider_name: minimax
+    model_override: ''
   shadow_observer:
     enabled: true
     max_calls_per_scan: 1
