@@ -459,7 +459,8 @@ strategies:
     buy_yes_4h_hist_override_enabled: true
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 12
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -587,6 +588,15 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
+    # 2026-05-23: shadow-mode ghost-data collection for ETH momentum guard.
+    # Guard runs the BEARISH/BULLISH MACD check and logs would-be-rejected
+    # candidates to rejected_candidates.jsonl with reason suffixed `_shadow`,
+    # but does NOT block trades. Lets us accumulate fresh post-f291b67 ghost
+    # data partitioned by (window, side) without sacrificing trade frequency.
+    eth_momentum_confirm:
+      shadow:
+        buy_yes: ["5m", "15m", "1h"]
+        buy_no: ["5m", "15m", "1h"]
     min_liquidity: 1000
     min_edge: 0.09
     min_edge_5m: 0.1
@@ -617,7 +627,8 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 12
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -787,7 +798,8 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 12
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
@@ -921,7 +933,8 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 8
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03
@@ -1069,7 +1082,8 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 8
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03
@@ -1212,7 +1226,8 @@ strategies:
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 8
-    ai_observer_timeout_sec: 20
+    ai_observer_timeout_sec: 60
+    ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03

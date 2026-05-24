@@ -2390,6 +2390,16 @@ OUTPUT (machine-parseable — follow exactly):
                         bucket_tags=lane_feedback_bundle.get("bucket_tags"),
                     )
                     return analysis_result
+                else:
+                    # Provider returned None (no exception) — usually means the
+                    # response couldn't be parsed (empty content, malformed JSON,
+                    # missing required keys). Log it so silent failures are visible.
+                    provider_errors.append(f"{provider_name}=ReturnedNone")
+                    logger.warning(
+                        f"Provider '{provider_name}' returned None after {elapsed_ms}ms "
+                        f"(unparseable response). Falling back to next provider."
+                    )
+                    continue
 
             except Exception as e:
                 provider_errors.append(f"{provider_name}={type(e).__name__}: {e}")

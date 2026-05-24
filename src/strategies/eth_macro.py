@@ -883,69 +883,83 @@ class ETHMacroStrategy(SolMacroStrategy):
             # 1h SHORT specifically WR=62% — guard blocking winners). Now an
             # explicit per-(side, window) allowlist via `eth_momentum_confirm:
             # {buy_yes: [...], buy_no: [...]}`. Empty/missing = guard off.
+            #
+            # Shadow mode (2026-05-23): a window listed under `shadow.buy_yes`
+            # / `shadow.buy_no` runs the check and logs the would-have-been-
+            # rejected candidate to the ghost log (reason suffixed `_shadow`),
+            # but does NOT block the trade. Used to accumulate fresh ghost
+            # data without sacrificing trade frequency. A window listed in
+            # BOTH the block list and the shadow list takes the block path.
             _eth_mc_cfg = self.config.get("eth_momentum_confirm") or {}
-            if (
-                action == "BUY_NO"
-                and _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
-            ):
-                _eth_bear_confirmed = (
-                    eth.macd_5m.crossover == "BEARISH_CROSS"
-                    or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
-                    or eth.macd_15m.crossover == "BEARISH_CROSS"
-                    or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
-                )
-                if not _eth_bear_confirmed:
-                    _bump_skip("buy_no_no_eth_momentum_confirm")
-                    _log_skip_reject(
-                        market=market,
-                        window=_updown_tf,
-                        side=market_allowed_side,
-                        action=action,
-                        reason="buy_no_no_eth_momentum_confirm",
-                        yes_price=yes_price,
-                        htf_bias=primary_htf_bias,
-                        context={
-                            "eth_macd_5m_hist": float(eth.macd_5m.histogram or 0.0),
-                            "eth_macd_5m_rising": bool(eth.macd_5m.histogram_rising),
-                            "eth_macd_5m_crossover": eth.macd_5m.crossover,
-                            "eth_macd_15m_hist": float(eth.macd_15m.histogram or 0.0),
-                            "eth_macd_15m_rising": bool(eth.macd_15m.histogram_rising),
-                            "eth_macd_15m_crossover": eth.macd_15m.crossover,
-                            "side_source": side_source,
-                        },
+            _eth_mc_shadow = _eth_mc_cfg.get("shadow") or {}
+
+            def _eth_mc_context() -> Dict[str, Any]:
+                return {
+                    "eth_macd_5m_hist": float(eth.macd_5m.histogram or 0.0),
+                    "eth_macd_5m_rising": bool(eth.macd_5m.histogram_rising),
+                    "eth_macd_5m_crossover": eth.macd_5m.crossover,
+                    "eth_macd_15m_hist": float(eth.macd_15m.histogram or 0.0),
+                    "eth_macd_15m_rising": bool(eth.macd_15m.histogram_rising),
+                    "eth_macd_15m_crossover": eth.macd_15m.crossover,
+                    "side_source": side_source,
+                }
+
+            if action == "BUY_NO":
+                _block = _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
+                _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_no") or [])
+                if _block or _shadow:
+                    _eth_bear_confirmed = (
+                        eth.macd_5m.crossover == "BEARISH_CROSS"
+                        or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
+                        or eth.macd_15m.crossover == "BEARISH_CROSS"
+                        or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
                     )
-                    continue
-            if (
-                action == "BUY_YES"
-                and _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
-            ):
-                _eth_bull_confirmed = (
-                    eth.macd_5m.crossover == "BULLISH_CROSS"
-                    or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
-                    or eth.macd_15m.crossover == "BULLISH_CROSS"
-                    or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
-                )
-                if not _eth_bull_confirmed:
-                    _bump_skip("buy_yes_no_eth_momentum_confirm")
-                    _log_skip_reject(
-                        market=market,
-                        window=_updown_tf,
-                        side=market_allowed_side,
-                        action=action,
-                        reason="buy_yes_no_eth_momentum_confirm",
-                        yes_price=yes_price,
-                        htf_bias=primary_htf_bias,
-                        context={
-                            "eth_macd_5m_hist": float(eth.macd_5m.histogram or 0.0),
-                            "eth_macd_5m_rising": bool(eth.macd_5m.histogram_rising),
-                            "eth_macd_5m_crossover": eth.macd_5m.crossover,
-                            "eth_macd_15m_hist": float(eth.macd_15m.histogram or 0.0),
-                            "eth_macd_15m_rising": bool(eth.macd_15m.histogram_rising),
-                            "eth_macd_15m_crossover": eth.macd_15m.crossover,
-                            "side_source": side_source,
-                        },
+                    if not _eth_bear_confirmed:
+                        _reason = "buy_no_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
+                        ctx = _eth_mc_context()
+                        ctx["shadow"] = bool(_shadow)
+                        if _block:
+                            _bump_skip(_reason)
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=market_allowed_side,
+                            action=action,
+                            reason=_reason,
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context=ctx,
+                        )
+                        if _block:
+                            continue
+            if action == "BUY_YES":
+                _block = _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
+                _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_yes") or [])
+                if _block or _shadow:
+                    _eth_bull_confirmed = (
+                        eth.macd_5m.crossover == "BULLISH_CROSS"
+                        or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
+                        or eth.macd_15m.crossover == "BULLISH_CROSS"
+                        or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
                     )
-                    continue
+                    if not _eth_bull_confirmed:
+                        _reason = "buy_yes_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
+                        ctx = _eth_mc_context()
+                        ctx["shadow"] = bool(_shadow)
+                        if _block:
+                            _bump_skip(_reason)
+                        _log_skip_reject(
+                            market=market,
+                            window=_updown_tf,
+                            side=market_allowed_side,
+                            action=action,
+                            reason=_reason,
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context=ctx,
+                        )
+                        if _block:
+                            continue
 
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf,
