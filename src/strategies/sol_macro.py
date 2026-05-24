@@ -1427,6 +1427,8 @@ class SolMacroStrategy:
         htf_bias: Optional[str],
         btc_1h_regime: Optional[str],
     ) -> float:
+        self._last_calibration_vetoed = False
+        self._last_calibration_lane_id = ""
         cal = getattr(self, "lane_calibrator", None)
         if cal is None:
             return raw_est_prob
@@ -1447,6 +1449,8 @@ class SolMacroStrategy:
         lane_id = str(lane_meta.get("lane_id") or "").strip()
         if not lane_id:
             return raw_est_prob
+        self._last_calibration_lane_id = lane_id
+        self._last_calibration_vetoed = bool(cal.is_vetoed(lane_id))
         return float(cal.calibrate(lane_id, raw_est_prob))
 
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
@@ -1992,6 +1996,22 @@ class SolMacroStrategy:
                     atr_14=getattr(sol, "atr_14", None),
                 )
             )
+            # Always stamp eval_mins_left so post-hoc analysis can distinguish
+            # in-window (eml <= entry_window_max) from pre-window noise on EVERY
+            # rejection reason, not just lane_entry_window. Closes the ghost-log
+            # blind spot found 2026-05-22 where alt 1h liquidity/momentum/oracle
+            # rejections dropped eml and looked indistinguishable from too-early.
+            if "eval_mins_left" not in merged_context and "mins_left" not in merged_context:
+                try:
+                    _end = getattr(market, "end_date", None)
+                    if _end is not None:
+                        if _end.tzinfo is None:
+                            _end = _end.replace(tzinfo=timezone.utc)
+                        merged_context["eval_mins_left"] = float(
+                            max(0.0, (_end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+                        )
+                except Exception:
+                    pass
             if btc_1h_regime is not None:
                 merged_context["btc_1h_regime"] = btc_1h_regime
             log_rejected_candidate(
@@ -3619,18 +3639,20 @@ class SolMacroStrategy:
             if edge < effective_min_edge:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
-                _bump_skip("lane_min_edge")
+                _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
+                _reject_reason = "beta_vetoed" if _vetoed else "lane_min_edge"
+                _bump_skip(_reject_reason)
                 log_rejected_candidate(
                     strategy=self._signal_strategy_name,
                     window=_updown_tf if is_updown else "15m",
                     side=allowed_side,
                     action=action,
-                    reason="lane_min_edge",
+                    reason=_reject_reason,
                     market=market,
                     yes_price=yes_price,
                     est_prob_up=estimated_prob,
                     htf_bias=primary_htf_bias,
-                    stage="lane_min_edge",
+                    stage=_reject_reason,
                     context={
                         "edge": round(float(edge), 6),
                         "effective_min_edge": round(float(effective_min_edge), 6),
@@ -3639,6 +3661,8 @@ class SolMacroStrategy:
                         "confidence": round(float(confidence), 6),
                         "side_source": side_source,
                         "rsi_soft_penalty": round(float(rsi_soft_penalty), 6),
+                        "beta_vetoed": _vetoed,
+                        "calibration_lane_id": getattr(self, "_last_calibration_lane_id", ""),
                         **build_market_context(
                             asset_spot=sol.current_price,
                             btc_spot=corr.btc_price,
@@ -3657,7 +3681,7 @@ class SolMacroStrategy:
                     _skip_reason = (
                         "edge_after_penalty_below_threshold"
                         if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge
-                        else "lane_min_edge"
+                        else _reject_reason
                     )
                     self._emit_buy_no_skip(
                         market=market,

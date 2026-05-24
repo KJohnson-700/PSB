@@ -197,25 +197,11 @@ lane_calibration:
   paper_shadow_mode: true
   live_shadow_mode: false
   min_samples_to_apply_live: 15
-  # LIVE β-VETO DISABLED 2026-05-23 — operator request: turn off live
-  # calibration's decision impact while ghost-derived per-lane thresholds
-  # are being computed and reviewed. With max_mean=0, _is_vetoed always
-  # returns False, calibrate() never forces 0.5, and all entries use raw
-  # model probability. β/α tracking + ghost feed still run passively so
-  # data keeps accumulating for the per-lane derivation. Re-enable by
-  # setting back to 0.40 once per-lane overrides are ready.
-  beta_veto_max_mean: 0
+  beta_veto_max_mean: 0.4
   beta_veto_min_n: 30
   per_lane_thresholds:
-    # ENABLED 2026-05-23 — flipped on to apply ghost-derived per-lane vetoes
-    # at admission. 11 loser cells identified (matches the 5 in your pending
-    # memo + 6 more). The bot will skip these specific lanes regardless of
-    # live β state, closing the death-spiral on bitcoin|5m, sol|5m, etc.
     enabled: true
-    # Auto-refresh lane_thresholds.json after each ghost-settle cycle so the
-    # set of vetoed lanes stays current. Without this, the veto set freezes
-    # at whatever was computed at bot-startup.
-    recompute_on_settle: true
+    recompute_on_settle: false
     recompute_min_new_settles: 25
     min_bucket_n: 100
     wr_veto_threshold: 0.4
@@ -426,15 +412,11 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
-    # 2026-05-23: per-(side,window) allowlist. Only cells where ghost
-    # counterfactual WR < 0.45 on n>1k get the guard. Empty/missing = off.
-    # - BUY_YES 15m: counterfactual WR 39.1% (n=1722) — guard saves us.
-    # - BUY_NO  1h : counterfactual WR 40.2% (n=1274) — guard saves us.
-    # Everything else off: BUY_YES alt 1h LONG counterfactuals were 78-91% WR
-    # (sol/doge/xrp/bnb), guard was destroying that edge.
     alt_momentum_confirm:
-      buy_yes: ["15m"]
-      buy_no: ["1h"]
+      buy_yes:
+      - 15m
+      buy_no:
+      - 1h
     min_liquidity: 750
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
@@ -480,7 +462,7 @@ strategies:
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
     lag_signal_min_pct: 0.12
-    neutral_macro_require_spike_or_lag: false
+    neutral_macro_require_spike_or_lag: true
     enforce_alt_1h_alignment: true
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
@@ -588,15 +570,16 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
-    # 2026-05-23: shadow-mode ghost-data collection for ETH momentum guard.
-    # Guard runs the BEARISH/BULLISH MACD check and logs would-be-rejected
-    # candidates to rejected_candidates.jsonl with reason suffixed `_shadow`,
-    # but does NOT block trades. Lets us accumulate fresh post-f291b67 ghost
-    # data partitioned by (window, side) without sacrificing trade frequency.
     eth_momentum_confirm:
       shadow:
-        buy_yes: ["5m", "15m", "1h"]
-        buy_no: ["5m", "15m", "1h"]
+        buy_yes:
+        - 5m
+        - 15m
+        - 1h
+        buy_no:
+        - 5m
+        - 15m
+        - 1h
     min_liquidity: 1000
     min_edge: 0.09
     min_edge_5m: 0.1
@@ -1409,10 +1392,10 @@ ai:
     log_jsonl: true
     provider_name: ''
   decision_layer:
-    enabled: true
+    enabled: false
     min_confidence: 0.6
     hard_skip_if_unavailable_on_enforced: true
-    use_shadow_portfolio: true
+    use_shadow_portfolio: false
     enforced_lanes:
       bitcoin:
       - neutral_15m

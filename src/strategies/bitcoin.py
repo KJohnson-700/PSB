@@ -339,6 +339,8 @@ class BitcoinStrategy:
         signal_reason: str,
         htf_bias: Optional[str],
     ) -> float:
+        self._last_calibration_vetoed = False
+        self._last_calibration_lane_id = ""
         cal = getattr(self, "lane_calibrator", None)
         if cal is None:
             return raw_est_prob
@@ -357,6 +359,8 @@ class BitcoinStrategy:
         lane_id = str(lane_meta.get("lane_id") or "").strip()
         if not lane_id:
             return raw_est_prob
+        self._last_calibration_lane_id = lane_id
+        self._last_calibration_vetoed = bool(cal.is_vetoed(lane_id))
         return float(cal.calibrate(lane_id, raw_est_prob))
 
     def _maybe_bias_quant_disagree_override(
@@ -2445,11 +2449,13 @@ class BitcoinStrategy:
                         effective_min_edge,
                     )
                 else:
-                    _skip_reason = (
-                        "lane_min_edge_bias_quant_disagree"
-                        if _bias_quant_disagree
-                        else "lane_min_edge"
-                    )
+                    _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
+                    if _vetoed:
+                        _skip_reason = "beta_vetoed"
+                    elif _bias_quant_disagree:
+                        _skip_reason = "lane_min_edge_bias_quant_disagree"
+                    else:
+                        _skip_reason = "lane_min_edge"
                     _bump_skip(_skip_reason)
                     log_rejected_candidate(
                         strategy=self._signal_strategy_name,
@@ -2471,6 +2477,8 @@ class BitcoinStrategy:
                             "confidence": round(float(confidence), 6),
                             "side_source": side_source,
                             "bias_quant_disagree": bool(_bias_quant_disagree),
+                            "beta_vetoed": _vetoed,
+                            "calibration_lane_id": getattr(self, "_last_calibration_lane_id", ""),
                             **build_market_context(
                                 asset_spot=ta.current_price,
                                 btc_spot=ta.current_price,
@@ -2488,7 +2496,7 @@ class BitcoinStrategy:
                     if action == "BUY_NO":
                         _record_buy_no_skip(
                             market=market,
-                            skip_reason="lane_min_edge",
+                            skip_reason=_skip_reason,
                             yes_price=yes_price,
                             edge=edge,
                             effective_min_edge=effective_min_edge,

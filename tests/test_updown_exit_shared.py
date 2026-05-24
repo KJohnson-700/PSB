@@ -108,6 +108,31 @@ def test_effective_stop_loss_applies_dynamic_regime_volatility_and_convergence()
     )
 
 
+def test_effective_stop_loss_applies_range_regime_multiplier():
+    assert (
+        effective_updown_stop_loss_pct(
+            0.20,
+            0.00,
+            in_profit_trigger_pct=0.05,
+            tighten_to_pct=0.08,
+            dynamic_stop_enabled=True,
+            btc_1h_regime="RANGE",
+            entry_volatility=0.01,
+            convergence_score=0.65,
+            dynamic_stop_bull_mult=0.95,
+            dynamic_stop_range_mult=1.05,
+            dynamic_stop_bear_mult=1.15,
+            dynamic_stop_high_vol_mult=1.15,
+            dynamic_stop_volatility_threshold=0.02,
+            dynamic_stop_low_convergence_mult=1.10,
+            dynamic_stop_high_convergence_mult=0.95,
+            dynamic_stop_low_convergence_threshold=0.55,
+            dynamic_stop_high_convergence_threshold=0.75,
+        )
+        == pytest.approx(0.20 * 1.05)
+    )
+
+
 def test_effective_stop_loss_tightens_for_bull_high_convergence():
     assert (
         effective_updown_stop_loss_pct(

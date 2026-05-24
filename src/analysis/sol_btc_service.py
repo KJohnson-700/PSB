@@ -68,6 +68,15 @@ CHAINLINK_ABI = [
     },
 ]
 
+# Shared result cache for Chainlink reads. Chainlink feeds for major pairs
+# update every ~1h; this cache avoids 7+ blocking Web3 HTTP RPC roundtrips
+# per 60s trading cycle (one per strategy × asset × call). Keyed by
+# (network, address) so BTCPriceService + every SOLBTCService subclass share
+# the same BTC feed result. Value is (price, on_chain_updated_at, fetch_monotonic).
+_CHAINLINK_RESULT_CACHE: Dict[Tuple[str, str], Tuple[float, datetime, float]] = {}
+_CHAINLINK_RESULT_TTL_SEC = 60.0
+
+
 ORACLE_FEEDS = {
     "BTCUSDT": ("polygon", CHAINLINK_BTC_USD),
     "ETHUSDT": ("polygon", CHAINLINK_ETH_USD),
@@ -496,6 +505,16 @@ class SOLBTCService:
             return None, None, None
         network, address = feed
         cache_key = (network, address)
+
+        # Process-shared result cache: skip the 2 blocking Web3 RPCs when a
+        # recent read for this feed is on hand. Chainlink updates ~hourly on
+        # major pairs, so a 60s TTL is well within freshness tolerance.
+        _cached_result = _CHAINLINK_RESULT_CACHE.get(cache_key)
+        if _cached_result is not None:
+            _price, _updated, _ts = _cached_result
+            if (time.monotonic() - _ts) < _CHAINLINK_RESULT_TTL_SEC:
+                return _price, _updated, network
+
         cached = self._oracle_clients.get(cache_key)
         if cached is not None:
             try:
@@ -505,6 +524,7 @@ class SOLBTCService:
                 decimals = contract.functions.decimals().call()
                 price = answer / (10 ** decimals)
                 updated = datetime.utcfromtimestamp(updated_at)
+                _CHAINLINK_RESULT_CACHE[cache_key] = (price, updated, time.monotonic())
                 return price, updated, network
             except Exception:
                 self._oracle_clients.pop(cache_key, None)
@@ -522,6 +542,7 @@ class SOLBTCService:
                 price = answer / (10 ** decimals)
                 updated = datetime.utcfromtimestamp(updated_at)
                 self._oracle_clients[cache_key] = (w3, contract)
+                _CHAINLINK_RESULT_CACHE[cache_key] = (price, updated, time.monotonic())
                 logger.info(
                     f"Chainlink {symbol.replace('USDT', '')}/USD: ${price:,.2f} via {network}:{rpc_url}"
                 )

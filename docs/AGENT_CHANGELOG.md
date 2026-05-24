@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-24 — May 22 baseline recovery guardrails
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Restored paper calibration to baseline-style shadow mode (`shadow_mode: true`, `paper_shadow_mode: true`) while keeping live calibration available via `live_shadow_mode: false`. Re-enabled the beta/per-lane veto guardrails (`beta_veto_max_mean: 0.4`, `per_lane_thresholds.enabled: true`) with threshold auto-recompute disabled so the veto set does not silently churn during a session.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Reverted broad macro loosening back toward the May 22 baseline posture for spike/lag and 5m BTC-catalyst requirements, and restored HYPE oracle basis caps to the previous tighter values. Operational-only improvements from the Claude pass remain in place: provider logging/timeouts, MiniMax cooldown handling, Chainlink result caching, and ETH momentum shadow logging. The unverified Kimi OAuth provider and disabled directional-breaker experiment were removed from the worktree cleanup.
+
+**[`src/analysis/lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), [`tests/test_lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_calibration.py):** Rejected the asymmetric alpha-clamp experiment and returned to the May 22 baseline calibration semantics: sub-1 alpha can shrink down to the symmetric low clamp instead of being forced back to identity.
+
+**Why:** The May 22 baseline note identified symmetric alpha shrinkage and BTC-dominated paper shadow behavior as the reliable reference, while the post-baseline asymmetric clamp was explicitly marked as the bug that allowed later bleed. This recovery keeps useful observability/runtime work but restores the strategy guardrails needed to compare future sessions against the baseline cleanly.
+
 ## 2026-05-21 — Ghost historical metadata reconstruction closed
 
 **[`tools/reconstruct_ghost_metadata.py`](/Users/mainfolder/Documents/psb-main%201/tools/reconstruct_ghost_metadata.py):** Added an operator reconstruction pass for settled ghost rows written before BTC 1H regime and convergence telemetry existed. The tool extends BTC 15m OHLCV through the settled ghost window, resamples completed 1H candles without lookahead, classifies `btc_1h_regime`, reconstructs `convergence_score` from copied probe/edge metadata when available, falls back to explicit reason-prior scores when old rows lack probes, writes a timestamped backup, and emits a JSON coverage report.

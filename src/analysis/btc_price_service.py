@@ -404,6 +404,22 @@ class BTCPriceService:
                 self._warned_missing_web3 = True
             return None, None
 
+        # Process-shared result cache (see sol_btc_service for the dict).
+        # Every strategy instantiates its own BTCPriceService, so without
+        # this dedup we'd issue 2 blocking Web3 RPCs per strategy per 60s
+        # cycle for the same on-chain BTC/USD feed.
+        from src.analysis.sol_btc_service import (
+            _CHAINLINK_RESULT_CACHE,
+            _CHAINLINK_RESULT_TTL_SEC,
+        )
+
+        _cache_key = ("polygon", CHAINLINK_BTC_USD)
+        _cached_result = _CHAINLINK_RESULT_CACHE.get(_cache_key)
+        if _cached_result is not None:
+            _price, _updated, _ts = _cached_result
+            if (time.monotonic() - _ts) < _CHAINLINK_RESULT_TTL_SEC:
+                return _price, _updated
+
         if self._w3 is not None and self._chainlink_contract is not None:
             try:
                 round_data = self._chainlink_contract.functions.latestRoundData().call()
@@ -411,6 +427,7 @@ class BTCPriceService:
                 decimals = self._chainlink_contract.functions.decimals().call()
                 price = answer / (10 ** decimals)
                 updated = datetime.utcfromtimestamp(updated_at)
+                _CHAINLINK_RESULT_CACHE[_cache_key] = (price, updated, time.monotonic())
                 return price, updated
             except Exception:
                 self._w3 = None
@@ -430,6 +447,7 @@ class BTCPriceService:
                 updated = datetime.utcfromtimestamp(updated_at)
                 self._w3 = w3
                 self._chainlink_contract = contract
+                _CHAINLINK_RESULT_CACHE[_cache_key] = (price, updated, time.monotonic())
                 logger.info(f"Chainlink BTC/USD: ${price:,.2f} via {rpc_url}")
                 return price, updated
             except Exception as e:

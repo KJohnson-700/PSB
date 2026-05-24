@@ -1201,7 +1201,7 @@ class UpdownBacktestEngine:
                 result.m5_direction = "LEAN_DOWN"
 
             m5_age_minutes = (
-                float(m5_early.iloc[-1]["open_time"] - window_open).total_seconds() / 60.0
+                (m5_early.iloc[-1]["open_time"] - window_open).total_seconds() / 60.0
             )
             result.m5_in_prediction_window = 3.0 <= m5_age_minutes <= 4.0
 

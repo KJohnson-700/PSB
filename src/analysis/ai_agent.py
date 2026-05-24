@@ -2897,6 +2897,11 @@ Reply with only the JSON object required by the system message (four keys: reaso
         """
         max_attempts = 2
         call_timeout = self._provider_timeout(provider_config)
+        pc = provider_config or {}
+        cooldown_429 = float(pc.get("cooldown_on_429_seconds", 60.0))
+        ck = self._cooldown_key("minimax", model)
+        if self._on_cooldown(ck):
+            raise RuntimeError("minimax_cooldown")
         for attempt in range(max_attempts):
             start_time = time.time()
             client = None
@@ -2904,9 +2909,12 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 if anthropic is None:
                     raise ImportError("anthropic package is not installed")
                 # MiniMax Coding Plan uses Anthropic-compatible endpoint with sk-cp- keys.
+                # max_retries=0 disables the SDK's built-in 429/5xx retry loop so a
+                # rate-limited account doesn't burn ~3s of waits before we fall through.
                 client = anthropic.AsyncAnthropic(
                     api_key=api_key,
-                    base_url="https://api.minimax.io/anthropic"
+                    base_url="https://api.minimax.io/anthropic",
+                    max_retries=0,
                 )
 
                 response = await asyncio.wait_for(
@@ -2953,6 +2961,19 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     or "529" in err_msg
                     or "overloaded" in err_msg.lower()
                 )
+                is_rate_limited = (
+                    status_code == 429
+                    or "429" in err_msg
+                    or "rate_limit" in err_msg.lower()
+                    or "usage limit" in err_msg.lower()
+                )
+                if is_rate_limited:
+                    self._set_cooldown(ck, cooldown_429)
+                    logger.warning(
+                        "MiniMax rate-limited (429) — cooling down for %.0fs before next attempt.",
+                        cooldown_429,
+                    )
+                    raise
                 if is_overloaded and attempt < max_attempts - 1:
                     logger.warning(
                         f"MiniMax overloaded (529) — retrying in 5s for market {market_id} "
@@ -2964,7 +2985,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 raise
             finally:
                 await _close_async_client_quietly(client)
-    
+
     def _extract_text_from_content(self, content_blocks) -> str:
         """Extract text from Anthropic-style content blocks (handles ThinkingBlock + TextBlock)."""
         parts = []
