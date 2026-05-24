@@ -3646,6 +3646,7 @@ async def main():
         "ETHERSCAN_API_KEY": os.getenv("ETHERSCAN_API_KEY"),
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
         "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY"),
+        "MOONSHOT_API_KEY": os.getenv("MOONSHOT_API_KEY"),
         "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"),
         "MINIMAX_API_KEY": (
             os.getenv("MINIMAX_API_KEY")

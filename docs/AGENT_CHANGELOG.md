@@ -14,6 +14,12 @@
 
 **Why:** The previous recovery pass left the global beta veto and per-lane threshold veto path active. That could still block high-WR ghost lanes such as BTC 15m neutral/down and BTC 1h bullish/bearish despite paper calibration being in shadow mode. This change disables those veto layers before restart without changing BTC/SOL/XRP strategy thresholds or the BTC-decoupled alt logic.
 
+## 2026-05-24 — Kimi decision provider restored
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Added `kimi_decision` as the first live `ai.provider_chain` entry using the existing OpenAI-compatible adapter, `MOONSHOT_API_KEY`, `https://api.moonshot.ai/v1`, and `model: kimi-k2.6`. Kept `minimax` as the next fallback. Pinned `shadow_pipeline.provider_name` to `ollama_local` / `qwen2.5:14b` and `research_narrative.provider_name` to `minimax` so lower-stakes shadow/summary work does not consume the Kimi decision provider by default.
+
+**Why:** The Moonshot key was still present, but Kimi was not in the active provider chain, so logs could only show MiniMax/Ollama. Kimi's official API is OpenAI-compatible at the Moonshot base URL, so no custom provider code is needed.
+
 ## 2026-05-24 — May 22 baseline recovery guardrails
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Restored paper calibration to baseline-style shadow mode (`shadow_mode: true`, `paper_shadow_mode: true`) while keeping live calibration available via `live_shadow_mode: false`. Re-enabled the beta/per-lane veto guardrails (`beta_veto_max_mean: 0.4`, `per_lane_thresholds.enabled: true`) with threshold auto-recompute disabled so the veto set does not silently churn during a session.

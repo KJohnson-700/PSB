@@ -1355,6 +1355,14 @@ ai:
   consensus_enabled: false
   consensus_min_agree: 2
   provider_chain:
+  - name: kimi_decision
+    type: openai
+    base_url: https://api.moonshot.ai/v1
+    model: kimi-k2.6
+    api_key_secret: MOONSHOT_API_KEY
+    json_mode: true
+    timeout_seconds: 90
+    cooldown_on_429_seconds: 90
   - name: minimax
     type: minimax
     model: MiniMax-M2.7
@@ -1390,7 +1398,7 @@ ai:
     max_calls_per_scan: 2
     min_confidence_to_log: 0.6
     log_jsonl: true
-    provider_name: ''
+    provider_name: minimax
   decision_layer:
     enabled: false
     min_confidence: 0.6
@@ -1413,8 +1421,8 @@ ai:
     max_calls_per_scan: 1
     min_confidence_to_log: 0.6
     log_jsonl: true
-    provider_name: ''
-    model_override: ''
+    provider_name: ollama_local
+    model_override: qwen2.5:14b
   shadow_observer:
     enabled: true
     max_calls_per_scan: 1

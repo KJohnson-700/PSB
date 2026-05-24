@@ -1766,6 +1766,7 @@ def _process_env_ai_keys() -> Dict[str, str]:
     names = (
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "MOONSHOT_API_KEY",
         "GOOGLE_API_KEY",
         "MINIMAX_API_KEY",
         "ANTHROPIC_API_KEY",
