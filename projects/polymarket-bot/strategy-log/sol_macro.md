@@ -13,6 +13,25 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-25 — Exploration sizing instead of SOL suppression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), SOL 5m/15m up/down entry-policy overrides now include `size_multiplier: 0.3`, while `alt_momentum_confirm` remains open and `iql_15m_enabled: false` so SOL continues collecting live calibration samples.
+- **Why:** The goal is not to starve SOL. The weak current session showed where the damage concentrated, but SOL still needs enough paper/ghost data to learn which prediction families can be converted into winners.
+- **Hypothesis:** SOL trade count remains meaningful, but standard-lane drawdowns are capped while calibration and lane attribution accumulate enough evidence to improve the prediction logic.
+- **Expected outcome:** Next session should show SOL entries continuing, with smaller per-trade notional on 5m/15m exploration lanes and enough closed samples to compare `standard` vs `spike` families.
+- **Actual outcome:** `pending` (need ≥15 closed SOL trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-25 — Restore SOL protective gates after weak current session
+
+- **Superseded:** Same-day operator feedback clarified the goal is calibration/exploration, not starvation. See the entry above; SOL gates were re-opened with `0.3x` exploratory sizing.
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), restored `sol_macro.alt_momentum_confirm` to `buy_yes: [15m]` and `buy_no: [1h]`, restored `sol_macro.iql_15m_enabled: true`, and restored shared `updown_composite.default_min_score: 0.62`.
+- **Why:** Current paper session `test_20260525_051023` underperformed the May 22 baseline on trade quality and concentrated losses in SOL standard down lanes. SOL total was `3/16`, `-$44.31`; `sol_macro|5m|down|bearish__bearish__bull|standard` was `1/9`, `-$37.57`.
+- **Hypothesis:** Restoring the protective gates should reduce repeat SOL standard-down entries, especially 5m bearish/BTC-bull setups that the May 22 baseline already flagged as structurally weak.
+- **Expected outcome:** Next session should show fewer SOL 5m standard-down entries and lower SOL drawdown contribution; skip diagnostics should show restored `buy_no_no_alt_momentum_confirm` / `iql_15m_reject` when applicable.
+- **Actual outcome:** `pending` (need ≥15 closed SOL trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — Cap live lane-calibration alpha at identity
 
 - **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify SOL-family probabilities away from 50/50; sub-1 shrinkage remains active.

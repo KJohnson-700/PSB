@@ -27,9 +27,9 @@ def _base_cfg() -> dict:
 
 def test_resolve_entry_policy_side_maps_trade_thesis():
     assert resolve_entry_policy_side(direction="UP", action="BUY_YES") == "up"
-    assert resolve_entry_policy_side(direction="UP", action="BUY_NO") == "down"
+    assert resolve_entry_policy_side(direction="UP", action="BUY_NO") == "up"
     assert resolve_entry_policy_side(direction="DOWN", action="BUY_YES") == "down"
-    assert resolve_entry_policy_side(direction="DOWN", action="BUY_NO") == "up"
+    assert resolve_entry_policy_side(direction="DOWN", action="BUY_NO") == "down"
 
 
 def test_entry_policy_precedence_window_side_beats_strategy_and_global():
@@ -102,7 +102,7 @@ def test_bitcoin_resolves_lane_specific_policy():
         }
     )
     strat = BitcoinStrategy(cfg, MagicMock(), PositionSizer())
-    side, policy = strat._resolve_lane_entry_policy(window_size="5m", action="BUY_NO", direction="UP")
+    side, policy = strat._resolve_lane_entry_policy(window_size="5m", action="BUY_NO", direction="DOWN")
     assert side == "down"
     assert policy.enabled is False
     side2, policy2 = strat._resolve_lane_entry_policy(window_size="5m", action="BUY_YES", direction="UP")
@@ -137,7 +137,7 @@ def test_sol_style_strategies_resolve_window_side_specific_policy():
         local_cfg = _base_cfg()
         local_cfg["strategies"][key].update(cfg["strategies"]["sol_macro"])
         strat = cls(local_cfg, MagicMock(), PositionSizer())
-        side, policy = strat._resolve_lane_entry_policy(window_size="15m", action="BUY_NO", direction="UP")
+        side, policy = strat._resolve_lane_entry_policy(window_size="15m", action="BUY_NO", direction="DOWN")
         assert side == "down"
         assert policy.min_edge == 0.11
         assert policy.size_multiplier == 0.8

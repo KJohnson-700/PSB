@@ -44,6 +44,9 @@ def _attach_mocks(bot: PolyBot) -> None:
     bot.risk_manager.add_position = MagicMock()
     bot.risk_manager.active_positions = {}
     bot.journal = MagicMock()
+    bot.journal.get_open_positions = MagicMock(return_value=[])
+    bot.journal.get_closed_trades = MagicMock(return_value=[])
+    bot.journal.get_all_entries = MagicMock(return_value=[])
     bot.notifier = MagicMock()
     bot.notifier.notify_trade = AsyncMock()
     bot.clob_client = MagicMock()
@@ -55,6 +58,7 @@ def _attach_mocks(bot: PolyBot) -> None:
     bot.lane_manager.can_execute = MagicMock(
         side_effect=lambda lane_id, *, dry_run: (True, "", "active", lane_id)
     )
+    bot._session_traded_market_ids = set()
 
 
 def _sol_like_signal(*, action: str, strategy_name: str = "hype_macro") -> SolMacroSignal:
@@ -195,6 +199,25 @@ async def test_execute_sol_macro_impl_buy_no():
 
 
 @pytest.mark.asyncio
+async def test_execute_sol_macro_blocks_reentry_after_same_market_closed():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.journal.get_closed_trades.return_value = [
+        {"market_id": "m_exec_drv_1", "trade_id": "old_trade", "strategy": "hype_macro"}
+    ]
+    bot._session_traded_market_ids = bot._load_session_traded_market_ids()
+    sig = _sol_like_signal(action="BUY_NO", strategy_name="hype_macro")
+
+    await bot._execute_sol_macro_signal_impl(sig)
+
+    bot.clob_client.place_order.assert_not_called()
+    bot.risk_manager.add_position.assert_not_called()
+    bot.journal.log_entry.assert_not_called()
+    bot.journal.log_skip.assert_called_once()
+    assert bot.journal.log_skip.call_args.args[3] == "duplicate_session_market"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro"])
 async def test_sol_style_strategies_execute_buy_no_as_no_leg(strategy_name: str):
     bot = _bare_polybot()
@@ -253,6 +276,19 @@ async def test_execute_bitcoin_impl_buy_no_order_outcome():
     extra = bot.journal.log_entry.call_args.kwargs["extra"]
     assert extra["raw_est_prob"] == pytest.approx(0.47)
     assert extra["est_prob"] == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
+async def test_execute_bitcoin_blocks_second_entry_same_market_in_process():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    sig = _bitcoin_signal(action="BUY_YES")
+
+    await bot._execute_bitcoin_signal_impl(sig)
+    await bot._execute_bitcoin_signal_impl(sig)
+
+    bot.clob_client.place_order.assert_called_once()
+    assert bot.journal.log_skip.call_args.args[3] == "duplicate_session_market"
 
 
 @pytest.mark.asyncio

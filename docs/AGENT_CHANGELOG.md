@@ -8,6 +8,38 @@
 
 ---
 
+## 2026-05-25 — BNB/DOGE 1h exploration before restart
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Added explicit BNB/DOGE 1h exploration policy: 1h `up.min_edge 0.09 -> 0.08`, 1h `down.min_edge 0.08 -> 0.075`, 1h `entry_price_max 0.55 -> 0.58`, and `size_multiplier: 0.3` for DOGE 1h to match BNB’s calibration-sized 1h posture.
+
+**Why:** Current calibration data showed BNB had zero 1h closed trades and DOGE had only one 1h closed trade. This is starvation, not enough evidence to classify those lanes as losers. The change is meant to collect 1h samples at small notional before restart.
+
+## 2026-05-25 — SOL/HYPE exploration posture instead of suppression
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Re-opened SOL sample collection by leaving `alt_momentum_confirm` empty and `iql_15m_enabled: false`, but added `0.30x` SOL entry-policy sizing on 5m/15m up/down lanes. Nudged HYPE BUY_NO thresholds slightly lower (`min_edge_buy_no 0.08 -> 0.075`, 5m/15m down lane overrides `0.08 -> 0.075`) and restored HYPE’s wider discovery timing windows while keeping its exploratory `0.30x` lane sizing.
+
+**Why:** The goal is not to simply cut losing lanes this early. SOL needs enough live/ghost samples to learn which predictions can become winners; the control should be smaller exploratory notional and better lane attribution, not starvation. HYPE was profitable in `test_20260525_051023` but mostly skipped on `lane_min_edge`, so it gets a small throughput nudge.
+
+## 2026-05-25 — Restore SOL/DOGE gate posture after weak session
+
+**Superseded:** Same-day operator feedback clarified that SOL should keep trading for calibration; the entry above re-opened SOL gates with smaller exploratory sizing.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/analysis/lane_entry_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_entry_policy.py), [`tests/test_lane_entry_policy.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_entry_policy.py):** Reverted the uncommitted paper-loop loosening that removed SOL alt-momentum confirmation, disabled SOL 15m IQL, widened DOGE windows, and lowered the shared composite floor. Also fixed lane entry-policy side resolution so BUY_NO/down trades use the `down` override instead of the `up` override.
+
+**Why:** Current paper session `test_20260525_051023` underperformed the May 22 baseline on WR/avg trade, with losses concentrated in SOL standard down lanes (`sol_macro|5m|down|bearish__bearish__bull|standard`: 1/9, -$37.57; SOL total: 3/16, -$44.31). The removed SOL gates were meant to protect the exact lane family that bled.
+
+## 2026-05-25 — Same-market re-entry blocked
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):** Added a session-level traded-market ledger and execution guard. Once any strategy has entered a Polymarket `market_id` in the current session, later signals for that same market are skipped as `duplicate_session_market`, even if the prior position already exited.
+
+**Why:** Fresh paper session `test_20260525_041239` re-entered HYPE market `2346183` three times after stop-loss exits inside the same 15m market. The old duplicate guard only excluded currently open markets, so repeated stop/re-entry loops were possible.
+
+## 2026-05-25 — Session scan diagnostics persisted
+
+**[`src/execution/trade_journal.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/trade_journal.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_trade_journal_resumable.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_trade_journal_resumable.py), [`tests/test_scan_diagnostics_annotation.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_scan_diagnostics_annotation.py):** `summary.json` now refreshes immediately after entries, and each cycle appends a compact `scan_diagnostics` annotation with per-strategy signal counts, allowed side, action counts, side-source counts, and top skip reasons.
+
+**Why:** Session review showed enabled bullish lanes could look silent in `entries.jsonl` even though live diagnostics had scanned and rejected them. Persisting scan diagnostics makes no-entry lane coverage auditable from the session journal instead of relying on transient dashboard state.
+
 ## 2026-05-25 — Lane calibration alpha amplification capped
 
 **[`src/analysis/lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), [`tests/test_lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_calibration.py):** Changed `ALPHA_CLAMP_HI` from `2.50` to `1.00`. Raw `alpha_ewma` can still exceed identity for telemetry, but the effective alpha used by live calibration can no longer amplify raw model confidence away from 50/50; sub-1 alpha shrinkage remains active.
@@ -1162,6 +1194,14 @@ Work landed on `main` the same calendar day; individual commits below are the au
 | Commit | Summary |
 |--------|---------|
 | `uncommitted` | Added real `doge_macro` / `bnb_macro` strategy classes, runtime instantiation in [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), exposure-manager routing, scan/execution diagnostics, and bootstrap config blocks in [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) so both lanes can generate rejected-candidate logs and settle into ghost-calibration data. Also extended [`tests/test_live_config_apply.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_live_config_apply.py) for the new runtime lanes. |
+
+---
+
+## 2026-05-25 — Paper loop gate cleanup
+
+| Commit | Summary |
+|--------|---------|
+| `uncommitted` | Loosened live paper blockers that were starving `sol_macro` and `doge_macro`: SOL no longer requires the stale 15m IQL / alt-momentum confirmations before paper entries, DOGE entry windows widened to match active scan cadence, and the up/down composite floor lowered so candidates can reach paper execution for calibration. |
 
 ---
 

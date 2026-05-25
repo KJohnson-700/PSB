@@ -493,6 +493,7 @@ class PolyBot:
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
             self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
             logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
+        self._session_traded_market_ids: Set[str] = self._load_session_traded_market_ids()
 
         def _dead_zone_skip_callback(
             *,
@@ -1684,6 +1685,84 @@ class PolyBot:
         """Return True if the manual global stop file exists (do not place new trades)."""
         return KILL_SWITCH_FILE.exists()
 
+    def _load_session_traded_market_ids(self) -> Set[str]:
+        """Markets already entered this session; used to prevent short-window re-entry."""
+        market_ids: Set[str] = set()
+        try:
+            for pos in self.journal.get_open_positions():
+                mid = str(pos.get("market_id") or "").strip()
+                if mid:
+                    market_ids.add(mid)
+        except Exception:
+            pass
+        try:
+            for trade in self.journal.get_closed_trades():
+                mid = str(trade.get("market_id") or "").strip()
+                if mid:
+                    market_ids.add(mid)
+        except Exception:
+            pass
+        try:
+            for entry in self.journal.get_all_entries(limit=20000):
+                if entry.get("event") != "ENTRY":
+                    continue
+                mid = str(entry.get("market_id") or "").strip()
+                if mid:
+                    market_ids.add(mid)
+        except Exception:
+            pass
+        return market_ids
+
+    def _check_session_market_reentry(
+        self,
+        *,
+        strategy: str,
+        market_id: str,
+        market_question: str,
+        lane_meta: Dict[str, Any],
+        signal_reason: Optional[str],
+    ) -> bool:
+        """Block multiple entries into the same Polymarket market in one session."""
+        mid = str(market_id or "").strip()
+        if not mid:
+            return True
+        traded = getattr(self, "_session_traded_market_ids", None)
+        if traded is None:
+            traded = self._load_session_traded_market_ids()
+            self._session_traded_market_ids = traded
+        if mid not in traded:
+            return True
+        reason = "duplicate_session_market"
+        self.journal.log_skip(
+            mid,
+            market_question,
+            strategy,
+            reason,
+            self.bankroll,
+            extra=self._lane_skip_extra(
+                lane_meta=lane_meta,
+                signal_reason=signal_reason,
+                skip_reason=reason,
+            ),
+        )
+        logging.warning(
+            "%s blocked duplicate session market entry: market_id=%s question=%s",
+            strategy,
+            mid,
+            market_question[:80],
+        )
+        return False
+
+    def _remember_session_market_entry(self, market_id: str) -> None:
+        mid = str(market_id or "").strip()
+        if not mid:
+            return
+        traded = getattr(self, "_session_traded_market_ids", None)
+        if traded is None:
+            traded = self._load_session_traded_market_ids()
+            self._session_traded_market_ids = traded
+        traded.add(mid)
+
     async def _handle_exit_decision(self, exit_decision: ExitDecision) -> None:
         """Exit order + journal + risk updates (serialized with other execution)."""
         async with self._execution_lock:
@@ -1765,7 +1844,7 @@ class PolyBot:
             extra={"cycle_count": int(self._unified_cycle_count or 0)},
         )
 
-        from src.ops_pulse import log_ops_pulse
+        from src.ops_pulse import _scan_skip_digest, _side_selection_digest, log_ops_pulse
 
         if self._kill_switch_active():
             logging.warning(
@@ -2336,6 +2415,10 @@ class PolyBot:
             clean_shutdown=False,
             extra={"open_positions": positions, "daily_trades": daily},
         )
+        self._append_scan_diagnostics_annotation(
+            scan_skip_digest=_scan_skip_digest(self.last_ai_scan_stats),
+            side_selection=_side_selection_digest(self.last_ai_scan_stats),
+        )
         log_ops_pulse(self, "main")
 
         # AI broker housekeeping + diagnostic. Sweep expired/stale entries
@@ -2358,6 +2441,61 @@ class PolyBot:
                 )
             except Exception:
                 logging.exception("ai_broker housekeeping failed")
+
+    def _append_scan_diagnostics_annotation(
+        self,
+        *,
+        scan_skip_digest: Dict[str, Any],
+        side_selection: Dict[str, Any],
+    ) -> None:
+        """Persist no-entry scan reasons so session review includes silent lanes."""
+        try:
+            if not getattr(self, "journal", None):
+                return
+            compact_stats: Dict[str, Any] = {}
+            for strategy, stats in (self.last_ai_scan_stats or {}).items():
+                if strategy == "weather":
+                    continue
+                if not isinstance(stats, dict):
+                    continue
+                compact_stats[strategy] = {
+                    "enabled": stats.get("enabled"),
+                    "signals": stats.get("signals"),
+                    "markets_considered": stats.get("markets_considered")
+                    or stats.get("btc_markets_considered"),
+                    "allowed_side": stats.get("allowed_side"),
+                    "action_counts": stats.get("action_counts") or {},
+                    "side_source_counts": stats.get("side_source_counts") or {},
+                    "top_skip_reasons": stats.get("top_skip_reasons") or {},
+                }
+            if not compact_stats:
+                return
+            cycle = int(self._unified_cycle_count or 0)
+            blocked = {
+                strategy: data
+                for strategy, data in compact_stats.items()
+                if int(data.get("signals") or 0) == 0 and data.get("top_skip_reasons")
+            }
+            text = (
+                f"Cycle {cycle} scan diagnostics: "
+                f"{len(blocked)} no-signal strategies had recorded skip reasons."
+            )
+            self.journal.append_annotation(
+                trade_id=f"__scan_diagnostics__::{cycle}",
+                text=text,
+                strategy="scan_diagnostics",
+                extra={
+                    "source": "scan_diagnostics",
+                    "cycle": cycle,
+                    "last_signal_counts": dict(self.last_signal_counts),
+                    "cumulative_signal_counts": dict(self.cumulative_signal_counts),
+                    "scan_skip_digest": scan_skip_digest,
+                    "side_selection": side_selection,
+                    "per_strategy": compact_stats,
+                },
+            )
+        except Exception as e:
+            logging.warning("scan diagnostics journal annotation failed: %s", e)
 
     def _build_correlation_context(self, *, current_strategy: str, current_action: str) -> str:
         """Compact one-line summary of currently-open positions for the post-trade
@@ -2630,6 +2768,14 @@ class PolyBot:
             lane_meta=lane_meta,
         ):
             return
+        if not self._check_session_market_reentry(
+            strategy="bitcoin",
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+            lane_meta=lane_meta,
+            signal_reason=signal.reason,
+        ):
+            return
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
         if not can_trade:
             logging.warning(f"Bitcoin trade risk check failed: {reason}")
@@ -2759,6 +2905,7 @@ class PolyBot:
                 },
             )
             self.risk_manager.add_position(position)
+            self._remember_session_market_entry(signal.market_id)
 
             self.journal.log_entry(
                 trade_id=order.order_id,
@@ -2874,6 +3021,14 @@ class PolyBot:
             strategy=strat,
             signal=signal,
             lane_meta=lane_meta,
+        ):
+            return
+        if not self._check_session_market_reentry(
+            strategy=strat,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+            lane_meta=lane_meta,
+            signal_reason=signal.reason,
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
@@ -3008,6 +3163,7 @@ class PolyBot:
                 },
             )
             self.risk_manager.add_position(position)
+            self._remember_session_market_entry(signal.market_id)
 
             self.journal.log_entry(
                 trade_id=order.order_id,

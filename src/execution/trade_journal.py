@@ -316,6 +316,7 @@ class TradeJournal:
         self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self._summary_cache = None  # invalidate on new entry
         self._save_positions()
+        self._save_summary()
         logger.info(
             f"JOURNAL ENTRY: {strategy}/{action} {outcome} ${size:.0f} @ {entry_price:.3f} | {market_question[:50]}"
         )

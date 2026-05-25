@@ -51,22 +51,17 @@ def _normalize_entry_policy_map(raw: Any) -> Dict[str, Any]:
 def resolve_entry_policy_side(*, direction: Optional[str], action: Optional[str]) -> str:
     """Return thesis side (`up`/`down`) for an entry.
 
-    Direction is the market question orientation (UP or DOWN). Action describes how the
-    bot participates in that market (BUY_YES / BUY_NO / SELL_YES).
+    Strategy callers pass ``direction`` as the already-selected trade thesis
+    (UP/DOWN), not the raw market question orientation. Keep BUY_NO aligned to
+    that thesis so lane-specific down policies apply to BUY_NO/down trades.
     """
     dir_clean = str(direction or "").strip().upper()
     action_clean = str(action or "").strip().upper()
 
     if dir_clean == "DOWN":
-        if action_clean == "BUY_YES":
-            return "down"
-        if action_clean in {"BUY_NO", "SELL_YES"}:
-            return "up"
-    elif dir_clean == "UP":
-        if action_clean == "BUY_YES":
-            return "up"
-        if action_clean in {"BUY_NO", "SELL_YES"}:
-            return "down"
+        return "down"
+    if dir_clean == "UP":
+        return "up"
 
     if action_clean == "BUY_NO":
         return "down"

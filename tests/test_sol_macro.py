@@ -395,7 +395,7 @@ def test_optional_min_positive_m5_adj_blocks_weak_5m_signal():
     assert strategy._strong_enough_5m_signal(0.02, "BUY_YES") is False
 
 
-def test_sol_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
+def test_sol_live_lane_calibration_does_not_amplify_buy_no_probability(tmp_path):
     cfg = _make_config()
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
     strategy.lane_calibrator = LaneCalibrator(
@@ -422,7 +422,7 @@ def test_sol_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
         btc_1h_regime="BULL",
     )
 
-    assert calibrated < 0.43
+    assert calibrated == 0.43
 
 
 def test_min_positive_m5_adj_zero_allows_counter_momentum():

@@ -1,5 +1,6 @@
 """Tests for session directory resolution (dashboard vs bot resume alignment)."""
 
+import json
 from pathlib import Path
 import src.execution.trade_journal as trade_journal_module
 
@@ -72,6 +73,29 @@ def test_weather_subtype_summary_tracks_open_and_closed_stats(tmp_path: Path, mo
     assert summary["weather_subtype_stats"]["precip"]["trades"] == 0
     assert summary["weather_open_stats"]["temp"]["open"] == 0
     assert summary["weather_open_stats"]["precip"]["open"] == 1
+
+
+def test_summary_file_updates_immediately_on_entry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260525_entry_summary", resume_latest=False)
+
+    journal.log_entry(
+        trade_id="t-open",
+        market_id="btc-updown",
+        market_question="Bitcoin Up or Down",
+        strategy="bitcoin",
+        action="BUY_YES",
+        side="BUY",
+        outcome="YES",
+        size=10.0,
+        entry_price=0.5,
+        bankroll=500.0,
+    )
+
+    summary = json.loads((journal.session_dir / "summary.json").read_text())
+    assert summary["total_entries"] == 1
+    assert summary["open_positions"] == 1
+    assert summary["total_cost"] == 5.0
 
 
 def test_dead_zone_skip_records_and_resolves(tmp_path: Path, monkeypatch) -> None:
