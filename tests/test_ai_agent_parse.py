@@ -4,7 +4,9 @@ import pytest
 
 from datetime import datetime
 import json
+from types import MethodType, SimpleNamespace
 
+import src.analysis.ai_agent as ai_agent_mod
 from src.analysis.ai_agent import AIAgent, AIAnalysis, AIResponseValidationError
 from tests.async_helpers import run_async
 
@@ -86,6 +88,192 @@ def test_coerce_confidence_phrases() -> None:
     assert ag._coerce_confidence_score("medium-high") == 0.72
     assert ag._coerce_confidence_score("high") == 0.82
     assert ag._coerce_confidence_score(0.65) == 0.65
+
+
+def test_extract_openai_message_text_checks_kimi_alternate_fields() -> None:
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content="",
+                    reasoning_content=(
+                        '{"reasoning":"compact","confidence_score":0.7,'
+                        '"estimated_probability":0.58,"recommendation":"BUY_YES"}'
+                    ),
+                )
+            )
+        ]
+    )
+
+    assert AIAgent._extract_openai_message_text(response).startswith('{"reasoning"')
+
+
+def test_kimi_empty_content_cools_down_without_second_attempt(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            calls["n"] += 1
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=0),
+            )
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+        def close(self):
+            return None
+
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [],
+                "temperature": 0.1,
+                "max_tokens": 800,
+            }
+        }
+    )
+
+    async def fake_token(provider_config, *, force_refresh=False):
+        return "token"
+
+    monkeypatch.setattr(ai_agent_mod, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
+    monkeypatch.setattr(ag, "_kimi_code_access_token", fake_token)
+
+    with pytest.raises(AIResponseValidationError, match="empty Kimi response"):
+        run_async(
+            ag._analyze_with_kimi_coding(
+                "prompt",
+                "m-kimi-empty",
+                "kimi-for-coding",
+                "oauth",
+                {
+                    "name": "kimi_coding",
+                    "type": "kimi_coding",
+                    "json_mode": True,
+                    "cooldown_on_parse_error_seconds": 600,
+                    "retry_without_json_mode_on_400": False,
+                },
+                0.52,
+            )
+        )
+
+    assert calls["n"] == 1
+    assert ag._on_cooldown("kimi_coding:kimi-for-coding") is True
+
+
+def test_direct_decision_scope_uses_only_configured_provider() -> None:
+    calls = []
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [
+                    {"name": "kimi_coding", "type": "fake_kimi", "model": "kimi", "local": True},
+                    {"name": "minimax", "type": "fake_minimax", "model": "mini", "local": True},
+                ],
+                "direct_decision_provider_names": ["kimi_coding"],
+                "direct_decision_fallback_to_chain": False,
+                "min_call_gap": 0,
+            }
+        }
+    )
+
+    async def fake_kimi(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+        calls.append(provider_config["name"])
+        return AIAnalysis(
+            reasoning="kimi decision",
+            confidence_score=0.7,
+            estimated_probability=0.62,
+            recommendation="BUY_YES",
+            market_id=market_id,
+            timestamp=datetime.utcnow(),
+        )
+
+    async def fake_minimax(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+        calls.append(provider_config["name"])
+        return AIAnalysis(
+            reasoning="minimax fallback",
+            confidence_score=0.7,
+            estimated_probability=0.38,
+            recommendation="BUY_NO",
+            market_id=market_id,
+            timestamp=datetime.utcnow(),
+        )
+
+    ag._analyze_with_fake_kimi = MethodType(fake_kimi, ag)  # type: ignore[attr-defined]
+    ag._analyze_with_fake_minimax = MethodType(fake_minimax, ag)  # type: ignore[attr-defined]
+
+    out = run_async(
+        ag.analyze_market(
+            market_question="BTC up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-direct-scope",
+            strategy_hint="bitcoin",
+            quant_action="BUY_YES",
+            provider_scope="decision",
+        )
+    )
+
+    assert out is not None
+    assert out.recommendation == "BUY_YES"
+    assert calls == ["kimi_coding"]
+
+
+def test_analysis_scope_can_still_use_minimax_provider() -> None:
+    calls = []
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [
+                    {"name": "kimi_coding", "type": "fake_kimi", "model": "kimi", "local": True},
+                    {"name": "minimax", "type": "fake_minimax", "model": "mini", "local": True},
+                ],
+                "direct_decision_provider_names": ["kimi_coding"],
+                "min_call_gap": 0,
+            }
+        }
+    )
+
+    async def fake_kimi(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+        calls.append(provider_config["name"])
+        raise RuntimeError("kimi unavailable")
+
+    async def fake_minimax(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+        calls.append(provider_config["name"])
+        return AIAnalysis(
+            reasoning="analysis fallback",
+            confidence_score=0.65,
+            estimated_probability=0.48,
+            recommendation="BUY_NO",
+            market_id=market_id,
+            timestamp=datetime.utcnow(),
+        )
+
+    ag._analyze_with_fake_kimi = MethodType(fake_kimi, ag)  # type: ignore[attr-defined]
+    ag._analyze_with_fake_minimax = MethodType(fake_minimax, ag)  # type: ignore[attr-defined]
+
+    out = run_async(
+        ag.analyze_market(
+            market_question="diagnostic",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-analysis-scope",
+            strategy_hint="narrator",
+            provider_scope="analysis",
+        )
+    )
+
+    assert out is not None
+    assert out.recommendation == "BUY_NO"
+    assert calls == ["kimi_coding", "minimax"]
 
 
 def test_short_window_cache_ttl_overrides_legacy_default() -> None:

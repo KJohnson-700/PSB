@@ -2326,8 +2326,9 @@ class PolyBot:
 
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades
+        trade_limit = self.risk_manager.effective_max_trades_per_day()
         logging.info(
-            f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{self.risk_manager.max_trades_per_day}"
+            f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{trade_limit}"
         )
         _write_runtime_status(
             phase="cycle_complete",

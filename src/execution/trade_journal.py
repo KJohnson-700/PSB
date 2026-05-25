@@ -47,6 +47,29 @@ def infer_entry_leg(pos: Dict[str, Any]) -> str:
     return "YES"
 
 
+def is_phantom_exit_row(row: Dict[str, Any], max_plausible_pnl: float = 200.0) -> bool:
+    """Detect legacy phantom exits without dropping valid long-NO closes."""
+    try:
+        entry_price = float(row.get("entry_price") or 0)
+        current_price = float(row.get("current_price") or 0)
+        pnl = float(row.get("pnl") or 0)
+    except (TypeError, ValueError):
+        return False
+
+    extra = row.get("extra") or {}
+    leg_row = dict(row)
+    if isinstance(extra, dict) and extra.get("entry_leg") in ("YES", "NO"):
+        leg_row["entry_leg"] = extra["entry_leg"]
+    leg = infer_entry_leg(leg_row)
+
+    is_token_flip = (
+        leg == "YES"
+        and entry_price > 0
+        and abs(entry_price + current_price - 1.0) < 0.02
+    )
+    return is_token_flip or abs(pnl) > max_plausible_pnl
+
+
 @dataclass
 class JournalEntry:
     """Single trade journal entry — immutable once written."""
@@ -1039,9 +1062,7 @@ class TradeJournal:
                                             if e.get("event") != "EXIT":
                                                 continue
                                             pnl = e.get("pnl", 0) or 0
-                                            ep = e.get("entry_price", 0) or 0
-                                            cp = e.get("current_price", 0) or 0
-                                            if (ep > 0 and abs(ep + cp - 1.0) < 0.02) or abs(pnl) > 200:
+                                            if is_phantom_exit_row(e):
                                                 continue
                                             real_pnl += pnl
                                             real_trades += 1
@@ -1208,15 +1229,10 @@ class TradeJournal:
                         ep  = e.get("entry_price", 0) or 0
                         cp  = e.get("current_price", 0) or 0
                         tid = e.get("trade_id")
-                        # Phantom-exit detection — two complementary checks:
-                        # 1. Token-ordering mismatch: scanner returned the NO token
-                        #    price (≈ 1 - YES_price) as the YES price.  The result is
-                        #    entry_price + current_price ≈ 1.0 and a massive loss.
-                        # 2. Dollar-magnitude cap: |pnl| > $200 on a ≤$5 position.
-                        # Either condition is sufficient to mark the record as phantom.
-                        is_token_flip = ep > 0 and abs(ep + cp - 1.0) < 0.02
-                        is_oversized  = abs(pnl) > _MAX_PLAUSIBLE_PNL
-                        if is_token_flip or is_oversized:
+                        # Phantom-exit detection: token flips are only phantom in
+                        # YES-quote coordinates; long-NO exits can legitimately
+                        # satisfy entry_price + current_price ~= 1.0.
+                        if is_phantom_exit_row(e, _MAX_PLAUSIBLE_PNL):
                             logger.debug(
                                 f"_load_state: skipping phantom EXIT "
                                 f"pnl={pnl:+.2f} ep={ep} cp={cp} "

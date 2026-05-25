@@ -1838,7 +1838,7 @@
         <div class="tab active" data-view="live" onclick="switchMainView('live')">live</div>
         <div class="tab" data-view="performance" onclick="switchMainView('performance')">performance</div>
         <div class="tab" data-view="journal" onclick="switchMainView('journal')">journal</div>
-        <div class="tab" data-view="backtest" onclick="switchMainView('backtest')">backtest</div>
+        <div class="tab" data-view="ghosts" onclick="switchMainView('ghosts')">ghost lab</div>
         <div class="tab" data-view="commands" onclick="switchMainView('commands')">commands</div>
     </div>
 </div>
@@ -1854,13 +1854,13 @@
             <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
-            <div class="hero-item" title="Mark-to-market paper equity for the current session">
-                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Equity</div></div>
-            <div class="hero-item" title="Realized PnL from closed trades this session.">
+            <div class="hero-item" title="Current paper equity">
+                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
+            <div class="hero-item" title="Realized PnL this session">
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
-            <div class="hero-item" title="Open positions in the current bot session">
+            <div class="hero-item" title="Currently open positions">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Closed trades counted by the risk manager for the current UTC calendar day (not session-scoped). Session entry count stays on the Paper Journal tab.">
+            <div class="hero-item" title="Trades counted by the risk manager for the current UTC day">
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Trades today (UTC)</div></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
@@ -2655,51 +2655,142 @@
     </div><!-- /view-journal -->
 
     <!-- ═══════════════════════════════════════════════════════
-         BACKTEST TAB
+         GHOST LAB TAB — counterfactual + time-of-day explorer
+         (replaces the deprecated backtest tab; reads /api/ghosts/lab
+         which merges settled ghosts + DEAD_ZONE_SKIP counterfactuals
+         + live EXIT events + lane posteriors)
          ═══════════════════════════════════════════════════════ -->
-    <div id="view-backtest" style="display:none;">
+    <div id="view-ghosts" style="display:none;">
 
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.6;padding:10px 14px;background:linear-gradient(135deg,rgba(176,96,255,.07),rgba(0,255,136,.04));border:1px solid rgba(176,96,255,.2);border-radius:6px;margin-bottom:14px;box-shadow:0 0 20px rgba(176,96,255,.08),inset 0 0 0 1px rgba(255,255,255,.04);">
-        <strong style="color:var(--ye);">While the bot is running:</strong> Backtests start as a subprocess. Report cards and the crypto dropdown follow <strong>strategies.*.enabled</strong> in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> (same journal keys as live). Cards read <strong>this server’s</strong> <span style="font-family:IBM Plex Mono,monospace;">data/backtest/reports/</span> — CLI bundle output on your laptop does not appear on a hosted dashboard unless that disk is shared. After a <strong>local</strong> <span style="font-family:IBM Plex Mono,monospace;">run_crypto_backtest_bundle.py</span> run, use header <strong>Refresh</strong> or revisit this tab so cards refetch (this page does not watch the folder continuously).
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.55;padding:10px 14px;background:linear-gradient(135deg,rgba(176,96,255,.07),rgba(0,255,136,.04));border:1px solid rgba(176,96,255,.2);border-radius:6px;margin-bottom:14px;">
+        <strong style="color:var(--ye);">Ghost Lab</strong> — three data sources merged on canonical lane_id:
+        <strong>ghosts</strong> (rejected by the scanner, settled vs real outcome),
+        <strong>deadzone skips</strong> (per-hour counterfactual: what would have been blocked if <code>dead_zone_enabled: true</code>),
+        and <strong>live</strong> EXIT trades. The headline question: <em>are there hours of day this bot trades well vs poorly?</em>
+        <span style="color:var(--text-muted);">Existing BTC blocklist: hours <code>[0,1,2,7,11]</code> UTC — visualized below as gray slashes.</span>
     </div>
 
-    <div id="bt-hud" class="bt-hud" role="region" aria-label="Backtest run status">
-        <div class="bt-hud-scan" aria-hidden="true"></div>
-        <div class="bt-hud-head">
-            <span id="bt-hud-title" class="bt-hud-title">BACKTEST // STANDBY</span>
-            <span id="bt-hud-phase" class="bt-hud-chip">IDLE</span>
-        </div>
-        <div id="bt-hud-job" class="bt-hud-job">— // select scope + run</div>
-        <div class="bt-hud-pct-row">
-            <span id="bt-hud-pct" class="bt-hud-pct">—</span>
-            <span id="bt-hud-win" class="bt-hud-win"></span>
-        </div>
-        <div id="bt-hud-track" class="bt-hud-track"><div id="bt-hud-fill" class="bt-hud-fill"></div></div>
-        <div id="bt-hud-footer" class="bt-hud-footer"></div>
-    </div>
-
-    <!-- Backtest Controls -->
-    <div class="card bt-shell" data-aos="fade-up" style="margin-bottom:16px;">
-        <div class="bt-shell-head">
-            <div class="bt-shell-titlewrap">
-                <div class="bt-shell-kicker">Subprocess Control</div>
-                <h2 class="bt-shell-title">Backtest Controls</h2>
-                <div class="bt-shell-sub">Run local crypto backtests, monitor process output, and keep the backtest scope aligned with live-enabled strategies.</div>
+    <!-- Controls strip -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:10px 14px;">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+            <div>
+                <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Window</label>
+                <select id="gl-since" onchange="loadGhostLab()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.78rem;">
+                    <option value="7">last 7d</option>
+                    <option value="14">last 14d</option>
+                    <option value="30" selected>last 30d</option>
+                    <option value="60">last 60d</option>
+                </select>
             </div>
-            <span class="bt-shell-pill">Control</span>
-        </div>
-        <div class="controls">
-            <select id="crypto-bt-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.78rem;">
-                <option value="">-- Loading scopes from settings… --</option>
-            </select>
-            <button class="btn-sm btn-purple" type="button" id="crypto-bt-run-btn" onclick="startCryptoBacktest()">Run Crypto BT</button>
-        </div>
-        <div id="process-status-bt" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
-        <div style="margin-top:10px;">
-            <div class="bt-shell-section-label">Backtest output tail</div>
-            <pre id="backtest-output-tail" class="backtest-output-tail">No active backtest output.</pre>
+            <div>
+                <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Lane filter</label>
+                <select id="gl-lane" onchange="onGhostLabLaneChange()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.78rem;min-width:280px;">
+                    <option value="">(all lanes)</option>
+                </select>
+            </div>
+            <div>
+                <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Sources</label>
+                <span class="gl-chip" data-src="ghost"        onclick="toggleGhostLabSource('ghost')">ghost</span>
+                <span class="gl-chip" data-src="deadzone_skip" onclick="toggleGhostLabSource('deadzone_skip')">deadzone</span>
+                <span class="gl-chip" data-src="live"         onclick="toggleGhostLabSource('live')">live</span>
+            </div>
+            <div style="margin-left:auto;font-size:.7rem;color:var(--text-muted);" id="gl-counts">—</div>
+            <button class="btn-sm" type="button" onclick="loadGhostLab()">Refresh</button>
         </div>
     </div>
+
+    <!-- Panel 1 — 24h clock ring (animated) + Panel 2 — 7x24 heatmap, side by side -->
+    <div class="grid" style="grid-template-columns: minmax(320px, 1fr) minmax(380px, 1.4fr); gap:14px; margin-bottom:14px;">
+        <div class="card" data-aos="fade-up" style="padding:12px 14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <h3 style="margin:0;font-size:.95rem;">Hour-of-day clock</h3>
+                <div>
+                    <button class="btn-sm" type="button" id="gl-play-btn" onclick="toggleGhostLabClock()">▶ Play</button>
+                </div>
+            </div>
+            <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px;">Wedge color = WR (red&lt;0.40, amber 0.40-0.55, green&gt;0.55). Thickness = n. Gray slash = currently blocked hour. Hover for stats.</div>
+            <svg id="gl-clock" viewBox="-160 -160 320 320" style="width:100%;height:auto;max-height:340px;display:block;"></svg>
+            <div id="gl-clock-stats" style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--text-muted);text-align:center;margin-top:4px;min-height:32px;">hover or play to inspect an hour</div>
+        </div>
+        <div class="card" data-aos="fade-up" style="padding:12px 14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <h3 style="margin:0;font-size:.95rem;">Day × hour heatmap</h3>
+                <div style="font-size:.7rem;color:var(--text-muted);">cell size ∝ n &middot; color = WR &middot; CI on hover</div>
+            </div>
+            <div id="gl-heatmap" style="overflow-x:auto;"></div>
+        </div>
+    </div>
+
+    <!-- Panel 3 — Replay scrubber -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;font-size:.95rem;">Animated replay</h3>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <button class="btn-sm" type="button" id="gl-replay-btn" onclick="toggleGhostLabReplay()">▶ Play</button>
+                <select id="gl-replay-speed" onchange="setGhostLabReplaySpeed()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 5px;font-size:.7rem;">
+                    <option value="1">1×</option>
+                    <option value="10">10×</option>
+                    <option value="100" selected>100×</option>
+                    <option value="1000">1000×</option>
+                </select>
+                <span id="gl-replay-time" style="font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--text-muted);min-width:140px;text-align:right;">—</span>
+            </div>
+        </div>
+        <canvas id="gl-replay" style="width:100%;height:80px;display:block;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></canvas>
+        <input type="range" id="gl-replay-scrub" min="0" max="1000" value="0" oninput="onGhostLabScrub()" style="width:100%;margin-top:6px;">
+        <div style="font-size:.66rem;color:var(--text-muted);margin-top:4px;">
+            Dots: <span style="color:#888;">●</span> ghost (rejected, settled) &nbsp;
+            <span style="color:#e0a64a;">●</span> deadzone-skip &nbsp;
+            <span style="color:var(--gn);">●</span> live win &nbsp;
+            <span style="color:var(--rd);">●</span> live loss &nbsp;|&nbsp; scrub to freeze the heatmap above to "data as of this moment".
+        </div>
+    </div>
+
+    <!-- Panel 4 — Lane × source table -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:16px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;font-size:.95rem;">Lane detail</h3>
+            <div style="font-size:.7rem;color:var(--text-muted);">click a row to filter all panels above</div>
+        </div>
+        <div style="overflow-x:auto;">
+            <table id="gl-lane-table" style="width:100%;border-collapse:collapse;font-size:.75rem;font-family:'IBM Plex Mono',monospace;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--text-muted);">
+                        <th style="padding:6px 8px;cursor:pointer;" onclick="sortGhostLabTable('lane_id')">lane_id</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_ghosts')">ghosts</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('ghost_wr')">ghost WR</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_live')">live</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('live_wr')">live WR</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_deadzone')">dz skips</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('deadzone_wr')">dz WR (resolved)</th>
+                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('posterior_mean')">posterior</th>
+                        <th style="padding:6px 8px;">blocked hours</th>
+                    </tr>
+                </thead>
+                <tbody id="gl-lane-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <style>
+    .gl-chip {
+        display:inline-block;padding:2px 9px;margin-right:4px;font-size:.7rem;
+        border:1px solid var(--border);border-radius:12px;cursor:pointer;
+        font-family:'IBM Plex Mono',monospace;color:var(--text-muted);
+        background:transparent;user-select:none;
+    }
+    .gl-chip.active { background:rgba(176,96,255,.15);color:var(--text);border-color:rgba(176,96,255,.5); }
+    .gl-heatcell { stroke:rgba(0,0,0,.25);stroke-width:.5; transition:opacity .15s; }
+    .gl-heatcell:hover { opacity:.7;stroke:#fff;stroke-width:1; }
+    .gl-clock-wedge { transition:opacity .15s; cursor:pointer; }
+    .gl-clock-wedge:hover { opacity:.85; }
+    .gl-clock-wedge.active { filter:drop-shadow(0 0 6px rgba(255,255,255,.5)); }
+    #gl-lane-tbody tr { border-bottom:1px solid rgba(255,255,255,.04); cursor:pointer; }
+    #gl-lane-tbody tr:hover { background:rgba(255,255,255,.03); }
+    #gl-lane-tbody tr.active { background:rgba(176,96,255,.12); }
+    #gl-lane-tbody td { padding:5px 8px; }
+    </style>
+
 
     <!-- Test Results + Live Scan -->
     <div class="grid" style="margin-bottom:16px;">
@@ -2752,13 +2843,7 @@
         </div>
     </div>
 
-    <!-- Backtest Reports -->
-    <div class="card" data-aos="fade-up">
-        <h2>Backtest Reports</h2>
-        <div id="backtest-reports"><p style="color:var(--text-muted)">Loading...</p></div>
-    </div>
-
-    </div><!-- /view-backtest -->
+    </div><!-- /view-ghosts -->
 
     <!-- ═══════════════════════════════════════════════════════
          COMMANDS TAB
@@ -3463,7 +3548,7 @@ function switchMainView(which, opts) {
         document.querySelectorAll('#main-view-tabs .tab').forEach(function(t) {
             t.classList.toggle('active', t.getAttribute('data-view') === which);
         });
-        ['live','performance','journal','backtest','commands'].forEach(function(v) {
+        ['live','performance','journal','ghosts','commands'].forEach(function(v) {
             var el = document.getElementById('view-' + v);
             if (el) {
                 var on = (v === which);
@@ -3494,8 +3579,8 @@ function switchMainView(which, opts) {
                 if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
             }, 80);
         }
-        if (which === 'backtest') {
-            loadBacktestReports();
+        if (which === 'ghosts') {
+            if (typeof loadGhostLab === 'function') loadGhostLab();
         }
         if (typeof scheduleDashboardRelayout === 'function') {
             scheduleDashboardRelayout();
@@ -3545,15 +3630,15 @@ window.addEventListener('resize', scheduleDashboardRelayout);
 window.addEventListener('orientationchange', scheduleDashboardRelayout);
 window.addEventListener('pageshow', scheduleDashboardRelayout);
 document.addEventListener('fullscreenchange', scheduleDashboardRelayout);
-let _btReportsVisibilityTimer = null;
+let _glVisibilityTimer = null;
 document.addEventListener('visibilitychange', () => {
     if (!document.hidden) scheduleDashboardRelayout();
-    if (document.hidden || _currentMainView() !== 'backtest') return;
-    if (_btReportsVisibilityTimer) clearTimeout(_btReportsVisibilityTimer);
-    _btReportsVisibilityTimer = setTimeout(function() {
-        _btReportsVisibilityTimer = null;
-        if (!document.hidden && _currentMainView() === 'backtest' && typeof loadBacktestReports === 'function') {
-            loadBacktestReports(1, 0, 0);
+    if (document.hidden || _currentMainView() !== 'ghosts') return;
+    if (_glVisibilityTimer) clearTimeout(_glVisibilityTimer);
+    _glVisibilityTimer = setTimeout(function() {
+        _glVisibilityTimer = null;
+        if (!document.hidden && _currentMainView() === 'ghosts' && typeof loadGhostLab === 'function') {
+            loadGhostLab();
         }
     }, 450);
 });
@@ -4063,7 +4148,7 @@ function applyHeroMetrics(d) {
         }
     }
     const brSub = document.getElementById('hero-bankroll-sub');
-    if (brSub) brSub.textContent = d.session_id ? ('mtm · ' + String(d.session_id).slice(-14)) : 'mtm';
+    if (brSub) brSub.textContent = '';
 
     let sessionPnlRaw = null;
     if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
@@ -5182,354 +5267,7 @@ async function stopLiveBot() {
     }
 }
 
-/** Fetch /api/backtest/reports and repaint cards. After subprocess exit, use lead+retries+gap so new JSON is on disk and not served from an HTTP cache. */
-async function loadBacktestReports(retries, gapMs, leadMs) {
-    const n = (retries == null || retries < 1) ? 1 : retries;
-    const gap = gapMs == null ? 0 : gapMs;
-    const lead = leadMs == null ? 0 : leadMs;
-    if (lead > 0) {
-        await new Promise(function(resolve) { setTimeout(resolve, lead); });
-    }
-    for (let attempt = 0; attempt < n; attempt++) {
-        if (attempt > 0 && gap > 0) {
-            await new Promise(function(resolve) { setTimeout(resolve, gap); });
-        }
-        try {
-            const r = await fetch('/api/backtest/reports?_=' + Date.now() + '&a=' + attempt, { cache: 'no-store' });
-            if (r.ok) updateBacktest(await r.json());
-        } catch (e) {
-            console.error('Failed to load backtest reports:', e);
-        }
-    }
-}
-
-function _btHudEls() {
-    return {
-        root: document.getElementById('bt-hud'),
-        title: document.getElementById('bt-hud-title'),
-        phase: document.getElementById('bt-hud-phase'),
-        job: document.getElementById('bt-hud-job'),
-        pct: document.getElementById('bt-hud-pct'),
-        win: document.getElementById('bt-hud-win'),
-        track: document.getElementById('bt-hud-track'),
-        fill: document.getElementById('bt-hud-fill'),
-        footer: document.getElementById('bt-hud-footer')
-    };
-}
-
-function _btSetHudLive(h, on) {
-    if (h && h.root) h.root.classList.toggle('bt-hud-live', !!on);
-}
-
-function _btClearInlineHeat(h) {
-    if (!h) return;
-    if (h.pct) {
-        h.pct.style.color = '';
-        h.pct.style.textShadow = '';
-    }
-    if (h.fill) {
-        h.fill.style.background = '';
-        h.fill.style.boxShadow = '';
-    }
-    if (h.track) {
-        h.track.style.borderColor = '';
-        h.track.style.boxShadow = '';
-    }
-}
-
-function _btHeatFromPct(p) {
-    p = Math.max(0, Math.min(100, Number(p) || 0));
-    var h, s, l;
-    if (p <= 50) {
-        var t = p / 50;
-        h = 358 + (32 - 358) * t;
-        s = 100;
-        l = 62 - 10 * t;
-    } else {
-        var t2 = (p - 50) / 50;
-        h = 32 + (142 - 32) * t2;
-        s = 100;
-        l = 52 + 6 * t2;
-    }
-    return { h: h, s: s, l: l };
-}
-
-function _btApplyDeterminateHeat(h, pct) {
-    if (!h || !h.pct || !h.fill) return;
-    var o = _btHeatFromPct(pct);
-    var c = 'hsl(' + o.h + ',' + o.s + '%,' + o.l + '%)';
-    var g = '0 0 40px hsla(' + o.h + ',' + o.s + '%,' + o.l + '%,.52), 0 0 88px hsla(' + o.h + ',' + o.s + '%,' + o.l + '%,.2)';
-    h.pct.style.color = c;
-    h.pct.style.textShadow = g;
-    var hDark = Math.max(0, o.h - 22);
-    var lHi = Math.min(66, o.l + 8);
-    h.fill.style.background = 'linear-gradient(90deg,hsla(' + hDark + ',' + o.s + '%,36%,.9),hsla(' + o.h + ',' + o.s + '%,' + lHi + '%,1))';
-    h.fill.style.boxShadow = '0 0 30px hsla(' + o.h + ',' + o.s + '%,48%,.58), inset 0 1px 0 rgba(255,255,255,.3)';
-    if (h.track) {
-        h.track.style.borderColor = 'hsla(' + o.h + ',' + Math.min(92, o.s) + '%,44%,.42)';
-        h.track.style.boxShadow = 'inset 0 0 16px rgba(0,0,0,.52), 0 0 28px hsla(' + o.h + ',' + o.s + '%,46%,.22)';
-    }
-}
-
-function inferBtPhase(lines, running, exitCode) {
-    const arr = Array.isArray(lines) ? lines : [];
-    const text = arr.join('\n');
-    if (!running) {
-        if (exitCode != null && exitCode !== 0) return 'HALT';
-        if (/CRYPTO BACKTEST COMPLETE|Report saved/i.test(text)) return 'DONE';
-        return 'STOP';
-    }
-    if (/progress\s+[\d,]+\/[\d,]+\s+windows/i.test(text)) return 'REPLAY';
-    if (/Loading\s+\w+\s+OHLCV/i.test(text) || /Loading oracle/i.test(text)) return 'LOAD';
-    if (/Running\s+\w+\s+\d+m\s+backtest/i.test(text)) return 'ARM';
-    return 'RUN';
-}
-
-function updateBacktestHud(s, label, jobId) {
-    const h = _btHudEls();
-    if (!h.root || !h.title) return;
-    const lines = (s && s.output) ? s.output : [];
-    const running = !!(s && s.running);
-    const exitCode = s && s.exit_code != null ? s.exit_code : null;
-    if (s && s.job_unknown) {
-        _btSetHudLive(h, false);
-        _btClearInlineHeat(h);
-        h.title.textContent = 'BACKTEST // SIGNAL LOST';
-        h.phase.textContent = 'HALT';
-        h.job.textContent = (label || 'job') + ' // job no longer registered (dashboard restart?)';
-        h.pct.textContent = '—';
-        h.pct.className = 'bt-hud-pct bt-hud-pct-warn';
-        h.win.textContent = '';
-        h.track.classList.remove('bt-hud-indet');
-        if (h.fill) {
-            h.fill.style.animation = '';
-            h.fill.style.marginLeft = '0';
-            h.fill.style.width = '0%';
-        }
-        h.footer.textContent = 're-run from Backtest tab if the subprocess is still on disk';
-        return;
-    }
-    let job = (s && s.jobs && s.jobs[0]) ? s.jobs[0] : {};
-    if (jobId && s && s.jobs && s.jobs.length) {
-        const found = s.jobs.find(function(x) { return x.job_id === jobId; });
-        if (found) job = found;
-    }
-    const pid = job.pid != null ? String(job.pid) : '—';
-    const summ = (job.summary || '').trim();
-    const phase = inferBtPhase(lines, running, exitCode);
-    if (running) {
-        _btSetHudLive(h, true);
-        h.title.textContent = 'BACKTEST // STATUS';
-        h.phase.textContent = phase;
-        const jid = jobId || job.job_id || '—';
-        let jline = (label || summ || 'crypto backtest') + '  //  job ' + jid + '  //  pid ' + pid;
-        if (summ) jline += '\n» ' + summ;
-        h.job.textContent = jline;
-        const pctVal = job.progress_pct;
-        const cur = job.progress_current;
-        const tot = job.progress_total;
-        if (pctVal != null && typeof pctVal === 'number') {
-            h.pct.textContent = pctVal.toFixed(1) + '%';
-            h.pct.className = 'bt-hud-pct';
-            _btApplyDeterminateHeat(h, pctVal);
-            h.win.textContent = (cur != null && tot != null) ? ('windows ' + cur.toLocaleString() + ' / ' + tot.toLocaleString()) : '';
-            h.track.classList.remove('bt-hud-indet');
-            if (h.fill) {
-                h.fill.style.animation = '';
-                h.fill.style.marginLeft = '0';
-                h.fill.style.width = Math.min(100, Math.max(0, pctVal)) + '%';
-            }
-        } else {
-            _btClearInlineHeat(h);
-            h.pct.textContent = '···';
-            h.pct.className = 'bt-hud-pct bt-hud-pct-wait';
-            h.win.textContent = phase === 'LOAD' ? 'loading OHLCV / oracle — first % on progress interval' : 'awaiting heartbeat lines from subprocess';
-            h.track.classList.add('bt-hud-indet');
-            if (h.fill) {
-                h.fill.style.width = '';
-                h.fill.style.marginLeft = '';
-                h.fill.style.animation = '';
-            }
-        }
-        h.footer.textContent = lines.length ? String(lines[lines.length - 1]).slice(0, 140) : 'subprocess live — mirror below';
-        return;
-    }
-    const failed = Number.isFinite(exitCode) && exitCode !== 0;
-    _btSetHudLive(h, false);
-    if (failed) {
-        _btClearInlineHeat(h);
-        h.title.textContent = 'BACKTEST // ABORT';
-        h.phase.textContent = 'FAIL';
-        h.pct.textContent = 'ERR';
-        h.pct.className = 'bt-hud-pct bt-hud-pct-bad';
-    } else {
-        h.title.textContent = 'BACKTEST // COMPLETE';
-        h.phase.textContent = phase === 'DONE' ? 'DONE' : 'STOP';
-        h.pct.textContent = '100%';
-        h.pct.className = 'bt-hud-pct';
-        _btApplyDeterminateHeat(h, 100);
-    }
-    const jid2 = jobId || job.job_id || '—';
-    h.job.textContent = (label || summ || 'crypto') + '  //  job ' + jid2 + '  //  exit ' + (exitCode != null ? exitCode : '—');
-    h.win.textContent = (job.progress_current != null && job.progress_total != null)
-        ? ('windows ' + job.progress_current.toLocaleString() + ' / ' + job.progress_total.toLocaleString()) : '';
-    h.track.classList.remove('bt-hud-indet');
-    if (h.fill) {
-        h.fill.style.animation = '';
-        h.fill.style.marginLeft = '0';
-        h.fill.style.width = failed ? '0%' : '100%';
-    }
-    h.footer.textContent = failed ? 'check output tail for failing child in ALL bundle' : 'reports on disk — cards below refresh';
-}
-
-function updateBacktestHudStandby() {
-    const h = _btHudEls();
-    if (!h.root) return;
-    _btSetHudLive(h, false);
-    _btClearInlineHeat(h);
-    h.title.textContent = 'BACKTEST // STANDBY';
-    h.phase.textContent = 'IDLE';
-    h.job.textContent = '— // select scope + Run Crypto BT';
-    h.pct.textContent = '—';
-    h.pct.className = 'bt-hud-pct bt-hud-pct-idle';
-    h.win.textContent = '';
-    h.track.classList.remove('bt-hud-indet');
-    if (h.fill) { h.fill.style.animation = ''; h.fill.style.marginLeft = '0'; h.fill.style.width = '0%'; }
-    h.footer.textContent = 'replay % parsed from stdout (progress x/y windows)';
-}
-
-function updateBacktestHudStarting(label, jobId, pid) {
-    const h = _btHudEls();
-    if (!h.root) return;
-    _btSetHudLive(h, true);
-    _btClearInlineHeat(h);
-    h.title.textContent = 'BACKTEST // SPAWN';
-    h.phase.textContent = 'ARM';
-    h.job.textContent = (label || 'crypto') + '  //  job ' + (jobId || '—') + '  //  pid ' + (pid != null ? pid : '—');
-    h.pct.textContent = '…';
-    h.pct.className = 'bt-hud-pct bt-hud-pct-wait';
-    h.win.textContent = 'subprocess forked — waiting for first log lines';
-    h.track.classList.add('bt-hud-indet');
-    if (h.fill) { h.fill.style.width = ''; h.fill.style.marginLeft = ''; h.fill.style.animation = ''; }
-    h.footer.textContent = 'POST /api/backtest/start';
-}
-
-function renderBacktestOutputTail(lines, fallbackText) {
-    const el = document.getElementById('backtest-output-tail');
-    if (!el) return;
-    const arr = Array.isArray(lines) ? lines.filter(Boolean) : [];
-    el.textContent = arr.length ? arr.join('\n') : (fallbackText || 'No active backtest output.');
-    const lineCount = Math.max(4, Math.min(12, (el.textContent.match(/\n/g) || []).length + 1));
-    el.style.height = `${Math.max(84, Math.min(220, 18 + lineCount * 16))}px`;
-    el.scrollTop = el.scrollHeight;
-}
-
-function pollBacktestJobUntilDone(jobId, label, statusEl, onComplete) {
-    let refreshEvery = 0;
-    const tick = async () => {
-        const s = await fetch('/api/backtest/status?job_id=' + encodeURIComponent(jobId))
-            .then(r => r.json()).catch(() => null);
-        if (!s) { setTimeout(tick, 4000); return; }
-        updateBacktestHud(s, label, jobId);
-        renderBacktestOutputTail(s.output || [], `${label}: waiting for subprocess output…`);
-        refreshEvery += 1;
-        if (_currentMainView() === 'backtest' && refreshEvery % 2 === 1) {
-            loadBacktestReports(1, 0, 0);
-        }
-        if (s.job_unknown) {
-            if (statusEl) {
-                statusEl.textContent = `${label} tracking lost after restart (job ${jobId}) — check reports/logs.`;
-                statusEl.style.color = 'var(--yellow)';
-            }
-            return;
-        }
-        if (s.running !== true) {
-            const code = s.exit_code;
-            const failed = Number.isFinite(code) && code !== 0;
-            if (failed && statusEl) {
-                statusEl.textContent = `${label} failed (exit ${code}) — partial per-symbol reports may still be on the cards below; check output tail for the failing child.`;
-                statusEl.style.color = 'var(--red)';
-            }
-            if (!failed) {
-                renderBacktestOutputTail(s.output || [], `${label} finished. Latest output shown above.`);
-            }
-            if (onComplete) onComplete(!failed);
-            return;
-        }
-        if (statusEl && s?.output?.length) {
-            const tail = s.output.slice(-2).join(' · ');
-            statusEl.textContent = `${label} (job ${jobId})… ${tail}`;
-        }
-        setTimeout(tick, 4000);
-    };
-    tick();
-}
-
-async function startCryptoBacktest() {
-    const sel = document.getElementById('crypto-bt-select');
-    const val = sel.value;
-    if (!val) { alert('Select a crypto backtest first (BTC 15m, SOL 5m, etc.)'); return; }
-    let symbol, window;
-    if (val.startsWith('ALL-')) {
-        symbol = 'ALL';
-        window = parseInt(val.slice(4), 10);
-    } else {
-        [symbol, window] = val.split('-');
-        window = parseInt(window, 10);
-    }
-    const body = { symbol, window };
-    const wLabel = (window === 60 ? '1h' : window + 'm');
-    const btn = document.getElementById('crypto-bt-run-btn');
-    const status = document.getElementById('process-status-bt');
-    btn.disabled = true;
-    status.textContent = `Running ${symbol} ${wLabel} backtest…`;
-    status.style.color = 'var(--yellow)';
-    renderBacktestOutputTail([], `Launching ${symbol} ${wLabel} backtest…`);
-    try {
-        const r = await fetch('/api/backtest/start', {
-            method: 'POST',
-            headers: dashAuthHeaders({'Content-Type': 'application/json'}),
-            body: JSON.stringify(body)
-        });
-        const d = await r.json();
-        if (d.status === 'started' && d.job_id) {
-            try {
-                localStorage.setItem('psb_pending_bt_job', d.job_id);
-                localStorage.setItem('psb_pending_bt_label', `${symbol} ${wLabel}`);
-            } catch (_) {}
-            status.textContent = `${symbol} ${wLabel} started (job ${d.job_id}, PID ${d.pid}) — can run alongside live bot`;
-            status.style.color = 'var(--green)';
-            renderBacktestOutputTail([], `${symbol} ${wLabel} started (job ${d.job_id}) — waiting for output…`);
-            updateBacktestHudStarting(`${symbol} ${wLabel}`, d.job_id, d.pid);
-            pollBacktestJobUntilDone(d.job_id, `${symbol} ${wLabel}`, status, (ok) => {
-                btn.disabled = false;
-                if (ok) {
-                    status.textContent = `${symbol} ${wLabel} backtest complete (job ${d.job_id}) — reports refreshed`;
-                    status.style.color = 'var(--green)';
-                }
-                try {
-                    localStorage.removeItem('psb_pending_bt_job');
-                    localStorage.removeItem('psb_pending_bt_label');
-                } catch (_) {}
-                loadBacktestReports(8, 450, 250);
-                loadLivePerformance();
-                if (_currentMainView() === 'backtest') fetchAll();
-            });
-        } else {
-            status.textContent = `Backtest error: ${d.message || d.status}`;
-            status.style.color = 'var(--red)';
-            renderBacktestOutputTail([], `Backtest error: ${d.message || d.status}`);
-            updateBacktestHudStandby();
-            btn.disabled = false;
-        }
-    } catch(e) {
-        status.textContent = 'Error: ' + e;
-        status.style.color = 'var(--red)';
-        renderBacktestOutputTail([], 'Backtest request failed: ' + e);
-        updateBacktestHudStandby();
-        btn.disabled = false;
-    }
-}
+// Backtest JS (loadBacktestReports, updateBacktestHud*, renderBacktestOutputTail, pollBacktestJobUntilDone, startCryptoBacktest) removed 2026-05-24 with the broken backtester.
 
 async function loadLivePerformance() {
     // Single source of truth: fetchAll already updates all Performance cards/widgets
@@ -5541,294 +5279,7 @@ async function loadLivePerformance() {
     }
 }
 
-/** Populate crypto backtest dropdown from /api/backtest/reports.live_scope (settings.yaml). */
-function rebuildCryptoBacktestSelect(scope) {
-    const sel = document.getElementById('crypto-bt-select');
-    if (!sel) return;
-    const prev = sel.value;
-    const FALLBACK_CRYPTO = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map((strategy_key, i) => ({
-        strategy_key,
-        symbol: ['BTC','SOL','ETH','HYPE','XRP','DOGE','BNB'][i],
-        enabled: true,
-    }));
-    const sc = scope && Array.isArray(scope.crypto_strategies) ? scope.crypto_strategies : FALLBACK_CRYPTO;
-    const windows = scope && scope.windows && scope.windows.length ? scope.windows : [5, 15, 60];
-    const enabled = sc.filter(row => row.enabled);
-    // Display label: 60 → "1h", everything else → "{n}m".
-    const windowLabel = (w) => (Number(w) === 60 ? '1h' : (w + 'm'));
-    sel.innerHTML = '';
-    const opt0 = document.createElement('option');
-    opt0.value = '';
-    opt0.textContent = enabled.length
-        ? '-- Enabled strategies (settings.yaml) --'
-        : '-- No crypto strategies enabled in settings.yaml --';
-    sel.appendChild(opt0);
-    for (const row of enabled) {
-        const sym = row.symbol || '';
-        const sk = row.strategy_key || '';
-        for (let i = windows.length - 1; i >= 0; i--) {
-            const w = windows[i];
-            const o = document.createElement('option');
-            o.value = sym + '-' + w;
-            o.textContent = sym + ' ' + windowLabel(w) + '  (' + sk + ')';
-            sel.appendChild(o);
-        }
-    }
-    if (windows.length) {
-        const sep = document.createElement('option');
-        sep.disabled = true;
-        sep.value = '';
-        sep.textContent = '— All symbols (same window) —';
-        sel.appendChild(sep);
-        for (let i = windows.length - 1; i >= 0; i--) {
-            const w = windows[i];
-            const o = document.createElement('option');
-            o.value = 'ALL-' + w;
-            o.textContent = 'ALL ' + windowLabel(w) + '  (BTC,SOL,ETH,XRP,HYPE bundle)';
-            sel.appendChild(o);
-        }
-    }
-    if (prev && Array.from(sel.options).some(opt => opt.value === prev))
-        sel.value = prev;
-}
-
-function updateBacktest(d) {
-    const el = document.getElementById('backtest-reports');
-    const allReports = d.reports || [];
-    const latestCompleted = d.latest_completed || d.latest || null;
-
-    // Display label: 60-minute windows show as "1h" (Polymarket discontinued the
-    // 30m crypto product; 1h is the long-cycle replacement). Everything else is "{n}m".
-    const winLabel = (w) => (Number(w) === 60 ? '1h' : `${w}m`);
-
-    // ── Helpers ─────────────────────────────────────────────────────────────
-    // Get the single latest report for a specific symbol+window combo.
-    // Accepts both new format (report_type='crypto_updown') and old format (symbol present, no report_type).
-    function isCryptoReport(r) {
-        if (r.report_type === 'xrp_dump_hedge_sim' || r.report_type === 'weather') return false;
-        return r.report_type === 'crypto_updown' || (r.symbol && r.window_minutes && !r.per_strategy_metrics);
-    }
-    function latestCryptoReport(sym, win) {
-        const w = Number(win);
-        const s = String(sym || '').toUpperCase();
-        return allReports
-            .filter(r => isCryptoReport(r)
-                && String(r.symbol || '').toUpperCase() === s
-                && Number(r.window_minutes) === w)
-            .sort((a, b) => {
-                const aKey = (a.run_at || a.filename || a.end_date || '');
-                const bKey = (b.run_at || b.filename || b.end_date || '');
-                return String(bKey).localeCompare(String(aKey));
-            })[0] || null;
-    }
-
-    function cryptoCard(sym, win, strategyKey) {
-        const r = latestCryptoReport(sym, win);
-        const symColor = stratHex(strategyKey) || stratHex(
-            sym === 'BTC' ? 'bitcoin' : sym === 'ETH' ? 'eth_macro' : sym === 'SOL' ? 'sol_macro' : sym === 'HYPE' ? 'hype_macro' : sym === 'XRP' ? 'xrp_macro' : 'unknown'
-        );
-        const keyLine = strategyKey
-            ? `<div style="font-family:IBM Plex Mono,monospace;font-size:0.68rem;color:var(--tm);margin-bottom:6px;font-weight:600;">${strategyKey}</div>`
-            : '';
-        const header = keyLine + `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
-            <span style="background:${symColor};color:#000;padding:2px 8px;border-radius:4px;font-weight:700;font-size:0.8rem;">${sym}</span>
-            <span style="font-size:1rem;font-weight:700;">${winLabel(win)}</span>
-        </div>`;
-        if (!r) {
-            return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
-                ${header}
-                <div style="color:var(--text-muted);font-size:0.82rem;text-align:center;padding:10px 0;">
-                    Not yet run<br>
-                    <span style="font-size:0.75rem;">Run Crypto BT · ${sym} ${winLabel(win)}</span>
-                </div>
-            </div>`;
-        }
-        const entered = Number(r.windows_entered || 0);
-        const scanned = Number(r.windows_scanned || 0);
-        const pnl = Number(r.net_pnl || 0);
-        const pnlCls = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-        const winPct = ((r.win_rate||0)*100).toFixed(1);
-        const winColor = (r.win_rate||0) >= 0.52 ? 'var(--green)' : (r.win_rate||0) >= 0.48 ? 'var(--text)' : 'var(--red)';
-        const entryRate = scanned > 0 ? ((entered/scanned)*100).toFixed(1) : null;
-        const entriesText = scanned > 0 ? `${entered} / ${scanned} (${entryRate}%)` : `${entered}`;
-        const period = `${(r.start_date||'').slice(0,10)} – ${(r.end_date||'').slice(0,10)}`;
-        function row(label, val, color) {
-            return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border);">
-                <span style="color:var(--text-muted);font-size:0.78rem;">${label}</span>
-                <span style="font-weight:600;font-size:0.82rem;color:${color||'var(--text)'};">${val}</span>
-            </div>`;
-        }
-        let skipHint = '';
-        if (entered === 0 && r.skip_counts && typeof r.skip_counts === 'object') {
-            const topSkips = Object.entries(r.skip_counts)
-                .sort((a, b) => Number(b[1]) - Number(a[1]))
-                .slice(0, 3)
-                .map(([k, v]) => `${k} (${v})`)
-                .join(', ');
-            if (topSkips) skipHint = ` Top skips: ${topSkips}.`;
-        }
-        const noEntryNote = entered === 0
-            ? `<div style="margin:6px 0 8px;color:var(--yellow);font-size:0.76rem;line-height:1.35;">
-                No qualifying entries${scanned > 0 ? ` across ${scanned} scanned windows` : ''}.${skipHint}
-            </div>`
-            : '';
-        // Per-card run timestamp + staleness flag. Cards older than 24h get a yellow
-        // "stale" badge so it's obvious when results don't reflect recent config edits.
-        const runAt = r.run_at || '';
-        let runAge = '';
-        let staleBadge = '';
-        if (runAt) {
-            const t = new Date(runAt);
-            if (!Number.isNaN(t.getTime())) {
-                const ageMs = Date.now() - t.getTime();
-                const ageHours = ageMs / 3600000;
-                if (ageHours < 1) runAge = `${Math.max(0, Math.floor(ageMs / 60000))}m ago`;
-                else if (ageHours < 24) runAge = `${Math.floor(ageHours)}h ago`;
-                else runAge = `${Math.floor(ageHours / 24)}d ago`;
-                if (ageHours >= 24) {
-                    staleBadge = `<span style="background:rgba(234,179,8,0.18);color:var(--yellow);padding:1px 6px;border-radius:3px;font-size:0.7rem;font-weight:700;margin-left:6px;">STALE</span>`;
-                }
-            }
-        }
-        const runAtDisplay = runAt
-            ? `<div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:4px;">Ran: ${runAt.replace('T',' ').slice(0,16)} ${runAge ? `(${runAge})` : ''}${staleBadge}</div>`
-            : '';
-        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:210px;flex:1;">
-            ${header}
-            ${runAtDisplay}
-            <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:8px;">Data: ${period}</div>
-            ${noEntryNote}
-            ${row('Win Rate', winPct+'%', winColor)}
-            ${row('Avg Edge', ((r.avg_edge||0)*100).toFixed(2)+'%')}
-            ${row('Expectancy', (r.expectancy||0).toFixed(4), pnlCls)}
-            ${row('Entries', entriesText)}
-            ${row('W / L', `${r.wins||0}W  ${r.losses||0}L`)}
-            ${row('Net PnL', `$${pnl.toFixed(2)}`, pnlCls)}
-            ${row('Return', `${(r.total_return_pct||0).toFixed(1)}%`, pnlCls)}
-        </div>`;
-    }
-
-    rebuildCryptoBacktestSelect(d.live_scope);
-
-    const FALLBACK_SCOPE = {
-        crypto_strategies: ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map((strategy_key, i) => ({
-            strategy_key,
-            symbol: ['BTC','SOL','ETH','HYPE','XRP','DOGE','BNB'][i],
-            enabled: true,
-        })),
-        windows: [5, 15, 60],
-        weather_enabled: false,
-    };
-    const scope = d.live_scope && d.live_scope.crypto_strategies ? d.live_scope : FALLBACK_SCOPE;
-    const stratRowsEnabled = scope.crypto_strategies.filter(row => row.enabled);
-    const wins = scope.windows && scope.windows.length ? scope.windows : [5, 15, 60];
-
-    // ── Build HTML ───────────────────────────────────────────────────────────
-    let html = '';
-    html += `<p style="font-size:0.74rem;color:var(--text-muted);margin:0 0 12px;line-height:1.45;font-family:'IBM Plex Mono',monospace;">
-        Crypto rows = <strong>strategies.*.enabled</strong> in settings.yaml · windows = live 5m / 15m / 1h buckets.</p>`;
-    if (latestCompleted) {
-        function formatAge(ts) {
-            if (!ts) return '';
-            const t = new Date(ts);
-            if (Number.isNaN(t.getTime())) return '';
-            const ageMs = Date.now() - t.getTime();
-            if (ageMs < 0) return '';
-            const mins = Math.floor(ageMs / 60000);
-            if (mins < 1) return 'just now';
-            if (mins < 60) return `${mins}m ago`;
-            const hrs = Math.floor(mins / 60);
-            if (hrs < 24) return `${hrs}h ago`;
-            const days = Math.floor(hrs / 24);
-            return `${days}d ago`;
-        }
-        const lcSym = String(latestCompleted.symbol || '').toUpperCase();
-        const lcWin = Number(latestCompleted.window_minutes);
-        const lcRunAt = latestCompleted.run_at
-            ? latestCompleted.run_at.replace('T', ' ').slice(0, 19)
-            : '';
-        const lcDate = lcRunAt || (latestCompleted.filename || '').replace('.json', '');
-        const lcAge = formatAge(latestCompleted.run_at);
-        const lcLabel = (lcSym && Number.isFinite(lcWin) && lcWin > 0)
-            ? `${lcSym} ${winLabel(lcWin)}`
-            : (latestCompleted.report_type || 'backtest');
-        html += `<div style="margin:0 0 12px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);font-size:0.82rem;">
-            <span style="color:var(--text-muted);">Latest completed backtest:</span>
-            <span style="font-weight:700;"> ${lcLabel}</span>
-            <span style="color:var(--text-muted);"> — ${lcDate}${lcAge ? ` (${lcAge})` : ''}</span>
-        </div>`;
-    }
-
-    if (!stratRowsEnabled.length) {
-        html += `<div style="padding:12px;border:1px dashed var(--border);border-radius:6px;color:var(--yellow);font-size:0.82rem;">
-            No crypto strategies enabled in <span style="font-family:IBM Plex Mono,monospace;">settings.yaml</span> — backtest rows mirror nothing from live.<br/>
-            <span style="color:var(--text-muted);font-size:0.75rem;">Enable <code>bitcoin</code> / <code>*_macro</code> entries under <code>strategies</code>.</span></div>`;
-    } else {
-        for (let ri = 0; ri < stratRowsEnabled.length; ri++) {
-            const row = stratRowsEnabled[ri];
-            html += `<h3 style="margin:${ri === 0 ? '0' : '14px'} 0 8px;font-size:0.9rem;letter-spacing:0.03em;color:var(--text-muted);">
-                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">${row.strategy_key}</span>
-                <span style="font-size:0.88em;color:var(--tm);"> · ${row.symbol} up/down</span></h3>`;
-            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
-            for (let i = wins.length - 1; i >= 0; i--) {
-                html += cryptoCard(row.symbol, wins[i], row.strategy_key);
-            }
-            html += `</div>`;
-        }
-    }
-
-    if (scope.weather_enabled) {
-        const weatherReports = allReports.filter(r => r.report_type === 'weather');
-        const sortWx = (a, b) => String(b.run_at || b.filename || '').localeCompare(String(a.run_at || a.filename || ''));
-        const latestWx = weatherReports.sort(sortWx)[0];
-        if (latestWx) {
-            const wlp = Number(latestWx.total_pnl != null ? latestWx.total_pnl : 0);
-            const wr = ((latestWx.win_rate || 0) * 100).toFixed(1);
-            html += `<h3 style="margin:12px 0 8px;font-size:0.9rem;letter-spacing:0.04em;color:var(--text-muted);">
-                <span style="font-family:IBM Plex Mono,monospace;font-weight:800;color:var(--text);">weather</span>
-                <span style="font-size:0.88em;color:var(--tm);"> · same strategy key as journal</span></h3>`;
-            html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">`;
-            html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;min-width:220px;flex:1;">
-                <div style="font-weight:700;margin-bottom:6px;">${stratPillHTML('weather')}</div>
-                <div style="color:var(--text-muted);font-size:0.72rem;margin-bottom:6px;">${(latestWx.run_at||'').replace('T',' ').slice(0,19)}</div>
-                <div style="font-size:0.82rem;line-height:1.5;">
-                    Signals: <strong>${latestWx.signals_generated ?? '—'}</strong> · W/L: <strong>${latestWx.wins ?? 0}/${latestWx.losses ?? 0}</strong><br/>
-                    Win rate: <strong>${wr}%</strong><br/>
-                    Total PnL: <strong style="color:${wlp>=0?'var(--green)':'var(--red)'};">$${wlp.toFixed(2)}</strong>
-                </div>
-            </div>`;
-            html += `</div>`;
-        }
-    }
-
-    // ── Section 4: Rigorous multi-strategy ───────────────────────────────────
-    const rigorous = allReports.filter(r => r.per_strategy_metrics || r.test_aggregate);
-    if (rigorous.length) {
-        html += `<h3 style="margin:12px 0 6px;font-size:0.9rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">Rigorous Backtests</h3>`;
-        html += `<table><thead><tr><th>File</th><th>Date</th><th>Strategy</th><th>Sharpe</th><th>Max DD</th><th>Test PnL</th></tr></thead><tbody>`;
-        rigorous.slice(0,8).forEach(r => {
-            const metrics = r.per_strategy_metrics || {};
-            const testAgg = r.test_aggregate || {};
-            const strats = Object.keys(metrics);
-            if (!strats.length && Object.keys(testAgg).length) strats.push(...Object.keys(testAgg));
-            const uniqueStrats = [...new Set(strats)];
-            const runDate = r.run_at ? r.run_at.slice(0,19).replace('T',' ') : (r.filename||'').replace('backtest_rigorous_','').replace('.json','');
-            uniqueStrats.forEach((s, i) => {
-                const m = metrics[s] || {};
-                const ta = testAgg[s] || [0,0];
-                const testPnl = Array.isArray(ta) ? ta.reduce((a,b)=>a+b, 0) : 0;
-                const pnlCls = testPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                html += `<tr>${i===0?`<td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;color:var(--text-muted);vertical-align:top;">${r.filename||'?'}</td><td rowspan="${uniqueStrats.length}" style="font-size:0.75rem;vertical-align:top;">${runDate}</td>`:''}<td>${stratPillHTML(s)}</td><td>${(m.sharpe_annual||0).toFixed(3)}</td><td class="pnl-neg">${(m.max_drawdown_pct||0).toFixed(2)}%</td><td class="${pnlCls}">$${testPnl.toFixed(2)}</td></tr>`;
-            });
-        });
-        html += '</tbody></table>';
-    }
-
-    if (!html.trim()) {
-        html = '<p style="color:var(--text-muted)">No backtest reports yet — use "Run Crypto BT" above to generate the first ones.</p>';
-    }
-    el.innerHTML = html;
-}
+// Backtest scope/dropdown JS (rebuildCryptoBacktestSelect, updateBacktest) removed 2026-05-24.
 
 function updateUsageSummary(d) {
     const el = document.getElementById('summary-table');
@@ -6502,7 +5953,38 @@ window._commandCenterPnlState = window._commandCenterPnlState || {
     lastValue: null,
     lastTs: 0,
     baselineEquity: null,
+    seededFor: null,
 };
+
+async function _seedCommandCenterPnlFromServer(sessionId) {
+    const state = window._commandCenterPnlState;
+    if (!state || !sessionId || state.seededFor === sessionId) return;
+    state.seededFor = sessionId; // prevent re-seeding even on failure
+    try {
+        const r = await fetchT(`/api/session/equity_history?limit=600`, 8000);
+        if (!r || !r.ok) return;
+        const data = await r.json();
+        const pts = Array.isArray(data?.points) ? data.points : [];
+        if (!pts.length) return;
+        // Only seed if this is still the current session and we haven't
+        // already accumulated meaningful live samples.
+        if (state.sessionId && state.sessionId !== sessionId) return;
+        if (state.points.length > 2) return;
+        state.sessionId = sessionId;
+        state.points = pts
+            .filter((p) => Number.isFinite(Number(p.t)) && Number.isFinite(Number(p.v)))
+            .map((p) => ({ t: Number(p.t), v: Number(p.v) }));
+        if (state.points.length) {
+            const last = state.points[state.points.length - 1];
+            state.lastValue = last.v;
+            state.lastTs = last.t;
+            state.baselineEquity = state.points[0].v;
+        }
+        renderCommandCenterPnlChart();
+    } catch (e) {
+        console.warn('pnl trace seed failed:', e);
+    }
+}
 
 function _commandCenterSessionPnl(d) {
     if (!d || typeof d !== 'object') return null;
@@ -6539,6 +6021,11 @@ function _sampleCommandCenterPnl(d) {
         if (!sessionId || !Number.isFinite(totalPnl) || !Number.isFinite(equity)) {
             if (!state.points.length) section.style.display = 'none';
             return;
+        }
+        // Seed historical points from server once per session so the trace
+        // retains its shape across page refreshes.
+        if (state.seededFor !== sessionId) {
+            _seedCommandCenterPnlFromServer(sessionId);
         }
         const now = Date.now();
         if (state.sessionId !== sessionId) {
@@ -8469,38 +7956,10 @@ if (_currentMainView() === 'journal') {
     loadAllocationChart();
     loadStrategyPnLChart();
     loadLivePerformance();
-} else if (_currentMainView() === 'backtest') {
-    loadBacktestReports();
+} else if (_currentMainView() === 'ghosts') {
+    if (typeof loadGhostLab === 'function') loadGhostLab();
 }
-
-(function resumePendingBacktestTracking() {
-    let jid = '';
-    let label = '';
-    try {
-        jid = localStorage.getItem('psb_pending_bt_job') || '';
-        label = localStorage.getItem('psb_pending_bt_label') || 'Crypto backtest';
-    } catch (_) {}
-    if (!jid) return;
-    const status = document.getElementById('process-status-bt');
-    if (status) {
-        status.textContent = `Resuming ${label} tracking (job ${jid})…`;
-        status.style.color = 'var(--yellow)';
-    }
-    updateBacktestHudStarting(label, jid, '');
-    pollBacktestJobUntilDone(jid, label, status, (ok) => {
-        if (status && ok) {
-            status.textContent = `${label} backtest complete (job ${jid}) — reports refreshed`;
-            status.style.color = 'var(--green)';
-        }
-        try {
-            localStorage.removeItem('psb_pending_bt_job');
-            localStorage.removeItem('psb_pending_bt_label');
-        } catch (_) {}
-        loadBacktestReports(8, 450, 250);
-        loadLivePerformance();
-        if (_currentMainView() === 'backtest') fetchAll();
-    });
-})();
+// (legacy resumePendingBacktestTracking IIFE removed with backtest tab)
 
 window._dashIntervals = window._dashIntervals || [];
 function _registerInterval(fn, ms) {
@@ -8573,6 +8032,402 @@ async function loadAISummary() {
     } catch(e) {}
 }
 
+// ── Ghost Lab — counterfactual + time-of-day explorer
+//    Reads /api/ghosts/lab. Renders: 24h clock ring, 7×24 heatmap, animated
+//    replay scrubber, lane detail table. Internal state is kept on _gl below.
+const _gl = {
+    raw: null,                       // last full payload
+    selectedLane: '',                // lane_id filter (empty = all)
+    selectedSources: new Set(['ghost', 'deadzone_skip', 'live']),
+    sortKey: 'n_ghosts',
+    sortDir: -1,
+    blockedHoursByStrategy: {        // mirrors config/settings.yaml blocked_utc_hours_updown
+        bitcoin: [0,1,2,7,11],
+        eth_macro: [], sol_macro: [], xrp_macro: [], hype_macro: [], bnb_macro: [], doge_macro: [],
+    },
+    clockAnim: { running:false, raf:null, hour:0, lastTick:0 },
+    replay: { running:false, raf:null, t:0, speed:100, lastTick:0, scrubbing:false },
+};
+
+function _glColorForWR(wr, n) {
+    if (!isFinite(wr) || n <= 0) return 'rgba(120,120,140,.25)';
+    // Red < 0.40, amber 0.40-0.55, green > 0.55. Saturation scales with sqrt(n) up to ~30.
+    const sat = Math.min(1.0, Math.sqrt(Math.min(n, 30)) / Math.sqrt(30));
+    let h;
+    if (wr < 0.40) h = 0;
+    else if (wr < 0.55) h = 38;
+    else h = 130;
+    const l = 50 - (1 - sat) * 25;
+    return `hsl(${h}, ${Math.round(70 * sat + 15)}%, ${l}%)`;
+}
+
+function _glFilteredEvents() {
+    if (!_gl.raw) return [];
+    const lane = _gl.selectedLane;
+    return _gl.raw.events.filter(e =>
+        (!lane || e.lane_id === lane) &&
+        _gl.selectedSources.has(e.source)
+    );
+}
+
+function _glLaneRows() {
+    if (!_gl.raw) return [];
+    let rows = _gl.raw.lanes.slice();
+    if (_gl.selectedLane) rows = rows.filter(L => L.lane_id === _gl.selectedLane);
+    rows.sort((a, b) => {
+        const av = _glSortValue(a, _gl.sortKey);
+        const bv = _glSortValue(b, _gl.sortKey);
+        if (av === bv) return 0;
+        return (av < bv ? -1 : 1) * _gl.sortDir;
+    });
+    return rows;
+}
+
+function _glSortValue(row, key) {
+    if (key === 'posterior_mean') return (row.posterior && row.posterior.mean) || 0;
+    return row[key] != null ? row[key] : 0;
+}
+
+async function loadGhostLab() {
+    const sinceDays = parseInt(document.getElementById('gl-since')?.value || '30', 10);
+    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString();
+    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=8000`;
+    try {
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        _gl.raw = data;
+        _glRenderControls();
+        _glRenderClock();
+        _glRenderHeatmap();
+        _glRenderReplay();
+        _glRenderTable();
+        _glRenderCounts();
+    } catch (e) {
+        console.warn('Ghost Lab load failed', e);
+        const tbody = document.getElementById('gl-lane-tbody');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="color:var(--rd);padding:10px;">Load failed: ${e.message}</td></tr>`;
+    }
+}
+
+function _glRenderControls() {
+    // Lane filter dropdown — populate from current lanes, preserve selection if still present.
+    const sel = document.getElementById('gl-lane');
+    if (sel && _gl.raw) {
+        const prev = sel.value;
+        const lanes = _gl.raw.lanes.slice().sort((a, b) => (b.n_ghosts + b.n_live + b.n_deadzone) - (a.n_ghosts + a.n_live + a.n_deadzone));
+        sel.innerHTML = '<option value="">(all lanes)</option>' +
+            lanes.map(L => {
+                const n = (L.n_ghosts || 0) + (L.n_live || 0) + (L.n_deadzone || 0);
+                return `<option value="${L.lane_id}">${L.lane_id} (n=${n})</option>`;
+            }).join('');
+        sel.value = prev && lanes.some(L => L.lane_id === prev) ? prev : '';
+        _gl.selectedLane = sel.value;
+    }
+    // Source chips reflect _gl.selectedSources.
+    document.querySelectorAll('.gl-chip[data-src]').forEach(el => {
+        el.classList.toggle('active', _gl.selectedSources.has(el.getAttribute('data-src')));
+    });
+}
+
+function _glRenderCounts() {
+    const el = document.getElementById('gl-counts');
+    if (!el || !_gl.raw) return;
+    const c = _gl.raw.session.n_events_per_source || {};
+    el.innerHTML = `ghosts=<strong style="color:var(--text);">${c.ghost || 0}</strong> &middot; ` +
+                   `deadzone=<strong style="color:#e0a64a;">${c.deadzone_skip || 0}</strong> &middot; ` +
+                   `live=<strong style="color:var(--gn);">${c.live || 0}</strong>`;
+}
+
+function onGhostLabLaneChange() {
+    _gl.selectedLane = document.getElementById('gl-lane').value || '';
+    _glRenderClock(); _glRenderHeatmap(); _glRenderReplay(); _glRenderTable();
+    // Highlight matching row in table.
+    document.querySelectorAll('#gl-lane-tbody tr').forEach(tr => {
+        tr.classList.toggle('active', tr.getAttribute('data-lane') === _gl.selectedLane);
+    });
+}
+
+function toggleGhostLabSource(src) {
+    if (_gl.selectedSources.has(src)) _gl.selectedSources.delete(src);
+    else _gl.selectedSources.add(src);
+    if (_gl.selectedSources.size === 0) _gl.selectedSources.add(src);
+    _glRenderControls();
+    _glRenderClock(); _glRenderHeatmap(); _glRenderReplay();
+}
+
+// ── Panel 1: 24h clock ring ─────────────────────────────────────────────
+function _glRenderClock() {
+    const svg = document.getElementById('gl-clock');
+    if (!svg) return;
+    // Aggregate filtered events by hour (only those with a settled win/loss).
+    const buckets = new Array(24).fill(0).map(() => ({ n: 0, w: 0 }));
+    for (const e of _glFilteredEvents()) {
+        if (e.win === null || e.win === undefined) continue;
+        if (typeof e.hour_utc !== 'number') continue;
+        const b = buckets[e.hour_utc];
+        b.n++; if (e.win) b.w++;
+    }
+    const maxN = Math.max(1, ...buckets.map(b => b.n));
+    // Figure out which hours are blocked (by selected lane's strategy, else union).
+    let blocked = new Set();
+    if (_gl.raw) {
+        if (_gl.selectedLane) {
+            const lane = _gl.raw.lanes.find(L => L.lane_id === _gl.selectedLane);
+            if (lane && Array.isArray(lane.blocked_hours_config)) lane.blocked_hours_config.forEach(h => blocked.add(h));
+            const strat = (lane && lane.strategy) || _gl.selectedLane.split('|')[0];
+            (_gl.blockedHoursByStrategy[strat] || []).forEach(h => blocked.add(h));
+        } else {
+            Object.values(_gl.blockedHoursByStrategy).forEach(arr => arr.forEach(h => blocked.add(h)));
+        }
+    }
+    // Draw wedges.
+    const R_OUT = 140, R_IN_MIN = 50, R_IN_MAX = 110;
+    const segs = [];
+    for (let h = 0; h < 24; h++) {
+        const a0 = (h / 24) * 2 * Math.PI - Math.PI / 2;
+        const a1 = ((h + 1) / 24) * 2 * Math.PI - Math.PI / 2;
+        const b = buckets[h];
+        const wr = b.n > 0 ? b.w / b.n : NaN;
+        const thickness = b.n > 0 ? (R_OUT - (R_IN_MAX - (R_OUT - R_IN_MIN) * Math.min(1, b.n / maxN))) : 6;
+        const rIn = R_OUT - thickness;
+        const x0o = Math.cos(a0) * R_OUT, y0o = Math.sin(a0) * R_OUT;
+        const x1o = Math.cos(a1) * R_OUT, y1o = Math.sin(a1) * R_OUT;
+        const x0i = Math.cos(a0) * rIn,   y0i = Math.sin(a0) * rIn;
+        const x1i = Math.cos(a1) * rIn,   y1i = Math.sin(a1) * rIn;
+        const path = `M${x0o.toFixed(2)},${y0o.toFixed(2)} A${R_OUT},${R_OUT} 0 0,1 ${x1o.toFixed(2)},${y1o.toFixed(2)} L${x1i.toFixed(2)},${y1i.toFixed(2)} A${rIn},${rIn} 0 0,0 ${x0i.toFixed(2)},${y0i.toFixed(2)} Z`;
+        const color = _glColorForWR(wr, b.n);
+        const isBlocked = blocked.has(h);
+        segs.push(`<path class="gl-clock-wedge" data-hour="${h}" d="${path}" fill="${color}" stroke="rgba(0,0,0,.4)" stroke-width=".5" onmouseenter="_glClockHover(${h})"></path>`);
+        if (isBlocked) {
+            // gray slash overlay
+            segs.push(`<path d="${path}" fill="url(#gl-slash)" pointer-events="none"></path>`);
+        }
+        // hour label
+        const aMid = (a0 + a1) / 2;
+        const lx = Math.cos(aMid) * 152, ly = Math.sin(aMid) * 152;
+        segs.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="9" fill="var(--text-muted)" text-anchor="middle" alignment-baseline="middle" font-family="IBM Plex Mono,monospace" pointer-events="none">${String(h).padStart(2,'0')}</text>`);
+    }
+    // Sweep hand (only visible when animating).
+    const hAng = (_gl.clockAnim.hour / 24) * 2 * Math.PI - Math.PI / 2;
+    const hx = Math.cos(hAng) * (R_OUT - 4), hy = Math.sin(hAng) * (R_OUT - 4);
+    const hand = _gl.clockAnim.running
+        ? `<line x1="0" y1="0" x2="${hx.toFixed(2)}" y2="${hy.toFixed(2)}" stroke="var(--ye)" stroke-width="2" stroke-linecap="round" />`
+        : '';
+    svg.innerHTML = `
+        <defs>
+            <pattern id="gl-slash" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+                <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,255,255,.25)" stroke-width="2"/>
+            </pattern>
+        </defs>
+        ${segs.join('')}
+        <circle cx="0" cy="0" r="42" fill="var(--bg)" stroke="var(--border)" stroke-width="1"/>
+        <text x="0" y="-4" font-size="13" fill="var(--text)" text-anchor="middle" font-family="IBM Plex Mono,monospace" id="gl-clock-center-1">${(_glComputeOverallWR()*100).toFixed(0)}%</text>
+        <text x="0" y="12" font-size="9" fill="var(--text-muted)" text-anchor="middle" font-family="IBM Plex Mono,monospace">overall WR</text>
+        ${hand}
+    `;
+}
+function _glComputeOverallWR() {
+    let n = 0, w = 0;
+    for (const e of _glFilteredEvents()) {
+        if (e.win === true) { w++; n++; } else if (e.win === false) { n++; }
+    }
+    return n > 0 ? w / n : 0;
+}
+function _glClockHover(h) {
+    const stats = document.getElementById('gl-clock-stats');
+    if (!stats) return;
+    const evs = _glFilteredEvents().filter(e => e.hour_utc === h && (e.win === true || e.win === false));
+    const wins = evs.filter(e => e.win === true).length;
+    const n = evs.length;
+    const wr = n ? wins / n : 0;
+    const bySource = { ghost: 0, deadzone_skip: 0, live: 0 };
+    evs.forEach(e => { bySource[e.source] = (bySource[e.source] || 0) + 1; });
+    stats.innerHTML = `<strong>hour ${String(h).padStart(2,'0')} UTC</strong> &middot; n=${n} &middot; WR=${(wr*100).toFixed(1)}% &middot; ` +
+        `<span style="color:#888;">ghosts ${bySource.ghost}</span> / ` +
+        `<span style="color:#e0a64a;">dz ${bySource.deadzone_skip}</span> / ` +
+        `<span style="color:var(--gn);">live ${bySource.live}</span>`;
+}
+function toggleGhostLabClock() {
+    _gl.clockAnim.running = !_gl.clockAnim.running;
+    const btn = document.getElementById('gl-play-btn');
+    if (btn) btn.textContent = _gl.clockAnim.running ? '❚❚ Pause' : '▶ Play';
+    if (_gl.clockAnim.running) {
+        _gl.clockAnim.lastTick = performance.now();
+        _glClockStep();
+    } else if (_gl.clockAnim.raf) {
+        cancelAnimationFrame(_gl.clockAnim.raf);
+        _gl.clockAnim.raf = null;
+        _glRenderClock();
+    }
+}
+function _glClockStep() {
+    if (!_gl.clockAnim.running) return;
+    const now = performance.now();
+    const dt = (now - _gl.clockAnim.lastTick) / 1000;
+    _gl.clockAnim.lastTick = now;
+    _gl.clockAnim.hour = (_gl.clockAnim.hour + dt * 2) % 24; // 2 hours / real second
+    _glRenderClock();
+    _glClockHover(Math.floor(_gl.clockAnim.hour));
+    _gl.clockAnim.raf = requestAnimationFrame(_glClockStep);
+}
+
+// ── Panel 2: 7×24 heatmap ────────────────────────────────────────────────
+function _glRenderHeatmap() {
+    const host = document.getElementById('gl-heatmap');
+    if (!host) return;
+    const buckets = {};  // key = "dow-hour" -> {n, w}
+    for (const e of _glFilteredEvents()) {
+        if (e.win !== true && e.win !== false) continue;
+        if (typeof e.hour_utc !== 'number' || typeof e.dow !== 'number') continue;
+        const k = `${e.dow}-${e.hour_utc}`;
+        const b = buckets[k] || (buckets[k] = { n: 0, w: 0 });
+        b.n++; if (e.win) b.w++;
+    }
+    const dows = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const maxN = Math.max(1, ...Object.values(buckets).map(b => b.n));
+    let html = `<table style="border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:.65rem;">`;
+    html += `<thead><tr><th></th>` + Array.from({length:24}, (_, h) => `<th style="padding:2px 0;color:var(--text-muted);text-align:center;width:22px;">${String(h).padStart(2,'0')}</th>`).join('') + `</tr></thead><tbody>`;
+    for (let d = 0; d < 7; d++) {
+        html += `<tr><td style="padding:0 6px;color:var(--text-muted);">${dows[d]}</td>`;
+        for (let h = 0; h < 24; h++) {
+            const b = buckets[`${d}-${h}`] || { n: 0, w: 0 };
+            const wr = b.n ? b.w / b.n : NaN;
+            const sz = b.n ? Math.max(8, Math.min(20, 8 + 12 * Math.sqrt(b.n) / Math.sqrt(maxN))) : 4;
+            const color = b.n ? _glColorForWR(wr, b.n) : 'rgba(60,60,80,.25)';
+            const title = b.n ? `${dows[d]} ${String(h).padStart(2,'0')}:00 — n=${b.n}, wins=${b.w}, WR=${(wr*100).toFixed(0)}%` : `${dows[d]} ${String(h).padStart(2,'0')}:00 — no data`;
+            html += `<td style="padding:1px;text-align:center;"><div class="gl-heatcell" title="${title}" style="width:${sz}px;height:${sz}px;background:${color};border-radius:2px;margin:0 auto;"></div></td>`;
+        }
+        html += `</tr>`;
+    }
+    html += `</tbody></table>`;
+    host.innerHTML = html;
+}
+
+// ── Panel 3: animated replay scrubber ───────────────────────────────────
+function _glRenderReplay() {
+    const cv = document.getElementById('gl-replay');
+    if (!cv || !_gl.raw) return;
+    const W = cv.clientWidth || 800; const H = 80;
+    if (cv.width !== W) cv.width = W;
+    if (cv.height !== H) cv.height = H;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,255,255,.04)'; ctx.fillRect(0, H/2 - .5, W, 1);
+    const events = _glFilteredEvents().slice().sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    if (!events.length) return;
+    const t0 = new Date(events[0].ts).getTime();
+    const t1 = new Date(events[events.length - 1].ts).getTime();
+    const span = Math.max(1, t1 - t0);
+    const cursor = _gl.replay.running ? Math.min(1, _gl.replay.t) : (_gl.replay.scrubbing ? _gl.replay.t : 1);
+    const cutoff = t0 + cursor * span;
+    for (const e of events) {
+        const t = new Date(e.ts).getTime();
+        if (t > cutoff) continue;
+        const x = ((t - t0) / span) * W;
+        let y, color;
+        if (e.source === 'ghost') { y = H * 0.25; color = 'rgba(180,180,200,.55)'; }
+        else if (e.source === 'deadzone_skip') { y = H * 0.55; color = 'rgba(224,166,74,.7)'; }
+        else { y = H * 0.85; color = e.win ? 'rgba(0,255,136,.75)' : 'rgba(255,80,80,.75)'; }
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(x, y, 1.6, 0, 2 * Math.PI); ctx.fill();
+    }
+    // Cursor line.
+    const cx = cursor * W;
+    ctx.strokeStyle = 'rgba(176,96,255,.65)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+    // Time label.
+    const lbl = document.getElementById('gl-replay-time');
+    if (lbl) lbl.textContent = new Date(cutoff).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+}
+function toggleGhostLabReplay() {
+    _gl.replay.running = !_gl.replay.running;
+    const btn = document.getElementById('gl-replay-btn');
+    if (btn) btn.textContent = _gl.replay.running ? '❚❚ Pause' : '▶ Play';
+    if (_gl.replay.running) {
+        if (_gl.replay.t >= 1) _gl.replay.t = 0;
+        _gl.replay.lastTick = performance.now();
+        _glReplayStep();
+    } else if (_gl.replay.raf) {
+        cancelAnimationFrame(_gl.replay.raf); _gl.replay.raf = null;
+    }
+}
+function setGhostLabReplaySpeed() {
+    _gl.replay.speed = parseInt(document.getElementById('gl-replay-speed').value, 10) || 100;
+}
+function _glReplayStep() {
+    if (!_gl.replay.running) return;
+    const now = performance.now();
+    const dt = (now - _gl.replay.lastTick) / 1000;
+    _gl.replay.lastTick = now;
+    // span / speed = real seconds to traverse the whole timeline at 1×.
+    // We just advance t by dt * speed / 30 (i.e. 30 simulated-units per real-second baseline).
+    _gl.replay.t = Math.min(1, _gl.replay.t + dt * _gl.replay.speed / 30 / 60);
+    _glRenderReplay();
+    _glRenderHeatmap();
+    document.getElementById('gl-replay-scrub').value = Math.round(_gl.replay.t * 1000);
+    if (_gl.replay.t >= 1) {
+        toggleGhostLabReplay();
+        return;
+    }
+    _gl.replay.raf = requestAnimationFrame(_glReplayStep);
+}
+function onGhostLabScrub() {
+    const v = parseInt(document.getElementById('gl-replay-scrub').value, 10) || 0;
+    _gl.replay.t = v / 1000;
+    _gl.replay.scrubbing = true;
+    _glRenderReplay();
+    _glRenderHeatmap();
+}
+
+// ── Panel 4: lane × source table ────────────────────────────────────────
+function _glRenderTable() {
+    const tb = document.getElementById('gl-lane-tbody');
+    if (!tb) return;
+    const rows = _glLaneRows();
+    if (!rows.length) {
+        tb.innerHTML = '<tr><td colspan="9" style="color:var(--text-muted);padding:10px;">No lanes match the current filter.</td></tr>';
+        return;
+    }
+    const cellWR = (wr, lo, hi, n) => {
+        if (!n) return '<span style="color:var(--text-muted);">—</span>';
+        const c = _glColorForWR(wr, n);
+        return `<span style="color:${c};">${(wr*100).toFixed(0)}%</span><span style="color:var(--text-muted);font-size:.65rem;"> [${(lo*100).toFixed(0)}-${(hi*100).toFixed(0)}]</span>`;
+    };
+    tb.innerHTML = rows.slice(0, 200).map(L => {
+        const post = L.posterior;
+        const postCell = post && post.mean != null
+            ? `<span title="α=${post.beta_a}, β=${post.beta_b}, n=${post.n}" style="color:${_glColorForWR(post.mean, post.n||0)};">${(post.mean*100).toFixed(0)}%</span>`
+            : '<span style="color:var(--text-muted);">—</span>';
+        const blocked = Array.isArray(L.blocked_hours_config) && L.blocked_hours_config.length
+            ? L.blocked_hours_config.join(',')
+            : '<span style="color:var(--text-muted);">—</span>';
+        const isActive = _gl.selectedLane === L.lane_id ? 'active' : '';
+        return `<tr class="${isActive}" data-lane="${L.lane_id}" onclick="_glPickLane('${L.lane_id.replace(/'/g, "\\'")}')">
+            <td>${L.lane_id}</td>
+            <td style="text-align:right;">${L.n_ghosts || 0}</td>
+            <td style="text-align:right;">${cellWR(L.ghost_wr, L.ghost_wr_lo, L.ghost_wr_hi, L.n_ghosts)}</td>
+            <td style="text-align:right;">${L.n_live || 0}</td>
+            <td style="text-align:right;">${cellWR(L.live_wr, L.live_wr_lo, L.live_wr_hi, L.n_live)}</td>
+            <td style="text-align:right;">${L.n_deadzone || 0}</td>
+            <td style="text-align:right;">${cellWR(L.deadzone_wr, L.deadzone_wr_lo, L.deadzone_wr_hi, L.n_deadzone_resolved)}</td>
+            <td style="text-align:right;">${postCell}</td>
+            <td>${blocked}</td>
+        </tr>`;
+    }).join('');
+}
+function sortGhostLabTable(key) {
+    if (_gl.sortKey === key) _gl.sortDir = -_gl.sortDir;
+    else { _gl.sortKey = key; _gl.sortDir = -1; }
+    _glRenderTable();
+}
+function _glPickLane(lane) {
+    const sel = document.getElementById('gl-lane');
+    if (sel) {
+        sel.value = (_gl.selectedLane === lane) ? '' : lane;
+        onGhostLabLaneChange();
+    }
+}
+
 // ── SSE — real-time snapshot every ~2s (heroes + badges + BTC); fetchAll is slower for heavy panels.
 let _sseActive = false;
 let _sseRetryDelay = 1000;
@@ -8613,7 +8468,8 @@ _setupSSE();
 document.addEventListener('DOMContentLoaded', function() {
     try {
         var v = localStorage.getItem('psb_main_view');
-        if (v && ['live','performance','journal','backtest','commands'].indexOf(v) >= 0)
+        if (v === 'backtest') v = 'ghosts';  // migrate old persisted tab name
+        if (v && ['live','performance','journal','ghosts','commands'].indexOf(v) >= 0)
             switchMainView(v, { skipTransition: true });
     } catch (e) {}
 });
@@ -9771,6 +9627,8 @@ function _maRenderBubbles() {
 
     // Pair each trade point to its asset's series index by closest time
     const points = (_maState.tradePoints || []).filter(p => p && visibleKeys.has(p.strategy));
+    // Track collisions per (bestI, strategy) so we can fan out stacked bubbles.
+    const _binCounts = {};
     const html = points.map(p => {
         const a = _maState.assets[p.strategy];
         if (!a || !Array.isArray(a.series)) return '';
@@ -9785,10 +9643,36 @@ function _maRenderBubbles() {
             if (d < bestD) { bestD = d; bestI = i; }
         }
         if (bestI < 0) return '';
-        const v = a.series[bestI];
-        if (v == null || !Number.isFinite(v)) return '';
-        const xPct = ((ML + (bestI + 0.5) * (CW / N)) / W) * 100;
-        const yPct = ((MT + CH * (1 - (v - yMin) / span)) / H) * 100;
+        let v = a.series[bestI];
+        if (v == null || !Number.isFinite(v)) {
+            // Series aligned to BTC's bar grid can have gaps for alts on other
+            // feeds (HL, mismatched bar boundaries). Search outward for the
+            // nearest non-null sample so the bubble still renders.
+            for (let off = 1; off < N; off++) {
+                const lo = bestI - off, hi = bestI + off;
+                const vl = lo >= 0 ? a.series[lo] : null;
+                if (vl != null && Number.isFinite(vl)) { v = vl; break; }
+                const vh = hi < N ? a.series[hi] : null;
+                if (vh != null && Number.isFinite(vh)) { v = vh; break; }
+            }
+            if (v == null || !Number.isFinite(v)) return '';
+        }
+        // Place x by the actual close timestamp (continuous), not snapped to the
+        // bar index — otherwise 60+ trades in the last 2h all stack on ~8 bar
+        // positions and look like ~15 bubbles visually.
+        const tFirst = _maState.times[0] || drawT;
+        const tLast = _maState.times[N - 1] || drawT;
+        const tSpan = (tLast - tFirst) || 1;
+        const tFrac = Math.max(0, Math.min(1, (drawT - tFirst) / tSpan));
+        // tFrac in [0,1] maps to bar centers [0..N-1] in pixel space
+        const xPx = ML + (0.5 + tFrac * (N - 1)) * (CW / N);
+        // Small y jitter to separate same-strategy trades at near-identical %
+        const binKey = p.strategy + ':' + bestI;
+        const stackIdx = _binCounts[binKey] || 0;
+        _binCounts[binKey] = stackIdx + 1;
+        const jitterY = ((stackIdx % 6) - 2.5) * 4;
+        const xPct = (xPx / W) * 100;
+        const yPct = ((MT + CH * (1 - (v - yMin) / span) + jitterY) / H) * 100;
         const pnl = Number(p.pnl) || 0;
         const isLoss = pnl < 0;
         const isWin = pnl >= 0 && p.closed_at;
@@ -9951,8 +9835,24 @@ async function loadMacroAlignChart() {
         _maState.assets = data.assets || {};
         _maState.order = Array.isArray(data.order) ? data.order : Object.keys(_maState.assets);
         _maState.lastFetch = Date.now();
-        // Pull latest trade-points if we have them from loadBTCChart's last call.
-        _maState.tradePoints = _exitHudTradePoints || [];
+        // Use trade points cached by loadBTCChart if present; otherwise fetch
+        // directly so the bubble layer renders even when this panel loads first.
+        if (Array.isArray(_exitHudTradePoints) && _exitHudTradePoints.length) {
+            _maState.tradePoints = _exitHudTradePoints;
+        } else {
+            try {
+                const tr = await fetchT('/api/journal/trade-points?limit=500', 8000);
+                if (tr && tr.ok) {
+                    const tj = await tr.json();
+                    _maState.tradePoints = (tj && tj.points) || [];
+                    _exitHudTradePoints = _maState.tradePoints;
+                } else {
+                    _maState.tradePoints = [];
+                }
+            } catch (_) {
+                _maState.tradePoints = [];
+            }
+        }
         _maRenderChips();
         if (_maState.view === 'macro') {
             _maDrawCanvas();

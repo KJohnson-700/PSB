@@ -1,8 +1,10 @@
-# Handoff: Strategy Entry Spec & Backtest Alignment
+# Handoff: Strategy Entry Spec
 
-**Audience:** Senior engineer  
-**Purpose:** Ensure the Strategy Entry Specification is implemented in the right places (live and backtest) and that backtesting faithfully reflects the same entry/sizing logic.  
+**Audience:** Senior engineer
+**Purpose:** Ensure the Strategy Entry Specification is implemented consistently in the live code path.
 **Spec reference:** `docs/STRATEGY_ENTRY_SPEC.md`
+
+> The in-repo backtest engines were removed 2026-05-24 (CLAUDE.md: they didn't faithfully replay live behavior). Validation is now via the ghost log + dashboard Ghost Lab. Backtest-alignment sections of this doc were dropped accordingly.
 
 ---
 
@@ -37,24 +39,6 @@ Verify and, if needed, implement the spec in these places:
 
 ---
 
-## 3. Backtesting — align with live behavior
-
-Backtests must use the **same** entry and sizing rules as live so that “pass in backtest” implies “would behave the same live.”
-
-| Location | What to check / implement |
-|----------|---------------------------|
-| **`src/backtest/engine.py`** | Uses `ArbitrageStrategy` / `FadeStrategy` with `BacktestAIAgent` and `PositionSizer` built from **the same config** as live (e.g. `config/settings.yaml`). Ensure: (1) no extra price-based filter (e.g. “skip if price < 0.55”) in the engine; (2) strategy instances receive the same `min_edge`, `ai_confidence_threshold`, `ipg_min`, etc.; (3) if **max_entry_price** is added for live, the backtest engine or strategy must apply it when generating/simulating signals (e.g. do not add a fill when signal price would exceed max_entry). |
-| **`backtesting/adapters.py`** (Nautilus adapter) | Uses `poly_bot.arbitrage_strategy` / `poly_bot.fade_strategy` and their `scan_and_analyze`. So long as PolyBot is constructed with the same config and no extra filtering in main, adapters inherit correct behavior. Verify: no adapter-level filter that drops signals by price band; if max_entry is enforced in strategy or main, adapter will receive already-capped signals. |
-| **Config used by backtest** | Scripts that run backtests (e.g. `scripts/run_backtest_rigorous.py`, `scripts/run_backtest_multi.py`) should load the **same** `config/settings.yaml` (or equivalent) so that `min_edge`, confidence thresholds, and any future `max_entry_price` are identical between live and backtest. |
-
-**Acceptance (backtest):**
-
-- Entry and sizing in backtest match the spec: no hard floor, optional max entry only, edge/confidence thresholds only for “don’t chase,” Kelly + risk limits for size.
-- No backtest-only filter that would allow a trade in backtest but block it in live (or vice versa) based on price band.
-- Config used for backtest is the same as (or explicitly overridden from) the live strategy config.
-
----
-
 ## 4. Optional config addition
 
 If **max_entry_price** is implemented, add to `config/settings.yaml` under `strategies` (e.g. under `arbitrage` and/or `fade`), for example:
@@ -73,6 +57,5 @@ Document in `STRATEGY_ENTRY_SPEC.md` that this is the only price-based entry cap
 - [ ] **Live:** Arbitrage and fade (and consensus, if it ever suggests size) have **no hard floor** and **no target window** on entry price; entry only requires edge (and confidence where applicable) above threshold.
 - [ ] **Live:** Optional **max_entry_price** is respected if present in config; no other price-based entry rule.
 - [ ] **Live:** Position size is governed only by Kelly and risk limits (no price-based sizing).
-- [ ] **Backtest:** `src/backtest/engine.py` and any Nautilus adapters use the same entry/sizing logic and config as live; no backtest-only price-floor or target-window logic.
-- [ ] **Backtest:** Config source for backtest runs matches live (same `settings.yaml` or explicit override).
+- [ ] **Validation:** Ghost log + Ghost Lab tab WR for affected lanes recorded before/after the change.
 - [ ] **Docs:** `STRATEGY_ENTRY_SPEC.md` and this handoff are updated if `max_entry_price` or any new rule is added.

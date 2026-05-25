@@ -31,7 +31,7 @@ from src.analysis.ghost_calibration import (  # noqa: E402
     ghost_id,
 )
 from src.analysis.rejected_candidate_log import compute_convergence_telemetry  # noqa: E402
-from src.backtest.ohlcv_loader import OHLCVLoader  # noqa: E402
+from src.data.ohlcv_loader import OHLCVLoader  # noqa: E402
 
 DEFAULT_REPORT_DIR = REPO_ROOT / "data" / "reports"
 DEFAULT_RANGE_BAND_PCT = 0.0012

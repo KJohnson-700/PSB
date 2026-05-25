@@ -33,6 +33,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import yaml
+from src.execution.trade_journal import is_phantom_exit_row
 
 try:
     from zoneinfo import ZoneInfo
@@ -101,11 +102,7 @@ def load_trades(
                     open_entries[tid] = e
                 elif etype == "EXIT":
                     pnl = e.get("pnl", 0) or 0
-                    ep = e.get("entry_price", 0) or 0
-                    cp = e.get("current_price", 0) or 0
-                    if ep > 0 and abs(ep + cp - 1.0) < 0.02:
-                        continue
-                    if abs(pnl) > 200:
+                    if is_phantom_exit_row(e):
                         continue
 
                     ts_str = e.get("timestamp", "")

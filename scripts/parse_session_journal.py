@@ -12,6 +12,42 @@ from pathlib import Path
 from typing import Any
 
 
+def _infer_entry_leg(row: dict[str, Any]) -> str:
+    extra = row.get("extra") or {}
+    if isinstance(extra, dict) and extra.get("entry_leg") in ("YES", "NO"):
+        return str(extra["entry_leg"])
+    leg = row.get("entry_leg")
+    if leg in ("YES", "NO"):
+        return str(leg)
+    action = str(row.get("action") or "").strip().upper()
+    if action == "BUY_NO":
+        return "NO"
+    if action == "SELL_YES":
+        return "YES"
+    side = str(row.get("side") or "").strip().upper()
+    outcome = str(row.get("outcome") or "").strip().upper()
+    if outcome == "NO" and side == "BUY":
+        return "NO"
+    if outcome == "NO" and side == "SELL":
+        return "YES"
+    return "YES"
+
+
+def _is_phantom_exit(row: dict[str, Any], max_plausible_pnl: float = 200.0) -> bool:
+    try:
+        entry_price = float(row.get("entry_price") or 0)
+        current_price = float(row.get("current_price") or 0)
+        pnl = float(row.get("pnl") or 0)
+    except (TypeError, ValueError):
+        return False
+    is_token_flip = (
+        _infer_entry_leg(row) == "YES"
+        and entry_price > 0
+        and abs(entry_price + current_price - 1.0) < 0.02
+    )
+    return is_token_flip or abs(pnl) > max_plausible_pnl
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("entries_jsonl", type=Path)
@@ -46,10 +82,8 @@ def main() -> None:
         merged = {**ee, **xo}
 
         pnl = float(ex.get("pnl") or 0)
-        entry_price = float(ex.get("entry_price") or 0)
-        cur = float(ex.get("current_price") or 0)
-        # skip phantom binary resolution lines (heatmap script parity)
-        if entry_price > 0 and abs(entry_price + cur - 1.0) < 0.02:
+        # Skip legacy phantom token-flip exits without dropping real BUY_NO exits.
+        if _is_phantom_exit(ex):
             continue
 
         sig = str(merged.get("signal_reason") or ee.get("signal_reason") or "")

@@ -12,6 +12,24 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-25 — Cap live lane-calibration alpha at identity
+
+- **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify ETH probabilities away from 50/50; sub-1 shrinkage remains active.
+- **Why:** Session attribution showed `alpha_used > 1.0` was damaging the overall session and alt lanes. This makes calibration a one-sided confidence reducer while the next sample accumulates.
+- **Hypothesis:** ETH should avoid calibration-driven edge inflation in thin or miscalibrated lanes while still shrinking historically overpredicted setups.
+- **Expected outcome:** Next live/non-shadow session should show no effective `alpha_used > 1.0` entries and lower loss concentration in high-alpha buckets.
+- **Actual outcome:** `pending` (need ≥15 closed `eth_macro` trades after this change).
+- **Status:** `pending`
+
+### 2026-05-24 — Restore ETH coverage after session starvation
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), kept ETH edge floors unchanged, widened oracle basis validation from `10/15` bps to `20/30` bps, and set 5m/15m/1h lane `size_multiplier: 0.3` for calibration sizing.
+- **Why:** Session `test_20260524_060424` showed only `3` ETH fills across `57` candidate events (`5.3%` entry rate) and no 15m/1h fills. Most later ETH candidates were blocked by the global daily trade cap; the cap has since been raised for paper. A broad edge loosen was tested and rejected because ETH 15m/1h cached replay produced high trade count but poor WR.
+- **Hypothesis:** ETH should resume producing calibration trades after the paper cap fix without lowering edge floors; widened oracle tolerance prevents feed-basis noise from becoming the next starvation point, and `0.3x` sizing limits damage while the lane is remeasured.
+- **Expected outcome:** Next paper run should show materially higher ETH candidate-to-entry conversion and at least some 15m/1h fills if markets are scanned.
+- **Actual outcome:** `pending` (need ≥15 closed `eth_macro` trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-21 — ETH high-edge cap moved from skip to sizing clamp
 
 - **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `max_edge_updown` no longer rejects ETH entries with `edge_above_cap`. ETH now keeps the trade admissible and caps only the Kelly sizing input used for position sizing (`size_edge_cap=...` added to reason/log context). Backtest parity for the shared engine was updated in [src/backtest/updown_engine.py](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py).

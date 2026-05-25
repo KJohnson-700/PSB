@@ -28,7 +28,7 @@ _HL_MAX_CANDLES_1M_PER_CHUNK = 500
 _HL_MIN_BARS_TO_BISECT = 48
 
 # Binance USDM perpetual is the primary live HYPE spot source; Hyperliquid is fallback.
-# Matches backtest path in ``src/backtest/ohlcv_loader.py`` so live and backtest see the
+# Matches the OHLCV path in ``src/data/ohlcv_loader.py`` so live tooling sees the
 # same spot reference (incl. oracle basis vs Chainlink). HL only carries this lane during
 # Binance outages / pre-listing windows / geo-block.
 _BINANCE_FUTURES_KLINES_URL = "https://fapi.binance.com/fapi/v1/klines"

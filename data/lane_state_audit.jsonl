@@ -29,3 +29,9 @@
 {"timestamp":"2026-05-20T01:29:46Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
 {"timestamp":"2026-05-20T01:52:22Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
 {"timestamp":"2026-05-20T01:56:49Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T01:34:46Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T01:39:54Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T01:41:28Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T01:44:48Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T06:21:34Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-25T06:22:48Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}

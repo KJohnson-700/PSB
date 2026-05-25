@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.execution.trade_journal import is_phantom_exit_row
+
 
 def _parse_exit_ts(raw: str) -> datetime | None:
     if not raw:
@@ -51,12 +53,7 @@ def _tag_side_src(sig: str, reason_entry: str) -> str:
 
 
 def _is_phantom_binary(ex: dict, ent: dict) -> bool:
-    pnl = float(ex.get("pnl") or 0)
-    entry_price = float(ex.get("entry_price") or 0)
-    cur = float(ex.get("current_price") or 0)
-    if entry_price > 0 and abs(entry_price + cur - 1.0) < 0.02:
-        return True
-    return False
+    return is_phantom_exit_row(ex)
 
 
 def closed_rows_from_jsonl(

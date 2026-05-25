@@ -53,8 +53,7 @@ On macOS, stock Python may use **LibreSSL**; **urllib3 v2** can print a noisy `N
    .venv\Scripts\activate     # Windows cmd/PowerShell
    source .venv/bin/activate  # macOS / Linux
    pip install -U pip
-   pip install -r requirements-railway.txt   # bot + dashboard (smaller)
-   # pip install -r requirements.txt       # full install incl. Nautilus backtests
+   pip install -r requirements-railway.txt   # bot + dashboard
    ```
 
 2. **Secrets — `.env` at repo root (or `config/secrets.env`)**
@@ -142,23 +141,25 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
 ```
 
-## Backtesting
+## Validation (Ghost Log, not Backtests)
 
-See **[docs/BACKTEST.md](docs/BACKTEST.md)** for research, best practices, and tools.
+The in-repo backtest engines were removed 2026-05-24 — they didn't faithfully replay
+point-in-time config, posteriors, regime, Polymarket YES/NO depth, or AI veto state,
+and their numbers diverged from live behavior. **Decisions are validated against
+the ghost log** instead: every candidate the live scanner rejects is settled against
+the actual Polymarket outcome and recorded in
+`data/calibration/rejected_candidates_settled.jsonl`.
 
-**Strategy test review** (audit reports and journals for bugs/miscalculations—not pytest CI): **[docs/polymarket-backtest-subagent-skill.md](docs/polymarket-backtest-subagent-skill.md)**.
+The dashboard's **Ghost Lab** tab visualizes this data — settled ghosts, deadzone
+counterfactuals, and live trades merged on canonical lane_id, with a 24h time-of-day
+clock and 7×24 day-of-week heatmap. See CLAUDE.md for the full validation rule.
 
-**Quick run:**
-```bash
-python scripts/run_backtest.py --strategy fade --slug will-trump-win-2024 --start 2024-10-01 --end 2024-11-14 --bankroll 500 --no-ui
-python scripts/run_backtest_multi.py --all --start 2024-10-01 --end 2024-11-30 --bankroll 2000 --target 30 --save-report --no-ui
-```
-
-**Production-grade backtesting:** Use [evan-kolberg/prediction-market-backtesting](https://github.com/evan-kolberg/prediction-market-backtesting) (NautilusTrader + Polymarket adapters, AccountBalanceNegative, L2 fills).
+For production-grade backtesting (out of scope for this repo), see the sibling
+`backtesting/` directory (NautilusTrader adapter) or
+[evan-kolberg/prediction-market-backtesting](https://github.com/evan-kolberg/prediction-market-backtesting).
 
 ## Top GitHub Repos for Reference
 
-- [evan-kolberg/prediction-market-backtesting](https://github.com/evan-kolberg/prediction-market-backtesting) - Nautilus backtest for Polymarket/Kalshi
 - [Polymarket/py-clob-client](https://github.com/Polymarket/py-clob-client) - Official CLOB SDK (893 stars)
 - [nlhx/polymarket-copy-trading-bot](https://github.com/nlhx/polymarket-copy-trading-bot) - 726 stars
 - [HyperBuildX/Polymarket-Trading-Bot-Rust](https://github.com/HyperBuildX/Polymarket-Trading-Bot-Rust) - 358 stars (for speed)

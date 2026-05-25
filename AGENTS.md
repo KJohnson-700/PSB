@@ -5,15 +5,15 @@
 - Before deep work on complex or explicitly high-priority tasks with thin scope, ask a few short clarifying questions (goal, constraints, priority).
 - Do not guess on technical claims; research and verify before recommending changes.
 - When comparing strategies or external approaches, give data-backed assessment, not reasoning only from the local codebase.
-- For long backtests or heavy jobs, show progress and concrete outputs; avoid silent stalls or loops with no results.
+- For long-running jobs, show progress and concrete outputs; avoid silent stalls or loops with no results.
 - Prefer running commands and fixing issues in the environment over only suggesting steps the user must run. If a tool fails (e.g. Railway CLI `Unauthorized`), **retry** and confirm basics (cwd, linked project) on the agent side first; **do not** imply the user misconfigured or “forgot to connect” without evidence—report the observed error and treat transient token/session expiry as a normal cause. When the user asks for a **“Railway update”** (or similar: status of the hosted bot / paper session), prioritize **paper-trading / ops signal**—e.g. latest `OPS_JSON` or journal-related lines via `railway logs` from the linked repo—not deploy metadata alone unless they asked about deploys. For paper-trading restarts, prefer dashboard-native flows and avoid suggesting UX that requires pasting API keys into the dashboard.
 - For mispricing-style entry (arbitrage, fade, and any consensus path that sizes trades), follow `docs/STRATEGY_ENTRY_SPEC.md`: enter when edge is above the minimum threshold, keep downside flexible with no hard floor, use an optional max-entry cap only if configured, avoid chasing noise, allow strong mispricings at low prices, and size with Kelly plus existing risk limits.
 - Discord (and the bot's notification module): **only** execution outcomes for **`bitcoin`**, **`sol_macro`**, **`eth_macro`**, **`hype_macro`**, **`xrp_macro`**, and **`xrp_dump_hedge`** — plus optional **errors** / **status** (when `alert_on_status` is on). **`notify_exit`** posts **closed-position** embeds to Discord when `alert_on_exit` is true; **`notify_trade`** is a **no-op stub** (callers still await it after fills, but **no entry/fill Discord** — exit-only noise policy). **Always include a Polymarket market link** on exit embeds when `market_id` is present (`https://polymarket.com/market/<id>`); if `market_id` is missing, the embed shows an explicit placeholder instead of a broken URL. No consensus, contrarian, or other opportunity-only webhooks from this codebase. If consensus- or contrarian-style opportunity alerts still reach Discord, treat that as unintended and trace the sender path (config, webhook, or code).
 - For calendar-day questions (today, yesterday, daily PnL or trade totals) when discussing the hosted bot or Railway logs, assume **America/Los_Angeles** unless the user specifies another timezone.
 - Before enabling execution on a path that was idle or gated, give a brief explicit reason (config, risk gate, or code path) so the decision is understandable without relying on chat memory.
-- Strategy and backtest auditing (distinct from routine pytest/CI green checks): prioritize finding bugs, miscalculations, inconsistencies, and spec drift in data, strategy code, and reports, and give actionable improvement suggestions; follow `docs/polymarket-backtest-subagent-skill.md`.
-- Recurring audit item: whenever auditing `sol_macro`, `eth_macro`, `hype_macro`, or `xrp_macro`, explicitly test whether BTC-secondary context/gates are helping or hurting each lane. Review settled ghosts, live journals, and backtests for BTC-follow and BTC-catalyst families such as `btc_1h_not_following`, `flat_btc_no_lag`, `no_btc_catalyst_*`, `btc_min_move_*`, and lag/spike filters; do not assume those gates are protective by default.
-- After material strategy changes (not minor bugfixes), deliver concise review or backtest summaries and prefer in-repo or dashboard-visible artifacts over copy-paste-only handoffs. When scoping a **new** short-window or new-asset strategy (e.g. HYPE on Polymarket), prioritize external research on documented approaches, fees, and resolution mechanics—not only porting an existing lag template.
+- Strategy auditing (distinct from routine pytest/CI green checks): prioritize finding bugs, miscalculations, inconsistencies, and spec drift in data and strategy code, and give actionable improvement suggestions. **Validation source of truth: the ghost log** (`data/calibration/rejected_candidates_settled.jsonl`) and the dashboard Ghost Lab tab — the in-repo backtest engines were removed 2026-05-24 because they didn't faithfully replay live behavior. See CLAUDE.md for the full rule.
+- Recurring audit item: whenever auditing `sol_macro`, `eth_macro`, `hype_macro`, or `xrp_macro`, explicitly test whether BTC-secondary context/gates are helping or hurting each lane. Review settled ghosts (via Ghost Lab) and live journals for BTC-follow and BTC-catalyst families such as `btc_1h_not_following`, `flat_btc_no_lag`, `no_btc_catalyst_*`, `btc_min_move_*`, and lag/spike filters; do not assume those gates are protective by default.
+- After material strategy changes (not minor bugfixes), deliver concise review summaries grounded in ghost-log or live-journal evidence; prefer in-repo or dashboard-visible artifacts over copy-paste-only handoffs. When scoping a **new** short-window or new-asset strategy (e.g. HYPE on Polymarket), prioritize external research on documented approaches, fees, and resolution mechanics—not only porting an existing lag template.
 - **No unsolicited tightening:** On strategy or performance questions, report what the data shows (patterns, lanes, hours, gates, bugs). Do **not** suggest tightening gates, raising `min_edge`, disabling windows, blocking hours, or similar restriction unless the user explicitly asks to tighten, restrict, or reduce activity.
 
 ## Strategy Log — AI Editor Instructions
@@ -30,12 +30,12 @@ The Obsidian vault at `projects/polymarket-bot/strategy-log/` is the authoritati
 6. **Review sessions** are triggered by: 15–20 new closed trades, a strategy change, or a regime shift.
 7. **Lessons Learned** are evergreen truths confirmed by data — add at top of that section, dated.
 8. **Status values:** `pending` → `confirmed ✅` | `reverted ❌` | `inconclusive ⚠️`
-9. **Quick Stats table** — update from `/api/journal/summary` live data or backtest JSON. Do not estimate.
+9. **Quick Stats table** — update from `/api/journal/summary` live data or the Ghost Lab tab (`/api/ghosts/lab`). Do not estimate.
 10. The vault also has `projects/polymarket-bot/changelog.md` for infrastructure/milestone changes (not strategy tuning — that goes in the strategy log).
 
-## Strategy test review (AI)
+## Strategy review (AI)
 
-For **auditing** backtest outputs, paper/live journals, and strategy code—hunting bugs, miscalculations, inconsistencies, and spec drift—use **`docs/polymarket-backtest-subagent-skill.md`**. That role is **not** the same as routine pytest/CI test running (green builds); it produces structured review findings and improvement suggestions.
+For **auditing** paper/live journals and strategy code—hunting bugs, miscalculations, inconsistencies, and spec drift—work from the ghost log and the dashboard Ghost Lab tab. That role is **not** the same as routine pytest/CI test running (green builds); it produces structured review findings and improvement suggestions.
 
 ## Running pytest (local / Cursor)
 
@@ -45,12 +45,10 @@ For **auditing** backtest outputs, paper/live journals, and strategy code—hunt
   - Paths with a space in the folder name: `.venv/bin/python -m pytest` from inside the project directory (or quote the path).
 - **Agents:** when running the test suite in this repo, default to **`.venv/bin/python -m pytest`** (or an activated venv) when `.venv` exists.
 
-### Where the oracle / crypto backtest tests live (for hung `run_backtest` or `OracleHistoryLoader` debugging)
+### Where oracle basis tests live
 
-- **Oracle loader + replay / basis gates:** `tests/test_backtest_oracle_replay.py` — imports `OracleHistoryLoader` from `src/backtest/oracle_loader.py`; run e.g. `.venv/bin/python -m pytest tests/test_backtest_oracle_replay.py -v`.
-- **Backtest runner wiring (mocks `load_history`):** `tests/test_crypto_backtest_eth.py` (class methods around oracle injection).
 - **Strategy-level oracle basis gates:** `tests/test_sol_macro.py`, `tests/test_eth_macro.py` (`test_*oracle*`).
-- **Fixture data:** `data/backtest/oracle/*.jsonl` (e.g. SOL feed files used by the loader for dated windows).
+- (The backtest-side oracle replay tests were removed with the broken backtester 2026-05-24.)
 
 ## Learned Workspace Facts
 
@@ -69,42 +67,23 @@ For **auditing** backtest outputs, paper/live journals, and strategy code—hunt
 - Obsidian Local REST API (coddingtonbear plugin): typically HTTPS on `127.0.0.1:27124` with `Authorization: Bearer <key>`; callers must handle self-signed TLS on localhost; confirm port in Obsidian plugin settings. When the API is unreachable, use markdown written to a manual-import drop (e.g. pending-transfer notes) instead of dropping the content.
 - Paper journal continuity vs deploy checks: `PolyBot` uses `TradeJournal(resume_latest=True)` and resumes the newest `data/paper_trades/<session>` that already has journal data (so restarts keep trades and snapshots in view); without a Railway volume on `/app/data`, redeploys still wipe disk. The Performance tab line “Old code — restart bot to activate” is driven by log-file markers scanned under `data/logs/`, not by Git commit freshness—confirm the running image with the deployment commit or `/health` `git_sha` when set.
 - Root `CURSOR_HANDOFF.md` is the dated checklist for ETH 5m/15m up/down and `eth_macro` parity with SOL macro; use it when changing that feature set.
-- `eth_macro` targets short-horizon ETH markets discovered via `eth-updown-15m` and `eth-updown-5m` slug prefixes; crypto up/down backtests can run `ETH` through `scripts/run_backtest_crypto.py` and the shared updown OHLCV path. Optional `hype_macro` (BTC vs Hyperliquid HYPE, `src/strategies/hype_macro.py` + `src/analysis/hyperliquid_hype_service.py`) is wired in `main.py` but **disabled** by default; the scanner includes `hype-updown-*` and `hyperliquid-up-or-down-*` slug families alongside BTC/SOL/ETH/XRP up/down.
-- Optional `xrp_dump_hedge` targets 15m XRP Up/Down via `xrp-updown-15m-*` slugs (quant-only); stress-style simulation without Polymarket history uses `scripts/run_backtest_xrp_dump_hedge.py`; keep disabled in config until live validation.
-- Keep live execution and backtests aligned with `docs/STRATEGY_ENTRY_SPEC.md` and the implementation map in `docs/HANDOFF_STRATEGY_ENTRY_AND_BACKTEST.md`.
-- Crypto strategy backtests stay local (no separate Railway service for that workload); support triggering local backtests manually from the dashboard without stopping the hosted Railway bot. Binance OHLCV fetches can return HTTP 451 in geo-restricted regions; keep `--start`/`--end` inside ranges fully covered by cached `data/backtest/ohlcv` parquet—if the loader treats `--end` as end-of-day UTC and the cache stops mid-day on the last date, a fetch may still run and fail. For **live** short-window Polymarket up/down, exchange-based features can diverge from each market’s **stated resolution oracle**—treat that basis explicitly (align feeds or measure the gap), especially when modeling XRP/HYPE 5m/15m payoffs.
+- `eth_macro` targets short-horizon ETH markets discovered via `eth-updown-15m` and `eth-updown-5m` slug prefixes. Optional `hype_macro` (BTC vs Hyperliquid HYPE, `src/strategies/hype_macro.py` + `src/analysis/hyperliquid_hype_service.py`) is wired in `main.py` but **disabled** by default; the scanner includes `hype-updown-*` and `hyperliquid-up-or-down-*` slug families alongside BTC/SOL/ETH/XRP up/down.
+- Optional `xrp_dump_hedge` targets 15m XRP Up/Down via `xrp-updown-15m-*` slugs (quant-only); keep disabled in config until live validation.
+- Keep live execution aligned with `docs/STRATEGY_ENTRY_SPEC.md`.
+- For **live** short-window Polymarket up/down, exchange-based features can diverge from each market's **stated resolution oracle**—treat that basis explicitly (align feeds or measure the gap), especially when modeling XRP/HYPE 5m/15m payoffs.
 - When changing per-trade sizing or other deploy-critical trading settings, align config and execution code and confirm Docker/Railway deployments pick up the same values (e.g. ~$10–$15 per trade rather than $1–$3 when that is the intended target).
 
-## Backtest Workflow (post-strategy-edit)
+## Post-strategy-edit validation
 
-After any **material strategy change** (signal logic, thresholds, sizing, new asset), run backtests locally and record results to vault before deploying.
+After any **material strategy change** (signal logic, thresholds, sizing, new asset), validate against the **ghost log** before deploying — the in-repo backtest engines were removed 2026-05-24 (per CLAUDE.md they didn't faithfully replay live behavior).
 
-### Which backtests to run (locally, not on Railway)
-```powershell
-# Core crypto up/down backtests — run after any signal/sizing change
-python scripts/run_backtest_crypto.py --symbol BTC  --window 15 --start 2026-01-20 --end 2026-04-20
-python scripts/run_backtest_crypto.py --symbol ETH  --window 15 --start 2026-01-20 --end 2026-04-20
-python scripts/run_backtest_crypto.py --symbol ETH  --window  5 --start 2026-01-20 --end 2026-04-20
-python scripts/run_backtest_crypto.py --symbol XRP  --window 15 --start 2026-01-20 --end 2026-04-20
-python scripts/run_backtest_crypto.py --symbol XRP  --window  5 --start 2026-01-20 --end 2026-04-20
-python scripts/run_backtest_crypto.py --symbol HYPE --window 15 --start 2026-01-20 --end 2026-04-20
+The truth source is `data/calibration/rejected_candidates_settled.jsonl` — every candidate the live scanner rejected, settled against the actual Polymarket outcome. The dashboard **Ghost Lab** tab (`/api/ghosts/lab`) visualizes this: 24h time-of-day clock, 7×24 day-of-week heatmap, animated replay scrubber, per-lane WR with Wilson CIs and posterior overlay.
 
-# SOL backtest (correlation lag, not pure up/down)
-python scripts/run_backtest_crypto.py --symbol SOL  --window 15 --start 2026-01-20 --end 2026-04-20
+**Ghosts cover:** gate on/off flips, threshold tuning, regime/family analysis, lane WR-at-volume.
 
-# XRP dump-hedge simulation (separate script, synthetic book)
-python scripts/run_backtest_xrp_dump_hedge.py
-```
+**Ghosts do NOT cover** (CLAUDE.md): exit/stop/time-decay changes, sizing/Kelly changes, portfolio-level capital interaction, new candidate-generation logic, new features not previously logged, new lanes or assets. For those questions, flag to the operator that ghosts can't answer the question — do not invent or estimate.
 
-### Backtest parameters (from run_backtest_crypto.py --help)
-- `--symbol`: BTC | SOL | ETH | HYPE | XRP
-- `--window`: 5 | 15 (minutes)
-- `--start` / `--end`: YYYY-MM-DD (default: last 90 days)
-- `--no-cache`: force fresh Binance download
-- `--no-save-report`: skip JSON report save
-
-### After running — record to vault
-1. Note key metrics: win rate, net PnL, return %, trades, expectancy
-2. Compare vs previous backtest results (same symbol/window)
-3. If materially different (WR >2% change, PnL sign flip): investigate before deploying
-4. Update strategy log with Change Log entry: "Backtest vs prior run: WR=X% (prev Y%), +$Z (prev $W)"
+### Record changes to vault
+1. Compute WR / WR-CI / trade count for affected lane(s) before vs after the change window from the Ghost Lab tab.
+2. Update the strategy log with a Change Log entry: "Ghost WR for lane X: WR=A% [lo-hi], n=N (prev WR=B%, n=M); change rolled out HH:MM UTC."
+3. If WR moved unfavorably or sample is too thin to tell, leave the entry status `pending` until the ghost sample crosses a meaningful threshold.

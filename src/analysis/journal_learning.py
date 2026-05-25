@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from src.execution.live_testing import DriftReport
-from src.execution.trade_journal import JOURNAL_DIR, TradeJournal
+from src.execution.trade_journal import JOURNAL_DIR, TradeJournal, is_phantom_exit_row
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +37,7 @@ _STRATEGY_CONFIG_KEYS = (
 
 
 def _phantom_exit(row: Dict[str, Any]) -> bool:
-    pnl = float(row.get("pnl") or 0)
-    ep = float(row.get("entry_price") or 0)
-    cp = float(row.get("current_price") or 0)
-    is_token_flip = ep > 0 and abs(ep + cp - 1.0) < 0.02
-    is_oversized = abs(pnl) > _MAX_PLAUSIBLE_PNL
-    return is_token_flip or is_oversized
+    return is_phantom_exit_row(row, _MAX_PLAUSIBLE_PNL)
 
 
 def _iter_session_dirs() -> Iterator[Tuple[Path, str]]:

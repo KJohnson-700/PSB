@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-25 — Cap live lane-calibration alpha at identity
+
+- **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify BTC probabilities away from 50/50; sub-1 shrinkage remains active.
+- **Why:** Session attribution showed `alpha_used > 1.0` was damaging the overall session and alt lanes, while BTC 5m was the only clear beneficiary. The global clamp tests whether one-sided shrinkage improves expectancy without letting calibration over-size bad confidence.
+- **Hypothesis:** BTC may lose some beneficial 5m amplification, but cross-lane drawdown should improve because calibration stops turning overconfident posteriors into larger entry edges.
+- **Expected outcome:** Next live/non-shadow session should show no `alpha_used > 1.0` effective calibration, lower damage from high-alpha cohorts, and BTC 5m should be reviewed separately before restoring any per-lane amplification.
+- **Actual outcome:** `pending` (need ≥15 closed BTC trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-21 — BTC high-edge cap moved from admission veto to sizing clamp
 
 - **What changed:** In [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), `max_edge_updown` no longer rejects BTC up/down entries with `edge_above_cap`. BTC now keeps the trade admissible and clamps only the Kelly sizing input to the configured edge cap (`size_edge_cap=...` in reason/log context). Backtest parity was updated in [src/backtest/updown_engine.py](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py) so simulated BTC entries now behave the same way.

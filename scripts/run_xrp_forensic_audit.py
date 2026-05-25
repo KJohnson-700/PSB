@@ -16,6 +16,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.analysis.underperformance_audit import load_backtest_action_summary
+from src.execution.trade_journal import is_phantom_exit_row
 
 
 @dataclass(frozen=True)
@@ -81,10 +82,8 @@ def _load_xrp_round_trips(paper_root: Path, sessions: Iterable[str]) -> List[XRP
                 en_extra = ent.get("extra") or {}
                 merged = {**en_extra, **ex_extra}
 
-                entry_price = _safe_float(ent.get("entry_price"))
-                current_price = _safe_float(payload.get("current_price"))
-                if entry_price > 0 and abs(entry_price + current_price - 1.0) < 0.02:
-                    # Phantom binary row.
+                if is_phantom_exit_row(payload):
+                    # Legacy phantom token-flip row.
                     continue
 
                 rows.append(

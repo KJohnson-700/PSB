@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.env_bootstrap import load_project_dotenv
+from src.execution.trade_journal import is_phantom_exit_row
 from src.journal_features import hold_bucket
 
 load_project_dotenv(ROOT, quiet=True)
@@ -87,12 +88,8 @@ def load_all_trades(days_back: int = 30) -> list[dict]:
 
                 elif event == "EXIT":
                     pnl = e.get("pnl", 0) or 0
-                    ep = e.get("entry_price", 0) or 0
-                    cp = e.get("current_price", 0) or 0
-                    # Skip phantom exits (token-flip bug)
-                    if ep > 0 and abs(ep + cp - 1.0) < 0.02:
-                        continue
-                    if abs(pnl) > 200:
+                    # Skip legacy phantom exits without dropping valid BUY_NO exits.
+                    if is_phantom_exit_row(e):
                         continue
 
                     # Parse closed_at

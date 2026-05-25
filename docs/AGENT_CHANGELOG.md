@@ -8,6 +8,48 @@
 
 ---
 
+## 2026-05-25 — Lane calibration alpha amplification capped
+
+**[`src/analysis/lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), [`tests/test_lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_calibration.py):** Changed `ALPHA_CLAMP_HI` from `2.50` to `1.00`. Raw `alpha_ewma` can still exceed identity for telemetry, but the effective alpha used by live calibration can no longer amplify raw model confidence away from 50/50; sub-1 alpha shrinkage remains active.
+
+**Why:** Session attribution showed `alpha_used > 1.0` concentrated losses in alt lanes while only BTC 5m benefited. The next session should test calibration as a one-sided risk reducer instead of an edge amplifier.
+
+## 2026-05-24 — BUY_NO phantom filter corrected in journal summaries
+
+**[`src/execution/trade_journal.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/trade_journal.py), [`scripts/parse_session_journal.py`](/Users/mainfolder/Documents/psb-main%201/scripts/parse_session_journal.py), [`src/analysis/journal_learning.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/journal_learning.py), attribution/report scripts, [`tests/test_trade_journal_resumable.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_trade_journal_resumable.py), [`docs/session_reports/eth_hype_bnb_session_audit_20260524_060424.md`](/Users/mainfolder/Documents/psb-main%201/docs/session_reports/eth_hype_bnb_session_audit_20260524_060424.md):** Fixed legacy phantom-exit filtering so `entry_price + current_price ~= 1.0` is treated as a token-flip phantom only for YES-leg rows. Long-NO exits can legitimately have complementary prices and should remain in realized PnL, win rate, session lists, reload state, session parsing, learning aggregates, and attribution reports.
+
+**Why:** Session `test_20260524_060424` showed HYPE as `0/2, -$11.19` in the saved summary, but the raw journal had a valid HYPE take-profit at lines 1328/1335. Corrected parsing reports HYPE as `1/3, -$6.00`; this changes measurement only, not strategy entry/exit behavior.
+
+## 2026-05-24 — Lane exit counterfactual analyzer
+
+**[`scripts/analyze_exit_counterfactuals.py`](/Users/mainfolder/Documents/psb-main%201/scripts/analyze_exit_counterfactuals.py), [`tests/test_analyze_exit_counterfactuals.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_analyze_exit_counterfactuals.py), [`docs/session_reports/exit_counterfactuals_20260524_235019.md`](/Users/mainfolder/Documents/psb-main%201/docs/session_reports/exit_counterfactuals_20260524_235019.md):** Added a read-only lane-level exit analysis tool that reconstructs closed crypto up/down trade paths from journal marks plus optional no-cache OHLCV proxy marks, then reports MFE/MAE, hold-vs-actual regret, profit-capture ratio, triple-barrier labels, and winner-exit classes.
+
+**Why:** The existing threshold replay only saw marks before the bot exited. This report gives PSB a lane-level way to test whether profitable exits were premature before changing live take-profit, stop-loss, or time-stop settings.
+
+## 2026-05-24 — Kimi-only direct decision policy
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_ai_agent_parse.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_agent_parse.py):** Split AI provider routing by scope so direct execution / tie-break decisions use only `kimi_coding`, with no MiniMax fallback. MiniMax remains in the general provider chain for shadow observation, research narration, and calibration analysis. Reduced active macro strategy `max_ai_calls_per_scan` caps to `1` so Kimi quota is spent on the highest-priority marginal candidate per scan.
+
+**Why:** The available settled sample showed Kimi's one graded directional call beat quant while MiniMax underperformed quant on the same markets. This change keeps execution quant-first, reserves Kimi for scarce premium tie-breaks, and prevents MiniMax from steering entries while still preserving its usefulness for non-execution data gathering.
+
+## 2026-05-24 — Kimi quota efficiency and JSON hardening
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_ai_agent_parse.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_ai_agent_parse.py):** Hardened the Kimi Code provider so each market uses one JSON-mode attempt by default, extracts usable text from alternate OpenAI-compatible message fields, applies provider-specific low-temperature / short-output caps, and cools Kimi down after empty/invalid JSON or quota errors instead of retrying it every scan.
+
+**Why:** Live logs showed Kimi spending quota on HTTP 200 responses with empty/unparseable `message.content`, then often making a second fallback attempt before MiniMax. The new behavior preserves Kimi for high-value marginal tie-breaks while reducing repeated quota burn and falling through to MiniMax faster when Kimi is exhausted or malformed.
+
+## 2026-05-24 — BTC prediction-window bonus disabled for next paper restart
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`tests/test_bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin.py):** Added configurable BTC prediction-window timing bonuses and set both `prediction_window_bonus_15m` and `prediction_window_bonus_5m` to `0.0`.
+
+**Why:** The current 200-trade paper session showed BTC `predict_window` as the cleanest repeat loser (`16` trades, `-$35.47`) while BTC drift/spike/standard short families were positive. Disabling the standalone prediction-window boost removes that weak admission path without turning off the stronger BTC countertrend/momentum families.
+
+## 2026-05-24 — Paper trade limit separated from live cap
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_risk_manager_hardening.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_risk_manager_hardening.py):** Raised the live daily trade cap to `500` and added `risk.paper_max_trades_per_day: 2000` for dry-run calibration. `RiskManager.can_trade()` now checks the effective cap for the active mode, and cycle logs report that same effective limit.
+
+**Why:** The previous single `200` cap stopped paper calibration early and also looked too low for live operation. Keeping separate caps preserves a runaway-trade guardrail while allowing paper sessions to collect enough samples for lane calibration.
+
 ## 2026-05-24 — Kimi Code OAuth decision provider corrected
 
 **[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Replaced the normal Moonshot OpenAI-compatible decision entry with a dedicated `kimi_coding` provider that reads the local Kimi Code OAuth credentials from `~/.kimi/credentials/kimi-code.json`, refreshes through `https://auth.kimi.com/api/oauth/token`, and calls `https://api.kimi.com/coding/v1` with the Kimi CLI `X-Msh-*` headers and `model: kimi-for-coding`.

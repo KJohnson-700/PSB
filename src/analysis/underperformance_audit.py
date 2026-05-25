@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from src.execution.trade_journal import is_phantom_exit_row
+
 
 STRATEGY_ORDER = ("bitcoin", "sol_macro", "eth_macro", "hype_macro", "xrp_macro")
 UPDOWN_EXIT_DAMAGE_REASONS = frozenset({"updown_time_stop", "updown_stop_loss"})
@@ -100,10 +102,8 @@ def load_closed_trades(paper_root: Path, sessions: Iterable[str]) -> List[Closed
                 elif payload.get("event") == "EXIT" and trade_id:
                     entry = entries.get(trade_id, {})
                     extra = entry.get("extra") or {}
-                    entry_price = _safe_float(payload.get("entry_price"))
-                    current_price = _safe_float(payload.get("current_price"))
-                    # Skip phantom binary rows from older journals.
-                    if entry_price > 0 and abs(entry_price + current_price - 1.0) < 0.02:
+                    # Skip legacy phantom exits without dropping valid BUY_NO exits.
+                    if is_phantom_exit_row(payload):
                         continue
                     rows.append(
                         ClosedTrade(

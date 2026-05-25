@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-25 — Cap live lane-calibration alpha at identity
+
+- **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify SOL-family probabilities away from 50/50; sub-1 shrinkage remains active.
+- **Why:** Session attribution showed `alpha_used > 1.0` was damaging the overall session and alt lanes. This removes calibration amplification from the shared macro path while preserving shrinkage for overpredicted lanes.
+- **Hypothesis:** SOL-family drawdown should improve by preventing high-alpha cohorts from receiving larger calibrated edge.
+- **Expected outcome:** Next live/non-shadow session should show no effective `alpha_used > 1.0` entries and lower loss concentration in high-alpha macro buckets.
+- **Actual outcome:** `pending` (need ≥15 closed SOL-family trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-21 — SOL-family high-edge cap converted to sizing clamp; oracle basis caps widened
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), the shared SOL-family up/down `max_edge_updown` no longer rejects entries with `edge_above_cap`; it now clamps only the Kelly sizing input and leaves the trade admissible. In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), oracle basis caps were widened for the shared macro family lanes that were repeatedly starved by basis blocks: `sol_macro.oracle_max_basis_bps 10 -> 25` with `oracle_basis_relax_max_bps 15 -> 30`, `xrp_macro 15 -> 20` with relax `15 -> 25`, `doge_macro 10 -> 18` with relax `15 -> 22`, and `bnb_macro 10 -> 18` with relax `15 -> 22`. Backtest parity was updated in [src/backtest/updown_engine.py](/Users/mainfolder/Documents/psb-main%201/src/backtest/updown_engine.py) so capped-edge trades still enter in simulation.

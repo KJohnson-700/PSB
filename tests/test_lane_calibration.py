@@ -31,12 +31,11 @@ def test_first_record_initialises_alpha_to_observation(tmp_log: Path):
     # stated_prob = 0.58, realized = +0.20 → a_obs = 0.20 / 0.08 = 2.5 (clamped 5.0)
     snap = cal.record("lane_A", stated_est_prob=0.58, realized_pct=0.20, win=True)
     assert snap["n"] == 1
-    # With n=1 below SHRINK_N, shrunk alpha blends 0.1*a + 0.9*1 = 0.25 + 0.9 = 1.15
+    # With n=1 below SHRINK_N, shrunk alpha blends to 1.15 then caps at identity.
     raw = cal.raw_alpha("lane_A")
     assert raw is not None
     assert raw == pytest.approx(2.5, abs=1e-6)
-    # Shrunk alpha at n=1 → w=0.1, blend = 0.1*2.5 + 0.9*1.0 = 1.15 (within clamp)
-    assert cal.alpha("lane_A") == pytest.approx(1.15, abs=1e-6)
+    assert cal.alpha("lane_A") == pytest.approx(1.0, abs=1e-6)
 
 
 def test_alpha_clamps_at_high_bound(tmp_log: Path):
@@ -119,16 +118,25 @@ def test_shadow_mode_calibrate_returns_raw(tmp_log: Path):
     assert cal.calibrate("L", 0.20) == 0.20
 
 
-def test_live_mode_warps_by_alpha(tmp_log: Path):
+def test_live_mode_shrinks_but_does_not_amplify_by_alpha(tmp_log: Path):
     cal = LaneCalibrator(path=tmp_log, shadow_mode=False, min_samples_to_apply=10)
-    # Build a lane with α > 1 (model under-predicts).
+    # Build a lane with raw α > 1 (model under-predicts). Effective alpha caps at
+    # identity so calibration cannot amplify confidence away from 50/50.
     for _ in range(SHRINK_N + 5):
         cal.record("L", stated_est_prob=0.60, realized_pct=0.30, win=True)
+    raw = cal.raw_alpha("L")
     a = cal.alpha("L")
-    assert a > 1.0
-    # p_cal = 0.5 + a * (0.65 - 0.5)
+    assert raw is not None
+    assert raw > 1.0
+    assert a == pytest.approx(1.0, abs=1e-6)
     p_raw = 0.65
-    assert cal.calibrate("L", p_raw) == pytest.approx(0.5 + a * (p_raw - 0.5), abs=1e-6)
+    assert cal.calibrate("L", p_raw) == pytest.approx(p_raw, abs=1e-6)
+
+    # Sign-flipped lane still shrinks overconfident probabilities toward 50/50.
+    for _ in range(SHRINK_N + 5):
+        cal.record("S", stated_est_prob=0.62, realized_pct=-0.30, win=False)
+    assert cal.alpha("S") < 1.0
+    assert cal.calibrate("S", p_raw) < p_raw
 
 
 def test_live_mode_clamps_calibrated_into_unit_interval(tmp_log: Path):

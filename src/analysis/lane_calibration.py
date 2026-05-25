@@ -7,8 +7,9 @@ small posteriors that are updated on every closed trade:
    ``realized_pct / (stated_est_prob - 0.5)``. Multiplies the deviation of the
    model's predicted probability from 50/50 to produce a calibrated probability:
    ``p_cal = 0.5 + alpha * (p_raw - 0.5)``. Lanes the model under-predicts
-   converge to ``alpha > 1`` (amplify); lanes it over-predicts converge to
-   ``alpha < 1`` (shrink toward 0.5).
+   can print raw ``alpha > 1`` for telemetry, but live correction caps at
+   identity so calibration never amplifies confidence. Lanes it over-predicts
+   can still converge to ``alpha < 1`` (shrink toward 0.5).
 
 2. ``Beta(a, b)`` — Bernoulli win-rate posterior with prior ``Beta(2, 3)``. Used
    only for reporting and for Phase 7 drift detection; does not feed the
@@ -46,7 +47,7 @@ DEFAULT_POSTERIORS_PATH = DEFAULT_CALIBRATION_DIR / "lane_posteriors.json"
 # Bound constants — see the plan's "Bounds rationale" section.
 EWMA_LAMBDA = 0.15
 ALPHA_CLAMP_LO = 0.30
-ALPHA_CLAMP_HI = 2.50
+ALPHA_CLAMP_HI = 1.00
 A_OBS_CLAMP = 5.0          # raw observation clamp before EWMA folds it in
 SHRINK_N = 10              # blend toward identity below this sample count
 PRIOR_A = 2.0

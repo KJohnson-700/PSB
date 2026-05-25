@@ -109,3 +109,35 @@ def test_crypto_sell_yes_position_counts_share_cost():
     assert can_trade is True
     assert size == 5.0
     assert reason == "OK"
+
+
+def test_paper_trading_uses_paper_daily_trade_limit():
+    rm = RiskManager(
+        {
+            "trading": {"dry_run": True},
+            "risk": {"max_trades_per_day": 500, "paper_max_trades_per_day": 2000},
+        }
+    )
+    rm.daily_trades = 500
+
+    can_trade, reason = rm.can_trade()
+
+    assert rm.effective_max_trades_per_day() == 2000
+    assert can_trade is True
+    assert reason == "OK"
+
+
+def test_live_trading_uses_live_daily_trade_limit():
+    rm = RiskManager(
+        {
+            "trading": {"dry_run": False},
+            "risk": {"max_trades_per_day": 500, "paper_max_trades_per_day": 2000},
+        }
+    )
+    rm.daily_trades = 500
+
+    can_trade, reason = rm.can_trade()
+
+    assert rm.effective_max_trades_per_day() == 500
+    assert can_trade is False
+    assert reason == "Daily trade limit reached"

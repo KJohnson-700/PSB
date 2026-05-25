@@ -9,7 +9,7 @@ Rules above target **mispricing/consensus paths** (`arbitrage`, `fade`). **Bitco
 - **`entry_price_min` / `entry_price_max`** — narrow YES band once quant (and optionally AI) edge clears.
 - **Mid-window drift skip** — e.g. skip when YES is far from about 50% (typically `yes_price < 0.20` or `> 0.80`) so entries are not late lottery tickets against an already-priced move.
 
-Those filters are intentional **risk/regime controls**, not contradicting the arbitrage-side “flexible downside” rule. See also `docs/HANDOFF_STRATEGY_ENTRY_AND_BACKTEST.md`.
+Those filters are intentional **risk/regime controls**, not contradicting the arbitrage-side "flexible downside" rule. See also `docs/HANDOFF_STRATEGY_ENTRY.md`.
 
 ## Entry logic
 

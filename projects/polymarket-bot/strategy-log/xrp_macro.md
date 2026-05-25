@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-05-25 — Cap live lane-calibration alpha at identity
+
+- **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify XRP probabilities away from 50/50; sub-1 shrinkage remains active.
+- **Why:** Session attribution showed high-alpha amplification was damaging alt lanes overall. XRP shares the macro calibration path, so it should use the same shrink-only posture.
+- **Hypothesis:** XRP avoids calibration-driven edge inflation while still shrinking overpredicted lanes.
+- **Expected outcome:** Next live/non-shadow session should show no effective `alpha_used > 1.0` XRP entries.
+- **Actual outcome:** `pending` (need ≥15 closed `xrp_macro` trades after this change).
+- **Status:** `pending`
+
 ### 2026-05-17 — Ghost-mode reopen: XRP 15m BUY_YES only
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), eased only the `xrp_macro` `15m` `BUY_YES` lane: `entry_price_max_15m_yes_side` **0.55 → 0.57**, and the `entry_policy.window_side_overrides.15m.up.min_edge` **0.09 → 0.085** with matching `entry_price_max` **0.55 → 0.57**. No `5m` XRP settings changed, and ETH/HYPE were left untouched.

@@ -49,15 +49,12 @@ def main():
         print(f"    {title}...")
 
     if args.validate and events:
-        slug = events[0].get("slug", "")
-        print(f"\nValidating: {slug}")
-        from src.backtest.data_loader import PolymarketLoader
-        loader = PolymarketLoader()
-        data = loader.load_market_data(slug, args.start, args.end, "1h")
-        if data is not None and not data.empty:
-            print(f"  Rows: {len(data)}, range: {data.index.min()} to {data.index.max()}")
-        else:
-            print("  No price data - try different dates or slug")
+        # --validate previously hit src/backtest/data_loader.PolymarketLoader to
+        # preview price history. That loader was removed when the broken backtester
+        # was deleted (2026-05-24). Validation should now go through the live
+        # rejected_candidates_settled.jsonl ghost log instead.
+        print("\n--validate is currently a no-op (backtest data_loader removed; "
+              "use ghost log for slug coverage).")
 
 
 if __name__ == "__main__":

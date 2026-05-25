@@ -376,6 +376,9 @@ class RiskManager:
         self.term_risk_config = self.config.get("term_risk", {})
         self.max_concurrent_positions = risk_config.get("max_concurrent_positions", 10)
         self.max_trades_per_day = risk_config.get("max_trades_per_day", 50)
+        self.paper_max_trades_per_day = risk_config.get(
+            "paper_max_trades_per_day", self.max_trades_per_day
+        )
         self.daily_loss_limit = risk_config.get("daily_loss_limit", 0.15)
         self.emergency_stop_loss = risk_config.get("emergency_stop_loss", 0.25)
         self.daily_trades = 0
@@ -384,6 +387,11 @@ class RiskManager:
         self.last_reset = datetime.now()
         self.emergency_stopped = False
         self.active_positions: Dict[str, Position] = {}
+
+    def effective_max_trades_per_day(self) -> int:
+        if self.config.get("trading", {}).get("dry_run", True):
+            return int(self.paper_max_trades_per_day)
+        return int(self.max_trades_per_day)
 
     def can_trade(self, strategy: str = None) -> tuple:
         if self.emergency_stopped:
@@ -397,7 +405,7 @@ class RiskManager:
                 and self.daily_pnl < -self.bankroll * self.daily_loss_limit
             ):
                 return False, f"Daily loss limit reached: {self.daily_pnl:.2f}"
-        if self.daily_trades >= self.max_trades_per_day:
+        if self.daily_trades >= self.effective_max_trades_per_day():
             return False, "Daily trade limit reached"
 
         # Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own reserved slots

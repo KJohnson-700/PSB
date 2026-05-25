@@ -474,6 +474,7 @@ class BitcoinStrategy:
     async def _analyze_market_with_timeout(self, **kwargs):
         """Bound BTC AI latency so one LLM call cannot dominate a scan cycle."""
         market_id = str(kwargs.get("market_id", ""))
+        kwargs.setdefault("provider_scope", "decision")
         try:
             return await asyncio.wait_for(
                 self.ai_agent.analyze_market(**kwargs),
@@ -949,12 +950,15 @@ class BitcoinStrategy:
                 bonus += 0.04 if "SPIKE" in mom.m5_direction else 0.02
                 reasons.append(f"5m early {mom.m5_direction}")
 
-        # Prediction window bonus
-        if mom.m15_in_prediction_window:
-            bonus += 0.03
+        # Prediction window bonus. Keep this configurable because paper data can
+        # distinguish plain timing-window entries from stronger drift/spike moves.
+        prediction_bonus_15m = float(self.config.get("prediction_window_bonus_15m", 0.03) or 0.0)
+        prediction_bonus_5m = float(self.config.get("prediction_window_bonus_5m", 0.02) or 0.0)
+        if mom.m15_in_prediction_window and prediction_bonus_15m > 0:
+            bonus += prediction_bonus_15m
             reasons.append("15m predict window")
-        if mom.m5_in_prediction_window:
-            bonus += 0.02
+        if mom.m5_in_prediction_window and prediction_bonus_5m > 0:
+            bonus += prediction_bonus_5m
             reasons.append("5m predict window")
 
         return bonus, reasons

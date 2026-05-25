@@ -46,8 +46,10 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     body = r.text
     assert "fetchAll" in body and "Command Center" in body
     assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
-    assert 'id="backtest-output-tail"' in body
-    assert 'id="bt-hud"' in body
+    # Backtest UI elements (bt-hud, backtest-output-tail) removed 2026-05-24 with the broken backtester.
+    # Ghost Lab tab replaced it.
+    assert 'id="view-ghosts"' in body
+    assert 'id="gl-clock"' in body
     assert 'id="action-perf-lanes"' in body
     assert "BTC Signals" not in body.split('id="strategy-boxes"')[1].split('id="strategy-table"')[0]
 
@@ -62,9 +64,9 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "text/html" in (snippet.headers.get("content-type") or "")
     assert data.get("dashboard_ui_rev") in snippet.text
 
-    br = c.get("/api/backtest/reports")
-    assert br.status_code == 200
-    assert "no-store" in (br.headers.get("cache-control") or "").lower()
+    gl = c.get("/api/ghosts/lab?since=2026-05-01")
+    assert gl.status_code == 200
+    assert "no-store" in (gl.headers.get("cache-control") or "").lower()
 
 
 def test_dashboard_inline_scripts_parse_cleanly():
@@ -302,157 +304,26 @@ def test_kelly_payload_pads_missing_live_strategies(monkeypatch):
     assert payload["_window_stats"]["bnb_macro"]["15m"]["wr"] == 0.0
 
 
-def test_dashboard_crypto_backtest_select_includes_all_bundle():
+# Backtest-tab tests removed 2026-05-24 with the broken backtester
+# (test_dashboard_crypto_backtest_select_includes_all_bundle,
+#  test_backtest_tab_renders_output_tail_and_poll_updates_it,
+#  test_startup_auto_backtests_skip_duplicate_session_spec,
+#  test_backtest_start_rejects_deprecated_30m_window,
+#  test_live_backtest_scope_includes_1h_not_30m,
+#  test_backtest_start_all_bundle_accepts_1h_window,
+#  test_backtest_start_all_bundle_invokes_bundle_script).
+# The replacement Ghost Lab tab is exercised in the index/health asserts above.
+
+
+def test_ghost_lab_tab_renders():
+    """Ghost Lab nav button + view container + key panel widgets are in the HTML."""
     html = INDEX.read_text(encoding="utf-8")
-    assert "ALL-" in html and "BTC,SOL,ETH,XRP,HYPE bundle" in html
-    assert "val.startsWith('ALL-')" in html
-
-
-def test_backtest_tab_renders_output_tail_and_poll_updates_it():
-    html = INDEX.read_text(encoding="utf-8")
-    assert 'id="backtest-output-tail"' in html
-    assert '.backtest-output-tail{' in html
-    assert "function renderBacktestOutputTail(lines, fallbackText)" in html
-    assert "el.scrollTop = el.scrollHeight;" in html
-    assert "renderBacktestOutputTail(s.output || []" in html
-    assert "partial per-symbol reports may still be on the cards below" in html
-    assert "Backtest output tail" in html
-
-
-def test_startup_auto_backtests_skip_duplicate_session_spec(monkeypatch):
-    from src.dashboard import server as dashboard_server
-
-    fake_bot = type(
-        "Bot",
-        (),
-        {
-            "config": {
-                "trading": {"dry_run": True},
-                "dashboard": {
-                    "auto_sol5_backtest_on_startup": True,
-                    "auto_weather_backtest_on_startup": False,
-                },
-            },
-            "journal": type("Journal", (), {"session_id": "test_session"})(),
-            "risk_manager": object(),
-        },
-    )()
-    monkeypatch.setattr(dashboard_server, "bot_instance", fake_bot)
-    dashboard_server._auto_startup_backtests_started.clear()
-
-    started = []
-
-    def _fake_start(cmd_args, summary):
-        started.append(summary)
-        return {"status": "started", "job_id": f"job{len(started)}", "pid": 100 + len(started), "summary": summary}
-
-    monkeypatch.setattr(dashboard_server, "_start_backtest_job", _fake_start)
-
-    first = dashboard_server._maybe_start_auto_backtests("startup")
-    second = dashboard_server._maybe_start_auto_backtests("startup")
-
-    assert len(first) == 1
-    assert first[0]["status"] == "started"
-    assert len(second) == 1
-    assert second[0]["status"] == "skipped"
-    assert second[0]["reason"] == "startup_dedupe"
-    assert started == ["SOL 5m crypto [auto-on-startup:test_session]"]
-
-
-def test_backtest_start_rejects_deprecated_30m_window(monkeypatch):
-    pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
-    from src.dashboard import server as dashboard_server
-
-    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
-    client = TestClient(dashboard_server.app)
-    r = client.post(
-        "/api/backtest/start",
-        json={"symbol": "BTC", "window": 30},
-        headers={"X-API-Key": "test-key"},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body.get("status") == "error"
-    assert body.get("message") == "Backtest window must be 5, 15, or 60 (1h)"
-
-
-def test_live_backtest_scope_includes_1h_not_30m():
-    from src.dashboard.server import _live_backtest_scope_from_config
-
-    scope = _live_backtest_scope_from_config({"strategies": {"bitcoin": {"enabled": True}}})
-    assert scope["windows"] == [5, 15, 60]
-    assert scope["backtest_windows"] == [5, 15, 60]
-    assert [row["strategy_key"] for row in scope["crypto_strategies"]] == [
-        "bitcoin",
-        "sol_macro",
-        "eth_macro",
-        "hype_macro",
-        "xrp_macro",
-        "doge_macro",
-        "bnb_macro",
-    ]
-    assert 30 not in scope["windows"]
-
-
-def test_backtest_start_all_bundle_accepts_1h_window(monkeypatch):
-    pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
-    from src.dashboard import server as dashboard_server
-
-    captured: list[list[str]] = []
-
-    def _fake_start(cmd_args, summary):
-        captured.append(list(cmd_args))
-        return {"status": "started", "job_id": "jb1h", "pid": 999, "summary": summary}
-
-    monkeypatch.setattr(dashboard_server, "_start_backtest_job", _fake_start)
-    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
-
-    client = TestClient(dashboard_server.app)
-    r = client.post(
-        "/api/backtest/start",
-        json={"symbol": "ALL", "window": 60},
-        headers={"X-API-Key": "test-key"},
-    )
-    assert r.status_code == 200
-    assert r.json().get("status") == "started"
-    assert "--window" in captured[0] and "60" in captured[0]
-
-
-def test_backtest_start_all_bundle_invokes_bundle_script(monkeypatch, tmp_path):
-    pytest.importorskip("httpx")
-    from fastapi.testclient import TestClient
-    from src.dashboard import server as dashboard_server
-
-    captured: list[list[str]] = []
-
-    def _fake_start(cmd_args, summary):
-        captured.append(list(cmd_args))
-        return {"status": "started", "job_id": "jb1", "pid": 999, "summary": summary}
-
-    monkeypatch.setattr(dashboard_server, "_start_backtest_job", _fake_start)
-    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
-    cfg = tmp_path / "settings.yaml"
-    cfg.write_text(
-        "backtest:\n  polymarket_marks:\n    enabled: true\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", cfg)
-
-    client = TestClient(dashboard_server.app)
-    r = client.post(
-        "/api/backtest/start",
-        json={"symbol": "ALL", "window": 15},
-        headers={"X-API-Key": "test-key"},
-    )
-    assert r.status_code == 200
-    assert r.json().get("status") == "started"
-    assert len(captured) == 1
-    cmd = captured[0]
-    assert "run_crypto_backtest_bundle.py" in cmd[1]
-    assert "--window" in cmd and "15" in cmd
-    assert "--polymarket-marks" in cmd
+    assert 'data-view="ghosts"' in html
+    assert 'id="view-ghosts"' in html
+    assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
+    assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
+    assert "function loadGhostLab" in html
+    assert "/api/ghosts/lab" in html
 
 
 def test_dashboard_status_handles_bootstrap_shim(monkeypatch):

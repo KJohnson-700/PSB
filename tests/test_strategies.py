@@ -11,7 +11,6 @@ from src.analysis.ai_agent import AIAgent
 from src.analysis.kelly_sizer import KellySizer
 from src.analysis.null_ai_agent import NullAIAgent
 from src.market.scanner import Market
-from src.backtest.backtest_ai import BacktestAIAgent
 from src.analysis.math_utils import PositionSizer
 from src.strategies.weather import WeatherStrategy
 from src.main import _merge_weather_market_sources, _weather_general_scan_enabled
@@ -53,60 +52,10 @@ def _make_market(yes_price, end_date=_SENTINEL, liquidity=0, market_id="test-mar
     )
 
 
-# ─── BACKTEST AI AGENT ────────────────────────────────────────────
-
-class TestBacktestAI:
-    def setup_method(self):
-        self.config = _make_config()
-        self.ai = BacktestAIAgent(self.config)
-
-    def test_ai_yes_consensus(self):
-        """YES at 0.90 -> AI should say true prob is much lower, recommend BUY_NO."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.90, "m1"))
-        assert result is not None
-        assert result.recommendation == "BUY_NO"
-        assert result.estimated_probability < 0.50
-
-    def test_ai_no_consensus(self):
-        """YES at 0.10 (NO at 0.90) -> AI should recommend BUY_YES."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.10, "m2"))
-        assert result is not None
-        assert result.recommendation == "BUY_YES"
-        assert result.estimated_probability > 0.10
-
-    def test_ai_underpriced_yes(self):
-        """YES at 0.30 -> AI estimates higher, recommends BUY_YES."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.30, "m3"))
-        assert result is not None
-        assert result.recommendation == "BUY_YES"
-        assert result.estimated_probability > 0.30
-
-    def test_ai_no_signal_at_fair(self):
-        """YES at 0.50 -> no signal (fair price, no edge)."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.50, "m4"))
-        assert result is None
-
-    def test_ai_no_signal_in_dead_zone(self):
-        """YES near fair value -> no proxy signal."""
-        result = run_async(self.ai.analyze_market("Q", "", 0.48, "m5"))
-        assert result is None
-
-    def test_backtest_ai_accepts_live_ai_kwargs(self):
-        live_params = list(inspect.signature(AIAgent.analyze_market).parameters)
-        backtest_params = list(inspect.signature(BacktestAIAgent.analyze_market).parameters)
-        for required in live_params:
-            assert required in backtest_params
-        result = run_async(
-            self.ai.analyze_market(
-                "Q",
-                "",
-                0.90,
-                "m6",
-                news_context="",
-                strategy_hint="bitcoin",
-            )
-        )
-        assert result is not None
+# BACKTEST AI AGENT tests removed with src/backtest/* deletion (2026-05-24).
+# Per CLAUDE.md, backtest engines are known-broken; validation goes through
+# the ghost log (rejected_candidates_settled.jsonl) instead. The live AIAgent
+# is covered by its own tests in tests/test_ai_agent.py.
 
 
 class TestNullAIAgent:

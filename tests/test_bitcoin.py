@@ -365,7 +365,7 @@ class TestBitcoinLTFConfirmation:
         assert confirmed is False
 
 
-def test_bitcoin_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
+def test_bitcoin_live_lane_calibration_does_not_amplify_buy_no_probability(tmp_path):
     strat = BitcoinStrategy(
         _make_config(),
         MagicMock(),
@@ -393,7 +393,8 @@ def test_bitcoin_live_lane_calibration_can_shrink_buy_no_probability(tmp_path):
         htf_bias="BEARISH",
     )
 
-    assert calibrated < 0.43
+    assert strat.lane_calibrator.raw_alpha(lane_id) > 1.0
+    assert calibrated == pytest.approx(0.43)
 
     def test_short_confirmed_by_bear_cross(self):
         """Bearish MACD cross confirms SHORT."""
@@ -450,9 +451,34 @@ class TestBitcoinTiming:
 
     def test_prediction_window_adds_bonus(self):
         """Being in the 15m prediction window gives bonus."""
-        ta = _make_ta(mom_15m_dir="FLAT", m15_in_predict=True, m5_in_predict=True)
+        ta = _make_ta(
+            mom_15m_dir="FLAT",
+            mom_15m_pct=0.0,
+            mom_5m_dir="FLAT",
+            mom_5m_pct=0.0,
+            m15_in_predict=True,
+            m5_in_predict=True,
+        )
         bonus, reasons = self.strategy._check_timing(ta, "LONG")
         assert any("predict window" in r for r in reasons)
+
+    def test_prediction_window_bonus_can_be_disabled(self):
+        """Prediction-window-only entries can be disabled without blocking momentum."""
+        self.strategy.config["prediction_window_bonus_15m"] = 0.0
+        self.strategy.config["prediction_window_bonus_5m"] = 0.0
+        ta = _make_ta(
+            mom_15m_dir="FLAT",
+            mom_15m_pct=0.0,
+            mom_5m_dir="FLAT",
+            mom_5m_pct=0.0,
+            m15_in_predict=True,
+            m5_in_predict=True,
+        )
+
+        bonus, reasons = self.strategy._check_timing(ta, "LONG")
+
+        assert bonus == 0.0
+        assert not any("predict window" in r for r in reasons)
 
 
 class TestBitcoinEdgeCalculation:

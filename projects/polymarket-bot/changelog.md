@@ -4,6 +4,19 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-25 — Ghost-led validation cleanup, Kimi decision hardening, and session audit tooling
+
+- **What changed**
+  - **Validation posture:** Removed the in-repo backtest stack and stale backtest docs/tests, moved the shared OHLCV loader to [src/data/ohlcv_loader.py](/Users/mainfolder/Documents/psb-main%201/src/data/ohlcv_loader.py), and updated [README.md](/Users/mainfolder/Documents/psb-main%201/README.md) plus [docs/HANDOFF_STRATEGY_ENTRY.md](/Users/mainfolder/Documents/psb-main%201/docs/HANDOFF_STRATEGY_ENTRY.md) to make settled ghosts/Ghost Lab the validation source of truth.
+  - **Dashboard/Ghost Lab:** Expanded [src/dashboard/server.py](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py) and [src/dashboard/index.html](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html) around ghost/live lane analysis, settled-candidate visibility, and operator review surfaces.
+  - **AI decision routing:** Hardened [src/analysis/ai_agent.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) for Kimi Code JSON extraction, cooldowns, provider-specific caps, and direct-decision provider scoping so MiniMax can remain shadow/research-only.
+  - **Paper/session measurement:** Added [scripts/analyze_exit_counterfactuals.py](/Users/mainfolder/Documents/psb-main%201/scripts/analyze_exit_counterfactuals.py) with a session report under [docs/session_reports/](/Users/mainfolder/Documents/psb-main%201/docs/session_reports/) and fixed BUY_NO phantom filtering across journal summaries/learning/report scripts.
+  - **Config/risk calibration:** Split paper daily trade capacity from the live cap, disabled BTC prediction-window bonuses, and capped live lane-calibration alpha amplification at identity. Per-strategy hypothesis tracking is recorded in `strategy-log/*.md`; code provenance is indexed in [docs/AGENT_CHANGELOG.md](/Users/mainfolder/Documents/psb-main%201/docs/AGENT_CHANGELOG.md).
+
+- **Why:** The removed backtest engines did not faithfully replay live behavior and had become a misleading validation surface. This bundle moves review toward settled ghost/live-journal evidence, makes AI execution routing stricter, and improves session attribution before the next paper run.
+
+- **Verification:** Targeted tests were updated for the affected areas. Run `.venv/bin/python -m pytest` before deployment if this commit is promoted beyond local/paper use.
+
 ## 2026-05-14 — Lane-management control system: lane IDs, execution gating, dashboard controls, recommendations, audit trail
 
 - **What changed**

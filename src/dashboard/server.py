@@ -49,7 +49,6 @@ from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
 from src.execution.backtest_expectations import load_backtest_expectations
 from src.execution.performance_feedback import public_feedback_status
-from src.dashboard.backtest_progress_parse import parse_crypto_progress_from_lines
 
 # Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
 load_project_dotenv(project_root_from_here(), quiet=True)
@@ -526,34 +525,7 @@ def set_bot_instance(bot: "PolyBot"):
     _journal_cache = {"path": None, "mtime": None, "journal": None}
     # Pre-warm the cache when bot starts so first dashboard load is instant
     _maybe_trigger_refresh(max_age=0)
-    auto_bts = _maybe_start_auto_backtests("startup")
-    if auto_bts:
-        session_id = getattr(getattr(bot, "journal", None), "session_id", None)
-        for auto_bt in auto_bts:
-            status = auto_bt.get("status")
-            name = auto_bt.get("name", "unknown")
-            if status == "started":
-                logger.info(
-                    "Dashboard startup auto-backtest: %s started for session=%s job_id=%s pid=%s",
-                    name,
-                    session_id,
-                    auto_bt.get("job_id"),
-                    auto_bt.get("pid"),
-                )
-            elif status == "skipped":
-                logger.info(
-                    "Dashboard startup auto-backtest: %s skipped for session=%s reason=%s",
-                    name,
-                    session_id,
-                    auto_bt.get("reason"),
-                )
-            elif status == "error":
-                logger.warning(
-                    "Dashboard startup auto-backtest: %s error for session=%s reason=%s",
-                    name,
-                    session_id,
-                    auto_bt.get("reason"),
-                )
+    # Auto-backtest hook removed 2026-05-24 with the broken backtester.
 
 
 logger = logging.getLogger(__name__)
@@ -573,21 +545,6 @@ ACTIVE_STRATEGY_NAMES = (
     "bnb_macro",
 )
 _DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES + ("weather",)
-CRYPTO_BACKTEST_SYMBOLS = {"BTC", "SOL", "ETH", "HYPE", "XRP", "DOGE", "BNB"}
-CRYPTO_BACKTEST_WINDOWS = (5, 15, 60)
-
-
-def _parse_crypto_backtest_window(raw: Any) -> tuple[Optional[int], Optional[str]]:
-    """Normalize dashboard/CLI window to minutes supported by run_backtest_crypto."""
-    try:
-        w_int = int(raw)
-    except (TypeError, ValueError):
-        return None, "Invalid window (use 5, 15, or 60 for 1h)"
-    if w_int not in CRYPTO_BACKTEST_WINDOWS:
-        return None, "Backtest window must be 5, 15, or 60 (1h)"
-    return w_int, None
-
-
 def _classify_updown_trade(question: str, strategy: str, market_id: str = "") -> str:
     """Map a closed trade to a stable updown bucket key (e.g. ETH_updown_15m).
 
@@ -1863,149 +1820,369 @@ async def get_usage_records():
     return usage_tracker.get_all_records()
 
 
-# ─── BACKTEST REPORTS ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Ghost Lab — time-of-day counterfactual explorer
+# ---------------------------------------------------------------------------
+#
+# Merges three counterfactual / outcome sources into one response:
+#   1. data/calibration/rejected_candidates_settled.jsonl — settled "ghost"
+#      rejections (live scanner rejected, settled vs Polymarket outcome).
+#   2. data/paper_trades/test_*/entries.jsonl — DEAD_ZONE_SKIP and
+#      DEAD_ZONE_SKIP_RESOLVED events (per-hour deadzone counterfactual),
+#      plus EXIT events for actual live (paper) trades.
+#   3. data/calibration/lane_posteriors.json — Bayesian per-lane state
+#      joined onto each lane.
+#
+# All three sources share the canonical lane_id format from
+# src/analysis/lane_identity.py:121 (strategy|window|side|regime|entry_family).
 
 
-def _live_backtest_scope_from_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Backtest-tab scope aligned with configured live strategies (not historical reports)."""
-    strat = (cfg or {}).get("strategies") or {}
-    crypto_strategies: List[Dict[str, Any]] = []
-    for key, symbol in (
-        ("bitcoin", "BTC"),
-        ("sol_macro", "SOL"),
-        ("eth_macro", "ETH"),
-        ("hype_macro", "HYPE"),
-        ("xrp_macro", "XRP"),
-        ("doge_macro", "DOGE"),
-        ("bnb_macro", "BNB"),
-    ):
-        block = strat.get(key) or {}
-        crypto_strategies.append(
-            {
-                "strategy_key": key,
-                "symbol": symbol,
-                "enabled": bool(block.get("enabled", False)),
-            }
-        )
-    weather_cfg = strat.get("weather") or {}
-    return {
-        "crypto_strategies": crypto_strategies,
-        # Matches live + backtest: 5m / 15m / 1h (60 minutes; legacy 30m discontinued).
-        "windows": list(CRYPTO_BACKTEST_WINDOWS),
-        "backtest_windows": list(CRYPTO_BACKTEST_WINDOWS),
-        "live_windows": list(CRYPTO_BACKTEST_WINDOWS),
-        "weather_enabled": bool(weather_cfg.get("enabled", False)),
-    }
-
-
-@app.get("/api/backtest/reports")
-async def get_backtest_reports():
-    report_dir = DATA_ROOT / "backtest" / "reports"
-    cfg_disk: Dict[str, Any] = {}
+def _gl_parse_ts(s: Any) -> Optional[datetime]:
+    if not s:
+        return None
     try:
-        if CONFIG_PATH.is_file():
-            with open(CONFIG_PATH, encoding="utf-8") as cf:
-                cfg_disk = yaml.safe_load(cf) or {}
+        if isinstance(s, (int, float)):
+            return datetime.utcfromtimestamp(float(s)).replace(tzinfo=None)
+        txt = str(s).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(txt)
+        return dt.astimezone(tz=None).replace(tzinfo=None) if dt.tzinfo else dt
     except Exception:
-        cfg_disk = {}
-    live_scope = _live_backtest_scope_from_config(cfg_disk)
-    if not report_dir.exists():
-        return JSONResponse(
-            content={
-                "reports": [],
-                "latest": None,
-                "latest_completed": None,
-                "live_scope": live_scope,
-            },
-            headers={"Cache-Control": "no-store, must-revalidate"},
-        )
-    files = sorted(
-        report_dir.glob("backtest_*.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    reports: List[Dict[str, Any]] = []
-    seen_crypto_keys: set[Tuple[str, int]] = set()
-    non_crypto_kept = 0
-    max_non_crypto = 30
-    latest_completed: Optional[Dict[str, Any]] = None
-    latest_mtime: float = -1.0
-    for f in files:
+        return None
+
+
+def _gl_wilson_ci(wins: int, n: int, z: float = 1.96) -> Tuple[float, float, float]:
+    """Wilson score interval for binomial proportion. Returns (p, lo, hi)."""
+    if n <= 0:
+        return (0.0, 0.0, 0.0)
+    p = wins / n
+    denom = 1 + (z * z) / n
+    centre = (p + (z * z) / (2 * n)) / denom
+    margin = (z * ((p * (1 - p) / n + (z * z) / (4 * n * n)) ** 0.5)) / denom
+    return (p, max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
+    path = DATA_ROOT / "calibration" / "rejected_candidates_settled.jsonl"
+    out: List[Dict[str, Any]] = []
+    if not path.exists():
+        return out
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                ts = _gl_parse_ts(rec.get("ts") or rec.get("settled_at"))
+                if ts is None or ts < since:
+                    continue
+                out.append({
+                    "ts": ts.isoformat(),
+                    "hour_utc": ts.hour,
+                    "dow": ts.weekday(),  # Monday=0
+                    "lane_id": rec.get("lane_id") or "",
+                    "strategy": rec.get("strategy") or "",
+                    "window": rec.get("window") or "",
+                    "side": rec.get("side") or "",
+                    "action": rec.get("action") or "",
+                    "source": "ghost",
+                    "reason": rec.get("reason") or "",
+                    "win": bool(rec.get("win")) if rec.get("win") is not None else None,
+                    "yes_price": rec.get("yes_price"),
+                    "est_prob_up": rec.get("est_prob_up"),
+                    "htf_bias": rec.get("htf_bias"),
+                    "hypothetical_payout": rec.get("hypothetical_payout"),
+                    "market_id": rec.get("market_id"),
+                })
+    except Exception:
+        pass
+    return out
+
+
+def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
+    """Scan all paper_trades/<session>/entries.jsonl for DEAD_ZONE_SKIP[_RESOLVED] and EXIT events."""
+    base = DATA_ROOT / "paper_trades"
+    out: List[Dict[str, Any]] = []
+    if not base.exists():
+        return out
+    # Build a quick lookup of DEAD_ZONE_SKIP keys → resolved outcome so we can attach win/outcome.
+    skip_outcomes: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    sessions = sorted(base.glob("test_*/entries.jsonl"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+    for path in sessions:
         try:
-            with open(f) as fp:
-                data = json.load(fp)
+            mtime = datetime.utcfromtimestamp(path.stat().st_mtime)
+            if mtime < since - timedelta(days=2):
+                # Skip very old sessions whose latest event is well before `since`.
+                continue
+        except Exception:
+            pass
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    event = str(rec.get("event") or "")
+                    if event not in ("DEAD_ZONE_SKIP", "DEAD_ZONE_SKIP_RESOLVED", "EXIT"):
+                        continue
+                    ts = _gl_parse_ts(rec.get("timestamp"))
+                    if ts is None or ts < since:
+                        continue
+                    extra = rec.get("extra") or {}
+                    if event == "DEAD_ZONE_SKIP_RESOLVED":
+                        # Attach outcome to the corresponding earlier SKIP.
+                        key = (
+                            str(rec.get("market_id") or ""),
+                            str(rec.get("strategy") or ""),
+                            str(extra.get("lane_id") or ""),
+                            str(extra.get("hour_utc") or ts.hour),
+                        )
+                        skip_outcomes[key] = {
+                            "win": bool(extra.get("would_have_won")) if extra.get("would_have_won") is not None else None,
+                            "resolved_at": rec.get("timestamp"),
+                            "payout": extra.get("hypothetical_payout"),
+                        }
+                        continue
+                    if event == "DEAD_ZONE_SKIP":
+                        out.append({
+                            "ts": ts.isoformat(),
+                            "hour_utc": ts.hour,
+                            "dow": ts.weekday(),
+                            "lane_id": str(extra.get("lane_id") or ""),
+                            "strategy": rec.get("strategy") or "",
+                            "window": str(extra.get("lane_window") or ""),
+                            "side": str(extra.get("lane_side") or ""),
+                            "action": rec.get("action") or "",
+                            "source": "deadzone_skip",
+                            "reason": rec.get("reason") or "dead_zone_disabled_hypothetical",
+                            "win": None,  # filled in after the RESOLVED pass
+                            "yes_price": extra.get("yes_price"),
+                            "est_prob_up": extra.get("est_up") or extra.get("est_prob"),
+                            "htf_bias": extra.get("htf_bias"),
+                            "hypothetical_payout": None,
+                            "market_id": rec.get("market_id"),
+                            "_resolve_key": (
+                                str(rec.get("market_id") or ""),
+                                str(rec.get("strategy") or ""),
+                                str(extra.get("lane_id") or ""),
+                                str(extra.get("hour_utc") or ts.hour),
+                            ),
+                            "blocked_hours_config": extra.get("blocked_hours_config"),
+                        })
+                        continue
+                    if event == "EXIT":
+                        out.append({
+                            "ts": ts.isoformat(),
+                            "hour_utc": extra.get("hour_utc_entry") if extra.get("hour_utc_entry") is not None else ts.hour,
+                            "dow": ts.weekday(),
+                            "lane_id": str(extra.get("lane_id") or ""),
+                            "strategy": rec.get("strategy") or "",
+                            "window": str(extra.get("lane_window") or extra.get("window_size") or ""),
+                            "side": str(extra.get("lane_side") or extra.get("direction") or ""),
+                            "action": rec.get("action") or "",
+                            "source": "live",
+                            "reason": rec.get("reason") or "",
+                            "win": bool(extra.get("outcome_won")) if extra.get("outcome_won") is not None else (rec.get("pnl", 0) > 0),
+                            "yes_price": extra.get("yes_price") or rec.get("entry_price"),
+                            "est_prob_up": extra.get("est_prob") or extra.get("raw_est_prob"),
+                            "htf_bias": extra.get("htf_bias"),
+                            "hypothetical_payout": rec.get("pnl"),
+                            "market_id": rec.get("market_id"),
+                        })
         except Exception:
             continue
-        try:
-            mtime = float(f.stat().st_mtime)
-        except Exception:
-            mtime = -1.0
+    # Second pass: attach resolved outcomes to earlier SKIPs.
+    for ev in out:
+        if ev.get("source") != "deadzone_skip":
+            continue
+        key = ev.pop("_resolve_key", None)
+        if key and key in skip_outcomes:
+            ev["win"] = skip_outcomes[key]["win"]
+            ev["hypothetical_payout"] = skip_outcomes[key]["payout"]
+    return out
 
-        # Keep a canonical pointer to the newest valid backtest report on disk,
-        # independent of per-(symbol,window) dedupe used by card rendering.
-        if mtime >= latest_mtime:
-            latest_mtime = mtime
-            latest_completed = {
-                "filename": f.name,
-                "symbol": data.get("symbol"),
-                "window_minutes": data.get("window_minutes"),
-                "report_type": data.get("report_type"),
-                "run_at": data.get("run_at"),
-                "start_date": data.get("start_date"),
-                "end_date": data.get("end_date"),
+
+def _gl_load_posteriors() -> Dict[str, Dict[str, Any]]:
+    path = DATA_ROOT / "calibration" / "lane_posteriors.json"
+    if not path.exists():
+        return {}
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        lanes = doc.get("lanes") or doc
+        if not isinstance(lanes, dict):
+            return {}
+        return lanes
+    except Exception:
+        return {}
+
+
+def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate events by lane and by (lane, hour, dow) with Wilson CIs."""
+    by_lane: Dict[str, Dict[str, Any]] = {}
+    by_lane_hour: Dict[Tuple[str, int], Dict[str, int]] = defaultdict(lambda: {"n": 0, "wins": 0})
+    by_lane_hour_dow: Dict[Tuple[str, int, int], Dict[str, int]] = defaultdict(lambda: {"n": 0, "wins": 0})
+
+    for ev in events:
+        lid = ev.get("lane_id") or ""
+        if not lid:
+            continue
+        lane = by_lane.setdefault(lid, {
+            "lane_id": lid,
+            "strategy": ev.get("strategy"),
+            "window": ev.get("window"),
+            "side": ev.get("side"),
+            "n_ghosts": 0, "ghost_wins": 0,
+            "n_live": 0, "live_wins": 0,
+            "n_deadzone": 0, "n_deadzone_resolved": 0, "deadzone_wins": 0,
+            "blocked_hours_config": ev.get("blocked_hours_config") if ev.get("source") == "deadzone_skip" else None,
+        })
+        src = ev.get("source")
+        win = ev.get("win")
+        h = ev.get("hour_utc")
+        dow = ev.get("dow")
+        if src == "ghost":
+            lane["n_ghosts"] += 1
+            if win is True:
+                lane["ghost_wins"] += 1
+        elif src == "live":
+            lane["n_live"] += 1
+            if win is True:
+                lane["live_wins"] += 1
+        elif src == "deadzone_skip":
+            lane["n_deadzone"] += 1
+            if win is not None:
+                lane["n_deadzone_resolved"] += 1
+                if win is True:
+                    lane["deadzone_wins"] += 1
+            if lane["blocked_hours_config"] is None and ev.get("blocked_hours_config"):
+                lane["blocked_hours_config"] = ev.get("blocked_hours_config")
+        if isinstance(h, int) and win is not None:
+            cell = by_lane_hour[(lid, h)]
+            cell["n"] += 1
+            if win is True:
+                cell["wins"] += 1
+            if isinstance(dow, int):
+                cell2 = by_lane_hour_dow[(lid, h, dow)]
+                cell2["n"] += 1
+                if win is True:
+                    cell2["wins"] += 1
+    # Compute WRs + Wilson CIs per lane.
+    for lane in by_lane.values():
+        for prefix, n_key in (("ghost", "n_ghosts"), ("live", "n_live"), ("deadzone", "n_deadzone_resolved")):
+            n = lane[n_key]
+            w = lane[f"{prefix}_wins"]
+            p, lo, hi = _gl_wilson_ci(w, n)
+            lane[f"{prefix}_wr"] = round(p, 4)
+            lane[f"{prefix}_wr_lo"] = round(lo, 4)
+            lane[f"{prefix}_wr_hi"] = round(hi, 4)
+    buckets_hour = []
+    for (lid, h), cell in by_lane_hour.items():
+        p, lo, hi = _gl_wilson_ci(cell["wins"], cell["n"])
+        buckets_hour.append({"lane_id": lid, "hour_utc": h, "n": cell["n"], "wins": cell["wins"],
+                             "wr": round(p, 4), "wr_lo": round(lo, 4), "wr_hi": round(hi, 4)})
+    buckets_hour_dow = []
+    for (lid, h, dow), cell in by_lane_hour_dow.items():
+        p, lo, hi = _gl_wilson_ci(cell["wins"], cell["n"])
+        buckets_hour_dow.append({"lane_id": lid, "hour_utc": h, "dow": dow, "n": cell["n"], "wins": cell["wins"],
+                                 "wr": round(p, 4), "wr_lo": round(lo, 4), "wr_hi": round(hi, 4)})
+    return {
+        "lanes": list(by_lane.values()),
+        "buckets_hour": buckets_hour,
+        "buckets_hour_dow": buckets_hour_dow,
+    }
+
+
+@app.get("/api/ghosts/lab")
+async def get_ghost_lab(
+    since: Optional[str] = None,
+    strategy: Optional[str] = None,
+    window: Optional[str] = None,
+    side: Optional[str] = None,
+    limit: int = 5000,
+):
+    """Ghost Lab — settled-ghost + deadzone-counterfactual + live-trade explorer with time-of-day buckets."""
+    # Default = last 30 days (time-of-day buckets need sample volume).
+    if since:
+        since_dt = _gl_parse_ts(since) or (datetime.utcnow() - timedelta(days=30))
+    else:
+        since_dt = datetime.utcnow() - timedelta(days=30)
+
+    ghosts = _gl_load_ghosts(since_dt)
+    paper = _gl_load_paper(since_dt)
+    events = ghosts + paper
+
+    # Filter.
+    if strategy:
+        events = [e for e in events if (e.get("strategy") or "") == strategy]
+    if window:
+        events = [e for e in events if (e.get("window") or "") == window]
+    if side:
+        events = [e for e in events if (e.get("side") or "") == side]
+
+    agg = _gl_aggregate(events)
+    posteriors = _gl_load_posteriors()
+    # Join posterior state onto lanes.
+    for lane in agg["lanes"]:
+        post = posteriors.get(lane["lane_id"]) or {}
+        if post:
+            a = float(post.get("beta_a") or 0)
+            b = float(post.get("beta_b") or 0)
+            mean = a / (a + b) if (a + b) > 0 else None
+            lane["posterior"] = {
+                "alpha_ewma": post.get("alpha_ewma"),
+                "beta_a": a,
+                "beta_b": b,
+                "mean": round(mean, 4) if mean is not None else None,
+                "n": post.get("n"),
+                "last_updated": post.get("last_updated"),
             }
-
-        sym_raw = data.get("symbol")
-        sym = str(sym_raw).strip() if sym_raw is not None else ""
-        wm_raw = data.get("window_minutes")
-        crypto_key: Optional[Tuple[str, int]] = None
-        rt = data.get("report_type")
-        # Sim / auxiliary reports share symbol+window fields but must not occupy
-        # crypto up/down card slots (e.g. XRP 15m vs xrp_dump_hedge sim).
-        if rt in {"xrp_dump_hedge_sim"}:
-            pass
-        elif rt == "crypto_updown" or (
-            rt in (None, "")
-            and sym
-            and wm_raw is not None
-            and str(wm_raw).strip() != ""
-            and not data.get("per_strategy_metrics")
-        ):
-            try:
-                wm_int = int(float(wm_raw))
-            except (TypeError, ValueError):
-                wm_int = 0
-            if sym and wm_int > 0:
-                crypto_key = (sym.upper(), wm_int)
-
-        if crypto_key:
-            # Newest file per (symbol, window) only — duplicates broke some clients and
-            # could surface stale rows ahead of the card picker.
-            if crypto_key in seen_crypto_keys:
-                continue
-            seen_crypto_keys.add(crypto_key)
-            data["symbol"] = crypto_key[0]
-            data["window_minutes"] = crypto_key[1]
         else:
-            if non_crypto_kept >= max_non_crypto:
-                continue
-            non_crypto_kept += 1
+            lane["posterior"] = None
 
-        data["filename"] = f.name
-        data.pop("trades", None)
-        data.pop("results", None)
-        data.pop("stress_scenarios", None)
-        reports.append(data)
-    payload = {
-        "reports": reports,
-        "latest": reports[0] if reports else None,
-        "latest_completed": latest_completed,
-        "live_scope": live_scope,
+    # Distinct reasons sorted by count (for the gate-toggle UI).
+    reason_counts: Dict[str, int] = defaultdict(int)
+    for e in events:
+        r = e.get("reason") or ""
+        if r:
+            reason_counts[r] += 1
+    reasons = [{"reason": r, "n": n} for r, n in sorted(reason_counts.items(), key=lambda kv: -kv[1])]
+
+    # Sort events newest-first; cap the raw array (aggregated buckets always shipped).
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    capped = events[: max(1, min(int(limit), 20000))]
+
+    counts = {
+        "ghost": sum(1 for e in events if e.get("source") == "ghost"),
+        "deadzone_skip": sum(1 for e in events if e.get("source") == "deadzone_skip"),
+        "live": sum(1 for e in events if e.get("source") == "live"),
     }
     return JSONResponse(
-        content=payload,
+        content={
+            "events": capped,
+            "lanes": agg["lanes"],
+            "buckets_hour": agg["buckets_hour"],
+            "buckets_hour_dow": agg["buckets_hour_dow"],
+            "reasons": reasons,
+            "session": {
+                "since": since_dt.isoformat(),
+                "now": datetime.utcnow().isoformat(),
+                "n_events_total": len(events),
+                "n_events_capped": len(capped),
+                "n_events_per_source": counts,
+            },
+        },
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
+
+
+# /api/backtest/reports route removed 2026-05-24; backtester deleted (see CLAUDE.md ghost-log rule).
 
 
 # ─── LIVE PERFORMANCE ──────────────────────────────────────────────
@@ -2226,365 +2403,8 @@ async def resume_live_bot(request: Request):
     }
 
 
-# ─── BACKTEST MANAGEMENT ──────────────────────────────────────────────
-
-MAX_CONCURRENT_BACKTESTS = 4
-
-_backtest_jobs_lock = threading.Lock()
-
-
-@dataclass
-class BacktestJob:
-    job_id: str
-    proc: subprocess.Popen
-    output: List[str] = field(default_factory=list)
-    summary: str = ""
-
-
-_backtest_jobs: Dict[str, BacktestJob] = {}
-_auto_startup_backtests_started: set[tuple[str, str]] = set()
-_auto_backtest_start_lock = threading.Lock()
-
-
-def _backtest_exit_code(proc: subprocess.Popen) -> Optional[int]:
-    """None while running; integer exit status after the process finishes."""
-    code = proc.poll()
-    return None if code is None else int(code)
-
-
-def _prune_finished_backtest_jobs(max_keep: int = 48) -> None:
-    """Drop oldest finished jobs so the map does not grow forever."""
-    with _backtest_jobs_lock:
-        if len(_backtest_jobs) <= max_keep:
-            return
-        finished = [
-            jid
-            for jid, j in _backtest_jobs.items()
-            if j.proc.poll() is not None
-        ]
-        for jid in finished[: max(0, len(_backtest_jobs) - max_keep)]:
-            _backtest_jobs.pop(jid, None)
-
-
-def _backtest_reader(job: BacktestJob) -> None:
-    """Background thread: reads subprocess stdout into job.output."""
-    try:
-        for line in job.proc.stdout:
-            line = line.rstrip()
-            if line:
-                job.output.append(line)
-    except Exception:
-        pass
-
-
-def _start_backtest_job(cmd_args: List[str], summary: str) -> Dict[str, Any]:
-    """Spawn a backtest subprocess, register in-memory tracking, and return API payload."""
-    jid = uuid.uuid4().hex[:10]
-    proc = subprocess.Popen(
-        cmd_args,
-        cwd=str(PROJECT_ROOT),
-        env=_safe_env(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    job = BacktestJob(job_id=jid, proc=proc, output=[], summary=summary)
-    with _backtest_jobs_lock:
-        _backtest_jobs[jid] = job
-    threading.Thread(
-        target=_backtest_reader,
-        args=(job,),
-        daemon=True,
-    ).start()
-    _prune_finished_backtest_jobs()
-    logger.info("Backtest job %s started (PID %s) %s", jid, proc.pid, summary)
-    return {"status": "started", "job_id": jid, "pid": proc.pid, "summary": summary}
-
-
-def _auto_backtest_specs(session_id: str, phase: str) -> List[Tuple[str, List[str], str]]:
-    specs: List[Tuple[str, List[str], str]] = []
-    bot = _full_bot_instance()
-    dashboard_cfg = (bot.config.get("dashboard", {}) or {}) if bot else {}
-
-    if dashboard_cfg.get(f"auto_sol5_backtest_on_{phase}", True):
-        crypto_script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
-        if crypto_script.exists():
-            specs.append(
-                (
-                    "sol5",
-                    [
-                        sys.executable,
-                        str(crypto_script),
-                        "--symbol",
-                        "SOL",
-                        "--window",
-                        "5",
-                    ],
-                    f"SOL 5m crypto [auto-on-{phase}:{session_id}]",
-                )
-            )
-
-    if dashboard_cfg.get(f"auto_weather_backtest_on_{phase}", True):
-        weather_script = PROJECT_ROOT / "scripts" / "run_backtest_weather.py"
-        if weather_script.exists():
-            specs.append(
-                (
-                    "weather",
-                    [
-                        sys.executable,
-                        str(weather_script),
-                        "--quick",
-                        "--save-report",
-                    ],
-                    f"weather live [auto-on-{phase}:{session_id}]",
-                )
-            )
-
-    return specs
-
-
-def _maybe_start_auto_backtests(phase: str) -> List[Dict[str, Any]]:
-    """Optionally kick off the configured auto backtest batch for startup/reset."""
-    global _auto_startup_backtests_started
-    bot = _full_bot_instance()
-    if not bot:
-        return []
-    if not bot.config.get("trading", {}).get("dry_run", True):
-        return []
-
-    current_session_id = getattr(getattr(bot, "journal", None), "session_id", None)
-    if not current_session_id:
-        return []
-
-    specs = _auto_backtest_specs(current_session_id, phase)
-    if not specs:
-        return []
-
-    results: List[Dict[str, Any]] = []
-    with _auto_backtest_start_lock:
-        with _backtest_jobs_lock:
-            running_n = sum(1 for j in _backtest_jobs.values() if j.proc.poll() is None)
-        for key, cmd_args, summary in specs:
-            dedupe_key = (current_session_id, f"{phase}:{key}")
-            if phase == "startup" and dedupe_key in _auto_startup_backtests_started:
-                results.append(
-                    {
-                        "name": key,
-                        "status": "skipped",
-                        "reason": "startup_dedupe",
-                    }
-                )
-                continue
-            if running_n >= MAX_CONCURRENT_BACKTESTS:
-                results.append(
-                    {
-                        "name": key,
-                        "status": "skipped",
-                        "reason": "max_concurrent_backtests",
-                    }
-                )
-                continue
-            if phase == "startup":
-                _auto_startup_backtests_started.add(dedupe_key)
-            try:
-                result = _start_backtest_job(cmd_args, summary)
-                result["name"] = key
-                results.append(result)
-                running_n += 1
-            except Exception as e:
-                if phase == "startup":
-                    _auto_startup_backtests_started.discard(dedupe_key)
-                logger.error("Auto %s backtest on %s failed: %s", key, phase, e)
-                results.append({"name": key, "status": "error", "reason": str(e)})
-    return results
-
-
-@app.get("/api/backtest/status")
-async def get_backtest_status(job_id: Optional[str] = None):
-    """Backtest status. Optional job_id scopes to one job; else lists all jobs."""
-
-    def _job_dict(j: BacktestJob, jid: str, alive: bool) -> Dict[str, Any]:
-        prog = parse_crypto_progress_from_lines(j.output)
-        return {
-            "job_id": jid,
-            "running": alive,
-            "pid": j.proc.pid,
-            "summary": j.summary,
-            "exit_code": None if alive else _backtest_exit_code(j.proc),
-            "progress_pct": prog["progress_pct"],
-            "progress_current": prog["progress_current"],
-            "progress_total": prog["progress_total"],
-        }
-
-    with _backtest_jobs_lock:
-        if job_id:
-            if job_id not in _backtest_jobs:
-                return {
-                    "running": False,
-                    "job_unknown": True,
-                    "jobs": [],
-                    "output": [],
-                }
-            j = _backtest_jobs[job_id]
-            alive = j.proc.poll() is None
-            return {
-                "running": alive,
-                "exit_code": None if alive else _backtest_exit_code(j.proc),
-                "jobs": [_job_dict(j, job_id, alive)],
-                "output": j.output[-50:],
-            }
-        jobs_payload: List[Dict[str, Any]] = []
-        any_running = False
-        merged_out: List[str] = []
-        for jid, j in _backtest_jobs.items():
-            alive = j.proc.poll() is None
-            any_running = any_running or alive
-            jobs_payload.append(_job_dict(j, jid, alive))
-            if alive:
-                merged_out.extend(j.output[-15:])
-        return {
-            "running": any_running,
-            "jobs": jobs_payload,
-            "output": merged_out[-50:],
-        }
-
-
-@app.post("/api/backtest/start")
-async def start_backtest(request: Request):
-    """Start a backtest subprocess (multiple may run while the live bot trades)."""
-    global _backtest_jobs
-    _check_auth(request)
-
-    body: Dict[str, Any] = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    strategies_raw = body.get("strategies", "")
-    if isinstance(strategies_raw, str):
-        strategies_list = [
-            x.strip()
-            for x in re.split(r"[\s,]+", strategies_raw.strip())
-            if x.strip()
-        ]
-    else:
-        strategies_list = [str(x).strip() for x in strategies_raw if str(x).strip()]
-    periods = body.get("periods", "all")
-    symbol = body.get("symbol", "")
-    window_raw = body.get("window", 15)
-    test_start = body.get("test_start", "").strip()
-
-    w_int, window_err = _parse_crypto_backtest_window(window_raw)
-    if window_err:
-        return {"status": "error", "message": window_err}
-    window = str(w_int)
-
-    with _backtest_jobs_lock:
-        running_n = sum(
-            1 for j in _backtest_jobs.values() if j.proc.poll() is None
-        )
-        if running_n >= MAX_CONCURRENT_BACKTESTS:
-            return {
-                "status": "error",
-                "message": (
-                    f"Max {MAX_CONCURRENT_BACKTESTS} concurrent backtests "
-                    "(wait for one to finish or use /api/backtest/status)."
-                ),
-            }
-
-    cfg_disk: Dict[str, Any] = {}
-    try:
-        if CONFIG_PATH.is_file():
-            with open(CONFIG_PATH, encoding="utf-8") as cf:
-                cfg_disk = yaml.safe_load(cf) or {}
-    except Exception:
-        cfg_disk = {}
-    pm_marks = bool(
-        (cfg_disk.get("backtest") or {}).get("polymarket_marks", {}).get("enabled")
-    )
-
-    sym_u = str(symbol).strip().upper()
-    if sym_u == "ALL":
-        bundle_script = PROJECT_ROOT / "scripts" / "run_crypto_backtest_bundle.py"
-        if not bundle_script.exists():
-            return {"status": "error", "message": f"{bundle_script} not found"}
-        cmd_args = [sys.executable, str(bundle_script), "--window", window]
-        start_d = str(body.get("start", "") or "").strip()
-        end_d = str(body.get("end", "") or "").strip()
-        if start_d:
-            cmd_args += ["--start", start_d]
-        if end_d:
-            cmd_args += ["--end", end_d]
-        if test_start:
-            cmd_args += ["--test-start", test_start]
-        par = body.get("parallel")
-        if isinstance(par, int) and par > 1:
-            cmd_args += ["--parallel", str(min(par, 5))]
-        if pm_marks:
-            cmd_args.append("--polymarket-marks")
-        summary = f"ALL {w_int}m crypto bundle" + (
-            f" test-from={test_start}" if test_start else " [in-sample]"
-        )
-    elif symbol in CRYPTO_BACKTEST_SYMBOLS:
-        script = PROJECT_ROOT / "scripts" / "run_backtest_crypto.py"
-        if not script.exists():
-            return {"status": "error", "message": f"{script} not found"}
-        cmd_args = [
-            sys.executable,
-            str(script),
-            "--symbol", symbol,
-            "--window", window,
-        ]
-        if test_start:
-            cmd_args += ["--test-start", test_start]
-        if pm_marks:
-            cmd_args.append("--polymarket-marks")
-        summary = f"{symbol} {window}m crypto" + (
-            f" test-from={test_start}" if test_start else " [in-sample]"
-        )
-    else:
-        return {
-            "status": "error",
-            "message": (
-                "Legacy fade/arbitrage/neh backtests were removed. "
-                "Use the crypto backtest controls for BTC, SOL, ETH, HYPE, XRP, or ALL bundle."
-            ),
-        }
-
-    try:
-        return _start_backtest_job(cmd_args, summary)
-    except Exception as e:
-        logger.error(f"Failed to start backtest: {e}")
-        return {"status": "error", "message": str(e)}
-
-
-@app.get("/api/backtest/output")
-async def get_backtest_output(job_id: Optional[str] = None):
-    """Tail of backtest stdout. Pass job_id when multiple jobs are active."""
-    with _backtest_jobs_lock:
-        if job_id and job_id in _backtest_jobs:
-            j = _backtest_jobs[job_id]
-            return {
-                "lines": j.output[-100:],
-                "running": j.proc.poll() is None,
-                "job_id": job_id,
-            }
-        alive = [j for j in _backtest_jobs.values() if j.proc.poll() is None]
-        if len(alive) == 1:
-            j = alive[0]
-            return {
-                "lines": j.output[-100:],
-                "running": True,
-                "job_id": j.job_id,
-            }
-        return {
-            "lines": [],
-            "running": bool(alive),
-            "job_id": None,
-            "hint": "Pass job_id when multiple backtests are running",
-        }
+# Backtest management (BacktestJob class, /api/backtest/{status,start,output}) removed
+# 2026-05-24 with the broken backtester. See CLAUDE.md: validation uses the ghost log.
 
 
 # ─── TEST RESULTS ─────────────────────────────────────────────────
@@ -3478,6 +3298,62 @@ async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] =
             }
         )
     return {"points": points}
+
+
+@app.get("/api/session/equity_history")
+async def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = None):
+    """Equity time-series for the current (or named) session, sourced from
+    ``snapshots.jsonl``. Each row contains ``t`` (epoch ms) and ``v`` (equity =
+    bankroll + realized_pnl + unrealized_pnl). Used to restore the Live P&L
+    trace shape after a dashboard refresh.
+    """
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session_dir = getattr(j, "session_dir", None) if j else None
+    if session_dir is None:
+        session_dir = _dashboard_journal_session_dir()
+    if not session_dir:
+        return {"points": [], "session_id": None}
+    snap = Path(session_dir) / "snapshots.jsonl"
+    if not snap.exists():
+        return {"points": [], "session_id": getattr(j, "session_id", None) if j else None}
+    limit = max(10, min(int(limit), 5000))
+    points: List[Dict[str, Any]] = []
+    try:
+        with open(snap, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = o.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    epoch_ms = int(datetime.fromisoformat(str(ts)).timestamp() * 1000)
+                except Exception:
+                    continue
+                try:
+                    base = float(o.get("bankroll") or 0)
+                    rpnl = float(o.get("realized_pnl") or 0)
+                    upnl = float(o.get("unrealized_pnl") or 0)
+                except (TypeError, ValueError):
+                    continue
+                points.append({"t": epoch_ms, "v": round(base + rpnl + upnl, 4)})
+    except OSError:
+        return {"points": [], "session_id": getattr(j, "session_id", None) if j else None}
+    if len(points) > limit:
+        # Decimate evenly so the shape survives without flooding the chart.
+        step = len(points) / float(limit)
+        points = [points[int(i * step)] for i in range(limit)]
+    return {
+        "points": points,
+        "session_id": getattr(j, "session_id", None) if j else None,
+    }
 
 
 @app.get("/api/journal/trade_journey")
@@ -5324,10 +5200,7 @@ async def reset_paper_session(request: Request):
         "new_session_id": new_id,
         "bankroll": new_bankroll,
     }
-    auto_backtests = _maybe_start_auto_backtests("reset")
-    if auto_backtests:
-        out["auto_backtests"] = auto_backtests
-        out["auto_backtest"] = auto_backtests[0]
+    # Auto-backtest on reset removed 2026-05-24 with the broken backtester.
     if archive_rel:
         out["archived_to"] = archive_rel
     return out

@@ -535,6 +535,52 @@ OUTPUT (machine-parseable — follow exactly):
     def _shadow_provider_chain(self) -> List[Dict[str, Any]]:
         return self._named_provider_chain(self.shadow_pipeline_cfg)
 
+    def _direct_decision_provider_chain(self) -> List[Dict[str, Any]]:
+        """
+        Providers allowed to affect entry decisions.
+
+        This intentionally differs from ``provider_chain``: MiniMax can remain
+        available for shadow/research/narration while Kimi is the only premium
+        tie-breaker allowed to steer execution.
+        """
+        raw_names = self.config.get("direct_decision_provider_names")
+        if raw_names is None:
+            raw_names = self.config.get("execution_provider_names")
+        names: List[str] = []
+        if isinstance(raw_names, str):
+            names = [raw_names.strip()] if raw_names.strip() else []
+        elif isinstance(raw_names, (list, tuple, set)):
+            names = [str(item).strip() for item in raw_names if str(item).strip()]
+
+        if not names:
+            return [dict(pc) for pc in self.provider_chain]
+
+        allowed = set(names)
+        selected = [
+            dict(pc)
+            for pc in self.provider_chain
+            if str(pc.get("name") or "").strip() in allowed
+        ]
+        missing = [name for name in names if not any(str(pc.get("name") or "").strip() == name for pc in selected)]
+        if missing:
+            logger.warning(
+                "Direct decision provider(s) not found in ai.provider_chain: %s",
+                ", ".join(missing),
+            )
+        if selected:
+            return selected
+        if bool(self.config.get("direct_decision_fallback_to_chain", False)):
+            logger.warning(
+                "No direct decision providers matched; falling back to full provider_chain."
+            )
+            return [dict(pc) for pc in self.provider_chain]
+        return []
+
+    def _provider_chain_for_scope(self, provider_scope: str) -> List[Dict[str, Any]]:
+        if str(provider_scope or "").strip().lower() == "decision":
+            return self._direct_decision_provider_chain()
+        return [dict(pc) for pc in self.provider_chain]
+
     def _extract_research_actions(self, value: Any) -> List[str]:
         if isinstance(value, list):
             out = []
@@ -1378,6 +1424,7 @@ OUTPUT (machine-parseable — follow exactly):
             quant_action=action,
             raw_probability=raw_probability,
             post_calibration_probability=post_calibration_probability,
+            provider_scope="decision",
         )
         if analysis is None:
             return AIDecision(False, "SKIP", 0.0, None, None, "direct_ai_failed", "direct")
@@ -1582,6 +1629,21 @@ OUTPUT (machine-parseable — follow exactly):
         if raw is not None:
             return max(5.0, float(raw))
         return max(5.0, float(self.timeout))
+
+    def _provider_max_tokens(self, provider_config: Optional[Dict[str, Any]]) -> int:
+        """Per-provider output cap. Kimi quota is wasted when it free-rambles."""
+        pc = provider_config or {}
+        raw = pc.get("max_tokens")
+        if raw is not None:
+            return max(64, int(raw))
+        return int(self.max_tokens)
+
+    def _provider_temperature(self, provider_config: Optional[Dict[str, Any]]) -> float:
+        pc = provider_config or {}
+        raw = pc.get("temperature")
+        if raw is not None:
+            return max(0.0, min(2.0, float(raw)))
+        return float(self.temperature)
 
     def _openrouter_rotated_models(
         self,
@@ -2180,6 +2242,42 @@ OUTPUT (machine-parseable — follow exactly):
         except Exception:
             return None
 
+    @staticmethod
+    def _extract_openai_message_text(response: Any) -> str:
+        """Extract text from OpenAI-compatible responses, including Kimi variants."""
+        with suppress(Exception):
+            choice = response.choices[0]
+            message = getattr(choice, "message", None)
+            if message is not None:
+                content = getattr(message, "content", None)
+                if isinstance(content, str) and content.strip():
+                    return content
+                if isinstance(content, list):
+                    parts: List[str] = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            text = block.get("text") or block.get("content")
+                        else:
+                            text = getattr(block, "text", None) or getattr(block, "content", None)
+                        if text:
+                            parts.append(str(text))
+                    if parts:
+                        return "\n".join(parts)
+                # Some coding/reasoning gateways put the useful payload outside
+                # message.content. Check common alternates before declaring empty.
+                for attr in ("parsed", "refusal", "reasoning_content", "reasoning"):
+                    value = getattr(message, attr, None)
+                    if value:
+                        return value if isinstance(value, str) else json.dumps(value)
+            text = getattr(choice, "text", None)
+            if text:
+                return str(text)
+        with suppress(Exception):
+            output_text = getattr(response, "output_text", None)
+            if output_text:
+                return str(output_text)
+        return ""
+
     def _daily_usage_key(self, provider_name: str) -> str:
         return f"{provider_name}:{date.today().isoformat()}"
 
@@ -2256,6 +2354,7 @@ OUTPUT (machine-parseable — follow exactly):
         quant_action: str = "",
         raw_probability: Optional[float] = None,
         post_calibration_probability: Optional[float] = None,
+        provider_scope: str = "analysis",
     ) -> Optional[AIAnalysis]:
         """
         Analyze a market with caching and rate limiting.
@@ -2332,8 +2431,10 @@ OUTPUT (machine-parseable — follow exactly):
                 )
             return result
 
-        # Skip entirely if no providers configured
-        if not self.provider_chain:
+        provider_chain = self._provider_chain_for_scope(provider_scope)
+
+        # Skip entirely if no providers configured for this scope.
+        if not provider_chain:
             logger.debug(f"No AI providers configured — skipping market {market_id}.")
             return None
 
@@ -2344,7 +2445,7 @@ OUTPUT (machine-parseable — follow exactly):
             return None
 
         provider_errors: List[str] = []
-        for provider_config in self.provider_chain:
+        for provider_config in provider_chain:
             provider_name = provider_config.get("name")
             provider_type = provider_config.get("type")
             model = provider_config.get("model")
@@ -2422,7 +2523,7 @@ OUTPUT (machine-parseable — follow exactly):
                 )
                 continue
 
-        if self.provider_chain:
+        if provider_chain:
             details = "; ".join(provider_errors) if provider_errors else "no provider attempts completed"
             msg = (
                 f"All AI providers failed for market {market_id}. "
@@ -2736,6 +2837,12 @@ Reply with only the JSON object required by the system message (four keys: reaso
         provider_label = str(pc.get("name") or "kimi_coding")
         base_url = str(pc.get("base_url") or "https://api.kimi.com/coding/v1")
         call_timeout = self._provider_timeout(pc)
+        max_tokens = self._provider_max_tokens(pc)
+        temperature = self._provider_temperature(pc)
+        cooldown_429 = float(pc.get("cooldown_on_429_seconds", 1800.0))
+        cooldown_usage = float(pc.get("cooldown_on_usage_limit_seconds", cooldown_429))
+        cooldown_parse = float(pc.get("cooldown_on_parse_error_seconds", 300.0))
+        retry_non_json_on_400 = bool(pc.get("retry_without_json_mode_on_400", False))
         parser = response_parser or self._parse_response
         models = self._models_for_provider(pc, model)
         if not models:
@@ -2744,7 +2851,13 @@ Reply with only the JSON object required by the system message (four keys: reaso
 
         last_err: Optional[BaseException] = None
         for m in models:
-            for force_refresh in (False, True):
+            ck = self._cooldown_key(provider_label, m)
+            if self._on_cooldown(ck):
+                logger.debug("Kimi Code model %s on cooldown — skipping.", m)
+                continue
+            self._bump_local_quota_and_warn(provider_label)
+            force_refresh = False
+            while True:
                 access_token = await self._kimi_code_access_token(
                     pc,
                     force_refresh=force_refresh,
@@ -2757,15 +2870,18 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     max_retries=0,
                 )
                 try:
-                    for use_json_mode in (bool(pc.get("json_mode", True)), False):
+                    json_attempts = [bool(pc.get("json_mode", True))]
+                    if retry_non_json_on_400 and json_attempts[0]:
+                        json_attempts.append(False)
+                    for use_json_mode in json_attempts:
                         kwargs: Dict[str, Any] = dict(
                             model=m,
                             messages=[
                                 {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
                                 {"role": "user", "content": prompt},
                             ],
-                            temperature=self.temperature,
-                            max_tokens=self.max_tokens,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
                         )
                         if use_json_mode:
                             kwargs["response_format"] = {"type": "json_object"}
@@ -2782,7 +2898,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                                 continue
                             raise
 
-                        content = response.choices[0].message.content or ""
+                        content = self._extract_openai_message_text(response)
                         usage = getattr(response, "usage", None)
                         latency = time.time() - start_time
                         if usage:
@@ -2793,14 +2909,20 @@ Reply with only the JSON object required by the system message (four keys: reaso
                                 output_tokens=getattr(usage, "completion_tokens", 0) or 0,
                                 latency=latency,
                             )
+                        if not content.strip():
+                            raise AIResponseValidationError(
+                                f"market={market_id} empty Kimi response content"
+                            )
                         try:
                             return parser(content, market_id, anchor_yes_price)
                         except AIResponseValidationError as exc:
                             logger.warning(
-                                "Kimi Code: schema/parse error model=%s: %s — trying next.",
+                                "Kimi Code: schema/parse error model=%s: %s — cooling down %.0fs.",
                                 m,
                                 exc,
+                                cooldown_parse,
                             )
+                            self._set_cooldown(ck, cooldown_parse)
                             last_err = exc
                             break
                 except Exception as exc:
@@ -2811,7 +2933,29 @@ Reply with only the JSON object required by the system message (four keys: reaso
                             "Kimi Code returned 401 for %s; refreshing OAuth token once.",
                             provider_label,
                         )
+                        force_refresh = True
                         continue
+                    msg = str(exc).lower()
+                    if isinstance(exc, AIResponseValidationError):
+                        self._set_cooldown(ck, cooldown_parse)
+                        logger.warning(
+                            "Kimi Code parse/empty response model=%s — cooling down %.0fs.",
+                            m,
+                            cooldown_parse,
+                        )
+                    if (
+                        status_code == 429
+                        or "429" in msg
+                        or "rate_limit" in msg
+                        or "usage limit" in msg
+                    ):
+                        cooldown = cooldown_usage if "usage limit" in msg else cooldown_429
+                        self._set_cooldown(ck, cooldown)
+                        logger.warning(
+                            "Kimi Code rate-limited model=%s — cooling down %.0fs.",
+                            m,
+                            cooldown,
+                        )
                     logger.warning(
                         "Kimi Code error model=%s: %s: %s",
                         m,
@@ -2821,6 +2965,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     break
                 finally:
                     await _close_async_client_quietly(client)
+                break
 
         if last_err:
             raise last_err

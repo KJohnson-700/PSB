@@ -3,7 +3,7 @@
 from pathlib import Path
 import src.execution.trade_journal as trade_journal_module
 
-from src.execution.trade_journal import TradeJournal
+from src.execution.trade_journal import TradeJournal, is_phantom_exit_row
 
 
 def test_newest_resumable_session_dir_skips_empty_stubs(tmp_path: Path) -> None:
@@ -141,6 +141,34 @@ def test_session_fill_count_matches_journal_not_phantom_filtered_subtotal(
     assert summary["total_entries"] == 1
     assert summary["total_exits"] == 1
     assert summary["open_positions"] == 0
+
+
+def test_buy_no_complementary_exit_price_is_not_phantom() -> None:
+    row = {
+        "event": "EXIT",
+        "action": "BUY_NO",
+        "side": "BUY",
+        "outcome": "NO",
+        "entry_price": 0.395,
+        "current_price": 0.6,
+        "pnl": 5.1899,
+        "extra": {"entry_leg": "NO"},
+    }
+    assert is_phantom_exit_row(row) is False
+
+
+def test_yes_complementary_exit_price_is_phantom() -> None:
+    row = {
+        "event": "EXIT",
+        "action": "BUY_YES",
+        "side": "BUY",
+        "outcome": "YES",
+        "entry_price": 0.395,
+        "current_price": 0.6,
+        "pnl": 5.1899,
+        "extra": {"entry_leg": "YES"},
+    }
+    assert is_phantom_exit_row(row) is True
 
 
 def test_buy_no_skip_event_is_persisted(tmp_path: Path, monkeypatch) -> None:
