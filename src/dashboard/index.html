@@ -2699,6 +2699,48 @@
         </div>
     </div>
 
+    <!-- Decision digest — deadzone theory + gate/calibration rollup -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;font-size:.95rem;">Deadzone theory</h3>
+            <div id="gl-digest-status" style="font-size:.68rem;color:var(--text-muted);">waiting</div>
+        </div>
+        <div id="gl-digest-summary" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px;"></div>
+        <div style="display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(320px,1fr);gap:12px;">
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);text-align:left;">
+                            <th style="padding:5px 8px;">hour/regime</th>
+                            <th style="padding:5px 8px;text-align:right;">dz n</th>
+                            <th style="padding:5px 8px;text-align:right;">dz WR</th>
+                            <th style="padding:5px 8px;text-align:right;">live n</th>
+                            <th style="padding:5px 8px;text-align:right;">live WR</th>
+                            <th style="padding:5px 8px;">read</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gl-deadzone-tbody">
+                        <tr><td colspan="6" style="padding:8px;color:var(--text-muted);">No digest loaded.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);text-align:left;">
+                            <th style="padding:5px 8px;">gate / calibration signal</th>
+                            <th style="padding:5px 8px;text-align:right;">n</th>
+                            <th style="padding:5px 8px;text-align:right;">metric</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gl-digest-tbody">
+                        <tr><td colspan="3" style="padding:8px;color:var(--text-muted);">No digest loaded.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- Panel 1 — 24h clock ring (animated) + Panel 2 — 7x24 heatmap, side by side -->
     <div class="grid" style="grid-template-columns: minmax(320px, 1fr) minmax(380px, 1.4fr); gap:14px; margin-bottom:14px;">
         <div class="card" data-aos="fade-up" style="padding:12px 14px;">
@@ -2746,7 +2788,46 @@
         </div>
     </div>
 
-    <!-- Panel 4 — Lane × source table -->
+    <!-- Panel 4 — Regime × Ghost breakdown -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <h3 style="margin:0;font-size:.95rem;">Regime × Ghost</h3>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <select id="gl-regime-since" onchange="loadGhostLabRegime()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.72rem;">
+                    <option value="1">today</option>
+                    <option value="2">last 2d</option>
+                    <option value="7" selected>last 7d</option>
+                    <option value="30">last 30d</option>
+                </select>
+                <button class="btn-sm" type="button" onclick="loadGhostLabRegime()">Refresh</button>
+            </div>
+        </div>
+        <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px;">
+            Ghost win rate broken down by market regime — deadzone_confirmed (price flat + polymarket clustered), active (hot price or real polymarket signal), quiet (flat price, no signal), unknown (insufficient regime data).
+        </div>
+        <div id="gl-regime-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
+        <div id="gl-regime-table-wrap" style="overflow-x:auto;">
+            <table id="gl-regime-table" style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--text-muted);">
+                        <th style="padding:5px 8px;">regime</th>
+                        <th style="padding:5px 8px;">gate</th>
+                        <th style="padding:5px 8px;text-align:right;">ghosts</th>
+                        <th style="padding:5px 8px;text-align:right;">WR</th>
+                        <th style="padding:5px 8px;text-align:right;">ci lo</th>
+                        <th style="padding:5px 8px;text-align:right;">ci hi</th>
+                        <th style="padding:5px 8px;">read</th>
+                    </tr>
+                </thead>
+                <tbody id="gl-regime-tbody"></tbody>
+            </table>
+        </div>
+        <div id="gl-regime-empty" style="display:none;font-size:.75rem;color:var(--text-muted);padding:12px;text-align:center;">
+            No regime data yet — <code>enhanced_price_tracker.py</code> needs to run for 24h+ first to collect regime labels.
+        </div>
+    </div>
+
+    <!-- Panel 5 — Lane × source table -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <h3 style="margin:0;font-size:.95rem;">Lane detail</h3>
@@ -8102,6 +8183,8 @@ async function loadGhostLab() {
         _glRenderReplay();
         _glRenderTable();
         _glRenderCounts();
+        loadGhostLabRegime();
+        loadGhostDecisionDigest();
     } catch (e) {
         console.warn('Ghost Lab load failed', e);
         const tbody = document.getElementById('gl-lane-tbody');
@@ -8127,6 +8210,211 @@ function _glRenderControls() {
     document.querySelectorAll('.gl-chip[data-src]').forEach(el => {
         el.classList.toggle('active', _gl.selectedSources.has(el.getAttribute('data-src')));
     });
+}
+
+// ── Decision digest: deadzone theory + ghost/calibration rollup ──────────
+async function loadGhostDecisionDigest() {
+    const sinceDays = parseInt(document.getElementById('gl-since')?.value || '30', 10);
+    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString();
+    const status = document.getElementById('gl-digest-status');
+    if (status) status.textContent = 'loading';
+    try {
+        const res = await fetch(`/api/ghosts/decision-digest?since=${encodeURIComponent(sinceISO)}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _glRenderDecisionDigest(data);
+        if (status) status.textContent = 'live';
+    } catch (e) {
+        if (status) status.textContent = `failed: ${e.message}`;
+        const dz = document.getElementById('gl-deadzone-tbody');
+        const dg = document.getElementById('gl-digest-tbody');
+        if (dz) dz.innerHTML = `<tr><td colspan="6" style="padding:8px;color:var(--rd);">Digest load failed: ${e.message}</td></tr>`;
+        if (dg) dg.innerHTML = `<tr><td colspan="3" style="padding:8px;color:var(--rd);">Digest load failed.</td></tr>`;
+    }
+}
+
+function _glVerdictLabel(v) {
+    if (v === 'block_hurting') return '<span style="color:#ffcc66;">block likely hurting</span>';
+    if (v === 'block_helping') return '<span style="color:#88d8ff;">block likely helping</span>';
+    if (v === 'mixed') return '<span style="color:#aaa;">mixed</span>';
+    return '<span style="color:var(--text-muted);">collecting</span>';
+}
+
+function _glPct(v) {
+    return v == null || !isFinite(v) ? '—' : `${(v * 100).toFixed(1)}%`;
+}
+
+function _glRenderDecisionDigest(data) {
+    const summary = document.getElementById('gl-digest-summary');
+    const dzBody = document.getElementById('gl-deadzone-tbody');
+    const digestBody = document.getElementById('gl-digest-tbody');
+    const dz = (data.deadzone_theory && data.deadzone_theory.summary) || {};
+    const counts = dz.verdict_counts || {};
+    if (summary) {
+        const cards = [
+            ['hour buckets', dz.hour_regime_buckets || 0, '#00e5ff'],
+            ['block hurting', counts.block_hurting || 0, '#ffcc66'],
+            ['block helping', counts.block_helping || 0, '#88d8ff'],
+            ['collecting', counts.collecting || 0, '#888'],
+        ];
+        summary.innerHTML = cards.map(([label, value, color]) => `
+            <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
+                <div style="font-size:.66rem;color:var(--text-muted);">${label}</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${value}</div>
+            </div>
+        `).join('');
+    }
+
+    const hourRows = ((data.deadzone_theory && data.deadzone_theory.hours) || [])
+        .filter(r => r.deadzone && r.deadzone.n)
+        .slice(0, 12);
+    if (dzBody) {
+        dzBody.innerHTML = hourRows.length ? hourRows.map(r => `
+            <tr style="border-bottom:1px solid rgba(255,255,255,.04);">
+                <td style="padding:4px 8px;">${String(r.hour_utc).padStart(2, '0')} UTC <span style="color:var(--text-muted);">${r.combined_regime || 'unknown'}</span></td>
+                <td style="padding:4px 8px;text-align:right;">${r.deadzone.n}</td>
+                <td style="padding:4px 8px;text-align:right;">${_glPct(r.deadzone.wr)}</td>
+                <td style="padding:4px 8px;text-align:right;">${r.live ? r.live.n : 0}</td>
+                <td style="padding:4px 8px;text-align:right;">${_glPct(r.live && r.live.n ? r.live.wr : null)}</td>
+                <td style="padding:4px 8px;">${_glVerdictLabel(r.verdict)}</td>
+            </tr>
+        `).join('') : '<tr><td colspan="6" style="padding:8px;color:var(--text-muted);">No resolved deadzone skips in this window.</td></tr>';
+    }
+
+    const digestRows = [];
+    const ghostGate = data.ghost_gate || {};
+    for (const row of (ghostGate.actionable_overtight_gates || []).slice(0, 4)) {
+        digestRows.push({
+            label: row.gate_key || row.reason || 'overtight gate',
+            n: row.n || 0,
+            metric: `WR ${_glPct(row.win_rate)} net ${Number(row.net_gate_value_pct || 0).toFixed(2)}`,
+        });
+    }
+    for (const row of (ghostGate.deadzone_gates || []).slice(0, 4)) {
+        digestRows.push({
+            label: row.regime_gate_key || row.reason || 'deadzone gate',
+            n: row.n || 0,
+            metric: `WR ${_glPct(row.win_rate)} net ${Number(row.net_gate_value_pct || 0).toFixed(2)}`,
+        });
+    }
+    for (const row of ((data.calibration && data.calibration.rows) || []).slice(0, 4)) {
+        digestRows.push({
+            label: row.lane_id || 'calibration lane',
+            n: row.n || 0,
+            metric: `pnl ${Number(row.total_pnl || 0).toFixed(2)} alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied}`,
+        });
+    }
+    if (digestBody) {
+        digestBody.innerHTML = digestRows.length ? digestRows.slice(0, 12).map(r => `
+            <tr style="border-bottom:1px solid rgba(255,255,255,.04);">
+                <td style="padding:4px 8px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.label}">${r.label}</td>
+                <td style="padding:4px 8px;text-align:right;">${r.n}</td>
+                <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${r.metric}</td>
+            </tr>
+        `).join('') : '<tr><td colspan="3" style="padding:8px;color:var(--text-muted);">No digest rows in this window.</td></tr>';
+    }
+}
+
+// ── Panel 4: Regime × Ghost breakdown ───────────────────────────────────
+const REGIME_COLORS = {
+    deadzone_confirmed: 'rgba(176,96,255,.18)',
+    active: 'rgba(0,255,136,.12)',
+    quiet: 'rgba(0,229,255,.08)',
+    unknown: 'rgba(80,80,100,.10)',
+};
+const REGIME_LABEL_COLORS = {
+    deadzone_confirmed: '#b060ff',
+    active: '#00ff88',
+    quiet: '#00e5ff',
+    unknown: '#888',
+};
+
+async function loadGhostLabRegime() {
+    const sinceDays = parseInt(document.getElementById('gl-regime-since')?.value || '7', 10);
+    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString().split('T')[0];
+    try {
+        const res = await fetch(`/api/ghosts/regime-breakdown?since=${encodeURIComponent(sinceISO)}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _glRegimeRender(data);
+    } catch (e) {
+        document.getElementById('gl-regime-summary').innerHTML = '';
+        document.getElementById('gl-regime-table-wrap').style.display = 'none';
+        const empty = document.getElementById('gl-regime-empty');
+        if (empty) {
+            empty.style.display = 'block';
+            empty.innerHTML = `Load failed: ${e.message}.`;
+        }
+    }
+}
+
+function _glRegimeRender(data) {
+    const rows = data.rows || [];
+    const tbody = document.getElementById('gl-regime-tbody');
+    const summary = document.getElementById('gl-regime-summary');
+    const tableWrap = document.getElementById('gl-regime-table-wrap');
+    const empty = document.getElementById('gl-regime-empty');
+
+    if (!rows.length) {
+        tbody.innerHTML = '';
+        summary.innerHTML = '';
+        tableWrap.style.display = 'none';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    tableWrap.style.display = '';
+
+    // Summary pills
+    const regimeOrder = ['deadzone_confirmed', 'active', 'quiet', 'unknown'];
+    const byRegime = {};
+    for (const r of rows) {
+        const key = r.regime || 'unknown';
+        if (!byRegime[key]) byRegime[key] = { n: 0, wins: 0 };
+        byRegime[key].n += r.n || 0;
+        byRegime[key].wins += Math.round((r.win_rate || 0) * (r.n || 0));
+    }
+    summary.innerHTML = regimeOrder.filter(r => byRegime[r]).map(r => {
+        const d = byRegime[r];
+        if (!d || !d.n) return '';
+        const wr = d.n > 0 ? (d.wins / d.n * 100).toFixed(1) : '—';
+        const bg = REGIME_COLORS[r] || 'rgba(80,80,100,.10)';
+        const col = REGIME_LABEL_COLORS[r] || '#888';
+        return `<div style="background:${bg};border:1px solid ${col}33;border-radius:6px;padding:6px 12px;min-width:100px;">
+            <div style="color:${col};font-size:.72rem;font-weight:600;margin-bottom:2px;">${r}</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:.9rem;color:var(--text);">${wr}</div>
+            <div style="font-size:.65rem;color:var(--text-muted);">n=${d.n.toLocaleString()}</div>
+        </div>`;
+    }).join('');
+
+    // Table — sort by n desc
+    const sorted = [...rows].sort((a, b) => (b.n || 0) - (a.n || 0));
+    tbody.innerHTML = sorted.map(r => {
+        const regime = r.regime || 'unknown';
+        const wr = r.win_rate != null ? (r.win_rate * 100).toFixed(1) + '%' : '—';
+        const ciLo = r.ci_lower != null ? (r.ci_lower * 100).toFixed(1) + '%' : '—';
+        const ciHi = r.ci_upper != null ? (r.ci_upper * 100).toFixed(1) + '%' : '—';
+        const n = (r.n || 0).toLocaleString();
+        const wrNum = r.win_rate || 0;
+        let verdict = '—';
+        if (r.n >= 20) {
+            if (wrNum > 0.55) verdict = '<span style="color:#ffcc66;">high ghost WR</span>';
+            else if (wrNum < 0.45) verdict = '<span style="color:#88d8ff;">low ghost WR</span>';
+            else verdict = '<span style="color:#888;">~50%</span>';
+        } else {
+            verdict = `<span style="color:#888;">n&lt;20</span>`;
+        }
+        const bg = REGIME_COLORS[regime] || 'transparent';
+        return `<tr style="background:${bg};border-bottom:1px solid rgba(255,255,255,.04);">
+            <td style="padding:4px 8px;color:${REGIME_LABEL_COLORS[regime] || '#888'};font-size:.7rem;">${regime}</td>
+            <td style="padding:4px 8px;color:var(--text-muted);font-size:.68rem;">${r.gate || 'unknown'}</td>
+            <td style="padding:4px 8px;text-align:right;">${n}</td>
+            <td style="padding:4px 8px;text-align:right;font-weight:600;">${wr}</td>
+            <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${ciLo}</td>
+            <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${ciHi}</td>
+            <td style="padding:4px 8px;">${verdict}</td>
+        </tr>`;
+    }).join('');
 }
 
 function _glRenderCounts() {

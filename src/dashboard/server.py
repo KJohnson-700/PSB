@@ -1896,6 +1896,10 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
                     "htf_bias": rec.get("htf_bias"),
                     "hypothetical_payout": rec.get("hypothetical_payout"),
                     "market_id": rec.get("market_id"),
+                    "price_regime": rec.get("price_regime"),
+                    "polymarket_regime": rec.get("polymarket_regime"),
+                    "combined_regime": rec.get("combined_regime"),
+                    "regime_source": rec.get("regime_source"),
                 })
     except Exception:
         pass
@@ -1968,6 +1972,10 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                             "htf_bias": extra.get("htf_bias"),
                             "hypothetical_payout": None,
                             "market_id": rec.get("market_id"),
+                            "price_regime": extra.get("price_regime"),
+                            "polymarket_regime": extra.get("polymarket_regime"),
+                            "combined_regime": extra.get("combined_regime"),
+                            "regime_source": extra.get("regime_source"),
                             "_resolve_key": (
                                 str(rec.get("market_id") or ""),
                                 str(rec.get("strategy") or ""),
@@ -1995,6 +2003,10 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                             "htf_bias": extra.get("htf_bias"),
                             "hypothetical_payout": rec.get("pnl"),
                             "market_id": rec.get("market_id"),
+                            "price_regime": extra.get("price_regime"),
+                            "polymarket_regime": extra.get("polymarket_regime"),
+                            "combined_regime": extra.get("combined_regime"),
+                            "regime_source": extra.get("regime_source"),
                         })
         except Exception:
             continue
@@ -2099,6 +2111,277 @@ def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _gl_regime_breakdown(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate settled ghosts by gate bucket and embedded market regime labels."""
+    buckets: Dict[Tuple[str, str], Dict[str, Any]] = defaultdict(
+        lambda: {"n": 0, "wins": 0, "regime_source_counts": defaultdict(int)}
+    )
+    missing_regime = 0
+
+    for ev in events:
+        if ev.get("source") != "ghost":
+            continue
+        lane_id = str(ev.get("lane_id") or "")
+        gate = lane_id.split("|")[-1] if lane_id else str(ev.get("reason") or "unknown")
+        regime = str(ev.get("combined_regime") or "unknown")
+        if regime == "unknown":
+            missing_regime += 1
+        key = (gate or "unknown", regime)
+        bucket = buckets[key]
+        bucket["n"] += 1
+        if ev.get("win") is True:
+            bucket["wins"] += 1
+        bucket["regime_source_counts"][str(ev.get("regime_source") or "missing")] += 1
+
+    rows: List[Dict[str, Any]] = []
+    for (gate, regime), stats in sorted(buckets.items()):
+        p, lo, hi = _gl_wilson_ci(int(stats["wins"]), int(stats["n"]))
+        rows.append(
+            {
+                "gate": gate,
+                "regime": regime,
+                "n": stats["n"],
+                "wins": stats["wins"],
+                "win_rate": round(p, 4),
+                "ci_lower": round(lo, 4),
+                "ci_upper": round(hi, 4),
+                "regime_source_counts": dict(stats["regime_source_counts"]),
+            }
+        )
+
+    return {
+        "rows": rows,
+        "metadata": {
+            "n_ghosts": sum(row["n"] for row in rows),
+            "missing_regime": missing_regime,
+            "source": "rejected_candidates_settled.jsonl.embedded_regime_fields",
+            "wilson_confidence": 0.95,
+        },
+    }
+
+
+def _gl_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        out = float(value)
+        if out != out:
+            return None
+        return out
+    except (TypeError, ValueError):
+        return None
+
+
+def _gl_empty_counterfactual_bucket() -> Dict[str, Any]:
+    return {
+        "n": 0,
+        "wins": 0,
+        "pnl_sum": 0.0,
+        "pnl_n": 0,
+    }
+
+
+def _gl_counterfactual_metrics(stats: Dict[str, Any]) -> Dict[str, Any]:
+    n = int(stats.get("n") or 0)
+    wins = int(stats.get("wins") or 0)
+    p, lo, hi = _gl_wilson_ci(wins, n)
+    pnl_n = int(stats.get("pnl_n") or 0)
+    pnl_sum = float(stats.get("pnl_sum") or 0.0)
+    return {
+        "n": n,
+        "wins": wins,
+        "wr": round(p, 4),
+        "wr_lo": round(lo, 4),
+        "wr_hi": round(hi, 4),
+        "pnl_sum": round(pnl_sum, 4),
+        "avg_pnl": round(pnl_sum / pnl_n, 4) if pnl_n else None,
+    }
+
+
+def _gl_deadzone_theory(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Summarize whether deadzone skips look colder than live trades by hour/regime."""
+    by_hour_regime: Dict[Tuple[int, str], Dict[str, Any]] = defaultdict(
+        lambda: {
+            "deadzone_skip": _gl_empty_counterfactual_bucket(),
+            "live": _gl_empty_counterfactual_bucket(),
+            "ghost": _gl_empty_counterfactual_bucket(),
+            "lanes": set(),
+        }
+    )
+    by_lane_hour: Dict[Tuple[str, int, str], Dict[str, Any]] = defaultdict(
+        lambda: {
+            "deadzone_skip": _gl_empty_counterfactual_bucket(),
+            "live": _gl_empty_counterfactual_bucket(),
+            "ghost": _gl_empty_counterfactual_bucket(),
+        }
+    )
+
+    for ev in events:
+        if ev.get("win") is not True and ev.get("win") is not False:
+            continue
+        hour = ev.get("hour_utc")
+        if not isinstance(hour, int):
+            continue
+        src = str(ev.get("source") or "")
+        if src not in {"deadzone_skip", "live", "ghost"}:
+            continue
+        regime = str(ev.get("combined_regime") or "unknown")
+        lane_id = str(ev.get("lane_id") or "unknown")
+        payout = _gl_float(ev.get("hypothetical_payout"))
+
+        for bucket in (
+            by_hour_regime[(hour, regime)],
+            by_lane_hour[(lane_id, hour, regime)],
+        ):
+            stats = bucket[src]
+            stats["n"] += 1
+            if ev.get("win") is True:
+                stats["wins"] += 1
+            if payout is not None:
+                stats["pnl_sum"] += payout
+                stats["pnl_n"] += 1
+        by_hour_regime[(hour, regime)]["lanes"].add(lane_id)
+
+    def verdict(deadzone: Dict[str, Any], live: Dict[str, Any]) -> str:
+        dz_n = int(deadzone["n"])
+        live_n = int(live["n"])
+        if dz_n < 5:
+            return "collecting"
+        if deadzone["wr"] >= 0.55 and (live_n == 0 or deadzone["wr"] >= live["wr"]):
+            return "block_hurting"
+        if deadzone["wr"] <= 0.45:
+            return "block_helping"
+        return "mixed"
+
+    hour_rows: List[Dict[str, Any]] = []
+    for (hour, regime), bucket in by_hour_regime.items():
+        dz = _gl_counterfactual_metrics(bucket["deadzone_skip"])
+        live = _gl_counterfactual_metrics(bucket["live"])
+        ghost = _gl_counterfactual_metrics(bucket["ghost"])
+        hour_rows.append(
+            {
+                "hour_utc": hour,
+                "combined_regime": regime,
+                "lane_count": len(bucket["lanes"]),
+                "deadzone": dz,
+                "live": live,
+                "ghost": ghost,
+                "wr_delta_deadzone_vs_live": (
+                    round(dz["wr"] - live["wr"], 4)
+                    if dz["n"] and live["n"]
+                    else None
+                ),
+                "verdict": verdict(dz, live),
+            }
+        )
+
+    lane_rows: List[Dict[str, Any]] = []
+    for (lane_id, hour, regime), bucket in by_lane_hour.items():
+        dz = _gl_counterfactual_metrics(bucket["deadzone_skip"])
+        live = _gl_counterfactual_metrics(bucket["live"])
+        ghost = _gl_counterfactual_metrics(bucket["ghost"])
+        lane_rows.append(
+            {
+                "lane_id": lane_id,
+                "hour_utc": hour,
+                "combined_regime": regime,
+                "deadzone": dz,
+                "live": live,
+                "ghost": ghost,
+                "wr_delta_deadzone_vs_live": (
+                    round(dz["wr"] - live["wr"], 4)
+                    if dz["n"] and live["n"]
+                    else None
+                ),
+                "verdict": verdict(dz, live),
+            }
+        )
+
+    hour_rows.sort(
+        key=lambda row: (
+            int(row["deadzone"]["n"]),
+            abs(float(row["wr_delta_deadzone_vs_live"] or 0.0)),
+        ),
+        reverse=True,
+    )
+    lane_rows.sort(
+        key=lambda row: (
+            int(row["deadzone"]["n"]),
+            abs(float(row["wr_delta_deadzone_vs_live"] or 0.0)),
+        ),
+        reverse=True,
+    )
+    verdict_counts: Dict[str, int] = defaultdict(int)
+    for row in hour_rows:
+        verdict_counts[str(row["verdict"])] += 1
+
+    return {
+        "hours": hour_rows,
+        "lane_hours": lane_rows[:100],
+        "summary": {
+            "hour_regime_buckets": len(hour_rows),
+            "lane_hour_regime_buckets": len(lane_rows),
+            "verdict_counts": dict(verdict_counts),
+        },
+    }
+
+
+def _gl_build_decision_digest(since_dt: datetime) -> Dict[str, Any]:
+    ghosts = _gl_load_ghosts(since_dt)
+    paper = _gl_load_paper(since_dt)
+    events = ghosts + paper
+    digest: Dict[str, Any] = {
+        "since": since_dt.isoformat(),
+        "now": datetime.utcnow().isoformat(),
+        "deadzone_theory": _gl_deadzone_theory(events),
+    }
+
+    try:
+        from tools.ghost_gate_report import build_report as build_ghost_gate_report
+        from tools.ghost_gate_report import enrich_rows_from_regime_log
+        from tools.ghost_gate_report import _iter_jsonl as iter_ghost_jsonl
+        from tools.ghost_gate_report import DEFAULT_SETTLED
+
+        raw_rows = [
+            row
+            for row in iter_ghost_jsonl(DEFAULT_SETTLED)
+            if (_gl_parse_ts(row.get("ts") or row.get("settled_at")) or datetime.min) >= since_dt
+        ]
+        ghost_report = build_ghost_gate_report(enrich_rows_from_regime_log(raw_rows))
+        digest["ghost_gate"] = {
+            "rows": ghost_report.get("rows", 0),
+            "overall": ghost_report.get("overall", {}),
+            "actionable_overtight_gates": ghost_report.get("actionable_overtight_gates", [])[:12],
+            "top_missed_ev": ghost_report.get("top_missed_ev", [])[:12],
+            "top_protected_loss": ghost_report.get("top_protected_loss", [])[:12],
+            "deadzone_gates": ghost_report.get("deadzone_gates", [])[:12],
+            "regimes": ghost_report.get("regimes", [])[:12],
+            "btc_regimes": ghost_report.get("btc_regimes", [])[:12],
+            "convergence": ghost_report.get("convergence", [])[:12],
+        }
+    except Exception as exc:
+        digest["ghost_gate"] = {"error": str(exc)}
+
+    try:
+        from tools.calibration_report import DEFAULT_LOG as CALIBRATION_LOG
+        from tools.calibration_report import _aggregate as aggregate_calibration
+        from tools.calibration_report import _iter_records as iter_calibration_records
+
+        calibration_records = [
+            row
+            for row in iter_calibration_records(CALIBRATION_LOG)
+            if (_gl_parse_ts(row.get("ts")) or datetime.min) >= since_dt
+        ]
+        digest["calibration"] = {
+            "rows": aggregate_calibration(calibration_records)[:20],
+            "n_records": len(calibration_records),
+        }
+    except Exception as exc:
+        digest["calibration"] = {"error": str(exc)}
+
+    return digest
+
+
 @app.get("/api/ghosts/lab")
 async def get_ghost_lab(
     since: Optional[str] = None,
@@ -2183,6 +2466,35 @@ async def get_ghost_lab(
 
 
 # /api/backtest/reports route removed 2026-05-24; backtester deleted (see CLAUDE.md ghost-log rule).
+
+
+@app.get("/api/ghosts/regime-breakdown")
+async def get_ghost_regime_breakdown(
+    since: Optional[str] = Query(default=None, description="ISO timestamp or YYYY-MM-DD. Defaults to 7 days ago."),
+):
+    """Return Ghost Lab's settled ghosts grouped by embedded market-regime labels."""
+    since_dt = _gl_parse_ts(since) if since else None
+    if since_dt is None:
+        since_dt = datetime.utcnow() - timedelta(days=7)
+    ghosts = _gl_load_ghosts(since_dt)
+    return JSONResponse(
+        content=_gl_regime_breakdown(ghosts),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/ghosts/decision-digest")
+async def get_ghost_decision_digest(
+    since: Optional[str] = Query(default=None, description="ISO timestamp or YYYY-MM-DD. Defaults to 30 days ago."),
+):
+    """Return structured Ghost Gate, calibration, and deadzone-theory dashboard data."""
+    since_dt = _gl_parse_ts(since) if since else None
+    if since_dt is None:
+        since_dt = datetime.utcnow() - timedelta(days=30)
+    return JSONResponse(
+        content=_gl_build_decision_digest(since_dt),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 # ─── LIVE PERFORMANCE ──────────────────────────────────────────────

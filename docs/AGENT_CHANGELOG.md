@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-25 — Ghost Lab deadzone decision digest added
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), [`tests/test_dashboard_bundle.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py):** Added `/api/ghosts/decision-digest`, a structured dashboard endpoint that combines deadzone counterfactual buckets, ghost-gate report rows, and lane calibration rows without importing Hermes cron wrappers or shelling out from the request path. Ghost Lab now has a **Deadzone theory** panel showing resolved deadzone-skip performance by UTC hour/regime beside the top ghost-gate and calibration signals. The older one-off `ghost_regime_report.py` artifact was removed; `tools/ghost_gate_report.py` remains the canonical ghost report surface.
+
+**Why:** The deadzone thesis needs live, structured evidence while data is collected: whether would-be blocked hours are actually cold, which regimes matter, and whether gates are saving loss or blocking winners. Hermes can still format notifications, but PSB owns the data and dashboard-visible interpretation.
+
 ## 2026-05-25 — BNB/DOGE 1h exploration before restart
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Added explicit BNB/DOGE 1h exploration policy: 1h `up.min_edge 0.09 -> 0.08`, 1h `down.min_edge 0.08 -> 0.075`, 1h `entry_price_max 0.55 -> 0.58`, and `size_multiplier: 0.3` for DOGE 1h to match BNB’s calibration-sized 1h posture.

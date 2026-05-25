@@ -68,6 +68,19 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert gl.status_code == 200
     assert "no-store" in (gl.headers.get("cache-control") or "").lower()
 
+    gr = c.get("/api/ghosts/regime-breakdown?since=2026-05-01")
+    assert gr.status_code == 200
+    assert "no-store" in (gr.headers.get("cache-control") or "").lower()
+    assert "rows" in gr.json()
+
+    gd = c.get("/api/ghosts/decision-digest?since=2026-05-01")
+    assert gd.status_code == 200
+    assert "no-store" in (gd.headers.get("cache-control") or "").lower()
+    gd_payload = gd.json()
+    assert "deadzone_theory" in gd_payload
+    assert "ghost_gate" in gd_payload
+    assert "calibration" in gd_payload
+
 
 def test_dashboard_inline_scripts_parse_cleanly():
     html = INDEX.read_text(encoding="utf-8")
@@ -322,8 +335,81 @@ def test_ghost_lab_tab_renders():
     assert 'id="view-ghosts"' in html
     assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
     assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
+    assert 'id="gl-deadzone-tbody"' in html
     assert "function loadGhostLab" in html
     assert "/api/ghosts/lab" in html
+    assert "/api/ghosts/regime-breakdown" in html
+    assert "/api/ghosts/decision-digest" in html
+    assert "high ghost WR" in html
+    assert "LOOSEN" not in html
+
+
+def test_ghost_lab_regime_breakdown_uses_embedded_ghost_regime_fields():
+    from src.dashboard.server import _gl_regime_breakdown
+
+    report = _gl_regime_breakdown(
+        [
+            {
+                "source": "ghost",
+                "lane_id": "bitcoin|15m|up|neutral|lane_min_edge",
+                "combined_regime": "deadzone_confirmed",
+                "regime_source": "market_regime",
+                "win": True,
+            },
+            {
+                "source": "ghost",
+                "lane_id": "bitcoin|15m|up|neutral|lane_min_edge",
+                "combined_regime": "deadzone_confirmed",
+                "regime_source": "market_regime",
+                "win": False,
+            },
+            {
+                "source": "live",
+                "lane_id": "bitcoin|15m|up|neutral|lane_min_edge",
+                "combined_regime": "deadzone_confirmed",
+                "win": True,
+            },
+        ]
+    )
+
+    assert report["rows"][0]["gate"] == "lane_min_edge"
+    assert report["rows"][0]["regime"] == "deadzone_confirmed"
+    assert report["rows"][0]["n"] == 2
+    assert report["metadata"]["source"] == "rejected_candidates_settled.jsonl.embedded_regime_fields"
+
+
+def test_ghost_lab_deadzone_theory_compares_skip_and_live_buckets():
+    from src.dashboard.server import _gl_deadzone_theory
+
+    report = _gl_deadzone_theory(
+        [
+            {
+                "source": "deadzone_skip",
+                "hour_utc": 7,
+                "lane_id": "bitcoin|15m|up|neutral|standard",
+                "combined_regime": "deadzone_confirmed",
+                "win": True,
+            }
+            for _ in range(5)
+        ]
+        + [
+            {
+                "source": "live",
+                "hour_utc": 7,
+                "lane_id": "bitcoin|15m|up|neutral|standard",
+                "combined_regime": "deadzone_confirmed",
+                "win": False,
+            }
+            for _ in range(5)
+        ]
+    )
+
+    row = report["hours"][0]
+    assert row["hour_utc"] == 7
+    assert row["combined_regime"] == "deadzone_confirmed"
+    assert row["deadzone"]["n"] == 5
+    assert row["live"]["n"] == 5
+    assert row["verdict"] == "block_hurting"
 
 
 def test_dashboard_status_handles_bootstrap_shim(monkeypatch):
