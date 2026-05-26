@@ -2713,7 +2713,7 @@
         </div>
         <div id="gl-morning-summary" style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
         <div id="gl-morning-loops" style="display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div style="display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(320px,1fr) minmax(320px,1fr);gap:12px;">
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(280px,1fr));gap:12px;">
             <div>
                 <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
                 <div id="gl-morning-standouts" style="display:flex;flex-direction:column;gap:6px;"></div>
@@ -2725,6 +2725,10 @@
             <div>
                 <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Lane calibration</h4>
                 <div id="gl-morning-calibration" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Next edit queue</h4>
+                <div id="gl-morning-next-edits" style="display:flex;flex-direction:column;gap:6px;"></div>
             </div>
         </div>
     </div>
@@ -8394,9 +8398,11 @@ function _glRenderMorningSummary(data) {
     const standoutsEl = document.getElementById('gl-morning-standouts');
     const adjustmentsEl = document.getElementById('gl-morning-adjustments');
     const calibrationEl = document.getElementById('gl-morning-calibration');
+    const nextEditsEl = document.getElementById('gl-morning-next-edits');
     const loopsEl = document.getElementById('gl-morning-loops');
     const counts = data.counts || {};
     const loops = data.data_loops || [];
+    const learning = data.learning_loop || {};
     const loopsClosed = loops.filter((row) => row.status === 'closed').length;
     if (windowEl) {
         windowEl.textContent = data.window && data.window.label
@@ -8408,7 +8414,7 @@ function _glRenderMorningSummary(data) {
             ['ghost rows', counts.ghost_rows || 0, '#00e5ff'],
             ['calibration records', counts.calibration_records || 0, '#88d8ff'],
             ['deadzone buckets', counts.deadzone_hour_buckets || 0, '#b060ff'],
-            ['closed loops', `${loopsClosed}/${loops.length || 0}`, '#00ff88'],
+            ['learning step', learning.next_step || `${loopsClosed}/${loops.length || 0} loops`, '#00ff88'],
         ];
         summaryEl.innerHTML = cards.map(([label, value, color]) => `
             <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
@@ -8444,6 +8450,17 @@ function _glRenderMorningSummary(data) {
             severity: row.severity,
         }));
         calibrationEl.innerHTML = rows.length ? rows.join('') : empty;
+    }
+    if (nextEditsEl) {
+        const rows = (data.priority_actions || []).slice(0, 6).map((row) => _glTinyCard({
+            title: row.title,
+            evidence: `${row.change_type || 'candidate'} · ${row.evidence || ''}`,
+            recommendation: `${row.recommendation || ''}${row.next_measurement ? ' Next: ' + row.next_measurement : ''}`,
+            n: row.n || 0,
+            sample_grade: row.confidence || 'thin',
+            severity: row.apply_mode === 'manual_review' ? 'warning' : 'info',
+        }));
+        nextEditsEl.innerHTML = rows.length ? rows.join('') : empty;
     }
 }
 

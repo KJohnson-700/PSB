@@ -94,8 +94,11 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "settings_adjustments" in gm_payload
     assert "lane_calibrations" in gm_payload
     assert "data_loops" in gm_payload
+    assert "learning_loop" in gm_payload
     assert "priority_actions" in gm_payload
     assert "source_files" in gm_payload
+    assert gm_payload["learning_loop"]["auto_apply"] is False
+    assert gm_payload["learning_loop"]["next_step"] in {"review_priority_actions", "collect_more_overnight_samples"}
     assert any(row["loop"] == "settings candidates -> live config change" for row in gm_payload["data_loops"])
 
 
@@ -415,6 +418,7 @@ def test_ghost_lab_tab_renders():
     assert 'id="gl-deadzone-tbody"' in html
     assert 'id="gl-morning-summary"' in html
     assert 'id="gl-morning-loops"' in html
+    assert 'id="gl-morning-next-edits"' in html
     assert "function loadGhostLab" in html
     assert "function loadGhostMorningSummary" in html
     assert "/api/ghosts/lab" in html

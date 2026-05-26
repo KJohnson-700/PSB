@@ -2635,22 +2635,28 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
         },
     ]
     priority_actions = []
-    for row in adjustments[:5]:
+    for idx, row in enumerate(adjustments[:5], start=1):
         priority_actions.append(
             {
+                "id": f"settings-{idx}",
                 "title": row.get("setting") or "settings candidate",
+                "change_type": "settings_adjustment",
                 "recommendation": row.get("recommendation") or "",
                 "evidence": row.get("evidence") or "",
                 "confidence": row.get("confidence") or "thin",
                 "apply_mode": "manual_review",
+                "next_measurement": "Compare the next overnight ghost WR, net gate value, and closed-trade PnL for the same lane/gate.",
             }
         )
+    lane_idx = 1
     for row in lane_calibrations:
         if row.get("severity") not in {"warning", "positive"}:
             continue
         priority_actions.append(
             {
+                "id": f"lane-calibration-{lane_idx}",
                 "title": row.get("lane_id") or "lane calibration",
+                "change_type": "lane_calibration",
                 "recommendation": row.get("recommendation") or "",
                 "evidence": (
                     f"n={row.get('n')}, WR={row.get('win_rate_pct')}%, "
@@ -2658,10 +2664,30 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
                 ),
                 "confidence": row.get("sample_grade") or "thin",
                 "apply_mode": "manual_review",
+                "next_measurement": "Track this lane's next closed-trade sample and posterior movement before scaling.",
             }
         )
+        lane_idx += 1
         if len(priority_actions) >= 8:
             break
+    learning_loop = {
+        "mode": "advisory_self_learning",
+        "auto_apply": False,
+        "closed_loops": sum(1 for row in data_loops if row["status"] == "closed"),
+        "total_loops": len(data_loops),
+        "next_step": (
+            "review_priority_actions"
+            if priority_actions
+            else "collect_more_overnight_samples"
+        ),
+        "cycle": [
+            "collect live trades, rejected ghosts, and deadzone skips",
+            "settle outcomes against real Polymarket results",
+            "summarize standouts and lane calibration",
+            "queue manual settings candidates",
+            "measure next round against the same lane/gate evidence",
+        ],
+    }
 
     return {
         "window": {
@@ -2682,6 +2708,7 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
             "lane_posteriors": _gl_file_status(DATA_ROOT / "calibration" / "lane_posteriors.json"),
         },
         "data_loops": data_loops,
+        "learning_loop": learning_loop,
         "priority_actions": priority_actions[:8],
         "standouts": standouts[:12],
         "settings_adjustments": adjustments[:10],
