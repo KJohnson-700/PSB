@@ -49,6 +49,7 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert 'id="live-shutdown-btn"' not in body
     assert "function shutdownLiveBot" in body
     assert "/api/live/shutdown" in body
+    assert "/api/ghosts/morning-summary" in body
     # Backtest UI elements (bt-hud, backtest-output-tail) removed 2026-05-24 with the broken backtester.
     # Ghost Lab tab replaced it.
     assert 'id="view-ghosts"' in body
@@ -83,6 +84,15 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert "deadzone_theory" in gd_payload
     assert "ghost_gate" in gd_payload
     assert "calibration" in gd_payload
+
+    gm = c.get("/api/ghosts/morning-summary?since=2099-01-01T00:00:00&until=2099-01-01T12:00:00")
+    assert gm.status_code == 200
+    assert "no-store" in (gm.headers.get("cache-control") or "").lower()
+    gm_payload = gm.json()
+    assert gm_payload["hermes_crons_needed"] is False
+    assert "standouts" in gm_payload
+    assert "settings_adjustments" in gm_payload
+    assert "lane_calibrations" in gm_payload
 
 
 def test_dashboard_inline_scripts_parse_cleanly():
@@ -399,10 +409,13 @@ def test_ghost_lab_tab_renders():
     assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
     assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
     assert 'id="gl-deadzone-tbody"' in html
+    assert 'id="gl-morning-summary"' in html
     assert "function loadGhostLab" in html
+    assert "function loadGhostMorningSummary" in html
     assert "/api/ghosts/lab" in html
     assert "/api/ghosts/regime-breakdown" in html
     assert "/api/ghosts/decision-digest" in html
+    assert "/api/ghosts/morning-summary" in html
     assert "high ghost WR" in html
     assert "LOOSEN" not in html
 

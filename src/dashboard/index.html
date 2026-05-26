@@ -2699,6 +2699,35 @@
         </div>
     </div>
 
+    <!-- Morning summary — overnight evidence + lane calibration actions -->
+    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:8px;">
+            <div>
+                <h3 style="margin:0;font-size:.95rem;">Morning summary</h3>
+                <div id="gl-morning-window" style="font-size:.68rem;color:var(--text-muted);margin-top:2px;">overnight window loading</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <div id="gl-morning-status" style="font-size:.68rem;color:var(--text-muted);">waiting</div>
+                <button class="btn-sm" type="button" onclick="loadGhostMorningSummary()">Refresh</button>
+            </div>
+        </div>
+        <div id="gl-morning-summary" style="display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
+        <div style="display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(320px,1fr) minmax(320px,1fr);gap:12px;">
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
+                <div id="gl-morning-standouts" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Settings adjustments</h4>
+                <div id="gl-morning-adjustments" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Lane calibration</h4>
+                <div id="gl-morning-calibration" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Decision digest — deadzone theory + gate/calibration rollup -->
     <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
@@ -8254,6 +8283,7 @@ async function loadGhostLab() {
         _glRenderCounts();
         loadGhostLabRegime();
         loadGhostDecisionDigest();
+        loadGhostMorningSummary();
     } catch (e) {
         console.warn('Ghost Lab load failed', e);
         const tbody = document.getElementById('gl-lane-tbody');
@@ -8311,6 +8341,91 @@ function _glVerdictLabel(v) {
 
 function _glPct(v) {
     return v == null || !isFinite(v) ? '—' : `${(v * 100).toFixed(1)}%`;
+}
+
+function _glSeverityColor(sev) {
+    if (sev === 'warning') return '#ffcc66';
+    if (sev === 'positive') return '#88d8ff';
+    return 'var(--text-muted)';
+}
+
+function _glTinyCard(row) {
+    const title = _htmlEscape(row.title || row.setting || row.lane_id || 'signal');
+    const evidence = _htmlEscape(row.evidence || '');
+    const action = _htmlEscape(row.action || row.recommendation || '');
+    const n = Number(row.n || 0);
+    const sev = row.severity || 'info';
+    const color = _glSeverityColor(sev);
+    const grade = _htmlEscape(row.sample_grade || row.confidence || 'thin');
+    return `
+        <div style="border:1px solid ${color}55;border-radius:6px;padding:7px 8px;background:rgba(255,255,255,.025);font-family:'IBM Plex Mono',monospace;font-size:.68rem;line-height:1.35;">
+            <div style="display:flex;justify-content:space-between;gap:8px;color:${color};">
+                <strong style="font-weight:700;">${title}</strong>
+                <span>n=${n} · ${grade}</span>
+            </div>
+            ${evidence ? `<div style="color:var(--text-muted);margin-top:4px;">${evidence}</div>` : ''}
+            ${action ? `<div style="color:var(--text);margin-top:4px;">${action}</div>` : ''}
+        </div>
+    `;
+}
+
+async function loadGhostMorningSummary() {
+    const status = document.getElementById('gl-morning-status');
+    if (status) status.textContent = 'loading';
+    try {
+        const res = await fetch('/api/ghosts/morning-summary?tz=America/Los_Angeles', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _glRenderMorningSummary(data);
+        if (status) status.textContent = 'live';
+    } catch (e) {
+        if (status) status.textContent = `failed: ${e.message}`;
+        for (const id of ['gl-morning-standouts', 'gl-morning-adjustments', 'gl-morning-calibration']) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = `<div style="color:var(--rd);font-size:.72rem;">Morning summary failed: ${_htmlEscape(e.message)}</div>`;
+        }
+    }
+}
+
+function _glRenderMorningSummary(data) {
+    const windowEl = document.getElementById('gl-morning-window');
+    const summaryEl = document.getElementById('gl-morning-summary');
+    const standoutsEl = document.getElementById('gl-morning-standouts');
+    const adjustmentsEl = document.getElementById('gl-morning-adjustments');
+    const calibrationEl = document.getElementById('gl-morning-calibration');
+    const counts = data.counts || {};
+    if (windowEl) {
+        windowEl.textContent = data.window && data.window.label
+            ? data.window.label
+            : `${data.window?.since || ''} -> ${data.window?.until || ''}`;
+    }
+    if (summaryEl) {
+        const cards = [
+            ['ghost rows', counts.ghost_rows || 0, '#00e5ff'],
+            ['calibration records', counts.calibration_records || 0, '#88d8ff'],
+            ['deadzone buckets', counts.deadzone_hour_buckets || 0, '#b060ff'],
+        ];
+        summaryEl.innerHTML = cards.map(([label, value, color]) => `
+            <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
+                <div style="font-size:.66rem;color:var(--text-muted);">${label}</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${value}</div>
+            </div>
+        `).join('');
+    }
+    const empty = '<div style="color:var(--text-muted);font-size:.72rem;">No strong signal in this overnight window.</div>';
+    if (standoutsEl) standoutsEl.innerHTML = (data.standouts || []).length ? data.standouts.slice(0, 6).map(_glTinyCard).join('') : empty;
+    if (adjustmentsEl) adjustmentsEl.innerHTML = (data.settings_adjustments || []).length ? data.settings_adjustments.slice(0, 6).map(_glTinyCard).join('') : empty;
+    if (calibrationEl) {
+        const rows = (data.lane_calibrations || []).slice(0, 6).map((row) => _glTinyCard({
+            title: row.lane_id,
+            evidence: `WR ${row.win_rate_pct == null ? 'n/a' : row.win_rate_pct + '%'} · pnl ${Number(row.total_pnl || 0).toFixed(2)} · avg ${Number(row.avg_pnl || 0).toFixed(2)} · alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied}`,
+            recommendation: row.recommendation,
+            n: row.n,
+            sample_grade: row.sample_grade,
+            severity: row.severity,
+        }));
+        calibrationEl.innerHTML = rows.length ? rows.join('') : empty;
+    }
 }
 
 function _glRenderDecisionDigest(data) {

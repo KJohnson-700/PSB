@@ -40,6 +40,7 @@ import yaml
 from datetime import datetime, timedelta
 from collections import defaultdict
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
 import uuid
 
 from src.analysis.usage_tracker import usage_tracker
@@ -2327,13 +2328,20 @@ def _gl_deadzone_theory(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _gl_build_decision_digest(since_dt: datetime) -> Dict[str, Any]:
-    ghosts = _gl_load_ghosts(since_dt)
-    paper = _gl_load_paper(since_dt)
+def _gl_build_decision_digest(since_dt: datetime, until_dt: Optional[datetime] = None) -> Dict[str, Any]:
+    until_dt = until_dt or datetime.utcnow()
+    ghosts = [
+        row for row in _gl_load_ghosts(since_dt)
+        if (_gl_parse_ts(row.get("ts")) or datetime.min) <= until_dt
+    ]
+    paper = [
+        row for row in _gl_load_paper(since_dt)
+        if (_gl_parse_ts(row.get("ts")) or datetime.min) <= until_dt
+    ]
     events = ghosts + paper
     digest: Dict[str, Any] = {
         "since": since_dt.isoformat(),
-        "now": datetime.utcnow().isoformat(),
+        "now": until_dt.isoformat(),
         "deadzone_theory": _gl_deadzone_theory(events),
     }
 
@@ -2346,7 +2354,7 @@ def _gl_build_decision_digest(since_dt: datetime) -> Dict[str, Any]:
         raw_rows = [
             row
             for row in iter_ghost_jsonl(DEFAULT_SETTLED)
-            if (_gl_parse_ts(row.get("ts") or row.get("settled_at")) or datetime.min) >= since_dt
+            if since_dt <= (_gl_parse_ts(row.get("ts") or row.get("settled_at")) or datetime.min) <= until_dt
         ]
         ghost_report = build_ghost_gate_report(enrich_rows_from_regime_log(raw_rows))
         digest["ghost_gate"] = {
@@ -2371,7 +2379,7 @@ def _gl_build_decision_digest(since_dt: datetime) -> Dict[str, Any]:
         calibration_records = [
             row
             for row in iter_calibration_records(CALIBRATION_LOG)
-            if (_gl_parse_ts(row.get("ts")) or datetime.min) >= since_dt
+            if since_dt <= (_gl_parse_ts(row.get("ts")) or datetime.min) <= until_dt
         ]
         digest["calibration"] = {
             "rows": aggregate_calibration(calibration_records)[:20],
@@ -2381,6 +2389,241 @@ def _gl_build_decision_digest(since_dt: datetime) -> Dict[str, Any]:
         digest["calibration"] = {"error": str(exc)}
 
     return digest
+
+
+def _gl_metric_pct(value: Any) -> Optional[float]:
+    out = _gl_float(value)
+    return round(out * 100.0, 1) if out is not None else None
+
+
+def _gl_lane_parts(lane_id: Any) -> Dict[str, str]:
+    parts = str(lane_id or "").split("|")
+    return {
+        "strategy": parts[0] if len(parts) > 0 else "",
+        "window": parts[1] if len(parts) > 1 else "",
+        "side": parts[2] if len(parts) > 2 else "",
+        "regime": parts[3] if len(parts) > 3 else "",
+        "family": parts[4] if len(parts) > 4 else "",
+    }
+
+
+def _gl_sample_grade(n: Any) -> str:
+    count = int(n or 0)
+    if count >= 40:
+        return "strong"
+    if count >= 15:
+        return "medium"
+    return "thin"
+
+
+def _gl_default_overnight_window(tz_name: str = "America/Los_Angeles") -> Tuple[datetime, datetime, str]:
+    """Return the operator's overnight window as naive UTC datetimes."""
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("America/Los_Angeles")
+        tz_name = "America/Los_Angeles"
+    now_local = datetime.now(tz)
+    if now_local.hour >= 9:
+        end_local = now_local.replace(hour=9, minute=0, second=0, microsecond=0)
+    else:
+        end_local = now_local
+    start_local = end_local.replace(hour=18, minute=0, second=0, microsecond=0)
+    if start_local >= end_local:
+        start_local -= timedelta(days=1)
+    start_utc = start_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_utc = end_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    label = f"{start_local.strftime('%Y-%m-%d %H:%M')} -> {end_local.strftime('%Y-%m-%d %H:%M')} {tz_name}"
+    return start_utc, end_utc, label
+
+
+def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] = None, *, window_label: str = "") -> Dict[str, Any]:
+    """Build an operator-facing overnight summary from Ghost Lab's local evidence."""
+    until_dt = until_dt or datetime.utcnow()
+    digest = _gl_build_decision_digest(since_dt, until_dt)
+    ghost_gate = digest.get("ghost_gate") if isinstance(digest.get("ghost_gate"), dict) else {}
+    calibration = digest.get("calibration") if isinstance(digest.get("calibration"), dict) else {}
+    deadzone = digest.get("deadzone_theory") if isinstance(digest.get("deadzone_theory"), dict) else {}
+
+    standouts: List[Dict[str, Any]] = []
+    adjustments: List[Dict[str, Any]] = []
+    lane_calibrations: List[Dict[str, Any]] = []
+
+    def add_standout(kind: str, title: str, evidence: str, action: str, *, n: int = 0, severity: str = "info", lane_id: str = "") -> None:
+        standouts.append(
+            {
+                "kind": kind,
+                "severity": severity,
+                "title": title,
+                "evidence": evidence,
+                "action": action,
+                "n": n,
+                "sample_grade": _gl_sample_grade(n),
+                **({"lane_id": lane_id, "lane": _gl_lane_parts(lane_id)} if lane_id else {}),
+            }
+        )
+
+    for row in (deadzone.get("hours") or [])[:20]:
+        dz = row.get("deadzone") or {}
+        live = row.get("live") or {}
+        n = int(dz.get("n") or 0)
+        if n < 5:
+            continue
+        verdict = str(row.get("verdict") or "")
+        hour = row.get("hour_utc")
+        regime = row.get("combined_regime") or "unknown"
+        dz_wr = _gl_metric_pct(dz.get("wr"))
+        live_wr = _gl_metric_pct(live.get("wr")) if int(live.get("n") or 0) else None
+        evidence = f"{n} resolved deadzone skips at {hour:02d} UTC / {regime}; skipped WR {dz_wr}%"
+        if live_wr is not None:
+            evidence += f" vs live WR {live_wr}%"
+        if verdict == "block_hurting":
+            add_standout(
+                "deadzone",
+                f"Deadzone may be blocking winners at {hour:02d} UTC",
+                evidence,
+                "Review dead_zone_enabled or blocked-hour rules for the affected lanes before the next overnight run.",
+                n=n,
+                severity="warning",
+            )
+            adjustments.append(
+                {
+                    "setting": "strategies.*.dead_zone_enabled / blocked_utc_hours_updown",
+                    "recommendation": "consider loosening this hour/regime after lane-level confirmation",
+                    "evidence": evidence,
+                    "confidence": _gl_sample_grade(n),
+                }
+            )
+        elif verdict == "block_helping":
+            add_standout(
+                "deadzone",
+                f"Deadzone block looks protective at {hour:02d} UTC",
+                evidence,
+                "Keep this block active unless later samples reverse.",
+                n=n,
+                severity="positive",
+            )
+
+    for row in (ghost_gate.get("actionable_overtight_gates") or [])[:8]:
+        n = int(row.get("n") or 0)
+        if n < 10:
+            continue
+        key = str(row.get("gate_key") or row.get("reason") or "gate")
+        wr = _gl_metric_pct(row.get("win_rate"))
+        ci_low = _gl_metric_pct(row.get("win_rate_ci_low"))
+        net = float(row.get("net_gate_value_pct") or 0.0)
+        evidence = f"n={n}, ghost WR {wr}%, Wilson low {ci_low}%, net gate value {net:+.3f}"
+        add_standout(
+            "gate",
+            f"Overtight gate: {key}",
+            evidence,
+            "Test a small relaxation for this gate/lane family; do not apply globally.",
+            n=n,
+            severity="warning",
+        )
+        adjustments.append(
+            {
+                "setting": key,
+                "recommendation": "candidate for lower min_edge or relaxed gate threshold on this lane only",
+                "evidence": evidence,
+                "confidence": _gl_sample_grade(n),
+            }
+        )
+
+    for row in (ghost_gate.get("top_protected_loss") or [])[:6]:
+        n = int(row.get("n") or 0)
+        if n < 10:
+            continue
+        key = str(row.get("gate_key") or row.get("reason") or "gate")
+        wr = _gl_metric_pct(row.get("win_rate"))
+        protected = float(row.get("protected_loss_pct") or 0.0)
+        evidence = f"n={n}, rejected-candidate WR {wr}%, protected loss {protected:.3f}"
+        add_standout(
+            "gate",
+            f"Protective gate: {key}",
+            evidence,
+            "Keep this protection; it is currently saving bad entries.",
+            n=n,
+            severity="positive",
+        )
+
+    for row in (calibration.get("rows") or [])[:20]:
+        n = int(row.get("n") or 0)
+        if n < 3:
+            continue
+        lane_id = str(row.get("lane_id") or "unknown")
+        pnl = float(row.get("total_pnl") or 0.0)
+        avg = float(row.get("avg_pnl") or 0.0)
+        wr = _gl_metric_pct(row.get("win_rate"))
+        alpha = row.get("alpha_implied")
+        beta_p50 = row.get("beta_p50")
+        action = "collect more samples"
+        severity = "info"
+        if pnl < 0 and (alpha is None or float(alpha) < 0.8):
+            action = "shrink this lane's effective confidence / calibration alpha before increasing size"
+            severity = "warning"
+        elif pnl > 0 and beta_p50 is not None and float(beta_p50) >= 0.55:
+            action = "candidate for slightly more throughput after risk review"
+            severity = "positive"
+        lane_calibrations.append(
+            {
+                "lane_id": lane_id,
+                "lane": _gl_lane_parts(lane_id),
+                "n": n,
+                "sample_grade": _gl_sample_grade(n),
+                "win_rate_pct": wr,
+                "total_pnl": round(pnl, 2),
+                "avg_pnl": round(avg, 2),
+                "alpha_implied": alpha,
+                "beta_p50": beta_p50,
+                "severity": severity,
+                "recommendation": action,
+            }
+        )
+
+    standouts.sort(key=lambda r: ({"warning": 3, "positive": 2, "info": 1}.get(str(r.get("severity")), 0), int(r.get("n") or 0)), reverse=True)
+    lane_calibrations.sort(key=lambda r: ({"warning": 3, "positive": 2, "info": 1}.get(str(r.get("severity")), 0), abs(float(r.get("total_pnl") or 0))), reverse=True)
+
+    return {
+        "window": {
+            "label": window_label,
+            "since": since_dt.isoformat(),
+            "until": until_dt.isoformat(),
+        },
+        "source": "dashboard.ghost_lab",
+        "hermes_crons_needed": False,
+        "hermes_note": (
+            "Hermes ghost crons only format PSB ghost/calibration reports. "
+            "Keep them only if you want external notifications."
+        ),
+        "counts": {
+            "ghost_rows": int((ghost_gate.get("overall") or {}).get("n") or ghost_gate.get("rows") or 0),
+            "calibration_records": int(calibration.get("n_records") or 0),
+            "deadzone_hour_buckets": int((deadzone.get("summary") or {}).get("hour_regime_buckets") or 0),
+        },
+        "standouts": standouts[:12],
+        "settings_adjustments": adjustments[:10],
+        "lane_calibrations": lane_calibrations[:12],
+    }
+
+
+@app.get("/api/ghosts/morning-summary")
+async def get_ghost_morning_summary(
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    timezone_name: str = Query("America/Los_Angeles", alias="tz"),
+):
+    """Morning Ghost Lab summary for overnight evidence and lane-level adjustments."""
+    if since:
+        since_dt = _gl_parse_ts(since) or (datetime.utcnow() - timedelta(hours=14))
+        until_dt = _gl_parse_ts(until) if until else datetime.utcnow()
+        label = f"{since_dt.isoformat()} -> {until_dt.isoformat()} UTC"
+    else:
+        since_dt, until_dt, label = _gl_default_overnight_window(timezone_name)
+    if until_dt < since_dt:
+        raise HTTPException(status_code=400, detail="until must be after since")
+    payload = _gl_build_morning_summary(since_dt, until_dt, window_label=label)
+    return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/ghosts/lab")
