@@ -1868,7 +1868,6 @@
             <button class="abtn cmd-sync-shine" id="paper-start-btn" onclick="startBotMode('paper')">Start Paper Bot</button>
             <button class="abtn cmd-sync-shine" id="real-live-start-btn" onclick="startBotMode('live')">Start Live Bot</button>
             <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
-            <button class="abtn cmd-sync-shine" id="live-shutdown-btn" onclick="shutdownLiveBot()">Shutdown Bot</button>
             <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn">Loss Kill Switch</button>
             <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn">Dead Zones</button>
             <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
@@ -3000,7 +2999,7 @@
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
         <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. <strong>Shutdown Bot</strong> calls <code>POST /api/live/shutdown</code> and sends the cooperative <code>SIGINT</code> path used by <kbd>Ctrl+C</kbd>.</p>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
         <h3>Foreground terminal</h3>
         <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
         <h3>Emergency halt and resume</h3>
@@ -5328,7 +5327,7 @@ async function stopLiveBot() {
     btn.disabled = true;
     try {
         const endpoint = isResume ? '/api/live/resume' : '/api/live/stop';
-        const r = await _mutatingFetch(endpoint, {method:'POST'});
+        const r = await fetch(endpoint, {method:'POST', headers: dashAuthHeaders()});
         const d = await r.json();
         if (isResume && d.status === 'trading_resumed') {
             status.textContent = 'Trading resumed; scan loop kept running';
@@ -5345,35 +5344,6 @@ async function stopLiveBot() {
         if (liveBtn) liveBtn.disabled = Boolean(lastStatusData?.running);
     } catch(e) { status.textContent = 'Error: '+e; status.style.color='var(--red)'; }
     finally {
-        if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);
-    }
-}
-
-async function shutdownLiveBot() {
-    const btn = document.getElementById('live-shutdown-btn');
-    const status = document.getElementById('process-status');
-    const confirmed = window.confirm('Shutdown the local bot process? This is different from Stop Trading and will close the dashboard served by that process.');
-    if (!confirmed) return;
-    let showedOverlay = false;
-    if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
-        DashPrivacy.show('shutdown', {
-            banner: 'ORACLE · PROCESS SHUTDOWN',
-            detail: 'Send cooperative SIGINT to the running local bot. Journals flush, async tasks cancel, and the dashboard server exits.'
-        });
-        showedOverlay = true;
-    }
-    if (btn) btn.disabled = true;
-    try {
-        const r = await _mutatingFetch('/api/live/shutdown', {method:'POST'});
-        const d = await r.json();
-        status.textContent = d.status === 'no_running_bot_handle'
-            ? 'No running bot process handle; kill switch armed'
-            : `Shutdown requested (${d.target || 'bot'} PID ${d.pid || 'n/a'})`;
-        status.style.color = d.status === 'no_running_bot_handle' ? 'var(--yellow)' : 'var(--green)';
-    } catch(e) {
-        status.textContent = 'Shutdown failed: '+e;
-        status.style.color='var(--red)';
-        if (btn) btn.disabled = false;
         if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);
     }
 }
