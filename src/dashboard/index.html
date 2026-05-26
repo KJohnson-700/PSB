@@ -1867,7 +1867,7 @@
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
             <button class="abtn cmd-sync-shine" id="paper-start-btn" onclick="startBotMode('paper')">Start Paper Bot</button>
             <button class="abtn cmd-sync-shine" id="real-live-start-btn" onclick="startBotMode('live')">Start Live Bot</button>
-            <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Stop Trading</button>
+            <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Pause Trading</button>
             <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn">Loss Kill Switch</button>
             <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn">Dead Zones</button>
             <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
@@ -2999,7 +2999,7 @@
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
         <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">When the bot is running, Command Center <strong>Start Paper Bot</strong> flips to <strong>Stop Bot</strong> and calls <code>POST /api/live/shutdown</code> for cooperative process shutdown. <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">When the bot is running, Command Center <strong>Start Paper Bot</strong> flips to <strong>Stop Bot</strong> and calls <code>POST /api/live/shutdown</code> for cooperative process shutdown. <strong>Pause Trading</strong> calls <code>POST /api/live/stop</code> to pause new entries while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that pause is active the same button flips to <strong>Unpause Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
         <h3>Foreground terminal</h3>
         <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
         <h3>Emergency halt and resume</h3>
@@ -4973,10 +4973,10 @@ function updateStatus(d) {
     if (liveBtn) liveBtn.disabled = running;
     if (stopBtn) {
         stopBtn.disabled = !running && !halted;
-        stopBtn.textContent = halted ? 'Resume Trading' : 'Stop Trading';
+        stopBtn.textContent = halted ? 'Unpause Trading' : 'Pause Trading';
         stopBtn.title = halted
-            ? 'Clear the manual trading halt and allow new trades again'
-            : 'Stop placing new trades while keeping scans and dashboard metrics running';
+            ? 'Clear the manual trading pause and allow new trades again'
+            : 'Pause new trades while keeping scans and dashboard metrics running';
         stopBtn.classList.toggle('stop-resume', halted);
     }
 
@@ -5322,7 +5322,7 @@ async function startBotMode(mode) {
 async function shutdownLiveBot() {
     const btn = document.getElementById('paper-start-btn');
     const status = document.getElementById('process-status');
-    const confirmed = window.confirm('Stop the running local bot process? This is different from Stop Trading and will shut down the bot.');
+    const confirmed = window.confirm('Stop the running local bot process? This is different from Pause Trading and will shut down the bot.');
     if (!confirmed) return;
 
     let showedOverlay = false;
@@ -5362,14 +5362,14 @@ async function stopLiveBot() {
     const paperBtn = document.getElementById('paper-start-btn');
     const liveBtn = document.getElementById('real-live-start-btn');
     const status = document.getElementById('process-status');
-    const isResume = (lastStatusData && lastStatusData.kill_switch_active) || btn.textContent === 'Resume Trading';
+    const isResume = (lastStatusData && lastStatusData.kill_switch_active) || btn.textContent === 'Unpause Trading';
     let showedOverlay = false;
     if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
         DashPrivacy.show(isResume ? 'loading' : 'shutdown', {
-            banner: isResume ? 'ORACLE · TRADING RESUME' : 'ORACLE · TRADING HALT',
+            banner: isResume ? 'ORACLE · TRADING UNPAUSE' : 'ORACLE · TRADING PAUSE',
             detail: isResume
-                ? 'Clear the manual trading halt and let the running bot place new trades again. Scans and dashboard metrics stay online either way.'
-                : 'Arm the manual trading halt without killing the subprocess. Scans, open-position tracking, and Command Center metrics stay up while new entries are blocked.'
+                ? 'Clear the manual trading pause and let the running bot place new trades again. Scans and dashboard metrics stay online either way.'
+                : 'Pause new entries without killing the subprocess. Scans, open-position tracking, and Command Center metrics stay up while new entries are blocked.'
         });
         showedOverlay = true;
     }
@@ -5379,10 +5379,10 @@ async function stopLiveBot() {
         const r = await fetch(endpoint, {method:'POST', headers: dashAuthHeaders()});
         const d = await r.json();
         if (isResume && d.status === 'trading_resumed') {
-            status.textContent = 'Trading resumed; scan loop kept running';
+            status.textContent = 'Trading unpaused; scan loop kept running';
             status.style.color = 'var(--green)';
         } else if (!isResume && (d.status === 'manual_stop_enabled' || d.status === 'trading_halted')) {
-            status.textContent = 'Trading halted; scans and metrics still running';
+            status.textContent = 'Trading paused; scans and metrics still running';
             status.style.color = 'var(--yellow)';
         } else {
             status.textContent = `Live control ${d.status}`;

@@ -143,6 +143,15 @@ def test_command_center_includes_ai_pipeline_digest_stub():
     assert "function updateCommandCenterDigests" in html
 
 
+def test_command_center_trading_control_uses_pause_language():
+    html = INDEX.read_text(encoding="utf-8")
+    assert 'id="live-stop-btn" onclick="stopLiveBot()" disabled>Pause Trading</button>' in html
+    assert "stopBtn.textContent = halted ? 'Unpause Trading' : 'Pause Trading';" in html
+    assert "btn.textContent === 'Unpause Trading'" in html
+    assert "Stop Trading" not in html
+    assert "Resume Trading" not in html
+
+
 def test_exposure_tile_labels_consecutive_losses_explicitly():
     html = INDEX.read_text(encoding="utf-8")
     assert "Consec Losses" in html
