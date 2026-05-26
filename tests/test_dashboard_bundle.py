@@ -336,7 +336,9 @@ def test_ghost_lab_tab_renders():
     assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
     assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
     assert 'id="gl-deadzone-tbody"' in html
+    assert 'id="live-shutdown-btn"' in html
     assert "function loadGhostLab" in html
+    assert "function shutdownLiveBot" in html
     assert "/api/ghosts/lab" in html
     assert "/api/ghosts/regime-breakdown" in html
     assert "/api/ghosts/decision-digest" in html
@@ -547,6 +549,26 @@ def test_config_post_fails_closed_without_dashboard_key(monkeypatch, tmp_path):
     )
     assert r.status_code == 503
     assert "DASHBOARD_API_KEY required" in r.json()["detail"]
+
+
+def test_live_shutdown_without_process_handle_arms_kill_switch(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+    monkeypatch.setattr(dashboard_server, "_bot_process", None)
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/live/shutdown",
+        headers={"X-API-Key": "test-key"},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "no_running_bot_handle"
+    assert (tmp_path / "KILL_SWITCH").exists()
 
 
 def test_config_post_rejects_unsafe_values_with_auth(monkeypatch, tmp_path):

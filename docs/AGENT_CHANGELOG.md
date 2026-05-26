@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-25 — Dashboard process shutdown control added
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), [`tests/test_dashboard_bundle.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py):** Added `POST /api/live/shutdown` and a Command Center **Shutdown Bot** button. `Stop Trading` remains the manual `data/KILL_SWITCH` trading halt; `Shutdown Bot` now sends cooperative `SIGINT` to either the dashboard-owned subprocess or the current in-process local bot, matching the terminal `Ctrl+C` shutdown path. Mutating live-control calls now use the dashboard auth helper.
+
+**Why:** Operators need both controls to be explicit: halt new entries while keeping scans/metrics alive, or fully shut down the local bot process.
+
 ## 2026-05-25 — Ghost Lab deadzone decision digest added
 
 **[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), [`tests/test_dashboard_bundle.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py):** Added `/api/ghosts/decision-digest`, a structured dashboard endpoint that combines deadzone counterfactual buckets, ghost-gate report rows, and lane calibration rows without importing Hermes cron wrappers or shelling out from the request path. Ghost Lab now has a **Deadzone theory** panel showing resolved deadzone-skip performance by UTC hour/regime beside the top ghost-gate and calibration signals. The older one-off `ghost_regime_report.py` artifact was removed; `tools/ghost_gate_report.py` remains the canonical ghost report surface.
