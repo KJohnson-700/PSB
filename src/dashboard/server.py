@@ -2416,6 +2416,24 @@ def _gl_sample_grade(n: Any) -> str:
     return "thin"
 
 
+def _gl_file_status(path: Path) -> Dict[str, Any]:
+    try:
+        st = path.stat()
+    except OSError:
+        return {
+            "path": str(path.relative_to(PROJECT_ROOT) if path.is_absolute() and PROJECT_ROOT in path.parents else path),
+            "exists": False,
+            "updated_at": None,
+            "bytes": 0,
+        }
+    return {
+        "path": str(path.relative_to(PROJECT_ROOT) if path.is_absolute() and PROJECT_ROOT in path.parents else path),
+        "exists": True,
+        "updated_at": datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+        "bytes": st.st_size,
+    }
+
+
 def _gl_default_overnight_window(tz_name: str = "America/Los_Angeles") -> Tuple[datetime, datetime, str]:
     """Return the operator's overnight window as naive UTC datetimes."""
     try:
@@ -2583,6 +2601,67 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
 
     standouts.sort(key=lambda r: ({"warning": 3, "positive": 2, "info": 1}.get(str(r.get("severity")), 0), int(r.get("n") or 0)), reverse=True)
     lane_calibrations.sort(key=lambda r: ({"warning": 3, "positive": 2, "info": 1}.get(str(r.get("severity")), 0), abs(float(r.get("total_pnl") or 0))), reverse=True)
+    counts = {
+        "ghost_rows": int((ghost_gate.get("overall") or {}).get("n") or ghost_gate.get("rows") or 0),
+        "calibration_records": int(calibration.get("n_records") or 0),
+        "deadzone_hour_buckets": int((deadzone.get("summary") or {}).get("hour_regime_buckets") or 0),
+    }
+    actionable_count = len(adjustments) + len([r for r in lane_calibrations if r.get("severity") in {"warning", "positive"}])
+    data_loops = [
+        {
+            "loop": "ghost rejects -> settled outcomes",
+            "status": "closed" if counts["ghost_rows"] > 0 else "waiting_for_settled_ghosts",
+            "detail": f"{counts['ghost_rows']} settled rejected candidates in window",
+        },
+        {
+            "loop": "closed trades -> lane calibration",
+            "status": "closed" if counts["calibration_records"] > 0 else "waiting_for_closed_trades",
+            "detail": f"{counts['calibration_records']} calibration trade records in window",
+        },
+        {
+            "loop": "deadzone skips -> resolved hour buckets",
+            "status": "closed" if counts["deadzone_hour_buckets"] > 0 else "waiting_for_resolved_deadzone_skips",
+            "detail": f"{counts['deadzone_hour_buckets']} hour/regime buckets in window",
+        },
+        {
+            "loop": "evidence -> settings candidates",
+            "status": "closed" if actionable_count > 0 else "waiting_for_stronger_signal",
+            "detail": f"{actionable_count} settings or calibration candidates surfaced",
+        },
+        {
+            "loop": "settings candidates -> live config change",
+            "status": "manual_review",
+            "detail": "dashboard surfaces evidence only; it does not auto-change trading settings",
+        },
+    ]
+    priority_actions = []
+    for row in adjustments[:5]:
+        priority_actions.append(
+            {
+                "title": row.get("setting") or "settings candidate",
+                "recommendation": row.get("recommendation") or "",
+                "evidence": row.get("evidence") or "",
+                "confidence": row.get("confidence") or "thin",
+                "apply_mode": "manual_review",
+            }
+        )
+    for row in lane_calibrations:
+        if row.get("severity") not in {"warning", "positive"}:
+            continue
+        priority_actions.append(
+            {
+                "title": row.get("lane_id") or "lane calibration",
+                "recommendation": row.get("recommendation") or "",
+                "evidence": (
+                    f"n={row.get('n')}, WR={row.get('win_rate_pct')}%, "
+                    f"pnl={row.get('total_pnl')}, alpha={row.get('alpha_implied')}"
+                ),
+                "confidence": row.get("sample_grade") or "thin",
+                "apply_mode": "manual_review",
+            }
+        )
+        if len(priority_actions) >= 8:
+            break
 
     return {
         "window": {
@@ -2596,11 +2675,14 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
             "Hermes ghost crons only format PSB ghost/calibration reports. "
             "Keep them only if you want external notifications."
         ),
-        "counts": {
-            "ghost_rows": int((ghost_gate.get("overall") or {}).get("n") or ghost_gate.get("rows") or 0),
-            "calibration_records": int(calibration.get("n_records") or 0),
-            "deadzone_hour_buckets": int((deadzone.get("summary") or {}).get("hour_regime_buckets") or 0),
+        "counts": counts,
+        "source_files": {
+            "settled_ghosts": _gl_file_status(DATA_ROOT / "calibration" / "rejected_candidates_settled.jsonl"),
+            "calibration_trades": _gl_file_status(DATA_ROOT / "calibration" / "trades.jsonl"),
+            "lane_posteriors": _gl_file_status(DATA_ROOT / "calibration" / "lane_posteriors.json"),
         },
+        "data_loops": data_loops,
+        "priority_actions": priority_actions[:8],
         "standouts": standouts[:12],
         "settings_adjustments": adjustments[:10],
         "lane_calibrations": lane_calibrations[:12],

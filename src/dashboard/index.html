@@ -2711,7 +2711,8 @@
                 <button class="btn-sm" type="button" onclick="loadGhostMorningSummary()">Refresh</button>
             </div>
         </div>
-        <div id="gl-morning-summary" style="display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
+        <div id="gl-morning-summary" style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
+        <div id="gl-morning-loops" style="display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:8px;margin-bottom:10px;"></div>
         <div style="display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(320px,1fr) minmax(320px,1fr);gap:12px;">
             <div>
                 <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
@@ -8393,7 +8394,10 @@ function _glRenderMorningSummary(data) {
     const standoutsEl = document.getElementById('gl-morning-standouts');
     const adjustmentsEl = document.getElementById('gl-morning-adjustments');
     const calibrationEl = document.getElementById('gl-morning-calibration');
+    const loopsEl = document.getElementById('gl-morning-loops');
     const counts = data.counts || {};
+    const loops = data.data_loops || [];
+    const loopsClosed = loops.filter((row) => row.status === 'closed').length;
     if (windowEl) {
         windowEl.textContent = data.window && data.window.label
             ? data.window.label
@@ -8404,6 +8408,7 @@ function _glRenderMorningSummary(data) {
             ['ghost rows', counts.ghost_rows || 0, '#00e5ff'],
             ['calibration records', counts.calibration_records || 0, '#88d8ff'],
             ['deadzone buckets', counts.deadzone_hour_buckets || 0, '#b060ff'],
+            ['closed loops', `${loopsClosed}/${loops.length || 0}`, '#00ff88'],
         ];
         summaryEl.innerHTML = cards.map(([label, value, color]) => `
             <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
@@ -8411,6 +8416,20 @@ function _glRenderMorningSummary(data) {
                 <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${value}</div>
             </div>
         `).join('');
+    }
+    if (loopsEl) {
+        loopsEl.innerHTML = loops.length ? loops.map((row) => {
+            const closed = row.status === 'closed';
+            const manual = row.status === 'manual_review';
+            const color = closed ? '#00ff88' : (manual ? '#ffcc66' : 'var(--text-muted)');
+            return `
+                <div style="border:1px solid ${color}44;border-radius:6px;padding:7px 8px;background:rgba(255,255,255,.02);font-family:'IBM Plex Mono',monospace;font-size:.66rem;line-height:1.35;">
+                    <div style="color:${color};font-weight:700;">${_htmlEscape(row.status || 'unknown')}</div>
+                    <div style="color:var(--text);margin-top:2px;">${_htmlEscape(row.loop || '')}</div>
+                    <div style="color:var(--text-muted);margin-top:2px;">${_htmlEscape(row.detail || '')}</div>
+                </div>
+            `;
+        }).join('') : '';
     }
     const empty = '<div style="color:var(--text-muted);font-size:.72rem;">No strong signal in this overnight window.</div>';
     if (standoutsEl) standoutsEl.innerHTML = (data.standouts || []).length ? data.standouts.slice(0, 6).map(_glTinyCard).join('') : empty;
