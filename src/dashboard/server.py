@@ -2705,8 +2705,7 @@ async def shutdown_live_bot(request: Request):
     _check_auth(request)
 
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
-    kill_switch_file.parent.mkdir(parents=True, exist_ok=True)
-    kill_switch_file.touch()
+    kill_switch_active = kill_switch_file.exists()
 
     if _bot_process is not None and _bot_process.poll() is None:
         _bot_process.send_signal(signal.SIGINT)
@@ -2714,7 +2713,7 @@ async def shutdown_live_bot(request: Request):
             "status": "shutdown_signal_sent",
             "target": "dashboard_subprocess",
             "pid": _bot_process.pid,
-            "kill_switch_active": True,
+            "kill_switch_active": kill_switch_active,
         }
 
     if bot_instance is not None:
@@ -2729,12 +2728,12 @@ async def shutdown_live_bot(request: Request):
             "status": "shutdown_signal_scheduled",
             "target": "current_process",
             "pid": pid,
-            "kill_switch_active": True,
+            "kill_switch_active": kill_switch_active,
         }
 
     return {
         "status": "no_running_bot_handle",
-        "kill_switch_active": True,
+        "kill_switch_active": kill_switch_active,
     }
 
 

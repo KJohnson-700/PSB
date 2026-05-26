@@ -1868,8 +1868,8 @@
             <button class="abtn cmd-sync-shine" id="paper-start-btn" onclick="startBotMode('paper')">Start Paper Bot</button>
             <button class="abtn cmd-sync-shine" id="real-live-start-btn" onclick="startBotMode('live')">Start Live Bot</button>
             <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Pause Trading</button>
-            <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn">Loss Kill Switch</button>
-            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn">Dead Zones</button>
+            <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn" disabled>Loss Kill: Loading</button>
+            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn" disabled>Dead Zones: Loading</button>
             <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
@@ -6409,6 +6409,24 @@ function updateOperatorToggleState(d) {
         lossKillSwitchEnabled,
         deadZoneEnabled,
     };
+    const lossBtn = document.getElementById('loss-kill-toggle-btn');
+    if (lossBtn) {
+        lossBtn.disabled = false;
+        lossBtn.textContent = lossKillSwitchEnabled ? 'Loss Kill: On' : 'Loss Kill: Off';
+        lossBtn.title = lossKillSwitchEnabled
+            ? 'Persisted in config/settings.yaml. Click to turn off loss-streak lane pauses.'
+            : 'Persisted in config/settings.yaml. Click to turn on loss-streak lane pauses.';
+        lossBtn.classList.toggle('stop-resume', lossKillSwitchEnabled);
+    }
+    const deadBtn = document.getElementById('dead-zone-toggle-btn');
+    if (deadBtn) {
+        deadBtn.disabled = false;
+        deadBtn.textContent = deadZoneEnabled ? 'Dead Zones: On' : 'Dead Zones: Off';
+        deadBtn.title = deadZoneEnabled
+            ? 'Persisted in config/settings.yaml. Click to turn off dead-zone entry blocks.'
+            : 'Persisted in config/settings.yaml. Click to turn on dead-zone entry blocks.';
+        deadBtn.classList.toggle('stop-resume', deadZoneEnabled);
+    }
     if (lastStatusData) updateStatusBadgesAndKill(lastStatusData);
 }
 
@@ -6436,6 +6454,7 @@ async function toggleLossKillSwitch() {
             },
         });
         await loadConfig();
+        if (typeof fetchAll === 'function') await fetchAll();
         if (status) {
             status.textContent = `Loss kill switch ${nextEnabled ? 'enabled' : 'disabled'}`;
             status.style.color = nextEnabled ? 'var(--yellow)' : 'var(--green)';
@@ -6459,6 +6478,7 @@ async function toggleDeadZones() {
         });
         await postConfigPatch(updates);
         await loadConfig();
+        if (typeof fetchAll === 'function') await fetchAll();
         if (status) {
             status.textContent = `Dead zones ${nextEnabled ? 'enabled' : 'disabled'}`;
             status.style.color = nextEnabled ? 'var(--yellow)' : 'var(--green)';

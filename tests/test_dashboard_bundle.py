@@ -115,7 +115,7 @@ def test_api_orderbook_returns_503_without_bot():
     assert r.status_code == 503
 
 
-def test_live_shutdown_without_process_handle_arms_kill_switch(tmp_path, monkeypatch):
+def test_live_shutdown_without_process_handle_does_not_change_pause_memory(tmp_path, monkeypatch):
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient
 
@@ -133,8 +133,34 @@ def test_live_shutdown_without_process_handle_arms_kill_switch(tmp_path, monkeyp
 
     assert r.status_code == 200
     assert r.json()["status"] == "no_running_bot_handle"
-    assert r.json()["kill_switch_active"] is True
+    assert r.json()["kill_switch_active"] is False
+    assert not (tmp_path / "KILL_SWITCH").exists()
+
+
+def test_live_pause_resume_memory_is_persisted_by_kill_switch(tmp_path, monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from src.dashboard import server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(dashboard_server, "_bot_process", None)
+
+    client = TestClient(dashboard_server.app)
+    pause = client.post("/api/live/stop", headers={"X-API-Key": "test-key"})
+    assert pause.status_code == 200
+    assert pause.json()["kill_switch_active"] is True
     assert (tmp_path / "KILL_SWITCH").exists()
+
+    status = client.get("/api/status")
+    assert status.status_code == 200
+    assert status.json()["kill_switch_active"] is True
+
+    resume = client.post("/api/live/resume", headers={"X-API-Key": "test-key"})
+    assert resume.status_code == 200
+    assert resume.json()["kill_switch_active"] is False
+    assert not (tmp_path / "KILL_SWITCH").exists()
 
 
 def test_command_center_includes_ai_pipeline_digest_stub():
@@ -266,7 +292,10 @@ def test_dashboard_contains_operator_toggle_buttons():
     assert "loss_kill_switch_enabled" in html
     assert "LOSS KILL ON" in html or "LOSS KILL OFF" in html
     assert "DEAD ZONES ON" in html or "DEAD ZONES OFF" in html
-    assert ">Loss Kill Switch</button>" in html
+    assert 'id="loss-kill-toggle-btn" disabled>Loss Kill: Loading</button>' in html
+    assert 'id="dead-zone-toggle-btn" disabled>Dead Zones: Loading</button>' in html
+    assert "lossBtn.textContent = lossKillSwitchEnabled ? 'Loss Kill: On' : 'Loss Kill: Off';" in html
+    assert "deadBtn.textContent = deadZoneEnabled ? 'Dead Zones: On' : 'Dead Zones: Off';" in html
     assert "kill-trigger" in html
     assert "live-off" in html
 
