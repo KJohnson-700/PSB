@@ -32,6 +32,7 @@ import json
 import logging
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -2695,6 +2696,45 @@ async def stop_live_bot(request: Request):
         "status": "manual_stop_enabled",
         "kill_switch_active": True,
         "subprocess_running": False,
+    }
+
+
+@app.post("/api/live/shutdown")
+async def shutdown_live_bot(request: Request):
+    """Cooperatively shut down the dashboard-owned or in-process local bot."""
+    _check_auth(request)
+
+    kill_switch_file = DATA_ROOT / "KILL_SWITCH"
+    kill_switch_file.parent.mkdir(parents=True, exist_ok=True)
+    kill_switch_file.touch()
+
+    if _bot_process is not None and _bot_process.poll() is None:
+        _bot_process.send_signal(signal.SIGINT)
+        return {
+            "status": "shutdown_signal_sent",
+            "target": "dashboard_subprocess",
+            "pid": _bot_process.pid,
+            "kill_switch_active": True,
+        }
+
+    if bot_instance is not None:
+        pid = os.getpid()
+
+        def _delayed_sigint() -> None:
+            _time_mod.sleep(0.25)
+            os.kill(pid, signal.SIGINT)
+
+        threading.Thread(target=_delayed_sigint, daemon=True).start()
+        return {
+            "status": "shutdown_signal_scheduled",
+            "target": "current_process",
+            "pid": pid,
+            "kill_switch_active": True,
+        }
+
+    return {
+        "status": "no_running_bot_handle",
+        "kill_switch_active": True,
     }
 
 

@@ -46,6 +46,9 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     body = r.text
     assert "fetchAll" in body and "Command Center" in body
     assert 'id="positions-master"' in body and 'id="ops-digest-ticker"' in body and 'id="positions-orderbook-wrap"' in body and 'id="ops-metric-deck-scroll"' in body
+    assert 'id="live-shutdown-btn"' not in body
+    assert "function shutdownLiveBot" in body
+    assert "/api/live/shutdown" in body
     # Backtest UI elements (bt-hud, backtest-output-tail) removed 2026-05-24 with the broken backtester.
     # Ghost Lab tab replaced it.
     assert 'id="view-ghosts"' in body
@@ -110,6 +113,28 @@ def test_api_orderbook_returns_503_without_bot():
     c = TestClient(app)
     r = c.get("/api/orderbook", params={"token_id": "12345678901234567890"})
     assert r.status_code == 503
+
+
+def test_live_shutdown_without_process_handle_arms_kill_switch(tmp_path, monkeypatch):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from src.dashboard import server as dashboard_server
+
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+    monkeypatch.setattr(dashboard_server, "_bot_process", None)
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/live/shutdown",
+        headers={"X-API-Key": "test-key"},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "no_running_bot_handle"
+    assert r.json()["kill_switch_active"] is True
+    assert (tmp_path / "KILL_SWITCH").exists()
 
 
 def test_command_center_includes_ai_pipeline_digest_stub():

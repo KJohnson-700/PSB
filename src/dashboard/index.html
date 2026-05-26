@@ -2999,7 +2999,7 @@
 
     <div class="card cmd-ref" style="margin-bottom:16px;">
         <h2 class="cmd-ref-lead">Shutdown, cancel, and stop</h2>
-        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">Command Center <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
+        <p class="cmd-note" style="font-size:0.82rem;line-height:1.5;">When the bot is running, Command Center <strong>Start Paper Bot</strong> flips to <strong>Stop Bot</strong> and calls <code>POST /api/live/shutdown</code> for cooperative process shutdown. <strong>Stop Trading</strong> calls <code>POST /api/live/stop</code> to arm the manual trading halt while leaving the subprocess alive for scans, open-position monitoring, and dashboard metrics. When that halt is active the same button flips to <strong>Resume Trading</strong> and clears <code>data/KILL_SWITCH</code> via <code>POST /api/live/resume</code>.</p>
         <h3>Foreground terminal</h3>
         <p class="cmd-note">If you started the bot in a shell with logs attached: <kbd>Ctrl+C</kbd> once for cooperative shutdown (async tasks cancel, journals flush on exit). Reserve <code>kill -9</code> for a wedged process only.</p>
         <h3>Emergency halt and resume</h3>
@@ -4962,7 +4962,14 @@ function updateStatus(d) {
     const stopBtn = document.getElementById('live-stop-btn');
     const running = !!d?.running;
     const halted = !!d?.kill_switch_active;
-    if (paperBtn) paperBtn.disabled = running;
+    if (paperBtn) {
+        paperBtn.disabled = false;
+        paperBtn.textContent = running ? 'Stop Bot' : 'Start Paper Bot';
+        paperBtn.title = running
+            ? 'Cooperatively shut down the running local bot process'
+            : 'Start the bot in paper mode';
+        paperBtn.classList.toggle('stop-resume', running);
+    }
     if (liveBtn) liveBtn.disabled = running;
     if (stopBtn) {
         stopBtn.disabled = !running && !halted;
@@ -5260,6 +5267,10 @@ async function startBotMode(mode) {
     const status = document.getElementById('process-status');
     const paperBtn = document.getElementById('paper-start-btn');
     const liveBtn = document.getElementById('real-live-start-btn');
+    if (modeNorm === 'paper' && lastStatusData && lastStatusData.running) {
+        await shutdownLiveBot();
+        return;
+    }
     if (modeNorm === 'live') {
         const phrase = window.prompt('Type LIVE to start the bot in live mode.');
         if (phrase !== 'LIVE') {
@@ -5305,6 +5316,44 @@ async function startBotMode(mode) {
     }
     finally {
         if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 480);
+    }
+}
+
+async function shutdownLiveBot() {
+    const btn = document.getElementById('paper-start-btn');
+    const status = document.getElementById('process-status');
+    const confirmed = window.confirm('Stop the running local bot process? This is different from Stop Trading and will shut down the bot.');
+    if (!confirmed) return;
+
+    let showedOverlay = false;
+    if (typeof DashPrivacy !== 'undefined' && dashPrivacyMotionOk()) {
+        DashPrivacy.show('shutdown', {
+            banner: 'ORACLE · BOT SHUTDOWN',
+            detail: 'POST /api/live/shutdown: arm the kill switch and send SIGINT for cooperative local bot shutdown.'
+        });
+        showedOverlay = true;
+    }
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch('/api/live/shutdown', {method:'POST', headers: dashAuthHeaders()});
+        const d = await r.json();
+        if (d.status === 'no_running_bot_handle') {
+            status.textContent = 'No running bot process handle; kill switch armed';
+            status.style.color = 'var(--yellow)';
+        } else if (d.status === 'shutdown_signal_sent' || d.status === 'shutdown_signal_scheduled') {
+            status.textContent = `Bot shutdown requested (${d.target || 'bot'} PID ${d.pid || 'n/a'})`;
+            status.style.color = 'var(--green)';
+        } else {
+            status.textContent = `Bot shutdown ${d.status || 'requested'}`;
+            status.style.color = d.status === 'error' ? 'var(--red)' : 'var(--yellow)';
+        }
+    } catch(e) {
+        status.textContent = 'Error: '+e;
+        status.style.color='var(--red)';
+        if (btn) btn.disabled = false;
+    }
+    finally {
+        if (showedOverlay) setTimeout(function() { if (typeof DashPrivacy !== 'undefined') DashPrivacy.hide(); }, 620);
     }
 }
 
