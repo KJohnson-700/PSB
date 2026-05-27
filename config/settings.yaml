@@ -212,7 +212,7 @@ lane_calibration:
 entry_policy:
   defaults:
     enabled: true
-    hard_min_edge: 0.0
+    hard_min_edge: 0.05
     ai_override_min_edge: 0.0
     size_multiplier: 1.0
 strategies:
@@ -249,7 +249,7 @@ strategies:
     skip_extended_precip_without_calibration: true
   bitcoin:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09
@@ -304,7 +304,7 @@ strategies:
     entry_policy:
       defaults:
         enabled: true
-        hard_min_edge: 0.0
+        hard_min_edge: 0.05
         size_multiplier: 1.0
       window_side_overrides:
         5m:
@@ -361,10 +361,15 @@ strategies:
     prediction_window_bonus_5m: 0.0
     blocked_utc_hours_updown:
     - 0
-    - 1
-    - 2
-    - 7
-    - 11
+    - 3
+    - 4
+    - 5
+    - 6
+    - 16
+    - 18
+    - 19
+    - 22
+    - 23
     disable_buy_yes: false
     disable_buy_no_counter_trend: false
     btc_htf_boost_strong_1h: 0.14
@@ -426,7 +431,7 @@ strategies:
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -525,8 +530,11 @@ strategies:
     iql_15m_hist_floor: 0.06
     blocked_utc_hours_updown:
     - 1
-    - 6
-    - 23
+    - 2
+    - 19
+    - 20
+    - 21
+    - 22
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -604,7 +612,7 @@ strategies:
         BEAR: 0.5
   eth_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     eth_momentum_confirm:
       buy_yes:
@@ -625,7 +633,7 @@ strategies:
     min_edge: 0.09
     defaults:
       min_edge: 0.09
-      hard_min_edge: 0.0
+      hard_min_edge: 0.05
       ai_override_min_edge: 0.1
     by_tf:
       5m:
@@ -709,9 +717,11 @@ strategies:
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
     blocked_utc_hours_updown:
-    - 1
-    - 15
-    - 23
+    - 0
+    - 2
+    - 4
+    - 6
+    - 8
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -723,7 +733,7 @@ strategies:
     entry_policy:
       defaults:
         enabled: true
-        hard_min_edge: 0.0
+        hard_min_edge: 0.05
         ai_override_min_edge: 0.1
         size_multiplier: 1.0
       window_side_overrides:
@@ -804,7 +814,7 @@ strategies:
         BEAR: 0.5
   hype_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -882,7 +892,9 @@ strategies:
     low_corr_threshold_1h: 0.4
     low_corr_damping: 0.75
     low_corr_suppresses_entries: false
-    blocked_utc_hours_updown: []
+    blocked_utc_hours_updown:
+    - 6
+    - 14
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -979,7 +991,7 @@ strategies:
         BEAR: 0.5
   xrp_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -994,7 +1006,7 @@ strategies:
     defaults:
       min_edge: 0.09
       min_edge_buy_no: 0.08
-      hard_min_edge: 0.0
+      hard_min_edge: 0.05
       ai_override_min_edge: 0.1
     by_tf:
       5m:
@@ -1002,7 +1014,7 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.05
+        min_edge: 0.07
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 16.0
@@ -1074,7 +1086,11 @@ strategies:
     dynamic_beta_extreme_max: 3.5
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown: []
+    blocked_utc_hours_updown:
+    - 2
+    - 3
+    - 4
+    - 22
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1086,7 +1102,7 @@ strategies:
     entry_policy:
       defaults:
         enabled: true
-        hard_min_edge: 0.0
+        hard_min_edge: 0.05
         ai_override_min_edge: 0.1
         size_multiplier: 1.0
       window_side_overrides:
@@ -1147,7 +1163,7 @@ strategies:
         BEAR: 0.5
   doge_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1165,7 +1181,7 @@ strategies:
     defaults:
       min_edge: 0.09
       min_edge_buy_no: 0.08
-      hard_min_edge: 0.0
+      hard_min_edge: 0.05
       ai_override_min_edge: 0.1
     by_tf:
       5m:
@@ -1237,7 +1253,11 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown: []
+    blocked_utc_hours_updown:
+    - 3
+    - 4
+    - 22
+    - 23
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1249,7 +1269,7 @@ strategies:
     entry_policy:
       defaults:
         enabled: true
-        hard_min_edge: 0.0
+        hard_min_edge: 0.05
         ai_override_min_edge: 0.1
         size_multiplier: 1.0
       window_side_overrides:
@@ -1310,7 +1330,7 @@ strategies:
         BEAR: 0.5
   bnb_macro:
     enabled: true
-    dead_zone_enabled: false
+    dead_zone_enabled: true
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1327,7 +1347,7 @@ strategies:
     defaults:
       min_edge: 0.09
       min_edge_buy_no: 0.08
-      hard_min_edge: 0.0
+      hard_min_edge: 0.05
       ai_override_min_edge: 0.1
     by_tf:
       5m:
@@ -1404,7 +1424,11 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown: []
+    blocked_utc_hours_updown:
+    - 2
+    - 4
+    - 14
+    - 22
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1416,7 +1440,7 @@ strategies:
     entry_policy:
       defaults:
         enabled: true
-        hard_min_edge: 0.0
+        hard_min_edge: 0.05
         ai_override_min_edge: 0.1
         size_multiplier: 1.0
       window_side_overrides:
