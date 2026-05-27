@@ -4370,12 +4370,17 @@ function updateStatusBadgesAndKill(d) {
         ? 'Dead zones are enabled. Click to disable.'
         : 'Dead zones are disabled. Click to enable.';
     const deadZonesBadge = `<button type="button" class="bdg-mq ${deadZonesCls}" id="dead-zone-btn" onclick="toggleDeadZones()" title="${deadZonesTitle}"><span class="mq-track"><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span></span></button>`;
-    const ai = d.ai || {};
-    const aiTip = String(ai.reason || '').replace(/"/g, '&quot;').replace(/</g, '');
-    const aiBadge = ai.ready
-        ? `<span class="badge badge-green" title="${aiTip}">AI ON</span>`
-        : `<span class="badge badge-red" title="${aiTip}">AI OFF</span>`;
-    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${aiBadge}`;
+    const cal = d.calibration || {};
+    const calOn = !!cal.active;
+    const calTip = (
+        `enabled=${cal.enabled ? 'true' : 'false'} · ` +
+        `shadow=${cal.shadow_mode ? 'true' : 'false'} · ` +
+        `per-lane-thresholds=${cal.per_lane_thresholds_enabled ? 'true' : 'false'}`
+    ).replace(/"/g, '&quot;').replace(/</g, '');
+    const calBadge = calOn
+        ? `<span class="badge badge-green" title="${calTip}">CALIBRATION ON</span>`
+        : `<span class="badge badge-red" title="${calTip}">CALIBRATION OFF</span>`;
+    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${calBadge}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
@@ -8521,7 +8526,7 @@ function _glRenderMorningSummary(data) {
     if (calibrationEl) {
         const rows = (data.lane_calibrations || []).slice(0, 6).map((row) => _glTinyCard({
             title: row.lane_id,
-            evidence: `WR ${row.win_rate_pct == null ? 'n/a' : row.win_rate_pct + '%'} · pnl ${Number(row.total_pnl || 0).toFixed(2)} · avg ${Number(row.avg_pnl || 0).toFixed(2)} · alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied}`,
+            evidence: `WR ${row.win_rate_pct == null ? 'n/a' : row.win_rate_pct + '%'} · pnl ${Number(row.total_pnl || 0).toFixed(2)} · avg ${Number(row.avg_pnl || 0).toFixed(2)} · alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied} · veto ${row.veto_active ? 'ON' : 'off'}${row.veto_source && row.veto_source !== 'none' ? ` (${row.veto_source})` : ''}`,
             recommendation: row.recommendation,
             n: row.n,
             sample_grade: row.sample_grade,

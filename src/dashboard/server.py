@@ -46,6 +46,7 @@ import uuid
 from src.analysis.usage_tracker import usage_tracker
 from src.analysis.btc_price_service import BTCPriceService as _BTCPriceService
 from src.analysis.lane_manager import LaneManager
+from src.analysis.lane_thresholds import load_lane_thresholds
 from src.config_merge import deep_merge_config as _deep_merge
 from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
@@ -84,6 +85,27 @@ def _is_full_bot(bot: Any) -> bool:
 
 def _full_bot_instance() -> Optional["PolyBot"]:
     return bot_instance if _is_full_bot(bot_instance) else None
+
+
+def _calibration_status_from_config(cfg: Dict[str, Any], *, dry_run: bool) -> Dict[str, Any]:
+    cal_cfg = dict((cfg or {}).get("lane_calibration") or {})
+    enabled = bool(cal_cfg.get("enabled", False))
+    default_shadow = bool(cal_cfg.get("shadow_mode", True))
+    mode_shadow = bool(
+        cal_cfg.get("paper_shadow_mode", default_shadow)
+        if dry_run
+        else cal_cfg.get("live_shadow_mode", default_shadow)
+    )
+    plt_cfg = dict(cal_cfg.get("per_lane_thresholds") or {})
+    return {
+        "enabled": enabled,
+        "active": bool(enabled and not mode_shadow),
+        "shadow_mode": mode_shadow,
+        "per_lane_thresholds_enabled": bool(plt_cfg.get("enabled", False)),
+        "min_samples_to_apply_live": int(cal_cfg.get("min_samples_to_apply_live", 15) or 15),
+        "beta_veto_max_mean": float(cal_cfg.get("beta_veto_max_mean", 0.0) or 0.0),
+        "beta_veto_min_n": int(cal_cfg.get("beta_veto_min_n", 30) or 30),
+    }
 
 # ── AI summary cache (keyed by session_id) ────────────────────────────────────
 _ai_summary_cache: Dict[str, str] = {}
@@ -1608,6 +1630,7 @@ async def get_status():
             "mode": "paper" if dry_run else "live",
             "dry_run": dry_run,
             "exposure": _effective_exposure_section(bot.config),
+            "calibration": _calibration_status_from_config(bot.config, dry_run=dry_run),
             "kill_switch_active": kill_switch_active,
             "loss_pause_active": _loss_pause.get("active", False),
             "loss_pause_count": _loss_pause.get("count", 0),
@@ -1698,6 +1721,7 @@ async def get_status():
         "mode": "paper" if dry_run else "live",
         "dry_run": dry_run,
         "exposure": _effective_exposure_section(cfg_disk),
+        "calibration": _calibration_status_from_config(cfg_disk, dry_run=dry_run),
         "kill_switch_active": kill_switch_active,
         "loss_pause_active": False,
         "loss_pause_count": 0,
@@ -2497,6 +2521,30 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
     standouts: List[Dict[str, Any]] = []
     adjustments: List[Dict[str, Any]] = []
     lane_calibrations: List[Dict[str, Any]] = []
+    posteriors = _gl_load_posteriors()
+    cfg_disk: Dict[str, Any] = {}
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                cfg_disk = yaml.safe_load(f) or {}
+        except Exception:
+            cfg_disk = {}
+    cal_cfg = dict(cfg_disk.get("lane_calibration") or {})
+    posterior_version = str(cal_cfg.get("posterior_version") or "").strip()
+    beta_veto_max_mean = float(cal_cfg.get("beta_veto_max_mean", 0.0) or 0.0)
+    beta_veto_min_n = int(cal_cfg.get("beta_veto_min_n", 30) or 30)
+    plt_cfg = dict(cal_cfg.get("per_lane_thresholds") or {})
+    per_lane_thresholds_enabled = bool(plt_cfg.get("enabled", False))
+    per_lane_thresholds: Dict[str, Dict[str, Any]] = {}
+    if per_lane_thresholds_enabled:
+        try:
+            path_str = str(
+                plt_cfg.get("path")
+                or (DATA_ROOT / "calibration" / "lane_thresholds.json")
+            )
+            per_lane_thresholds = load_lane_thresholds(Path(path_str))
+        except Exception:
+            per_lane_thresholds = {}
 
     def add_standout(kind: str, title: str, evidence: str, action: str, *, n: int = 0, severity: str = "info", lane_id: str = "") -> None:
         standouts.append(
@@ -2606,6 +2654,22 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
         wr = _gl_metric_pct(row.get("win_rate"))
         alpha = row.get("alpha_implied")
         beta_p50 = row.get("beta_p50")
+        posterior = posteriors.get(lane_id) if isinstance(posteriors, dict) else None
+        p_n = int((posterior or {}).get("n", 0) or 0) if isinstance(posterior, dict) else 0
+        p_a = float((posterior or {}).get("beta_a", 0.0) or 0.0) if isinstance(posterior, dict) else 0.0
+        p_b = float((posterior or {}).get("beta_b", 0.0) or 0.0) if isinstance(posterior, dict) else 0.0
+        p_total = p_a + p_b
+        beta_mean = (p_a / p_total) if p_total > 0 else None
+        prefix = f"{posterior_version}::" if posterior_version else ""
+        lane_key = lane_id.split("::", 1)[1] if (prefix and lane_id.startswith(prefix)) else lane_id
+        threshold_override = per_lane_thresholds.get(lane_id) or per_lane_thresholds.get(lane_key) or {}
+        veto_floor = float(threshold_override.get("recommended_max_mean", beta_veto_max_mean) or 0.0)
+        veto_recommended = bool(threshold_override.get("veto_recommended"))
+        veto_active = False
+        if veto_recommended:
+            veto_active = True
+        elif beta_mean is not None and p_n >= beta_veto_min_n and veto_floor > 0.0:
+            veto_active = beta_mean < veto_floor
         action = "collect more samples"
         severity = "info"
         if pnl < 0 and (alpha is None or float(alpha) < 0.8):
@@ -2625,6 +2689,13 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
                 "avg_pnl": round(avg, 2),
                 "alpha_implied": alpha,
                 "beta_p50": beta_p50,
+                "beta_mean": round(beta_mean, 4) if beta_mean is not None else None,
+                "veto_active": bool(veto_active),
+                "veto_source": (
+                    "per_lane_override"
+                    if veto_recommended and per_lane_thresholds_enabled
+                    else ("beta_veto" if veto_active else "none")
+                ),
                 "severity": severity,
                 "recommendation": action,
             }
