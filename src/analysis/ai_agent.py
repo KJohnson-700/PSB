@@ -2339,6 +2339,9 @@ OUTPUT (machine-parseable — follow exactly):
     def _on_cooldown(self, key: str) -> bool:
         return time.time() < self._model_cooldown_until.get(key, 0.0)
 
+    def _cooldown_remaining_seconds(self, key: str) -> float:
+        return max(0.0, self._model_cooldown_until.get(key, 0.0) - time.time())
+
     def _set_cooldown(self, key: str, seconds: float) -> None:
         self._model_cooldown_until[key] = time.time() + max(1.0, seconds)
 
@@ -2850,10 +2853,17 @@ Reply with only the JSON object required by the system message (four keys: reaso
             return None
 
         last_err: Optional[BaseException] = None
+        skipped_cooldowns: List[tuple[str, float]] = []
         for m in models:
             ck = self._cooldown_key(provider_label, m)
             if self._on_cooldown(ck):
-                logger.debug("Kimi Code model %s on cooldown — skipping.", m)
+                remaining = self._cooldown_remaining_seconds(ck)
+                skipped_cooldowns.append((m, remaining))
+                logger.info(
+                    "Kimi Code model %s on cooldown for %.0fs — skipping.",
+                    m,
+                    remaining,
+                )
                 continue
             self._bump_local_quota_and_warn(provider_label)
             force_refresh = False
@@ -2969,6 +2979,9 @@ Reply with only the JSON object required by the system message (four keys: reaso
 
         if last_err:
             raise last_err
+        if skipped_cooldowns:
+            details = ", ".join(f"{m}:{remaining:.0f}s" for m, remaining in skipped_cooldowns)
+            raise RuntimeError(f"kimi_coding_cooldown:{details}")
         return None
     
     async def _analyze_with_openai(

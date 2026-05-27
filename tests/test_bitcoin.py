@@ -116,6 +116,94 @@ def test_bitcoin_updown_edge_cap_uses_window_and_side_override():
     assert strat._max_edge_cap_for_updown(window_label="15m", side="SHORT") == pytest.approx(0.12)
 
 
+def test_bitcoin_direction_resolver_rollover_short_from_bullish_htf():
+    cfg = _make_config()
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    macd_4h = MagicMock(histogram_rising=False)
+    mom = MagicMock(m15_direction="DRIFT_DOWN", m5_direction="NONE")
+    reason_parts = []
+
+    decision = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=macd_4h,
+        reason_parts=reason_parts,
+        mom=mom,
+    )
+
+    assert decision.action == "BUY_NO"
+    assert decision.direction == "DOWN"
+    assert decision.effective_side == "SHORT"
+    assert decision.side_source == "btc_bull_rollover_countertrend"
+    assert decision.conflict_type == "bullish_htf_rollover_down"
+    assert decision.htf_side == "LONG"
+    assert decision.momentum_side == "SHORT"
+    assert "counter_trend=btc_4h_hist_declining" in reason_parts
+
+
+def test_bitcoin_direction_resolver_quant_flip_records_conflict_path():
+    cfg = _make_config()
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    macd_4h = MagicMock(histogram_rising=True)
+    mom = MagicMock(m15_direction="DRIFT_DOWN", m5_direction="NONE")
+    reason_parts = []
+
+    initial = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=macd_4h,
+        reason_parts=reason_parts,
+        mom=mom,
+    )
+    decision = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=macd_4h,
+        reason_parts=reason_parts,
+        raw_est_prob=0.44,
+        mom=mom,
+        current=initial,
+    )
+
+    assert decision.action == "BUY_NO"
+    assert decision.side_source == "btc_quant_disagree_flip"
+    assert decision.conflict_type == "long_to_short_quant_disagree"
+    assert decision.quant_side == "SHORT"
+    assert decision.resolver_path.endswith("__quant_short")
+    assert any(part.startswith("quant_flip=raw(0.440)<") for part in reason_parts)
+
+
+def test_bitcoin_direction_resolver_suppresses_quant_flip_without_momentum():
+    cfg = _make_config()
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    macd_4h = MagicMock(histogram_rising=True)
+    mom = MagicMock(m15_direction="NONE", m5_direction="NONE")
+    reason_parts = []
+
+    initial = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=macd_4h,
+        reason_parts=reason_parts,
+        mom=mom,
+    )
+    decision = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=macd_4h,
+        reason_parts=reason_parts,
+        raw_est_prob=0.44,
+        mom=mom,
+        current=initial,
+    )
+
+    assert decision.action == "BUY_YES"
+    assert decision.side_source == "btc_htf_bias"
+    assert decision.quant_side == "SHORT"
+    assert decision.momentum_side is None
+    assert any("quant_flip_suppressed=no_down_momentum" in part for part in reason_parts)
+
+
 def test_bitcoin_bias_quant_disagree_override_allows_moderate_non5m_long_gap():
     cfg = _make_config()
     cfg["strategies"]["bitcoin"].update(
@@ -396,29 +484,64 @@ def test_bitcoin_live_lane_calibration_does_not_amplify_buy_no_probability(tmp_p
     assert strat.lane_calibrator.raw_alpha(lane_id) > 1.0
     assert calibrated == pytest.approx(0.43)
 
-    def test_short_confirmed_by_bear_cross(self):
-        """Bearish MACD cross confirms SHORT."""
-        ta = _make_ta(
-            macd_15m_cross="BEARISH_CROSS",
-            macd_15m_hist=-5,
-            macd_15m_above_signal=False,
-        )
-        ta.macd_15m.histogram_rising = False
-        confirmed, strength, reasons = self.strategy._check_lower_tf_confirmation(
-            ta, "SHORT"
-        )
-        assert confirmed is True
-        assert strength >= 0.40
 
-    def test_short_rejected_when_bullish(self):
-        """Bullish MACD does NOT confirm SHORT."""
-        ta = _make_ta(
-            macd_15m_cross="BULLISH_CROSS", macd_15m_hist=5, macd_15m_above_signal=True
-        )
-        confirmed, strength, reasons = self.strategy._check_lower_tf_confirmation(
-            ta, "SHORT"
-        )
-        assert confirmed is False
+def test_bitcoin_scan_calibration_uses_resolver_split_lane(tmp_path):
+    strat = BitcoinStrategy(
+        _make_config(),
+        MagicMock(),
+        PositionSizer(kelly_fraction=0.25, max_position_pct=0.05),
+    )
+    strat.lane_calibrator = LaneCalibrator(
+        path=tmp_path / "lane_posteriors.json",
+        shadow_mode=True,
+        posterior_version="lane_identity_v2_source_resolver",
+    )
+
+    strat._calibrate_est_prob(
+        0.47,
+        action="BUY_NO",
+        direction="DOWN",
+        window_size="15m",
+        signal_reason="quant_flip",
+        htf_bias="BULLISH",
+        side_source="btc_quant_disagree_flip",
+        resolver_path="htf_bullish__side_long__quant_short",
+    )
+
+    assert (
+        strat._last_calibration_lane_id
+        == "bitcoin|15m|down|bullish|htf_bullish_side_long_quant_short"
+    )
+
+
+def test_short_confirmed_by_bear_cross():
+    strategy = BitcoinStrategy(
+        _make_config(),
+        MagicMock(),
+        PositionSizer(kelly_fraction=0.25, max_position_pct=0.05),
+    )
+    ta = _make_ta(
+        macd_15m_cross="BEARISH_CROSS",
+        macd_15m_hist=-5,
+        macd_15m_above_signal=False,
+    )
+    ta.macd_15m.histogram_rising = False
+    confirmed, strength, reasons = strategy._check_lower_tf_confirmation(ta, "SHORT")
+    assert confirmed is True
+    assert strength >= 0.40
+
+
+def test_short_rejected_when_bullish():
+    strategy = BitcoinStrategy(
+        _make_config(),
+        MagicMock(),
+        PositionSizer(kelly_fraction=0.25, max_position_pct=0.05),
+    )
+    ta = _make_ta(
+        macd_15m_cross="BULLISH_CROSS", macd_15m_hist=5, macd_15m_above_signal=True
+    )
+    confirmed, strength, reasons = strategy._check_lower_tf_confirmation(ta, "SHORT")
+    assert confirmed is False
 
 
 class TestBitcoinTiming:

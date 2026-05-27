@@ -23,6 +23,8 @@ CRYPTO_UPDOWN_STRATEGIES: FrozenSet[str] = frozenset(
         "eth_macro",
         "hype_macro",
         "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
     }
 )
 
@@ -35,12 +37,15 @@ def symbol_to_strategy_name(symbol: str) -> str:
         "ETH": "eth_macro",
         "XRP": "xrp_macro",
         "HYPE": "hype_macro",
+        "DOGE": "doge_macro",
+        "BNB": "bnb_macro",
     }.get(str(symbol).upper(), "sol_macro")
 
 
 @dataclass(frozen=True)
 class UpdownExitGlobals:
     take_profit_pct: float
+    updown_hold_winners_to_resolution: bool
     updown_stop_loss_pct: float
     updown_stop_cents: float
     updown_exit_window_mins: float
@@ -67,6 +72,7 @@ class UpdownExitGlobals:
 @dataclass(frozen=True)
 class UpdownResolvedExitParams:
     take_profit_pct: float
+    updown_hold_winners_to_resolution: bool
     updown_stop_loss_pct: float
     updown_stop_cents: float
     updown_exit_window_mins: float
@@ -91,6 +97,7 @@ class UpdownResolvedExitParams:
 _UPDOWN_EXIT_PARAM_KEYS = frozenset(
     {
         "take_profit_pct",
+        "updown_hold_winners_to_resolution",
         "updown_stop_loss_pct",
         "updown_stop_cents",
         "updown_exit_window_mins",
@@ -114,13 +121,17 @@ _UPDOWN_EXIT_PARAM_KEYS = frozenset(
 )
 
 
-def _normalize_override_map(raw: Any) -> Dict[str, float]:
+def _normalize_override_map(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
-    out: Dict[str, float] = {}
+    out: Dict[str, Any] = {}
     for key in _UPDOWN_EXIT_PARAM_KEYS:
         if key in raw:
-            out[key] = float(raw[key])
+            out[key] = (
+                bool(raw[key])
+                if key == "updown_hold_winners_to_resolution"
+                else float(raw[key])
+            )
     return out
 
 
@@ -164,6 +175,9 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         lane_overrides[str(lane)] = _normalize_override_map(raw)
     return UpdownExitGlobals(
         take_profit_pct=float(ec.get("take_profit_pct", 0.15) or 0.15),
+        updown_hold_winners_to_resolution=bool(
+            ec.get("updown_hold_winners_to_resolution", False)
+        ),
         updown_stop_loss_pct=float(ec.get("updown_stop_loss_pct", 0.20) or 0.20),
         updown_stop_cents=base_stop,
         updown_exit_window_mins=base_win,
@@ -268,6 +282,7 @@ def resolve_updown_exit_params_for_position(
     strategy_cfg = g.updown_overrides.get(str(strategy_name), {})
     params: Dict[str, float] = {
         "take_profit_pct": g.take_profit_pct,
+        "updown_hold_winners_to_resolution": g.updown_hold_winners_to_resolution,
         "updown_stop_loss_pct": g.updown_stop_loss_pct,
         "updown_stop_cents": g.updown_stop_cents,
         "updown_exit_window_mins": g.updown_exit_window_mins,
@@ -300,6 +315,9 @@ def resolve_updown_exit_params_for_position(
             params.update(window_cfg.get(lane, {}))
     return UpdownResolvedExitParams(
         take_profit_pct=float(params["take_profit_pct"]),
+        updown_hold_winners_to_resolution=bool(
+            params["updown_hold_winners_to_resolution"]
+        ),
         updown_stop_loss_pct=float(params["updown_stop_loss_pct"]),
         updown_stop_cents=float(params["updown_stop_cents"]),
         updown_exit_window_mins=float(params["updown_exit_window_mins"]),

@@ -80,6 +80,27 @@ DEFAULT_CALIBRATION_DIR = (
 )
 DEFAULT_REJECTED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates.jsonl"
 
+
+def _valid_lane_id(value: Any) -> str:
+    lane_id = str(value or "").strip()
+    return lane_id if len(lane_id.split("|")) >= 5 else ""
+
+
+def _biases_from_live_lane(lane_id: str) -> Dict[str, str]:
+    parts = lane_id.split("|")
+    if len(parts) < 4:
+        return {}
+    bits = [bit for bit in parts[3].split("__") if bit]
+    if len(bits) >= 3:
+        return {
+            "primary_htf_bias": bits[0].upper(),
+            "alt_htf_bias": bits[1].upper(),
+            "btc_htf_bias": bits[2].upper(),
+        }
+    if bits:
+        return {"primary_htf_bias": bits[0].upper()}
+    return {}
+
 # Fixed stage taxonomy for the `stage` field on rejection records. Downstream
 # filters depend on these values — do not rename without coordinating the
 # consumers (calibration dashboards, jq one-liners).
@@ -435,6 +456,8 @@ def log_rejected_candidate(
         up_or_down = "up" if str(action).upper() == "BUY_YES" else "down"
         synthetic_lane = f"{strategy}|{window}|{up_or_down}|{bias_token}|rejected"
         record_context = dict(context or {})
+        live_lane_id = _valid_lane_id(record_context.get("calibration_lane_id"))
+        lane_biases = _biases_from_live_lane(live_lane_id)
         effective_min_edge_val = (
             float(effective_min_edge)
             if effective_min_edge is not None
@@ -454,7 +477,12 @@ def log_rejected_candidate(
             calibrated_est_prob_val = float(est_prob_up)
         if raw_est_prob_val is None:
             raw_est_prob_val = calibrated_est_prob_val
-        primary_bias = str(primary_htf_bias or htf_bias or "").strip()
+        primary_bias = str(
+            primary_htf_bias
+            or lane_biases.get("primary_htf_bias")
+            or htf_bias
+            or ""
+        ).strip()
         gate_reason_text = str(gate_reason or reason or "").strip()
         gate_stage_text = str(gate_stage or stage or "").strip()
         correlation_value = None
@@ -500,6 +528,8 @@ def log_rejected_candidate(
             "reason": reason,
             "stage": stage,
             "lane_id": synthetic_lane,
+            "ghost_lane_id": synthetic_lane,
+            "live_lane_id": live_lane_id,
             "market_id": str(getattr(market, "id", "") or ""),
             "market_question": str(getattr(market, "question", "") or ""),
             "market_slug": str(getattr(market, "slug", "") or ""),
@@ -518,6 +548,8 @@ def log_rejected_candidate(
             "side_source": str(side_source or "").strip(),
             "resolver_path": str(resolver_path or side_source or "").strip(),
             "primary_htf_bias": primary_bias,
+            "alt_htf_bias": lane_biases.get("alt_htf_bias", ""),
+            "btc_htf_bias": lane_biases.get("btc_htf_bias", ""),
             "lane_family": str(lane_family or "").strip(),
             "entry_policy_snapshot": (
                 entry_policy_snapshot if isinstance(entry_policy_snapshot, dict) else {}

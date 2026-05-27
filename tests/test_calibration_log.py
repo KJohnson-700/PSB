@@ -75,7 +75,7 @@ def test_build_record_extracts_canonical_schema():
     assert rec["edge_bucket"] == "0.12_0.18"
     assert rec["entry_price_bucket"] == "0.43_0.46"
     assert rec["exit_reason"] == "take_profit"
-    assert rec["schema_version"] == 1
+    assert rec["schema_version"] == 2
 
 
 def test_build_record_handles_loss_and_buy_no():
@@ -107,6 +107,9 @@ def test_build_record_preserves_trace_fields_from_entry_signal():
             "side_source": "bullish_rally_default",
             "resolver_path": "four_path_resolver",
             "primary_htf_bias": "BULLISH",
+            "alt_htf_bias": "BULLISH",
+            "btc_htf_bias": "BEAR",
+            "conflict_type": "none",
             "lane_family": "override",
             "entry_policy": {"min_edge": 0.09},
             "effective_min_edge": 0.11,
@@ -117,6 +120,9 @@ def test_build_record_preserves_trace_fields_from_entry_signal():
     assert rec["side_source"] == "bullish_rally_default"
     assert rec["resolver_path"] == "four_path_resolver"
     assert rec["primary_htf_bias"] == "BULLISH"
+    assert rec["alt_htf_bias"] == "BULLISH"
+    assert rec["btc_htf_bias"] == "BEAR"
+    assert rec["conflict_type"] == "none"
     assert rec["lane_family"] == "override"
     assert rec["entry_policy_snapshot"] == {"min_edge": 0.09}
     assert rec["effective_min_edge"] == 0.11

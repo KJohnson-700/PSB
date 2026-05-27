@@ -88,6 +88,14 @@ def _full_bot_instance() -> Optional["PolyBot"]:
 # ── AI summary cache (keyed by session_id) ────────────────────────────────────
 _ai_summary_cache: Dict[str, str] = {}
 
+# ── All-time journal aggregate cache (TTL'd, used for session-vs-alltime deltas)
+# Baseline cutoff: earlier sessions ran under pre-ghost / pre-calibration code
+# and aren't comparable. Start from 2026-05-15 — first day with settled-ghost
+# data and the 2026-05-22 baseline ref doc's bracket.
+_ALLTIME_BASELINE_START_ISO = "2026-05-15"
+_alltime_agg_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_ALLTIME_AGG_TTL_S = 300.0
+
 
 def _strip_ai_thinking_text(text: str) -> str:
     """Remove provider reasoning wrappers before dashboard text reaches operators."""
@@ -1881,11 +1889,23 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
                 ts = _gl_parse_ts(rec.get("ts") or rec.get("settled_at"))
                 if ts is None or ts < since:
                     continue
+                context = rec.get("context")
+                context_lane_id = (
+                    context.get("calibration_lane_id") if isinstance(context, dict) else ""
+                )
+                live_lane_id = (
+                    rec.get("live_lane_id")
+                    or context_lane_id
+                    or rec.get("lane_id")
+                    or ""
+                )
                 out.append({
                     "ts": ts.isoformat(),
                     "hour_utc": ts.hour,
                     "dow": ts.weekday(),  # Monday=0
-                    "lane_id": rec.get("lane_id") or "",
+                    "lane_id": live_lane_id,
+                    "ghost_lane_id": rec.get("ghost_lane_id") or rec.get("lane_id") or "",
+                    "live_lane_id": live_lane_id,
                     "strategy": rec.get("strategy") or "",
                     "window": rec.get("window") or "",
                     "side": rec.get("side") or "",
@@ -1896,6 +1916,17 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
                     "yes_price": rec.get("yes_price"),
                     "est_prob_up": rec.get("est_prob_up"),
                     "htf_bias": rec.get("htf_bias"),
+                    "primary_htf_bias": rec.get("primary_htf_bias"),
+                    "alt_htf_bias": rec.get("alt_htf_bias"),
+                    "btc_htf_bias": rec.get("btc_htf_bias"),
+                    "side_source": rec.get("side_source"),
+                    "resolver_path": rec.get("resolver_path"),
+                    "lane_family": rec.get("lane_family"),
+                    "effective_min_edge": rec.get("effective_min_edge"),
+                    "raw_est_prob": rec.get("raw_est_prob"),
+                    "calibrated_est_prob": rec.get("calibrated_est_prob"),
+                    "gate_reason": rec.get("gate_reason") or rec.get("reason"),
+                    "gate_stage": rec.get("gate_stage"),
                     "hypothetical_payout": rec.get("hypothetical_payout"),
                     "market_id": rec.get("market_id"),
                     "price_regime": rec.get("price_regime"),
@@ -4454,6 +4485,192 @@ def _format_narrator_block(annotations: List[Dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _alltime_journal_aggregate() -> Dict[str, Any]:
+    """Sum fills/wins/losses/realized_pnl across every active + archived session.
+    Cached for ~5 min; per-session figures come from summary.json (cheap)."""
+    import time as _t
+    now = _t.time()
+    cached = _alltime_agg_cache.get("data")
+    if cached and (now - float(_alltime_agg_cache.get("ts") or 0)) < _ALLTIME_AGG_TTL_S:
+        return cached
+
+    from src.execution.trade_journal import TradeJournal
+    try:
+        sessions = TradeJournal.list_sessions()
+    except Exception as exc:
+        logger.warning("alltime aggregate: list_sessions failed: %s", exc)
+        sessions = []
+
+    by_session: Dict[str, Dict[str, Any]] = {}
+    total_fills = 0
+    total_wins = 0
+    total_losses = 0
+    total_pnl = 0.0
+    by_strategy: Dict[str, Dict[str, float]] = defaultdict(lambda: {"trades": 0, "wins": 0, "pnl": 0.0})
+
+    skipped_pre_baseline = 0
+    for s in sessions:
+        sid = str(s.get("session_id") or "")
+        if not sid:
+            continue
+        started_at = str(s.get("started_at") or "")
+        # Skip sessions that started before the ghost/calibration baseline.
+        if started_at and started_at[:10] < _ALLTIME_BASELINE_START_ISO:
+            skipped_pre_baseline += 1
+            continue
+        wins = int(s.get("wins") or 0)
+        losses = int(s.get("losses") or 0)
+        fills = int(s.get("total_entries") or (wins + losses))
+        pnl = float(s.get("realized_pnl") or 0.0)
+        by_session[sid] = {"fills": fills, "wins": wins, "losses": losses, "pnl": pnl,
+                            "strategy_stats": s.get("strategy_stats") or {}}
+        total_fills += fills
+        total_wins += wins
+        total_losses += losses
+        total_pnl += pnl
+        for strat, st in (s.get("strategy_stats") or {}).items():
+            try:
+                by_strategy[strat]["trades"] += int(st.get("trades") or 0)
+                by_strategy[strat]["wins"] += int(st.get("wins") or 0)
+                by_strategy[strat]["pnl"] += float(st.get("pnl") or 0)
+            except (TypeError, ValueError):
+                continue
+
+    n_sessions = max(1, len(by_session))
+    data = {
+        "baseline_start": _ALLTIME_BASELINE_START_ISO,
+        "skipped_pre_baseline": skipped_pre_baseline,
+        "n_sessions": len(by_session),
+        "fills": total_fills,
+        "wins": total_wins,
+        "losses": total_losses,
+        "realized_pnl": round(total_pnl, 2),
+        "win_rate": round(total_wins / max(1, total_wins + total_losses), 4),
+        "avg_fills_per_session": round(total_fills / n_sessions, 2),
+        "avg_pnl_per_session": round(total_pnl / n_sessions, 2),
+        "by_session": by_session,
+        "by_strategy": {k: {
+            "trades": v["trades"],
+            "wins": v["wins"],
+            "pnl": round(v["pnl"], 2),
+            "win_rate": round(v["wins"] / v["trades"], 4) if v["trades"] else 0.0,
+        } for k, v in by_strategy.items()},
+    }
+    _alltime_agg_cache["data"] = data
+    _alltime_agg_cache["ts"] = now
+    return data
+
+
+def _build_session_structured_block(summary_data: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    """Build morning-summary-style KPI cards + per-strategy + standouts +
+    priority-actions for the Last Session AI Review card."""
+    alltime = _alltime_journal_aggregate()
+    by_session = (alltime.get("by_session") or {})
+    # Exclude this session from the all-time baseline so deltas are vs. *other* sessions.
+    other_fills = max(0, int(alltime.get("fills") or 0) - int((by_session.get(session_id) or {}).get("fills") or 0))
+    other_wins = max(0, int(alltime.get("wins") or 0) - int((by_session.get(session_id) or {}).get("wins") or 0))
+    other_losses = max(0, int(alltime.get("losses") or 0) - int((by_session.get(session_id) or {}).get("losses") or 0))
+    other_pnl = float(alltime.get("realized_pnl") or 0.0) - float((by_session.get(session_id) or {}).get("pnl") or 0.0)
+    other_n_sessions = max(1, int(alltime.get("n_sessions") or 1) - (1 if session_id in by_session else 0))
+    other_wr = (other_wins / (other_wins + other_losses)) if (other_wins + other_losses) > 0 else 0.0
+
+    s_fills = int(summary_data.get("total_entries") or 0)
+    s_wins = int(summary_data.get("wins") or 0)
+    s_losses = int(summary_data.get("losses") or 0)
+    s_wr = float(summary_data.get("win_rate") or 0.0)
+    s_pnl = float(summary_data.get("realized_pnl") or 0.0)
+    s_open = int(summary_data.get("open_positions") or 0)
+
+    kpis = [
+        {"label": "session fills", "value": s_fills,
+         "delta": f"avg {round(other_fills / other_n_sessions, 1)}/sess all-time" if other_n_sessions else ""},
+        {"label": "win rate",
+         "value": f"{round(s_wr * 100, 1)}%" if (s_wins + s_losses) else "n/a",
+         "delta": f"{round((s_wr - other_wr) * 100, 1):+}pp vs all-time" if (s_wins + s_losses) and (other_wins + other_losses) else "no baseline yet"},
+        {"label": "realized pnl", "value": f"${s_pnl:+.2f}",
+         "delta": f"avg ${round(other_pnl / other_n_sessions, 2):+.2f}/sess" if other_n_sessions else ""},
+        {"label": "open positions", "value": s_open,
+         "delta": f"unrealized ${float(summary_data.get('unrealized_pnl') or 0):+.2f}"},
+    ]
+
+    # Per-strategy: this session next to all-time baseline.
+    sstrats = summary_data.get("strategy_stats") or {}
+    astrats = alltime.get("by_strategy") or {}
+    per_strategy = []
+    for strat, st in sorted(sstrats.items()):
+        trades = int(st.get("trades") or 0)
+        if trades == 0:
+            continue
+        wr = float(st.get("win_rate") or 0.0)
+        pnl = float(st.get("pnl") or 0.0)
+        avg_pnl = float(st.get("avg_pnl") or 0.0)
+        base = astrats.get(strat) or {}
+        base_wr = float(base.get("win_rate") or 0.0)
+        per_strategy.append({
+            "strategy": strat,
+            "n": trades,
+            "wr_pct": round(wr * 100, 1),
+            "pnl": round(pnl, 2),
+            "avg_pnl": round(avg_pnl, 2),
+            "wr_delta_pp": round((wr - base_wr) * 100, 1) if base.get("trades") else None,
+            "alltime_n": int(base.get("trades") or 0),
+        })
+    per_strategy.sort(key=lambda r: r["pnl"], reverse=True)
+
+    # Standouts: best and worst strategy this session by PnL.
+    standouts: List[Dict[str, Any]] = []
+    if per_strategy:
+        best = per_strategy[0]
+        if best["pnl"] > 0:
+            standouts.append({
+                "title": f"{best['strategy']} carried the session",
+                "evidence": f"n={best['n']} · WR {best['wr_pct']}% · ${best['pnl']:+.2f}",
+                "recommendation": "Confirm lane posteriors still favor this strategy before next session.",
+                "severity": "info", "sample_grade": "ok" if best["n"] >= 10 else "thin",
+            })
+        worst = per_strategy[-1]
+        if worst["pnl"] < 0 and worst["strategy"] != best["strategy"]:
+            standouts.append({
+                "title": f"{worst['strategy']} bled this session",
+                "evidence": f"n={worst['n']} · WR {worst['wr_pct']}% · ${worst['pnl']:+.2f}",
+                "recommendation": "Pull up the lane heatmap and check if a single bias-triple cell drove the loss.",
+                "severity": "warning", "sample_grade": "ok" if worst["n"] >= 10 else "thin",
+            })
+
+    # Next-edit queue: pull priority_actions from the ghost morning summary (already
+    # surfaces actionable lane edits). Soft-fail — never block the AI Review.
+    next_edits: List[Dict[str, Any]] = []
+    try:
+        since_dt, until_dt, _label = _gl_default_overnight_window("America/Los_Angeles")
+        morning = _gl_build_morning_summary(since_dt, until_dt, window_label="overnight")
+        for row in (morning.get("priority_actions") or [])[:5]:
+            next_edits.append({
+                "title": row.get("title") or "edit",
+                "evidence": f"{row.get('change_type') or 'candidate'} · {row.get('evidence') or ''}",
+                "recommendation": row.get("recommendation") or "",
+                "n": row.get("n") or 0,
+                "sample_grade": row.get("confidence") or "thin",
+                "severity": "warning" if row.get("apply_mode") == "manual_review" else "info",
+            })
+    except Exception as exc:
+        logger.debug("structured ai-summary: priority_actions fetch failed: %s", exc)
+
+    return {
+        "kpis": kpis,
+        "per_strategy": per_strategy,
+        "standouts": standouts,
+        "next_edits": next_edits,
+        "alltime": {
+            "baseline_start": alltime.get("baseline_start"),
+            "skipped_pre_baseline": alltime.get("skipped_pre_baseline"),
+            "n_sessions": alltime.get("n_sessions"),
+            "fills": alltime.get("fills"),
+            "win_rate": alltime.get("win_rate"),
+            "realized_pnl": alltime.get("realized_pnl"),
+        },
+    }
+
+
 @app.get("/api/journal/ai-summary")
 async def get_session_ai_summary(session_id: Optional[str] = None):
     """Generate AI natural-language summary of the most recent session, plus
@@ -4480,7 +4697,8 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
     cache_key = f"{session_id}::{mtime}"
     cached_text = _ai_summary_cache.get(cache_key)
     if cached_text is not None:
-        return {"summary": cached_text, "session_id": session_id, "cached": True}
+        structured = _build_session_structured_block(summary_data, session_id)
+        return {"summary": cached_text, "session_id": session_id, "cached": True, "structured": structured}
 
     trades = summary_data.get("total_trades", 0) or summary_data.get("total_entries", 0) or 0
     wins = summary_data.get("wins", 0)
@@ -4494,7 +4712,8 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
         else:
             summary = "No trades have been completed in this session yet."
         _ai_summary_cache[cache_key] = summary
-        return {"summary": summary, "session_id": session_id}
+        structured = _build_session_structured_block(summary_data, session_id)
+        return {"summary": summary, "session_id": session_id, "structured": structured}
 
     trades_word = "trade" if trades == 1 else "trades"
     prompt = (
@@ -4543,7 +4762,8 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
 
     summary = summary + narrator_block
     _ai_summary_cache[cache_key] = summary
-    return {"summary": summary, "session_id": session_id, "cached": False}
+    structured = _build_session_structured_block(summary_data, session_id)
+    return {"summary": summary, "session_id": session_id, "cached": False, "structured": structured}
 
 
 # ─── EXPOSURE MANAGER ────────────────────────────────────────────
@@ -5406,7 +5626,12 @@ class ConfigUpdates(BaseModel):
                 _validate_section_keys(
                     exit_rules,
                     "trading.exit_rules",
-                    {"updown_stop_loss_pct", "updown_lane_overrides", "updown_overrides"},
+                    {
+                        "updown_stop_loss_pct",
+                        "updown_hold_winners_to_resolution",
+                        "updown_lane_overrides",
+                        "updown_overrides",
+                    },
                 )
                 _validate_numeric_range(
                     exit_rules,
@@ -5577,6 +5802,7 @@ def _validate_updown_override_patch(exit_rules: Dict[str, Any]) -> None:
                 "updown_high_entry_threshold",
                 "updown_in_profit_stop_trigger_pct",
                 "updown_in_profit_stop_tighten_to_pct",
+                "updown_hold_winners_to_resolution",
                 "lane_overrides",
                 "window_lane_overrides",
             },

@@ -28,6 +28,7 @@ DEFAULT_CALIBRATION_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "calibration"
 )
 DEFAULT_TRADES_LOG = DEFAULT_CALIBRATION_DIR / "trades.jsonl"
+CALIBRATION_SCHEMA_VERSION = 2
 
 
 def _coerce_float(value: Any) -> Optional[float]:
@@ -123,6 +124,8 @@ def build_record_from_closed_trade(
         or closed.get("htf_bias")
         or ""
     ).strip()
+    alt_htf_bias = str(signal.get("alt_htf_bias") or "").strip()
+    btc_htf_bias = str(signal.get("btc_htf_bias") or "").strip()
     entry_policy_snapshot = signal.get("entry_policy")
     if not isinstance(entry_policy_snapshot, dict):
         entry_policy_snapshot = {}
@@ -177,14 +180,20 @@ def build_record_from_closed_trade(
         "closed_at": str(closed.get("closed_at") or ""),
         "side_source": side_source,
         "resolver_path": resolver_path,
+        "conflict_type": str(signal.get("conflict_type") or "").strip(),
+        "htf_side": str(signal.get("htf_side") or "").strip(),
+        "quant_side": str(signal.get("quant_side") or "").strip(),
+        "momentum_side": str(signal.get("momentum_side") or "").strip(),
         "primary_htf_bias": primary_htf_bias,
+        "alt_htf_bias": alt_htf_bias,
+        "btc_htf_bias": btc_htf_bias,
         "lane_family": _resolve_lane_family(signal, lane_id),
         "entry_policy_snapshot": entry_policy_snapshot,
         "effective_min_edge": effective_min_edge,
         "raw_est_prob": raw_est_prob,
         "gate_reason": gate_reason,
         "gate_stage": gate_stage,
-        "schema_version": 1,
+        "schema_version": CALIBRATION_SCHEMA_VERSION,
         **bucket_tags,
     }
 

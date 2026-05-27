@@ -18,6 +18,28 @@ from src.execution.updown_exit_shared import (
 
 def test_symbol_to_strategy_name_maps_hype():
     assert symbol_to_strategy_name("hype") == "hype_macro"
+    assert symbol_to_strategy_name("doge") == "doge_macro"
+    assert symbol_to_strategy_name("bnb") == "bnb_macro"
+
+
+def test_crypto_updown_strategy_set_includes_all_enabled_macro_assets():
+    from src.execution.updown_exit_shared import CRYPTO_UPDOWN_STRATEGIES
+
+    assert {
+        "bitcoin",
+        "sol_macro",
+        "eth_macro",
+        "hype_macro",
+        "xrp_macro",
+        "doge_macro",
+        "bnb_macro",
+    }.issubset(CRYPTO_UPDOWN_STRATEGIES)
+
+
+def test_parse_hold_winners_to_resolution_policy():
+    g = parse_updown_exit_globals({"updown_hold_winners_to_resolution": True})
+
+    assert g.updown_hold_winners_to_resolution is True
 
 
 def test_parse_includes_exit_window_max_fraction_in_overrides():

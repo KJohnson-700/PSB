@@ -87,6 +87,15 @@ def _ghost_to_live_lane_id(rec: Dict[str, Any]) -> Optional[str]:
     3-segment ``<alt_1h>__<alt_1h>__<btc>`` heuristic; family forced to
     ``standard``.
     """
+    live_lane_id = str(rec.get("live_lane_id") or "").strip()
+    if live_lane_id and len(live_lane_id.split("|")) >= 5:
+        return live_lane_id
+    context = rec.get("context")
+    if isinstance(context, dict):
+        context_lane_id = str(context.get("calibration_lane_id") or "").strip()
+        if context_lane_id and len(context_lane_id.split("|")) >= 5:
+            return context_lane_id
+
     lid = str(rec.get("lane_id") or "")
     parts = lid.split("|")
     if len(parts) < 5:

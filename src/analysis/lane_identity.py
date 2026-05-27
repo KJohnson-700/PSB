@@ -53,12 +53,33 @@ def resolve_lane_regime(
 
 def resolve_entry_family(
     *,
+    strategy: Optional[str] = None,
+    window_size: Optional[str] = None,
+    lane_side: Optional[str] = None,
     side_source: Optional[str] = None,
+    resolver_path: Optional[str] = None,
     ai_used: bool = False,
     reason: Optional[str] = None,
     signal_reason: Optional[str] = None,
 ) -> str:
     source = _clean_part(side_source, default="")
+    resolver = _clean_part(resolver_path, default="")
+    strat = _clean_part(strategy, default="")
+    window = _clean_part(window_size, default="")
+    side = _clean_part(lane_side, default="")
+
+    # BTC side selection is itself a regime decision. Keep the family split by
+    # resolver path so HTF, rollover, and quant-disagreement buckets no longer
+    # share one posterior.
+    if strat == "bitcoin":
+        return resolver or source or "standard"
+
+    # The current alt bleed concentrates in 5m downside standard lanes. Split
+    # that high-volume bucket by source so calibration can learn whether e.g.
+    # bearish dip defaults, BTC-follow paths, or overrides are the actual issue.
+    if strat.endswith("_macro") and window == "5m" and side == "down" and source:
+        return source
+
     if source:
         if "override" in source:
             return "override"
@@ -88,6 +109,7 @@ def build_lane_metadata(
     direction: Optional[str] = None,
     entry_leg: Optional[str] = None,
     side_source: Optional[str] = None,
+    resolver_path: Optional[str] = None,
     ai_used: bool = False,
     reason: Optional[str] = None,
     signal_reason: Optional[str] = None,
@@ -106,7 +128,11 @@ def build_lane_metadata(
         btc_1h_regime=btc_1h_regime,
     )
     entry_family = resolve_entry_family(
+        strategy=strategy,
+        window_size=window_size,
+        lane_side=lane_side,
         side_source=side_source,
+        resolver_path=resolver_path,
         ai_used=ai_used,
         reason=reason,
         signal_reason=signal_reason,

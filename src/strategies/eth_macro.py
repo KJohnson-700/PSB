@@ -21,7 +21,14 @@ from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
 from src.analysis.lane_entry_policy import entry_policy_to_dict
 from src.analysis.lane_identity import build_lane_metadata
-from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy, macd_bearish_momentum_ok
+from src.strategies.sol_macro import (
+    SolMacroSignal,
+    SolMacroStrategy,
+    build_alt_resolver_metadata,
+    macd_bearish_momentum_ok,
+    side_from_est_prob_up,
+    side_from_momentum_bias,
+)
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -1487,6 +1494,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 side_source=side_source,
                 signal_reason=" | ".join(r for r in reason_parts if r),
                 htf_bias=primary_htf_bias,
+                primary_htf_bias=primary_htf_bias,
+                alt_htf_bias=mtt.h1_trend,
                 btc_1h_regime=btc_1h_regime if btc_ta else None,
             )
             edge = estimated_prob - yes_price if action == "BUY_YES" else yes_price - estimated_prob
@@ -2044,6 +2053,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                 if btc_ta
                 else float(getattr(corr, "btc_price", 0.0) or 0.0)
             )
+            resolver_meta = build_alt_resolver_metadata(
+                side_source=side_source,
+                htf_side=allowed_side,
+                quant_side=side_from_est_prob_up(raw_est_prob),
+                momentum_side=side_from_momentum_bias(getattr(mtt, "m5_trend", None)),
+            )
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
@@ -2065,6 +2080,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code="eth",
                 htf_bias=primary_htf_bias,
+                primary_htf_bias=primary_htf_bias,
+                alt_htf_bias=mtt.h1_trend,
+                btc_htf_bias=btc_htf_bias,
                 btc_1h_regime=btc_1h_regime,
                 entry_policy=entry_policy_meta,
                 window_size=_updown_tf,
@@ -2074,6 +2092,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 rsi=round(eth.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
                 side_source=side_source,
+                **resolver_meta,
                 convergence_score=(
                     round(float(entry_convergence_score), 4)
                     if "entry_convergence_score" in locals() and entry_convergence_score is not None
@@ -2118,12 +2137,21 @@ class ETHMacroStrategy(SolMacroStrategy):
                     "btc_4h_hist_conviction_ok": (
                         bool(btc_htf_details["hist_conviction_ok"]) if btc_htf_details else None
                     ),
-                    "alt_1h_histogram": round(float(eth.macd_1h.histogram or 0.0), 4),
-                    "alt_1h_histogram_rising": bool(eth.macd_1h.histogram_rising),
-                    "alt_15m_histogram": round(float(eth.macd_15m.histogram or 0.0), 4),
-                    "alt_15m_histogram_rising": bool(eth.macd_15m.histogram_rising),
-                    "alt_5m_histogram": round(float(eth.macd_5m.histogram or 0.0), 4),
-                    "alt_5m_histogram_rising": bool(eth.macd_5m.histogram_rising),
+                    **self._build_alt_indicator_snapshot(
+                        eth,
+                        correlation=corr,
+                        composite_score=(
+                            entry_composite_score
+                            if "entry_composite_score" in locals()
+                            else None
+                        ),
+                        convergence_score=(
+                            entry_convergence_score
+                            if "entry_convergence_score" in locals()
+                            else None
+                        ),
+                        entry_volatility=getattr(conditions, "volatility", 0.0),
+                    ),
                     "btc_1h_histogram": round(float(btc_ta.macd_1h.histogram or 0.0), 4)
                     if btc_ta
                     else None,

@@ -149,6 +149,71 @@ def macd_bullish_momentum_ok(m: Any) -> bool:
     return False
 
 
+def side_from_bias(bias: Optional[str]) -> Optional[str]:
+    """Map a directional bias label to the canonical LONG/SHORT side."""
+    token = str(bias or "").strip().upper()
+    if token == "BULLISH":
+        return "LONG"
+    if token == "BEARISH":
+        return "SHORT"
+    return None
+
+
+def side_from_est_prob_up(est_prob_up: Optional[float]) -> Optional[str]:
+    """Infer the probability-implied side from YES probability."""
+    try:
+        prob = float(est_prob_up)
+    except (TypeError, ValueError):
+        return None
+    if prob > 0.5:
+        return "LONG"
+    if prob < 0.5:
+        return "SHORT"
+    return None
+
+
+def side_from_momentum_bias(momentum_bias: Optional[str]) -> Optional[str]:
+    """Infer side from a BULLISH/BEARISH short-window momentum label."""
+    return side_from_bias(momentum_bias)
+
+
+def build_alt_resolver_metadata(
+    *,
+    side_source: Optional[str],
+    htf_side: Optional[str],
+    quant_side: Optional[str],
+    momentum_side: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """Build BTC-compatible resolver metadata for alt macro signals."""
+    htf = str(htf_side or "").strip().upper() or None
+    quant = str(quant_side or "").strip().upper() or None
+    momentum = str(momentum_side or "").strip().upper() or None
+    source = str(side_source or "alt_macro").strip() or "alt_macro"
+    conflict_bits: List[str] = []
+    if htf and quant and htf != quant:
+        conflict_bits.append("quant")
+    if htf and momentum and htf != momentum:
+        conflict_bits.append("momentum")
+    if not conflict_bits:
+        conflict_type = "aligned"
+    else:
+        conflict_type = "alt_macro_" + "_".join(conflict_bits) + "_disagree"
+    tokens = [source]
+    if htf:
+        tokens.append(f"htf_{htf.lower()}")
+    if quant:
+        tokens.append(f"quant_{quant.lower()}")
+    if momentum:
+        tokens.append(f"momentum_{momentum.lower()}")
+    return {
+        "conflict_type": conflict_type,
+        "resolver_path": "__".join(tokens),
+        "htf_side": htf,
+        "quant_side": quant,
+        "momentum_side": momentum,
+    }
+
+
 class SolMacroSignal(BaseModel):
     """Represents a signal on a Solana price market."""
     market_id: str = Field(..., description="Market identifier")
@@ -171,6 +236,18 @@ class SolMacroSignal(BaseModel):
     ai_used: bool = Field(default=False, description="Whether AI was consulted")
     # Coach features — logged to journal extra dict for pattern analysis
     htf_bias: Optional[str] = Field(None, description="HTF bias at entry: BULLISH/BEARISH/NEUTRAL")
+    primary_htf_bias: Optional[str] = Field(
+        None,
+        description="Primary directional bias used for entry; normally alt macro for alt strategies",
+    )
+    alt_htf_bias: Optional[str] = Field(
+        None,
+        description="Alt-native HTF/1H bias at entry, kept separate from primary/fallback bias",
+    )
+    btc_htf_bias: Optional[str] = Field(
+        None,
+        description="BTC higher-timeframe context bias at entry",
+    )
     btc_1h_regime: Optional[str] = Field(
         None, description="BTC 1H vs SMA(20) bucket: BULL/RANGE/BEAR when regime gates enabled"
     )
@@ -184,6 +261,11 @@ class SolMacroSignal(BaseModel):
     rsi: Optional[float] = Field(None, description="SOL RSI-14 at entry")
     corr_1h: Optional[float] = Field(None, description="BTC–alt 1h correlation at entry (SOL/ETH/HYPE/XRP)")
     side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
+    conflict_type: Optional[str] = Field(None, description="Alt resolver conflict class at entry")
+    resolver_path: Optional[str] = Field(None, description="Alt resolver decision path at entry")
+    htf_side: Optional[str] = Field(None, description="HTF-implied side before exceptions")
+    quant_side: Optional[str] = Field(None, description="Raw-quant-implied side when available")
+    momentum_side: Optional[str] = Field(None, description="Short-window momentum side when available")
     oracle_basis_bps: Optional[float] = Field(None, description="Oracle basis at entry when applicable")
     indicator_snapshot: Optional[Dict[str, Any]] = Field(
         None,
@@ -657,6 +739,78 @@ class SolMacroStrategy:
         """Uppercase label for log lines (SOL, ETH, HYPE, XRP)."""
         return self._alt_asset_code().upper()
 
+    def _build_alt_indicator_snapshot(
+        self,
+        alt: Any,
+        *,
+        correlation: Optional[Any] = None,
+        composite_score: Optional[float] = None,
+        convergence_score: Optional[float] = None,
+        entry_volatility: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build full-fidelity alt TA snapshot for replay/FSM validation.
+
+        This is intentionally asset-neutral. SOL, XRP, HYPE, BNB, and DOGE all
+        flow through this base path, while ETH can reuse the same contract.
+        """
+
+        def _macd(tf: str, fallback_tf: str = "15m") -> tuple[str, Any]:
+            obj = getattr(alt, f"macd_{tf}", None)
+            if obj is None and fallback_tf:
+                obj = getattr(alt, f"macd_{fallback_tf}", None)
+            return tf, obj
+
+        def _hist(obj: Any) -> float:
+            return round(float(getattr(obj, "histogram", 0.0) or 0.0), 4)
+
+        def _rising(obj: Any) -> bool:
+            return bool(getattr(obj, "histogram_rising", False))
+
+        def _crossover(obj: Any) -> str:
+            return str(getattr(obj, "crossover", "NONE") or "NONE")
+
+        def _above_zero(obj: Any) -> bool:
+            return bool(getattr(obj, "above_zero", False))
+
+        snapshot: Dict[str, Any] = {
+            "composite_score": (
+                round(float(composite_score), 4) if composite_score is not None else None
+            ),
+            "convergence_score": (
+                round(float(convergence_score), 4) if convergence_score is not None else None
+            ),
+            "entry_volatility": (
+                round(float(entry_volatility), 6) if entry_volatility is not None else None
+            ),
+        }
+
+        for tf, obj in (
+            _macd("1h"),
+            _macd("30m"),
+            _macd("15m"),
+            _macd("5m"),
+        ):
+            snapshot[f"alt_{tf}_histogram"] = _hist(obj)
+            snapshot[f"alt_{tf}_histogram_rising"] = _rising(obj)
+            snapshot[f"alt_{tf}_crossover"] = _crossover(obj)
+            snapshot[f"alt_{tf}_above_zero"] = _above_zero(obj)
+
+        snapshot.update(
+            {
+                "alt_ema_9": round(float(getattr(alt, "ema_9", 0.0) or 0.0), 4),
+                "alt_ema_21": round(float(getattr(alt, "ema_21", 0.0) or 0.0), 4),
+                "alt_ema_50": round(float(getattr(alt, "ema_50", 0.0) or 0.0), 4),
+                "alt_rsi_14": round(float(getattr(alt, "rsi_14", 50.0) or 50.0), 2),
+                "btc_move_5m_pct": round(
+                    float(getattr(correlation, "btc_move_5m_pct", 0.0) or 0.0), 4
+                ),
+                "btc_move_15m_pct": round(
+                    float(getattr(correlation, "btc_move_15m_pct", 0.0) or 0.0), 4
+                ),
+            }
+        )
+        return snapshot
+
     def _btc_alt_corr_log_label(self) -> str:
         return f"BTC-{self._alt_log_label()} corr"
 
@@ -1124,19 +1278,45 @@ class SolMacroStrategy:
         self,
         sol: Any,
         *,
+        action: Optional[str] = None,
+        window_size: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> OracleValidation:
+        def _float_config(key: str, default: Optional[float]) -> Optional[float]:
+            raw = self.config.get(key, default)
+            if raw is None:
+                return default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        side = "buy_no" if str(action or "").strip().upper() == "BUY_NO" else "buy_yes"
+        window = str(window_size or "").strip().lower()
+        max_basis_bps = self.oracle_max_basis_bps
+        basis_relax_max_bps = self.oracle_basis_relax_max_bps
+        stale_basis_relax_max_bps = self.oracle_stale_basis_relax_max_bps
+        if window:
+            max_basis_bps = _float_config(f"oracle_max_basis_bps_{window}_{side}", max_basis_bps)
+            basis_relax_max_bps = _float_config(
+                f"oracle_basis_relax_max_bps_{window}_{side}",
+                basis_relax_max_bps,
+            )
+            stale_basis_relax_max_bps = _float_config(
+                f"oracle_stale_basis_relax_max_bps_{window}_{side}",
+                stale_basis_relax_max_bps,
+            )
         return validate_oracle_reference(
             oracle_price=getattr(sol, "chainlink_price", None),
             exchange_spot=getattr(sol, "current_price", None),
             oracle_updated_at=getattr(sol, "chainlink_updated_at", None),
             max_age_sec=self.oracle_max_age_sec,
-            max_basis_bps=self.oracle_max_basis_bps,
+            max_basis_bps=max_basis_bps,
             require_oracle=self.require_oracle_for_updown,
             now=now,
             allow_exchange_when_oracle_missing=self.updown_allow_exchange_when_oracle_missing,
-            stale_basis_relax_max_bps=self.oracle_stale_basis_relax_max_bps,
-            basis_relax_max_bps=self.oracle_basis_relax_max_bps,
+            stale_basis_relax_max_bps=stale_basis_relax_max_bps,
+            basis_relax_max_bps=basis_relax_max_bps,
         )
 
     def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
@@ -1425,7 +1605,9 @@ class SolMacroStrategy:
         side_source: str,
         signal_reason: str,
         htf_bias: Optional[str],
-        btc_1h_regime: Optional[str],
+        primary_htf_bias: Optional[str] = None,
+        alt_htf_bias: Optional[str] = None,
+        btc_1h_regime: Optional[str] = None,
     ) -> float:
         self._last_calibration_vetoed = False
         self._last_calibration_lane_id = ""
@@ -1442,8 +1624,8 @@ class SolMacroStrategy:
             ai_used=False,
             reason=signal_reason,
             signal_reason=signal_reason,
-            htf_bias=htf_bias,
-            alt_htf_bias=htf_bias,
+            primary_htf_bias=primary_htf_bias or htf_bias,
+            alt_htf_bias=alt_htf_bias or htf_bias,
             btc_1h_regime=btc_1h_regime,
         )
         lane_id = str(lane_meta.get("lane_id") or "").strip()
@@ -2492,7 +2674,11 @@ class SolMacroStrategy:
                     reason_parts.append(f"rsi_soft_penalty={rsi_soft_penalty:.3f}")
                     _sample("rsi_soft_penalty", rsi_soft_penalty)
                 rsi_soft_delta = _rsi_soft_delta
-                oracle_validation = self._validate_updown_oracle(sol)
+                oracle_validation = self._validate_updown_oracle(
+                    sol,
+                    action=action,
+                    window_size=_updown_tf if is_updown else "15m",
+                )
                 if not oracle_validation.passed:
                     _bump_skip(oracle_validation.reason)
                     _log_skip_reject(
@@ -2790,6 +2976,8 @@ class SolMacroStrategy:
                         side_source=side_source if "side_source" in locals() else "neutral_macro",
                         signal_reason=" | ".join(r for r in reason_parts if r),
                         htf_bias=primary_htf_bias,
+                        primary_htf_bias=primary_htf_bias,
+                        alt_htf_bias=mtt.h1_trend,
                         btc_1h_regime=btc_1h_regime if btc_ta else None,
                     )
 
@@ -2972,6 +3160,8 @@ class SolMacroStrategy:
                         side_source=side_source if "side_source" in locals() else "neutral_macro",
                         signal_reason=" | ".join(r for r in reason_parts if r),
                         htf_bias=primary_htf_bias,
+                        primary_htf_bias=primary_htf_bias,
+                        alt_htf_bias=mtt.h1_trend,
                         btc_1h_regime=btc_1h_regime if btc_ta else None,
                     )
 
@@ -3065,6 +3255,8 @@ class SolMacroStrategy:
                     side_source=side_source if "side_source" in locals() else "neutral_macro",
                     signal_reason=" | ".join(r for r in reason_parts if r),
                     htf_bias=primary_htf_bias,
+                    primary_htf_bias=primary_htf_bias,
+                    alt_htf_bias=mtt.h1_trend,
                     btc_1h_regime=btc_1h_regime if btc_ta else None,
                 )
 
@@ -4003,6 +4195,13 @@ class SolMacroStrategy:
                 reason_parts.append(f"lane_size={lane_policy.size_multiplier:.2f}x")
 
             reason_str = " | ".join(r for r in reason_parts if r)
+            signal_side_source = side_source if "side_source" in locals() else "neutral_macro"
+            resolver_meta = build_alt_resolver_metadata(
+                side_source=signal_side_source,
+                htf_side=allowed_side,
+                quant_side=side_from_est_prob_up(raw_est_prob),
+                momentum_side=side_from_momentum_bias(getattr(mtt, "m5_trend", None)),
+            )
 
             signal = SolMacroSignal(
                 market_id=market.id,
@@ -4025,6 +4224,9 @@ class SolMacroStrategy:
                 strategy_name=self._signal_strategy_name,
                 alt_asset_code=_spot_key,
                 htf_bias=primary_htf_bias,
+                primary_htf_bias=primary_htf_bias,
+                alt_htf_bias=mtt.h1_trend,
+                btc_htf_bias=btc_htf_bias,
                 btc_1h_regime=btc_1h_regime if btc_ta else None,
                 window_size=_updown_tf if is_updown else "15m",
                 hour_utc=datetime.now(timezone.utc).hour,
@@ -4032,7 +4234,8 @@ class SolMacroStrategy:
                 raw_est_prob=round(raw_est_prob, 4),
                 rsi=round(sol.rsi_14, 1),
                 corr_1h=round(corr.correlation_1h, 4),
-                side_source=side_source if "side_source" in locals() else "neutral_macro",
+                side_source=signal_side_source,
+                **resolver_meta,
                 oracle_basis_bps=(
                     round(float(sol.oracle_basis_bps), 2)
                     if sol.oracle_basis_bps is not None
@@ -4045,27 +4248,13 @@ class SolMacroStrategy:
                 ),
                 entry_volatility=round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
                 entry_policy=entry_policy_meta,
-                indicator_snapshot={
-                    "composite_score": (
-                        round(float(entry_composite_score), 4)
-                        if entry_composite_score is not None
-                        else None
-                    ),
-                    "convergence_score": (
-                        round(float(entry_convergence_score), 4)
-                        if entry_convergence_score is not None
-                        else None
-                    ),
-                    "entry_volatility": round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
-                    "alt_1h_histogram": round(float(sol.macd_1h.histogram or 0.0), 4),
-                    "alt_1h_histogram_rising": bool(sol.macd_1h.histogram_rising),
-                    "alt_15m_histogram": round(float(sol.macd_15m.histogram or 0.0), 4),
-                    "alt_15m_histogram_rising": bool(sol.macd_15m.histogram_rising),
-                    "alt_5m_histogram": round(float(sol.macd_5m.histogram or 0.0), 4),
-                    "alt_5m_histogram_rising": bool(sol.macd_5m.histogram_rising),
-                    "btc_move_5m_pct": round(float(corr.btc_move_5m_pct or 0.0), 4),
-                    "btc_move_15m_pct": round(float(corr.btc_move_15m_pct or 0.0), 4),
-                },
+                indicator_snapshot=self._build_alt_indicator_snapshot(
+                    sol,
+                    correlation=corr,
+                    composite_score=entry_composite_score,
+                    convergence_score=entry_convergence_score,
+                    entry_volatility=getattr(conditions, "volatility", 0.0),
+                ),
             )
             if (
                 is_updown

@@ -57,6 +57,7 @@ from src.analysis.journal_learning import (
 )
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.lane_manager import LaneManager
+from src.analysis.circuit_breakers import CircuitBreakerManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
 from src.analysis.calibration_log import (
     append_calibration_record,
@@ -451,6 +452,7 @@ class PolyBot:
         self._rebuild_runtime_config_dependents()
         self.clob_client = CLOBClient(self.config)
         self.risk_manager = RiskManager(self.config)
+        self.circuit_breakers = CircuitBreakerManager(self.config)
 
         # Track last signal counts per strategy (for dashboard)
         self.last_signal_counts = {
@@ -514,6 +516,7 @@ class PolyBot:
                     action=action,
                     direction=payload.get("direction"),
                     side_source=payload.get("side_source"),
+                    resolver_path=payload.get("resolver_path"),
                     ai_used=bool(payload.get("ai_used", False)),
                     reason=payload.get("reason"),
                     signal_reason=payload.get("signal_reason"),
@@ -551,6 +554,7 @@ class PolyBot:
                     action="BUY_NO",
                     direction=lane_payload.get("direction", "DOWN"),
                     side_source=lane_payload.get("side_source"),
+                    resolver_path=lane_payload.get("resolver_path"),
                     ai_used=bool(lane_payload.get("ai_used", False)),
                     reason=skip_reason,
                     signal_reason=lane_payload.get("signal_reason"),
@@ -709,6 +713,37 @@ class PolyBot:
             return bool(cal_cfg.get("paper_shadow_mode", default_shadow))
         return bool(cal_cfg.get("live_shadow_mode", default_shadow))
 
+    def _ai_entry_attribution(
+        self,
+        *,
+        ai_consulted: bool,
+        ai_verdict: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Journal AI decision-gate state without enabling the gate."""
+        ai_cfg = self.config.get("ai") or {}
+        gate_cfg = ai_cfg.get("decision_layer") or self.config.get("decision_gates") or {}
+        gate_enabled = bool(gate_cfg.get("enabled", False))
+        consulted = bool(ai_consulted)
+        if ai_verdict is None:
+            if not consulted:
+                verdict = "not_consulted"
+            elif gate_enabled:
+                verdict = "approved"
+            else:
+                verdict = "analytics_consulted_gate_off"
+        else:
+            verdict = str(ai_verdict)
+        return {
+            # Historical request: "AI on/off" means pre-entry decision-gate on/off.
+            "ai_enabled_at_entry": gate_enabled,
+            "ai_decision_gate_enabled_at_entry": gate_enabled,
+            "ai_analytics_enabled_at_entry": bool(ai_cfg.get("enabled", False)),
+            "ai_live_inferencing_at_entry": bool(ai_cfg.get("live_inferencing", True)),
+            "ai_consulted": consulted,
+            "ai_verdict": verdict,
+            "ai_influenced_decision": bool(gate_enabled and consulted),
+        }
+
     def _build_lane_calibrator(self) -> LaneCalibrator:
         """Construct the per-lane probability calibrator.
 
@@ -733,6 +768,9 @@ class PolyBot:
         beta_veto_min_n = int(
             cal_cfg.get("beta_veto_min_n", _DEFAULT_BETA_VETO_MIN_N) or 0
         )
+        posterior_version = str(
+            cal_cfg.get("posterior_version") or "lane_identity_v2_source_resolver"
+        ).strip()
         # Per-lane threshold overrides (ghost-derived). Off by default —
         # operator inspects lane_thresholds.json then flips
         # `lane_calibration.per_lane_thresholds.enabled: true` in config.
@@ -764,6 +802,7 @@ class PolyBot:
                 beta_veto_min_n=beta_veto_min_n,
                 per_lane_thresholds_enabled=plt_enabled,
                 per_lane_thresholds=per_lane_thresholds,
+                posterior_version=posterior_version,
             )
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)
@@ -1763,6 +1802,47 @@ class PolyBot:
             self._session_traded_market_ids = traded
         traded.add(mid)
 
+    def _check_circuit_breakers(
+        self,
+        *,
+        strategy: str,
+        action: str,
+        market_id: str,
+        market_question: str,
+        signal_reason: Optional[str],
+        lane_meta: Dict[str, Any],
+        btc_price: Optional[float] = None,
+    ) -> bool:
+        if not hasattr(self, "circuit_breakers"):
+            self.circuit_breakers = CircuitBreakerManager(self.config)
+        decision = self.circuit_breakers.can_enter(
+            action=action,
+            active_positions=self.risk_manager.active_positions.values(),
+            btc_price=btc_price,
+        )
+        if decision.allowed:
+            return True
+        reason = decision.reason or "circuit_breaker_halt"
+        logging.warning(
+            "%s circuit breaker blocked %s: %s",
+            strategy,
+            action,
+            reason,
+        )
+        self.journal.log_skip(
+            market_id,
+            market_question,
+            strategy,
+            reason,
+            self.bankroll,
+            extra=self._lane_skip_extra(
+                lane_meta=lane_meta,
+                signal_reason=signal_reason,
+                skip_reason=reason,
+            ),
+        )
+        return False
+
     async def _handle_exit_decision(self, exit_decision: ExitDecision) -> None:
         """Exit order + journal + risk updates (serialized with other execution)."""
         async with self._execution_lock:
@@ -1785,6 +1865,9 @@ class PolyBot:
                     )
                     strat = getattr(pos, "strategy", "unknown") if pos else "unknown"
                     mq = getattr(pos, "market_question", "N/A") if pos else "N/A"
+                    breaker_action = (
+                        self.circuit_breakers.action_from_position(pos) if pos else ""
+                    )
                     entry_price_snap = (
                         float(getattr(pos, "entry_price", 0) or 0) if pos else 0.0
                     )
@@ -1806,6 +1889,10 @@ class PolyBot:
                         exit_price=exit_decision.exit_price,
                         bankroll=self.bankroll,
                         reason=exit_decision.reason,
+                    )
+                    self.circuit_breakers.record_exit(
+                        reason=exit_decision.reason,
+                        action=breaker_action,
                     )
                     self._log_closed_trade_for_calibration(exit_decision.position_id)
                     if exit_decision.position_id in self.risk_manager.active_positions:
@@ -2749,6 +2836,7 @@ class PolyBot:
             direction=signal.direction,
             entry_leg=_entry_leg,
             side_source=getattr(signal, "side_source", None),
+            resolver_path=getattr(signal, "resolver_path", None),
             ai_used=bool(signal.ai_used),
             reason=_entry_reason,
             signal_reason=signal.reason,
@@ -2774,6 +2862,16 @@ class PolyBot:
             market_question=signal.market_question,
             lane_meta=lane_meta,
             signal_reason=signal.reason,
+        ):
+            return
+        if not self._check_circuit_breakers(
+            strategy="bitcoin",
+            action=signal.action,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+            signal_reason=signal.reason,
+            lane_meta=lane_meta,
+            btc_price=getattr(signal, "btc_current", None),
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
@@ -2900,8 +2998,15 @@ class PolyBot:
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
                     "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
+                    "side_source": getattr(signal, "side_source", None),
+                    "conflict_type": getattr(signal, "conflict_type", None),
+                    "resolver_path": getattr(signal, "resolver_path", None),
+                    "htf_side": getattr(signal, "htf_side", None),
+                    "quant_side": getattr(signal, "quant_side", None),
+                    "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
+                    **lane_meta,
                 },
             )
             self.risk_manager.add_position(position)
@@ -2932,6 +3037,7 @@ class PolyBot:
                     "macro_leg": None,             # bitcoin path has no alt-lag leg
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
+                    **self._ai_entry_attribution(ai_consulted=bool(signal.ai_used)),
                     "yes_price": (
                         round(1.0 - signal.price, 4)
                         if signal.action == "BUY_NO"
@@ -2943,6 +3049,11 @@ class PolyBot:
                     "raw_est_prob": getattr(signal, "raw_est_prob", signal.est_prob),
                     "rsi": signal.rsi,
                     "side_source": getattr(signal, "side_source", None),
+                    "conflict_type": getattr(signal, "conflict_type", None),
+                    "resolver_path": getattr(signal, "resolver_path", None),
+                    "htf_side": getattr(signal, "htf_side", None),
+                    "quant_side": getattr(signal, "quant_side", None),
+                    "momentum_side": getattr(signal, "momentum_side", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
@@ -3002,11 +3113,12 @@ class PolyBot:
             direction=signal.direction,
             entry_leg=_entry_leg,
             side_source=getattr(signal, "side_source", None),
+            resolver_path=getattr(signal, "resolver_path", None),
             ai_used=bool(signal.ai_used),
             reason=_entry_reason,
             signal_reason=signal.reason,
-            htf_bias=signal.htf_bias,
-            alt_htf_bias=signal.htf_bias,
+            primary_htf_bias=getattr(signal, "primary_htf_bias", None) or signal.htf_bias,
+            alt_htf_bias=getattr(signal, "alt_htf_bias", None) or signal.htf_bias,
             btc_1h_regime=signal.btc_1h_regime,
         )
         if not self._check_lane_execution(
@@ -3029,6 +3141,16 @@ class PolyBot:
             market_question=signal.market_question,
             lane_meta=lane_meta,
             signal_reason=signal.reason,
+        ):
+            return
+        if not self._check_circuit_breakers(
+            strategy=strat,
+            action=signal.action,
+            market_id=signal.market_id,
+            market_question=signal.market_question,
+            signal_reason=signal.reason,
+            lane_meta=lane_meta,
+            btc_price=getattr(signal, "btc_current", None),
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
@@ -3157,9 +3279,19 @@ class PolyBot:
                 entry_signal={
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
+                    "primary_htf_bias": getattr(signal, "primary_htf_bias", None),
+                    "alt_htf_bias": getattr(signal, "alt_htf_bias", None),
+                    "btc_htf_bias": getattr(signal, "btc_htf_bias", None),
                     "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
+                    "side_source": getattr(signal, "side_source", None),
+                    "conflict_type": getattr(signal, "conflict_type", None),
+                    "resolver_path": getattr(signal, "resolver_path", None),
+                    "htf_side": getattr(signal, "htf_side", None),
+                    "quant_side": getattr(signal, "quant_side", None),
+                    "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
+                    **lane_meta,
                 },
             )
             self.risk_manager.add_position(position)
@@ -3185,9 +3317,13 @@ class PolyBot:
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
+                    "primary_htf_bias": getattr(signal, "primary_htf_bias", None),
+                    "alt_htf_bias": getattr(signal, "alt_htf_bias", None),
+                    "btc_htf_bias": getattr(signal, "btc_htf_bias", None),
                     "btc_1h_regime": signal.btc_1h_regime,
                     "ai_used": signal.ai_used,
                     "ai_confidence": signal.confidence if signal.ai_used else None,
+                    **self._ai_entry_attribution(ai_consulted=bool(signal.ai_used)),
                     "yes_price": (
                         round(1.0 - signal.price, 4)
                         if signal.action == "BUY_NO"
@@ -3202,6 +3338,11 @@ class PolyBot:
                     "rsi": signal.rsi,
                     "corr_1h": signal.corr_1h,
                     "side_source": getattr(signal, "side_source", None),
+                    "conflict_type": getattr(signal, "conflict_type", None),
+                    "resolver_path": getattr(signal, "resolver_path", None),
+                    "htf_side": getattr(signal, "htf_side", None),
+                    "quant_side": getattr(signal, "quant_side", None),
+                    "momentum_side": getattr(signal, "momentum_side", None),
                     "oracle_basis_bps": getattr(signal, "oracle_basis_bps", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
@@ -3411,6 +3552,9 @@ class PolyBot:
                     "weather_horizon_days": getattr(signal, "horizon_days", None),
                     "weather_calibration_bias": getattr(signal, "calibration_bias", 0.0),
                     "weather_calibration_count": getattr(signal, "calibration_count", 0),
+                    **self._ai_entry_attribution(
+                        ai_consulted=bool(getattr(signal, "ai_ensemble", None))
+                    ),
                     **lane_meta,
                 },
                 market_end_at=signal.end_date,

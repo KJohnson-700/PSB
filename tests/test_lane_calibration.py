@@ -162,6 +162,24 @@ def test_record_persists_to_disk(tmp_log: Path):
     assert blob["lanes"]["L"]["n"] == 1
 
 
+def test_posterior_version_namespaces_new_lane_state(tmp_log: Path):
+    cal_a = LaneCalibrator(path=tmp_log, shadow_mode=True)
+    cal_a.record("L", 0.6, 0.2, win=True)
+
+    cal_b = LaneCalibrator(
+        path=tmp_log,
+        shadow_mode=True,
+        posterior_version="lane_identity_v2_source_resolver",
+    )
+    assert cal_b.posterior("L")["n"] == 0
+    cal_b.record("L", 0.6, 0.2, win=True)
+
+    blob = json.loads(tmp_log.read_text(encoding="utf-8"))
+    assert "L" in blob["lanes"]
+    assert "lane_identity_v2_source_resolver::L" in blob["lanes"]
+    assert blob["posterior_version"] == "lane_identity_v2_source_resolver"
+
+
 def test_round_trip_through_new_instance(tmp_log: Path):
     cal_a = LaneCalibrator(path=tmp_log, shadow_mode=True)
     for _ in range(3):

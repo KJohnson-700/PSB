@@ -31,6 +31,7 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -80,6 +81,21 @@ from src.strategies.btc_updown_5m import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class BTCDirectionDecision:
+    """Canonical BTC side-resolution result for audit and lane metadata."""
+
+    action: str
+    direction: str
+    effective_side: str
+    side_source: str
+    conflict_type: str
+    resolver_path: str
+    htf_side: str
+    quant_side: Optional[str] = None
+    momentum_side: Optional[str] = None
+
+
 class BitcoinSignal(BaseModel):
     """Represents a signal on a Bitcoin price market."""
     market_id: str = Field(..., description="Market identifier")
@@ -109,6 +125,11 @@ class BitcoinSignal(BaseModel):
     )
     rsi: Optional[float] = Field(None, description="BTC RSI-14 at entry")
     side_source: Optional[str] = Field(None, description="Directional source used for the trade call")
+    conflict_type: Optional[str] = Field(None, description="BTC resolver conflict class at entry")
+    resolver_path: Optional[str] = Field(None, description="BTC resolver decision path at entry")
+    htf_side: Optional[str] = Field(None, description="HTF-implied side before exceptions")
+    quant_side: Optional[str] = Field(None, description="Raw-quant-implied side when available")
+    momentum_side: Optional[str] = Field(None, description="Short-window momentum side when available")
     oracle_basis_bps: Optional[float] = Field(None, description="Oracle basis at entry when applicable")
     indicator_snapshot: Optional[Dict[str, Any]] = Field(
         None,
@@ -268,66 +289,124 @@ class BitcoinStrategy:
                 return float(value)
         return base_cap
 
-    def _maybe_quant_flip(
+    @staticmethod
+    def _btc_action_for_side(side: str) -> tuple[str, str, str]:
+        if side == "SHORT":
+            return "BUY_NO", "DOWN", "SHORT"
+        return "BUY_YES", "UP", "LONG"
+
+    @staticmethod
+    def _btc_momentum_side(mom: Any = None) -> Optional[str]:
+        m15_dir = getattr(mom, "m15_direction", None) if mom is not None else None
+        m5_dir = getattr(mom, "m5_direction", None) if mom is not None else None
+        if m15_dir in ("SPIKE_DOWN", "DRIFT_DOWN") or m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN"):
+            return "SHORT"
+        if m15_dir in ("SPIKE_UP", "DRIFT_UP") or m5_dir in ("SPIKE_UP", "DRIFT_UP"):
+            return "LONG"
+        return None
+
+    def _resolve_btc_direction(
         self,
-        action: str,
-        direction: str,
-        effective_side: str,
-        side_source: str,
-        raw_est_prob: Optional[float],
+        *,
+        htf_bias: str,
+        allowed_side: str,
+        macd_4h: Any,
         reason_parts: list,
+        raw_est_prob: Optional[float] = None,
         mom: Any = None,
-    ):
-        # Post-quant counter-trend flip. The pre-quant counter-trend gate (1335-1339)
-        # only listens to 4H MACD histogram. When the quant model itself contradicts
-        # the HTF-picked side (e.g. BULLISH HTF → BUY_YES but raw_est_prob<0.48),
-        # rejecting on edge is worse than flipping to the side the quant supports.
-        # Symmetric for HTF=BEARISH. Respects existing disable flags.
-        if raw_est_prob is None:
-            return action, direction, effective_side, side_source
+        current: Optional[BTCDirectionDecision] = None,
+    ) -> BTCDirectionDecision:
+        """Resolve BTC side once, with explicit conflict metadata.
+
+        The first call establishes the HTF/rollover side. A later call with
+        raw_est_prob applies the existing quant-disagreement flip policy.
+        """
+        htf_side = "LONG" if htf_bias == "BULLISH" else "SHORT" if htf_bias == "BEARISH" else allowed_side
+        momentum_side = self._btc_momentum_side(mom)
+
+        if current is None:
+            counter_trend_disabled = bool(self.config.get("disable_buy_no_counter_trend", False))
+            rollover_short = (
+                not counter_trend_disabled
+                and htf_bias == "BULLISH"
+                and not bool(getattr(macd_4h, "histogram_rising", False))
+            )
+            if rollover_short:
+                reason_parts.append("counter_trend=btc_4h_hist_declining")
+                action, direction, effective_side = self._btc_action_for_side("SHORT")
+                return BTCDirectionDecision(
+                    action=action,
+                    direction=direction,
+                    effective_side=effective_side,
+                    side_source="btc_bull_rollover_countertrend",
+                    conflict_type="bullish_htf_rollover_down",
+                    resolver_path="htf_bull__4h_hist_declining",
+                    htf_side=htf_side,
+                    momentum_side=momentum_side,
+                )
+
+            action, direction, effective_side = self._btc_action_for_side(allowed_side)
+            return BTCDirectionDecision(
+                action=action,
+                direction=direction,
+                effective_side=effective_side,
+                side_source="btc_htf_bias",
+                conflict_type="none" if effective_side == htf_side else "neutral_resolver",
+                resolver_path=f"htf_{htf_bias.lower()}__side_{allowed_side.lower()}",
+                htf_side=htf_side,
+                momentum_side=momentum_side,
+            )
+
+        quant_side: Optional[str] = None
+        if raw_est_prob is not None:
+            try:
+                thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
+            except (TypeError, ValueError):
+                thresh = 0.48
+            upper = 1.0 - thresh
+            raw = float(raw_est_prob)
+            if raw < thresh:
+                quant_side = "SHORT"
+            elif raw > upper:
+                quant_side = "LONG"
+
+        if quant_side is None or quant_side == current.effective_side:
+            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
+
+        if quant_side == "SHORT" and bool(self.config.get("disable_buy_no_counter_trend", False)):
+            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
+        if quant_side == "LONG" and bool(self.config.get("disable_buy_yes", False)):
+            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
+
+        require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
+        if require_mom and mom is not None and momentum_side != quant_side:
+            if quant_side == "SHORT":
+                reason_parts.append(f"quant_flip_suppressed=no_down_momentum(raw={float(raw_est_prob):.3f})")
+            else:
+                reason_parts.append(f"quant_flip_suppressed=no_up_momentum(raw={float(raw_est_prob):.3f})")
+            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
+
         try:
             thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
         except (TypeError, ValueError):
             thresh = 0.48
-        upper = 1.0 - thresh
+        if quant_side == "SHORT":
+            reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})<{thresh:.2f}")
+        else:
+            reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})>{1.0 - thresh:.2f}")
 
-        # Momentum-confirmation guard for counter-trend flips.
-        # Live audit 2026-05-21: bitcoin|15m|down|bullish|predict_window (n=20, 25% WR, -$25.78)
-        # was the worst BUY_NO lane and all 20 had side_source=btc_quant_disagree_flip with
-        # no early-candle momentum support. Sibling drift/standard lanes with the same flip
-        # were profitable. The flip mechanism is sound; it just needs momentum alignment
-        # before honoring the quant signal against the HTF bias.
-        require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
-        m15_dir = getattr(mom, "m15_direction", None) if mom is not None else None
-        m5_dir = getattr(mom, "m5_direction", None) if mom is not None else None
-        down_aligned = m15_dir in ("SPIKE_DOWN", "DRIFT_DOWN") or m5_dir in ("SPIKE_DOWN", "DRIFT_DOWN")
-        up_aligned = m15_dir in ("SPIKE_UP", "DRIFT_UP") or m5_dir in ("SPIKE_UP", "DRIFT_UP")
-
-        if (
-            action == "BUY_YES"
-            and raw_est_prob < thresh
-            and not self.config.get("disable_buy_no_counter_trend", False)
-        ):
-            if require_mom and mom is not None and not down_aligned:
-                reason_parts.append(
-                    f"quant_flip_suppressed=no_down_momentum(raw={raw_est_prob:.3f})"
-                )
-                return action, direction, effective_side, side_source
-            reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})<{thresh:.2f}")
-            return "BUY_NO", "DOWN", "SHORT", "btc_quant_disagree_flip"
-        if (
-            action == "BUY_NO"
-            and raw_est_prob > upper
-            and not self.config.get("disable_buy_yes", False)
-        ):
-            if require_mom and mom is not None and not up_aligned:
-                reason_parts.append(
-                    f"quant_flip_suppressed=no_up_momentum(raw={raw_est_prob:.3f})"
-                )
-                return action, direction, effective_side, side_source
-            reason_parts.append(f"quant_flip=raw({raw_est_prob:.3f})>{upper:.2f}")
-            return "BUY_YES", "UP", "LONG", "btc_quant_disagree_flip"
-        return action, direction, effective_side, side_source
+        action, direction, effective_side = self._btc_action_for_side(quant_side)
+        return BTCDirectionDecision(
+            action=action,
+            direction=direction,
+            effective_side=effective_side,
+            side_source="btc_quant_disagree_flip",
+            conflict_type=f"{current.effective_side.lower()}_to_{quant_side.lower()}_quant_disagree",
+            resolver_path=f"{current.resolver_path}__quant_{quant_side.lower()}",
+            htf_side=current.htf_side,
+            quant_side=quant_side,
+            momentum_side=momentum_side,
+        )
 
     def _calibrate_est_prob(
         self,
@@ -338,6 +417,8 @@ class BitcoinStrategy:
         window_size: str,
         signal_reason: str,
         htf_bias: Optional[str],
+        side_source: Optional[str] = None,
+        resolver_path: Optional[str] = None,
     ) -> float:
         self._last_calibration_vetoed = False
         self._last_calibration_lane_id = ""
@@ -350,7 +431,8 @@ class BitcoinStrategy:
             action=action,
             direction=direction,
             entry_leg=("NO" if action == "BUY_NO" else "YES"),
-            side_source="btc_htf_bias",
+            side_source=side_source or "btc_htf_bias",
+            resolver_path=resolver_path,
             ai_used=False,
             reason=signal_reason,
             signal_reason=signal_reason,
@@ -1393,6 +1475,7 @@ class BitcoinStrategy:
             threshold = None
             direction = "UP"  # default; overridden below
             side_source = "btc_htf_bias"
+            direction_decision: Optional[BTCDirectionDecision] = None
             reason_parts = [f"HTF={htf_bias}", f"side={allowed_side}"]
             dead_zone_would_block = False
             dead_zone_hour = None
@@ -1473,30 +1556,17 @@ class BitcoinStrategy:
                     )
                     continue
 
-                # In updown markets: LONG → BUY_YES (UP), SHORT → BUY_NO (DOWN).
-                # Counter-trend: bullish HTF but 4H MACD histogram rolling over → BUY_NO (DOWN).
-                # Gated by disable_buy_no_counter_trend (set true in bull grind regimes — 36% WR).
-                _counter_trend_disabled = self.config.get("disable_buy_no_counter_trend", False)
-                btc_bull_rollover = (
-                    not _counter_trend_disabled
-                    and htf_bias == "BULLISH"
-                    and not macd_4h.histogram_rising
+                direction_decision = self._resolve_btc_direction(
+                    htf_bias=htf_bias,
+                    allowed_side=allowed_side,
+                    macd_4h=macd_4h,
+                    reason_parts=reason_parts,
+                    mom=mom,
                 )
-                if btc_bull_rollover:
-                    action = "BUY_NO"
-                    direction = "DOWN"
-                    effective_side = "SHORT"
-                    side_source = "btc_bull_rollover_countertrend"
-                    reason_parts.append("counter_trend=btc_4h_hist_declining")
-                elif allowed_side == "LONG":
-                    action = "BUY_YES"
-                    direction = "UP"
-                    effective_side = "LONG"
-                else:
-                    action = "BUY_NO"
-                    direction = "DOWN"
-                    effective_side = "SHORT"
-                action_counts[action] = action_counts.get(action, 0) + 1
+                action = direction_decision.action
+                direction = direction_decision.direction
+                effective_side = direction_decision.effective_side
+                side_source = direction_decision.side_source
 
                 # ── BUY_YES manual disable ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
@@ -1612,10 +1682,19 @@ class BitcoinStrategy:
                         m5_reasons.append("5m predict window")
 
                     raw_est_prob = quant.est_prob_up
-                    action, direction, effective_side, side_source = self._maybe_quant_flip(
-                        action, direction, effective_side, side_source,
-                        raw_est_prob, reason_parts, mom=mom,
+                    direction_decision = self._resolve_btc_direction(
+                        htf_bias=htf_bias,
+                        allowed_side=allowed_side,
+                        macd_4h=macd_4h,
+                        reason_parts=reason_parts,
+                        raw_est_prob=raw_est_prob,
+                        mom=mom,
+                        current=direction_decision,
                     )
+                    action = direction_decision.action
+                    direction = direction_decision.direction
+                    effective_side = direction_decision.effective_side
+                    side_source = direction_decision.side_source
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -1623,6 +1702,8 @@ class BitcoinStrategy:
                         window_size=_updown_tf,
                         signal_reason=" | ".join(r for r in reason_parts if r),
                         htf_bias=htf_bias,
+                        side_source=direction_decision.side_source,
+                        resolver_path=direction_decision.resolver_path,
                     )
                     edge = edge_for_action(
                         estimated_prob=estimated_prob,
@@ -1801,10 +1882,19 @@ class BitcoinStrategy:
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
-                    action, direction, effective_side, side_source = self._maybe_quant_flip(
-                        action, direction, effective_side, side_source,
-                        raw_est_prob, reason_parts, mom=mom,
+                    direction_decision = self._resolve_btc_direction(
+                        htf_bias=htf_bias,
+                        allowed_side=allowed_side,
+                        macd_4h=macd_4h,
+                        reason_parts=reason_parts,
+                        raw_est_prob=raw_est_prob,
+                        mom=mom,
+                        current=direction_decision,
                     )
+                    action = direction_decision.action
+                    direction = direction_decision.direction
+                    effective_side = direction_decision.effective_side
+                    side_source = direction_decision.side_source
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -1812,6 +1902,8 @@ class BitcoinStrategy:
                         window_size=_updown_tf,
                         signal_reason=" | ".join(r for r in reason_parts if r),
                         htf_bias=htf_bias,
+                        side_source=direction_decision.side_source,
+                        resolver_path=direction_decision.resolver_path,
                     )
 
                     if action == "BUY_YES":
@@ -1882,6 +1974,8 @@ class BitcoinStrategy:
                         window_size="15m",
                         signal_reason=" | ".join(r for r in reason_parts if r),
                         htf_bias=htf_bias,
+                        side_source=direction_decision.side_source if direction_decision else side_source,
+                        resolver_path=direction_decision.resolver_path if direction_decision else None,
                     )
 
                     if action == "BUY_YES":
@@ -2416,6 +2510,9 @@ class BitcoinStrategy:
                 )
                 continue
 
+            if is_updown:
+                action_counts[action] = action_counts.get(action, 0) + 1
+
             try:
                 _sample("est_prob_up", est_prob_up)
             except NameError:
@@ -2480,6 +2577,31 @@ class BitcoinStrategy:
                             "estimated_prob": round(float(estimated_prob), 6),
                             "confidence": round(float(confidence), 6),
                             "side_source": side_source,
+                            "conflict_type": (
+                                direction_decision.conflict_type
+                                if direction_decision is not None
+                                else ""
+                            ),
+                            "resolver_path": (
+                                direction_decision.resolver_path
+                                if direction_decision is not None
+                                else ""
+                            ),
+                            "htf_side": (
+                                direction_decision.htf_side
+                                if direction_decision is not None
+                                else allowed_side
+                            ),
+                            "quant_side": (
+                                direction_decision.quant_side
+                                if direction_decision is not None
+                                else None
+                            ),
+                            "momentum_side": (
+                                direction_decision.momentum_side
+                                if direction_decision is not None
+                                else self._btc_momentum_side(mom)
+                            ),
                             "bias_quant_disagree": bool(_bias_quant_disagree),
                             "beta_vetoed": _vetoed,
                             "calibration_lane_id": getattr(self, "_last_calibration_lane_id", ""),
@@ -2791,6 +2913,19 @@ class BitcoinStrategy:
                 raw_est_prob=_signal_raw_est_prob,
                 rsi=round(ta.rsi_14, 1),
                 side_source=side_source,
+                conflict_type=(
+                    direction_decision.conflict_type if direction_decision is not None else None
+                ),
+                resolver_path=(
+                    direction_decision.resolver_path if direction_decision is not None else None
+                ),
+                htf_side=direction_decision.htf_side if direction_decision is not None else allowed_side,
+                quant_side=direction_decision.quant_side if direction_decision is not None else None,
+                momentum_side=(
+                    direction_decision.momentum_side
+                    if direction_decision is not None
+                    else self._btc_momentum_side(mom)
+                ),
                 oracle_basis_bps=None,
                 convergence_score=(
                     round(float(entry_convergence_score), 4)
@@ -2819,10 +2954,25 @@ class BitcoinStrategy:
                     ),
                     "btc_4h_histogram": round(float(macd_4h.histogram or 0.0), 4),
                     "btc_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                    "btc_4h_crossover": str(getattr(macd_4h, "crossover", "NONE") or "NONE"),
+                    "btc_4h_above_zero": bool(getattr(macd_4h, "above_zero", False)),
                     "btc_1h_histogram": round(float(ta.macd_1h.histogram or 0.0), 4),
                     "btc_1h_histogram_rising": bool(ta.macd_1h.histogram_rising),
+                    "btc_1h_crossover": str(getattr(ta.macd_1h, "crossover", "NONE") or "NONE"),
+                    "btc_1h_above_zero": bool(getattr(ta.macd_1h, "above_zero", False)),
+                    "btc_30m_histogram": round(float(getattr(ta, "macd_30m", macd_4h).histogram or 0.0), 4),
+                    "btc_30m_histogram_rising": bool(getattr(getattr(ta, "macd_30m", macd_4h), "histogram_rising", False)),
+                    "btc_30m_crossover": str(getattr(getattr(ta, "macd_30m", macd_4h), "crossover", "NONE") or "NONE"),
+                    "btc_30m_above_zero": bool(getattr(getattr(ta, "macd_30m", macd_4h), "above_zero", False)),
                     "btc_15m_histogram": round(float(ta.macd_15m.histogram or 0.0), 4),
                     "btc_15m_histogram_rising": bool(ta.macd_15m.histogram_rising),
+                    "btc_15m_crossover": str(getattr(ta.macd_15m, "crossover", "NONE") or "NONE"),
+                    "btc_15m_above_zero": bool(getattr(ta.macd_15m, "above_zero", False)),
+                    # FSM ema_alignment + rsi_zone inputs (for lane_direction_fsm replay)
+                    "btc_ema_9": round(float(getattr(ta, "ema_9", 0.0) or 0.0), 4),
+                    "btc_ema_21": round(float(getattr(ta, "ema_21", 0.0) or 0.0), 4),
+                    "btc_ema_50": round(float(getattr(ta, "ema_50", 0.0) or 0.0), 4),
+                    "btc_rsi_14": round(float(getattr(ta, "rsi_14", 50.0) or 50.0), 2),
                     "sabre_trend": int(ta.trend_sabre.trend or 0),
                 },
             )

@@ -165,6 +165,36 @@ def test_kimi_empty_content_cools_down_without_second_attempt(monkeypatch) -> No
     assert ag._on_cooldown("kimi_coding:kimi-for-coding") is True
 
 
+def test_kimi_cooldown_raises_explicit_reason() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "provider_chain": [],
+                "temperature": 0.1,
+                "max_tokens": 800,
+            }
+        }
+    )
+    ag._set_cooldown("kimi_coding:kimi-for-coding", 600)
+
+    with pytest.raises(RuntimeError, match="kimi_coding_cooldown:kimi-for-coding"):
+        run_async(
+            ag._analyze_with_kimi_coding(
+                "prompt",
+                "m-kimi-cooldown",
+                "kimi-for-coding",
+                "oauth",
+                {
+                    "name": "kimi_coding",
+                    "type": "kimi_coding",
+                    "model": "kimi-for-coding",
+                },
+                0.52,
+            )
+        )
+
+
 def test_direct_decision_scope_uses_only_configured_provider() -> None:
     calls = []
     ag = AIAgent(

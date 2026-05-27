@@ -15,8 +15,13 @@ import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
-from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
+from src.strategies.sol_macro import (
+    SolMacroStrategy,
+    SolMacroSignal,
+    build_alt_resolver_metadata,
+)
 from src.analysis.lane_calibration import LaneCalibrator
 from src.analysis.sol_btc_service import (
     SOLBTCService,
@@ -93,6 +98,39 @@ def test_sol_liquidity_floor_is_lane_aware_by_window_and_side():
     assert strategy._resolve_min_liquidity_floor(window_size="1h", action="BUY_NO") == 2500
     assert strategy._resolve_min_liquidity_floor(window_size="15m", action="BUY_YES") == 4000
     assert strategy._resolve_min_liquidity_floor(window_size="5m", action="BUY_YES") == 10000
+
+
+def test_sol_oracle_validation_uses_window_side_basis_overrides():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps"] = 25.0
+    cfg["strategies"]["sol_macro"]["oracle_basis_relax_max_bps"] = None
+    cfg["strategies"]["sol_macro"]["oracle_max_basis_bps_15m_buy_yes"] = 30.0
+    cfg["strategies"]["sol_macro"]["oracle_basis_relax_max_bps_15m_buy_yes"] = 40.0
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    now = datetime(2026, 5, 26, tzinfo=timezone.utc)
+    analysis = SimpleNamespace(
+        chainlink_price=100.0,
+        current_price=100.35,
+        chainlink_updated_at=now,
+    )
+
+    default_path = strategy._validate_updown_oracle(
+        analysis,
+        action="BUY_NO",
+        window_size="15m",
+        now=now,
+    )
+    yes_path = strategy._validate_updown_oracle(
+        analysis,
+        action="BUY_YES",
+        window_size="15m",
+        now=now,
+    )
+
+    assert default_path.passed is False
+    assert default_path.reason == "oracle_basis_block"
+    assert yes_path.passed is True
+    assert yes_path.reason == "oracle_basis_relaxed"
 
 
 def test_optional_rsi_buy_ceiling_hard_block_when_enabled():
@@ -423,6 +461,21 @@ def test_sol_live_lane_calibration_does_not_amplify_buy_no_probability(tmp_path)
     )
 
     assert calibrated == 0.43
+
+
+def test_alt_resolver_metadata_marks_quant_and_momentum_conflicts():
+    meta = build_alt_resolver_metadata(
+        side_source="primary_htf",
+        htf_side="SHORT",
+        quant_side="LONG",
+        momentum_side="LONG",
+    )
+
+    assert meta["conflict_type"] == "alt_macro_quant_momentum_disagree"
+    assert meta["resolver_path"] == "primary_htf__htf_short__quant_long__momentum_long"
+    assert meta["htf_side"] == "SHORT"
+    assert meta["quant_side"] == "LONG"
+    assert meta["momentum_side"] == "LONG"
 
 
 def test_min_positive_m5_adj_zero_allows_counter_momentum():

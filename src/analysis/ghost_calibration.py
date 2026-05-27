@@ -50,6 +50,18 @@ REJECTED_COPY_FIELDS = (
     "probe_variants",
     "policy_version",
     "feature_hash",
+    "side_source",
+    "resolver_path",
+    "primary_htf_bias",
+    "alt_htf_bias",
+    "btc_htf_bias",
+    "lane_family",
+    "entry_policy_snapshot",
+    "effective_min_edge",
+    "raw_est_prob",
+    "calibrated_est_prob",
+    "gate_reason",
+    "gate_stage",
     "convergence_score",
     "convergence_probe_count",
     "convergence_pass_count",
@@ -58,6 +70,14 @@ REJECTED_COPY_FIELDS = (
     "convergence_strong_pass_count",
     "edge_quality",
     "component_mean_quality",
+    "edge_bucket",
+    "entry_price_bucket",
+    "correlation_bucket",
+    "side_source_bucket",
+    "regime_tag_bucket",
+    "gate_family_bucket",
+    "rsi_bucket",
+    "atr_bucket",
 )
 
 
@@ -231,6 +251,7 @@ def backfill_settled_regimes(
                     if rejected_src.get(field) is not None:
                         enriched_row[field] = rejected_src.get(field)
                         metadata_copied = True
+        enriched_row = normalize_ghost_metadata(enriched_row)
         if metadata_copied:
             summary["rejected_metadata_copied"] += 1
         if was_labelled and not force and not metadata_copied:
@@ -355,6 +376,70 @@ def compute_would_be(
     }
 
 
+def _valid_lane_id(value: Any) -> str:
+    lane_id = str(value or "").strip()
+    return lane_id if len(lane_id.split("|")) >= 5 else ""
+
+
+def _lane_id_from_context(rec: Dict[str, Any]) -> str:
+    context = rec.get("context")
+    if not isinstance(context, dict):
+        return ""
+    return _valid_lane_id(context.get("calibration_lane_id"))
+
+
+def _biases_from_live_lane(lane_id: str) -> Dict[str, str]:
+    parts = lane_id.split("|")
+    if len(parts) < 4:
+        return {}
+    bits = [bit for bit in parts[3].split("__") if bit]
+    if len(bits) >= 3:
+        return {
+            "primary_htf_bias": bits[0].upper(),
+            "alt_htf_bias": bits[1].upper(),
+            "btc_htf_bias": bits[2].upper(),
+            "regime_tag_bucket": parts[3],
+        }
+    if bits:
+        return {"primary_htf_bias": bits[0].upper(), "regime_tag_bucket": parts[3]}
+    return {}
+
+
+def normalize_ghost_metadata(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Add stable persistent metadata without changing the original ghost lane."""
+    out = dict(rec)
+    ghost_lane_id = _valid_lane_id(out.get("ghost_lane_id") or out.get("lane_id"))
+    live_lane_id = _valid_lane_id(out.get("live_lane_id")) or _lane_id_from_context(out)
+    if not live_lane_id:
+        keys = _ghost_to_live_lane_keys(out)
+        live_lane_id = keys[0] if keys else ""
+    if ghost_lane_id:
+        out["ghost_lane_id"] = ghost_lane_id
+        if out.get("lane_id") in (None, ""):
+            out["lane_id"] = ghost_lane_id
+    if live_lane_id:
+        out["live_lane_id"] = live_lane_id
+        parts = live_lane_id.split("|")
+        if len(parts) >= 5 and not out.get("lane_family"):
+            out["lane_family"] = parts[4]
+        for key, value in _biases_from_live_lane(live_lane_id).items():
+            if out.get(key) in (None, ""):
+                out[key] = value
+
+    context = out.get("context")
+    if isinstance(context, dict):
+        for key in ("side_source", "resolver_path", "effective_min_edge", "raw_est_prob"):
+            if out.get(key) in (None, "") and context.get(key) not in (None, ""):
+                out[key] = context.get(key)
+        if out.get("calibrated_est_prob") in (None, ""):
+            out["calibrated_est_prob"] = (
+                context.get("estimated_prob")
+                if context.get("estimated_prob") not in (None, "")
+                else context.get("calibrated_est_prob")
+            )
+    return out
+
+
 def _ghost_to_live_lane_keys(rec: Dict[str, Any]) -> List[str]:
     """Map a rejected/ghost record's lane_id to the live lane_id key(s) that
     self-healing should update.
@@ -372,6 +457,10 @@ def _ghost_to_live_lane_keys(rec: Dict[str, Any]) -> List[str]:
     from the record's ``htf_bias`` + ``btc_1h_regime``. If insufficient
     metadata, returns an empty list (skip the update).
     """
+    live_lane_id = _valid_lane_id(rec.get("live_lane_id")) or _lane_id_from_context(rec)
+    if live_lane_id:
+        return [live_lane_id]
+
     lid = str(rec.get("lane_id") or "")
     parts = lid.split("|")
     if len(parts) < 5:
@@ -481,6 +570,11 @@ def settle_rejected_candidates(
             ),
             outcome=outcome,
         )
+        rejected_metadata = {
+            field: rec.get(field)
+            for field in REJECTED_COPY_FIELDS
+            if rec.get(field) is not None
+        }
         settled_rec = {
             "ghost_id": gid,
             "settled_at": ts_now.isoformat(),
@@ -499,20 +593,9 @@ def settle_rejected_candidates(
             "no_price": rec.get("no_price"),
             "est_prob_up": rec.get("est_prob_up"),
             "htf_bias": rec.get("htf_bias"),
-            "btc_1h_regime": rec.get("btc_1h_regime"),
-            "context": rec.get("context", {}),
-            "probe_variants": rec.get("probe_variants", []),
-            "policy_version": rec.get("policy_version"),
-            "feature_hash": rec.get("feature_hash"),
-            "convergence_score": rec.get("convergence_score"),
-            "convergence_probe_count": rec.get("convergence_probe_count"),
-            "convergence_pass_count": rec.get("convergence_pass_count"),
-            "convergence_fail_count": rec.get("convergence_fail_count"),
-            "convergence_narrow_pass_count": rec.get("convergence_narrow_pass_count"),
-            "convergence_strong_pass_count": rec.get("convergence_strong_pass_count"),
-            "edge_quality": rec.get("edge_quality"),
-            "component_mean_quality": rec.get("component_mean_quality"),
+            **rejected_metadata,
         }
+        settled_rec = normalize_ghost_metadata(settled_rec)
         settled_rec = enrich_with_regime(
             settled_rec,
             regime_snapshots,

@@ -54,6 +54,7 @@ PRIOR_A = 2.0
 PRIOR_B = 3.0
 DEV_FLOOR = 0.005          # |stated_prob - 0.5| guard before computing a_obs
 SCHEMA_VERSION = 1
+DEFAULT_POSTERIOR_VERSION = ""
 
 # β_mean veto: lanes with established losing history get forced to 0.5
 # (zero edge → rejected by lane_min_edge) regardless of α magnitude.
@@ -96,6 +97,7 @@ class LaneCalibrator:
         beta_veto_min_n: int = BETA_VETO_MIN_N,
         per_lane_thresholds_enabled: bool = False,
         per_lane_thresholds: Optional[Dict[str, Dict[str, Any]]] = None,
+        posterior_version: str = DEFAULT_POSTERIOR_VERSION,
     ):
         self.path: Path = Path(path) if path is not None else DEFAULT_POSTERIORS_PATH
         self.shadow_mode: bool = bool(shadow_mode)
@@ -110,8 +112,16 @@ class LaneCalibrator:
         self.per_lane_thresholds: Dict[str, Dict[str, Any]] = dict(
             per_lane_thresholds or {}
         )
+        self.posterior_version: str = str(posterior_version or "").strip()
         self._posteriors: Dict[str, LanePosterior] = {}
         self._load()
+
+    def _lane_key(self, lane_id: str) -> str:
+        lane = str(lane_id or "").strip()
+        if not lane or not self.posterior_version:
+            return lane
+        prefix = f"{self.posterior_version}::"
+        return lane if lane.startswith(prefix) else f"{prefix}{lane}"
 
     # ---------------------------------------------------------------- loading
 
@@ -172,6 +182,7 @@ class LaneCalibrator:
     def _serialise(self) -> Dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
+            "posterior_version": self.posterior_version,
             "lanes": {lid: asdict(p) for lid, p in self._posteriors.items()},
         }
 
@@ -239,10 +250,11 @@ class LaneCalibrator:
              instead of the global floor against live β
           3. No override → fall back to global β-veto check
         """
-        p = self._posteriors.get(lane_id)
+        lane_key = self._lane_key(lane_id)
+        p = self._posteriors.get(lane_key)
         if not self.per_lane_thresholds_enabled:
             return self._is_vetoed(p)
-        override = self.per_lane_thresholds.get(lane_id)
+        override = self.per_lane_thresholds.get(lane_id) or self.per_lane_thresholds.get(lane_key)
         if override is None:
             return self._is_vetoed(p)
         # Hard veto if ghost data flags this lane explicitly.
@@ -274,7 +286,7 @@ class LaneCalibrator:
         """Effective α used for correction (shrunk + clamped). Identity if unknown."""
         if not lane_id:
             return 1.0
-        p = self._posteriors.get(lane_id)
+        p = self._posteriors.get(self._lane_key(lane_id))
         if p is None or p.n == 0:
             return 1.0
         if p.n < self.min_samples_to_apply:
@@ -316,7 +328,7 @@ class LaneCalibrator:
         w = max(0.0, float(weight))
         if w <= 0.0:
             return
-        p = self._posteriors.setdefault(lane, LanePosterior.fresh())
+        p = self._posteriors.setdefault(self._lane_key(lane), LanePosterior.fresh())
         if win:
             p.beta_a += w
         else:
@@ -325,14 +337,14 @@ class LaneCalibrator:
 
     def raw_alpha(self, lane_id: str) -> Optional[float]:
         """The unshrunk, unclamped EWMA value (or None if no samples)."""
-        p = self._posteriors.get(lane_id)
+        p = self._posteriors.get(self._lane_key(lane_id))
         if p is None or p.n == 0:
             return None
         return p.alpha_ewma
 
     def posterior(self, lane_id: str) -> Dict[str, Any]:
         """Snapshot for telemetry: n, beta posterior mean, current α (shrunk)."""
-        p = self._posteriors.get(lane_id)
+        p = self._posteriors.get(self._lane_key(lane_id))
         if p is None or p.n == 0:
             return {
                 "n": 0,
@@ -343,6 +355,7 @@ class LaneCalibrator:
                 "beta_mean": PRIOR_A / (PRIOR_A + PRIOR_B),
                 "min_samples_to_apply": self.min_samples_to_apply,
                 "vetoed": False,
+                "posterior_version": self.posterior_version,
             }
         return {
             "n": p.n,
@@ -353,6 +366,7 @@ class LaneCalibrator:
             "beta_mean": self._beta_mean(p),
             "min_samples_to_apply": self.min_samples_to_apply,
             "vetoed": self._is_vetoed(p),
+            "posterior_version": self.posterior_version,
         }
 
     def calibrate(self, lane_id: str, raw_est_prob: float) -> float:
@@ -394,7 +408,7 @@ class LaneCalibrator:
         if not lane:
             return self.posterior("")
 
-        p = self._posteriors.setdefault(lane, LanePosterior.fresh())
+        p = self._posteriors.setdefault(self._lane_key(lane), LanePosterior.fresh())
 
         # Beta update — independent of probability calibration; always applied.
         if win:

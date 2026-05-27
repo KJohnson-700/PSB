@@ -1,6 +1,7 @@
 """Guard dashboard index.html + HTTP shell so pre-restart checks include the UI bundle."""
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -178,6 +179,39 @@ def test_live_pause_resume_memory_is_persisted_by_kill_switch(tmp_path, monkeypa
     assert resume.status_code == 200
     assert resume.json()["kill_switch_active"] is False
     assert not (tmp_path / "KILL_SWITCH").exists()
+
+
+def test_ghost_lab_uses_persistent_live_lane_from_settled_context(tmp_path, monkeypatch):
+    from src.dashboard import server as dashboard_server
+
+    cal_dir = tmp_path / "calibration"
+    cal_dir.mkdir(parents=True)
+    row = {
+        "ts": "2026-05-26T05:00:00+00:00",
+        "lane_id": "sol_macro|5m|down|bearish|rejected",
+        "strategy": "sol_macro",
+        "window": "5m",
+        "side": "SHORT",
+        "action": "BUY_NO",
+        "reason": "lane_min_edge",
+        "win": True,
+        "context": {
+            "calibration_lane_id": "sol_macro|5m|down|bearish__bearish__bull|standard"
+        },
+    }
+    (cal_dir / "rejected_candidates_settled.jsonl").write_text(
+        json.dumps(row, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+
+    events = dashboard_server._gl_load_ghosts(
+        dashboard_server._gl_parse_ts("2026-05-25T00:00:00")
+    )
+
+    assert events[0]["lane_id"] == "sol_macro|5m|down|bearish__bearish__bull|standard"
+    assert events[0]["ghost_lane_id"] == "sol_macro|5m|down|bearish|rejected"
 
 
 def test_command_center_includes_ai_pipeline_digest_stub():
@@ -673,6 +707,31 @@ def test_config_post_accepts_updown_stop_loss_pct_with_auth(monkeypatch, tmp_pat
     )
     assert r.status_code == 200
     assert "updown_stop_loss_pct: 0.18" in config_path.read_text(encoding="utf-8")
+
+
+def test_config_post_accepts_hold_winners_to_resolution_with_auth(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        "trading:\n  dry_run: true\n  exit_rules:\n    updown_hold_winners_to_resolution: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(dashboard_server, "DASHBOARD_API_KEY", "test-key")
+
+    r = TestClient(dashboard_server.app).post(
+        "/api/config",
+        headers={"X-API-Key": "test-key"},
+        json={"trading": {"exit_rules": {"updown_hold_winners_to_resolution": True}}},
+    )
+
+    assert r.status_code == 200
+    assert "updown_hold_winners_to_resolution: true" in config_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_config_get_overlays_effective_runtime_loss_kill_switch(monkeypatch, tmp_path):

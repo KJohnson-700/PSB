@@ -2588,8 +2588,20 @@
           <h2 style="margin:0;">Last Session &#8212; AI Review</h2>
           <button type="button" class="btn-sm btn-purple" onclick="openAIReviewDialog()" title="Open full review in a window">Review window</button>
         </div>
+        <div id="ai-summary-kpis" style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
         <div id="ai-summary-text" style="font-size:0.82rem;line-height:1.6;color:var(--text);max-height:200px;overflow:auto;">Waiting for session data...</div>
         <div id="ai-summary-meta" style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;"></div>
+        <div id="ai-summary-strategies" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;"></div>
+        <div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:12px;">
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
+                <div id="ai-summary-standouts" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+            <div>
+                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Next edit queue</h4>
+                <div id="ai-summary-next-edits" style="display:flex;flex-direction:column;gap:6px;"></div>
+            </div>
+        </div>
     </div>
 
     <div class="card" data-aos="fade-up" id="lane-health-card" style="margin-bottom:16px;">
@@ -2676,9 +2688,10 @@
             <div>
                 <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Window</label>
                 <select id="gl-since" onchange="loadGhostLab()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.78rem;">
+                    <option value="all" selected>all-time</option>
                     <option value="7">last 7d</option>
                     <option value="14">last 14d</option>
-                    <option value="30" selected>last 30d</option>
+                    <option value="30">last 30d</option>
                     <option value="60">last 60d</option>
                 </select>
             </div>
@@ -2793,7 +2806,7 @@
                 <h3 style="margin:0;font-size:.95rem;">Day × hour heatmap</h3>
                 <div style="font-size:.7rem;color:var(--text-muted);">cell size ∝ n &middot; color = WR &middot; CI on hover</div>
             </div>
-            <div id="gl-heatmap" style="overflow-x:auto;"></div>
+            <div id="gl-heatmap"></div>
         </div>
     </div>
 
@@ -8213,7 +8226,68 @@ async function loadAISummary() {
                 if (dm) dm.textContent = line;
             }
         }
+        _renderAISummaryStructured(d.structured || null);
     } catch(e) {}
+}
+
+function _renderAISummaryStructured(s) {
+    const kpisEl = document.getElementById('ai-summary-kpis');
+    const stratsEl = document.getElementById('ai-summary-strategies');
+    const standoutsEl = document.getElementById('ai-summary-standouts');
+    const nextEditsEl = document.getElementById('ai-summary-next-edits');
+    const empty = '<div style="color:var(--text-muted);font-size:.72rem;">Not enough session data yet.</div>';
+    if (!s) {
+        if (kpisEl) kpisEl.innerHTML = '';
+        if (stratsEl) stratsEl.innerHTML = '';
+        if (standoutsEl) standoutsEl.innerHTML = empty;
+        if (nextEditsEl) nextEditsEl.innerHTML = empty;
+        return;
+    }
+    const colors = ['#00e5ff', '#00ff88', '#ffcc66', '#b060ff'];
+    const baseline = (s.alltime && s.alltime.baseline_start) ? s.alltime.baseline_start : null;
+    const baselineMeta = baseline
+        ? `All-time baseline: sessions started on/after ${baseline} (n=${s.alltime.n_sessions || 0}; skipped ${s.alltime.skipped_pre_baseline || 0} earlier).`
+        : '';
+    const metaEl = document.getElementById('ai-summary-meta');
+    if (metaEl && baselineMeta) {
+        const existing = window._lastAiSummaryMeta || '';
+        metaEl.textContent = existing ? `${existing} · ${baselineMeta}` : baselineMeta;
+    }
+    if (kpisEl) {
+        kpisEl.innerHTML = (s.kpis || []).map((card, i) => {
+            const color = colors[i % colors.length];
+            return `
+                <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
+                    <div style="font-size:.66rem;color:var(--text-muted);">${_htmlEscape(card.label)}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${_htmlEscape(String(card.value))}</div>
+                    <div style="font-size:.6rem;color:var(--text-muted);margin-top:2px;">${_htmlEscape(card.delta || '')}</div>
+                </div>
+            `;
+        }).join('');
+    }
+    if (stratsEl) {
+        const rows = (s.per_strategy || []);
+        stratsEl.innerHTML = rows.length ? rows.map((r) => {
+            const pnlColor = r.pnl > 0 ? '#00ff88' : (r.pnl < 0 ? '#ff5c5c' : 'var(--text-muted)');
+            const dPp = (r.wr_delta_pp == null) ? '' : ` (${r.wr_delta_pp >= 0 ? '+' : ''}${r.wr_delta_pp}pp vs all-time n=${r.alltime_n})`;
+            return `
+                <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:4px 8px;font-family:'IBM Plex Mono',monospace;font-size:.7rem;">
+                    <span style="color:var(--text);font-weight:700;">${_htmlEscape(r.strategy)}</span>
+                    <span style="color:var(--text-muted);">n=${r.n}</span>
+                    <span style="color:var(--text-muted);"> WR ${r.wr_pct}%${dPp}</span>
+                    <span style="color:${pnlColor};"> $${r.pnl >= 0 ? '+' : ''}${r.pnl}</span>
+                </div>
+            `;
+        }).join('') : '<div style="color:var(--text-muted);font-size:.72rem;">No per-strategy fills this session.</div>';
+    }
+    if (standoutsEl) {
+        const items = s.standouts || [];
+        standoutsEl.innerHTML = items.length ? items.map(_glTinyCard).join('') : empty;
+    }
+    if (nextEditsEl) {
+        const items = s.next_edits || [];
+        nextEditsEl.innerHTML = items.length ? items.map(_glTinyCard).join('') : empty;
+    }
 }
 
 // ── Ghost Lab — counterfactual + time-of-day explorer
@@ -8273,9 +8347,11 @@ function _glSortValue(row, key) {
 }
 
 async function loadGhostLab() {
-    const sinceDays = parseInt(document.getElementById('gl-since')?.value || '30', 10);
-    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString();
-    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=8000`;
+    const sinceRaw = document.getElementById('gl-since')?.value || 'all';
+    const sinceISO = sinceRaw === 'all'
+        ? '1970-01-01T00:00:00Z'
+        : new Date(Date.now() - parseInt(sinceRaw, 10) * 86400000).toISOString();
+    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=20000`;
     try {
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
@@ -8318,8 +8394,10 @@ function _glRenderControls() {
 
 // ── Decision digest: deadzone theory + ghost/calibration rollup ──────────
 async function loadGhostDecisionDigest() {
-    const sinceDays = parseInt(document.getElementById('gl-since')?.value || '30', 10);
-    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString();
+    const sinceRaw = document.getElementById('gl-since')?.value || 'all';
+    const sinceISO = sinceRaw === 'all'
+        ? '1970-01-01T00:00:00Z'
+        : new Date(Date.now() - parseInt(sinceRaw, 10) * 86400000).toISOString();
     const status = document.getElementById('gl-digest-status');
     if (status) status.textContent = 'loading';
     try {
@@ -8793,22 +8871,39 @@ function _glRenderHeatmap() {
     }
     const dows = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     const maxN = Math.max(1, ...Object.values(buckets).map(b => b.n));
-    let html = `<table style="border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:.65rem;">`;
-    html += `<thead><tr><th></th>` + Array.from({length:24}, (_, h) => `<th style="padding:2px 0;color:var(--text-muted);text-align:center;width:22px;">${String(h).padStart(2,'0')}</th>`).join('') + `</tr></thead><tbody>`;
+
+    // Responsive CSS grid: 1 label col + 24 hour cols. Cells use aspect-ratio:1
+    // so the whole grid scales with the card width — no horizontal scroll.
+    const headCells = Array.from({length:24}, (_, h) =>
+        `<div style="text-align:center;color:var(--text-muted);font-size:.6rem;line-height:1;">${String(h).padStart(2,'0')}</div>`
+    ).join('');
+    const rows = [];
     for (let d = 0; d < 7; d++) {
-        html += `<tr><td style="padding:0 6px;color:var(--text-muted);">${dows[d]}</td>`;
+        const rowCells = [];
+        rowCells.push(`<div style="color:var(--text-muted);font-size:.65rem;align-self:center;text-align:right;padding-right:4px;">${dows[d]}</div>`);
         for (let h = 0; h < 24; h++) {
             const b = buckets[`${d}-${h}`] || { n: 0, w: 0 };
             const wr = b.n ? b.w / b.n : NaN;
-            const sz = b.n ? Math.max(8, Math.min(20, 8 + 12 * Math.sqrt(b.n) / Math.sqrt(maxN))) : 4;
-            const color = b.n ? _glColorForWR(wr, b.n) : 'rgba(60,60,80,.25)';
-            const title = b.n ? `${dows[d]} ${String(h).padStart(2,'0')}:00 — n=${b.n}, wins=${b.w}, WR=${(wr*100).toFixed(0)}%` : `${dows[d]} ${String(h).padStart(2,'0')}:00 — no data`;
-            html += `<td style="padding:1px;text-align:center;"><div class="gl-heatcell" title="${title}" style="width:${sz}px;height:${sz}px;background:${color};border-radius:2px;margin:0 auto;"></div></td>`;
+            // Inner dot scales 30%–96% of cell based on sqrt(n).
+            const pct = b.n ? Math.max(30, Math.min(96, 30 + 66 * Math.sqrt(b.n) / Math.sqrt(maxN))) : 22;
+            const color = b.n ? _glColorForWR(wr, b.n) : 'rgba(60,60,80,.22)';
+            const title = b.n
+                ? `${dows[d]} ${String(h).padStart(2,'0')}:00 — n=${b.n}, wins=${b.w}, WR=${(wr*100).toFixed(0)}%`
+                : `${dows[d]} ${String(h).padStart(2,'0')}:00 — no data`;
+            rowCells.push(
+                `<div style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;" title="${title}">` +
+                `<div class="gl-heatcell" style="width:${pct}%;height:${pct}%;background:${color};border-radius:2px;"></div>` +
+                `</div>`
+            );
         }
-        html += `</tr>`;
+        rows.push(rowCells.join(''));
     }
-    html += `</tbody></table>`;
-    host.innerHTML = html;
+    host.innerHTML = `
+        <div style="display:grid;grid-template-columns:minmax(28px,auto) repeat(24, minmax(0, 1fr));gap:2px;width:100%;font-family:'IBM Plex Mono',monospace;">
+            <div></div>${headCells}
+            ${rows.join('')}
+        </div>
+    `;
 }
 
 // ── Panel 3: animated replay scrubber ───────────────────────────────────

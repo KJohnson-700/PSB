@@ -130,6 +130,80 @@ def test_updown_take_profit_uses_lane_window_override():
     assert exits[0].reason == "take_profit"
 
 
+def test_updown_hold_winners_to_resolution_suppresses_take_profit():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.10,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_hold_winners_to_resolution": True,
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Bitcoin Up or Down - test",
+        outcome="NO",
+        strategy="bitcoin",
+        size=10.0,
+        entry_price=0.50,
+        current_price=0.50,
+        pnl=0.0,
+        opened_at=now - timedelta(minutes=2),
+        end_date=now + timedelta(minutes=3),
+        entry_leg="NO",
+        window_size="5m",
+    )
+
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.42}, {"m1": ("YES_TOKEN", "NO_TOKEN")})
+
+    assert exits == []
+
+
+def test_doge_and_bnb_use_updown_exit_path():
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.99,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_exit_window_mins": 2.25,
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for strategy in ("doge_macro", "bnb_macro"):
+        pos = SimpleNamespace(
+            market_id=f"m-{strategy}",
+            market_question=f"{strategy} Up or Down - test",
+            outcome="YES",
+            strategy=strategy,
+            size=10.0,
+            entry_price=0.50,
+            opened_at=now - timedelta(minutes=3),
+            end_date=now + timedelta(minutes=8),
+            entry_leg="YES",
+            window_size="5m",
+        )
+
+        exits = mgr.check_exits(
+            {"p1": pos},
+            {f"m-{strategy}": 0.39},
+            {f"m-{strategy}": ("YES_TOKEN", "NO_TOKEN")},
+        )
+
+        assert len(exits) == 1
+        assert exits[0].reason == "updown_stop_loss"
+
+
 def test_updown_percentage_stop_loss_fires_before_expiry_window():
     cfg = {
         "trading": {
