@@ -2265,7 +2265,10 @@ OUTPUT (machine-parseable — follow exactly):
                         return "\n".join(parts)
                 # Some coding/reasoning gateways put the useful payload outside
                 # message.content. Check common alternates before declaring empty.
-                for attr in ("parsed", "refusal", "reasoning_content", "reasoning"):
+                # Skip reasoning_* fields — those are chain-of-thought prose, never
+                # the JSON the parser expects, and substituting them masks the real
+                # cause (model hit max_tokens before emitting `content`).
+                for attr in ("parsed", "refusal"):
                     value = getattr(message, attr, None)
                     if value:
                         return value if isinstance(value, str) else json.dumps(value)
@@ -3525,8 +3528,11 @@ Reply with only the JSON object required by the system message (four keys: reaso
         except json.JSONDecodeError as e:
             salvaged = self._salvage_four_key_response(content, market_id)
             if salvaged is None:
-                logger.error("Failed to parse AI response: %s", e)
-                logger.debug("Raw response: %s", content)
+                logger.warning(
+                    "Failed to parse AI response: %s | raw[:800]=%r",
+                    e,
+                    (content or "")[:800],
+                )
                 raise AIResponseValidationError(
                     f"market={market_id} invalid JSON: {e}"
                 ) from e
