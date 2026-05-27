@@ -71,7 +71,11 @@ from src.analysis.lane_entry_policy import (
 )
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies.strategy_config import resolve_enabled_flag
+from src.strategies.strategy_config import (
+    resolve_enabled_flag,
+    resolve_tf_config_value,
+    tf_config_override_snapshot,
+)
 from src.execution.performance_feedback import (
     get_drift_min_edge_mult,
     get_loosen_min_edge_mult,
@@ -329,11 +333,13 @@ class SolMacroStrategy:
                  ai_broker=None):
         self.full_config = config
         self.config = config.get('strategies', {}).get('sol_macro', {})
+        self._signal_strategy_name = "sol_macro"
         self.enabled = resolve_enabled_flag(
             "sol_macro",
             self.config,
             logger=logger,
         )
+        self._log_tf_config_overrides()
         self.ai_agent = ai_agent
         # AI decision broker: when set, the strategy enqueues per-market AI
         # requests instead of awaiting the provider in-line. None → legacy
@@ -345,7 +351,6 @@ class SolMacroStrategy:
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
-        self._signal_strategy_name = "sol_macro"
         self.dead_zone_skip_callback = None
         self.buy_no_skip_callback = None
         self.lane_calibrator = None
@@ -367,7 +372,9 @@ class SolMacroStrategy:
         self._shadow_observer_retry_after: Dict[str, float] = {}
         self._refresh_shadow_observer_controls()
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
-        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.min_edge_5m_ai_override = float(
+            self._tf_cfg("5m", "ai_override_min_edge", 0.10)
+        )
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -394,6 +401,27 @@ class SolMacroStrategy:
         self.ai_observer_max_inflight = max(
             1,
             int(self.config.get("ai_observer_max_inflight", 1) or 1),
+        )
+
+    def _tf_cfg(self, tf: str, key: str, default: Any = None) -> Any:
+        return resolve_tf_config_value(
+            self.config,
+            tf=tf,
+            key=key,
+            default=default,
+        )
+
+    def _log_tf_config_overrides(self) -> None:
+        overrides = tf_config_override_snapshot(self.config)
+        if overrides:
+            logger.info("[config] %s by_tf overrides: %s", self._signal_strategy_name.upper(), overrides)
+
+    def _min_edge_for_window(self, window_size: str) -> float:
+        return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
+
+    def _ai_override_min_edge_for_window(self, window_size: str) -> float:
+        return float(
+            self._tf_cfg(window_size, "ai_override_min_edge", self.min_edge_5m_ai_override)
         )
 
     def _prune_shadow_observer_state(self) -> None:
@@ -507,7 +535,10 @@ class SolMacroStrategy:
         self.min_liquidity = self.config.get("min_liquidity", 1000)
         self.min_liquidity_buy_no = self.config.get("min_liquidity_buy_no", None)
         self.min_edge = self.config.get("min_edge", 0.09)
-        self.min_edge_5m = self.config.get("min_edge_5m", self.min_edge)
+        self.min_edge_5m = float(self._tf_cfg("5m", "min_edge", self.min_edge))
+        self.min_edge_5m_ai_override = float(
+            self._tf_cfg("5m", "ai_override_min_edge", 0.10)
+        )
         # Non-bypassable absolute edge floor for this strategy lane.
         self.hard_min_edge = float(self.config.get("hard_min_edge", 0.0))
         # Extra floor applied only to BUY_NO entries (counter-trend / short bias).
@@ -1058,8 +1089,12 @@ class SolMacroStrategy:
         """Return entry window bounds, optionally widened to align with scan cadence."""
         if tf not in ("5m", "15m", "1h"):
             tf = "15m"
-        win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
-        win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
+        win_min = float(
+            self._tf_cfg(tf, "entry_window_min", default_min)
+        )
+        win_max = float(
+            self._tf_cfg(tf, "entry_window_max", default_max)
+        )
         if win_min > win_max:
             win_min, win_max = win_max, win_min
 
@@ -1116,14 +1151,20 @@ class SolMacroStrategy:
         direction: str,
     ) -> Dict[str, Any]:
         if window_size == "5m":
-            min_edge = self.min_edge_5m
+            min_edge = float(self._tf_cfg("5m", "min_edge", self.min_edge))
         elif window_size == "1h":
-            min_edge = float(self.config.get("min_edge_1h", self.min_edge))
+            min_edge = float(self._tf_cfg("1h", "min_edge", self.min_edge))
         else:
-            min_edge = self.min_edge
-        min_edge = max(min_edge, self.hard_min_edge)
-        if action == "BUY_NO" and self.min_edge_buy_no > 0:
-            min_edge = max(self.hard_min_edge, self.min_edge_buy_no)
+            min_edge = float(self._tf_cfg(window_size, "min_edge", self.min_edge))
+        hard_min_edge = float(
+            self._tf_cfg(window_size, "hard_min_edge", self.hard_min_edge)
+        )
+        min_edge = max(min_edge, hard_min_edge)
+        min_edge_buy_no = float(
+            self._tf_cfg(window_size, "min_edge_buy_no", self.min_edge_buy_no)
+        )
+        if action == "BUY_NO" and min_edge_buy_no > 0:
+            min_edge = max(hard_min_edge, min_edge_buy_no)
         win_min, win_max = self._default_entry_window_bounds(window_size)
         size_multiplier = float(self.tuning_size_multiplier)
         if window_size == "5m" and self.calibration_size_multiplier_5m > 0:
@@ -1150,8 +1191,10 @@ class SolMacroStrategy:
         return {
             "enabled": True,
             "min_edge": float(min_edge),
-            "hard_min_edge": float(self.hard_min_edge),
-            "ai_override_min_edge": float(self.min_edge_5m_ai_override),
+            "hard_min_edge": float(hard_min_edge),
+            "ai_override_min_edge": float(
+                self._ai_override_min_edge_for_window(window_size)
+            ),
             "entry_price_min": float(self.entry_price_min),
             "entry_price_max": float(entry_price_max),
             "entry_window_min": float(win_min),
@@ -2342,9 +2385,6 @@ class SolMacroStrategy:
         # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
         _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
-        _regime_ai_override = float(self.min_edge_5m_ai_override)
-        if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
-            _regime_ai_override *= self._regime_min_edge_mult(btc_1h_regime)
 
         for market in sol_markets:
             is_updown = self._is_updown_market(market)
@@ -3303,7 +3343,10 @@ class SolMacroStrategy:
                         continue
 
                 # AI tiebreaker for marginal edge (skipped when AI offline or use_ai false)
-                if edge < self.min_edge and edge > 0.03:
+                _marginal_min_edge = self._min_edge_for_window(
+                    _updown_tf if is_updown else "15m"
+                )
+                if edge < _marginal_min_edge and edge > 0.03:
                     def _log_ai_veto(_reason: str, **extra: Any) -> None:
                         _log_skip_reject(
                             market=market,
@@ -3317,7 +3360,7 @@ class SolMacroStrategy:
                             stage="ai_veto",
                             context={
                                 "edge": round(float(edge), 6),
-                                "min_edge": float(self.min_edge),
+                                "min_edge": float(_marginal_min_edge),
                                 **extra,
                             },
                         )
@@ -3365,7 +3408,7 @@ class SolMacroStrategy:
                         f"=== 15m CONFIRMATION ===\n"
                         f"15m MACD: hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover}\n\n"
                         f"Allowed side: {allowed_side}\n"
-                        f"Quant edge={edge:.4f} min_edge={(self.min_edge_5m if is_5m else self.min_edge):.4f}\n"
+                        f"Quant edge={edge:.4f} min_edge={_marginal_min_edge:.4f}\n"
                         f"Should we take this {action} trade, or HOLD?\n"
                         f"\n=== MARKET ===\n{format_market_metadata(market)}"
                     )
@@ -3394,7 +3437,7 @@ class SolMacroStrategy:
                         edge=edge,
                         confidence=confidence,
                         action=action,
-                        quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
+                        quant_threshold=_marginal_min_edge,
                         raw_est_prob=raw_est_prob,
                         estimated_prob=estimated_prob,
                         require_shadow_portfolio=False,
@@ -3416,7 +3459,7 @@ class SolMacroStrategy:
                             quant_action=action,
                             quant_edge=edge,
                             quant_confidence=confidence,
-                            quant_threshold=self.min_edge_5m if is_5m else self.min_edge,
+                            quant_threshold=_marginal_min_edge,
                             raw_probability=raw_est_prob,
                             post_calibration_probability=estimated_prob,
                             require_shadow_portfolio=False,
@@ -3506,7 +3549,7 @@ class SolMacroStrategy:
                                 quant_action=action,
                                 quant_edge=edge,
                                 quant_threshold=(
-                                    self.min_edge_5m if is_5m else self.min_edge
+                                    _marginal_min_edge
                                 ),
                                 existing_research=None,
                             )

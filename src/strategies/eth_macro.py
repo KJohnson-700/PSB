@@ -107,6 +107,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         )
         self._apply_strategy_config(rebuild_service=True)
         self._signal_strategy_name = "eth_macro"
+        self._log_tf_config_overrides()
 
         self.btc_follow_1h_hist_min = float(self.config.get("btc_follow_1h_hist_min", 8.0))
         self.btc_follow_15m_hist_min = float(self.config.get("btc_follow_15m_hist_min", 0.03))
@@ -133,7 +134,9 @@ class ETHMacroStrategy(SolMacroStrategy):
         )
         self._refresh_shadow_observer_controls()
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
-        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.min_edge_5m_ai_override = float(
+            self._tf_cfg("5m", "ai_override_min_edge", 0.10)
+        )
         self.btc_follow_1h_required = bool(self.config.get("btc_follow_1h_required", True))
         self.btc_follow_1h_allow_rising_recovery = bool(
             self.config.get("btc_follow_1h_allow_rising_recovery", True)

@@ -77,9 +77,9 @@ def test_optional_rsi_buy_ceiling_soft_penalty_by_default():
     assert delta3 == 0.0
 
 
-def test_sol_legacy_entry_policy_supports_hourly_overrides():
+def test_sol_entry_policy_supports_hourly_by_tf_overrides():
     cfg = _make_config()
-    cfg["strategies"]["sol_macro"]["min_edge_1h"] = 0.11
+    cfg["strategies"]["sol_macro"]["by_tf"] = {"1h": {"min_edge": 0.11}}
     cfg["strategies"]["sol_macro"]["entry_price_max_1h_yes_side"] = 0.60
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 

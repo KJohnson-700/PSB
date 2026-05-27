@@ -253,7 +253,22 @@ strategies:
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09
-    min_edge_5m: 0.08
+    defaults:
+      min_edge: 0.09
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.08
+        entry_window_min: 0.5
+        entry_window_max: 5.5
+      15m:
+        min_edge: 0.09
+        entry_window_min: 2.0
+        entry_window_max: 19.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 1.0
+        entry_window_max: 59.0
     min_edge_15m_neutral: 0.12
     neutral_15m_min_quant_confidence: 0.58
     neutral_15m_requires_shadow_portfolio: true
@@ -272,7 +287,6 @@ strategies:
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 18.0
     entry_timing_window_5m_min: 0.5
@@ -282,10 +296,6 @@ strategies:
     entry_price_max: 0.9
     entry_price_min_updown: 0.45
     entry_price_max_updown: 0.55
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 19.0
-    entry_window_5m_min: 0.5
-    entry_window_5m_max: 5.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -428,7 +438,23 @@ strategies:
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
     min_edge: 0.09
-    min_edge_5m: 0.085
+    defaults:
+      min_edge: 0.09
+      hard_min_edge: 0.07
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.085
+        entry_window_min: 0.0
+        entry_window_max: 4.0
+      15m:
+        min_edge: 0.09
+        entry_window_min: 1.0
+        entry_window_max: 32.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 0.0
+        entry_window_max: 60.0
     hard_min_edge: 0.07
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -459,7 +485,6 @@ strategies:
     oracle_max_basis_bps_15m_buy_yes: 30.0
     oracle_basis_relax_max_bps_15m_buy_yes: 40.0
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -502,15 +527,11 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
-    entry_window_15m_min: 1.0
-    entry_window_15m_max: 32.0
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
     block_counter_macro_leg_updown: true
     updown_macro_leg_min_for_long: 0.0
-    entry_window_5m_min: 0.0
-    entry_window_5m_max: 4.0
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -600,7 +621,23 @@ strategies:
         - 1h
     min_liquidity: 1000
     min_edge: 0.09
-    min_edge_5m: 0.1
+    defaults:
+      min_edge: 0.09
+      hard_min_edge: 0.0
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.1
+        entry_window_min: 0.5
+        entry_window_max: 4.0
+      15m:
+        min_edge: 0.09
+        entry_window_min: 1.0
+        entry_window_max: 24.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 0.0
+        entry_window_max: 60.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -635,7 +672,6 @@ strategies:
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 15.0
     entry_timing_window_5m_min: 0.5
@@ -677,10 +713,6 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
-    entry_window_15m_min: 1.0
-    entry_window_15m_max: 24.0
-    entry_window_5m_min: 0.5
-    entry_window_5m_max: 4.0
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -785,7 +817,24 @@ strategies:
     min_liquidity_1h_buy_no: 200
     min_edge: 0.09
     min_edge_buy_no: 0.08
-    min_edge_5m: 0.07
+    defaults:
+      min_edge: 0.09
+      min_edge_buy_no: 0.08
+      hard_min_edge: 0.07
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.07
+        entry_window_min: 0.0
+        entry_window_max: 5.5
+      15m:
+        min_edge: 0.09
+        entry_window_min: 2.0
+        entry_window_max: 36.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 1.0
+        entry_window_max: 59.0
     hard_min_edge: 0.07
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: false
@@ -816,7 +865,6 @@ strategies:
     oracle_basis_relax_max_bps: 60.0
     oracle_stale_basis_relax_max_bps: 75.0
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     entry_timing_window_15m_min: 2.0
     entry_timing_window_15m_max: 25.0
     entry_timing_window_5m_min: 0.5
@@ -835,10 +883,6 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 36.0
-    entry_window_5m_min: 0.0
-    entry_window_5m_max: 5.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 4.0
@@ -943,7 +987,24 @@ strategies:
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
     min_edge: 0.09
-    min_edge_5m: 0.085
+    defaults:
+      min_edge: 0.09
+      min_edge_buy_no: 0.08
+      hard_min_edge: 0.0
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.085
+        entry_window_min: 0.0
+        entry_window_max: 4.5
+      15m:
+        min_edge: 0.09
+        entry_window_min: 2.0
+        entry_window_max: 16.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 0.0
+        entry_window_max: 60.0
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -951,7 +1012,6 @@ strategies:
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
@@ -1012,10 +1072,6 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
-    entry_window_5m_min: 0.0
-    entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
@@ -1099,7 +1155,24 @@ strategies:
     min_liquidity_1h: 250
     min_liquidity_1h_buy_no: 250
     min_edge: 0.09
-    min_edge_5m: 0.085
+    defaults:
+      min_edge: 0.09
+      min_edge_buy_no: 0.08
+      hard_min_edge: 0.0
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.085
+        entry_window_min: 0.0
+        entry_window_max: 4.5
+      15m:
+        min_edge: 0.09
+        entry_window_min: 2.0
+        entry_window_max: 16.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 0.0
+        entry_window_max: 60.0
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1107,7 +1180,6 @@ strategies:
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
@@ -1162,10 +1234,6 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
-    entry_window_5m_min: 0.0
-    entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0
@@ -1250,7 +1318,24 @@ strategies:
     min_liquidity_1h: 250
     min_liquidity_1h_buy_no: 250
     min_edge: 0.09
-    min_edge_5m: 0.085
+    defaults:
+      min_edge: 0.09
+      min_edge_buy_no: 0.08
+      hard_min_edge: 0.0
+      ai_override_min_edge: 0.1
+    by_tf:
+      5m:
+        min_edge: 0.085
+        entry_window_min: 0.0
+        entry_window_max: 4.5
+      15m:
+        min_edge: 0.09
+        entry_window_min: 2.0
+        entry_window_max: 16.0
+      1h:
+        min_edge: 0.09
+        entry_window_min: 0.0
+        entry_window_max: 60.0
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1258,7 +1343,6 @@ strategies:
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 60
     ai_hold_veto_ttl_sec: 300
-    min_edge_5m_ai_override: 0.1
     ai_updown_marginal_min_edge: 0.03
     require_oracle_for_updown: true
     oracle_max_age_sec: 180
@@ -1316,10 +1400,6 @@ strategies:
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
-    entry_window_15m_min: 2.0
-    entry_window_15m_max: 16.0
-    entry_window_5m_min: 0.0
-    entry_window_5m_max: 4.5
     entry_window_auto_align: true
     entry_window_align_scan_interval_sec: 60
     entry_window_auto_align_max_expand_min: 3.0

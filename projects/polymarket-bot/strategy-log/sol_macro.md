@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-26 — Timeframe-scoped entry control config
+
+- **What changed:** Moved SOL entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed shared macro entry policy reads through the timeframe resolver.
+- **Why:** Static config audit showed the same 5m/15m values duplicated in flat keys and lane policy overrides, making it unclear which tuning surface was authoritative.
+- **Hypothesis:** SOL 5m/15m/1h tuning changes should stay scoped to their `by_tf` cell with no cross-timeframe bleed.
+- **Expected outcome:** Startup logs should show SOL `by_tf` overrides; focused tests should preserve the same effective min-edge/window values.
+- **Actual outcome:** `pending` (config migration only; need >=15 closed SOL trades before performance judgment).
+- **Status:** `pending`
+
 ### 2026-05-26 — Resolver metadata parity for shared macro signals
 
 - **What changed:** Added BTC-compatible resolver metadata to the shared macro signal path: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.

@@ -20,7 +20,12 @@ def _config():
             "eth_macro": {
                 "enabled": True,
                 "min_edge": 0.09,
-                "min_edge_5m": 0.09,
+                "by_tf": {
+                    "5m": {
+                        "min_edge": 0.09,
+                        "ai_override_min_edge": 0.12,
+                    }
+                },
                 "entry_price_min": 0.46,
                 "entry_price_max": 0.54,
                 "btc_follow_1h_hist_min": 8.0,
@@ -33,7 +38,6 @@ def _config():
                 "eth_follow_15m_min_adj": 0.05,
                 "rsi_sell_block_below": 40.0,
                 "ai_hold_veto_ttl_sec": 111,
-                "min_edge_5m_ai_override": 0.12,
             }
         },
         "trading": {"dry_run": True},

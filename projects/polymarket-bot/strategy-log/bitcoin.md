@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-26 — Timeframe-scoped entry control config
+
+- **What changed:** Moved BTC entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed BTC entry policy reads through the shared timeframe resolver.
+- **Why:** Static config audit showed the same 5m/15m values duplicated in flat keys and lane policy overrides, making it unclear which tuning surface was authoritative.
+- **Hypothesis:** BTC 5m/15m/1h tuning changes should stay scoped to their `by_tf` cell with no cross-timeframe bleed.
+- **Expected outcome:** Startup logs should show BTC `by_tf` overrides; focused tests should preserve the same effective min-edge/window values.
+- **Actual outcome:** `pending` (config migration only; need >=15 closed BTC trades before performance judgment).
+- **Status:** `pending`
+
 ### 2026-05-26 — Hold up/down winners to resolution
 
 - **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.

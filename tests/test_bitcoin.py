@@ -94,9 +94,9 @@ def _make_btc_market(
     )
 
 
-def test_bitcoin_legacy_entry_policy_supports_hourly_overrides():
+def test_bitcoin_entry_policy_supports_hourly_by_tf_overrides():
     cfg = _make_config()
-    cfg["strategies"]["bitcoin"]["min_edge_1h"] = 0.12
+    cfg["strategies"]["bitcoin"]["by_tf"] = {"1h": {"min_edge": 0.12}}
     cfg["strategies"]["bitcoin"]["entry_price_max_1h_yes_side"] = 0.61
     strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
 

@@ -62,7 +62,11 @@ from src.analysis.lane_entry_policy import (
     resolve_lane_entry_policy,
 )
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
-from src.strategies.strategy_config import resolve_enabled_flag
+from src.strategies.strategy_config import (
+    resolve_enabled_flag,
+    resolve_tf_config_value,
+    tf_config_override_snapshot,
+)
 from src.strategies.strategy_ai_context import (
     ai_recommendation_supports_action,
     format_market_metadata,
@@ -206,9 +210,10 @@ class BitcoinStrategy:
             self.config,
             logger=logger,
         )
+        self._log_tf_config_overrides()
         self.min_liquidity = self.config.get('min_liquidity', 10000)
         self.min_edge = self.config.get('min_edge', 0.08)
-        self.min_edge_5m = self.config.get('min_edge_5m', self.min_edge)  # 5m-specific edge threshold
+        self.min_edge_5m = float(self._tf_cfg("5m", "min_edge", self.min_edge))
         self.min_edge_15m_neutral = float(
             self.config.get("min_edge_15m_neutral", self.min_edge) or self.min_edge
         )
@@ -252,7 +257,9 @@ class BitcoinStrategy:
         # This closes the gap where AI correctly says HOLD but 5m quant fires anyway.
         self._ai_hold_cache: Dict[str, float] = {}  # market_id → timestamp of HOLD
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)     # 5m default
-        self.min_edge_5m_ai_override = self.config.get("min_edge_5m_ai_override", 0.10)
+        self.min_edge_5m_ai_override = float(
+            self._tf_cfg("5m", "ai_override_min_edge", 0.10)
+        )
         self.bias_quant_disagree_override_enabled = bool(
             self.config.get("bias_quant_disagree_override_enabled", False)
         )
@@ -273,6 +280,27 @@ class BitcoinStrategy:
 
         # Observability snapshot populated each scan (used by ops pulse / dashboard status).
         self.last_scan_stats: Dict[str, Any] = {}
+
+    def _tf_cfg(self, tf: str, key: str, default: Any = None) -> Any:
+        return resolve_tf_config_value(
+            self.config,
+            tf=tf,
+            key=key,
+            default=default,
+        )
+
+    def _log_tf_config_overrides(self) -> None:
+        overrides = tf_config_override_snapshot(self.config)
+        if overrides:
+            logger.info("[config] BTC by_tf overrides: %s", overrides)
+
+    def _min_edge_for_window(self, window_size: str) -> float:
+        return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
+
+    def _ai_override_min_edge_for_window(self, window_size: str) -> float:
+        return float(
+            self._tf_cfg(window_size, "ai_override_min_edge", self.min_edge_5m_ai_override)
+        )
 
     def _max_edge_cap_for_updown(self, *, window_label: str, side: str) -> float:
         base_cap = float(self.config.get("max_edge_updown", 0.12) or 0.12)
@@ -685,8 +713,12 @@ class BitcoinStrategy:
         """Return entry window bounds, optionally widened to align with scan cadence."""
         if tf not in ("5m", "15m", "1h"):
             tf = "15m"
-        win_min = float(self.config.get(f"entry_window_{tf}_min", default_min))
-        win_max = float(self.config.get(f"entry_window_{tf}_max", default_max))
+        win_min = float(
+            self._tf_cfg(tf, "entry_window_min", default_min)
+        )
+        win_max = float(
+            self._tf_cfg(tf, "entry_window_max", default_max)
+        )
         if win_min > win_max:
             win_min, win_max = win_max, win_min
 
@@ -744,12 +776,14 @@ class BitcoinStrategy:
         action: str,
     ) -> Dict[str, Any]:
         if window_size == "5m":
-            min_edge = self.min_edge_5m
+            min_edge = float(self._tf_cfg("5m", "min_edge", self.min_edge))
         elif window_size == "1h":
-            min_edge = float(self.config.get("min_edge_1h", self.min_edge))
+            min_edge = float(self._tf_cfg("1h", "min_edge", self.min_edge))
         else:
-            min_edge = self.min_edge
-        min_edge_buy_no = float(self.config.get("min_edge_buy_no", 0.0))
+            min_edge = float(self._tf_cfg(window_size, "min_edge", self.min_edge))
+        min_edge_buy_no = float(
+            self._tf_cfg(window_size, "min_edge_buy_no", 0.0)
+        )
         if action == "BUY_NO" and min_edge_buy_no > 0:
             min_edge = min_edge_buy_no
         win_min, win_max = self._default_entry_window_bounds(window_size)
@@ -765,7 +799,9 @@ class BitcoinStrategy:
             "enabled": True,
             "min_edge": float(min_edge),
             "hard_min_edge": 0.0,
-            "ai_override_min_edge": float(self.min_edge_5m_ai_override),
+            "ai_override_min_edge": float(
+                self._ai_override_min_edge_for_window(window_size)
+            ),
             "entry_price_min": float(self.config.get("entry_price_min_updown", 0.46)),
             "entry_price_max": float(entry_price_max),
             "entry_window_min": float(win_min),
@@ -2005,7 +2041,10 @@ class BitcoinStrategy:
                     confidence = min(0.85, 0.50 + ltf_strength * 0.20 + timing_bonus + distance_pct * 0.5)
 
                     # Marginal edge → AI tiebreaker (skipped when AI offline or use_ai false)
-                    if edge < self.min_edge and edge > 0.03:
+                    _marginal_min_edge = self._min_edge_for_window(
+                        _updown_tf if is_updown else "15m"
+                    )
+                    if edge < _marginal_min_edge and edge > 0.03:
                         if not self.config.get("use_ai", True):
                             logger.debug(
                                 f"BTC: use_ai=false — skipping marginal trade "
@@ -2120,7 +2159,7 @@ class BitcoinStrategy:
                                     marginal_recommendation=str(ai_analysis.recommendation),
                                     quant_action=action,
                                     quant_edge=edge,
-                                    quant_threshold=self.min_edge,
+                                    quant_threshold=_marginal_min_edge,
                                     existing_research=None,
                                 )
                                 if shadow_out and shadow_out.get("ok"):
@@ -2236,7 +2275,7 @@ class BitcoinStrategy:
                                 marginal_recommendation=str(ai_analysis.recommendation),
                                 quant_action=action,
                                 quant_edge=edge,
-                                quant_threshold=self.min_edge,
+                                quant_threshold=_marginal_min_edge,
                                 existing_research=None,
                             )
                             if shadow_out and shadow_out.get("ok"):

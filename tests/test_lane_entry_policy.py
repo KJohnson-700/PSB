@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from src.analysis.lane_entry_policy import resolve_entry_policy_side, resolve_lane_entry_policy
 from src.analysis.math_utils import PositionSizer
+from src.strategies.strategy_config import resolve_tf_config_value
 from src.strategies.bitcoin import BitcoinStrategy
 from src.strategies.eth_macro import ETHMacroStrategy
 from src.strategies.hype_macro import HYPEMacroStrategy
@@ -15,11 +16,11 @@ def _base_cfg() -> dict:
     return {
         "entry_policy": {"defaults": {"enabled": True, "size_multiplier": 1.0}},
         "strategies": {
-            "bitcoin": {"enabled": True, "min_edge": 0.10, "min_edge_5m": 0.08},
-            "sol_macro": {"enabled": True, "min_edge": 0.09, "min_edge_5m": 0.085},
-            "eth_macro": {"enabled": True, "min_edge": 0.09, "min_edge_5m": 0.10},
-            "hype_macro": {"enabled": True, "min_edge": 0.09, "min_edge_5m": 0.07},
-            "xrp_macro": {"enabled": True, "min_edge": 0.09, "min_edge_5m": 0.085},
+            "bitcoin": {"enabled": True, "min_edge": 0.10},
+            "sol_macro": {"enabled": True, "min_edge": 0.09},
+            "eth_macro": {"enabled": True, "min_edge": 0.09},
+            "hype_macro": {"enabled": True, "min_edge": 0.09},
+            "xrp_macro": {"enabled": True, "min_edge": 0.09},
         },
         "hyperliquid": {},
     }
@@ -85,6 +86,22 @@ def test_entry_policy_uses_legacy_fallback_when_new_keys_absent():
     assert policy.entry_window_max == 19.0
 
 
+def test_tf_config_resolver_scopes_by_timeframe_without_legacy_tf_keys():
+    cfg = {
+        "min_edge": 0.09,
+        "defaults": {"min_edge": 0.10, "entry_window_min": 2.0},
+        "by_tf": {
+            "15m": {"min_edge": 0.11},
+            "1h": {"entry_window_min": 4.0},
+        },
+    }
+
+    assert resolve_tf_config_value(cfg, tf="5m", key="min_edge") == 0.10
+    assert resolve_tf_config_value(cfg, tf="15m", key="min_edge") == 0.11
+    assert resolve_tf_config_value(cfg, tf="1h", key="entry_window_min") == 4.0
+    assert resolve_tf_config_value(cfg, tf="5m", key="entry_window_min") == 2.0
+
+
 def test_bitcoin_resolves_lane_specific_policy():
     cfg = _base_cfg()
     cfg["strategies"]["bitcoin"].update(
@@ -108,6 +125,30 @@ def test_bitcoin_resolves_lane_specific_policy():
     side2, policy2 = strat._resolve_lane_entry_policy(window_size="5m", action="BUY_YES", direction="UP")
     assert side2 == "up"
     assert policy2.min_edge == 0.08
+
+
+def test_bitcoin_legacy_policy_uses_by_tf_without_cross_timeframe_leakage():
+    cfg = _base_cfg()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "min_edge": 0.09,
+            "entry_window_auto_align": False,
+            "defaults": {"min_edge": 0.10},
+            "by_tf": {
+                "5m": {"min_edge": 0.12, "entry_window_min": 0.25, "entry_window_max": 4.25},
+                "15m": {"min_edge": 0.095, "entry_window_min": 2.0, "entry_window_max": 19.0},
+            },
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), PositionSizer())
+
+    policy_5m = strat._legacy_entry_policy(window_size="5m", action="BUY_YES")
+    policy_15m = strat._legacy_entry_policy(window_size="15m", action="BUY_YES")
+
+    assert policy_5m["min_edge"] == 0.12
+    assert policy_5m["entry_window_min"] == 0.25
+    assert policy_15m["min_edge"] == 0.095
+    assert policy_15m["entry_window_min"] == 2.0
 
 
 def test_sol_style_strategies_resolve_window_side_specific_policy():
@@ -141,3 +182,31 @@ def test_sol_style_strategies_resolve_window_side_specific_policy():
         assert side == "down"
         assert policy.min_edge == 0.11
         assert policy.size_multiplier == 0.8
+
+
+def test_sol_legacy_policy_uses_by_tf_thresholds_and_windows():
+    cfg = _base_cfg()
+    cfg["strategies"]["sol_macro"].update(
+        {
+            "min_edge": 0.09,
+            "hard_min_edge": 0.07,
+            "entry_window_auto_align": False,
+            "by_tf": {
+                "5m": {"min_edge": 0.105, "entry_window_min": 0.0, "entry_window_max": 3.5},
+                "15m": {"min_edge_buy_no": 0.115, "entry_window_min": 1.0, "entry_window_max": 32.0},
+            },
+        }
+    )
+    strat = SolMacroStrategy(cfg, MagicMock(), PositionSizer())
+
+    policy_5m = strat._legacy_entry_policy(window_size="5m", action="BUY_YES", direction="UP")
+    policy_15m_down = strat._legacy_entry_policy(
+        window_size="15m",
+        action="BUY_NO",
+        direction="DOWN",
+    )
+
+    assert policy_5m["min_edge"] == 0.105
+    assert policy_5m["entry_window_max"] == 3.5
+    assert policy_15m_down["min_edge"] == 0.115
+    assert policy_15m_down["entry_window_max"] == 32.0
