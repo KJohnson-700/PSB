@@ -90,7 +90,14 @@ def test_coerce_confidence_phrases() -> None:
     assert ag._coerce_confidence_score(0.65) == 0.65
 
 
-def test_extract_openai_message_text_checks_kimi_alternate_fields() -> None:
+def test_extract_openai_message_text_does_not_fall_back_to_reasoning_content() -> None:
+    # Regression: kimi-for-coding (and other reasoning models) consume the
+    # max_tokens budget on reasoning_content before emitting `content`. The
+    # extractor MUST NOT substitute reasoning prose when content is empty —
+    # doing so feeds CoT text to the JSON parser, masking the real cause
+    # (budget exhaustion) as a parse error and triggering a 600s cooldown.
+    # Empty content should stay empty so the caller can raise "empty response"
+    # cleanly and skip the cooldown.
     response = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -105,7 +112,29 @@ def test_extract_openai_message_text_checks_kimi_alternate_fields() -> None:
         ]
     )
 
-    assert AIAgent._extract_openai_message_text(response).startswith('{"reasoning"')
+    assert AIAgent._extract_openai_message_text(response) == ""
+
+
+def test_extract_openai_message_text_uses_parsed_and_refusal_fallbacks() -> None:
+    # `parsed` / `refusal` are legitimate alternate payload locations on the
+    # OpenAI SDK shape — keep those fallbacks even though reasoning_* is gone.
+    parsed_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="", parsed={"recommendation": "HOLD"})
+            )
+        ]
+    )
+    assert "HOLD" in AIAgent._extract_openai_message_text(parsed_response)
+
+    refusal_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="", refusal="cannot comply")
+            )
+        ]
+    )
+    assert AIAgent._extract_openai_message_text(refusal_response) == "cannot comply"
 
 
 def test_kimi_empty_content_cools_down_without_second_attempt(monkeypatch) -> None:
