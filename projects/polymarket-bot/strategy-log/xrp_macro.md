@@ -14,6 +14,42 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-05-26 — Resolver metadata parity for shared macro signals
+
+- **What changed:** Added BTC-compatible resolver metadata to the shared macro signal path used by XRP: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.
+- **Why:** XRP had HTF and oracle metadata, but direction-resolution details were not first-class like BTC.
+- **Hypothesis:** Future ghost/trade reviews can separate HTF-aligned, quant-disagree, and momentum-disagree XRP entries without changing entry behavior.
+- **Expected outcome:** New XRP entries should include resolver metadata in journal extras and `entry_signal`.
+- **Actual outcome:** `pending` (need post-change entries to verify field coverage).
+- **Status:** `pending`
+
+### 2026-05-26 — Hold up/down winners to resolution
+
+- **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.
+- **Why:** XRP showed sizing, exit, and selection damage. This addresses the exit side without further entry-gate tightening.
+- **Hypothesis:** Correct XRP trades should realize closer to binary-resolution payoff when held through settlement.
+- **Expected outcome:** Fewer `take_profit` exits, more `RESOLVED:* (real)` exits, and higher avg-win dollars.
+- **Actual outcome:** `pending` (need >=15 closed XRP trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — BUY_YES recovery tweak after rollback
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), changed XRP `alt_momentum_confirm.buy_yes` to `15m` only while keeping `buy_no` confirmation on `5m`, `15m`, and `1h`.
+- **Why:** XRP was still a winner but started giving back; the goal is not to suppress BUY_YES entirely while fixing unconfirmed downside flow.
+- **Hypothesis:** XRP BUY_YES remains available when edge/price/oracle checks clear, while BUY_NO remains protected by explicit momentum confirmation.
+- **Expected outcome:** Next paper run should show XRP BUY_YES not globally starved, with fewer unconfirmed downside fills.
+- **Actual outcome:** `pending` (need ≥15 closed XRP trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-26 — Pre-restart rollback of post-May-22 momentum guard regression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), added active `xrp_macro.alt_momentum_confirm` blocking for `BUY_YES` and `BUY_NO` on `5m`, `15m`, and `1h`; restored XRP base `min_edge 0.085 -> 0.09` and restored XRP up-lane edge overrides to the May 22 levels.
+- **Why:** XRP remained a net winner but started giving back while the shared alt macro path admitted far more unconfirmed default-side trades. This rolls XRP back toward the confirmed-entry baseline without disabling the lane.
+- **Hypothesis:** XRP should keep higher-quality confirmed trades while reducing marginal fills admitted by the post-May-22 exploration posture.
+- **Expected outcome:** Next paper run should show fewer unconfirmed XRP entries, especially default-side 5m/15m fills, with outcome pending until enough closed trades accrue.
+- **Actual outcome:** `pending` (need ≥15 closed XRP trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — Cap live lane-calibration alpha at identity
 
 - **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify XRP probabilities away from 50/50; sub-1 shrinkage remains active.

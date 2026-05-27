@@ -12,6 +12,42 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-26 — Resolver metadata parity for macro signals
+
+- **What changed:** Added BTC-compatible resolver metadata to ETH macro entries: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.
+- **Why:** ETH had HTF and oracle metadata, but direction-resolution details were not first-class like BTC.
+- **Hypothesis:** Future ghost/trade reviews can separate ETH HTF-aligned, quant-disagree, and momentum-disagree entries without changing entry behavior.
+- **Expected outcome:** New ETH entries should include resolver metadata in journal extras and `entry_signal`.
+- **Actual outcome:** `pending` (need post-change entries to verify field coverage).
+- **Status:** `pending`
+
+### 2026-05-26 — Hold up/down winners to resolution
+
+- **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.
+- **Why:** ETH size was basically stable while W/L ratio deteriorated, so the problem is exit/selection rather than sizing.
+- **Hypothesis:** Correct ETH trades should realize closer to binary-resolution payoff when held through settlement.
+- **Expected outcome:** Fewer `take_profit` exits, more `RESOLVED:* (real)` exits, and higher avg-win dollars.
+- **Actual outcome:** `pending` (need >=15 closed ETH trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Restore May-22 ETH sizing posture
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), restored ETH 5m lane `size_multiplier` from `0.3x` to the May 22 `0.4x`, and removed the added `0.3x` haircut from ETH 15m/1h lane policies.
+- **Why:** Session attribution showed average winners collapsed across macro lanes. ETH’s exit logic did not change from the May 22 restore point, so the clean regression to undo is the post-baseline lane sizing haircut.
+- **Hypothesis:** ETH average realized winner should improve without adding new entry restrictions; 5m remains calibration-sized at the original `0.4x`.
+- **Expected outcome:** Next ETH paper sample should no longer show `lane_size=0.30x` on 15m/1h entries, and 5m should show the intended `0.40x` lane size.
+- **Actual outcome:** `pending` (need >=15 closed ETH trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Pre-restart rollback of post-May-22 ETH momentum guard regression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), restored active `eth_momentum_confirm.buy_yes` and `eth_momentum_confirm.buy_no` blocking on `5m`, `15m`, and `1h`. Existing shadow logging remains, but the active block list now takes precedence.
+- **Why:** ETH shifted from profitable `BUY_YES` participation in the prior 24h to mostly `BUY_NO` / `alt_1h_legacy_btc_mode` losses. Baseline `62486e6` had default-on ETH-native momentum confirmation; the post-May-22 allowlist/shadow conversion left ETH admission materially weaker.
+- **Hypothesis:** ETH entries should require ETH-native MACD confirmation before either side is admitted, reducing unconfirmed `alt_1h_legacy_btc_mode` fills.
+- **Expected outcome:** Next paper run should show fewer unconfirmed ETH default-side fills and clearer skip attribution through `buy_*_no_eth_momentum_confirm`.
+- **Actual outcome:** `pending` (need ≥15 closed ETH trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — Cap live lane-calibration alpha at identity
 
 - **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify ETH probabilities away from 50/50; sub-1 shrinkage remains active.

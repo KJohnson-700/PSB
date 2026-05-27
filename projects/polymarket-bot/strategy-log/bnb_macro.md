@@ -12,6 +12,51 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-26 — Resolver metadata parity for shared macro signals
+
+- **What changed:** Added BTC-compatible resolver metadata to the shared macro signal path used by BNB: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.
+- **Why:** BNB had HTF and oracle metadata, but direction-resolution details were not first-class like BTC.
+- **Hypothesis:** Future ghost/trade reviews can separate HTF-aligned, quant-disagree, and momentum-disagree BNB entries without changing entry behavior.
+- **Expected outcome:** New BNB entries should include resolver metadata in journal extras and `entry_signal`.
+- **Actual outcome:** `pending` (need post-change entries to verify field coverage).
+- **Status:** `pending`
+
+### 2026-05-26 — Route BNB through up/down exits and hold winners
+
+- **What changed:** Added `bnb_macro` to the shared crypto up/down exit strategy set and enabled `trading.exit_rules.updown_hold_winners_to_resolution`.
+- **Why:** BNB was missing from the specialized up/down exit path, so it could bypass the stop/window/resolution behavior used by BTC/SOL/ETH/HYPE/XRP.
+- **Hypothesis:** BNB exits should now use up/down-specific stop/window semantics, and correct winners should settle instead of being clipped by early TP.
+- **Expected outcome:** BNB exits should include up/down-specific reasons and more `RESOLVED:* (real)` winners when correct.
+- **Actual outcome:** `pending` (need >=15 closed BNB trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Remove BNB 15m/1h exploration size haircut
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), removed the added `0.3x` lane `size_multiplier` from BNB 15m and 1h up/down policies while keeping the existing 5m calibration sizing unchanged.
+- **Why:** BNB was the only strategy whose win/loss ratio improved, so this is not a defensive tighten. It removes the broad post-baseline sizing experiment so BNB economics remain comparable with the May 22-style Kelly posture.
+- **Hypothesis:** BNB 15m/1h avg winner and avg loser magnitudes should become interpretable without an extra lane-policy haircut.
+- **Expected outcome:** Next BNB sample should show no 15m/1h `lane_size=0.30x` tag from lane policy.
+- **Actual outcome:** `pending` (need >=15 closed BNB trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — BUY_YES recovery tweak and missing BNB settings
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), changed BNB `alt_momentum_confirm.buy_yes` to `15m` only while keeping `buy_no` confirmation on `5m`, `15m`, and `1h`. Added/activated BNB BUY_YES settings by keeping `oracle_max_basis_bps_15m_buy_yes` / `oracle_basis_relax_max_bps_15m_buy_yes`, adding `entry_price_max_15m_yes_side`, and widening the BNB 15m up entry price cap to `0.57`. The shared oracle validator now reads those side/window settings.
+- **Why:** BNB had partial BUY_YES settings in YAML, but the live validator was not using side/window oracle overrides. The all-window BUY_YES confirm rollback also risked suppressing the side we need to recover.
+- **Hypothesis:** BNB should admit measured BUY_YES samples on cleaner setups without reopening unconfirmed BUY_NO downside flow.
+- **Expected outcome:** Next paper run should show BNB BUY_YES eligibility/fills when 15m price/oracle conditions are acceptable, with BUY_NO still momentum-confirmed.
+- **Actual outcome:** `pending` (need ≥15 closed BNB trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-26 — Pre-restart rollback of post-May-22 momentum guard regression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), added active `bnb_macro.alt_momentum_confirm` blocking for `BUY_YES` and `BUY_NO` on `5m`, `15m`, and `1h`; restored BNB 1h edge overrides to `up: 0.09` and `down: 0.08`.
+- **Why:** BNB was less bad than before but still not proven, and the post-May-22 guard regression exposed it to unconfirmed default-side fills. This removes the premature 1h exploration loosen before restart.
+- **Hypothesis:** BNB throughput should fall until BNB-native MACD confirms side selection, improving quality of any remaining fills.
+- **Expected outcome:** Next paper run should show fewer BNB unconfirmed default-side entries and clearer momentum-confirm skip attribution.
+- **Actual outcome:** `pending` (need ≥15 closed BNB trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — 1h exploration admission before restart
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), BNB 1h lane-policy floors were lowered to `up.min_edge: 0.08` and `down.min_edge: 0.075`, with 1h `entry_price_max` widened to `0.58`. Existing `0.3x` 1h calibration sizing remains.

@@ -8,11 +8,47 @@
 
 ---
 
+## 2026-05-27 — Crypto circuit breakers for correlated stop cascades
+
+**[`src/analysis/circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_circuit_breakers.py):** Added global side-specific crypto up/down circuit breakers. Fast mode halts a side after 3 same-side stop exits inside 60 seconds; slow mode halts after 6 same-side stop exits inside 15 minutes; BTC reversal mode halts new entries on a dominant side after a 0.3% adverse BTC move over 5 minutes with at least 5 same-side open positions.
+
+**Why:** The prior breaker proposal handled clustered cascades but not the observed slow 5/26_04 bleed. This change blocks only new entries on the damaged side while keeping exits and offsetting opposite-side entries available for the next paper/session round.
+
+## 2026-05-26 — Alt macro resolver metadata parity
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py), [`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py):** Added BTC-compatible resolver metadata to shared macro signals and ETH macro signals: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`. The execution path now persists those fields into journal extras and position `entry_signal`; selected tests cover metadata construction plus journal/position propagation.
+
+**Why:** SOL/ETH/HYPE/XRP/DOGE/BNB already had oracle validation config plumbing and HTF bias fields, but their direction-resolution metadata was weaker than BTC’s. This is an observability/parity change only; it does not alter entry gates, thresholds, sizing, or order routing.
+
+## 2026-05-25 — Calibration lane identity v2 and persistent ghost metadata
+
+**[`src/analysis/lane_identity.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_identity.py), [`src/analysis/calibration_log.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/calibration_log.py), [`src/analysis/lane_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), [`src/analysis/rejected_candidate_log.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/rejected_candidate_log.py), [`src/analysis/ghost_calibration.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ghost_calibration.py), [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py):** Added persistent normalized ghost/trade metadata, a `lane_identity_v2_source_resolver` posterior namespace, BTC resolver-path lane families, and alt 5m downside side-source lane families. Settled ghosts now preserve `ghost_lane_id` and `live_lane_id` so Ghost Lab can aggregate against persistent live calibration lanes instead of per-session reject buckets.
+
+**Why:** The audit showed plenty of ghost volume, but BTC conflict paths and alt 5m downside sources were being mixed into broad posterior buckets. This pass makes the data feed persistent and separable before any threshold or gate tuning.
+
+## 2026-05-25 — BTC direction conflict resolver refactor
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin.py), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):** Replaced BTC's scattered HTF/rollover/quant-flip side assignment with a `BTCDirectionDecision` resolver object that carries `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side` into signals, position `entry_signal`, journal extras, and rejected-candidate context. Current thresholds and admission gates are unchanged; this pass makes the conflict path first-class and testable.
+
+**Why:** The BTC audit showed admitted 15m downside lanes underperforming while rejected bias/quant disagreement ghosts were strong. Before tuning that conflict, side resolution needs one canonical decision surface instead of separate rollover and quant-flip mutations.
+
+## 2026-05-25 — Alt macro lane bias fields split
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):** Added explicit `primary_htf_bias`, `alt_htf_bias`, and `btc_htf_bias` fields to macro signals, populated them from the strategy scanners, and changed live lane construction to use distinct `primary + alt + btc_1h` regime tokens instead of duplicating `signal.htf_bias` into both the primary and alt slots. The position `entry_signal` now carries the resolved lane metadata for closed-trade calibration.
+
+**Why:** Session review showed SOL-family alt trades collapsing into the same `bearish__bearish__bull` lane bucket. The execution path was building lane metadata from `signal.htf_bias` twice, so calibration could not distinguish primary macro bias from alt-native HTF state even when the scanner had richer diagnostics.
+
 ## 2026-05-25 — Ghost Lab deadzone decision digest added
 
 **[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), [`tests/test_dashboard_bundle.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_dashboard_bundle.py):** Added `/api/ghosts/decision-digest`, a structured dashboard endpoint that combines deadzone counterfactual buckets, ghost-gate report rows, and lane calibration rows without importing Hermes cron wrappers or shelling out from the request path. Ghost Lab now has a **Deadzone theory** panel showing resolved deadzone-skip performance by UTC hour/regime beside the top ghost-gate and calibration signals. The older one-off `ghost_regime_report.py` artifact was removed; `tools/ghost_gate_report.py` remains the canonical ghost report surface.
 
 **Why:** The deadzone thesis needs live, structured evidence while data is collected: whether would-be blocked hours are actually cold, which regimes matter, and whether gates are saving loss or blocking winners. Hermes can still format notifications, but PSB owns the data and dashboard-visible interpretation.
+
+## 2026-05-25 — AI decision-gate attribution added
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):** Added entry-journal attribution fields for `ai_enabled_at_entry`, `ai_consulted`, `ai_verdict`, and `ai_influenced_decision`, plus explicit aliases for decision-gate state and analytics/live-inferencing state. Current `decision_gates.enabled: false` remains unchanged, so the next session can keep collecting quant-first entries while preserving clean AI attribution columns.
+
+**Why:** The existing `ai_used` field only showed whether an AI path was touched. It did not distinguish analytics availability from pre-entry decision-gate enforcement, which made “AI off” versus “AI available but not gating” ambiguous in session review.
 
 ## 2026-05-25 — BNB/DOGE 1h exploration before restart
 

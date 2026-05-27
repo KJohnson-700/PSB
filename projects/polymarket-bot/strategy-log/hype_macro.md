@@ -13,6 +13,51 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-05-26 — Resolver metadata parity for shared macro signals
+
+- **What changed:** Added BTC-compatible resolver metadata to the shared macro signal path used by HYPE: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.
+- **Why:** HYPE had HTF and oracle metadata, but direction-resolution details were not first-class like BTC.
+- **Hypothesis:** Future ghost/trade reviews can separate HTF-aligned, quant-disagree, and momentum-disagree HYPE entries without changing entry behavior.
+- **Expected outcome:** New HYPE entries should include resolver metadata in journal extras and `entry_signal`.
+- **Actual outcome:** `pending` (need post-change entries to verify field coverage).
+- **Status:** `pending`
+
+### 2026-05-26 — Hold up/down winners to resolution
+
+- **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.
+- **Why:** HYPE size grew while W/L ratio collapsed, so sizing cannot explain the damage. This targets premature winner clipping directly.
+- **Hypothesis:** Correct HYPE trades should realize closer to binary-resolution payoff when held through settlement.
+- **Expected outcome:** Fewer `take_profit` exits, more `RESOLVED:* (real)` exits, and higher avg-win dollars.
+- **Actual outcome:** `pending` (need >=15 closed HYPE trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Remove post-May-22 HYPE lane-size haircut
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), removed the `0.3x` lane `size_multiplier` from HYPE 5m, 15m, and 1h up/down entry policies.
+- **Why:** HYPE’s current avg win/loss ratio inverted despite the same NO-heavy trade mix. The blanket 0.3x exploration sizing was a direct post-baseline change and was no longer justified by the reported per-trade economics.
+- **Hypothesis:** HYPE winners should stop being mechanically capped by the lane haircut; remaining damage should then be attributable to entry quality or stop behavior rather than sizing.
+- **Expected outcome:** Next HYPE paper sample should show no `lane_size=0.30x` from lane policy and should recover avg winner dollars if the signal quality is comparable.
+- **Actual outcome:** `pending` (need >=15 closed HYPE trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — BUY_YES recovery tweak after rollback
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), changed HYPE `alt_momentum_confirm.buy_yes` to `15m` only while keeping `buy_no` confirmation on `5m`, `15m`, and `1h`.
+- **Why:** The pre-restart rollback protected against unconfirmed downside floods, but applying all-window confirmation to BUY_YES risked recreating the BUY_YES starvation problem.
+- **Hypothesis:** HYPE can still collect BUY_YES samples on cleaner 5m/1h setups while preserving confirmation on 15m.
+- **Expected outcome:** Next paper run should show nonzero HYPE BUY_YES eligibility without a broad increase in BUY_NO defaults.
+- **Actual outcome:** `pending` (need ≥15 closed HYPE trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-26 — Pre-restart rollback of post-May-22 momentum guard regression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), added active `hype_macro.alt_momentum_confirm` blocking for `BUY_YES` and `BUY_NO` on `5m`, `15m`, and `1h`; restored HYPE `min_edge 0.085 -> 0.09`, `min_edge_buy_no 0.075 -> 0.08`, down-lane edge overrides back to `0.08`, and `15m` entry-window max back to `36` minutes.
+- **Why:** HYPE was the post-restart bright spot, but the same shared guard regression affected its admission path. This keeps HYPE tradeable while removing the exploration loosen that was not part of the May 22 baseline.
+- **Hypothesis:** HYPE should retain confirmed directional fills but avoid unconfirmed downside/default entries admitted only by the weakened allowlist posture.
+- **Expected outcome:** Next paper run should show lower unconfirmed HYPE throughput and cleaner side-source attribution without disabling HYPE.
+- **Actual outcome:** `pending` (need ≥15 closed HYPE trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — BUY_NO exploration threshold nudge
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), lowered HYPE BUY_NO admission slightly: `min_edge_buy_no 0.08 -> 0.075`, and 5m/15m `down` lane-policy `min_edge 0.08 -> 0.075`. Restored wider discovery timing windows; existing `0.3x` exploratory size remains.

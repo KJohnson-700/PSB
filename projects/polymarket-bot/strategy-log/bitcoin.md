@@ -17,6 +17,24 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-26 — Hold up/down winners to resolution
+
+- **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.
+- **Why:** The audit showed early `take_profit` wins were much smaller than real resolution wins. This targets exit behavior directly instead of changing sizing.
+- **Hypothesis:** Correct BTC trades should realize closer to binary-resolution payoff when held through settlement.
+- **Expected outcome:** Fewer `take_profit` exits, more `RESOLVED:* (real)` exits, and higher avg-win dollars.
+- **Actual outcome:** `pending` (need >=15 closed BTC trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Remove post-May-22 lane-size haircut
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), removed the `0.3x` lane `size_multiplier` that had been added to BTC 5m and 15m up/down entry policies after the May 22 baseline.
+- **Why:** Current session attribution showed the regression was in per-trade economics, not BUY_YES/BUY_NO mix. The blanket haircut directly reduced realized winner dollars while leaving the same NO-heavy direction mix in place.
+- **Hypothesis:** BTC average winner size should move closer to the May 22 baseline while existing Kelly/risk caps still bound notional.
+- **Expected outcome:** Next BTC paper sample should show no `lane_size=0.30x` tag from 5m/15m BTC lane policy and should recover avg win/loss ratio if entry quality is otherwise comparable.
+- **Actual outcome:** `pending` (need >=15 closed BTC trades after restart).
+- **Status:** `pending`
+
 ### 2026-05-25 — Cap live lane-calibration alpha at identity
 
 - **What changed:** In [src/analysis/lane_calibration.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_calibration.py), `ALPHA_CLAMP_HI` changed from `2.50` to `1.00`. Raw `alpha_ewma` telemetry can still exceed `1.0`, but live calibration can no longer amplify BTC probabilities away from 50/50; sub-1 shrinkage remains active.

@@ -13,6 +13,51 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-26 — Resolver metadata parity for shared macro signals
+
+- **What changed:** Added BTC-compatible resolver metadata to the shared macro signal path: `conflict_type`, `resolver_path`, `htf_side`, `quant_side`, and `momentum_side`, with journal and position persistence.
+- **Why:** SOL-family entries already had HTF and oracle metadata, but direction-resolution details were not first-class like BTC.
+- **Hypothesis:** Future ghost/trade reviews can separate HTF-aligned, quant-disagree, and momentum-disagree entries without changing entry behavior.
+- **Expected outcome:** New SOL entries should include resolver metadata in journal extras and `entry_signal`.
+- **Actual outcome:** `pending` (need post-change entries to verify field coverage).
+- **Status:** `pending`
+
+### 2026-05-26 — Hold up/down winners to resolution
+
+- **What changed:** Enabled `trading.exit_rules.updown_hold_winners_to_resolution` and suppressed up/down `take_profit` exits while that flag is true.
+- **Why:** SOL still showed exit+selection damage after separating sizing. This targets premature winner clipping directly.
+- **Hypothesis:** Correct SOL trades should realize closer to binary-resolution payoff when held through settlement.
+- **Expected outcome:** Fewer `take_profit` exits, more `RESOLVED:* (real)` exits, and higher avg-win dollars.
+- **Actual outcome:** `pending` (need >=15 closed SOL trades after restart).
+- **Status:** `pending`
+
+### 2026-05-26 — Missed SOL 15m IQL restore before restart
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), restored `sol_macro.iql_15m_enabled: true` with the existing `iql_15m_hist_floor: 0.06`.
+- **Why:** A second pass found SOL still carried the May 25 exploration setting (`iql_15m_enabled: false`) even though the May 22 baseline and earlier rollback intent had the 15m IQL guard active. This was a missed setting in the pre-restart rollback.
+- **Hypothesis:** SOL 15m volume should drop when the 15m MACD structure is not strong enough, reducing the SOL volume-up/loss problem while leaving the BUY_YES recovery tweak intact for non-15m paths.
+- **Expected outcome:** Next paper run should show `iql_15m_reject` ghosts/skips for weak SOL 15m candidates and lower SOL 15m standard-lane churn.
+- **Actual outcome:** `pending` (need ≥15 closed SOL trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-26 — BUY_YES recovery tweak and missing SOL settings
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), changed SOL `alt_momentum_confirm.buy_yes` from all windows to `15m` only while keeping `buy_no` confirmation on `5m`, `15m`, and `1h`. Added explicit SOL `min_liquidity_buy_no`, `entry_price_max_15m_yes_side`, `oracle_max_basis_bps_15m_buy_yes`, and `oracle_basis_relax_max_bps_15m_buy_yes`. In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), side/window-specific oracle basis settings are now read by the live validator.
+- **Why:** The prior rollback risked overcorrecting into BUY_YES starvation. SOL also lacked settings that the shared strategy code supports and other alt lanes were already carrying.
+- **Hypothesis:** SOL BUY_YES can reappear on cleaner 5m/1h setups while 15m BUY_YES remains confirmed; BUY_NO remains protected from unconfirmed bearish-default floods.
+- **Expected outcome:** Next paper run should show nonzero SOL BUY_YES candidates/fills without reopening unconfirmed BUY_NO volume.
+- **Actual outcome:** `pending` (need ≥15 closed SOL trades after restart on this config).
+- **Status:** `pending`
+
+### 2026-05-26 — Pre-restart rollback of post-May-22 momentum guard regression
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), restored `sol_macro.alt_momentum_confirm` to block `BUY_YES` and `BUY_NO` on `5m`, `15m`, and `1h` unless SOL-native MACD confirms the trade direction.
+- **Why:** Post-restart accepted trades became overwhelmingly `BUY_NO`, with `bearish_dip_default` swallowing most fills. Review against baseline `62486e6` showed the May 22 default-on momentum guards had been replaced by empty allowlists, so the later “restore baseline” did not actually restore the protective admission behavior.
+- **Hypothesis:** SOL default-side entries, especially bearish-standard 5m/15m lanes, should drop unless SOL tape confirms the side; `buy_*_no_alt_momentum_confirm` should reappear as an intentional skip reason.
+- **Expected outcome:** Next paper run should show fewer SOL `bearish_dip_default` fills and lower SOL drawdown contribution, while still allowing confirmed LONG/SHORT entries.
+- **Actual outcome:** `pending` (need ≥15 closed SOL trades after restart on this config).
+- **Status:** `pending`
+
 ### 2026-05-25 — Exploration sizing instead of SOL suppression
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), SOL 5m/15m up/down entry-policy overrides now include `size_multiplier: 0.3`, while `alt_momentum_confirm` remains open and `iql_15m_enabled: false` so SOL continues collecting live calibration samples.

@@ -4,6 +4,128 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-27 — Cross-strategy crypto circuit breakers
+
+- **What changed:** Added [src/analysis/circuit_breakers.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), a global side-specific halt manager for crypto up/down entries. It has:
+  - **Fast correlation-stop halt:** default `3` same-side stop exits inside `60s`.
+  - **Slow correlation-stop halt:** default `6` same-side stop exits inside `900s`, added because the 5/26_04 failure was a multi-hour bleed rather than only a tight stop cluster.
+  - **BTC reversal halt:** default `0.3%` adverse BTC move over `300s` while the book has at least `5` same-side positions.
+- **Execution wiring:** [src/main.py](/Users/mainfolder/Documents/psb-main%201/src/main.py) now records stop-loss exits into the breaker and checks the breaker before new BTC/SOL/ETH/HYPE/XRP/DOGE/BNB macro entries. Breakers block only new entries on the halted side; exits and offsetting opposite-side entries remain allowed.
+- **Config:** [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) adds `correlation_stop_halt` and `reversal_halt`, both enabled for the next paper/session round.
+- **Why:** The earlier `3 stops / 60s` design would catch clustered cascades but could miss the observed 3.5h slow bleed. The added slow mode is the direct fix for that coverage gap.
+- **Verification:** [tests/test_circuit_breakers.py](/Users/mainfolder/Documents/psb-main%201/tests/test_circuit_breakers.py) covers fast halt, slow halt, BTC reversal halt, and offsetting-side allowance.
+- **Status:** `pending` — needs the next paper session to confirm whether halt events reduce post-peak wipeout without suppressing useful recovery entries.
+
+## 2026-05-26 — Per-(asset, timeframe) lane direction FSM + signal-snapshot enrichment
+
+**Audience:** Codex cross-check before any live cutover. Nothing live changed; default-off.
+
+### Background — why this exists
+
+Prior assessment (in this session) showed:
+- 5/22 GOLD sessions were +$170 / +$292 at 42–57% WR, almost entirely BUY_NO.
+- 5/26 sessions degraded to −$26 → −$62 over multiple 200-trade windows at 35–38% WR with 100% BUY_NO and `primary_htf_bias` pinned BEARISH (BTC at 97.5% bearish vs 5/22 BTC bias which was 100% BULLISH on one session and 37% BULL/63% BEAR on the other).
+- Codex correctly flagged and reverted the 0.3× lane sizing haircut, but per-trade win/loss ratio collapsed on 5 of 7 strategies (XRP 2.09 → 0.97, HYPE 3.69 → 0.84, SOL 2.28 → 1.42, BTC 2.55 → 1.79, DOGE 2.09 → 1.20). On `bearish_dip_default` lane WR fell 46–57% → 30.6%. Codex's hold-to-resolution counterfactual showed +$65 on 5/22 but −$102 / −$146 on 5/26 — winners on 5/26 are weak and revert after TP.
+- Root cause hypothesis: the global `primary_htf_bias` pin overrides per-(asset, timeframe) signal direction; lanes whose own quant signal disagrees with the global classifier are forced into the wrong side (or are NEUTRAL-skipped) rather than firing on their own conviction.
+
+### What changed
+
+User-approved plan: `/Users/mainfolder/.claude/plans/it-weems-like-each-zippy-pond.md`
+
+1. **New module:** [src/analysis/lane_direction_fsm.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_direction_fsm.py) — per-(asset, timeframe) conviction-score FSM.
+   - Score range [−1, +1] built from six contributors per timeframe: MACD direction (sign of histogram), MACD momentum (rising+above_zero=+1, falling+below_zero=−1, else 0), MACD crossover (BULL_CROSS=+1, BEAR_CROSS=−1, NONE=0), EMA alignment (9>21>50 stack), RSI zone (50–70=+1, 30–50=−1, extremes=0), neighbour-TF MACD direction (5m peeks 15m, 15m peeks 30m, etc.).
+   - `htf_bias` applied as a small additive nudge (default α=0.15) — modulator, not overrider. Encodes the user's directive: "let htf bias modulate confidence scores rather than override them."
+   - Posterior confidence calibration: low-data lanes get scaled-down scores (`score *= 0.5 + 0.5*conf` where `conf = min(1, total_n/N_REF)`); biases sparse lanes toward NEUTRAL.
+   - Discretisation with hysteresis: `T_enter=0.30`, `T_exit=0.10` (separate enter vs leave) to prevent flip-flop at threshold boundary.
+   - NEUTRAL sub-FSM keyed by `previous_non_neutral` + `momentum_at_transition` (sign of macd_direction at the moment the lane left BULLISH/BEARISH). Behaviour matrix:
+     - BULLISH → NEUTRAL, momentum still up → SIT_OUT (let it confirm).
+     - BULLISH → NEUTRAL, momentum turned down → contrarian-fade BUY_NO at 0.3× size.
+     - BEARISH → NEUTRAL, momentum still down → SIT_OUT.
+     - BEARISH → NEUTRAL, momentum turned up → contrarian-fade BUY_YES at 0.3× size.
+     - NEUTRAL stuck >30 min → exploration mode, signal-time side, 0.3× size.
+     - NEUTRAL_INITIAL (no prior resolution) → SIT_OUT.
+   - State persists to `data/calibration/lane_direction_state.json`; every transition emits a `direction_event` line to `data/lane_state_audit.jsonl`.
+   - Feature gate: `lane_direction_fsm_active` in config (default **false**) — module is available for replay/shadow wiring but is NOT yet called by live strategy side-decision sites.
+
+2. **Unit tests:** [tests/test_lane_direction_fsm.py](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_direction_fsm.py) — 27 tests covering score math, htf modulator (verifying it does NOT override a strong contrary signal), posterior confidence scaling, hysteresis edge cases, every NEUTRAL FSM transition, persistence round-trip, audit-log emission, defensive paths (missing TA, bogus timeframe). [tests/test_alt_macro_snapshot_contract.py](/Users/mainfolder/Documents/psb-main%201/tests/test_alt_macro_snapshot_contract.py) adds explicit per-asset snapshot coverage for SOL, ETH, XRP, HYPE, BNB, and DOGE. **34/34 pass.**
+
+3. **Config additions:** [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) (added at end, NOT modifying any existing keys):
+   - `lane_direction_fsm_active: false` (feature gate)
+   - `lane_direction_t_enter: 0.30`, `lane_direction_t_exit: 0.10`, `lane_direction_htf_alpha: 0.15`
+   - `lane_direction_posterior_n_ref: 200`, `lane_direction_neutral_stuck_sec: 1800`, `lane_direction_recovery_size_mult: 0.30`
+   - `lane_direction_overrides: {}`, `lane_direction_contributor_weights: {}` (per-lane / per-tf overrides; empty by default)
+
+4. **Replay validator:** [scripts/lane_direction_fsm_replay.py](/Users/mainfolder/Documents/psb-main%201/scripts/lane_direction_fsm_replay.py) — walks `data/paper_trades/*/entries.jsonl`, reconstructs minimal TA from `extra.indicator_snapshot` per ENTRY, runs the FSM, computes counterfactual WR and pnl. Acceptance gate per the plan:
+   - Baseline 5/22 (`test_20260521_212905`, `test_20260522_052210`): WR drop ≤ 2pp.
+   - Current 5/26 (`test_20260525_231430`, `test_20260526_042005`): WR improvement ≥ +5pp AND sit-out ≤ 25%.
+
+5. **Tuner:** [scripts/lane_direction_fsm_tune.py](/Users/mainfolder/Documents/psb-main%201/scripts/lane_direction_fsm_tune.py) — parameter sweep over (t_enter, t_exit, htf_alpha, contributor-weight emphasis, n_ref). Prints top configurations by current-period WR delta with acceptance markers. Does NOT write config.
+
+6. **Signal-snapshot enrichment (this is the change that affects future entries):** added to [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) at the existing `indicator_snapshot={...}` dict (around line 2940). For alt strategies, [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) now owns an asset-neutral `_build_alt_indicator_snapshot(...)` helper used by SOL/XRP/HYPE/BNB/DOGE, and [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) reuses the same helper inside its ETH-specific signal path:
+   - Per existing per-tf histogram entry, added paired `_crossover` and `_above_zero` fields.
+   - Added 30m timeframe slot (`btc_30m_*` / `alt_30m_*`) where it wasn't already present.
+   - Added EMA stack: `btc_ema_9 / _21 / _50` (or `alt_ema_*`).
+   - Added per-prefix RSI: `btc_rsi_14` / `alt_rsi_14` (extra.rsi remains as fallback).
+   - HYPE / BNB / DOGE / XRP inherit from `SolMacroStrategy` and now have explicit test coverage proving they get the full snapshot contract. HYPE's `scan_and_analyze` override at hype_macro.py:110 is a post-filter only.
+   - The refactor centralizes snapshot construction; no FSM side-decision wiring, sizing changes, gates, or exits were added.
+
+### Hypothesis
+
+The pre-FSM behaviour forces all lanes onto the global bias. When the global classifier is correct, results are fine (5/22 baseline). When it sticks for hours (5/26 100% BEARISH including BTC), every alt is forced to BUY_NO regardless of its own signals, and per-lane WR collapses on lanes whose underlying asset is trending opposite the pin.
+
+The FSM:
+- Lets each (asset, timeframe) lane vote with its own quant signal.
+- Uses `htf_bias` only to nudge confidence, not flip side.
+- Adds a NEUTRAL-recovery path with contrarian-fade slots so a lane that has just lost its directional bias can still take a small contrarian position when momentum has turned, instead of sitting out the entire transition.
+
+### Expected outcome (must be measured, not assumed)
+
+On a 5/26-equivalent session, the FSM at a passing tuning should:
+- Route BTC to NEUTRAL_FROM_BULL (it was BULLISH for days, then went bearish) → either SIT_OUT or contrarian-fade BUY_NO at 0.3× — instead of full-size BUY_NO that's been bleeding.
+- Route at least some alts (HYPE, XRP) to BULLISH where their own MACD/EMA disagree with the global BEARISH pin — taking BUY_YES that the current bot won't fire.
+- Reduce per-trade volume slightly (sit-out budget ≤ 25%) while improving WR ≥ +5pp.
+
+On a 5/22-equivalent session, the FSM should mostly agree with the existing BEARISH routing (because the quant signal AND the htf bias both point bearish on those alts). Acceptance bar: WR drop ≤ 2pp.
+
+### Actual outcome — pending; ACCEPTANCE GATE CURRENTLY **FAILS**
+
+Replay on existing data (before snapshot enrichment took effect on new entries):
+- Baseline 5/22: actual WR 47.6% → FSM WR 45.7% (Δ −1.8pp — within 2pp budget, **OK**).
+- Current 5/26: actual WR 38.3% → FSM WR 36.2% (Δ −2.1pp — need ≥+5pp, **FAIL**).
+- Tuner sweep of 1,500 configurations: 0 pass acceptance. Best current Δ across all 1,500 = −0.1pp.
+
+Diagnosis: the FSM can't pass replay at any tuning because the OLD `indicator_snapshot` only logs 3–4 MACD histograms per entry with no crossover, no `above_zero`, no EMA stack, no per-tf RSI. The FSM reads 6 contributors — only 2–3 are reconstructable from pre-enrichment entries → scores cluster near zero → near-noise decisions. **This is a data-sparsity problem, not an FSM design problem.**
+
+Path A (chosen by operator): enrich the snapshot fields so future replays have full-fidelity data. **Done in this changelog entry.** The bot needs to write ~200 fresh entries under the new schema, then replay re-runs against those entries should be discriminating enough to validate (or correctly refute) the FSM at some tuning.
+
+### What Codex should cross-check
+
+1. **`src/analysis/lane_direction_fsm.py`** — verify the FSM math matches the user's stated rule ("let htf_bias modulate confidence rather than override"). Specifically: `apply_htf_modifier` is purely additive at α=0.15 default; a raw_score of ±0.9 with a contrary htf_bias still resolves to the score's side. Test case in `tests/test_lane_direction_fsm.py::TestHtfModifier::test_does_not_override_strong_signal` proves it.
+
+2. **NEUTRAL sub-FSM mapping** — verify the directives table at `lane_direction_fsm.py:_neutral_directive` matches the updown-market semantics (BUY_NO = bet price ends below open = fade prior bullish; BUY_YES = bet price ends above open = fade prior bearish). State-to-side table in this changelog and in tests.
+
+3. **Snapshot edits are per-asset covered** — diff the strategy files at the `indicator_snapshot={...}` block and `_build_alt_indicator_snapshot(...)`. Backward compatibility for the replay reader is preserved (it falls back to `(hist > 0)` for `above_zero` and to `extra.rsi` for RSI when the new keys are absent). `tests/test_alt_macro_snapshot_contract.py` proves SOL, ETH, XRP, HYPE, BNB, and DOGE all emit 30m MACD, crossover, above-zero, EMA stack, RSI, and BTC move context fields.
+
+4. **Live behaviour unchanged** — `lane_direction_fsm_active: false`, and the strategy files at the side-decision sites (`bitcoin.py:1342`, `eth_macro.py:544`, `sol_macro.py:1871`) have **not** been wired to call the FSM. Per the plan: shadow-mode wiring at those sites only happens once the replay validator passes.
+
+5. **Test coverage** — 27 unit tests; non-related pre-existing failures (4 in `test_bitcoin_scenarios.py` / `test_sol_macro_skip_accounting.py`) confirmed not caused by these changes (they don't reference `indicator_snapshot`).
+
+### Files for Codex to read
+
+- Plan: `/Users/mainfolder/.claude/plans/it-weems-like-each-zippy-pond.md`
+- Module: `src/analysis/lane_direction_fsm.py`
+- Tests: `tests/test_lane_direction_fsm.py`, `tests/test_alt_macro_snapshot_contract.py`
+- Replay: `scripts/lane_direction_fsm_replay.py`
+- Tuner: `scripts/lane_direction_fsm_tune.py`
+- Config block: `config/settings.yaml` (bottom, under the dashboard section)
+- Snapshot edits: `src/strategies/bitcoin.py` ~2940, `src/strategies/sol_macro.py` ~4101, `src/strategies/eth_macro.py` ~2093
+
+### Status
+
+`pending` — awaiting ~200 fresh paper entries under enriched snapshot schema, then re-run `python3 scripts/lane_direction_fsm_replay.py`. If acceptance passes, run `lane_direction_fsm_tune.py` to confirm or tune, then wire shadow-mode at the three strategy sites, then run live shadow for ~200 more trades, then flip `lane_direction_fsm_active: true` only after shadow confirms.
+
+---
+
 ## 2026-05-25 — Ghost-led validation cleanup, Kimi decision hardening, and session audit tooling
 
 - **What changed**
