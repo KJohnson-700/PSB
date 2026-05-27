@@ -1285,6 +1285,10 @@ async def sse_stream(request: Request):
                     "loss_pause_latest_trigger": loss_pause_payload.get("latest_trigger"),
                     "can_trade": can_trade,
                     "ai": ai_payload,
+                    "calibration": _calibration_status_from_config(
+                        bot.config if bot else cfg_disk,
+                        dry_run=dry_run,
+                    ),
                     "session_id": session_id,
                     "session_open": session_open,
                     "bankroll": bankroll_snap,

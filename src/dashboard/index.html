@@ -4454,6 +4454,7 @@ function applySSESnapshot(raw) {
             dry_run: raw.dry_run,
             running: raw.running,
             exposure: raw.exposure || (lastStatusData ? lastStatusData.exposure : undefined),
+            calibration: raw.calibration || (lastStatusData ? lastStatusData.calibration : undefined),
             kill_switch_active: raw.kill_switch_active,
             loss_pause_active: raw.loss_pause_active,
             loss_pause_lanes: raw.loss_pause_lanes,
