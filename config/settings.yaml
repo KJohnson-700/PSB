@@ -55,6 +55,7 @@ trading:
     updown_exit_window_mins: 2.25
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.2
+    updown_hold_winners_to_resolution: false
     dynamic_stop_enabled: true
     dynamic_stop_bull_mult: 0.95
     dynamic_stop_range_mult: 1.05
@@ -196,6 +197,7 @@ lane_calibration:
   shadow_mode: true
   paper_shadow_mode: true
   live_shadow_mode: false
+  posterior_version: lane_identity_v2_source_resolver
   min_samples_to_apply_live: 15
   beta_veto_max_mean: 0
   beta_veto_min_n: 30
@@ -415,9 +417,14 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
-      buy_yes: []
-      buy_no: []
+      buy_yes:
+      - 15m
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
     min_liquidity: 750
+    min_liquidity_buy_no: 300
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
     min_edge: 0.09
@@ -449,6 +456,8 @@ strategies:
     oracle_max_age_sec: 180
     oracle_max_basis_bps: 25.0
     oracle_basis_relax_max_bps: 30.0
+    oracle_max_basis_bps_15m_buy_yes: 30.0
+    oracle_basis_relax_max_bps_15m_buy_yes: 40.0
     ai_hold_veto_ttl_sec: 300
     min_edge_5m_ai_override: 0.1
     entry_timing_window_15m_min: 2.0
@@ -458,6 +467,7 @@ strategies:
     kelly_fraction: 0.27
     entry_price_min: 0.42
     entry_price_max: 0.58
+    entry_price_max_15m_yes_side: 0.58
     min_lag_magnitude_pct: 0.4
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -483,7 +493,7 @@ strategies:
     flat_btc_only_blocks_when_alt_neutral: true
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
-    iql_15m_enabled: false
+    iql_15m_enabled: true
     iql_15m_hist_floor: 0.06
     blocked_utc_hours_updown:
     - 1
@@ -520,14 +530,12 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 4.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.085
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 4.0
-            size_multiplier: 0.3
         15m:
           up:
             min_edge: 0.09
@@ -535,14 +543,12 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 32.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 32.0
-            size_multiplier: 0.3
         1h:
           up:
             min_edge: 0.09
@@ -575,6 +581,14 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     eth_momentum_confirm:
+      buy_yes:
+      - 5m
+      - 15m
+      - 1h
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
       shadow:
         buy_yes:
         - 5m
@@ -686,14 +700,14 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.5
             entry_window_max: 4.0
-            size_multiplier: 0.3
+            size_multiplier: 0.4
           down:
             min_edge: 0.1
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.5
             entry_window_max: 4.0
-            size_multiplier: 0.3
+            size_multiplier: 0.4
         15m:
           up:
             min_edge: 0.09
@@ -701,14 +715,12 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 24.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 24.0
-            size_multiplier: 0.3
         1h:
           up:
             min_edge: 0.09
@@ -716,14 +728,12 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
-            size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -762,12 +772,19 @@ strategies:
     enabled: true
     dead_zone_enabled: false
     use_ai: true
+    alt_momentum_confirm:
+      buy_yes:
+      - 15m
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
     min_liquidity: 100
     min_liquidity_buy_no: 300
     min_liquidity_1h: 100
     min_liquidity_1h_buy_no: 200
-    min_edge: 0.085
-    min_edge_buy_no: 0.075
+    min_edge: 0.09
+    min_edge_buy_no: 0.08
     min_edge_5m: 0.07
     hard_min_edge: 0.07
     min_edge_15m_when_ltf_unconfirmed: 0.1
@@ -819,7 +836,7 @@ strategies:
     look_ahead_5m: 1
     max_concurrent_positions: 3
     entry_window_15m_min: 2.0
-    entry_window_15m_max: 45.0
+    entry_window_15m_max: 36.0
     entry_window_5m_min: 0.0
     entry_window_5m_max: 5.5
     entry_window_auto_align: true
@@ -841,29 +858,25 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 5.5
-            size_multiplier: 0.3
           down:
-            min_edge: 0.075
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 5.5
-            size_multiplier: 0.3
         15m:
           up:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 45.0
-            size_multiplier: 0.3
+            entry_window_max: 36.0
           down:
-            min_edge: 0.075
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 36.0
-            size_multiplier: 0.3
         1h:
           up:
             min_edge: 0.09
@@ -871,14 +884,12 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 59.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 59.0
-            size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
     lag_signal_min_pct: 0.12
@@ -921,10 +932,17 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
+    alt_momentum_confirm:
+      buy_yes:
+      - 15m
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
     min_liquidity: 750
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
-    min_edge: 0.085
+    min_edge: 0.09
     min_edge_5m: 0.085
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
@@ -1012,7 +1030,7 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.08
+            min_edge: 0.085
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1027,7 +1045,7 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            min_edge: 0.08
+            min_edge: 0.085
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
@@ -1040,7 +1058,7 @@ strategies:
             entry_window_max: 16.0
         1h:
           up:
-            min_edge: 0.085
+            min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1070,6 +1088,13 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
+    alt_momentum_confirm:
+      buy_yes:
+      - 15m
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
     min_liquidity: 750
     min_liquidity_1h: 250
     min_liquidity_1h_buy_no: 250
@@ -1183,19 +1208,17 @@ strategies:
             entry_window_max: 16.0
         1h:
           up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 60.0
+          down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
-            size_multiplier: 0.3
-          down:
-            min_edge: 0.075
-            entry_price_min: 0.42
-            entry_price_max: 0.58
-            entry_window_min: 0.0
-            entry_window_max: 60.0
-            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1215,6 +1238,13 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
+    alt_momentum_confirm:
+      buy_yes:
+      - 15m
+      buy_no:
+      - 5m
+      - 15m
+      - 1h
     min_liquidity: 750
     min_liquidity_buy_no: 300
     min_liquidity_1h: 250
@@ -1245,6 +1275,7 @@ strategies:
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
+    entry_price_max_15m_yes_side: 0.57
     min_lag_magnitude_pct: 0.4
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1320,32 +1351,28 @@ strategies:
           up:
             min_edge: 0.085
             entry_price_min: 0.42
-            entry_price_max: 0.55
+            entry_price_max: 0.57
             entry_window_min: 2.0
             entry_window_max: 16.0
-            size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 16.0
-            size_multiplier: 0.3
         1h:
           up:
+            min_edge: 0.09
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 60.0
+          down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
-            size_multiplier: 0.3
-          down:
-            min_edge: 0.075
-            entry_price_min: 0.42
-            entry_price_max: 0.58
-            entry_window_min: 0.0
-            entry_window_max: 60.0
-            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1603,3 +1630,27 @@ dashboard:
   auto_sol5_backtest_on_reset: false
   auto_weather_backtest_on_startup: false
   auto_weather_backtest_on_reset: false
+lane_direction_fsm_active: false
+lane_direction_t_enter: 0.3
+lane_direction_t_exit: 0.1
+lane_direction_htf_alpha: 0.15
+lane_direction_posterior_n_ref: 200
+lane_direction_neutral_stuck_sec: 1800
+lane_direction_recovery_size_mult: 0.3
+lane_direction_overrides: {}
+lane_direction_contributor_weights: {}
+correlation_stop_halt:
+  enabled: true
+  stops_threshold: 3
+  window_sec: 60
+  slow_mode_enabled: true
+  slow_stops_threshold: 6
+  slow_window_sec: 900
+  pause_minutes: 15
+  same_side_only: true
+reversal_halt:
+  enabled: true
+  btc_pct_threshold: 0.003
+  position_threshold: 5
+  lookback_sec: 300
+  pause_minutes: 10
