@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-27 — Live calibration cuts for four leaking gates
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/btc_updown_5m.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/btc_updown_5m.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin.py):** Converted BTC non-5m `lane_min_edge_bias_quant_disagree` from a hard min-edge rejection path into an admitted path with `bias_quant_disagree_size_multiplier: 0.5`; BTC 5m disagreement remains strict because the post-commit ghost slice was negative on realized value. Lowered only selected lane-level `lane_min_edge` thresholds with positive post-commit ghost support, dropped HYPE 1h BUY_NO liquidity to its existing 1h base floor, and changed BTC `hist_gate_5m_short_reject` to telemetry-only when `hist_gate_5m_short_hard_reject: false`.
+
+**Why:** Post-commit ghost results from `test_20260527_042014` showed the remaining missed winners concentrated in four legacy gates: `lane_min_edge_bias_quant_disagree`, residual `lane_min_edge`, 1h BUY_NO `liquidity`, and `hist_gate_5m_short_reject`. The edit intentionally avoids global min-edge loosening; DOGE/BNB liquidity and negative/weak buckets are left unchanged.
+
 ## 2026-05-27 — Crypto circuit breakers for correlated stop cascades
 
 **[`src/analysis/circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_circuit_breakers.py):** Added global side-specific crypto up/down circuit breakers. Fast mode halts a side after 3 same-side stop exits inside 60 seconds; slow mode halts after 6 same-side stop exits inside 15 minutes; BTC reversal mode halts new entries on a dominant side after a 0.3% adverse BTC move over 5 minutes with at least 5 same-side open positions.

@@ -331,7 +331,7 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 19.0
           down:
-            min_edge: 0.09
+            min_edge: 0.06
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -373,8 +373,10 @@ strategies:
     btc_htf_boost_weak_15m: 0.06
     quant_disagree_flip_thresh: 0.48
     bias_quant_disagree_override_enabled: true
-    bias_quant_disagree_aligned_max_gap_non5m: 0.1
-    bias_quant_disagree_aligned_min_edge_non5m: -0.1
+    bias_quant_disagree_aligned_max_gap_non5m: 1.0
+    bias_quant_disagree_aligned_min_edge_non5m: -1.0
+    bias_quant_disagree_size_multiplier: 0.5
+    hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
@@ -547,7 +549,8 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.085
+            min_edge: 0.06
+            hard_min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -566,7 +569,8 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.09
+            min_edge: 0.06
+            hard_min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -812,7 +816,7 @@ strategies:
     min_liquidity_buy_no: 300
     min_liquidity_buy_yes: 300
     min_liquidity_1h: 100
-    min_liquidity_1h_buy_no: 200
+    min_liquidity_1h_buy_no: 100
     min_liquidity_1h_buy_yes: 200
     min_edge: 0.09
     min_edge_buy_no: 0.08
@@ -909,20 +913,23 @@ strategies:
             entry_window_max: 5.5
         15m:
           up:
-            min_edge: 0.08
+            min_edge: 0.06
+            hard_min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 36.0
           down:
-            min_edge: 0.08
+            min_edge: 0.06
+            hard_min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 36.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.06
+            hard_min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -1085,14 +1092,14 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.085
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1106,14 +1113,14 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 16.0
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 16.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1248,7 +1255,7 @@ strategies:
       window_side_overrides:
         5m:
           up:
-            min_edge: 0.085
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1269,14 +1276,14 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 16.0
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
             entry_window_max: 16.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1422,7 +1429,7 @@ strategies:
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0

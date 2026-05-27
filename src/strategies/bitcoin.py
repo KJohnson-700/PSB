@@ -269,6 +269,9 @@ class BitcoinStrategy:
         self.bias_quant_disagree_aligned_min_edge_non5m = float(
             self.config.get("bias_quant_disagree_aligned_min_edge_non5m", 0.0) or 0.0
         )
+        self.bias_quant_disagree_size_multiplier = float(
+            self.config.get("bias_quant_disagree_size_multiplier", 0.50) or 0.50
+        )
         self.macro_event_guard_enabled = bool(self.config.get("macro_event_guard_enabled", False))
         self.macro_event_guard_before_min = int(self.config.get("macro_event_guard_before_min", 30))
         self.macro_event_guard_after_min = int(self.config.get("macro_event_guard_after_min", 30))
@@ -485,7 +488,7 @@ class BitcoinStrategy:
         edge: float,
         reason_parts: list,
     ) -> bool:
-        """Allow moderate HTF-aligned disagreement on slower BTC lanes."""
+        """Route HTF/quant disagreement through sizing instead of hard rejection."""
         if (
             not self.bias_quant_disagree_override_enabled
             or not is_updown
@@ -509,10 +512,11 @@ class BitcoinStrategy:
         )
         if gap < 0:
             return False
-        if gap > self.bias_quant_disagree_aligned_max_gap_non5m:
-            return False
-        if edge < self.bias_quant_disagree_aligned_min_edge_non5m:
-            return False
+        if window_size != "5m":
+            if gap > self.bias_quant_disagree_aligned_max_gap_non5m:
+                return False
+            if edge < self.bias_quant_disagree_aligned_min_edge_non5m:
+                return False
 
         reason_parts.append(f"bias_quant_override_gap={gap:.3f}")
         reason_parts.append(f"bias_quant_override_edge={edge:.3f}")
@@ -1645,7 +1649,18 @@ class BitcoinStrategy:
                     hist_reject = btc_5m_hist_gate_reject_reason(
                         macd_4h, macd_1h, effective_side
                     )
-                    if hist_reject:
+                    _short_hist_telemetry_only = (
+                        hist_reject == "hist_gate_5m_short_reject"
+                        and not bool(
+                            self.config.get("hist_gate_5m_short_hard_reject", True)
+                        )
+                    )
+                    if _short_hist_telemetry_only:
+                        reason_parts.append("hist_gate_5m_short_telemetry")
+                        logger.info(
+                            f"  BTC [5m] telemetry '{market.question[:40]}' — {hist_reject}"
+                        )
+                    elif hist_reject:
                         _bump_skip(hist_reject)
                         log_rejected_candidate(
                             strategy="bitcoin",
@@ -1704,6 +1719,12 @@ class BitcoinStrategy:
                         yes_price=yes_price,
                         m5_direction=m5_dir,
                         m5_in_prediction_window=bool(mom.m5_in_prediction_window),
+                        hard_hist_gate=not (
+                            hist_reject == "hist_gate_5m_short_reject"
+                            and not bool(
+                                self.config.get("hist_gate_5m_short_hard_reject", True)
+                            )
+                        ),
                     )
                     if quant.rsi_blocked:
                         _bump_skip("rsi_overbought_5m")
@@ -2559,6 +2580,7 @@ class BitcoinStrategy:
             except NameError:
                 pass
             _sample("edge", edge)
+            _bias_quant_size_multiplier = 1.0
             if edge < effective_min_edge:
                 # (3) Flag bias/quant directional disagreement so we can isolate this cohort
                 # in analysis. True when raw_est is on the opposite side of 0.50 from the
@@ -2590,6 +2612,14 @@ class BitcoinStrategy:
                         edge,
                         effective_min_edge,
                     )
+                    _bias_quant_size_multiplier = max(
+                        0.0,
+                        min(1.0, float(self.bias_quant_disagree_size_multiplier)),
+                    )
+                    if _bias_quant_size_multiplier < 0.999:
+                        reason_parts.append(
+                            f"bias_quant_size={_bias_quant_size_multiplier:.2f}x"
+                        )
                 else:
                     _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
                     if _vetoed:
@@ -2892,6 +2922,8 @@ class BitcoinStrategy:
 
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier
+            if _bias_quant_size_multiplier > 0 and _bias_quant_size_multiplier < 0.999:
+                raw_size *= _bias_quant_size_multiplier
 
             # Apply dynamic exposure scaling
             size = self.exposure_manager.scale_size(raw_size)

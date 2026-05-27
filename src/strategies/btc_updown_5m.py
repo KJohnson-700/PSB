@@ -108,6 +108,7 @@ def compute_btc_5m_quant(
     yes_price: float,
     m5_direction: str,
     m5_in_prediction_window: bool,
+    hard_hist_gate: bool = True,
 ) -> Btc5mQuantResult:
     """Raw quant path for BTC 5m (pre ``_calibrate_est_prob`` on live)."""
     est_prob_up = 0.50
@@ -115,7 +116,7 @@ def compute_btc_5m_quant(
     est_prob_up += htf_boost
 
     hist_ok = btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, allowed_side)
-    if not hist_ok:
+    if not hist_ok and hard_hist_gate:
         return Btc5mQuantResult(
             est_prob_up=est_prob_up,
             edge=0.0,
