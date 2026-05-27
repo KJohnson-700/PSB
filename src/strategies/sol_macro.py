@@ -745,8 +745,7 @@ class SolMacroStrategy:
             f"min_liquidity_{window}_{side}",
             f"min_liquidity_{window}",
         ]
-        if side == "buy_no":
-            candidates.append("min_liquidity_buy_no")
+        candidates.append(f"min_liquidity_{side}")
         candidates.append("min_liquidity")
         for key in candidates:
             raw = self.config.get(key)
@@ -2587,9 +2586,14 @@ class SolMacroStrategy:
                 if _btc_price > 0 and _btc_move < _btc_min_move:
                     reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
 
-                # Skip windows where price has already drifted far from 50/50
+                # Skip only when our entry-side price is in the unfavorable long
+                # tail (paying high premium against the market). The favorable
+                # tail (market already agrees with our side) is left in — ghost
+                # log 2026-05-27 shows our-side price >= 0.80 wins 87–97% across
+                # ~6k settled rejections; symmetric reject was throwing them out.
                 _sample("entry_price", yes_price)
-                if yes_price < 0.20 or yes_price > 0.80:
+                _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
+                if _our_price < 0.20:
                     _bump_skip("price_too_far_from_even")
                     _log_skip_reject(
                         market=market,
@@ -2600,23 +2604,23 @@ class SolMacroStrategy:
                         yes_price=yes_price,
                         htf_bias=primary_htf_bias,
                         context={
-                            "entry_price": float(yes_price),
-                            "entry_price_min": 0.20,
-                            "entry_price_max": 0.80,
+                            "entry_price": float(_our_price),
+                            "yes_price": float(yes_price),
+                            "our_side_price_min": 0.20,
                         },
                         probe_variants=build_range_probe_variants(
-                            metric_name="entry_price_band",
-                            observed_value=float(yes_price),
+                            metric_name="our_side_entry_price",
+                            observed_value=float(_our_price),
                             baseline_min=0.20,
-                            baseline_max=0.80,
+                            baseline_max=1.0,
                             relax_steps=[0.02, 0.05, 0.10],
                             tighten_steps=[0.02, 0.05],
                         ),
-                        policy_version="entry_price_band_v1",
+                        policy_version="entry_price_band_v2_side_aware",
                     )
                     logger.debug(
-                        f"  {_brand} skip '{market.question[:40]}' — price {yes_price:.2f} "
-                        f"too far from 50/50, window in progress"
+                        f"  {_brand} skip '{market.question[:40]}' — our-side "
+                        f"price {_our_price:.2f} < 0.20 (yes={yes_price:.2f}, {action})"
                     )
                     continue
 

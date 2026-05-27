@@ -1083,8 +1083,11 @@ class ETHMacroStrategy(SolMacroStrategy):
             if _btc_price > 0 and _btc_move < _btc_min_move:
                 reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
 
+            # Skip only when our entry-side price is in the unfavorable long
+            # tail. Favorable tail (our side >= 0.80) ghost-WR 87–97%; kept.
             _sample("entry_price", yes_price)
-            if yes_price < 0.20 or yes_price > 0.80:
+            _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
+            if _our_price < 0.20:
                 _bump_skip("price_too_far")
                 _log_skip_reject(
                     market=market,
@@ -1095,19 +1098,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
                     context={
-                        "entry_price": float(yes_price),
-                        "entry_price_min": 0.20,
-                        "entry_price_max": 0.80,
+                        "entry_price": float(_our_price),
+                        "yes_price": float(yes_price),
+                        "our_side_price_min": 0.20,
                     },
                     probe_variants=build_range_probe_variants(
-                        metric_name="entry_price_band",
-                        observed_value=float(yes_price),
+                        metric_name="our_side_entry_price",
+                        observed_value=float(_our_price),
                         baseline_min=0.20,
-                        baseline_max=0.80,
+                        baseline_max=1.0,
                         relax_steps=[0.02, 0.05, 0.10],
                         tighten_steps=[0.02, 0.05],
                     ),
-                    policy_version="entry_price_band_v1",
+                    policy_version="entry_price_band_v2_side_aware",
                 )
                 continue
 

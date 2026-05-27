@@ -1581,14 +1581,16 @@ class BitcoinStrategy:
                     tf=_updown_tf,
                 )
 
-                # Skip markets where price has already moved far from 50/50
-                # (means the window is mid-resolution and market has "decided")
+                # Skip only when our entry-side price is in the unfavorable
+                # long tail. Side derived from allowed_side (LONG=BUY_YES);
+                # favorable tail (our side >= 0.80) wins 87–97% in ghost log.
                 _sample("entry_price", yes_price)
-                if yes_price < 0.20 or yes_price > 0.80:
+                _our_price = (1.0 - yes_price) if allowed_side == "SHORT" else yes_price
+                if _our_price < 0.20:
                     _bump_skip("price_too_far_from_50_50")
                     logger.debug(
-                        f"  BTC skip '{market.question[:40]}' — price {yes_price:.2f} "
-                        f"too far from 50/50, window likely in progress"
+                        f"  BTC skip '{market.question[:40]}' — our-side price "
+                        f"{_our_price:.2f} < 0.20 (yes={yes_price:.2f}, {allowed_side})"
                     )
                     continue
 

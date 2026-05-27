@@ -427,28 +427,34 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
-      buy_yes:
-      - 15m
+      # 2026-05-27 ghost recalibration: 5m/15m guards had 49–53% rej WR
+      # (noise). 1h BUY_NO retained — 44.6% rej WR. BUY_YES guard dropped
+      # entirely (no 1h SOL BUY_YES cell with separable signal).
+      buy_yes: []
       buy_no:
-      - 5m
-      - 15m
       - 1h
     min_liquidity: 750
     min_liquidity_buy_no: 300
+    min_liquidity_buy_yes: 300
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
+    min_liquidity_1h_buy_yes: 400
     min_edge: 0.09
     defaults:
       min_edge: 0.09
       hard_min_edge: 0.07
       ai_override_min_edge: 0.1
     by_tf:
+      # 2026-05-27 ghost recalibration: lane_min_edge rejections WR 68–71% on
+      # SOL 5m both sides → drop to 0.05. 15m BUY_NO rej WR 69% → 0.06.
       5m:
-        min_edge: 0.085
+        min_edge: 0.05
+        min_edge_buy_no: 0.05
         entry_window_min: 0.0
         entry_window_max: 4.0
       15m:
         min_edge: 0.09
+        min_edge_buy_no: 0.06
         entry_window_min: 1.0
         entry_window_max: 32.0
       1h:
@@ -602,13 +608,13 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     eth_momentum_confirm:
+      # 2026-05-27 ghost recalibration: 1h is the only cell with real signal
+      # (BUY_YES 12.8% rej WR — strongest separator in entire ghost dataset;
+      # BUY_NO 1h 42.8%). 5m / 15m cells were 49–50% — pure noise. Shadow
+      # kept full to preserve forward-counterfactual data on dropped cells.
       buy_yes:
-      - 5m
-      - 15m
       - 1h
       buy_no:
-      - 5m
-      - 15m
       - 1h
       shadow:
         buy_yes:
@@ -620,6 +626,7 @@ strategies:
         - 15m
         - 1h
     min_liquidity: 1000
+    min_liquidity_buy_yes: 1000
     min_edge: 0.09
     defaults:
       min_edge: 0.09
@@ -805,16 +812,20 @@ strategies:
     dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
-      buy_yes:
-      - 15m
+      # 2026-05-27: BUY_YES 15m guard dropped (49.5% rej WR — noise).
+      # BUY_NO retained at all tfs — HYPE shorts already winning; user
+      # directive is leave-alone, not loosen further.
+      buy_yes: []
       buy_no:
       - 5m
       - 15m
       - 1h
     min_liquidity: 100
     min_liquidity_buy_no: 300
+    min_liquidity_buy_yes: 300
     min_liquidity_1h: 100
     min_liquidity_1h_buy_no: 200
+    min_liquidity_1h_buy_yes: 200
     min_edge: 0.09
     min_edge_buy_no: 0.08
     defaults:
@@ -977,15 +988,15 @@ strategies:
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
-      buy_yes:
-      - 15m
-      buy_no:
-      - 5m
-      - 15m
-      - 1h
+      # 2026-05-27: all XRP momentum-confirm cells were 48–57% rej WR — no
+      # separable signal. Guard off both sides.
+      buy_yes: []
+      buy_no: []
     min_liquidity: 750
+    min_liquidity_buy_yes: 300
     min_liquidity_1h: 400
     min_liquidity_1h_buy_no: 400
+    min_liquidity_1h_buy_yes: 400
     min_edge: 0.09
     defaults:
       min_edge: 0.09
@@ -993,16 +1004,20 @@ strategies:
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:
+      # 2026-05-27 ghost recalibration: lane_min_edge rej WR was 70–75% on
+      # XRP 15m / 1h both sides. Lower thresholds to capture them.
       5m:
         min_edge: 0.085
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.09
+        min_edge: 0.05
+        min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 16.0
       1h:
-        min_edge: 0.09
+        min_edge: 0.05
+        min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 60.0
     min_edge_15m_when_ltf_unconfirmed: 0.09
@@ -1145,15 +1160,18 @@ strategies:
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
-      buy_yes:
-      - 15m
+      # 2026-05-27: BUY_YES 15m dropped (56.3% rej WR — noise).
+      # BUY_NO retained — DOGE shorts already winning; leave-alone per user.
+      buy_yes: []
       buy_no:
       - 5m
       - 15m
       - 1h
     min_liquidity: 750
+    min_liquidity_buy_yes: 300
     min_liquidity_1h: 250
     min_liquidity_1h_buy_no: 250
+    min_liquidity_1h_buy_yes: 250
     min_edge: 0.09
     defaults:
       min_edge: 0.09
@@ -1161,12 +1179,14 @@ strategies:
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:
+      # 2026-05-27 ghost recalibration: DOGE 15m BUY_YES lane_min_edge
+      # rej WR 64% → 0.06. BUY_NO 15m kept at 0.09 per leave-alone directive.
       5m:
         min_edge: 0.085
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.09
+        min_edge: 0.06
         entry_window_min: 2.0
         entry_window_max: 16.0
       1h:
@@ -1307,16 +1327,18 @@ strategies:
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
-      buy_yes:
-      - 15m
+      # 2026-05-27: 15m guards both sides dropped (49.3% / 56.7% rej WR).
+      # 1h BUY_NO dropped (60% — guard is anti-signal here). 5m BUY_NO and
+      # BUY_YES guards retained — only borderline-useful cells.
+      buy_yes: []
       buy_no:
       - 5m
-      - 15m
-      - 1h
     min_liquidity: 750
     min_liquidity_buy_no: 300
+    min_liquidity_buy_yes: 300
     min_liquidity_1h: 250
     min_liquidity_1h_buy_no: 250
+    min_liquidity_1h_buy_yes: 250
     min_edge: 0.09
     defaults:
       min_edge: 0.09
@@ -1324,12 +1346,16 @@ strategies:
       hard_min_edge: 0.0
       ai_override_min_edge: 0.1
     by_tf:
+      # 2026-05-27 ghost recalibration: BNB 5m BUY_NO rej WR 66% → 0.06.
+      # 15m BUY_NO rej WR 76% → 0.05.
       5m:
         min_edge: 0.085
+        min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
         min_edge: 0.09
+        min_edge_buy_no: 0.05
         entry_window_min: 2.0
         entry_window_max: 16.0
       1h:
