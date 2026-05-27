@@ -665,6 +665,7 @@ class PolyBot:
         # don't reset loss-limit checks to zero (bug: bot could breach daily limit, restart,
         # and immediately trade again as if no losses occurred)
         self._restore_daily_stats()
+        self._sync_exposure_managers_portfolio_pnl()
 
         # Setup logging
         self._setup_logging()
@@ -1631,7 +1632,29 @@ class PolyBot:
         self.bankroll = max(0.0, float(self.bankroll) + float(pnl))
         self.risk_manager.update_pnl(float(pnl))
         self.risk_manager.bankroll = self.bankroll
+        self._sync_exposure_managers_portfolio_pnl()
         return self.bankroll
+
+    def _all_exposure_managers(self):
+        return [
+            self.btc_exposure_manager,
+            self.sol_exposure_manager,
+            self.eth_exposure_manager,
+            self.hype_exposure_manager,
+            self.xrp_exposure_manager,
+            self.doge_exposure_manager,
+            self.bnb_exposure_manager,
+            self.event_exposure_manager,
+        ]
+
+    def _sync_exposure_managers_portfolio_pnl(self) -> None:
+        """Keep lane exposure managers aligned to current daily realized PnL."""
+        daily_pnl = float(getattr(self.risk_manager, "daily_pnl", 0.0) or 0.0)
+        for em in self._all_exposure_managers():
+            try:
+                em.update_portfolio_pnl(daily_pnl)
+            except Exception:
+                continue
 
     async def _run_resolution_check(self, label: str = ""):
         """Shared resolution check — routes settlements to the correct exposure manager."""
@@ -2795,6 +2818,12 @@ class PolyBot:
         )
         if regime_extra:
             lane_meta.update(regime_extra)
+        combined_regime = str(regime_extra.get("combined_regime") or "")
+        in_deadzone = combined_regime.startswith("deadzone") if combined_regime else None
+        self._get_exposure_manager_for(strategy).update_resume_window(
+            green_window=bool(allowed),
+            in_deadzone=in_deadzone,
+        )
         if allowed:
             return True
 

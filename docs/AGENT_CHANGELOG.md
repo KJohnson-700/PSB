@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-27 — Loss-streak auto-resume wiring: recovery + green/non-deadzone gates
+
+**[`src/execution/exposure_manager.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/exposure_manager.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_exposure_manager_sizing.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_exposure_manager_sizing.py):** Added lane pause reactivation controls so a loss-streak pause can require (a) portfolio PnL recovery vs a pause-time anchor (`loss_pause_recovery_multiple`), (b) a green window, and (c) non-deadzone regime context before auto-resume. Main now syncs daily realized PnL into all lane exposure managers and feeds regime gate state (`combined_regime` deadzone flag + gate-allowed state) into each lane’s resume context.
+
+**Why:** Operator requested safer per-asset reactivation semantics after 3-loss pauses instead of pure cycle-based resume. This keeps the hard loss-streak pause while preventing immediate re-entry in deadzone windows or before adequate recovery.
+
 ## 2026-05-27 — Live calibration cuts for four leaking gates
 
 **[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/btc_updown_5m.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/btc_updown_5m.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_bitcoin.py):** Converted BTC non-5m `lane_min_edge_bias_quant_disagree` from a hard min-edge rejection path into an admitted path with `bias_quant_disagree_size_multiplier: 0.5`; BTC 5m disagreement remains strict because the post-commit ghost slice was negative on realized value. Lowered only selected lane-level `lane_min_edge` thresholds with positive post-commit ghost support, dropped HYPE 1h BUY_NO liquidity to its existing 1h base floor, and changed BTC `hist_gate_5m_short_reject` to telemetry-only when `hist_gate_5m_short_hard_reject: false`.

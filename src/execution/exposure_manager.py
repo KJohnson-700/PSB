@@ -59,6 +59,8 @@ class MarketConditions:
     trend_strength: float = 0.0  # 0-1, from technical analysis
     trend_direction: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
     weekend_penalty: float = 1.0  # 1.0 = normal, 0.0 = full penalty (weekend/low-liquidity)
+    green_window: Optional[bool] = None
+    in_deadzone: Optional[bool] = None
 
 
 class ExposureManager:
@@ -105,6 +107,15 @@ class ExposureManager:
         self.max_pause_cycles = int(
             exposure_config.get("max_pause_cycles", max(self.pause_cycles * 2, self.pause_cycles + 1))
         )
+        self.loss_pause_recovery_multiple = float(
+            exposure_config.get("loss_pause_recovery_multiple", 0.0) or 0.0
+        )
+        self.require_non_deadzone_for_resume = bool(
+            exposure_config.get("require_non_deadzone_for_resume", False)
+        )
+        self.require_green_window_for_resume = bool(
+            exposure_config.get("require_green_window_for_resume", False)
+        )
         self.resume_mode = PauseResumeMode(
             exposure_config.get('live_resume_mode', 'auto')
         )
@@ -129,6 +140,12 @@ class ExposureManager:
         self._last_conditions: Optional[MarketConditions] = None
         self._on_pause_ai_callback: Optional[Callable] = None
         self._last_loss_kill_trigger: Optional[Dict[str, Any]] = None
+        self._streak_loss_abs_total: float = 0.0
+        self._portfolio_pnl: float = 0.0
+        self._pause_recovery_anchor_pnl: float = 0.0
+        self._pause_recovery_target: float = 0.0
+        self._latest_green_window: Optional[bool] = None
+        self._latest_in_deadzone: Optional[bool] = None
 
     def reload_from_config(self, exposure_config: Dict[str, Any]) -> None:
         """Refresh sizing, kill-switch, and condition thresholds from YAML/dashboard.
@@ -152,6 +169,15 @@ class ExposureManager:
         self.pause_cycles = exposure_config.get("pause_cycles", 2)
         self.max_pause_cycles = int(
             exposure_config.get("max_pause_cycles", max(self.pause_cycles * 2, self.pause_cycles + 1))
+        )
+        self.loss_pause_recovery_multiple = float(
+            exposure_config.get("loss_pause_recovery_multiple", 0.0) or 0.0
+        )
+        self.require_non_deadzone_for_resume = bool(
+            exposure_config.get("require_non_deadzone_for_resume", False)
+        )
+        self.require_green_window_for_resume = bool(
+            exposure_config.get("require_green_window_for_resume", False)
         )
         self.resume_mode = PauseResumeMode(
             exposure_config.get("live_resume_mode", "auto")
@@ -183,7 +209,10 @@ class ExposureManager:
                 # Auto-resume: check if conditions improved
                 self._cycles_since_pause += 1
                 if self._cycles_since_pause >= self.pause_cycles:
-                    if self._cycles_since_pause >= self.max_pause_cycles:
+                    if (
+                        self._cycles_since_pause >= self.max_pause_cycles
+                        and self._pause_recovery_target <= 0
+                    ):
                         logger.warning(
                             "OPS_JSON exposure_auto_resume lane=%s reason=%r cycles=%s max_pause_cycles=%s",
                             self.lane_name,
@@ -294,12 +323,22 @@ class ExposureManager:
 
     def _should_resume(self, conditions: MarketConditions) -> bool:
         """Check if conditions are good enough to resume after pause."""
-        # Need at least moderate conditions to resume
-        return (
+        base_ok = (
             conditions.volume_ratio >= self.low_volume_ratio
             and conditions.trend_strength >= 0.3
             and conditions.volatility >= self.low_vol_threshold
         )
+        if not base_ok:
+            return False
+        if self.require_green_window_for_resume and not self._is_green_window(conditions):
+            return False
+        if self.require_non_deadzone_for_resume and self._is_in_deadzone(conditions):
+            return False
+        if self._pause_recovery_target > 0:
+            recovered = max(0.0, self._portfolio_pnl - self._pause_recovery_anchor_pnl)
+            if recovered < self._pause_recovery_target:
+                return False
+        return True
 
     def _resume_waiting_for(self, conditions: MarketConditions) -> str:
         missing = []
@@ -309,6 +348,16 @@ class ExposureManager:
             missing.append("trend_strength")
         if conditions.volatility < self.low_vol_threshold:
             missing.append("volatility")
+        if self.require_green_window_for_resume and not self._is_green_window(conditions):
+            missing.append("green_window")
+        if self.require_non_deadzone_for_resume and self._is_in_deadzone(conditions):
+            missing.append("non_deadzone")
+        if self._pause_recovery_target > 0:
+            recovered = max(0.0, self._portfolio_pnl - self._pause_recovery_anchor_pnl)
+            if recovered < self._pause_recovery_target:
+                missing.append(
+                    f"recovery_pnl({recovered:.2f}/{self._pause_recovery_target:.2f})"
+                )
         return ",".join(missing) if missing else "none"
 
     def _build_reason(self, tier: ExposureTier, c: MarketConditions) -> str:
@@ -357,6 +406,7 @@ class ExposureManager:
         # Track consecutive losses
         if pnl < 0:
             self._consecutive_losses += 1
+            self._streak_loss_abs_total += abs(float(pnl))
             logger.info(f"Exposure: Loss recorded ({pnl:+.2f}), streak={self._consecutive_losses}")
 
             if self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
@@ -370,6 +420,7 @@ class ExposureManager:
             if self._consecutive_losses > 0:
                 logger.info(f"Exposure: Win recorded ({pnl:+.2f}), resetting loss streak")
             self._consecutive_losses = 0
+            self._streak_loss_abs_total = 0.0
 
     def _trigger_pause(self, reason: str, *, window_size: str = ""):
         """Activate the loss-streak lane pause."""
@@ -377,12 +428,21 @@ class ExposureManager:
         self._pause_reason = reason
         self._pause_start = datetime.now()
         self._cycles_since_pause = 0
+        self._pause_recovery_anchor_pnl = self._portfolio_pnl
+        self._pause_recovery_target = (
+            self._streak_loss_abs_total * self.loss_pause_recovery_multiple
+            if self.loss_pause_recovery_multiple > 0
+            else 0.0
+        )
         window_norm = str(window_size or "").strip()
         self._last_loss_kill_trigger = {
             "lane": str(self.lane_name or "UNKNOWN"),
             "window_size": window_norm,
             "reason": reason,
             "timestamp": self._pause_start.isoformat(),
+            "streak_loss_abs_total": round(self._streak_loss_abs_total, 4),
+            "pause_recovery_target": round(self._pause_recovery_target, 4),
+            "pause_recovery_anchor_pnl": round(self._pause_recovery_anchor_pnl, 4),
         }
 
         if self.is_paper:
@@ -425,6 +485,9 @@ class ExposureManager:
         self._pause_reason = ""
         self._cycles_since_pause = 0
         self._consecutive_losses = 0  # Reset on unpause
+        self._streak_loss_abs_total = 0.0
+        self._pause_recovery_anchor_pnl = self._portfolio_pnl
+        self._pause_recovery_target = 0.0
         self._last_loss_kill_trigger = None
         logger.info(f"EXPOSURE RESUMED: {reason}")
 
@@ -444,6 +507,9 @@ class ExposureManager:
         self._pause_reason = ""
         self._cycles_since_pause = 0
         self._consecutive_losses = 0
+        self._streak_loss_abs_total = 0.0
+        self._pause_recovery_anchor_pnl = self._portfolio_pnl
+        self._pause_recovery_target = 0.0
         self._last_loss_kill_trigger = None
         logger.info("Exposure: MANUAL RESUME — all clear")
 
@@ -458,7 +524,47 @@ class ExposureManager:
         self._manual_pause = False
         self._current_tier = ExposureTier.FULL
         self._last_conditions = None
+        self._streak_loss_abs_total = 0.0
+        self._pause_recovery_anchor_pnl = self._portfolio_pnl
+        self._pause_recovery_target = 0.0
+        self._latest_green_window = None
+        self._latest_in_deadzone = None
         self._last_loss_kill_trigger = None
+
+    def update_portfolio_pnl(self, pnl: float) -> None:
+        """Update portfolio-level realized PnL used for pause recovery tracking."""
+        self._portfolio_pnl = float(pnl)
+
+    def update_resume_window(
+        self,
+        *,
+        green_window: Optional[bool] = None,
+        in_deadzone: Optional[bool] = None,
+    ) -> None:
+        """Push latest lane window context (market-regime gate outcome)."""
+        if green_window is not None:
+            self._latest_green_window = bool(green_window)
+        if in_deadzone is not None:
+            self._latest_in_deadzone = bool(in_deadzone)
+
+    def _is_green_window(self, conditions: MarketConditions) -> bool:
+        if conditions.green_window is not None:
+            return bool(conditions.green_window)
+        if self._latest_green_window is not None:
+            return bool(self._latest_green_window)
+        return self._should_resume_baseline(conditions)
+
+    def _is_in_deadzone(self, conditions: MarketConditions) -> bool:
+        if conditions.in_deadzone is not None:
+            return bool(conditions.in_deadzone)
+        return bool(self._latest_in_deadzone)
+
+    def _should_resume_baseline(self, conditions: MarketConditions) -> bool:
+        return (
+            conditions.volume_ratio >= self.low_volume_ratio
+            and conditions.trend_strength >= 0.3
+            and conditions.volatility >= self.low_vol_threshold
+        )
 
     # ──────────────────────────────────────────────────────────────
     # Helpers
@@ -519,6 +625,9 @@ class ExposureManager:
                 'trend_strength': self._last_conditions.trend_strength if self._last_conditions else 0,
             } if self._last_conditions else {},
             'last_loss_kill_trigger': dict(self._last_loss_kill_trigger) if self._last_loss_kill_trigger else None,
+            'pause_recovery_target': self._pause_recovery_target,
+            'pause_recovery_anchor_pnl': self._pause_recovery_anchor_pnl,
+            'portfolio_pnl': self._portfolio_pnl,
         }
 
     @staticmethod

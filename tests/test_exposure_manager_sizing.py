@@ -98,3 +98,42 @@ def test_loss_kill_trigger_records_latest_lane_context() -> None:
     assert trigger["lane"] == "DOGE"
     assert trigger["window_size"] == "5m"
     assert "consecutive losses" in trigger["reason"]
+
+
+def test_pause_resume_requires_recovery_and_green_non_deadzone_window() -> None:
+    cfg = {
+        "exposure": {
+            "loss_kill_switch_enabled": True,
+            "max_consecutive_losses": 1,
+            "pause_cycles": 1,
+            "max_pause_cycles": 5,
+            "loss_pause_recovery_multiple": 2.0,
+            "require_green_window_for_resume": True,
+            "require_non_deadzone_for_resume": True,
+            "live_resume_mode": "auto",
+            "low_volume_ratio": 0.7,
+            "low_vol_pct": 0.005,
+        }
+    }
+    mgr = ExposureManager(cfg, is_paper=True, lane_name="SOL")
+    mgr.update_portfolio_pnl(-10.0)
+    mgr.record_trade(-3.0, strategy="sol_macro", window_size="5m")
+
+    ok = MarketConditions(volatility=0.02, volume_ratio=1.2, trend_strength=0.8)
+
+    mgr.update_resume_window(green_window=False, in_deadzone=False)
+    t1, *_ = mgr.get_exposure(ok)
+    assert t1 == ExposureTier.PAUSED
+
+    mgr.update_resume_window(green_window=True, in_deadzone=True)
+    t2, *_ = mgr.get_exposure(ok)
+    assert t2 == ExposureTier.PAUSED
+
+    mgr.update_resume_window(green_window=True, in_deadzone=False)
+    mgr.update_portfolio_pnl(-5.0)  # recovered 5 < target 6
+    t3, *_ = mgr.get_exposure(ok)
+    assert t3 == ExposureTier.PAUSED
+
+    mgr.update_portfolio_pnl(-4.0)  # recovered 6 == target
+    t4, *_ = mgr.get_exposure(ok)
+    assert t4 != ExposureTier.PAUSED
