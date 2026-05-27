@@ -178,7 +178,7 @@ data_collection:
     interval_sec: 300
     path: data/market_prices/weather_prices.jsonl
 lane_management:
-  enabled: false
+  enabled: true
   default_state: paper
   states: {}
   state_meta: {}
@@ -194,18 +194,18 @@ lane_management:
     auto_pause_confirmation_trades: 3
 lane_calibration:
   enabled: true
-  shadow_mode: true
-  paper_shadow_mode: true
+  shadow_mode: false
+  paper_shadow_mode: false
   live_shadow_mode: false
   posterior_version: lane_identity_v2_source_resolver
-  min_samples_to_apply_live: 15
-  beta_veto_max_mean: 0
+  min_samples_to_apply_live: 30
+  beta_veto_max_mean: 0.42
   beta_veto_min_n: 30
   per_lane_thresholds:
-    enabled: false
-    recompute_on_settle: false
+    enabled: true
+    recompute_on_settle: true
     recompute_min_new_settles: 25
-    min_bucket_n: 100
+    min_bucket_n: 50
     wr_veto_threshold: 0.4
     recommended_max_mean: 0.4
     path: data/calibration/lane_thresholds.json
