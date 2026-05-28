@@ -11,6 +11,15 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 - **Verification:** `.venv/bin/python -m pytest tests/test_exposure_manager_sizing.py tests/test_lane_manager.py -q` passed; `py_compile` passed for the touched execution/strategy modules.
 - **Status:** `pending` — next paper run should confirm the bot resumes after loss-pause cooldown and keeps producing calibration samples.
 
+## 2026-05-28 — Beta-veto historical backfill + disabled-state checkpoint
+
+- **What changed:** Added reproducible historical beta-veto reconstruction via [src/analysis/beta_veto_backfill.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/beta_veto_backfill.py), [tools/backfill_beta_veto_rows.py](/Users/mainfolder/Documents/psb-main%201/tools/backfill_beta_veto_rows.py), and [tests/test_beta_veto_backfill.py](/Users/mainfolder/Documents/psb-main%201/tests/test_beta_veto_backfill.py). Ran the backfill at the last attempted setting `beta_veto_max_mean=0.42`, `beta_veto_min_n=30`, producing [data/calibration/beta_veto_historical_rows.jsonl](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_rows.jsonl) and [data/calibration/beta_veto_historical_summary.json](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_summary.json). Verified the restart config remains in the disabled state at `beta_veto_max_mean: 0.0`, `beta_veto_min_n: 0`.
+- **Backfill result:** The reconstructed `0.42 / 30` veto would have matched `2,287` historical rejected rows, `2,272` of them already settled, with `1,509` wins and `763` losses for a settled WR of `66.4%`. Largest affected cohorts were BTC (`997` rows), SOL (`369`), BNB (`305`), XRP (`216`), HYPE (`206`), and DOGE (`192`).
+- **Why:** The operator wanted to preserve a defensible starting point for beta-veto sweet-spot tuning before turning the veto off for throughput recovery. The existing ghost ledgers did not already contain an explicit historical `beta_vetoed` family, so the correct move was to reconstruct it from timestamp-ordered live trade history rather than guess.
+- **Method caveat:** This backfill replays only live trades and the same Beta(2,3) update math as the calibrator. It intentionally excludes later ghost-fed beta updates and per-lane override logic because those are not available at rejection time and would blur the global veto experiment.
+- **Verification:** `.venv/bin/python -m pytest tests/test_beta_veto_backfill.py -q` passed; `.venv/bin/python -m py_compile src/analysis/beta_veto_backfill.py tools/backfill_beta_veto_rows.py` passed; `.venv/bin/python tools/backfill_beta_veto_rows.py --max-mean 0.42 --min-n 30` generated the committed artifacts.
+- **Status:** `pending` — next paper run should confirm throughput recovers with the veto disabled while the saved backfill anchors the next `max_mean/min_n` sweep.
+
 ## 2026-05-27 — Cross-strategy crypto circuit breakers
 
 - **What changed:** Added [src/analysis/circuit_breakers.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), a global side-specific halt manager for crypto up/down entries. It has:

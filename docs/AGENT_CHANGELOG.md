@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-28 — Beta-veto historical backfill and disabled-state checkpoint
+
+**[`src/analysis/beta_veto_backfill.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/beta_veto_backfill.py), [`tools/backfill_beta_veto_rows.py`](/Users/mainfolder/Documents/psb-main%201/tools/backfill_beta_veto_rows.py), [`tests/test_beta_veto_backfill.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_beta_veto_backfill.py):** Added a reproducible historical beta-veto reconstruction pass that replays live lane Beta(2,3) posteriors from `data/calibration/trades.jsonl` and emits derived veto-eligible ghost rows for a chosen `(max_mean, min_n)` setting. Ran it for the unfinished `0.42 / 30` experiment and committed the outputs at [`data/calibration/beta_veto_historical_rows.jsonl`](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_rows.jsonl) and [`data/calibration/beta_veto_historical_summary.json`](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_summary.json). The working-tree restart config was also verified to be in the disabled state (`beta_veto_max_mean: 0.0`, `beta_veto_min_n: 0`) before handoff.
+
+**Why:** The operator wanted the current beta-veto experiment preserved before throughput recovery. Existing rejected/settled ghost ledgers did not already contain a mature explicit `beta_vetoed` family, so the correct provenance path was historical reconstruction from live trade chronology rather than inference-by-memory.
+
 ## 2026-05-27 — Loss-streak auto-resume wiring: recovery + green/non-deadzone gates
 
 **[`src/execution/exposure_manager.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/exposure_manager.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`tests/test_exposure_manager_sizing.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_exposure_manager_sizing.py):** Added lane pause reactivation controls so a loss-streak pause can require (a) portfolio PnL recovery vs a pause-time anchor (`loss_pause_recovery_multiple`), (b) a green window, and (c) non-deadzone regime context before auto-resume. Main now syncs daily realized PnL into all lane exposure managers and feeds regime gate state (`combined_regime` deadzone flag + gate-allowed state) into each lane’s resume context.

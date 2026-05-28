@@ -12,3 +12,23 @@
 - Make future changes one at a time and compare against the strong `test_20260527_042014` run plus settled ghost slices.
 
 **Do not drift into:** broad tightening, global min-edge raises, narrower entry windows, or assuming zero trades means success.
+
+## 2026-05-28 — Beta-veto tuning checkpoint
+
+**Purpose:** Preserve the exact restart point for the unfinished `[[Beta Veto]]` experiment before disabling it for throughput recovery.
+
+**Last tested live setting:**
+- `lane_calibration.beta_veto_max_mean = 0.42`
+- `lane_calibration.beta_veto_min_n = 30`
+
+**Historical reconstruction saved before disable:** [data/calibration/beta_veto_historical_rows.jsonl](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_rows.jsonl) and [data/calibration/beta_veto_historical_summary.json](/Users/mainfolder/Documents/psb-main%201/data/calibration/beta_veto_historical_summary.json)
+
+**Reconstructed result at `0.42 / 30`:**
+- `2,287` matched historical rejected rows
+- `2,272` already settled
+- `1,509` wins / `763` losses
+- settled WR `66.4%`
+
+**Interpretation:** The current veto setting was suppressing a large body of historically winning rejects under the global-beta replay, so leaving it on would starve calibration. The veto is therefore disabled for now, but the exact `0.42 / 30` attempt is preserved as the baseline for the next sweet-spot sweep rather than being abandoned or forgotten.
+
+**When resuming tuning:** start near the current attempt, not from scratch. First sweep should stay local: `max_mean ∈ {0.38, 0.40, 0.42}` and `min_n ∈ {20, 30, 40}`.
