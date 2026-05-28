@@ -55,6 +55,15 @@ STRATEGY_CONFIG_KEYS = {
     "eth_macro": "eth_macro",
 }
 
+# Ghost-settled rejection log (counterfactual outcomes for rejected candidates).
+# Reading this fold-in lets the heatmap reflect ~270k samples instead of the
+# ~2k executed trades alone — the gap that caused the 79cd310 deadzone refit
+# to mis-block 22 of 35 hour-cells across 7 strategies (see commit 340611f).
+GHOST_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "data" / "calibration" / "rejected_candidates_settled.jsonl"
+)
+
 
 # ── Data loading (reuses same logic as strategy_coach.py) ──────────────────
 
@@ -157,6 +166,79 @@ def load_trades(
         trades.extend(raw_trades)
 
     return trades
+
+
+def load_ghost_trades(
+    days_back: int = 30,
+    strategy_filter: str = None,
+) -> list:
+    """Load settled rejected-candidate ghost outcomes from the calibration log.
+
+    Each ghost record is a candidate the live scanner rejected; `win` is the
+    counterfactual outcome resolved against the real Polymarket settlement.
+    Returns rows shaped like the live `load_trades` output, with a synthetic
+    `pnl` of +1/-1 so existing hourly_stats aggregation works unchanged
+    (only WR is meaningful for ghosts — pnl is binary, not dollar).
+    """
+    import json
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    out: list = []
+
+    if not GHOST_PATH.exists():
+        print(f"[heatmap] No ghost log at {GHOST_PATH}")
+        return out
+
+    skipped_no_ts = 0
+    skipped_no_win = 0
+    with open(GHOST_PATH, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+
+            strategy = rec.get("strategy") or ""
+            if strategy_filter and strategy != strategy_filter:
+                continue
+
+            ts_raw = rec.get("ts") or rec.get("settled_at")
+            if not ts_raw:
+                skipped_no_ts += 1
+                continue
+            try:
+                ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            except Exception:
+                skipped_no_ts += 1
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                continue
+
+            win = rec.get("win")
+            if win is None:
+                skipped_no_win += 1
+                continue
+
+            out.append({
+                "strategy":  strategy,
+                "action":    rec.get("action", ""),
+                "pnl":       1.0 if bool(win) else -1.0,  # synthetic — only WR is meaningful
+                "hour_utc":  ts.hour,
+                "window":    rec.get("window"),
+                "htf_bias":  rec.get("htf_bias"),
+                "exit_reason": "ghost",
+                "closed_at": ts.isoformat(),
+                "source":    "ghost",
+            })
+
+    if skipped_no_ts or skipped_no_win:
+        print(f"[heatmap] ghost skips: no_ts={skipped_no_ts} no_win={skipped_no_win}")
+    return out
 
 
 # ── Analysis ───────────────────────────────────────────────────────────────
@@ -356,6 +438,22 @@ def main():
         default="entry_utc",
         help="Which clock to bucket hours: entry vs exit, UTC vs America/Los_Angeles",
     )
+    parser.add_argument(
+        "--include-ghosts",
+        action="store_true",
+        help=(
+            "Fold rejected_candidates_settled.jsonl ghost outcomes into the "
+            "WR calculation. Massively expands sample size (~270k vs ~2k live) "
+            "and is what should be used for any blocklist refit. WR becomes the "
+            "primary metric (avg PnL is no longer dollar-meaningful when ghosts "
+            "are mixed in)."
+        ),
+    )
+    parser.add_argument(
+        "--ghosts-only",
+        action="store_true",
+        help="Show only ghost-settled outcomes, ignoring live trades.",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -370,16 +468,42 @@ def main():
         "entry_pt": "Pacific hour at entry (fallback: exit)",
         "exit_pt": "Pacific hour at exit",
     }
-    trades = load_trades(
-        days_back=args.days,
-        strategy_filter=args.strategy,
-        hour_axis=args.hour_axis,
-    )
-    print(f"[heatmap] {len(trades)} trades loaded.")
+    if args.ghosts_only:
+        trades = []
+        n_live = 0
+    else:
+        trades = load_trades(
+            days_back=args.days,
+            strategy_filter=args.strategy,
+            hour_axis=args.hour_axis,
+        )
+        n_live = len(trades)
+        print(f"[heatmap] {n_live} live trades loaded.")
+
+    n_ghost = 0
+    if args.include_ghosts or args.ghosts_only:
+        if args.hour_axis != "entry_utc":
+            print(
+                f"[heatmap] WARNING: --hour-axis={args.hour_axis} ignored for "
+                f"ghosts (always entry_utc — exit/PT timestamps not in ghost log)."
+            )
+        ghosts = load_ghost_trades(
+            days_back=args.days,
+            strategy_filter=args.strategy,
+        )
+        n_ghost = len(ghosts)
+        print(f"[heatmap] {n_ghost} ghost outcomes loaded.")
+        trades.extend(ghosts)
 
     if not trades:
         print("[heatmap] No trades found. Make sure the bot has been running and logging.")
         return
+
+    if n_ghost > 0:
+        print(
+            f"[heatmap] Note: ghost rows use synthetic pnl=±1; WR is the only "
+            f"reliable metric. Live={n_live} ghost={n_ghost} total={len(trades)}."
+        )
 
     # Build stats
     stats, no_hour = build_hourly_stats(trades)
