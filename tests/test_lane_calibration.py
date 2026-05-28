@@ -263,3 +263,58 @@ def test_main_record_path_smoke():
     # The Phase 6 hook in main.py would now call:
     #   cal.record(rec['lane_id'], rec['stated_est_prob'], rec['realized_pct'], rec['win'])
     # which exercises the same call path tested above with synthetic data.
+
+
+# ─────────────────────────────────────────────────────────── per-lane hard veto
+
+def test_per_lane_hard_veto_fires_when_global_beta_off(tmp_log: Path) -> None:
+    """Regression: veto_recommended=true must fire even when
+    beta_veto_max_mean=0 and beta_veto_min_n=0 (global β-veto disabled).
+    The per-lane threshold pipeline is an independent decision source.
+    """
+    cal = LaneCalibrator(
+        path=tmp_log,
+        shadow_mode=True,
+        beta_veto_max_mean=0.0,
+        beta_veto_min_n=0,
+        per_lane_thresholds_enabled=True,
+        per_lane_thresholds={
+            "bitcoin|5m|down|bearish|htf_bearish_side_short": {
+                "veto_recommended": True,
+                "n": 147,
+                "wr": 0.313,
+            },
+        },
+    )
+    assert cal.is_vetoed("bitcoin|5m|down|bearish|htf_bearish_side_short") is True
+
+
+def test_per_lane_no_veto_when_override_says_no(tmp_log: Path) -> None:
+    cal = LaneCalibrator(
+        path=tmp_log,
+        shadow_mode=True,
+        beta_veto_max_mean=0.0,
+        beta_veto_min_n=0,
+        per_lane_thresholds_enabled=True,
+        per_lane_thresholds={
+            "bitcoin|5m|down|bullish|drift": {
+                "veto_recommended": False,
+                "n": 63,
+                "wr": 0.60,
+            },
+        },
+    )
+    assert cal.is_vetoed("bitcoin|5m|down|bullish|drift") is False
+
+
+def test_per_lane_no_override_no_veto_when_global_off(tmp_log: Path) -> None:
+    """A lane with no override and global β-veto off must not be vetoed."""
+    cal = LaneCalibrator(
+        path=tmp_log,
+        shadow_mode=True,
+        beta_veto_max_mean=0.0,
+        beta_veto_min_n=0,
+        per_lane_thresholds_enabled=True,
+        per_lane_thresholds={},
+    )
+    assert cal.is_vetoed("bitcoin|5m|down|bearish|standard") is False

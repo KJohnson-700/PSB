@@ -245,22 +245,31 @@ class LaneCalibrator:
 
         Three outcomes per lane when per-lane mode is on:
           1. Override marks lane as ``veto_recommended: True`` → VETO
-             (regardless of live β state — ghost says this lane loses)
+             (independent of global β state — per-lane data says this lane loses)
           2. Override exists with custom ``recommended_max_mean`` → use that
-             instead of the global floor against live β
+             instead of the global floor against live β (only when global β
+             gating is configured)
           3. No override → fall back to global β-veto check
         """
         lane_key = self._lane_key(lane_id)
         p = self._posteriors.get(lane_key)
+        # Hard veto path runs even when global β-veto is disabled: the
+        # per-lane threshold pipeline is an independent decision source
+        # (live + ghost outcomes per lane_id, see lane_thresholds.py).
+        if self.per_lane_thresholds_enabled:
+            override = self.per_lane_thresholds.get(lane_id) or self.per_lane_thresholds.get(lane_key)
+            if override is not None and bool(override.get("veto_recommended")):
+                return True
+        # Remaining paths apply a β floor against live posteriors and
+        # require the global β-veto thresholds to be configured.
+        if self.beta_veto_min_n <= 0 or self.beta_veto_max_mean <= 0.0:
+            return False
         if not self.per_lane_thresholds_enabled:
             return self._is_vetoed(p)
         override = self.per_lane_thresholds.get(lane_id) or self.per_lane_thresholds.get(lane_key)
         if override is None:
             return self._is_vetoed(p)
-        # Hard veto if ghost data flags this lane explicitly.
-        if bool(override.get("veto_recommended")):
-            return True
-        # Otherwise apply a (possibly per-lane) β floor against live data.
+        # Per-lane β floor against live data (override.recommended_max_mean).
         if p is None or p.n <= 0:
             return False
         max_mean = float(
