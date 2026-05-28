@@ -4,6 +4,13 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-28 — Calibration throughput guardrails
+
+- **What changed:** Restored paper loss-pause behavior so paper-mode lanes auto-resume during calibration instead of requiring manual intervention after a loss-streak pause. Manual resume semantics still apply to explicit live/manual pause mode. Added a Codex working note at [projects/polymarket-bot/codex-working-notes.md](/Users/mainfolder/Documents/psb-main%201/projects/polymarket-bot/codex-working-notes.md) anchoring the current calibration recommendation.
+- **Why:** The project is in calibration/data-gathering mode. A lane stuck in `exposure_paused` blocks sample collection and can make a good strategy posture look broken by starving it.
+- **Verification:** `.venv/bin/python -m pytest tests/test_exposure_manager_sizing.py tests/test_lane_manager.py -q` passed; `py_compile` passed for the touched execution/strategy modules.
+- **Status:** `pending` — next paper run should confirm the bot resumes after loss-pause cooldown and keeps producing calibration samples.
+
 ## 2026-05-27 — Cross-strategy crypto circuit breakers
 
 - **What changed:** Added [src/analysis/circuit_breakers.py](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), a global side-specific halt manager for crypto up/down entries. It has:

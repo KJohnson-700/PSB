@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-28 — BTC-follow LONG hard skips converted to soft penalties
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `btc_1h_not_following` and `btc_15m_not_following` no longer hard-skip ETH LONG candidates. They now mirror the SHORT path: dampen `est_prob_up`, add a small min-edge penalty, and preserve the candidate for later ETH-native gates.
+- **Why:** Calibration review showed these skip reasons blocking settled winners, and the hard skip violated the current rule that alts are decided by alt-native indicators with BTC used only as context.
+- **Hypothesis:** ETH LONG throughput should recover when ETH-native evidence is present, while the BTC disagreement still reduces confidence through a soft penalty.
+- **Expected outcome:** Future skip diagnostics should stop showing `btc_1h_not_following` / `btc_15m_not_following` as hard ETH LONG blockers; ETH LONG trades should be judged after >=15 closed post-change ETH trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-26 — Timeframe-scoped entry control config
 
 - **What changed:** Moved ETH entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed shared macro entry policy reads through the timeframe resolver.

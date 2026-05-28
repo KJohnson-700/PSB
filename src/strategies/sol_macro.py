@@ -2898,30 +2898,9 @@ class SolMacroStrategy:
 
                     _sample("m5_adj", m5_adj)
                     if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
-                        _bump_skip("sell_5m_low_corr")
-                        log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="5m",
-                            side=allowed_side, action=action,
-                            reason="sell_5m_low_corr", market=market,
-                            yes_price=yes_price, est_prob_up=est_prob_up,
-                            htf_bias=primary_htf_bias,
-                            stage="corr_floor_5m",
-                            context={
-                                "correlation_1h": float(corr.correlation_1h),
-                                "floor": float(self.sell_5m_min_corr),
-                                **build_market_context(
-                                    asset_spot=sol.current_price,
-                                    btc_spot=corr.btc_price,
-                                    rsi_14=sol.rsi_14,
-                                    atr_14=sol.atr_14,
-                                ),
-                            },
+                        reason_parts.append(
+                            f"diag_sell_5m_low_corr({corr.correlation_1h:.2f}<{self.sell_5m_min_corr:.2f})"
                         )
-                        logger.info(
-                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"{action} corr {corr.correlation_1h:.2f} < floor {self.sell_5m_min_corr:.2f}"
-                        )
-                        continue
 
                     if not self._strong_enough_5m_signal(m5_adj, action):
                         _min_req = (

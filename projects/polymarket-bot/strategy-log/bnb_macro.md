@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
+
+- **What changed:** BNB inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.
+- **Why:** Calibration review showed the hard BTC-correlation skip could throw away valid alt-native downside entries.
+- **Hypothesis:** BNB 5m downside candidates should reach later edge/risk gates instead of being blocked by BTC correlation alone.
+- **Expected outcome:** Future BNB diagnostics should stop reporting `sell_5m_low_corr` as a hard skip; review after >=15 closed post-change BNB trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-26 — Timeframe-scoped entry control config
 
 - **What changed:** Moved BNB entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed shared macro entry policy reads through the timeframe resolver.

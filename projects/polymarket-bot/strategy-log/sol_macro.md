@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-28 — `sell_5m_low_corr` hard skip downgraded to diagnostic context
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates. Low alt-vs-BTC correlation is now appended as `diag_sell_5m_low_corr(...)` in the signal reason while later alt-native signal, edge, price, liquidity, and risk gates still decide admission.
+- **Why:** Calibration review showed the rejected pool near coin-flip-to-positive, and the hard skip let BTC correlation decide SOL admission despite the current alt-native rule.
+- **Hypothesis:** SOL 5m downside throughput should improve without bypassing the actual edge and risk gates.
+- **Expected outcome:** Future SOL diagnostics should stop reporting `sell_5m_low_corr` as a hard skip; impact should be reviewed after >=15 closed post-change SOL trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-26 — Timeframe-scoped entry control config
 
 - **What changed:** Moved SOL entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed shared macro entry policy reads through the timeframe resolver.

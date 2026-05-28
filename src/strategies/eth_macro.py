@@ -1321,22 +1321,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                             )
                             reason_parts.append("btc_1h_follow_penalty_short")
                         else:
-                            _bump_skip("btc_1h_not_following")
-                            log_rejected_candidate(
-                                strategy=self._signal_strategy_name, window="1h",
-                                side=market_allowed_side, action=action,
-                                reason="btc_1h_not_following", market=market,
-                                yes_price=yes_price, est_prob_up=est_prob_up,
-                                htf_bias=primary_htf_bias,
-                                stage="signal_strength_1h",
-                                context=build_market_context(
-                                    asset_spot=eth.current_price,
-                                    btc_spot=corr.btc_price,
-                                    rsi_14=eth.rsi_14,
-                                    atr_14=eth.atr_14,
-                                ),
+                            est_prob_up -= float(
+                                self.config.get(
+                                    "btc_1h_not_following_long_penalty",
+                                    self.config.get("btc_1h_not_following_short_penalty", 0.04),
+                                )
                             )
-                            continue
+                            follow_penalty_min_edge_add += float(
+                                self.config.get(
+                                    "btc_1h_not_following_long_min_edge_add",
+                                    self.config.get("btc_1h_not_following_short_min_edge_add", 0.01),
+                                )
+                            )
+                            reason_parts.append("btc_1h_follow_penalty_long")
                     eth_1h_adj, eth_reasons = self._eth_1h_follow_score(
                         eth.macd_1h, market_allowed_side
                     )
@@ -1410,22 +1407,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                             )
                             reason_parts.append("btc_15m_follow_penalty_short")
                         else:
-                            _bump_skip("btc_15m_not_following")
-                            log_rejected_candidate(
-                                strategy=self._signal_strategy_name, window="15m",
-                                side=market_allowed_side, action=action,
-                                reason="btc_15m_not_following", market=market,
-                                yes_price=yes_price, est_prob_up=est_prob_up,
-                                htf_bias=primary_htf_bias,
-                                stage="signal_strength_15m",
-                                context=build_market_context(
-                                    asset_spot=eth.current_price,
-                                    btc_spot=corr.btc_price,
-                                    rsi_14=eth.rsi_14,
-                                    atr_14=eth.atr_14,
-                                ),
+                            est_prob_up -= float(
+                                self.config.get(
+                                    "btc_15m_not_following_long_penalty",
+                                    self.config.get("btc_15m_not_following_short_penalty", 0.03),
+                                )
                             )
-                            continue
+                            follow_penalty_min_edge_add += float(
+                                self.config.get(
+                                    "btc_15m_not_following_long_min_edge_add",
+                                    self.config.get("btc_15m_not_following_short_min_edge_add", 0.01),
+                                )
+                            )
+                            reason_parts.append("btc_15m_follow_penalty_long")
                     eth_15m_adj, eth_reasons = self._eth_15m_follow_score(
                         eth.macd_15m, market_allowed_side
                     )

@@ -247,10 +247,10 @@ class ExposureManager:
                         f"[cycle {self._cycles_since_pause}/{self.pause_cycles}]"
                     )
             else:
-                # Manual resume mode (live)
+                # Manual resume mode
                 return (
                     ExposureTier.PAUSED, 0.0, 0.0,
-                    f"Paused ({self._pause_reason}) — restart bot to resume"
+                    f"Paused ({self._pause_reason}) — manual resume required"
                 )
 
         # --- Determine tier from conditions ---
@@ -450,7 +450,7 @@ class ExposureManager:
                 f"LOSS-STREAK LANE PAUSE: {reason} — pausing for {self.pause_cycles} cycles"
             )
         else:
-            mode_desc = "auto-resume" if self.resume_mode == PauseResumeMode.AUTO else "manual restart"
+            mode_desc = "auto-resume" if self.resume_mode == PauseResumeMode.AUTO else "manual resume"
             logger.warning(
                 f"LOSS-STREAK LANE PAUSE: {reason} — paused until {mode_desc}"
             )
@@ -532,7 +532,7 @@ class ExposureManager:
         self._last_loss_kill_trigger = None
 
     def update_portfolio_pnl(self, pnl: float) -> None:
-        """Update portfolio-level realized PnL used for pause recovery tracking."""
+        """Update realized PnL used for recovery gating and operator diagnostics."""
         self._portfolio_pnl = float(pnl)
 
     def update_resume_window(
@@ -541,7 +541,7 @@ class ExposureManager:
         green_window: Optional[bool] = None,
         in_deadzone: Optional[bool] = None,
     ) -> None:
-        """Push latest lane window context (market-regime gate outcome)."""
+        """Push latest market-regime context into the pause/resume gate."""
         if green_window is not None:
             self._latest_green_window = bool(green_window)
         if in_deadzone is not None:

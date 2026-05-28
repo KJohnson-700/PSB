@@ -80,6 +80,23 @@ def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
     assert second_tier != ExposureTier.PAUSED
 
 
+def test_loss_pause_auto_resumes_by_default_in_paper() -> None:
+    cfg = {
+        "exposure": {
+            "loss_kill_switch_enabled": True,
+            "max_consecutive_losses": 1,
+            "pause_cycles": 1,
+            "max_pause_cycles": 1,
+        }
+    }
+    mgr = ExposureManager(cfg, is_paper=True, lane_name="TEST")
+    mgr.record_trade(-1.0, strategy="bitcoin")
+    ok = MarketConditions(volatility=0.02, volume_ratio=1.2, trend_strength=0.8)
+
+    tier, *_ = mgr.get_exposure(ok)
+    assert tier != ExposureTier.PAUSED
+
+
 def test_loss_kill_trigger_records_latest_lane_context() -> None:
     cfg = {
         "exposure": {
@@ -137,3 +154,21 @@ def test_pause_resume_requires_recovery_and_green_non_deadzone_window() -> None:
     mgr.update_portfolio_pnl(-4.0)  # recovered 6 == target
     t4, *_ = mgr.get_exposure(ok)
     assert t4 != ExposureTier.PAUSED
+
+
+def test_pause_recovery_anchor_uses_post_loss_portfolio_pnl() -> None:
+    cfg = {
+        "exposure": {
+            "loss_kill_switch_enabled": True,
+            "max_consecutive_losses": 1,
+            "pause_cycles": 1,
+            "loss_pause_recovery_multiple": 2.0,
+        }
+    }
+    mgr = ExposureManager(cfg, is_paper=True, lane_name="BTC")
+    mgr.update_portfolio_pnl(-13.0)
+    mgr.record_trade(-3.0, strategy="bitcoin", window_size="5m")
+
+    status = mgr.get_status()
+    assert status["pause_recovery_anchor_pnl"] == -13.0
+    assert status["pause_recovery_target"] == 6.0
