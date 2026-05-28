@@ -2192,6 +2192,24 @@ class BitcoinStrategy:
                         resolver_path=direction_decision.resolver_path,
                     )
 
+                    # BTC 1h BUY_YES asymmetric floor — observed BUY_YES inversion
+                    # in raw est_prob 0.45–0.50 bucket (79% WR n=29 over 14d).
+                    # Bullish-bias × BUY_YES on 1h lifts by config'd amount,
+                    # clamped to 0.90. Config off (= 0.0) disables.
+                    if (
+                        is_1h
+                        and action == "BUY_YES"
+                        and htf_bias == "BULLISH"
+                    ):
+                        _floor_bump = float(
+                            self.config.get("btc_1h_buy_yes_bullish_floor_bump", 0.08)
+                        )
+                        if _floor_bump > 0:
+                            estimated_prob = min(0.90, estimated_prob + _floor_bump)
+                            reason_parts.append(
+                                f"btc_1h_buy_yes_floor=+{_floor_bump:.2f}"
+                            )
+
                     if action == "BUY_YES":
                         edge = estimated_prob - yes_price
                     else:

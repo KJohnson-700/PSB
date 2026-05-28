@@ -1850,6 +1850,28 @@ class SolMacroStrategy:
             return min(est_prob_up, self.degraded_bearish_est_up)
         return est_prob_up
 
+    def _hourly_buy_yes_native_bonus(
+        self,
+        *,
+        window_size: str,
+        allowed_side: str,
+        resolution: BiasResolution,
+        ltf_strength: float,
+    ) -> float:
+        """Small uplift for clean native 1H bullish lanes with real LTF confirmation."""
+        if window_size != "1h" or allowed_side != "LONG":
+            return 0.0
+        if resolution.horizon_tf != "1h" or resolution.horizon_bias != "BULLISH":
+            return 0.0
+        if not str(resolution.side_source or "").endswith("_1h_native"):
+            return 0.0
+        min_ltf_strength = float(
+            self.config.get("hourly_buy_yes_native_bonus_min_ltf_strength_1h", 0.30)
+        )
+        if float(ltf_strength) < min_ltf_strength:
+            return 0.0
+        return float(self.config.get("hourly_buy_yes_native_bonus_1h", 0.0))
+
     def _strong_enough_5m_signal(self, m5_adj: float, action: str) -> bool:
         """Optional guard for weak 5m-only entries.
 
@@ -3339,6 +3361,17 @@ class SolMacroStrategy:
                     # LTF confirmation — PRIMARY probability driver (increased from 0.18)
                     ltf_adj = ltf_strength * ltf_weight
                     est_prob_up += ltf_adj if allowed_side == "LONG" else -ltf_adj
+                    hourly_buy_yes_bonus = self._hourly_buy_yes_native_bonus(
+                        window_size=window_label,
+                        allowed_side=allowed_side,
+                        resolution=resolution,
+                        ltf_strength=ltf_strength,
+                    )
+                    if hourly_buy_yes_bonus > 0:
+                        est_prob_up += hourly_buy_yes_bonus
+                        reason_parts.append(
+                            f"hourly_buy_yes_native_bonus={hourly_buy_yes_bonus:+.3f}"
+                        )
 
                     # BTC catalyst boosts — lag/spike signal quality priced into est_prob
                     if corr.lag_opportunity and corr.opportunity_direction == allowed_side:

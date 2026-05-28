@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from src.strategies.xrp_macro import XRPMacroStrategy
-from src.strategies.sol_macro import SolMacroStrategy
+from src.strategies.sol_macro import BiasResolution, SolMacroStrategy
 from src.analysis.math_utils import PositionSizer
 
 
@@ -73,3 +73,26 @@ def test_xrp_macro_rejects_non_xrp_market():
         description = ""
 
     assert not st._is_solana_market(_M())
+
+
+def test_xrp_macro_hourly_buy_yes_native_bonus_is_opted_in():
+    cfg = _cfg(enabled=True)
+    cfg["strategies"]["xrp_macro"]["hourly_buy_yes_native_bonus_1h"] = 0.03
+    cfg["strategies"]["xrp_macro"]["hourly_buy_yes_native_bonus_min_ltf_strength_1h"] = 0.30
+    st = XRPMacroStrategy(cfg, MagicMock(), _pos_sizer())
+
+    native = BiasResolution(
+        allowed_side="LONG",
+        side_source="xrp_1h_native",
+        horizon_tf="1h",
+        horizon_bias="BULLISH",
+        slower_biases={},
+        primary_htf_bias="BULLISH",
+    )
+
+    assert st._hourly_buy_yes_native_bonus(
+        window_size="1h",
+        allowed_side="LONG",
+        resolution=native,
+        ltf_strength=0.35,
+    ) == 0.03

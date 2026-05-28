@@ -76,3 +76,6 @@
 {"timestamp":"2026-05-28T21:31:27Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
 {"timestamp":"2026-05-28T21:49:30Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
 {"timestamp":"2026-05-28T22:23:36Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-28T23:14:30Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-28T23:15:36Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}
+{"timestamp":"2026-05-28T23:16:56Z","lane_id":"bitcoin|5m|down","requested_state":"default","effective_state":"paper","previous_state":"paper","source":"dashboard_manual","note":""}

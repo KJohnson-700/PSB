@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 from src.strategies.sol_macro import (
+    BiasResolution,
     SolMacroStrategy,
     SolMacroSignal,
     build_alt_resolver_metadata,
@@ -98,6 +99,49 @@ def test_sol_liquidity_floor_is_lane_aware_by_window_and_side():
     assert strategy._resolve_min_liquidity_floor(window_size="1h", action="BUY_NO") == 2500
     assert strategy._resolve_min_liquidity_floor(window_size="15m", action="BUY_YES") == 4000
     assert strategy._resolve_min_liquidity_floor(window_size="5m", action="BUY_YES") == 10000
+
+
+def test_sol_hourly_buy_yes_native_bonus_only_applies_to_clean_native_hourly_longs():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["hourly_buy_yes_native_bonus_1h"] = 0.03
+    cfg["strategies"]["sol_macro"]["hourly_buy_yes_native_bonus_min_ltf_strength_1h"] = 0.30
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    native = BiasResolution(
+        allowed_side="LONG",
+        side_source="sol_1h_native",
+        horizon_tf="1h",
+        horizon_bias="BULLISH",
+        slower_biases={},
+        primary_htf_bias="BULLISH",
+    )
+    assert strategy._hourly_buy_yes_native_bonus(
+        window_size="1h",
+        allowed_side="LONG",
+        resolution=native,
+        ltf_strength=0.35,
+    ) == 0.03
+    assert strategy._hourly_buy_yes_native_bonus(
+        window_size="1h",
+        allowed_side="LONG",
+        resolution=native,
+        ltf_strength=0.20,
+    ) == 0.0
+
+    disagreed = BiasResolution(
+        allowed_side="LONG",
+        side_source="sol_1h_vs_slower",
+        horizon_tf="1h",
+        horizon_bias="BULLISH",
+        slower_biases={"15m": "BEARISH"},
+        primary_htf_bias="BULLISH",
+    )
+    assert strategy._hourly_buy_yes_native_bonus(
+        window_size="1h",
+        allowed_side="LONG",
+        resolution=disagreed,
+        ltf_strength=0.35,
+    ) == 0.0
 
 
 def test_sol_oracle_validation_uses_window_side_basis_overrides():

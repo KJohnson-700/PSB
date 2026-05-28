@@ -339,8 +339,8 @@ strategies:
     - 3
     disable_buy_yes: false
     disable_buy_no_counter_trend: false
-    btc_htf_boost_strong_1h: 0.14
-    btc_htf_boost_weak_1h: 0.07
+    btc_htf_boost_strong_1h: 0.18
+    btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
     btc_htf_boost_weak_15m: 0.06
     quant_disagree_flip_thresh: 0.48
@@ -351,7 +351,7 @@ strategies:
     bull_regime_buy_no_min_mins_left: 2.0
     bull_regime_buy_no_min_mins_left_15m: 4.0
     bias_quant_disagree_override_enabled: true
-    bias_quant_disagree_aligned_max_gap_non5m: 0.15
+    bias_quant_disagree_aligned_max_gap_non5m: 0.2
     bias_quant_disagree_aligned_min_edge_non5m: -0.1
     hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
@@ -863,6 +863,8 @@ strategies:
     low_corr_threshold_1h: 0.4
     low_corr_damping: 0.75
     low_corr_suppresses_entries: false
+    hourly_buy_yes_native_bonus_1h: 0.03
+    hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
@@ -1058,6 +1060,8 @@ strategies:
     dynamic_beta_extreme_max: 3.5
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
+    hourly_buy_yes_native_bonus_1h: 0.03
+    hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
     blocked_utc_hours_updown:
     - 3
     - 4

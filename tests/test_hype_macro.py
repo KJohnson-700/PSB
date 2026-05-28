@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from src.strategies.hype_macro import HYPEMacroStrategy
-from src.strategies.sol_macro import SolMacroSignal
+from src.strategies.sol_macro import BiasResolution, SolMacroSignal
 
 from tests.async_helpers import run_async
 
@@ -13,6 +13,8 @@ def _make_config():
             "hype_macro": {
                 "enabled": True,
                 "hard_min_edge": 0.0,
+                "hourly_buy_yes_native_bonus_1h": 0.03,
+                "hourly_buy_yes_native_bonus_min_ltf_strength_1h": 0.30,
                 "hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h": 0.45,
             }
         },
@@ -87,3 +89,22 @@ def test_hype_scan_filters_local_guarded_signals():
 
     assert [signal.market_id for signal in signals] == ["hype_kept"]
     assert strategy.last_scan_stats["top_skip_reasons"]["local_hype_guard"] == 1
+
+
+def test_hype_hourly_buy_yes_native_bonus_is_opted_in():
+    strategy = HYPEMacroStrategy(_make_config(), MagicMock(), MagicMock())
+    native = BiasResolution(
+        allowed_side="LONG",
+        side_source="hype_1h_native",
+        horizon_tf="1h",
+        horizon_bias="BULLISH",
+        slower_biases={},
+        primary_htf_bias="BULLISH",
+    )
+
+    assert strategy._hourly_buy_yes_native_bonus(
+        window_size="1h",
+        allowed_side="LONG",
+        resolution=native,
+        ltf_strength=0.35,
+    ) == 0.03
