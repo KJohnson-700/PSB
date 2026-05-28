@@ -489,6 +489,7 @@ def log_rejected_candidate(
             parts = live_lane_id.split("|")
             if len(parts) >= 5:
                 lane_family_text = str(parts[4] or "").strip()
+        family_came_from_caller = bool(lane_family_text)
         if not lane_family_text:
             lane_family_text = resolve_entry_family(
                 strategy=strategy,
@@ -500,6 +501,22 @@ def log_rejected_candidate(
                 reason=reason,
                 signal_reason=record_context.get("signal_reason") or reason,
             )
+        if (
+            not family_came_from_caller
+            and lane_family_text == "standard"
+            and not (
+                resolver_path
+                or record_context.get("resolver_path")
+                or side_source
+                or record_context.get("side_source")
+            )
+        ):
+            # Rejected before the direction resolver assigned a family
+            # (e.g. iql_15m_reject, eth_15m_weak_confirm). resolve_entry_family
+            # falls back to "standard" when given no signal, which pollutes the
+            # real `*|standard` bucket. Tag distinctly so the populations
+            # bucket separately for calibration.
+            lane_family_text = "pre_resolver_reject"
         gate_reason_text = str(gate_reason or reason or "").strip()
         gate_stage_text = str(gate_stage or stage or "").strip()
         correlation_value = None

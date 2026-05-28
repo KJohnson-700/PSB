@@ -1,19 +1,26 @@
-"""Ghost-driven per-lane threshold derivation.
+"""Per-lane threshold derivation from ghost + live outcomes.
 
 The live ``LaneCalibrator`` applies global thresholds (β-veto floor 0.40,
-min sample 30, α clamp [0.30, 2.50]) to every lane. The 180k+ records in
-``rejected_candidates_settled.jsonl`` (would-have-been outcomes on every
-candidate the live scanner rejected) carry enough information to compute
-*per-lane* thresholds — some lanes are consistent 25% WR in specific
-regimes and warrant a tighter floor than 0.40, others bounce around
-50% and shouldn't be vetoed at all.
+min sample 30, α clamp [0.30, 2.50]) to every lane. Two complementary
+input streams carry enough information to compute *per-lane* thresholds:
 
-This module derives those per-lane overrides from the ghost log and
-writes them to ``lane_thresholds.json``. The live calibrator can load
-them at boot and consult them at admission time. **Off by default** —
-gated by ``lane_calibration.per_lane_thresholds.enabled`` config; the
-ghost data is the input but the operator decides when to flip the
-override on.
+- ``rejected_candidates_settled.jsonl`` — would-have-been outcomes on
+  every candidate the live scanner rejected. Catches lanes that *should*
+  be opened (rejected pool > global floor) and lanes that should stay
+  rejected (rejected pool < floor).
+- ``trades.jsonl`` — actual outcomes on every accepted entry. Catches
+  *selection bias inside accepted lanes*: a lane where the rejected pool
+  has 70% WR can still bleed at 30% WR live if the bot's selection
+  within it is anti-edge. Ghost data alone can never see this.
+
+Outcomes from both streams are merged equal-weight by live ``lane_id``;
+veto fires when combined n meets the floor AND combined WR is below the
+threshold.
+
+The combined results are written to ``lane_thresholds.json``. The live
+calibrator loads them at boot and consults them at admission time. **Off
+by default** — gated by ``lane_calibration.per_lane_thresholds.enabled``
+config.
 
 Schema of ``lane_thresholds.json``::
 
@@ -24,8 +31,12 @@ Schema of ``lane_thresholds.json``::
       "wr_veto_threshold": 0.40,
       "thresholds": {
         "sol_macro|5m|down|bearish__bearish__bull|standard": {
+          "n": 612,
+          "wr": 0.301,
           "ghost_n": 487,
           "ghost_wr": 0.269,
+          "live_n": 125,
+          "live_wr": 0.424,
           "veto_recommended": true,
           "recommended_max_mean": 0.40
         },
@@ -51,6 +62,7 @@ DEFAULT_CALIBRATION_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "calibration"
 )
 DEFAULT_SETTLED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates_settled.jsonl"
+DEFAULT_TRADES_LOG = DEFAULT_CALIBRATION_DIR / "trades.jsonl"
 DEFAULT_THRESHOLDS_PATH = DEFAULT_CALIBRATION_DIR / "lane_thresholds.json"
 
 SCHEMA_VERSION = 1
@@ -62,6 +74,13 @@ DEFAULT_WR_VETO_THRESHOLD = 0.40
 # recommend veto. The recommended_max_mean lets the operator dial how
 # tight the override is — by default match the global floor.
 DEFAULT_RECOMMENDED_MAX_MEAN = 0.40
+# Once a lane has at least this many live (accepted) trades, the veto
+# decision uses live data ALONE — ghost data is dropped from the
+# decision. Rationale: ghost is the rejected-pool counterfactual; live
+# is the accepted (selection-biased) subset. They estimate different
+# distributions. While live n is small, the merge is informative; once
+# live is mature, mixing in ghost masks selection drift inside the cell.
+DEFAULT_LIVE_MATURE_N = 50
 
 
 @dataclass
@@ -187,7 +206,7 @@ def _iter_settled(path: Path) -> Iterable[Dict[str, Any]]:
 def aggregate_ghost_buckets(
     settled_path: Path = DEFAULT_SETTLED_LOG,
 ) -> Dict[str, LaneBucket]:
-    """Aggregate ghost outcomes by translated live lane_id."""
+    """Aggregate ghost (rejected-and-settled) outcomes by translated live lane_id."""
     buckets: Dict[str, LaneBucket] = defaultdict(LaneBucket)
     for rec in _iter_settled(settled_path):
         win = rec.get("win")
@@ -203,38 +222,97 @@ def aggregate_ghost_buckets(
     return buckets
 
 
+def aggregate_live_buckets(
+    trades_path: Path = DEFAULT_TRADES_LOG,
+) -> Dict[str, LaneBucket]:
+    """Aggregate accepted-trade outcomes by ``lane_id`` straight from
+    ``trades.jsonl``.
+
+    Trades carry the canonical live ``lane_id`` already, so no translation
+    is needed. Both shadow_mode and real-money entries are included —
+    selection bias is the same path regardless. Phantom/no-fill rows
+    (no boolean ``win``) are skipped.
+    """
+    buckets: Dict[str, LaneBucket] = defaultdict(LaneBucket)
+    for rec in _iter_settled(trades_path):
+        win = rec.get("win")
+        if not isinstance(win, bool):
+            continue
+        lane_id = str(rec.get("lane_id") or "").strip()
+        if not lane_id or len(lane_id.split("|")) < 5:
+            continue
+        b = buckets[lane_id]
+        b.n += 1
+        if win:
+            b.wins += 1
+    return buckets
+
+
 def compute_lane_thresholds(
     settled_path: Path = DEFAULT_SETTLED_LOG,
     *,
+    trades_path: Path = DEFAULT_TRADES_LOG,
     min_bucket_n: int = DEFAULT_MIN_BUCKET_N,
     wr_veto_threshold: float = DEFAULT_WR_VETO_THRESHOLD,
     recommended_max_mean: float = DEFAULT_RECOMMENDED_MAX_MEAN,
+    live_mature_n: int = DEFAULT_LIVE_MATURE_N,
 ) -> Dict[str, Any]:
-    """Compute per-lane threshold recommendations from ghost data.
+    """Compute per-lane threshold recommendations from ghost + live data.
 
-    Returns a payload dict matching the ``lane_thresholds.json`` schema.
-    A lane gets ``veto_recommended=True`` if its ghost WR is below
-    ``wr_veto_threshold`` AND its bucket has at least ``min_bucket_n``
-    settled records.
+    Decision rule per lane:
+      - If ``live_n >= live_mature_n``: use LIVE ONLY. Ghost is the
+        rejected-pool counterfactual; live is the accepted (selection-
+        biased) subset. Once live is statistically mature they are
+        different distributions and mixing them masks the selection
+        drift the veto needs to catch.
+      - Else: combine equal-weight (``n = ghost_n + live_n``,
+        ``wins = ghost_wins + live_wins``). Small live samples are too
+        noisy to decide alone; ghost still informs.
+
+    A lane gets ``veto_recommended=True`` if the decision-stream WR is
+    below ``wr_veto_threshold`` AND the decision-stream sample is at
+    least ``min_bucket_n``. The non-decision stream is still recorded
+    in the output for review.
     """
-    buckets = aggregate_ghost_buckets(settled_path)
+    ghost = aggregate_ghost_buckets(settled_path)
+    live = aggregate_live_buckets(trades_path)
+    all_ids = set(ghost.keys()) | set(live.keys())
     thresholds: Dict[str, Dict[str, Any]] = {}
-    for lane_id, b in buckets.items():
-        if b.n < min_bucket_n:
+    for lane_id in all_ids:
+        g = ghost.get(lane_id) or LaneBucket()
+        l = live.get(lane_id) or LaneBucket()
+        if l.n >= live_mature_n:
+            decision_n = l.n
+            decision_wins = l.wins
+            decision_source = "live"
+        else:
+            decision_n = g.n + l.n
+            decision_wins = g.wins + l.wins
+            decision_source = "combined"
+        if decision_n < min_bucket_n:
             continue
-        wr = b.win_rate or 0.0
-        veto = wr < wr_veto_threshold
-        thresholds[lane_id] = {
-            "ghost_n": b.n,
-            "ghost_wr": round(wr, 4),
+        decision_wr = decision_wins / decision_n
+        veto = decision_wr < wr_veto_threshold
+        entry: Dict[str, Any] = {
+            "n": int(decision_n),
+            "wr": round(decision_wr, 4),
+            "decision_source": decision_source,
+            "ghost_n": int(g.n),
+            "live_n": int(l.n),
             "veto_recommended": bool(veto),
             "recommended_max_mean": float(recommended_max_mean),
         }
+        if g.n > 0:
+            entry["ghost_wr"] = round(g.wins / g.n, 4)
+        if l.n > 0:
+            entry["live_wr"] = round(l.wins / l.n, 4)
+        thresholds[lane_id] = entry
     return {
         "schema_version": SCHEMA_VERSION,
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "min_bucket_n": int(min_bucket_n),
         "wr_veto_threshold": float(wr_veto_threshold),
+        "live_mature_n": int(live_mature_n),
         "thresholds": thresholds,
     }
 
@@ -300,11 +378,22 @@ def summarize_thresholds(payload: Dict[str, Any]) -> str:
         f"veto recommended: {len(veto_rows)}",
         "",
     ]
+    veto_rows.sort(key=lambda kv: (kv[1].get("wr") if kv[1].get("wr") is not None else (kv[1].get("ghost_wr") or 0)))
     if veto_rows:
-        lines.append(f"{'lane_id':<60} {'n':>5} {'wr':>7}")
+        lines.append(
+            f"{'lane_id':<60} {'n':>5} {'wr':>6} {'g_n':>5} {'g_wr':>6} {'l_n':>5} {'l_wr':>6}"
+        )
         for lid, info in veto_rows[:40]:
+            n = info.get("n", info.get("ghost_n", 0))
+            wr = info.get("wr", info.get("ghost_wr", 0)) or 0.0
+            g_n = info.get("ghost_n", 0)
+            g_wr = info.get("ghost_wr")
+            l_n = info.get("live_n", 0)
+            l_wr = info.get("live_wr")
             lines.append(
-                f"{lid:<60} {info.get('ghost_n',0):>5} {info.get('ghost_wr',0):>7.3f}"
+                f"{lid:<60} {n:>5d} {wr:>6.3f} "
+                f"{g_n:>5d} {(g_wr if g_wr is not None else 0):>6.3f} "
+                f"{l_n:>5d} {(l_wr if l_wr is not None else 0):>6.3f}"
             )
         if len(veto_rows) > 40:
             lines.append(f"  ... +{len(veto_rows)-40} more")
