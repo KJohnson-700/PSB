@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.analysis import ghost_calibration as gc
+from src.analysis import lane_thresholds as lt
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -206,3 +207,38 @@ def test_build_ghost_calibration_status_summarizes_logs(tmp_path):
     assert status["settled_win_rate"] == 0.5
     assert status["last_settled_at"] == "2026-05-16T15:05:00+00:00"
     assert status["top_reason_action"]["r1|BUY_YES"]["n"] == 2
+
+
+def test_ghost_lane_reconstruction_preserves_uniform_family_without_live_lane_id():
+    rec = {
+        "lane_id": "eth_macro|15m|up|bullish|rejected",
+        "strategy": "eth_macro",
+        "window": "15m",
+        "action": "BUY_YES",
+        "reason": "hist_gate_15m_long_reject",
+        "side_source": "eth_15m_native",
+        "primary_htf_bias": "BULLISH",
+        "alt_htf_bias": "BULLISH",
+        "btc_1h_regime": "BEAR",
+    }
+
+    expected = "eth_macro|15m|up|bullish__bullish__bear|eth_15m_native"
+    assert gc._ghost_to_live_lane_keys(rec) == [expected]
+    assert lt._ghost_to_live_lane_id(rec) == expected
+
+
+def test_ghost_lane_reconstruction_uses_recorded_lane_family_when_present():
+    rec = {
+        "lane_id": "doge_macro|5m|down|bearish|rejected",
+        "strategy": "doge_macro",
+        "window": "5m",
+        "action": "BUY_NO",
+        "reason": "entry_window_block",
+        "lane_family": "bearish_dip_default",
+        "primary_htf_bias": "BEARISH",
+        "btc_1h_regime": "BULL",
+    }
+
+    expected = "doge_macro|5m|down|bearish__bearish__bull|bearish_dip_default"
+    assert gc._ghost_to_live_lane_keys(rec) == [expected]
+    assert lt._ghost_to_live_lane_id(rec) == expected

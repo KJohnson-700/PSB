@@ -6,7 +6,7 @@ import re
 from typing import Any, Optional
 
 
-def _clean_part(value: Any, *, default: str = "unknown") -> str:
+def clean_lane_part(value: Any, *, default: str = "unknown") -> str:
     text = str(value or "").strip().lower()
     if not text:
         return default
@@ -16,21 +16,51 @@ def _clean_part(value: Any, *, default: str = "unknown") -> str:
     return text or default
 
 
+_clean_part = clean_lane_part
+
+
+def resolve_uniform_bias_family(value: Any) -> str:
+    """Return the normalized family token for the new uniform bias taxonomy."""
+    text = clean_lane_part(value, default="")
+    if not text:
+        return ""
+    if text.endswith("_native"):
+        return text
+    if "_vs_slower" in text:
+        return text
+    if "_neutral_fallback_" in text:
+        return text
+    return ""
+
+
+def clean_lane_regime(value: Any, *, default: str = "unclassified") -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    text = text.replace("/", "_").replace(" ", "_")
+    text = re.sub(r"[^a-z0-9_:-]+", "_", text)
+    placeholder = "colondoubleunderscorecolon"
+    text = text.replace("__", placeholder)
+    text = re.sub(r"_+", "_", text).strip("_")
+    text = text.replace(placeholder, "__")
+    return text or default
+
+
 def resolve_lane_side(
     *,
     action: Optional[str] = None,
     direction: Optional[str] = None,
     entry_leg: Optional[str] = None,
 ) -> str:
-    direction_clean = _clean_part(direction, default="")
+    direction_clean = clean_lane_part(direction, default="")
     if direction_clean in {"up", "down"}:
         return direction_clean
 
-    action_clean = _clean_part(action, default="")
+    action_clean = clean_lane_part(action, default="")
     if action_clean == "buy_no":
         return "down"
     if action_clean in {"buy_yes", "sell_yes"}:
-        if _clean_part(entry_leg, default="") == "no":
+        if clean_lane_part(entry_leg, default="") == "no":
             return "down"
         return "up"
     return "unknown"
@@ -45,7 +75,7 @@ def resolve_lane_regime(
 ) -> str:
     parts = []
     for value in (primary_htf_bias, alt_htf_bias, htf_bias, btc_1h_regime):
-        clean = _clean_part(value, default="")
+        clean = clean_lane_part(value, default="")
         if clean:
             parts.append(clean)
     return "__".join(parts) if parts else "unclassified"
@@ -62,11 +92,18 @@ def resolve_entry_family(
     reason: Optional[str] = None,
     signal_reason: Optional[str] = None,
 ) -> str:
-    source = _clean_part(side_source, default="")
-    resolver = _clean_part(resolver_path, default="")
-    strat = _clean_part(strategy, default="")
-    window = _clean_part(window_size, default="")
-    side = _clean_part(lane_side, default="")
+    source = clean_lane_part(side_source, default="")
+    resolver = clean_lane_part(resolver_path, default="")
+    strat = clean_lane_part(strategy, default="")
+    window = clean_lane_part(window_size, default="")
+    side = clean_lane_part(lane_side, default="")
+
+    source_uniform = resolve_uniform_bias_family(source)
+    if source_uniform:
+        return source_uniform
+    resolver_uniform = resolve_uniform_bias_family(resolver)
+    if resolver_uniform:
+        return resolver_uniform
 
     # BTC side selection is itself a regime decision. Keep the family split by
     # resolver path so HTF, rollover, and quant-disagreement buckets no longer
@@ -99,6 +136,25 @@ def resolve_entry_family(
     if "predict window" in context:
         return "predict_window"
     return "standard"
+
+
+def compose_lane_id(
+    *,
+    strategy: Any,
+    window_size: Any,
+    lane_side: Any,
+    lane_regime: Any,
+    entry_family: Any,
+) -> str:
+    return "|".join(
+        [
+            clean_lane_part(strategy, default="unknown"),
+            clean_lane_part(window_size, default="unknown"),
+            clean_lane_part(lane_side, default="unknown"),
+            clean_lane_regime(lane_regime, default="unclassified"),
+            clean_lane_part(entry_family, default="standard"),
+        ]
+    )
 
 
 def build_lane_metadata(
@@ -142,15 +198,13 @@ def build_lane_metadata(
         "lane_window": lane_window,
         "lane_regime": lane_regime,
         "entry_family": entry_family,
-        "promotion_state": _clean_part(promotion_state, default="paper"),
+        "promotion_state": clean_lane_part(promotion_state, default="paper"),
     }
-    lane["lane_id"] = "|".join(
-        [
-            _clean_part(strategy, default="unknown"),
-            lane_window,
-            lane_side,
-            lane_regime,
-            entry_family,
-        ]
+    lane["lane_id"] = compose_lane_id(
+        strategy=strategy,
+        window_size=lane_window,
+        lane_side=lane_side,
+        lane_regime=lane_regime,
+        entry_family=entry_family,
     )
     return lane

@@ -24,6 +24,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import requests
 
+from src.analysis.lane_identity import build_lane_metadata, clean_lane_part, compose_lane_id
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CALIBRATION_DIR = (
@@ -388,6 +390,74 @@ def _lane_id_from_context(rec: Dict[str, Any]) -> str:
     return _valid_lane_id(context.get("calibration_lane_id"))
 
 
+def _reconstruct_live_lane_id(rec: Dict[str, Any], parts: Sequence[str]) -> str:
+    context = rec.get("context")
+    if not isinstance(context, dict):
+        context = {}
+
+    strategy = str(rec.get("strategy") or (parts[0] if len(parts) >= 1 else "")).strip()
+    window = str(rec.get("window") or (parts[1] if len(parts) >= 2 else "")).strip()
+    direction = str(parts[2] if len(parts) >= 3 else "").strip()
+    if not strategy or not window or not direction:
+        return ""
+
+    primary_bias = str(
+        rec.get("primary_htf_bias")
+        or context.get("primary_htf_bias")
+        or rec.get("htf_bias")
+        or context.get("htf_bias")
+        or ""
+    ).strip()
+    alt_bias = str(
+        rec.get("alt_htf_bias")
+        or context.get("alt_htf_bias")
+        or ""
+    ).strip()
+    btc_bias = str(
+        rec.get("btc_htf_bias")
+        or rec.get("btc_1h_regime")
+        or context.get("btc_1h_regime")
+        or ""
+    ).strip()
+    if strategy != "bitcoin" and primary_bias and not alt_bias:
+        alt_bias = primary_bias
+
+    lane_meta = build_lane_metadata(
+        strategy=strategy,
+        window_size=window,
+        direction=direction,
+        side_source=rec.get("side_source") or context.get("side_source"),
+        resolver_path=rec.get("resolver_path") or context.get("resolver_path"),
+        ai_used=bool(context.get("ai_used")),
+        reason=rec.get("reason"),
+        signal_reason=context.get("signal_reason") or rec.get("reason"),
+        htf_bias=(primary_bias if strategy == "bitcoin" else None),
+        primary_htf_bias=(None if strategy == "bitcoin" else primary_bias),
+        alt_htf_bias=(None if strategy == "bitcoin" else alt_bias),
+        btc_1h_regime=(None if strategy == "bitcoin" else btc_bias),
+    )
+    lane_regime = str(lane_meta.get("lane_regime") or "").strip()
+    lane_family = ""
+    for candidate in (
+        rec.get("lane_family"),
+        context.get("lane_family"),
+        context.get("entry_family"),
+        parts[4] if len(parts) >= 5 and parts[4] != "rejected" else "",
+    ):
+        lane_family = clean_lane_part(candidate, default="")
+        if lane_family:
+            break
+    if not lane_family:
+        lane_family = str(lane_meta.get("entry_family") or "").strip()
+    return compose_lane_id(
+        strategy=strategy,
+        window_size=window,
+        lane_side=direction,
+        lane_regime=lane_regime or "unclassified",
+        entry_family=lane_family or "standard",
+    )
+
+
 def _biases_from_live_lane(lane_id: str) -> Dict[str, str]:
     parts = lane_id.split("|")
     if len(parts) < 4:
@@ -444,18 +514,10 @@ def _ghost_to_live_lane_keys(rec: Dict[str, Any]) -> List[str]:
     """Map a rejected/ghost record's lane_id to the live lane_id key(s) that
     self-healing should update.
 
-    Ghost records carry lane_id like ``bitcoin|5m|down|bearish|rejected`` or
-    ``sol_macro|5m|down|bearish|rejected`` (single-segment regime tag, family
-    always ``rejected``). Live trades use ``bitcoin|5m|down|bearish|standard``
-    (BTC: single-segment regime, varied family) or
-    ``sol_macro|5m|down|bearish__bearish__bull|standard`` (alt: 3-segment
-    regime, varied family).
-
-    Returns the list of candidate live lane_ids the ghost outcome should be
-    applied to. Family is always ``standard`` (the dominant admission path);
-    BTC keeps the single-segment regime; alts get a 3-segment regime built
-    from the record's ``htf_bias`` + ``btc_1h_regime``. If insufficient
-    metadata, returns an empty list (skip the update).
+    Prefer the exact ``live_lane_id`` when the writer supplied one. Otherwise
+    rebuild the live lane from the record's side-selection metadata so new
+    family names like ``*_native`` and ``*_neutral_fallback_*`` survive ghost
+    settlement instead of being collapsed into ``standard``.
     """
     live_lane_id = _valid_lane_id(rec.get("live_lane_id")) or _lane_id_from_context(rec)
     if live_lane_id:
@@ -463,26 +525,12 @@ def _ghost_to_live_lane_keys(rec: Dict[str, Any]) -> List[str]:
 
     lid = str(rec.get("lane_id") or "")
     parts = lid.split("|")
-    if len(parts) < 5:
+    if len(parts) < 3:
         return []
-    strategy, window, direction, _ghost_regime, _ghost_family = parts[:5]
-    if not strategy or not window or not direction:
+    live_lane_id = _valid_lane_id(_reconstruct_live_lane_id(rec, parts))
+    if not live_lane_id:
         return []
-    if strategy == "bitcoin":
-        # BTC live keys: bitcoin|<window>|<direction>|<single_regime>|standard
-        regime = (_ghost_regime or "unknown").lower()
-        return [f"bitcoin|{window}|{direction}|{regime}|standard"]
-    # Alts: need 3-segment regime tag <alt_1h>__<alt_4h>__<btc>
-    htf = str(rec.get("htf_bias") or "").strip().lower()
-    btc_regime_raw = rec.get("btc_1h_regime")
-    btc = str(btc_regime_raw or "").strip().lower() if btc_regime_raw else ""
-    if not htf or not btc:
-        return []
-    # Heuristic: assume alt 4H tracks alt 1H. Live keys we saw in trades:
-    # sol_macro|5m|down|bearish__bearish__bull|standard — alt_1h=bearish,
-    # alt_4h=bearish, btc=bull. Build same shape.
-    composite = f"{htf}__{htf}__{btc}"
-    return [f"{strategy}|{window}|{direction}|{composite}|standard"]
+    return [live_lane_id]
 
 
 def settle_rejected_candidates(

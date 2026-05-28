@@ -43,6 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.analysis.lane_identity import build_lane_metadata, clean_lane_part, compose_lane_id
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CALIBRATION_DIR = (
@@ -82,10 +84,9 @@ def _ghost_to_live_lane_id(rec: Dict[str, Any]) -> Optional[str]:
     """Mirror of ``ghost_calibration._ghost_to_live_lane_keys`` returning the
     first translated key (or None if metadata insufficient).
 
-    Inlined here to avoid a cross-module dep at import time. Keeps the
-    semantics aligned: BTC keeps single-segment regime; alts expand to
-    3-segment ``<alt_1h>__<alt_1h>__<btc>`` heuristic; family forced to
-    ``standard``.
+    Mirrors ghost settlement: prefer the exact lane id when present, otherwise
+    rebuild the live lane from the rejected-record metadata so new entry-family
+    taxonomy is preserved for threshold learning.
     """
     live_lane_id = str(rec.get("live_lane_id") or "").strip()
     if live_lane_id and len(live_lane_id.split("|")) >= 5:
@@ -95,24 +96,74 @@ def _ghost_to_live_lane_id(rec: Dict[str, Any]) -> Optional[str]:
         context_lane_id = str(context.get("calibration_lane_id") or "").strip()
         if context_lane_id and len(context_lane_id.split("|")) >= 5:
             return context_lane_id
+    else:
+        context = {}
 
     lid = str(rec.get("lane_id") or "")
     parts = lid.split("|")
-    if len(parts) < 5:
+    if len(parts) < 3:
         return None
-    strategy, window, direction, ghost_regime, _ghost_family = parts[:5]
+    strategy = str(rec.get("strategy") or parts[0]).strip()
+    window = str(rec.get("window") or parts[1]).strip()
+    direction = str(parts[2] or "").strip()
     if not strategy or not window or not direction:
         return None
-    if strategy == "bitcoin":
-        regime = (ghost_regime or "unknown").lower()
-        return f"bitcoin|{window}|{direction}|{regime}|standard"
-    htf = str(rec.get("htf_bias") or "").strip().lower()
-    btc_regime_raw = rec.get("btc_1h_regime")
-    btc = str(btc_regime_raw or "").strip().lower() if btc_regime_raw else ""
-    if not htf or not btc:
-        return None
-    composite = f"{htf}__{htf}__{btc}"
-    return f"{strategy}|{window}|{direction}|{composite}|standard"
+
+    primary_bias = str(
+        rec.get("primary_htf_bias")
+        or context.get("primary_htf_bias")
+        or rec.get("htf_bias")
+        or context.get("htf_bias")
+        or ""
+    ).strip()
+    alt_bias = str(
+        rec.get("alt_htf_bias")
+        or context.get("alt_htf_bias")
+        or ""
+    ).strip()
+    btc_bias = str(
+        rec.get("btc_htf_bias")
+        or rec.get("btc_1h_regime")
+        or context.get("btc_1h_regime")
+        or ""
+    ).strip()
+    if strategy != "bitcoin" and primary_bias and not alt_bias:
+        alt_bias = primary_bias
+
+    lane_meta = build_lane_metadata(
+        strategy=strategy,
+        window_size=window,
+        direction=direction,
+        side_source=rec.get("side_source") or context.get("side_source"),
+        resolver_path=rec.get("resolver_path") or context.get("resolver_path"),
+        ai_used=bool(context.get("ai_used")),
+        reason=rec.get("reason"),
+        signal_reason=context.get("signal_reason") or rec.get("reason"),
+        htf_bias=(primary_bias if strategy == "bitcoin" else None),
+        primary_htf_bias=(None if strategy == "bitcoin" else primary_bias),
+        alt_htf_bias=(None if strategy == "bitcoin" else alt_bias),
+        btc_1h_regime=(None if strategy == "bitcoin" else btc_bias),
+    )
+    lane_regime = str(lane_meta.get("lane_regime") or "").strip() or "unclassified"
+    lane_family = ""
+    for candidate in (
+        rec.get("lane_family"),
+        context.get("lane_family"),
+        context.get("entry_family"),
+        parts[4] if len(parts) >= 5 and parts[4] != "rejected" else "",
+    ):
+        lane_family = clean_lane_part(candidate, default="")
+        if lane_family:
+            break
+    if not lane_family:
+        lane_family = str(lane_meta.get("entry_family") or "").strip() or "standard"
+    return compose_lane_id(
+        strategy=strategy,
+        window_size=window,
+        lane_side=direction,
+        lane_regime=lane_regime,
+        entry_family=lane_family,
+    )
 
 
 def _iter_settled(path: Path) -> Iterable[Dict[str, Any]]:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from src.analysis.lane_identity import resolve_uniform_bias_family
+
 
 def _coerce_float(value: Any) -> Optional[float]:
     try:
@@ -70,6 +72,13 @@ def side_source_bucket(side_source: Any) -> str:
     text = str(side_source or "").strip().lower()
     if not text:
         return ""
+    uniform_family = resolve_uniform_bias_family(text)
+    if uniform_family.endswith("_native"):
+        return "native"
+    if "_vs_slower" in uniform_family:
+        return "vs_slower"
+    if "_neutral_fallback_" in uniform_family:
+        return "neutral_fallback"
     if "override" in text:
         return "override"
     if "btc" in text:

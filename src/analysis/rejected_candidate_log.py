@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 
 from src.analysis.calibration_buckets import build_bucket_tags
+from src.analysis.lane_identity import resolve_entry_family, resolve_lane_side
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +484,22 @@ def log_rejected_candidate(
             or htf_bias
             or ""
         ).strip()
+        lane_family_text = str(lane_family or "").strip()
+        if not lane_family_text and live_lane_id:
+            parts = live_lane_id.split("|")
+            if len(parts) >= 5:
+                lane_family_text = str(parts[4] or "").strip()
+        if not lane_family_text:
+            lane_family_text = resolve_entry_family(
+                strategy=strategy,
+                window_size=window,
+                lane_side=resolve_lane_side(action=action, direction=up_or_down),
+                side_source=side_source or record_context.get("side_source"),
+                resolver_path=resolver_path or record_context.get("resolver_path"),
+                ai_used=bool(record_context.get("ai_used")),
+                reason=reason,
+                signal_reason=record_context.get("signal_reason") or reason,
+            )
         gate_reason_text = str(gate_reason or reason or "").strip()
         gate_stage_text = str(gate_stage or stage or "").strip()
         correlation_value = None
@@ -550,7 +567,7 @@ def log_rejected_candidate(
             "primary_htf_bias": primary_bias,
             "alt_htf_bias": lane_biases.get("alt_htf_bias", ""),
             "btc_htf_bias": lane_biases.get("btc_htf_bias", ""),
-            "lane_family": str(lane_family or "").strip(),
+            "lane_family": lane_family_text,
             "entry_policy_snapshot": (
                 entry_policy_snapshot if isinstance(entry_policy_snapshot, dict) else {}
             ),
