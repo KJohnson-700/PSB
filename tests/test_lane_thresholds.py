@@ -20,8 +20,8 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
             f.write(json.dumps(r) + "\n")
 
 
-def _live_row(lane_id: str, win: bool) -> dict:
-    return {"lane_id": lane_id, "win": win}
+def _live_row(lane_id: str, win: bool, pnl: float = 0.0) -> dict:
+    return {"lane_id": lane_id, "win": win, "pnl": pnl}
 
 
 def _ghost_row(strategy: str, window: str, direction: str, family: str, bias: str, win: bool) -> dict:
@@ -183,6 +183,67 @@ def test_compute_respects_min_bucket_n_on_combined(tmp_path: Path) -> None:
         live_mature_n=50,
     )
     assert lane not in payload["thresholds"]
+
+
+def test_pnl_guard_suppresses_veto_on_profitable_low_wr_lane(tmp_path: Path) -> None:
+    """Low WR but positive realized PnL must NOT be vetoed.
+
+    Polymarket payouts are uneven (a 0.35-priced NO that wins pays
+    ~1.86x; the same losing leg loses 1x). So a 36% WR cell can be net
+    profitable. The veto must respect realized $ outcomes, not just WR.
+    """
+    settled = tmp_path / "ghost.jsonl"
+    trades = tmp_path / "trades.jsonl"
+    lane = "xrp_macro|15m|down|bearish__bearish__bull|standard"
+    _write_jsonl(settled, [])
+    # 100 trades, 36% WR. Wins pay $2.00, losses lose $1.00. Net = +$8.
+    rows = []
+    for i in range(36):
+        rows.append(_live_row(lane, True, pnl=2.00))
+    for i in range(64):
+        rows.append(_live_row(lane, False, pnl=-1.00))
+    _write_jsonl(trades, rows)
+
+    payload = compute_lane_thresholds(
+        settled_path=settled,
+        trades_path=trades,
+        min_bucket_n=50,
+        wr_veto_threshold=0.40,
+        live_mature_n=50,
+    )
+    info = payload["thresholds"][lane]
+    assert info["wr"] == 0.36
+    assert info["live_pnl"] == 8.00
+    assert info["veto_recommended"] is False
+    assert info["veto_suppressed_reason"] == "profitable_despite_low_wr"
+
+
+def test_pnl_guard_does_not_block_veto_on_money_loser(tmp_path: Path) -> None:
+    """Low WR AND negative realized PnL → veto fires (no suppression)."""
+    settled = tmp_path / "ghost.jsonl"
+    trades = tmp_path / "trades.jsonl"
+    lane = "bitcoin|5m|down|bearish|htf_bearish_side_short"
+    _write_jsonl(settled, [])
+    rows = []
+    for i in range(30):
+        rows.append(_live_row(lane, True, pnl=1.50))
+    for i in range(70):
+        rows.append(_live_row(lane, False, pnl=-1.00))
+    # 30 wins * $1.50 = $45 ; 70 losses * -$1.00 = -$70 ; net = -$25
+    _write_jsonl(trades, rows)
+
+    payload = compute_lane_thresholds(
+        settled_path=settled,
+        trades_path=trades,
+        min_bucket_n=50,
+        wr_veto_threshold=0.40,
+        live_mature_n=50,
+    )
+    info = payload["thresholds"][lane]
+    assert info["wr"] == 0.30
+    assert info["live_pnl"] == -25.00
+    assert info["veto_recommended"] is True
+    assert "veto_suppressed_reason" not in info
 
 
 def test_compute_ghost_only_lane_still_works(tmp_path: Path) -> None:

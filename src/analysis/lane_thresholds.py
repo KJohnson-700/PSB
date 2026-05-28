@@ -85,10 +85,16 @@ DEFAULT_LIVE_MATURE_N = 50
 
 @dataclass
 class LaneBucket:
-    """Counterfactual WR aggregate for one live lane_id."""
+    """Counterfactual WR aggregate for one live lane_id.
+
+    ``pnl_sum`` is only populated by the live aggregator (real $ PnL
+    from accepted trades). Ghost buckets leave it at 0.0 — they have
+    hypothetical payouts but not the realized fills the veto cares about.
+    """
 
     n: int = 0
     wins: int = 0
+    pnl_sum: float = 0.0
 
     @property
     def losses(self) -> int:
@@ -245,6 +251,10 @@ def aggregate_live_buckets(
         b.n += 1
         if win:
             b.wins += 1
+        try:
+            b.pnl_sum += float(rec.get("pnl") or 0.0)
+        except (TypeError, ValueError):
+            pass
     return buckets
 
 
@@ -292,7 +302,15 @@ def compute_lane_thresholds(
         if decision_n < min_bucket_n:
             continue
         decision_wr = decision_wins / decision_n
-        veto = decision_wr < wr_veto_threshold
+        wr_below_floor = decision_wr < wr_veto_threshold
+        # Profitability guard: never veto a cell that is currently
+        # making money. Polymarket payouts are uneven (NO at 0.65 pays
+        # 0.35 per win, etc.), so a sub-40% WR cell can still be net
+        # positive. PnL data is only on live trades; for combined/ghost-
+        # only decisions we fall back to pure WR because we have no
+        # realized PnL to consult.
+        live_pnl_positive = l.n > 0 and l.pnl_sum > 0.0
+        veto = wr_below_floor and not live_pnl_positive
         entry: Dict[str, Any] = {
             "n": int(decision_n),
             "wr": round(decision_wr, 4),
@@ -306,6 +324,9 @@ def compute_lane_thresholds(
             entry["ghost_wr"] = round(g.wins / g.n, 4)
         if l.n > 0:
             entry["live_wr"] = round(l.wins / l.n, 4)
+            entry["live_pnl"] = round(l.pnl_sum, 2)
+        if wr_below_floor and live_pnl_positive:
+            entry["veto_suppressed_reason"] = "profitable_despite_low_wr"
         thresholds[lane_id] = entry
     return {
         "schema_version": SCHEMA_VERSION,
