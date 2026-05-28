@@ -11,6 +11,7 @@ class LaneManager:
     def __init__(self, config: Dict[str, Any]):
         cfg = dict(config.get("lane_management") or {})
         self.enabled = bool(cfg.get("enabled", False))
+        self.execution_enforcement_enabled = bool(cfg.get("execution_enforcement_enabled", False))
         self.default_state = self._normalize_state(cfg.get("default_state", "paper"))
         rec_cfg = dict(cfg.get("recommendations") or {})
         self.rec_min_live_trades = int(rec_cfg.get("min_live_trades", 15) or 15)
@@ -54,10 +55,10 @@ class LaneManager:
         state, matched_key = self.get_lane_state(lane_id)
         if not self.enabled:
             return True, "lane_management_disabled", state, matched_key
+        if not self.execution_enforcement_enabled:
+            return True, "lane_advisory_only", state, matched_key
         if state == "paused":
             return False, "lane_paused", state, matched_key
-        if state == "paper" and not dry_run:
-            return False, "lane_paper_only", state, matched_key
         return True, "lane_allowed", state, matched_key
 
     def get_lane_meta(self, lane_id: str) -> Tuple[Dict[str, Any], str]:

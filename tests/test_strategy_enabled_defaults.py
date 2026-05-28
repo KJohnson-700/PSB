@@ -4,7 +4,6 @@ from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.strategies.bitcoin import BitcoinStrategy
 from src.strategies.sol_macro import SolMacroStrategy
-from src.strategies.weather import WeatherStrategy
 
 
 class _StubAIAgent(AIAgent):
@@ -43,8 +42,3 @@ def test_sol_macro_missing_enabled_fails_closed_and_warns(caplog):
     assert "missing required config key 'enabled'" in caplog.text
 
 
-def test_weather_explicit_enabled_still_respected():
-    cfg = _base_config()
-    cfg["strategies"]["weather"] = {"enabled": True}
-    strat = WeatherStrategy(cfg, PositionSizer())
-    assert strat.enabled is True

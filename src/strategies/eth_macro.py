@@ -8,6 +8,7 @@ import asyncio
 import logging
 import time
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -57,6 +58,19 @@ ETH_UPDOWN_PATTERN = re.compile(
 )
 ETH_UPDOWN_SLUG_PREFIXES = ("eth-updown-", "eth-up-or-down-", "ethereum-up-or-down-", "ether-up-or-down-")
 NON_ETH_ASSET_TERMS = ("bitcoin", "btc", "solana", "xrp", "ripple", "hyperliquid", "hype")
+
+
+@dataclass(frozen=True)
+class ETHDirectionDecision:
+    action: str
+    direction: str
+    effective_side: str
+    side_source: str
+    conflict_type: str
+    resolver_path: str
+    htf_side: Optional[str]
+    quant_side: Optional[str] = None
+    momentum_side: Optional[str] = None
 
 
 class ETHMacroStrategy(SolMacroStrategy):
@@ -147,13 +161,6 @@ class ETHMacroStrategy(SolMacroStrategy):
         self.btc_follow_1h_allow_floor_without_rising = bool(
             self.config.get("btc_follow_1h_allow_floor_without_rising", False)
         )
-        self.direction_source = str(self.config.get("direction_source", "btc")).strip().lower()
-        if self.direction_source not in {"btc", "hybrid", "signal_first"}:
-            self.direction_source = "btc"
-        self.signal_15m_long_threshold = float(self.config.get("signal_15m_long_threshold", 0.55))
-        self.signal_15m_short_threshold = float(self.config.get("signal_15m_short_threshold", 0.45))
-        self.signal_4h_long_threshold = float(self.config.get("signal_4h_long_threshold", 0.70))
-        self.signal_4h_short_threshold = float(self.config.get("signal_4h_short_threshold", 0.30))
         # When BTC HTF is bullish but 5m/15m lack SPIKE/DRIFT candle labels, entries starve.
         # If BTC 1H continuation already passes, allow bypassing strict STF impulse requirements.
         _stf_bypass = self.config.get("btc_follow_stf_bypass_if_1h_ok")
@@ -220,6 +227,75 @@ class ETHMacroStrategy(SolMacroStrategy):
         if str(market_allowed_side or "").upper() == "SHORT":
             return float(self.eth_follow_15m_min_adj_short)
         return float(self.eth_follow_15m_min_adj_long)
+
+    def _resolve_eth_direction(
+        self,
+        *,
+        market_allowed_side: str,
+        side_source: str,
+        raw_est_prob: Optional[float] = None,
+        momentum_bias: Optional[str] = None,
+    ) -> ETHDirectionDecision:
+        action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
+        direction = "UP" if market_allowed_side == "LONG" else "DOWN"
+        resolver_meta = build_alt_resolver_metadata(
+            side_source=side_source,
+            htf_side=market_allowed_side,
+            quant_side=side_from_est_prob_up(raw_est_prob),
+            momentum_side=side_from_momentum_bias(momentum_bias),
+        )
+        return ETHDirectionDecision(
+            action=action,
+            direction=direction,
+            effective_side=market_allowed_side,
+            side_source=side_source,
+            conflict_type=str(resolver_meta.get("conflict_type") or "aligned"),
+            resolver_path=str(resolver_meta.get("resolver_path") or side_source),
+            htf_side=resolver_meta.get("htf_side"),
+            quant_side=resolver_meta.get("quant_side"),
+            momentum_side=resolver_meta.get("momentum_side"),
+        )
+
+    def _eth_direction_guard_reason(
+        self,
+        *,
+        window_size: str,
+        decision: ETHDirectionDecision,
+        yes_price: float,
+        btc_htf_bias: Optional[str],
+        btc_1h_regime: Optional[str],
+        alt_h1_trend: Optional[str],
+        rsi_14: float,
+    ) -> Optional[str]:
+        regime = str(btc_1h_regime or "").upper()
+        btc_bias = str(btc_htf_bias or "").upper()
+        alt_bias = str(alt_h1_trend or "").upper()
+
+        if (
+            window_size == "5m"
+            and decision.action == "BUY_NO"
+            and regime == "BULL"
+        ):
+            max_yes = float(self.config.get("eth_5m_buy_no_max_yes_price_bull_1h", 0.68))
+            if yes_price >= max_yes:
+                return "eth_5m_bull_regime_expensive_short"
+
+        if (
+            window_size == "15m"
+            and decision.action == "BUY_YES"
+            and alt_bias == "NEUTRAL"
+            and btc_bias == "BEARISH"
+        ):
+            max_rsi = float(
+                self.config.get(
+                    "eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral",
+                    68.0,
+                )
+            )
+            if rsi_14 >= max_rsi:
+                return "eth_15m_overbought_long_vs_btc"
+
+        return None
 
     def _record_eth_abort(self, reason: str, extra: Optional[Dict[str, Any]] = None) -> None:
         payload: Dict[str, Any] = {
@@ -442,31 +518,6 @@ class ETHMacroStrategy(SolMacroStrategy):
             return 0.25
         return 0.50
 
-    def _resolve_market_side(self, base_side: str, btc_htf_bias: str, market_yes_price: float) -> tuple[str, str]:
-        # Modes:
-        # - btc: legacy label; live side remains the alt-derived base side.
-        # - hybrid: alt-derived base side remains primary; market/BTC only annotate strength.
-        # - signal_first: test mode where 15m market signal can set side directly
-        if self.direction_source == "btc":
-            return base_side, "alt_1h_legacy_btc_mode"
-
-        signal_15m = float(market_yes_price)
-
-        if self.direction_source == "signal_first":
-            # Market 15m signal can set side, but require BTC HTF agreement (or NEUTRAL)
-            # so we don't LONG into a BEARISH macro purely from market YES price.
-            if signal_15m >= self.signal_15m_long_threshold and btc_htf_bias != "BEARISH":
-                return "LONG", "signal_first_long"
-            if signal_15m <= self.signal_15m_short_threshold and btc_htf_bias != "BULLISH":
-                return "SHORT", "signal_first_short"
-            return base_side, "signal_first_fallback"
-
-        if base_side == "LONG" and signal_15m >= self.signal_15m_long_threshold:
-            return base_side, "hybrid_alt_long_confirmed"
-        if base_side == "SHORT" and signal_15m <= self.signal_15m_short_threshold:
-            return base_side, "hybrid_alt_short_confirmed"
-        return base_side, "hybrid_alt_first"
-
     async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
         _phase_t0 = time.perf_counter()
         if not self.enabled:
@@ -546,97 +597,16 @@ class ETHMacroStrategy(SolMacroStrategy):
                     btc_1h_regime,
                 )
 
-        # Non-BTC strategies are alt-first: ETH 1H establishes direction; BTC
-        # is secondary context/fallback when ETH has no usable bias.
-        skip_btc_follow_1h = False
-        alt_1h_trend = corr.sol_trend
-        if alt_1h_trend in {"BULLISH", "BEARISH"}:
-            allowed_side = "LONG" if alt_1h_trend == "BULLISH" else "SHORT"
-            skip_btc_follow_1h = True
-            logger.info(
-                "ETH Macro: ETH 1H %s is primary — side %s; BTC HTF %s is secondary",
-                alt_1h_trend,
-                allowed_side,
-                btc_htf_bias,
-            )
-            # Symmetric four-path resolver — gates LONG and SHORT with their own LTF
-            # momentum in both regimes. Falls back to legacy regime-default + buy_no
-            # override when only the buy_no flag is on.
-            resolver_active = (
-                self.buy_yes_ltf_override_enabled
-                or self.buy_no_ltf_override_enabled
-                or self.buy_yes_4h_hist_override_enabled
-                or self.buy_no_4h_hist_override_enabled
-            )
-            if resolver_active:
-                _resolved_side, _resolved_source, _resolved_detail = (
-                    self._resolve_allowed_side_with_ltf_overrides(eth_ta, alt_1h_trend)
-                )
-                # Additive-only resolver: side is never None for BULLISH/BEARISH inputs.
-                # Defaults match legacy; only exception path can flip side.
-                if _resolved_side and _resolved_side != allowed_side:
-                    logger.info(
-                        "ETH Macro: LTF resolver flipped to exception → %s (%s) — %s",
-                        _resolved_side,
-                        _resolved_source,
-                        _resolved_detail,
-                    )
-                if _resolved_side is not None:
-                    allowed_side = _resolved_side
-            elif alt_1h_trend == "BULLISH" and self.buy_no_ltf_override_enabled:
-                _short_override, _short_override_reason = self._buy_no_ltf_override(eth_ta)
-                if _short_override:
-                    allowed_side = "SHORT"
-                    logger.info(
-                        "ETH Macro: bullish ETH 1H SHORT override enabled — %s",
-                        _short_override_reason,
-                    )
-        else:
-            # ETH 1H NEUTRAL: alt has no usable bias → sit out.
-            # 2026-05-21 audit: previously this block had THREE BTC-decides-side
-            # paths (BTC spike → catch-up side, lag_opportunity → opportunity_direction,
-            # and btc_htf_bias → LONG/SHORT fallback). All violated the "alts decided
-            # by alt-native indicators" rule. BTC spike/lag/HTF stay useful as
-            # diagnostic context but must not pick ETH's side.
-            _btc_ctx_bits = []
-            if corr.btc_spike_detected:
-                _btc_ctx_bits.append(f"BTC spike {corr.btc_move_5m_pct:+.2f}%")
-            if corr.lag_opportunity:
-                _btc_ctx_bits.append(
-                    f"BTC lag dir={corr.opportunity_direction} mag={abs(corr.opportunity_magnitude):.2f}%"
-                )
-            if btc_htf_bias in ("BULLISH", "BEARISH"):
-                _btc_ctx_bits.append(f"BTC HTF={btc_htf_bias}")
-            _btc_ctx = f" [diagnostic: {', '.join(_btc_ctx_bits)}]" if _btc_ctx_bits else ""
-            logger.info(
-                "ETH Macro: ETH 1H NEUTRAL — sitting out (alt-native only)%s",
-                _btc_ctx,
-            )
-            self._record_eth_abort(
-                "neutral_alt_no_bias",
-                {"markets_considered": len(eth_markets), "btc_ctx": _btc_ctx},
-            )
-            return []
-
-        if (
-            btc_ta
-            and self.btc_follow_1h_required
-            and not skip_btc_follow_1h
-            and not self._btc_follow_1h_ok(btc_ta, allowed_side)
-        ):
-            logger.info(
-                "ETH Macro strategy: BTC 1H continuation not strong enough "
-                f"(bias={btc_htf_bias}, hist={btc_ta.macd_1h.histogram:+.2f})"
-            )
-            self._record_eth_abort(
-                "btc_follow_1h_blocked",
-                {
-                    "markets_considered": len(eth_markets),
-                    "btc_htf_bias": btc_htf_bias,
-                    "btc_1h_histogram": btc_ta.macd_1h.histogram,
-                },
-            )
-            return []
+        alt_1h_trend = self._get_1h_bias(eth_ta)
+        alt_15m_trend = self._get_15m_bias(eth_ta)
+        alt_5m_trend = self._get_5m_bias(eth_ta)
+        logger.info(
+            "ETH Macro bias stack: 1h=%s 15m=%s 5m=%s | BTC HTF=%s",
+            alt_1h_trend,
+            alt_15m_trend,
+            alt_5m_trend,
+            btc_htf_bias,
+        )
 
         eth = eth_ta.sol
         eth_price = eth.current_price
@@ -896,11 +866,27 @@ class ETHMacroStrategy(SolMacroStrategy):
             is_5m = _updown_tf == "5m"
             is_1h = _updown_tf == "1h"
             yes_price = market.yes_price
-            market_allowed_side, side_source = self._resolve_market_side(
-                allowed_side, btc_htf_bias, yes_price
+            resolution = self._resolve_alt_bias_for_tf(eth_ta, _updown_tf)
+            market_allowed_side = resolution.allowed_side
+            side_source = resolution.side_source
+            if market_allowed_side is None:
+                _bump_skip("neutral_bias")
+                logger.info(
+                    "ETH Macro skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
+                    market.question[:40],
+                    _updown_tf,
+                    alt_1h_trend,
+                    alt_15m_trend,
+                    alt_5m_trend,
+                )
+                continue
+            direction_decision = self._resolve_eth_direction(
+                market_allowed_side=market_allowed_side,
+                side_source=side_source,
+                momentum_bias=getattr(mtt, "m5_trend", None),
             )
-            action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
-            primary_htf_bias = "BULLISH" if market_allowed_side == "LONG" else "BEARISH"
+            action = direction_decision.action
+            primary_htf_bias = resolution.primary_htf_bias
 
             # ETH-native momentum guards. 2026-05-23 ghost-counterfactual review:
             # default-on guards were breakeven-to-harmful (BUY_NO n=9826 WR=48%,
@@ -928,7 +914,21 @@ class ETHMacroStrategy(SolMacroStrategy):
                     "side_source": side_source,
                 }
 
-            if action == "BUY_NO":
+            # Bias-aligned bypass: when the trade aligns with primary_htf_bias the
+            # gate is provably inverting on alts (ghost data 5/22→5/27: BEARISH×SHORT
+            # blocked WR > traded WR by +13.2pp on eth_macro; LONG side neutral but
+            # contributes to LONG starvation). Keep gate active for counter-trend
+            # trades.
+            _eth_bias_aligned_short = (
+                action == "BUY_NO"
+                and (primary_htf_bias or "").upper() == "BEARISH"
+            )
+            _eth_bias_aligned_long = (
+                action == "BUY_YES"
+                and (primary_htf_bias or "").upper() == "BULLISH"
+            )
+
+            if action == "BUY_NO" and not _eth_bias_aligned_short:
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_no") or [])
                 if _block or _shadow:
@@ -956,7 +956,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                         if _block:
                             continue
-            if action == "BUY_YES":
+            if action == "BUY_YES" and not _eth_bias_aligned_long:
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_yes") or [])
                 if _block or _shadow:
@@ -1087,7 +1087,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             # tail. Favorable tail (our side >= 0.80) ghost-WR 87–97%; kept.
             _sample("entry_price", yes_price)
             _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
-            if _our_price < 0.20:
+            if _our_price < 0.12:
                 _bump_skip("price_too_far")
                 _log_skip_reject(
                     market=market,
@@ -1100,15 +1100,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                     context={
                         "entry_price": float(_our_price),
                         "yes_price": float(yes_price),
-                        "our_side_price_min": 0.20,
+                        "our_side_price_min": 0.12,
                     },
                     probe_variants=build_range_probe_variants(
                         metric_name="our_side_entry_price",
                         observed_value=float(_our_price),
-                        baseline_min=0.20,
+                        baseline_min=0.12,
                         baseline_max=1.0,
-                        relax_steps=[0.02, 0.05, 0.10],
-                        tighten_steps=[0.02, 0.05],
+                        relax_steps=[0.02, 0.04],
+                        tighten_steps=[0.03, 0.08],
                     ),
                     policy_version="entry_price_band_v2_side_aware",
                 )
@@ -1117,14 +1117,22 @@ class ETHMacroStrategy(SolMacroStrategy):
             side_source_counts[side_source] = side_source_counts.get(side_source, 0) + 1
 
             action_counts[action] = action_counts.get(action, 0) + 1
-            direction = "UP" if market_allowed_side == "LONG" else "DOWN"
+            direction = direction_decision.direction
             reason_parts = [
                 f"ETH_HTF={alt_1h_trend}",
+                f"ETH_15M={alt_15m_trend}",
+                f"ETH_5M={alt_5m_trend}",
                 f"BTC_HTF={btc_htf_bias}",
                 f"PRIMARY_HTF={primary_htf_bias}",
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
+            if resolution.horizon_bias == "NEUTRAL":
+                reason_parts.append(f"{_updown_tf}_neutral")
+            if resolution.penalty_reasons:
+                reason_parts.append(
+                    f"bias_penalty={resolution.confidence_penalty:.3f}:{','.join(resolution.penalty_reasons)}"
+                )
             follow_penalty_min_edge_add = 0.0
             if btc_htf_details:
                 reason_parts.append(
@@ -1293,6 +1301,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     )
                     continue
                 est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.04)
+                if resolution.confidence_penalty > 0:
+                    est_prob_up += (
+                        -resolution.confidence_penalty
+                        if market_allowed_side == "LONG"
+                        else resolution.confidence_penalty
+                    )
                 # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
                 if self.enforce_alt_1h_alignment:
                     if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
@@ -1365,6 +1379,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                         continue
                     est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.09)
+                    if resolution.confidence_penalty > 0:
+                        est_prob_up += (
+                            -resolution.confidence_penalty
+                            if market_allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
                     if self.enforce_alt_1h_alignment:
                         if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
                             est_prob_up -= 0.06
@@ -1458,6 +1478,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                         continue
                     est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
+                    if resolution.confidence_penalty > 0:
+                        est_prob_up += (
+                            -resolution.confidence_penalty
+                            if market_allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
                     # Move 2 (2026-05-16): dampen est_prob when ETH 1H trend disagrees with side.
                     if self.enforce_alt_1h_alignment:
                         if market_allowed_side == "LONG" and mtt.h1_trend == "BEARISH":
@@ -1486,6 +1512,14 @@ class ETHMacroStrategy(SolMacroStrategy):
                 est_prob_up += rsi_soft_delta
             est_prob_up = max(0.10, min(0.90, est_prob_up))
             raw_est_prob = est_prob_up
+            direction_decision = self._resolve_eth_direction(
+                market_allowed_side=market_allowed_side,
+                side_source=side_source,
+                raw_est_prob=raw_est_prob,
+                momentum_bias=getattr(mtt, "m5_trend", None),
+            )
+            action = direction_decision.action
+            direction = direction_decision.direction
             estimated_prob = self._calibrate_est_prob(
                 raw_est_prob,
                 action=action,
@@ -1568,6 +1602,37 @@ class ETHMacroStrategy(SolMacroStrategy):
                         f"effective_min_edge={float(effective_min_edge):.4f}",
                     ],
                     metadata={"eval_mins_left": float(_eval_left)},
+                )
+                continue
+            _direction_guard = self._eth_direction_guard_reason(
+                window_size=_updown_tf,
+                decision=direction_decision,
+                yes_price=yes_price,
+                btc_htf_bias=btc_htf_bias,
+                btc_1h_regime=btc_1h_regime if btc_ta else None,
+                alt_h1_trend=mtt.h1_trend,
+                rsi_14=float(eth.rsi_14 or 0.0),
+            )
+            if _direction_guard:
+                _bump_skip(_direction_guard)
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason=_direction_guard,
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=primary_htf_bias,
+                    stage="direction_guard",
+                    context={
+                        "btc_htf_bias": btc_htf_bias,
+                        "btc_1h_regime": btc_1h_regime if btc_ta else None,
+                        "alt_1h_trend": mtt.h1_trend,
+                        "rsi_14": float(eth.rsi_14 or 0.0),
+                        "side_source": side_source,
+                        "raw_est_prob": float(raw_est_prob),
+                    },
                 )
                 continue
             if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
@@ -2053,12 +2118,13 @@ class ETHMacroStrategy(SolMacroStrategy):
                 if btc_ta
                 else float(getattr(corr, "btc_price", 0.0) or 0.0)
             )
-            resolver_meta = build_alt_resolver_metadata(
-                side_source=side_source,
-                htf_side=allowed_side,
-                quant_side=side_from_est_prob_up(raw_est_prob),
-                momentum_side=side_from_momentum_bias(getattr(mtt, "m5_trend", None)),
-            )
+            resolver_meta = {
+                "conflict_type": direction_decision.conflict_type,
+                "resolver_path": direction_decision.resolver_path,
+                "htf_side": direction_decision.htf_side,
+                "quant_side": direction_decision.quant_side,
+                "momentum_side": direction_decision.momentum_side,
+            }
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
@@ -2182,7 +2248,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             logger.info(f"  [gate-dist] {gate_distributions}")
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
-            f"ETH Macro SCAN_DIAG base_side={allowed_side} mode={self.direction_source} "
+            f"ETH Macro SCAN_DIAG base_side={locals().get('market_allowed_side')} "
             f"side_sources={side_source_counts} BTC_HTF={btc_htf_bias} eth_1H_trend={mtt.h1_trend} "
             f"enforce_alt_1h={self.enforce_alt_1h_alignment} markets={len(eth_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"
@@ -2197,8 +2263,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             ),
             "btc_htf_bias": btc_htf_bias,
             "btc_htf_vote_details": dict(btc_htf_details) if btc_htf_details else None,
-            "allowed_side": allowed_side,
-            "direction_source": self.direction_source,
+            "allowed_side": locals().get("market_allowed_side"),
             "action_counts": dict(sorted(action_counts.items())),
             "side_source_counts": side_source_counts,
             "alt_1h_trend": mtt.h1_trend,

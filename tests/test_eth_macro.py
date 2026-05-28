@@ -92,6 +92,52 @@ def test_eth_15m_follow_threshold_can_relax_short_lane_only():
     assert strat._eth_follow_15m_required_adj("SHORT") == 0.03
 
 
+def test_eth_direction_guard_blocks_5m_buy_no_when_btc_1h_bull_and_no_too_cheap():
+    strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
+    decision = strat._resolve_eth_direction(
+        market_allowed_side="SHORT",
+        side_source="eth_5m_native",
+        raw_est_prob=0.42,
+        momentum_bias="BEARISH",
+    )
+
+    reason = strat._eth_direction_guard_reason(
+        window_size="5m",
+        decision=decision,
+        yes_price=0.72,
+        btc_htf_bias="BEARISH",
+        btc_1h_regime="BULL",
+        alt_h1_trend="BEARISH",
+        rsi_14=42.0,
+    )
+
+    assert decision.action == "BUY_NO"
+    assert reason == "eth_5m_bull_regime_expensive_short"
+
+
+def test_eth_direction_guard_blocks_15m_overbought_long_when_btc_bearish_and_alt_neutral():
+    strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
+    decision = strat._resolve_eth_direction(
+        market_allowed_side="LONG",
+        side_source="eth_15m_native",
+        raw_est_prob=0.59,
+        momentum_bias="BULLISH",
+    )
+
+    reason = strat._eth_direction_guard_reason(
+        window_size="15m",
+        decision=decision,
+        yes_price=0.48,
+        btc_htf_bias="BEARISH",
+        btc_1h_regime="BULL",
+        alt_h1_trend="NEUTRAL",
+        rsi_14=71.0,
+    )
+
+    assert decision.action == "BUY_YES"
+    assert reason == "eth_15m_overbought_long_vs_btc"
+
+
 def test_eth_liquidity_floor_is_lane_aware_by_window_and_side():
     cfg = _config()
     cfg["strategies"]["eth_macro"]["min_liquidity_15m_buy_no"] = 2200
@@ -957,40 +1003,3 @@ def test_eth_btc_follow_15m_requires_macd_and_candle_agreement():
     assert strat._btc_follow_15m_impulse_ok(btc_ta, "LONG") is False
     btc_ta.macd_15m = MACDResult(histogram=0.04, histogram_rising=True, crossover="NONE")
     assert strat._btc_follow_15m_impulse_ok(btc_ta, "LONG") is True
-
-
-def test_eth_side_resolution_hybrid_keeps_alt_side_over_btc_proxy():
-    cfg = _config()
-    cfg["strategies"]["eth_macro"]["direction_source"] = "hybrid"
-    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
-    side, source = strat._resolve_market_side(
-        base_side="LONG",
-        btc_htf_bias="BEARISH",
-        market_yes_price=0.42,
-    )
-    assert side == "LONG"
-    assert source == "hybrid_alt_first"
-
-
-def test_eth_side_resolution_signal_first_toggle():
-    cfg = _config()
-    cfg["strategies"]["eth_macro"]["direction_source"] = "signal_first"
-    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
-    # signal_first lets the market 15m signal set side, but only when BTC HTF
-    # doesn't actively disagree (BULLISH HTF blocks SHORT, BEARISH HTF blocks LONG).
-    side, source = strat._resolve_market_side(
-        base_side="LONG",
-        btc_htf_bias="NEUTRAL",
-        market_yes_price=0.43,
-    )
-    assert side == "SHORT"
-    assert source == "signal_first_short"
-
-    # When BTC HTF disagrees with the market signal, fall back to base_side.
-    side, source = strat._resolve_market_side(
-        base_side="LONG",
-        btc_htf_bias="BULLISH",
-        market_yes_price=0.43,
-    )
-    assert side == "LONG"
-    assert source == "signal_first_fallback"

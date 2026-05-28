@@ -2362,35 +2362,6 @@
         </div>
     </div>
 
-    <!-- Weather Strategy Panel (moved to bottom of Live tab) -->
-    <div class="card" data-aos="fade-up" id="weather-analysis-panel" style="margin-bottom:16px;display:none;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <h2 style="margin-bottom:0;">&#9928; Weather</h2>
-        <span style="font-size:0.7rem;color:var(--text-muted);">Open-Meteo airport-station forecast vs Polymarket price</span>
-      </div>
-      <div class="status-hero crypto-hero-six" id="weather-hero">
-        <div class="hero-item"><div class="hero-val" id="wx-scanned">-</div><div class="hero-lbl">Total Seen</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-city">-</div><div class="hero-lbl">City Match</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-temp">-</div><div class="hero-lbl">Temp Mkts</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-precip">-</div><div class="hero-lbl">Precip Mkts</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-signals" style="color:var(--green);">-</div><div class="hero-lbl">Signals</div></div>
-        <div class="hero-item"><div class="hero-val" id="wx-trades">-</div><div class="hero-lbl">Open Trades</div></div>
-      </div>
-      <div class="crypto-meta-four">
-        <div>Temp Trades: <span id="wx-temp-trades" style="color:var(--text);">-</span></div>
-        <div>Precip Trades: <span id="wx-precip-trades" style="color:var(--text);">-</span></div>
-        <div>Temp PnL: <span id="wx-temp-pnl" style="color:var(--text);">-</span></div>
-        <div>Precip PnL: <span id="wx-precip-pnl" style="color:var(--text);">-</span></div>
-      </div>
-      <div class="crypto-meta-four">
-        <div>Skip vol: <span id="wx-skip-vol" style="color:var(--text);">-</span></div>
-        <div>Skip hrs: <span id="wx-skip-hrs" style="color:var(--text);">-</span></div>
-        <div>Skip EV: <span id="wx-skip-ev" style="color:var(--text);">-</span></div>
-        <div>Skip thresh: <span id="wx-skip-thresh" style="color:var(--text);">-</span></div>
-      </div>
-      <div id="wx-last-signal" style="margin-top:8px;font-size:0.75rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:8px;line-height:1.5;"></div>
-    </div>
-
     </div><!-- /view-live -->
 
     <!-- ═══════════════════════════════════════════════════════
@@ -2966,7 +2937,6 @@
                 <div class="tab" data-strat="doge_macro" onclick="switchScanTab('doge_macro')">DOGE</div>
                 <div class="tab" data-strat="bnb_macro" onclick="switchScanTab('bnb_macro')">BNB</div>
             </div>
-            <div id="weather-scan-diag" style="display:none;padding:8px 4px 4px;"></div>
             <div class="scrollbox" id="scan-signals" style="min-height:100px;"></div>
         </div>
     </div>
@@ -3077,7 +3047,6 @@
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-eth_macro-enabled"> <span>ETH Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-hype_macro-enabled"> <span>HYPE Macro enabled</span></label></div>
                     <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-xrp_macro-enabled"> <span>XRP Macro enabled</span></label></div>
-                    <div class="cfg-field cfg-field-row"><label><input type="checkbox" id="cfg-strategies-weather-enabled"> <span>Weather enabled</span></label></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Trading</h3>
@@ -3132,10 +3101,6 @@
                     <div class="cfg-field"><label>Entry Max</label><input type="number" id="cfg-strategies-hype_macro-entry_price_max" step="0.01" value="0.54"></div>
                     <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-hype_macro-kelly_fraction" step="0.01" value="0.24"></div>
                     <div class="cfg-field"><label>AI Threshold</label><input type="number" id="cfg-strategies-hype_macro-ai_confidence_threshold" step="0.01" value="0.60"></div>
-                </div>
-                <div class="cfg-group">
-                    <h3>Weather Strategy</h3>
-                    <div class="cfg-field"><label>Kelly Fraction</label><input type="number" id="cfg-strategies-weather-kelly_fraction" step="0.01" value="0.37"></div>
                 </div>
                 <div class="cfg-group">
                     <h3>Exposure Scaling</h3>
@@ -3198,7 +3163,6 @@ window.STRATS = {
     xrp_lag: '#ff5a36',
     doge_lag: '#ff6ec7',
     bnb_lag: '#f3ba2f',
-    weather: '#10b981',
     sol_macro: '#b14dff',
     eth_macro: '#00e5ff',
     hype_macro: '#ff6a00',
@@ -5063,7 +5027,6 @@ async function toggleKillSwitch() {
 }
 
 function updateMetrics(d) {
-    updateWeatherDiag(d && typeof d === 'object' ? d : null);
     if (!d || typeof d !== 'object') return;
     const tbody = document.querySelector('#strategy-table tbody');
     if (!tbody) return;
@@ -5092,8 +5055,8 @@ function updateMetrics(d) {
         return Math.floor(ago/3600) + 'h ago';
     }
 
-    const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', doge_macro:'Macro-based', bnb_macro:'Macro-based', weather:'Event-based'};
-    const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', doge_macro:'Correlated', bnb_macro:'Correlated', weather:'Independent'};
+    const breakEven = {bitcoin:'Trend-based', sol_macro:'Macro-based', eth_macro:'Macro-based', hype_macro:'Macro-based', xrp_macro:'Macro-based', doge_macro:'Macro-based', bnb_macro:'Macro-based'};
+    const riskProfile = {bitcoin:'Hierarchical', sol_macro:'Correlated', eth_macro:'Correlated', hype_macro:'Correlated', xrp_macro:'Correlated', doge_macro:'Correlated', bnb_macro:'Correlated'};
     tbody.innerHTML = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'].map(s => {
         const m = d[s]||{};
         const pnlCls = (m.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
@@ -5109,12 +5072,12 @@ function updateScan(d) {
     if (!sumEl) return;
     if (!d || !d.scan) {
         currentScanData = null;
-        sumEl.textContent = 'Legacy live scan feed retired — use strategy/weather diagnostics.';
+        sumEl.textContent = 'Legacy live scan feed retired — use strategy diagnostics.';
         const distEl = document.getElementById('scan-distribution');
         if (distEl) distEl.innerHTML = '';
         const el = document.getElementById('scan-signals');
         if (el) {
-            el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">Scan cards are no longer powered by <code>/api/scans/latest</code>. Weather visibility is in the Weather diagnostics panel (from <code>/api/strategy/metrics</code>).</p>`;
+            el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">Scan cards are no longer powered by <code>/api/scans/latest</code>. Use the strategy diagnostics panel (from <code>/api/strategy/metrics</code>).</p>`;
         }
         return;
     }
@@ -5148,7 +5111,7 @@ function renderScanSignals() {
 
     el.innerHTML = sigs.slice(0, 50).map(s => {
         const hx = stratHex(s.strategy);
-        const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB',weather:'WX'};
+        const stratShort = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYP',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB'};
         const badge = stratShort[s.strategy] || (s.strategy||'?').slice(0,3).toUpperCase();
         const actionColor = s.action?.includes('BUY') ? 'var(--green)' : 'var(--red)';
         return `<div class="signal-row">
@@ -5166,119 +5129,7 @@ function switchScanTab(filter) {
         const ds = t.getAttribute('data-strat');
         t.classList.toggle('active', ds === filter);
     });
-    const wxDiag = document.getElementById('weather-scan-diag');
-    if (wxDiag) wxDiag.style.display = filter === 'weather' ? 'block' : 'none';
     renderScanSignals();
-}
-
-function updateWeatherDiag(metricsData) {
-    const weatherBlock = metricsData?.weather;
-    const wx = weatherBlock?.scan_stats;
-    const wm = weatherBlock || {};
-
-    // ── Live tab weather panel ──────────────────────────────────────
-    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-    const SCAN_IDS = [
-        'wx-scanned', 'wx-city', 'wx-temp', 'wx-precip', 'wx-signals',
-        'wx-skip-vol', 'wx-skip-hrs', 'wx-skip-ev', 'wx-skip-thresh',
-    ];
-
-    if (!metricsData || !weatherBlock) {
-        SCAN_IDS.forEach((id) => set(id, '-'));
-        set('wx-trades', '-');
-        set('wx-temp-trades', '-');
-        set('wx-precip-trades', '-');
-        set('wx-temp-pnl', '-');
-        set('wx-precip-pnl', '-');
-        const wl = document.getElementById('wx-last-signal');
-        if (wl) wl.textContent = 'No weather metrics payload — reload the dashboard.';
-        const deadDiag = document.getElementById('weather-scan-diag');
-        if (deadDiag) {
-            deadDiag.innerHTML =
-                '<p style="color:var(--text-muted);font-size:0.8rem;padding:4px 0;">Weather section missing from strategy metrics.</p>';
-        }
-        return;
-    }
-
-    if (!wx) {
-        SCAN_IDS.forEach((id) => set(id, '-'));
-        const sigEl = document.getElementById('wx-signals');
-        if (sigEl) sigEl.style.color = 'var(--green)';
-        if (!wm.last_cycle) {
-            const pending = document.getElementById('wx-last-signal');
-            if (pending) pending.textContent = 'Scan stats reset — counters fill after the next weather bot cycle.';
-        }
-    } else {
-        set('wx-scanned', wx.total_markets_seen ?? '-');
-        set('wx-city', wx.city_matches ?? '-');
-        set('wx-temp', wx.temp_markets ?? '-');
-        set('wx-precip', wx.precip_markets ?? '-');
-        set('wx-signals', wx.signals_generated ?? '-');
-        set('wx-skip-vol', wx.skipped_below_volume ?? '-');
-        set('wx-skip-hrs', wx.skipped_below_min_hours ?? '-');
-        set('wx-skip-ev', wx.skipped_ev ?? '-');
-        set('wx-skip-thresh', wx.skipped_no_threshold ?? '-');
-    }
-    const wxTemp = wm.subtypes?.temp || {};
-    const wxPrecip = wm.subtypes?.precip || {};
-    const wxTrades = document.getElementById('wx-trades');
-    if (wxTrades) {
-        const wxOpenTotal = Number(wxTemp.open || 0) + Number(wxPrecip.open || 0);
-        wxTrades.textContent = Number.isFinite(wxOpenTotal) ? String(wxOpenTotal) : '-';
-    }
-    set('wx-temp-trades', `${wxTemp.trades ?? 0} closed / ${wxTemp.open ?? 0} open`);
-    set('wx-precip-trades', `${wxPrecip.trades ?? 0} closed / ${wxPrecip.open ?? 0} open`);
-    set('wx-temp-pnl', `$${Number(wxTemp.pnl || 0).toFixed(2)}`);
-    set('wx-precip-pnl', `$${Number(wxPrecip.pnl || 0).toFixed(2)}`);
-    const wxLast = document.getElementById('wx-last-signal');
-    if (wxLast && wm.last_cycle) {
-        const ago = Math.round((Date.now() - new Date(wm.last_cycle).getTime()) / 1000);
-        const agoStr = ago < 60 ? ago + 's ago' : Math.floor(ago/60) + 'm ago';
-        wxLast.textContent = `Last cycle: ${agoStr} | PnL: $${(wm.pnl||0).toFixed(2)} | temp WR ${(Number(wxTemp.win_rate || 0) * 100).toFixed(0)}% | precip WR ${(Number(wxPrecip.win_rate || 0) * 100).toFixed(0)}%`;
-    }
-
-    // ── Backtest-tab scan diagnostics div ──────────────────────────
-    const el = document.getElementById('weather-scan-diag');
-    if (!el) return;
-    if (!wx) { el.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;padding:4px 0;">No scan data yet — waiting for first weather cycle.</p>'; return; }
-    const row = (label, val, color) =>
-        `<span style="margin-right:14px;font-size:0.78rem;"><span style="color:var(--text-muted);">${label}:</span> <span style="color:${color||'var(--text)'}">${val}</span></span>`;
-    el.innerHTML = `
-        <div style="background:rgba(0,0,0,0.3);border-radius:6px;padding:8px 12px;margin-bottom:6px;">
-            <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Weather Scan Diagnostics</div>
-            <div style="flex-wrap:wrap;display:flex;gap:4px 0;">
-                ${row('total', wx.total_markets_seen, 'var(--text)')}
-                ${row('keyword', wx.weather_keyword_matches, wx.weather_keyword_matches > 0 ? '#86efac' : 'var(--text-muted)')}
-                ${row('scanned', wx.markets_scanned, 'var(--text)')}
-                ${row('city match', wx.city_matches, wx.city_matches > 0 ? 'var(--green)' : 'var(--text-muted)')}
-                ${row('temp', wx.temp_markets, '#fb923c')}
-                ${row('precip', wx.precip_markets, '#38bdf8')}
-                ${row('signals', wx.signals_generated, wx.signals_generated > 0 ? '#86efac' : 'var(--text-muted)')}
-            </div>
-            <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
-                <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Skipped:</span>
-                ${row('no loc', wx.skipped_no_location, wx.skipped_no_location > 0 ? 'var(--red)' : 'var(--text-muted)')}
-                ${row('no temp', wx.skipped_no_temp_keyword, wx.skipped_no_temp_keyword > 0 ? 'var(--red)' : 'var(--text-muted)')}
-                ${row('liq', wx.skipped_below_liquidity, wx.skipped_below_liquidity > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('volume', wx.skipped_below_volume, wx.skipped_below_volume > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('min h', wx.skipped_below_min_hours, wx.skipped_below_min_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('max h', wx.skipped_above_max_hours, wx.skipped_above_max_hours > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('far', wx.skipped_too_far_out, wx.skipped_too_far_out > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('extreme', wx.skipped_extreme_consensus, wx.skipped_extreme_consensus > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('ev', wx.skipped_ev, wx.skipped_ev > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('no threshold', wx.skipped_no_threshold, wx.skipped_no_threshold > 0 ? 'var(--red)' : 'var(--text-muted)')}
-                ${row('forecast', wx.skipped_no_forecast, wx.skipped_no_forecast > 0 ? 'var(--red)' : 'var(--text-muted)')}
-                ${row('metar', wx.skipped_metar_mismatch, wx.skipped_metar_mismatch > 0 ? 'var(--red)' : 'var(--text-muted)')}
-                ${row('past res', wx.skipped_past_resolution, wx.skipped_past_resolution > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-                ${row('uncalib ext', wx.skipped_extended_precip_uncalibrated, wx.skipped_extended_precip_uncalibrated > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-            </div>
-            <div style="flex-wrap:wrap;display:flex;gap:4px 0;margin-top:4px;border-top:1px solid var(--border);padding-top:4px;">
-                <span style="font-size:0.7rem;color:var(--text-muted);margin-right:8px;">Weather AI:</span>
-                ${row('calls', wx.weather_ai_calls ?? 0, 'var(--text)')}
-                ${row('applied', wx.weather_ai_applied ?? 0, (wx.weather_ai_applied ?? 0) > 0 ? '#86efac' : 'var(--text-muted)')}
-                ${row('hold', wx.weather_ai_hold ?? 0, (wx.weather_ai_hold ?? 0) > 0 ? 'var(--yellow)' : 'var(--text-muted)')}
-            </div>
-        </div>`;
 }
 
 async function runTests() {
@@ -5633,7 +5484,7 @@ function updateJournal(d) {
     const ss = d.strategy_stats || {};
     const stratsEl = document.getElementById('journal-strats');
     const ACTIVE_STRATS = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
-    const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB',weather:'WX'};
+    const stratLabels = {bitcoin:'BTC',sol_macro:'SOL',eth_macro:'ETH',hype_macro:'HYPE',xrp_macro:'XRP',doge_macro:'DOGE',bnb_macro:'BNB'};
     // merge api data + zeros for missing strategies
     const merged = Object.fromEntries(ACTIVE_STRATS.map(s => [s, ss[s] || {trades:0,wins:0,pnl:0,win_rate:0}]));
     // also include any extra historical strategies still present in old journals
@@ -6398,7 +6249,6 @@ async function loadConfig() {
             'cfg-strategies-eth_macro-enabled': d.strategies?.eth_macro?.enabled,
             'cfg-strategies-hype_macro-enabled': d.strategies?.hype_macro?.enabled,
             'cfg-strategies-xrp_macro-enabled': d.strategies?.xrp_macro?.enabled,
-            'cfg-strategies-weather-enabled': d.strategies?.weather?.enabled,
             'cfg-exposure-loss_kill_switch_enabled': d.exposure?.loss_kill_switch_enabled,
         };
         for (const [id, val] of Object.entries(boolMap)) {
@@ -6439,7 +6289,6 @@ async function loadConfig() {
             'cfg-strategies-hype_macro-kelly_fraction': d.strategies?.hype_macro?.kelly_fraction,
             'cfg-strategies-hype_macro-ai_confidence_threshold': d.strategies?.hype_macro?.ai_confidence_threshold,
             'cfg-strategies-xrp_macro-kelly_fraction': d.strategies?.xrp_macro?.kelly_fraction,
-            'cfg-strategies-weather-kelly_fraction': d.strategies?.weather?.kelly_fraction,
             'cfg-exposure-full_size': d.exposure?.full_size,
             'cfg-exposure-moderate_size': d.exposure?.moderate_size,
             'cfg-exposure-minimal_size': d.exposure?.minimal_size,
@@ -6621,7 +6470,7 @@ async function toggleFullscreen() {
 
 // ─── EXPOSURE MANAGER ────────────────────────────────────────
 const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'doge', 'bnb'];
-const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', weather: 'Weather', event: 'Weather' };
+const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP' };
 const tierColors = {FULL:'var(--green)',MODERATE:'var(--yellow)',MINIMAL:'var(--red)',PAUSED:'var(--red)',UNKNOWN:'var(--text-muted)'};
 
 function updateExposure(d) {
@@ -6702,7 +6551,7 @@ async function resumeExposureLane(lane) {
 }
 
 async function pauseExposure() {
-    if (!confirm('Pause all strategies (BTC, SOL, ETH, HYPE, XRP, Weather)?')) return;
+    if (!confirm('Pause all strategies (BTC, SOL, ETH, HYPE, XRP)?')) return;
     try {
         const r = await _mutatingFetch('/api/exposure/pause', {method:'POST'});
         if (!r?.ok) {
@@ -6738,7 +6587,7 @@ async function resetPaperSession() {
                 : (data.auto_backtest ? [data.auto_backtest] : []);
             let trackedJob = false;
             for (const ab of autoBacktests) {
-                const label = ab?.name === 'weather' ? 'weather' : 'SOL 5m';
+                const label = 'SOL 5m';
                 if (ab?.status === 'started' && ab.job_id) {
                     if (!trackedJob) {
                         try {
@@ -8725,9 +8574,15 @@ function _glRenderCounts() {
     const el = document.getElementById('gl-counts');
     if (!el || !_gl.raw) return;
     const c = _gl.raw.session.n_events_per_source || {};
+    const cur = _gl.raw.current_deadzone || {};
+    const active = cur.in_market_deadzone ? 'active' : 'clear';
+    const stale = cur.fresh === false ? ' stale' : '';
+    const regime = cur.combined_regime || 'unknown';
     el.innerHTML = `ghosts=<strong style="color:var(--text);">${c.ghost || 0}</strong> &middot; ` +
                    `deadzone=<strong style="color:#e0a64a;">${c.deadzone_skip || 0}</strong> &middot; ` +
-                   `live=<strong style="color:var(--gn);">${c.live || 0}</strong>`;
+                   `live=<strong style="color:var(--gn);">${c.live || 0}</strong> &middot; ` +
+                   `now=<strong style="color:${cur.in_market_deadzone ? '#ffcc66' : 'var(--gn)'};">${active}${stale}</strong> ` +
+                   `<span style="color:var(--text-muted);">${regime} @ ${String(cur.hour_utc ?? '--').padStart(2, '0')} UTC</span>`;
 }
 
 function onGhostLabLaneChange() {

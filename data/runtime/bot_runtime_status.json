@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "--paper"
+  ],
+  "clean_shutdown": true,
+  "cycle_count": 305,
+  "daily_trades": 126,
+  "detail": "2",
+  "mode": "paper",
+  "open_positions": 4,
+  "phase": "shutdown_complete",
+  "pid": 46532,
+  "session_id": "test_20260528_042826",
+  "strategy_task_count": 7,
+  "ts": "2026-05-28T21:04:16.327100+00:00"
+}

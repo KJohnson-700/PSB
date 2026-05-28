@@ -46,7 +46,6 @@ def _scan_skip_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "xrp_macro",
         "doge_macro",
         "bnb_macro",
-        "weather",
     )
     per_lane: Dict[str, Any] = {}
     for lane in lanes:
@@ -254,7 +253,6 @@ def _ai_pipeline_digest(ai_scan_stats: Dict[str, Any]) -> Dict[str, Any]:
         "xrp_macro",
         "doge_macro",
         "bnb_macro",
-        "weather",
     )
     aliases = {
         "ai_pipeline_calls": ("ai_pipeline_calls", "ai_calls"),

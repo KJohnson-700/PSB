@@ -72,6 +72,9 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     gl = c.get("/api/ghosts/lab?since=2026-05-01")
     assert gl.status_code == 200
     assert "no-store" in (gl.headers.get("cache-control") or "").lower()
+    gl_payload = gl.json()
+    assert "current_deadzone" in gl_payload
+    assert "in_market_deadzone" in gl_payload["current_deadzone"]
 
     gr = c.get("/api/ghosts/regime-breakdown?since=2026-05-01")
     assert gr.status_code == 200
@@ -356,7 +359,7 @@ def test_action_breakdown_backend_includes_doge_and_bnb():
     assert '"doge_macro"' in server
     assert '"bnb_macro"' in server
     assert "_ACTION_BREAKDOWN_STRATEGIES = _DASHBOARD_STRATEGY_NAMES" in server
-    assert "_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES + (\"weather\",)" in server
+    assert "_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES" in server
 
 
 def test_reason_buckets_backend_includes_doge_and_bnb():
@@ -601,8 +604,6 @@ def test_dashboard_status_exposes_latest_loss_kill_trigger(monkeypatch):
             "xrp_exposure_manager": None,
             "doge_exposure_manager": None,
             "bnb_exposure_manager": None,
-            "weather_exposure_manager": None,
-            "event_exposure_manager": None,
         },
     )()
     monkeypatch.setattr(dashboard_server, "bot_instance", bot)

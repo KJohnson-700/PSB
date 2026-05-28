@@ -37,7 +37,7 @@ import subprocess
 import sys
 import threading
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
@@ -566,6 +566,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 LANE_STATE_AUDIT_LOG = DATA_ROOT / "lane_state_audit.jsonl"
 LANE_CANDIDATE_STATUS_PATH = DATA_ROOT / "lane_candidate_status.json"
+DEFAULT_MARKET_REGIME_LOG = DATA_ROOT / "calibration" / "market_regime.jsonl"
 
 ACTIVE_STRATEGY_NAMES = (
     "bitcoin",
@@ -576,7 +577,7 @@ ACTIVE_STRATEGY_NAMES = (
     "doge_macro",
     "bnb_macro",
 )
-_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES + ("weather",)
+_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES
 def _classify_updown_trade(question: str, strategy: str, market_id: str = "") -> str:
     """Map a closed trade to a stable updown bucket key (e.g. ETH_updown_15m).
 
@@ -754,7 +755,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-21-command-center-start-shine-cache-bust",
+        "dashboard_ui_rev": "2026-05-27-ghostlab-deadzone-status",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -2096,6 +2097,74 @@ def _gl_load_posteriors() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def _gl_current_deadzone_status() -> Dict[str, Any]:
+    cfg = _load_yaml_config()
+    gate_cfg = ((cfg.get("trading") or {}).get("market_regime_gate") or {})
+    path = Path(gate_cfg.get("regime_log") or DEFAULT_MARKET_REGIME_LOG)
+    latest: Optional[Dict[str, Any]] = None
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict):
+                        latest = obj
+        except OSError:
+            latest = None
+
+    now = datetime.now(timezone.utc)
+    max_age_sec = float(gate_cfg.get("max_snapshot_age_sec", 1800) or 1800)
+    age_sec = None
+    fresh = False
+    if latest:
+        try:
+            ts = datetime.fromisoformat(str(latest.get("ts")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_sec = max(0.0, (now - ts.astimezone(timezone.utc)).total_seconds())
+            fresh = age_sec <= max_age_sec
+        except (TypeError, ValueError):
+            fresh = False
+
+    combined = str((latest or {}).get("combined_regime") or "")
+    poly = str((latest or {}).get("polymarket_regime") or "")
+    strategy_status = {}
+    for name, strat_cfg in ((cfg.get("strategies") or {}).items()):
+        if not isinstance(strat_cfg, dict):
+            continue
+        if "dead_zone_enabled" not in strat_cfg and "blocked_utc_hours_updown" not in strat_cfg:
+            continue
+        hours = strat_cfg.get("blocked_utc_hours_updown") or []
+        try:
+            blocked_hours = [int(h) for h in hours]
+        except (TypeError, ValueError):
+            blocked_hours = []
+        strategy_status[name] = {
+            "dead_zone_enabled": bool(strat_cfg.get("dead_zone_enabled", True)),
+            "blocked_now_by_hour": now.hour in blocked_hours,
+            "blocked_hours_config": blocked_hours,
+        }
+
+    return {
+        "enabled": bool(gate_cfg.get("enabled", False)),
+        "fresh": bool(fresh),
+        "age_sec": round(age_sec, 3) if age_sec is not None else None,
+        "max_age_sec": max_age_sec,
+        "hour_utc": now.hour,
+        "in_market_deadzone": bool(fresh and combined.startswith("deadzone")),
+        "combined_regime": combined or None,
+        "polymarket_regime": poly or None,
+        "latest": latest,
+        "strategies": strategy_status,
+    }
+
+
 def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Aggregate events by lane and by (lane, hour, dow) with Wilson CIs."""
     by_lane: Dict[str, Dict[str, Any]] = {}
@@ -2905,6 +2974,7 @@ async def get_ghost_lab(
         "deadzone_skip": sum(1 for e in events if e.get("source") == "deadzone_skip"),
         "live": sum(1 for e in events if e.get("source") == "live"),
     }
+    current_deadzone = _gl_current_deadzone_status()
     return JSONResponse(
         content={
             "events": capped,
@@ -2912,6 +2982,7 @@ async def get_ghost_lab(
             "buckets_hour": agg["buckets_hour"],
             "buckets_hour_dow": agg["buckets_hour_dow"],
             "reasons": reasons,
+            "current_deadzone": current_deadzone,
             "session": {
                 "since": since_dt.isoformat(),
                 "now": datetime.utcnow().isoformat(),
@@ -2971,7 +3042,6 @@ async def get_live_performance():
         "eth_macro",
         "hype_macro",
         "xrp_macro",
-        "weather",
     )
     strategy_stats_filtered: Dict[str, Any] = {}
     if isinstance(strategy_stats, dict):
@@ -3608,17 +3678,6 @@ async def get_strategy_metrics():
             "win_rate": None,
             "reports": 0,
         },
-        "weather": {
-            "signals": 0,
-            "trades": 0,
-            "pnl": 0,
-            "win_rate": None,
-            "reports": 0,
-            "subtypes": {
-                "temp": {"trades": 0, "wins": 0, "pnl": 0, "avg_pnl": 0, "win_rate": 0, "open": 0, "unrealized_pnl": 0},
-                "precip": {"trades": 0, "wins": 0, "pnl": 0, "avg_pnl": 0, "win_rate": 0, "open": 0, "unrealized_pnl": 0},
-            },
-        },
     }
 
     # ── Primary: live trade stats from summary.json (disk-first) ──
@@ -3630,23 +3689,6 @@ async def get_strategy_metrics():
             metrics[strat]["win_rate"] = s.get("win_rate", None)
             metrics[strat]["wins"] = s.get("wins", 0)
             metrics[strat]["avg_pnl"] = s.get("avg_pnl", 0)
-    weather_subtypes = summary.get("weather_subtype_stats", {}) or {}
-    weather_open = summary.get("weather_open_stats", {}) or {}
-    for subtype in ("temp", "precip"):
-        stats = weather_subtypes.get(subtype, {}) or {}
-        open_stats = weather_open.get(subtype, {}) or {}
-        metrics["weather"]["subtypes"][subtype].update(
-            {
-                "trades": stats.get("trades", 0),
-                "wins": stats.get("wins", 0),
-                "pnl": stats.get("pnl", 0),
-                "avg_pnl": stats.get("avg_pnl", 0),
-                "win_rate": stats.get("win_rate", 0),
-                "open": open_stats.get("open", 0),
-                "unrealized_pnl": open_stats.get("unrealized_pnl", 0),
-            }
-        )
-
     # ── Aggregate backtest report counts (lightweight metadata only) ──
     report_dir = DATA_ROOT / "backtest" / "reports"
     if report_dir.exists():
@@ -3702,39 +3744,6 @@ async def get_strategy_metrics():
                 metrics[strat]["open_positions"] = (
                     metrics[strat].get("open_positions", 0) + 1
                 )
-
-    # ── Weather scan diagnostics ──
-    if bot and hasattr(bot, "last_ai_scan_stats"):
-        wx = bot.last_ai_scan_stats.get("weather") or {}
-        if wx and "weather" in metrics:
-            metrics["weather"]["scan_stats"] = {
-                "total_markets_seen":      wx.get("total_markets_seen", 0),
-                "weather_keyword_matches": wx.get("weather_keyword_matches", 0),
-                "markets_scanned":        wx.get("markets_scanned", 0),
-                "city_matches":           wx.get("city_matches", 0),
-                "temp_markets":           wx.get("temp_markets", 0),
-                "precip_markets":         wx.get("precip_markets", 0),
-                "signals_generated":      wx.get("signals_generated", 0),
-                "skipped_no_location":    wx.get("skipped_no_location", 0),
-                "skipped_no_temp_keyword": wx.get("skipped_no_temp_keyword", 0),
-                "skipped_below_liquidity": wx.get("skipped_below_liquidity", 0),
-                "skipped_below_volume":   wx.get("skipped_below_volume", 0),
-                "skipped_below_min_hours": wx.get("skipped_below_min_hours", 0),
-                "skipped_above_max_hours": wx.get("skipped_above_max_hours", 0),
-                "skipped_too_far_out":    wx.get("skipped_too_far_out", 0),
-                "skipped_extreme_consensus": wx.get("skipped_extreme_consensus", 0),
-                "skipped_ev":             wx.get("skipped_ev", 0),
-                "skipped_no_threshold":   wx.get("skipped_no_threshold", 0),
-                "skipped_no_forecast":    wx.get("skipped_no_forecast", 0),
-                "skipped_metar_mismatch": wx.get("skipped_metar_mismatch", 0),
-                "skipped_past_resolution": wx.get("skipped_past_resolution", 0),
-                "skipped_extended_precip_uncalibrated": wx.get(
-                    "skipped_extended_precip_uncalibrated", 0
-                ),
-                "weather_ai_calls": wx.get("weather_ai_calls", 0),
-                "weather_ai_applied": wx.get("weather_ai_applied", 0),
-                "weather_ai_hold": wx.get("weather_ai_hold", 0),
-            }
 
     return metrics
 
@@ -4859,8 +4868,6 @@ def _all_exposure_managers():
         "xrp_exposure_manager",
         "doge_exposure_manager",
         "bnb_exposure_manager",
-        "weather_exposure_manager",
-        "event_exposure_manager",
     ):
         mgr = getattr(bot, attr, None)
         if mgr and id(mgr) not in seen:
@@ -4929,8 +4936,6 @@ EXPOSURE_LANE_TO_ATTR = {
     "xrp": "xrp_exposure_manager",
     "doge": "doge_exposure_manager",
     "bnb": "bnb_exposure_manager",
-    "weather": "weather_exposure_manager",
-    "event": "weather_exposure_manager",  # backward-compatible alias
 }
 
 
@@ -4961,7 +4966,6 @@ async def get_exposure_status():
         ("xrp", "xrp_exposure_manager"),
         ("doge", "doge_exposure_manager"),
         ("bnb", "bnb_exposure_manager"),
-        ("weather", "weather_exposure_manager"),
     )
     out: Dict[str, Any] = {}
     idx = 0
@@ -5007,7 +5011,7 @@ async def pause_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or weather (event also accepted).",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, or xrp.",
         )
     mgr.manual_pause()
     return {"status": "paused", "lane": lane.lower().strip()}
@@ -5021,7 +5025,7 @@ async def resume_exposure_lane(lane: str, request: Request):
     if mgr is None:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, xrp, or weather (event also accepted).",
+            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, or xrp.",
         )
     mgr.manual_resume()
     return {"status": "resumed", "lane": lane.lower().strip()}
@@ -5741,9 +5745,18 @@ class ConfigUpdates(BaseModel):
             _validate_section_keys(
                 self.lane_management,
                 "lane_management",
-                {"enabled", "default_state", "states"},
+                {
+                    "enabled",
+                    "execution_enforcement_enabled",
+                    "default_state",
+                    "states",
+                },
             )
-            _validate_bool_fields(self.lane_management, "lane_management", {"enabled"})
+            _validate_bool_fields(
+                self.lane_management,
+                "lane_management",
+                {"enabled", "execution_enforcement_enabled"},
+            )
             default_state = self.lane_management.get("default_state")
             if default_state is not None and str(default_state).strip().lower() not in {"paper", "live", "paused"}:
                 raise ValueError("lane_management.default_state must be paper, live, or paused")
@@ -5788,7 +5801,6 @@ class ConfigUpdates(BaseModel):
                 "xrp_macro",
                 "doge_macro",
                 "bnb_macro",
-                "weather",
             }
             _validate_section_keys(self.strategies, "strategies", allowed_strategies)
             allowed_strategy_fields = {

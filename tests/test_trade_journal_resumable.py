@@ -37,44 +37,6 @@ def test_list_sessions_skips_empty_summary_only_dirs(tmp_path: Path, monkeypatch
     assert [s["session_id"] for s in sessions] == ["20260101_100000"]
 
 
-def test_weather_subtype_summary_tracks_open_and_closed_stats(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
-    journal = TradeJournal(session_id="20260427_210000", resume_latest=False)
-    journal.log_entry(
-        trade_id="t-temp",
-        market_id="wx-temp",
-        market_question="Highest temperature in Hong Kong on May 5, 2026?",
-        strategy="weather",
-        action="BUY_YES",
-        side="BUY",
-        outcome="YES",
-        size=10.0,
-        entry_price=0.4,
-        bankroll=1000.0,
-        extra={"weather_subtype": "temp"},
-    )
-    journal.log_entry(
-        trade_id="t-precip",
-        market_id="wx-precip",
-        market_question="Will Hong Kong have 100-110mm of precipitation in May 2026?",
-        strategy="weather",
-        action="BUY_NO",
-        side="BUY",
-        outcome="NO",
-        size=12.0,
-        entry_price=0.5,
-        bankroll=1000.0,
-        extra={"weather_subtype": "precip"},
-    )
-    journal.log_exit("t-temp", exit_price=0.7, bankroll=1003.0, reason="test")
-    summary = journal.get_summary()
-    assert summary["weather_subtype_stats"]["temp"]["trades"] == 1
-    assert summary["weather_subtype_stats"]["temp"]["wins"] == 1
-    assert summary["weather_subtype_stats"]["precip"]["trades"] == 0
-    assert summary["weather_open_stats"]["temp"]["open"] == 0
-    assert summary["weather_open_stats"]["precip"]["open"] == 1
-
-
 def test_summary_file_updates_immediately_on_entry(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
     journal = TradeJournal(session_id="20260525_entry_summary", resume_latest=False)

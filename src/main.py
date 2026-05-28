@@ -28,7 +28,6 @@ from src.market.scanner import (
     is_crypto_updown_market,
     resolved_updown_window_minutes,
 )
-from src.market.price_collector import PriceCollector
 from src.market.websocket import WebSocketClient
 from src.analysis.ai_agent import AIAgent
 from src.analysis.ai_decision_broker import AIDecisionBroker
@@ -37,7 +36,6 @@ from src.strategies.bitcoin import BitcoinStrategy, BitcoinSignal
 from src.strategies.sol_macro import SolMacroStrategy, SolMacroSignal
 from src.strategies.eth_macro import ETHMacroStrategy
 from src.strategies.hype_macro import HYPEMacroStrategy
-from src.strategies.weather import WeatherStrategy, WeatherSignal
 from src.strategies.xrp_macro import XRPMacroStrategy
 from src.strategies.doge_macro import DOGEMacroStrategy
 from src.strategies.bnb_macro import BNBMacroStrategy
@@ -83,6 +81,28 @@ RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
 _FAULT_HANDLER_STREAM = None
+
+
+def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shutdown_timeout_seconds(default: float = 8.0) -> float:
+    raw = os.getenv("PSB_SHUTDOWN_TIMEOUT_SECONDS")
+    if raw is None:
+        return default
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        logging.warning(
+            "Invalid PSB_SHUTDOWN_TIMEOUT_SECONDS=%r; using default %.1fs",
+            raw,
+            default,
+        )
+        return default
 
 
 def market_regime_gate_decision(
@@ -322,58 +342,10 @@ def _filter_crypto_hourly_markets(markets, include_hourly: bool) -> list:
     return [m for m in markets if not _is_hourly_crypto_market(m)]
 
 
-def _filter_weather_markets(markets, config: Dict) -> list:
-    """Filter to weather-appropriate markets using weather strategy config."""
-    weather_cfg = (config.get("strategies", {}) or {}).get("weather", {}) or {}
-    min_hours = float(weather_cfg.get("min_hours_to_resolution", 2.0))
-    max_hours = float(weather_cfg.get("max_hours_to_resolution", 72.0))
-    resolution_window_enabled = bool(
-        weather_cfg.get("resolution_window_enabled", True)
-    )
-    result = []
-    now = datetime.now(timezone.utc)
-    for market in markets:
-        if _is_crypto_market(market) or not market.end_date:
-            continue
-        end = (
-            market.end_date.replace(tzinfo=timezone.utc)
-            if market.end_date.tzinfo is None
-            else market.end_date.astimezone(timezone.utc)
-        )
-        hours = (end - now).total_seconds() / 3600
-        if resolution_window_enabled:
-            if min_hours <= hours <= max_hours:
-                result.append(market)
-        elif hours >= min_hours:
-            result.append(market)
-    return result
-
-
-def _merge_weather_market_sources(primary_markets, secondary_markets) -> list:
-    """Deduplicate weather candidates, preferring dedicated weather fetch results."""
-    merged = []
-    seen_ids = set()
-    for source in (primary_markets or [], secondary_markets or []):
-        for market in source:
-            if not market or market.id in seen_ids:
-                continue
-            seen_ids.add(market.id)
-            merged.append(market)
-    return merged
-
-
-def _weather_general_scan_enabled(config: Dict) -> bool:
-    weather_cfg = (config.get("strategies", {}) or {}).get("weather", {}) or {}
-    return bool(weather_cfg.get("scan_from_general_markets", False))
-
-
 def _is_crypto_market(market) -> bool:
-    """Crypto up/down and short-candle markets; exempt from resolution window filter.
+    """Crypto up/down and short-candle markets.
 
-    Uses the same slug/question/group rules as the scanner so Solana/BTC/etc. cannot
-    leak into weather-only paths when ``window_minutes`` is missing. The old
-    ``end - now < 86400`` fallback misclassified many non-crypto markets (timezone
-    skew, monthly events) as crypto.
+    Uses the same slug/question/group rules as the scanner.
     """
     if is_crypto_updown_market(market):
         return True
@@ -395,7 +367,6 @@ class PolyBot:
 
         # Initialize components
         self.market_scanner = MarketScanner(self.config)
-        self.price_collector = PriceCollector(self.config)
         self.ws_client = WebSocketClient(self.config)
         self.ai_agent = AIAgent(self.config)
         # Async-decoupled AI decision broker: strategies enqueue here instead of
@@ -437,14 +408,6 @@ class PolyBot:
         self.xrp_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='XRP')
         self.doge_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='DOGE')
         self.bnb_exposure_manager = ExposureManager(self.config, is_paper=is_paper, notifications=self.notifier, lane_name='BNB')
-        self.weather_exposure_manager = ExposureManager(
-            self.config,
-            is_paper=is_paper,
-            notifications=self.notifier,
-            lane_name="WEATHER",
-        )
-        # Backward-compatible alias for older code paths/tools still referencing "event".
-        self.event_exposure_manager = self.weather_exposure_manager
         # Keep a reference for resolution tracker settlements
         self.exposure_manager = self.btc_exposure_manager
 
@@ -463,7 +426,6 @@ class PolyBot:
             "xrp_macro": 0,
             "doge_macro": 0,
             "bnb_macro": 0,
-            "weather": 0,
         }
         # ISO timestamp of the last time each strategy completed a cycle
         self.last_cycle_times: Dict[str, str] = {}
@@ -672,7 +634,7 @@ class PolyBot:
         em0 = self.btc_exposure_manager
         logging.warning(
             "EXPOSURE per-lane: loss_kill_switch_enabled=%s max_consecutive_losses=%s pause_cycles=%s "
-            "(btc/sol/eth/xrp/weather each have separate streaks). "
+            "(btc/sol/eth/xrp each have separate streaks). "
             "This is the loss-streak lane pause, not the manual global stop. "
             "If a stale image is running, set EXPOSURE_LOSS_KILL_SWITCH_ENABLED=false in the environment and restart.",
             em0.loss_kill_switch_enabled,
@@ -856,6 +818,7 @@ class PolyBot:
                     recommended_max_mean=float(
                         plt_cfg.get("recommended_max_mean", 0.40) or 0.40
                     ),
+                    live_mature_n=int(plt_cfg.get("live_mature_n", 50) or 50),
                 )
                 tpath = Path(plt_cfg.get("path") or str(DEFAULT_THRESHOLDS_PATH))
                 write_lane_thresholds(payload, path=tpath)
@@ -972,7 +935,6 @@ class PolyBot:
                 "xrp_exposure_manager",
                 "doge_exposure_manager",
                 "bnb_exposure_manager",
-                "weather_exposure_manager",
             ):
                 mgr = getattr(self, attr, None)
                 if mgr is not None:
@@ -1061,12 +1023,6 @@ class PolyBot:
         ):
             strategy.lane_calibrator = self.lane_calibrator
         self._validate_lane_calibration_runtime()
-        self.weather_strategy = WeatherStrategy(
-            self.config,
-            self.position_sizer,
-            self.kelly_sizer,
-            self.ai_agent,
-        )
         self._wire_strategy_callbacks()
         self._log_effective_sizing_config(context="runtime_rebuild")
 
@@ -1565,20 +1521,20 @@ class PolyBot:
     def _get_exposure_manager_for(self, strategy: str):
         """Return the correct exposure manager for a given strategy."""
         if strategy == "bitcoin":
-            return self.btc_exposure_manager
+            return getattr(self, "btc_exposure_manager", None)
         elif strategy == "sol_macro":
-            return self.sol_exposure_manager
+            return getattr(self, "sol_exposure_manager", None)
         elif strategy == "eth_macro":
-            return self.eth_exposure_manager
+            return getattr(self, "eth_exposure_manager", None)
         elif strategy == "hype_macro":
-            return self.hype_exposure_manager
+            return getattr(self, "hype_exposure_manager", None)
         elif strategy == "xrp_macro":
-            return self.xrp_exposure_manager
+            return getattr(self, "xrp_exposure_manager", None)
         elif strategy == "doge_macro":
-            return self.doge_exposure_manager
+            return getattr(self, "doge_exposure_manager", None)
         elif strategy == "bnb_macro":
-            return self.bnb_exposure_manager
-        return getattr(self, "weather_exposure_manager", self.event_exposure_manager)
+            return getattr(self, "bnb_exposure_manager", None)
+        return None
 
     def _log_closed_trade_for_calibration(self, trade_id: str) -> None:
         """Write a calibration-log row + update lane posteriors for one closed trade.
@@ -1636,16 +1592,21 @@ class PolyBot:
         return self.bankroll
 
     def _all_exposure_managers(self):
-        return [
-            self.btc_exposure_manager,
-            self.sol_exposure_manager,
-            self.eth_exposure_manager,
-            self.hype_exposure_manager,
-            self.xrp_exposure_manager,
-            self.doge_exposure_manager,
-            self.bnb_exposure_manager,
-            self.event_exposure_manager,
-        ]
+        names = (
+            "btc_exposure_manager",
+            "sol_exposure_manager",
+            "eth_exposure_manager",
+            "hype_exposure_manager",
+            "xrp_exposure_manager",
+            "doge_exposure_manager",
+            "bnb_exposure_manager",
+        )
+        out = []
+        for name in names:
+            mgr = getattr(self, name, None)
+            if mgr is not None:
+                out.append(mgr)
+        return out
 
     def _sync_exposure_managers_portfolio_pnl(self) -> None:
         """Keep lane exposure managers aligned to current daily realized PnL."""
@@ -1679,12 +1640,13 @@ class PolyBot:
                 window = str(s.get("window_size") or "") or _detect_window_from_question(
                     str(s.get("market_question") or "")
                 )
-                em.record_trade(
-                    pnl=s["pnl"],
-                    strategy=strat,
-                    market_id=s.get("market_id", ""),
-                    window_size=window,
-                )
+                if em is not None:
+                    em.record_trade(
+                        pnl=s["pnl"],
+                        strategy=strat,
+                        market_id=s.get("market_id", ""),
+                        window_size=window,
+                    )
                 self.kelly_sizer.record_outcome(strat, s["pnl"] > 0, window)
                 # Phase 0 calibration log + Phase 6 posterior update for
                 # market-resolution exits. Without this, trades.jsonl
@@ -1898,15 +1860,16 @@ class PolyBot:
                     trade_id_tail = _tid[-14:] if _tid else ""
                     em = self._get_exposure_manager_for(strat)
                     window = str(getattr(pos, "window_size", "") or "") or _detect_window_from_question(mq)
-                    em.record_trade(
-                        pnl=exit_decision.unrealized_pnl,
-                        strategy=strat,
-                        market_id=exit_decision.market_id,
-                        window_size=window,
-                    )
-                    self.kelly_sizer.record_outcome(strat, exit_decision.unrealized_pnl > 0, window)
                     exit_pnl = exit_decision.unrealized_pnl
                     self._apply_realized_pnl_to_bankroll(exit_pnl)
+                    if em is not None:
+                        em.record_trade(
+                            pnl=exit_pnl,
+                            strategy=strat,
+                            market_id=exit_decision.market_id,
+                            window_size=window,
+                        )
+                    self.kelly_sizer.record_outcome(strat, exit_pnl > 0, window)
                     self.journal.log_exit(
                         trade_id=exit_decision.position_id,
                         exit_price=exit_decision.exit_price,
@@ -1996,7 +1959,6 @@ class PolyBot:
         )
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])
-        weather_snapshot_markets = opportunities.get("weather", [])
         scanner_meta = opportunities.get("scanner_meta", {})
         if scanner_meta:
             self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
@@ -2015,11 +1977,6 @@ class PolyBot:
             logging.info("No high liquidity markets found")
             log_ops_pulse(self, "main")
             return
-
-        try:
-            self.price_collector.maybe_collect(weather_snapshot_markets)
-        except Exception as e:
-            logging.error(f"Weather price collection error: {e}")
 
         # Filter out markets we already have positions in (avoid duplicates)
         held_market_ids = set()
@@ -2043,7 +2000,6 @@ class PolyBot:
             logging.error(f"Exit check error: {e}")
 
         available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
-        weather_available = [m for m in weather_snapshot_markets if m.id not in held_market_ids]
         short_horizon = _filter_short_horizon(available_markets, self.config)
         self._unified_cycle_count = max(1, int(self._unified_cycle_count or 0))
         include_hourly_crypto = _should_include_hourly_crypto_markets(
@@ -2054,24 +2010,8 @@ class PolyBot:
             short_horizon,
             include_hourly=include_hourly_crypto,
         )
-        weather_fallback_markets = (
-            available_markets if _weather_general_scan_enabled(self.config) else []
-        )
-        weather_candidates = _merge_weather_market_sources(
-            weather_available,
-            weather_fallback_markets,
-        )
-        weather_markets = _filter_weather_markets(weather_candidates, self.config)
-        self.last_ai_scan_stats.setdefault("scanner", {}).update(
-            {
-                "weather_dedicated_count": len(weather_snapshot_markets),
-                "weather_available_count": len(weather_available),
-                "weather_candidates_count": len(weather_candidates),
-                "weather_filtered_count": len(weather_markets),
-            }
-        )
         logging.info(
-            "Markets: %d total, %d held, %d available, %d in resolution window, %d strategy-scan | hourly_crypto=%s cycle=%d | weather: dedicated=%d available=%d filtered=%d",
+            "Markets: %d total, %d held, %d available, %d in resolution window, %d strategy-scan | hourly_crypto=%s cycle=%d",
             len(high_liquidity),
             len(held_market_ids),
             len(available_markets),
@@ -2079,20 +2019,7 @@ class PolyBot:
             len(strategy_markets),
             "included" if include_hourly_crypto else "skipped",
             self._unified_cycle_count,
-            len(weather_snapshot_markets),
-            len(weather_available),
-            len(weather_markets),
         )
-        if weather_snapshot_markets:
-            logging.info(
-                "[TRADING] Weather dedicated sample: %s",
-                [m.question[:100] for m in weather_snapshot_markets[:3]],
-            )
-        if weather_markets:
-            logging.info(
-                "[TRADING] Weather filtered sample: %s",
-                [m.question[:100] for m in weather_markets[:3]],
-            )
 
         # Crypto: Bitcoin, SOL/ETH/HYPE macro, XRP macro
         open_positions_snapshot = list(self.risk_manager.active_positions.values())
@@ -2492,11 +2419,6 @@ class PolyBot:
         except Exception as e:
             logging.error(f"Crypto BNB macro error: {e}", exc_info=True)
 
-        # Weather is being removed; keep the scan path hard-disabled even if stale
-        # config still marks the strategy enabled.
-        self.last_signal_counts["weather"] = 0
-        self.last_ai_scan_stats["weather"] = {}
-
         _write_runtime_status(
             phase="resolution_and_calibration",
             session_id=getattr(self.journal, "session_id", None),
@@ -2564,8 +2486,6 @@ class PolyBot:
                 return
             compact_stats: Dict[str, Any] = {}
             for strategy, stats in (self.last_ai_scan_stats or {}).items():
-                if strategy == "weather":
-                    continue
                 if not isinstance(stats, dict):
                     continue
                 compact_stats[strategy] = {
@@ -2820,10 +2740,12 @@ class PolyBot:
             lane_meta.update(regime_extra)
         combined_regime = str(regime_extra.get("combined_regime") or "")
         in_deadzone = combined_regime.startswith("deadzone") if combined_regime else None
-        self._get_exposure_manager_for(strategy).update_resume_window(
-            green_window=bool(allowed),
-            in_deadzone=in_deadzone,
-        )
+        em = self._get_exposure_manager_for(strategy)
+        if em is not None and hasattr(em, "update_resume_window"):
+            em.update_resume_window(
+                green_window=bool(allowed),
+                in_deadzone=in_deadzone,
+            )
         if allowed:
             return True
 
@@ -3414,204 +3336,6 @@ class PolyBot:
         async with self._execution_lock:
             await self._execute_sol_macro_signal_impl(signal)
 
-    async def _execute_weather_signal(self, signal: WeatherSignal):
-        """Execute a weather forecast vs market price trade signal."""
-        async with self._execution_lock:
-            await self._execute_weather_signal_impl(signal)
-
-    async def _execute_weather_signal_impl(self, signal: WeatherSignal):
-        strat = "weather"
-        _entry_leg = "NO" if signal.action == "BUY_NO" else "YES"
-        lane_meta = build_lane_metadata(
-            strategy=strat,
-            window_size=str(getattr(signal, "subtype", "") or "weather"),
-            action=signal.action,
-            direction=("down" if signal.action == "BUY_NO" else "up"),
-            entry_leg=_entry_leg,
-            side_source="forecast_gap",
-            ai_used=bool(getattr(signal, "ai_ensemble", None)),
-            reason=signal.reason,
-            signal_reason=signal.reason,
-            htf_bias=str(getattr(signal, "city", "") or getattr(signal, "subtype", "") or "weather"),
-        )
-        if not self._check_lane_execution(
-            strategy=strat,
-            signal_reason=signal.reason,
-            lane_meta=lane_meta,
-            market_id=signal.market_id,
-            market_question=signal.market_question,
-        ):
-            return
-        can_trade, reason = self.risk_manager.can_trade(strategy=strat)
-        if not can_trade:
-            logging.warning(f"{strat} trade risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                f"{reason} | {signal.reason}" if signal.reason else reason,
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=f"{reason} | {signal.reason}" if signal.reason else reason,
-                ),
-            )
-            return
-
-        can_trade, final_size, reason = self.risk_manager.evaluate_entry(
-            end_date=signal.end_date,
-            current_edge=signal.gap,
-            bankroll=self.bankroll,
-            strategy=strat,
-            requested_size=signal.size,
-        )
-        if not can_trade:
-            logging.warning(f"{strat} term risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                f"term_risk: {reason}" + (f" | {signal.reason}" if signal.reason else ""),
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=f"term_risk: {reason}" + (f" | {signal.reason}" if signal.reason else ""),
-                ),
-            )
-            return
-
-        if signal.action == "BUY_YES":
-            token_id = signal.token_id_yes
-            side = "BUY"
-        elif signal.action == "BUY_NO":
-            token_id = signal.token_id_no
-            side = "BUY"
-        else:
-            logging.warning(f"{strat}: unsupported action {signal.action}")
-            return
-
-        # ── T1-1: Unsellable token guard ─────────────────────────────────────
-        token_to_test = token_id
-        if not await self.clob_client.can_sell_token(token_to_test, signal.market_id):
-            logging.warning(
-                f"{strat} unsellable-token skip '{signal.market_question[:40]}' "
-                f"— token={token_to_test[:20]} has no bids"
-            )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                "unsellable_token" + (f" | {signal.reason}" if signal.reason else ""),
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason="unsellable_token" + (f" | {signal.reason}" if signal.reason else ""),
-                ),
-            )
-            return
-
-        order_size = final_size / max(0.01, signal.price)
-        pos_size = order_size
-
-        logging.info(
-            f"Executing {strat}: {signal.action} {final_size:.2f} @ {signal.price} "
-            f"(forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f})"
-        )
-
-        order = await self.clob_client.place_order(
-            token_id=token_id,
-            side=side,
-            price=signal.price,
-            size=order_size,
-            market_id=signal.market_id,
-            post_only=True,
-            dry_run=self.config.get("trading", {}).get("dry_run", True),
-            order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
-        )
-
-        if order and hasattr(order, "order_id"):
-            outcome = "YES" if signal.action == "BUY_YES" else "NO"
-            position = Position(
-                position_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
-                pnl=0.0,
-                opened_at=datetime.now(),
-                end_date=signal.end_date,
-                strategy=strat,
-                entry_leg=_entry_leg,
-                window_size=str(getattr(signal, "window_size", "") or ""),
-                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
-                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
-            )
-            self.risk_manager.add_position(position)
-
-            self.journal.log_entry(
-                trade_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                strategy=strat,
-                action=signal.action,
-                side=side,
-                outcome=outcome,
-                size=pos_size,
-                entry_price=signal.price,
-                bankroll=self.bankroll,
-                edge=signal.gap,
-                confidence=signal.gap,
-                reason=signal.reason
-                or f"weather forecast={signal.forecast_prob:.2f} market={signal.market_price:.2f} gap={signal.gap:.2f}",
-                token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
-                token_id_no=str(getattr(signal, "token_id_no", "") or ""),
-                extra={
-                    "weather_subtype": signal.subtype,
-                    "forecast_prob": signal.forecast_prob,
-                    "market_yes_price": signal.market_price,
-                    "signal_gap": signal.gap,
-                    "raw_forecast_prob": getattr(signal, "raw_forecast_prob", signal.forecast_prob),
-                    "corrected_forecast_prob": signal.forecast_prob,
-                    "weather_city": getattr(signal, "city", None),
-                    "weather_horizon_days": getattr(signal, "horizon_days", None),
-                    "weather_calibration_bias": getattr(signal, "calibration_bias", 0.0),
-                    "weather_calibration_count": getattr(signal, "calibration_count", 0),
-                    **self._ai_entry_attribution(
-                        ai_consulted=bool(getattr(signal, "ai_ensemble", None))
-                    ),
-                    **lane_meta,
-                },
-                market_end_at=signal.end_date,
-                entry_leg=_entry_leg,
-            )
-            asyncio.create_task(self._annotate_entry_async(
-                trade_id=order.order_id,
-                market_id=signal.market_id,
-                market_question=signal.market_question,
-                strategy=strat,
-                action=signal.action,
-                edge=float(signal.gap or 0.0),
-                confidence=float(signal.gap or 0.0),
-                yes_price=self._annotation_yes_price(signal.action, signal.price),
-            ))
-
-            await self.notifier.notify_trade(
-                {
-                    "question": signal.market_question,
-                    "side": side,
-                    "outcome": outcome,
-                    "size": final_size,
-                    "price": signal.price,
-                    "auto_execute": True,
-                    "strategy": strat,
-                }
-            )
-
     async def shutdown(self):
         """Shutdown the bot gracefully"""
         logging.info("Shutting down PolyBot...")
@@ -3757,7 +3481,18 @@ def start_dashboard(bot: Optional["PolyBot"]):
     # On PaaS (PORT set), never run fuser/taskkill: ephemeral port reuse / sidecars can
     # cause false positives; binding is the source of truth.
     if _port_in_use() and not os.environ.get("PORT"):
-        logging.info(f"Stale process on {port} — evicting so bot can own the dashboard")
+        if not _env_flag_enabled("PSB_EVICT_DASHBOARD_PORT"):
+            raise SystemExit(
+                f"FATAL: dashboard port {port} already in use on {connect_host}. "
+                "Stop the existing process first or set PSB_EVICT_DASHBOARD_PORT=1 "
+                "to evict it explicitly."
+            )
+        logging.warning(
+            "Dashboard port %s already in use on %s; evicting existing listener "
+            "because PSB_EVICT_DASHBOARD_PORT is enabled.",
+            port,
+            connect_host,
+        )
         try:
             import subprocess as _sp
             if sys.platform == "win32":
@@ -3785,6 +3520,11 @@ def start_dashboard(bot: Optional["PolyBot"]):
             time.sleep(0.5)
             if not _port_in_use():
                 break
+        if _port_in_use():
+            raise SystemExit(
+                f"FATAL: dashboard port {port} remained busy on {connect_host} "
+                "after eviction attempt."
+            )
 
     def run_server():
         logging.info(f"Starting dashboard server (bind {host}:{port}) — open: {display_url}")
@@ -4035,6 +3775,23 @@ async def main():
                 "Dashboard enabled but Uvicorn server handle missing — shutdown may not stop dashboard thread."
             )
 
+    async def _graceful_shutdown_or_exit() -> None:
+        timeout_sec = _shutdown_timeout_seconds()
+        try:
+            await asyncio.wait_for(bot.shutdown(), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            _write_runtime_status(
+                phase="shutdown_forced",
+                session_id=getattr(bot.journal, "session_id", None),
+                clean_shutdown=False,
+                detail=f"graceful shutdown exceeded {timeout_sec:.1f}s timeout",
+            )
+            logging.error(
+                "Graceful shutdown exceeded %.1fs timeout; forcing process exit.",
+                timeout_sec,
+            )
+            os._exit(1)
+
     # Dashboard-only mode: serve dashboard + backtests, no trading loop
     if "--dashboard-only" in sys.argv:
         logging.info("Dashboard-only mode — trading disabled. Run backtests from the dashboard.")
@@ -4048,12 +3805,20 @@ async def main():
                 await asyncio.sleep(30)
         except (KeyboardInterrupt, asyncio.CancelledError):
             bot._terminal_shutdown_sig = signal.SIGINT
-        await bot.shutdown()
+        await _graceful_shutdown_or_exit()
         if getattr(bot, "_terminal_shutdown_sig", None) is not None:
             print_shutdown_banner(bot._terminal_shutdown_sig)
         return
 
+    loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+    shutdown_state = {"signal": None}
+
     def signal_handler(sig, frame):
+        if shutdown_state["signal"] is not None:
+            logging.info("Received repeated shutdown signal %s; waiting for shutdown.", sig)
+            return
+        shutdown_state["signal"] = sig
         bot._terminal_shutdown_sig = sig
         _write_runtime_status(
             phase="signal_received",
@@ -4061,19 +3826,10 @@ async def main():
             clean_shutdown=False,
             detail=str(sig),
         )
-        logging.info("Received shutdown signal — cancelling tasks...")
+        logging.info("Received shutdown signal — stopping bot and cancelling main loop.")
         bot.stop()
-        # Cancel all running asyncio tasks so sleeping loops wake up immediately
-        for task in asyncio.all_tasks():
-            task.cancel()
-        # Force-exit after 8s in case scanner threads are still blocking
-        import threading, os
-        def _force_exit():
-            import time; time.sleep(8)
-            logging.warning("Force exit — scanner threads did not stop in time.")
-            os._exit(0)
-        t = threading.Thread(target=_force_exit, daemon=True)
-        t.start()
+        if main_task is not None and not main_task.done():
+            loop.call_soon_threadsafe(main_task.cancel)
 
     signal.signal(signal.SIGINT, signal_handler)
     if hasattr(signal, "SIGTERM"):
@@ -4085,7 +3841,7 @@ async def main():
         pass
     finally:
         try:
-            await bot.shutdown()
+            await _graceful_shutdown_or_exit()
         finally:
             sig = getattr(bot, "_terminal_shutdown_sig", None)
             if sig is not None:

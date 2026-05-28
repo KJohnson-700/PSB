@@ -299,7 +299,6 @@ class TradeJournal:
             "entry_reason": reason,
             "opened_at": entry.timestamp,
             "peak_token_price": entry_price,
-            "weather_subtype": merged_extra.get("weather_subtype"),
             # Preserve full signal context so exits can reference entry conditions
             "entry_signal": merged_extra,
             "entry_leg": entry_leg,
@@ -806,10 +805,6 @@ class TradeJournal:
         wins = sum(1 for ct in real_trades if ct.get("pnl", 0) > 0)
         losses = sum(1 for ct in real_trades if ct.get("pnl", 0) <= 0)
         strat_stats: Dict = {}
-        weather_subtype_stats: Dict[str, Dict[str, Any]] = {
-            "temp": {"trades": 0, "wins": 0, "pnl": 0.0, "avg_pnl": 0.0},
-            "precip": {"trades": 0, "wins": 0, "pnl": 0.0, "avg_pnl": 0.0},
-        }
         real_pnl = 0.0
         for ct in real_trades:
             s = ct["strategy"]
@@ -820,21 +815,7 @@ class TradeJournal:
             real_pnl += ct.get("pnl", 0)
             if ct.get("pnl", 0) > 0:
                 strat_stats[s]["wins"] += 1
-            if s == "weather":
-                subtype = (
-                    ct.get("weather_subtype")
-                    or (ct.get("entry_signal") or {}).get("weather_subtype")
-                )
-                if subtype in weather_subtype_stats:
-                    weather_subtype_stats[subtype]["trades"] += 1
-                    weather_subtype_stats[subtype]["pnl"] += ct.get("pnl", 0)
-                    if ct.get("pnl", 0) > 0:
-                        weather_subtype_stats[subtype]["wins"] += 1
         for s in strat_stats.values():
-            s["win_rate"] = round(s["wins"] / s["trades"], 3) if s["trades"] else 0
-            s["avg_pnl"] = round(s["pnl"] / s["trades"], 2) if s["trades"] else 0
-            s["pnl"] = round(s["pnl"], 2)
-        for s in weather_subtype_stats.values():
             s["win_rate"] = round(s["wins"] / s["trades"], 3) if s["trades"] else 0
             s["avg_pnl"] = round(s["pnl"] / s["trades"], 2) if s["trades"] else 0
             s["pnl"] = round(s["pnl"], 2)
@@ -850,7 +831,6 @@ class TradeJournal:
             "realized_pnl": round(real_pnl, 2),
             "win_rate_parts": (wins, losses),
             "strategy_stats": strat_stats,
-            "weather_subtype_stats": weather_subtype_stats,
             "closed_notional": round(sum(_notional(ct) for ct in real_trades), 2),
         }
 
@@ -882,22 +862,6 @@ class TradeJournal:
             sum(_notional(p) for p in self.open_positions.values()) + closed["closed_notional"],
             2,
         )
-        weather_open_stats: Dict[str, Dict[str, Any]] = {
-            "temp": {"open": 0, "exposure": 0.0, "unrealized_pnl": 0.0},
-            "precip": {"open": 0, "exposure": 0.0, "unrealized_pnl": 0.0},
-        }
-        for p in self.open_positions.values():
-            if p.get("strategy") != "weather":
-                continue
-            subtype = p.get("weather_subtype") or (p.get("entry_signal") or {}).get("weather_subtype")
-            if subtype not in weather_open_stats:
-                continue
-            weather_open_stats[subtype]["open"] += 1
-            weather_open_stats[subtype]["exposure"] += float(p.get("size", 0) or 0)
-            weather_open_stats[subtype]["unrealized_pnl"] += float(p.get("pnl", 0) or 0)
-        for s in weather_open_stats.values():
-            s["exposure"] = round(s["exposure"], 2)
-            s["unrealized_pnl"] = round(s["unrealized_pnl"], 2)
         # Fills / closed totals must match journal state (same as log_entry assigns:
         # open + len(closed_trades)), not len(real_trades). The phantom heuristic in
         # _build_closed_stats mirrors pre-fix buggy EXIT rows across all legs while
@@ -921,8 +885,6 @@ class TradeJournal:
             "wins": wins,
             "losses": losses,
             "strategy_stats": closed["strategy_stats"],
-            "weather_subtype_stats": closed["weather_subtype_stats"],
-            "weather_open_stats": weather_open_stats,
         }
         src = (
             "archived"

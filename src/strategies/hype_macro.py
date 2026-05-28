@@ -42,6 +42,26 @@ NON_HYPE_ASSET_TERMS = ("bitcoin", "btc", "solana", "ethereum", "ether", "xrp", 
 class HYPEMacroStrategy(SolMacroStrategy):
     """HYPE macro strategy with HYPE-first direction and Hyperliquid data."""
 
+    def _hype_signal_guard_reason(self, signal: SolMacroSignal) -> str | None:
+        if signal.action != "BUY_NO":
+            return None
+        side_source = str(signal.side_source or "")
+        if "neutral_fallback" not in side_source:
+            return None
+
+        if signal.window_size == "5m":
+            return "hype_5m_neutral_fallback_short_disabled"
+
+        if signal.window_size == "15m" and str(signal.btc_1h_regime or "").upper() == "BULL":
+            yes_price = 1.0 - float(signal.price or 0.0)
+            max_yes = float(
+                self.config.get("hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h", 0.45)
+            )
+            if yes_price >= max_yes:
+                return "hype_15m_neutral_fallback_expensive_short"
+
+        return None
+
     def _build_alt_service(self) -> HyperliquidHypeService:
         """Build the HYPE data/oracle service; never use SOL spot for this lane."""
         hk = hyperliquid_kwargs_from_config(self._hyperliquid_cfg)
@@ -114,17 +134,31 @@ class HYPEMacroStrategy(SolMacroStrategy):
         regardless of whether AI branch was used.
         """
         signals = await super().scan_and_analyze(markets, bankroll)
-        base_hard = max(0.05, float(self.config.get("hard_min_edge", 0.05)))
+        base_hard = max(0.0, float(self.config.get("hard_min_edge", 0.0) or 0.0))
         filtered: List[SolMacroSignal] = []
         rejected = 0
+        guard_rejected = 0
+        edge_rejected = 0
 
         for signal in signals:
+            guard_reason = self._hype_signal_guard_reason(signal)
+            if guard_reason:
+                rejected += 1
+                guard_rejected += 1
+                logger.info(
+                    "HYPE local guard skip '%s...' reason=%s side_source=%s",
+                    signal.market_question[:45],
+                    guard_reason,
+                    signal.side_source,
+                )
+                continue
             hard_min_edge = base_hard
             if self._btc_1h_regime_gates.get("enabled", False) and signal.btc_1h_regime:
                 hard_min_edge *= self._regime_min_edge_mult(signal.btc_1h_regime)
             hard_min_edge *= get_drift_min_edge_mult("hype_macro", self.full_config)
             if float(signal.edge or 0.0) < hard_min_edge:
                 rejected += 1
+                edge_rejected += 1
                 logger.info(
                     "HYPE hard-edge skip '%s...' edge=%.4f < %.4f (ai_used=%s)",
                     signal.market_question[:45],
@@ -138,7 +172,10 @@ class HYPEMacroStrategy(SolMacroStrategy):
         if rejected:
             stats = dict(getattr(self, "last_scan_stats", {}) or {})
             top = dict(stats.get("top_skip_reasons", {}) or {})
-            top["hard_min_edge"] = int(top.get("hard_min_edge", 0)) + rejected
+            if edge_rejects := int(edge_rejected):
+                top["hard_min_edge"] = int(top.get("hard_min_edge", 0)) + edge_rejects
+            if guard_rejects := int(guard_rejected):
+                top["local_hype_guard"] = int(top.get("local_hype_guard", 0)) + guard_rejects
             stats["top_skip_reasons"] = top
             stats["signals"] = len(filtered)
             self.last_scan_stats = stats

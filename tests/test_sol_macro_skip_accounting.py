@@ -10,20 +10,24 @@ ETH_MACRO = REPO / "src" / "strategies" / "eth_macro.py"
 
 
 def test_updown_market_loop_early_continues_are_counted() -> None:
+    """Verify the sol_macro market loop still accounts for each early-continue path.
+
+    Note: list pruned 2026-05-28 — `lane_entry_window`, `btc_min_move_dollars`,
+    `lane_min_edge`, `lane_price_band`, `lane_size_too_small` were removed by the
+    BTC-decouple refactor and the horizon-coherent bias rewrite. The remaining
+    reasons are the ones still wired in sol_macro.py and that the live skip
+    accounting depends on.
+    """
     source = SOL_MACRO.read_text(encoding="utf-8")
     required_skip_reasons = (
         "liquidity",
         "missing_end_date",
-        "lane_entry_window",
-        "btc_min_move_dollars",
         "price_too_far_from_even",
         "low_corr_suppressed",
-        "lane_min_edge",
-        "lane_price_band",
-        "lane_size_too_small",
+        "neutral_bias",
     )
     for reason in required_skip_reasons:
-        assert f'_bump_skip("{reason}")' in source
+        assert f'_bump_skip("{reason}")' in source, f"skip reason {reason!r} not wired in sol_macro.py"
 
 
 def test_updown_entry_band_uses_explicit_min_and_max() -> None:

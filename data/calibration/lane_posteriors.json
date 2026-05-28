@@ -1,11 +1,11 @@
 {
   "lanes": {
     "bitcoin|15m|down|bearish|drift": {
-      "alpha_ewma": 1.658776873176048,
-      "beta_a": 39.0,
-      "beta_b": 66.0,
-      "last_updated": "2026-05-23T22:55:10.333494+00:00",
-      "n": 100
+      "alpha_ewma": 1.8680832880247813,
+      "beta_a": 41.0,
+      "beta_b": 71.0,
+      "last_updated": "2026-05-26T05:13:40.678856+00:00",
+      "n": 107
     },
     "bitcoin|15m|down|bearish|predict_window": {
       "alpha_ewma": 1.8384431686305756,
@@ -22,25 +22,25 @@
       "n": 2489
     },
     "bitcoin|15m|down|bearish|spike": {
-      "alpha_ewma": -1.4302404122496326,
-      "beta_a": 9.0,
-      "beta_b": 10.0,
-      "last_updated": "2026-05-23T21:49:14.507535+00:00",
-      "n": 14
+      "alpha_ewma": -0.6679714860299482,
+      "beta_a": 10.0,
+      "beta_b": 12.0,
+      "last_updated": "2026-05-26T02:50:20.912961+00:00",
+      "n": 17
     },
     "bitcoin|15m|down|bearish|standard": {
-      "alpha_ewma": 0.861829894791849,
-      "beta_a": 159.5,
-      "beta_b": 140.5,
-      "last_updated": "2026-05-23T23:10:11.415334+00:00",
-      "n": 84
+      "alpha_ewma": 1.3748962841390442,
+      "beta_a": 170.5,
+      "beta_b": 159.0,
+      "last_updated": "2026-05-26T04:37:36.059832+00:00",
+      "n": 90
     },
     "bitcoin|15m|down|bullish|drift": {
-      "alpha_ewma": -1.5009804553823158,
-      "beta_a": 28.0,
-      "beta_b": 43.0,
-      "last_updated": "2026-05-25T06:11:45.741554+00:00",
-      "n": 66
+      "alpha_ewma": -0.34996610569327014,
+      "beta_a": 31.0,
+      "beta_b": 50.0,
+      "last_updated": "2026-05-26T00:34:35.626116+00:00",
+      "n": 76
     },
     "bitcoin|15m|down|bullish|predict_window": {
       "alpha_ewma": 1.652367251786091,
@@ -50,18 +50,18 @@
       "n": 33
     },
     "bitcoin|15m|down|bullish|spike": {
-      "alpha_ewma": -4.055331578947368,
-      "beta_a": 5.0,
-      "beta_b": 4.0,
-      "last_updated": "2026-05-24T16:22:31.950062+00:00",
-      "n": 4
+      "alpha_ewma": -3.381138315789473,
+      "beta_a": 6.0,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-25T22:10:08.440418+00:00",
+      "n": 6
     },
     "bitcoin|15m|down|bullish|standard": {
-      "alpha_ewma": 2.305504222089138,
-      "beta_a": 82.5,
-      "beta_b": 55.0,
-      "last_updated": "2026-05-25T04:20:29.351928+00:00",
-      "n": 51
+      "alpha_ewma": 1.813748917900482,
+      "beta_a": 134.0,
+      "beta_b": 101.5,
+      "last_updated": "2026-05-25T23:32:53.069229+00:00",
+      "n": 68
     },
     "bitcoin|15m|down|neutral|standard": {
       "alpha_ewma": 1.0,
@@ -70,26 +70,33 @@
       "last_updated": "",
       "n": 0
     },
-    "bitcoin|15m|up|bullish|drift": {
-      "alpha_ewma": -1.9534773080233854,
-      "beta_a": 4.0,
-      "beta_b": 9.0,
-      "last_updated": "2026-05-25T05:31:18.013531+00:00",
-      "n": 8
-    },
-    "bitcoin|15m|up|bullish|spike": {
-      "alpha_ewma": -2.8834471887594697,
-      "beta_a": 3.0,
-      "beta_b": 8.0,
-      "last_updated": "2026-05-25T02:17:01.718419+00:00",
-      "n": 6
-    },
-    "bitcoin|15m|up|bullish|standard": {
+    "bitcoin|15m|up|bearish|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 68.5,
-      "beta_b": 62.5,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
       "last_updated": "",
       "n": 0
+    },
+    "bitcoin|15m|up|bullish|drift": {
+      "alpha_ewma": -0.628794685449954,
+      "beta_a": 6.0,
+      "beta_b": 11.0,
+      "last_updated": "2026-05-25T17:03:03.440685+00:00",
+      "n": 12
+    },
+    "bitcoin|15m|up|bullish|spike": {
+      "alpha_ewma": -2.648730110445549,
+      "beta_a": 3.0,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-25T15:04:22.539512+00:00",
+      "n": 7
+    },
+    "bitcoin|15m|up|bullish|standard": {
+      "alpha_ewma": 5.0,
+      "beta_a": 100.0,
+      "beta_b": 78.0,
+      "last_updated": "2026-05-25T10:18:18.267702+00:00",
+      "n": 1
     },
     "bitcoin|15m|up|neutral|standard": {
       "alpha_ewma": 1.0,
@@ -99,11 +106,11 @@
       "n": 0
     },
     "bitcoin|1h|down|bearish|drift": {
-      "alpha_ewma": 0.8412831978112576,
-      "beta_a": 13.0,
+      "alpha_ewma": -0.034909281860431074,
+      "beta_a": 14.0,
       "beta_b": 23.0,
-      "last_updated": "2026-05-23T20:33:05.841606+00:00",
-      "n": 31
+      "last_updated": "2026-05-26T02:29:13.282502+00:00",
+      "n": 32
     },
     "bitcoin|1h|down|bearish|predict_window": {
       "alpha_ewma": 0.12066804086216454,
@@ -113,25 +120,25 @@
       "n": 14
     },
     "bitcoin|1h|down|bearish|spike": {
-      "alpha_ewma": -2.90694459445303,
-      "beta_a": 4.0,
+      "alpha_ewma": -3.2209029052850755,
+      "beta_a": 5.0,
       "beta_b": 5.0,
-      "last_updated": "2026-05-23T19:27:33.444040+00:00",
-      "n": 4
+      "last_updated": "2026-05-26T01:33:58.683505+00:00",
+      "n": 5
     },
     "bitcoin|1h|down|bearish|standard": {
-      "alpha_ewma": 0.2821901927181149,
-      "beta_a": 148.0,
-      "beta_b": 69.0,
-      "last_updated": "2026-05-23T23:10:12.574922+00:00",
-      "n": 27
+      "alpha_ewma": 0.9898616638103976,
+      "beta_a": 152.5,
+      "beta_b": 77.0,
+      "last_updated": "2026-05-26T05:17:29.683436+00:00",
+      "n": 30
     },
     "bitcoin|1h|down|bullish|drift": {
-      "alpha_ewma": 0.6160207083058828,
-      "beta_a": 12.0,
-      "beta_b": 25.0,
-      "last_updated": "2026-05-25T06:15:08.431934+00:00",
-      "n": 32
+      "alpha_ewma": 1.0326887174883503,
+      "beta_a": 14.0,
+      "beta_b": 27.0,
+      "last_updated": "2026-05-25T23:06:20.058986+00:00",
+      "n": 36
     },
     "bitcoin|1h|down|bullish|predict_window": {
       "alpha_ewma": 1.9840485285682468,
@@ -141,16 +148,16 @@
       "n": 7
     },
     "bitcoin|1h|down|bullish|standard": {
-      "alpha_ewma": -0.17175140610944228,
-      "beta_a": 23.0,
-      "beta_b": 18.0,
-      "last_updated": "2026-05-25T01:53:25.774537+00:00",
-      "n": 17
+      "alpha_ewma": 0.42225705117989554,
+      "beta_a": 40.0,
+      "beta_b": 35.5,
+      "last_updated": "2026-05-25T20:34:50.416200+00:00",
+      "n": 22
     },
     "bitcoin|1h|up|bullish|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 21.0,
-      "beta_b": 11.0,
+      "beta_a": 30.0,
+      "beta_b": 13.5,
       "last_updated": "",
       "n": 0
     },
@@ -163,10 +170,10 @@
     },
     "bitcoin|5m|down|bearish|predict_window": {
       "alpha_ewma": 1.7562559565927731,
-      "beta_a": 5.0,
-      "beta_b": 15.0,
-      "last_updated": "2026-05-23T22:55:39.349365+00:00",
-      "n": 15
+      "beta_a": 7.0,
+      "beta_b": 16.0,
+      "last_updated": "2026-05-26T04:29:25.744767+00:00",
+      "n": 18
     },
     "bitcoin|5m|down|bearish|rejected": {
       "alpha_ewma": -4.241359088316774,
@@ -176,32 +183,32 @@
       "n": 588
     },
     "bitcoin|5m|down|bearish|spike": {
-      "alpha_ewma": -0.6257588382392889,
+      "alpha_ewma": 0.21810498749660445,
       "beta_a": 6.0,
-      "beta_b": 10.0,
-      "last_updated": "2026-05-22T13:38:58.032747+00:00",
-      "n": 11
+      "beta_b": 11.0,
+      "last_updated": "2026-05-26T02:49:03.842879+00:00",
+      "n": 12
     },
     "bitcoin|5m|down|bearish|standard": {
-      "alpha_ewma": 1.648964652050929,
-      "beta_a": 167.5,
-      "beta_b": 219.0,
-      "last_updated": "2026-05-23T22:53:08.710617+00:00",
-      "n": 126
+      "alpha_ewma": -1.4350049400591833,
+      "beta_a": 208.0,
+      "beta_b": 257.5,
+      "last_updated": "2026-05-26T05:34:22.227218+00:00",
+      "n": 139
     },
     "bitcoin|5m|down|bullish|drift": {
-      "alpha_ewma": -2.7076557069512566,
-      "beta_a": 21.0,
-      "beta_b": 16.0,
-      "last_updated": "2026-05-25T03:46:30.915496+00:00",
-      "n": 32
+      "alpha_ewma": -2.123622185772283,
+      "beta_a": 22.0,
+      "beta_b": 17.0,
+      "last_updated": "2026-05-25T07:41:50.217158+00:00",
+      "n": 34
     },
     "bitcoin|5m|down|bullish|predict_window": {
-      "alpha_ewma": 5.0,
-      "beta_a": 2.0,
-      "beta_b": 8.0,
-      "last_updated": "2026-05-25T04:19:22.500224+00:00",
-      "n": 5
+      "alpha_ewma": 3.5,
+      "beta_a": 4.0,
+      "beta_b": 12.0,
+      "last_updated": "2026-05-25T23:44:17.932821+00:00",
+      "n": 11
     },
     "bitcoin|5m|down|bullish|spike": {
       "alpha_ewma": 0.04337616949212619,
@@ -211,11 +218,11 @@
       "n": 15
     },
     "bitcoin|5m|down|bullish|standard": {
-      "alpha_ewma": 2.1404953474886588,
-      "beta_a": 101.0,
-      "beta_b": 104.0,
-      "last_updated": "2026-05-25T04:21:42.597246+00:00",
-      "n": 70
+      "alpha_ewma": -0.025466030418991537,
+      "beta_a": 169.0,
+      "beta_b": 175.0,
+      "last_updated": "2026-05-26T00:28:43.085469+00:00",
+      "n": 109
     },
     "bitcoin|5m|down|neutral|drift": {
       "alpha_ewma": 1.3692429598799398,
@@ -245,10 +252,17 @@
       "last_updated": "2026-05-24T00:02:29.633519+00:00",
       "n": 21
     },
+    "bitcoin|5m|up|bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 13.5,
+      "beta_b": 6.5,
+      "last_updated": "",
+      "n": 0
+    },
     "bitcoin|5m|up|bullish|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 120.0,
-      "beta_b": 101.5,
+      "beta_a": 161.0,
+      "beta_b": 130.0,
       "last_updated": "",
       "n": 0
     },
@@ -274,11 +288,11 @@
       "n": 22
     },
     "bnb_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.1124239253143765,
-      "beta_a": 1850.0,
-      "beta_b": 1719.5,
-      "last_updated": "2026-05-25T04:37:38.845431+00:00",
-      "n": 44
+      "alpha_ewma": -0.2631197930470339,
+      "beta_a": 2727.0,
+      "beta_b": 2474.5,
+      "last_updated": "2026-05-26T04:22:49.499971+00:00",
+      "n": 52
     },
     "bnb_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": 3.852740789473684,
@@ -289,52 +303,52 @@
     },
     "bnb_macro|15m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 0.7213173959336393,
-      "beta_a": 2129.5,
-      "beta_b": 1954.5,
+      "beta_a": 3399.5,
+      "beta_b": 3350.5,
       "last_updated": "2026-05-21T23:52:19.348770+00:00",
       "n": 17
     },
     "bnb_macro|1h|down|bearish__bearish__bull|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 302.0,
-      "beta_b": 396.5,
+      "beta_a": 435.0,
+      "beta_b": 569.5,
       "last_updated": "",
       "n": 0
     },
     "bnb_macro|1h|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 302.0,
-      "beta_b": 265.0,
+      "beta_a": 599.0,
+      "beta_b": 498.0,
       "last_updated": "",
       "n": 0
     },
     "bnb_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -2.048299838909121,
-      "beta_a": 319.0,
-      "beta_b": 371.5,
-      "last_updated": "2026-05-25T04:42:16.792548+00:00",
-      "n": 86
+      "alpha_ewma": -1.891350610876296,
+      "beta_a": 472.5,
+      "beta_b": 536.0,
+      "last_updated": "2026-05-26T05:52:56.154912+00:00",
+      "n": 125
     },
     "bnb_macro|5m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 2.225,
-      "beta_a": 407.0,
-      "beta_b": 395.5,
+      "beta_a": 589.5,
+      "beta_b": 590.0,
       "last_updated": "2026-05-21T23:39:36.528194+00:00",
       "n": 4
     },
     "doge_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 1.4137644609602904,
-      "beta_a": 7.0,
-      "beta_b": 10.0,
-      "last_updated": "2026-05-25T03:49:55.883798+00:00",
-      "n": 12
+      "alpha_ewma": 0.9058967531411755,
+      "beta_a": 9.0,
+      "beta_b": 13.0,
+      "last_updated": "2026-05-26T05:09:51.183100+00:00",
+      "n": 17
     },
     "doge_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -0.596911757464417,
-      "beta_a": 1533.5,
-      "beta_b": 1482.5,
-      "last_updated": "2026-05-25T04:21:40.079195+00:00",
-      "n": 37
+      "alpha_ewma": 0.44580940901410127,
+      "beta_a": 2229.0,
+      "beta_b": 2375.0,
+      "last_updated": "2026-05-26T03:31:48.553398+00:00",
+      "n": 55
     },
     "doge_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": -2.011045751633987,
@@ -345,45 +359,45 @@
     },
     "doge_macro|15m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": -0.10462045149769739,
-      "beta_a": 2171.0,
-      "beta_b": 2364.5,
+      "beta_a": 3534.5,
+      "beta_b": 3608.5,
       "last_updated": "2026-05-21T08:32:56.597212+00:00",
       "n": 12
     },
     "doge_macro|1h|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 5.0,
-      "beta_a": 288.0,
-      "beta_b": 321.0,
-      "last_updated": "2026-05-24T16:46:42.904310+00:00",
-      "n": 1
+      "alpha_ewma": 4.8132363636363635,
+      "beta_a": 404.5,
+      "beta_b": 472.5,
+      "last_updated": "2026-05-25T23:08:03.661765+00:00",
+      "n": 2
     },
     "doge_macro|1h|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 389.5,
-      "beta_b": 260.5,
+      "beta_a": 562.0,
+      "beta_b": 629.5,
       "last_updated": "",
       "n": 0
     },
     "doge_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 1.0478795740388325,
-      "beta_a": 274.5,
-      "beta_b": 314.5,
-      "last_updated": "2026-05-25T04:27:16.939604+00:00",
-      "n": 74
+      "alpha_ewma": -3.0475187566664492,
+      "beta_a": 420.5,
+      "beta_b": 484.5,
+      "last_updated": "2026-05-26T05:32:38.107326+00:00",
+      "n": 123
     },
     "doge_macro|5m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 1.4053621848958326,
-      "beta_a": 445.5,
-      "beta_b": 480.5,
+      "beta_a": 645.0,
+      "beta_b": 692.0,
       "last_updated": "2026-05-21T23:57:28.947264+00:00",
       "n": 8
     },
     "eth_macro|15m|down|bearish__bearish__bull|drift": {
-      "alpha_ewma": 0.6018595088331606,
-      "beta_a": 16.0,
-      "beta_b": 31.0,
-      "last_updated": "2026-05-22T18:46:18.057796+00:00",
-      "n": 42
+      "alpha_ewma": 1.0122729551167158,
+      "beta_a": 17.0,
+      "beta_b": 36.0,
+      "last_updated": "2026-05-26T03:15:48.213539+00:00",
+      "n": 48
     },
     "eth_macro|15m|down|bearish__bearish__bull|late_window": {
       "alpha_ewma": -5.0,
@@ -393,25 +407,25 @@
       "n": 1
     },
     "eth_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": -0.2818731387254468,
-      "beta_a": 8.0,
-      "beta_b": 15.0,
-      "last_updated": "2026-05-23T08:46:27.663447+00:00",
-      "n": 18
+      "alpha_ewma": -0.6832633427291352,
+      "beta_a": 9.0,
+      "beta_b": 16.0,
+      "last_updated": "2026-05-26T01:19:14.827260+00:00",
+      "n": 20
     },
     "eth_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -0.17274776097566302,
-      "beta_a": 840.0,
-      "beta_b": 867.5,
-      "last_updated": "2026-05-22T15:31:17.105953+00:00",
-      "n": 40
+      "alpha_ewma": -0.17022275730491665,
+      "beta_a": 1303.0,
+      "beta_b": 1499.0,
+      "last_updated": "2026-05-25T13:32:45.057060+00:00",
+      "n": 42
     },
     "eth_macro|15m|up|bullish__bullish__bull|drift": {
-      "alpha_ewma": -0.783869484271022,
-      "beta_a": 8.0,
-      "beta_b": 21.0,
-      "last_updated": "2026-05-25T05:50:05.748993+00:00",
-      "n": 24
+      "alpha_ewma": -0.5076992645694622,
+      "beta_a": 12.0,
+      "beta_b": 27.0,
+      "last_updated": "2026-05-25T17:16:49.020468+00:00",
+      "n": 34
     },
     "eth_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": 1.0564711410256415,
@@ -421,32 +435,39 @@
       "n": 5
     },
     "eth_macro|15m|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": 0.684322366503917,
-      "beta_a": 1067.5,
-      "beta_b": 986.0,
-      "last_updated": "2026-05-25T05:39:30.272507+00:00",
-      "n": 34
+      "alpha_ewma": 1.8985424753563827,
+      "beta_a": 2344.0,
+      "beta_b": 2104.5,
+      "last_updated": "2026-05-25T15:05:31.536510+00:00",
+      "n": 40
     },
     "eth_macro|1h|down|bearish__bearish__bull|drift": {
-      "alpha_ewma": 1.1086336538461539,
+      "alpha_ewma": 1.3423424519230769,
       "beta_a": 3.0,
-      "beta_b": 5.0,
-      "last_updated": "2026-05-22T15:17:01.779082+00:00",
-      "n": 3
-    },
-    "eth_macro|1h|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 1.7226336002747251,
-      "beta_a": 204.0,
-      "beta_b": 191.0,
-      "last_updated": "2026-05-22T09:17:41.423020+00:00",
+      "beta_b": 6.0,
+      "last_updated": "2026-05-25T23:06:20.875712+00:00",
       "n": 4
     },
-    "eth_macro|1h|up|bullish__bullish__bull|drift": {
-      "alpha_ewma": -1.1286561538461535,
+    "eth_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -4.598692307692307,
       "beta_a": 3.0,
-      "beta_b": 5.0,
-      "last_updated": "2026-05-25T05:08:04.370550+00:00",
-      "n": 3
+      "beta_b": 3.0,
+      "last_updated": "2026-05-26T01:03:14.364385+00:00",
+      "n": 1
+    },
+    "eth_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.8755154833104393,
+      "beta_a": 271.5,
+      "beta_b": 301.5,
+      "last_updated": "2026-05-26T03:32:48.585446+00:00",
+      "n": 5
+    },
+    "eth_macro|1h|up|bullish__bullish__bull|drift": {
+      "alpha_ewma": 0.3252238434564906,
+      "beta_a": 6.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-25T16:14:53.599447+00:00",
+      "n": 8
     },
     "eth_macro|1h|up|bullish__bullish__bull|spike": {
       "alpha_ewma": -2.6467692307692308,
@@ -456,18 +477,18 @@
       "n": 1
     },
     "eth_macro|1h|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": 2.9179084615384614,
-      "beta_a": 102.5,
-      "beta_b": 86.5,
-      "last_updated": "2026-05-25T06:04:50.708161+00:00",
-      "n": 4
+      "alpha_ewma": 1.806643687788461,
+      "beta_a": 417.0,
+      "beta_b": 344.0,
+      "last_updated": "2026-05-25T10:58:09.137837+00:00",
+      "n": 7
     },
     "eth_macro|5m|down|bearish__bearish__bull|drift": {
-      "alpha_ewma": 0.3704135936602249,
+      "alpha_ewma": -1.1198761785804874,
       "beta_a": 8.0,
-      "beta_b": 13.0,
-      "last_updated": "2026-05-23T12:18:25.011052+00:00",
-      "n": 16
+      "beta_b": 15.0,
+      "last_updated": "2026-05-25T13:22:24.144510+00:00",
+      "n": 18
     },
     "eth_macro|5m|down|bearish__bearish__bull|spike": {
       "alpha_ewma": -3.725,
@@ -478,8 +499,8 @@
     },
     "eth_macro|5m|down|bearish__bearish__bull|standard": {
       "alpha_ewma": 3.864180162184798,
-      "beta_a": 193.5,
-      "beta_b": 245.5,
+      "beta_a": 346.5,
+      "beta_b": 385.5,
       "last_updated": "2026-05-24T18:54:54.759368+00:00",
       "n": 54
     },
@@ -491,11 +512,11 @@
       "n": 2
     },
     "eth_macro|5m|up|bullish__bullish__bull|standard": {
-      "alpha_ewma": 1.1705372408320645,
-      "beta_a": 273.0,
-      "beta_b": 327.0,
-      "last_updated": "2026-05-25T04:58:40.140796+00:00",
-      "n": 16
+      "alpha_ewma": 2.6482311830259917,
+      "beta_a": 520.5,
+      "beta_b": 608.0,
+      "last_updated": "2026-05-25T14:17:49.557955+00:00",
+      "n": 19
     },
     "hype_macro|15m|down|bearish__bearish__bull|ai_assisted": {
       "alpha_ewma": -4.547304347826087,
@@ -505,18 +526,18 @@
       "n": 1
     },
     "hype_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 0.32900880090616785,
-      "beta_a": 15.0,
-      "beta_b": 28.0,
-      "last_updated": "2026-05-25T01:00:27.824580+00:00",
-      "n": 38
+      "alpha_ewma": -1.810738965536919,
+      "beta_a": 21.0,
+      "beta_b": 33.0,
+      "last_updated": "2026-05-26T00:48:24.983102+00:00",
+      "n": 49
     },
     "hype_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.10377087605993718,
-      "beta_a": 1257.5,
-      "beta_b": 1334.0,
-      "last_updated": "2026-05-25T05:52:22.082452+00:00",
-      "n": 59
+      "alpha_ewma": 0.4784138640257183,
+      "beta_a": 3085.0,
+      "beta_b": 2670.5,
+      "last_updated": "2026-05-26T01:34:02.255962+00:00",
+      "n": 90
     },
     "hype_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": -0.2734014724122023,
@@ -527,31 +548,31 @@
     },
     "hype_macro|15m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 0.44868854078317816,
-      "beta_a": 2170.5,
-      "beta_b": 1744.5,
+      "beta_a": 2324.0,
+      "beta_b": 1982.5,
       "last_updated": "2026-05-21T23:37:58.291392+00:00",
       "n": 64
     },
     "hype_macro|1h|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 3.2409207920792076,
-      "beta_a": 220.0,
-      "beta_b": 390.0,
-      "last_updated": "2026-05-23T14:13:46.483426+00:00",
-      "n": 2
+      "alpha_ewma": 2.9339946548341467,
+      "beta_a": 733.5,
+      "beta_b": 633.0,
+      "last_updated": "2026-05-26T00:18:34.421457+00:00",
+      "n": 3
     },
     "hype_macro|1h|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 383.5,
-      "beta_b": 307.5,
+      "beta_a": 431.5,
+      "beta_b": 366.0,
       "last_updated": "",
       "n": 0
     },
     "hype_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 1.276599263551852,
-      "beta_a": 150.5,
-      "beta_b": 128.0,
-      "last_updated": "2026-05-25T00:14:28.952962+00:00",
-      "n": 9
+      "alpha_ewma": 1.2523576276527972,
+      "beta_a": 265.5,
+      "beta_b": 236.0,
+      "last_updated": "2026-05-26T00:26:23.666868+00:00",
+      "n": 13
     },
     "hype_macro|5m|down|bullish__bullish__bull|override": {
       "alpha_ewma": 5.0,
@@ -569,10 +590,1816 @@
     },
     "hype_macro|5m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 2.7222130087537266,
-      "beta_a": 443.0,
-      "beta_b": 400.5,
+      "beta_a": 479.0,
+      "beta_b": 420.5,
       "last_updated": "2026-05-21T23:13:29.120123+00:00",
       "n": 40
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|down|bearish|htf_bearish_side_long_quant_short": {
+      "alpha_ewma": 3.838374159090909,
+      "beta_a": 3.5,
+      "beta_b": 6.5,
+      "last_updated": "2026-05-28T18:42:29.416785+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|down|bearish|htf_bearish_side_short": {
+      "alpha_ewma": 1.6727493447237192,
+      "beta_a": 149.5,
+      "beta_b": 142.0,
+      "last_updated": "2026-05-28T20:23:16.614793+00:00",
+      "n": 147
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|down|bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 6.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|down|neutral|htf_neutral_side_short": {
+      "alpha_ewma": 1.0,
+      "beta_a": 8.5,
+      "beta_b": 7.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|up|bearish|htf_bearish_side_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 30.0,
+      "beta_b": 12.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|up|bearish|htf_bearish_side_short_quant_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 7.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|up|bullish|htf_bullish_side_long": {
+      "alpha_ewma": -2.408602960784311,
+      "beta_a": 3.5,
+      "beta_b": 6.5,
+      "last_updated": "2026-05-26T14:31:23.441227+00:00",
+      "n": 3
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|up|neutral|htf_neutral_side_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|15m|up|neutral|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 21.5,
+      "beta_b": 21.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|down|bearish|htf_bearish_side_short": {
+      "alpha_ewma": 1.9144509256225177,
+      "beta_a": 60.0,
+      "beta_b": 40.0,
+      "last_updated": "2026-05-28T20:18:54.410597+00:00",
+      "n": 40
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|down|bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|down|neutral|htf_neutral_side_short": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|up|bearish|htf_bearish_side_short_quant_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|up|bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|1h|up|neutral|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 7.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|down|bearish|htf_bearish_side_long_quant_short": {
+      "alpha_ewma": 2.0060292897158822,
+      "beta_a": 10.0,
+      "beta_b": 19.5,
+      "last_updated": "2026-05-28T20:53:06.609880+00:00",
+      "n": 14
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|down|bearish|htf_bearish_side_short": {
+      "alpha_ewma": -0.22234470920086846,
+      "beta_a": 296.5,
+      "beta_b": 253.0,
+      "last_updated": "2026-05-28T19:49:20.907720+00:00",
+      "n": 147
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|down|bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 103.5,
+      "beta_b": 77.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|down|neutral|htf_neutral_side_short": {
+      "alpha_ewma": -0.18324522475153315,
+      "beta_a": 43.5,
+      "beta_b": 46.0,
+      "last_updated": "2026-05-26T17:13:02.446814+00:00",
+      "n": 23
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|bearish|htf_bearish_side_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 43.5,
+      "beta_b": 24.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|bearish|htf_bearish_side_short_quant_long": {
+      "alpha_ewma": -2.363507499999997,
+      "beta_a": 8.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-28T14:18:19.431273+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|bullish|htf_bullish_side_long": {
+      "alpha_ewma": -3.5,
+      "beta_a": 6.0,
+      "beta_b": 8.0,
+      "last_updated": "2026-05-26T14:26:44.980944+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|neutral|htf_neutral_side_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|neutral|htf_neutral_side_short_quant_long": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bitcoin|5m|up|neutral|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.5,
+      "beta_b": 6.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bearish__bull|bnb_15m_native": {
+      "alpha_ewma": -1.6755575039471182,
+      "beta_a": 21.5,
+      "beta_b": 21.0,
+      "last_updated": "2026-05-28T15:32:42.894368+00:00",
+      "n": 11
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bearish__bull|bnb_15m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 9.0,
+      "beta_b": 15.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -0.0284679160382747,
+      "beta_a": 20.5,
+      "beta_b": 6.5,
+      "last_updated": "2026-05-28T05:57:54.735576+00:00",
+      "n": 6
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": -0.7772001730595565,
+      "beta_a": 3676.5,
+      "beta_b": 3551.5,
+      "last_updated": "2026-05-28T06:32:21.456485+00:00",
+      "n": 31
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bullish__bull|spike": {
+      "alpha_ewma": -4.599225806451612,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-26T15:32:37.319086+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__bullish__bull|standard": {
+      "alpha_ewma": 2.45398773006135,
+      "beta_a": 5.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-26T14:48:43.000255+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 2.0261437908496727,
+      "beta_a": 4.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-27T21:24:29.167003+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": -3.268488842951219,
+      "beta_a": 7.5,
+      "beta_b": 11.5,
+      "last_updated": "2026-05-27T02:02:57.349155+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__bearish__bull|bnb_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__bearish__bull|bnb_15m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 958.5,
+      "beta_b": 1037.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__neutral__bull|bnb_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 23.5,
+      "beta_b": 12.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 8.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|15m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 22.0,
+      "beta_b": 8.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__bearish__bull|bnb_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 11.5,
+      "beta_b": 7.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 11.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 887.5,
+      "beta_b": 558.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 104.5,
+      "beta_b": 177.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|1h|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 13.0,
+      "beta_b": 6.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+      "alpha_ewma": 1.4563385914069817,
+      "beta_a": 97.0,
+      "beta_b": 61.0,
+      "last_updated": "2026-05-28T04:23:46.804659+00:00",
+      "n": 53
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bearish__bull|bnb_5m_native": {
+      "alpha_ewma": -1.8918594999999998,
+      "beta_a": 19.5,
+      "beta_b": 22.5,
+      "last_updated": "2026-05-28T12:28:11.188087+00:00",
+      "n": 6
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bearish__bull|bnb_5m_neutral_fallback_15m": {
+      "alpha_ewma": 3.5,
+      "beta_a": 15.5,
+      "beta_b": 20.5,
+      "last_updated": "2026-05-28T15:28:50.685618+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bearish__bull|bnb_5m_neutral_fallback_1h": {
+      "alpha_ewma": -5.0,
+      "beta_a": 11.5,
+      "beta_b": 18.0,
+      "last_updated": "2026-05-28T15:57:18.162522+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 618.0,
+      "beta_b": 671.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__bullish__bull|bearish_dip_exception": {
+      "alpha_ewma": -0.22006250000000005,
+      "beta_a": 9.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-26T15:26:42.192236+00:00",
+      "n": 7
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+      "alpha_ewma": -2.133540245535714,
+      "beta_a": 9.5,
+      "beta_b": 10.0,
+      "last_updated": "2026-05-27T20:36:55.533737+00:00",
+      "n": 7
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|down|bearish__neutral__bull|bnb_5m_native": {
+      "alpha_ewma": 5.0,
+      "beta_a": 3.5,
+      "beta_b": 5.5,
+      "last_updated": "2026-05-28T20:12:18.886152+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__bearish__bull|bnb_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 4.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__bearish__bull|bnb_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.5,
+      "beta_b": 7.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 4.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 167.5,
+      "beta_b": 196.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__neutral__bull|bnb_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 16.5,
+      "beta_b": 9.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__neutral__bull|bnb_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 5.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::bnb_macro|5m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 33.5,
+      "beta_b": 15.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__bearish__bull|doge_15m_native": {
+      "alpha_ewma": -3.774625,
+      "beta_a": 15.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-28T15:32:42.867953+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__bearish__bull|doge_15m_neutral_fallback_1h": {
+      "alpha_ewma": 0.3022523724744609,
+      "beta_a": 183.0,
+      "beta_b": 126.5,
+      "last_updated": "2026-05-28T15:21:28.090500+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 2.032800787212037,
+      "beta_a": 6.0,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-26T22:04:14.935225+00:00",
+      "n": 6
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 2.1122923877422015,
+      "beta_a": 2258.5,
+      "beta_b": 3068.5,
+      "last_updated": "2026-05-28T04:33:28.584801+00:00",
+      "n": 24
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": -4.131870967741935,
+      "beta_a": 5.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-27T04:16:00.507375+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": -2.705207998730408,
+      "beta_a": 21.0,
+      "beta_b": 7.5,
+      "last_updated": "2026-05-27T12:01:18.592391+00:00",
+      "n": 6
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__bearish__bull|doge_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__bearish__bull|doge_15m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 1779.0,
+      "beta_b": 1686.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__neutral__bull|doge_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 24.0,
+      "beta_b": 7.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|15m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 14.0,
+      "beta_b": 10.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|down|bearish__bearish__bull|doge_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 40.0,
+      "beta_b": 31.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 5.5,
+      "beta_b": 4.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 2.685076923076923,
+      "beta_a": 434.0,
+      "beta_b": 653.0,
+      "last_updated": "2026-05-26T08:10:53.439851+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 8.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 281.5,
+      "beta_b": 287.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|1h|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+      "alpha_ewma": 1.6944525978886036,
+      "beta_a": 65.5,
+      "beta_b": 56.0,
+      "last_updated": "2026-05-28T01:42:08.632773+00:00",
+      "n": 45
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__bearish__bull|doge_5m_native": {
+      "alpha_ewma": -2.941990625,
+      "beta_a": 18.0,
+      "beta_b": 7.5,
+      "last_updated": "2026-05-28T13:22:07.396887+00:00",
+      "n": 8
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__bearish__bull|doge_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 6.5,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__bearish__bull|doge_5m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 14.0,
+      "beta_b": 8.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 466.0,
+      "beta_b": 511.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+      "alpha_ewma": -0.11113949177824878,
+      "beta_a": 25.0,
+      "beta_b": 16.5,
+      "last_updated": "2026-05-27T21:12:50.149294+00:00",
+      "n": 19
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__neutral__bull|bearish_dip_exception": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__neutral__bull|doge_5m_native": {
+      "alpha_ewma": 5.0,
+      "beta_a": 4.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-28T20:18:55.890466+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__bearish__bull|doge_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__bearish__bull|doge_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 13.0,
+      "beta_b": 8.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 344.0,
+      "beta_b": 335.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__neutral__bull|doge_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 15.5,
+      "beta_b": 4.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__neutral__bull|doge_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 6.5,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::doge_macro|5m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 35.0,
+      "beta_b": 21.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|drift": {
+      "alpha_ewma": -0.7863214105357141,
+      "beta_a": 3.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-27T17:21:58.384651+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|eth_15m_native": {
+      "alpha_ewma": 1.8775075417707294,
+      "beta_a": 3.0,
+      "beta_b": 6.5,
+      "last_updated": "2026-05-28T14:18:18.594776+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|eth_15m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 127.0,
+      "beta_b": 170.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|late_window": {
+      "alpha_ewma": -5.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-28T04:13:31.340177+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -1.6276220000000001,
+      "beta_a": 4.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-28T04:33:26.124319+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": -0.987603639757037,
+      "beta_a": 2439.0,
+      "beta_b": 2562.0,
+      "last_updated": "2026-05-28T04:23:04.777068+00:00",
+      "n": 13
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 388.5,
+      "beta_b": 540.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|down|bearish__bullish__bull|drift": {
+      "alpha_ewma": 2.1504999999999996,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-26T13:45:31.952587+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bearish__bull|drift": {
+      "alpha_ewma": -5.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-27T21:00:57.213252+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bearish__bull|eth_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bearish__bull|spike": {
+      "alpha_ewma": -2.7925000000000013,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-27T20:32:34.908688+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": -2.9058500000000014,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-27T20:52:46.327535+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bullish__bull|drift": {
+      "alpha_ewma": 5.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-26T14:23:34.593302+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bullish__bull|eth_15m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": -4.739507692307693,
+      "beta_a": 2.0,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-26T14:31:22.573481+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": -2.175615384615385,
+      "beta_a": 528.5,
+      "beta_b": 499.5,
+      "last_updated": "2026-05-26T13:02:59.450619+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__bullish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 95.5,
+      "beta_b": 125.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|15m|up|bullish__neutral__bull|eth_15m_native": {
+      "alpha_ewma": -2.2180879201452317,
+      "beta_a": 4.0,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-28T18:18:41.004169+00:00",
+      "n": 8
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|down|bearish__bearish__bull|eth_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 35.0,
+      "beta_b": 25.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -4.336666666666667,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-26T16:12:50.300227+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 0.09999999999999998,
+      "beta_a": 404.5,
+      "beta_b": 558.0,
+      "last_updated": "2026-05-28T04:18:48.161453+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 49.5,
+      "beta_b": 74.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|up|bullish__bullish__bull|drift": {
+      "alpha_ewma": 5.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-26T14:17:55.450796+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": -2.0287692307692304,
+      "beta_a": 17.5,
+      "beta_b": 123.5,
+      "last_updated": "2026-05-26T13:06:29.127451+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bearish__bull|alt_1h_legacy_btc_mode": {
+      "alpha_ewma": 1.432123160071276,
+      "beta_a": 16.5,
+      "beta_b": 20.0,
+      "last_updated": "2026-05-28T01:57:38.873555+00:00",
+      "n": 25
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bearish__bull|eth_5m_native": {
+      "alpha_ewma": 3.725,
+      "beta_a": 3.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-28T13:28:44.942838+00:00",
+      "n": 3
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bearish__bull|eth_5m_neutral_fallback_1h": {
+      "alpha_ewma": 5.0,
+      "beta_a": 10.0,
+      "beta_b": 11.0,
+      "last_updated": "2026-05-28T16:08:19.729277+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 542.0,
+      "beta_b": 642.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 40.5,
+      "beta_b": 31.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__bullish__bull|alt_1h_legacy_btc_mode": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-26T12:12:49.787559+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|down|bearish__neutral__bull|eth_5m_native": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.5,
+      "beta_b": 4.5,
+      "last_updated": "2026-05-28T21:03:51.415319+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|up|bullish__bearish__bull|eth_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|up|bullish__bullish__bull|eth_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 16.5,
+      "beta_b": 10.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": -2.225,
+      "beta_a": 111.0,
+      "beta_b": 116.5,
+      "last_updated": "2026-05-26T14:15:46.686388+00:00",
+      "n": 3
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|up|bullish__bullish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 71.0,
+      "beta_b": 51.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::eth_macro|5m|up|bullish__neutral__bull|eth_5m_native": {
+      "alpha_ewma": 5.0,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
+      "last_updated": "2026-05-28T16:39:25.623077+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__bearish__bull|hype_15m_native": {
+      "alpha_ewma": 0.6201881030626666,
+      "beta_a": 14.5,
+      "beta_b": 12.5,
+      "last_updated": "2026-05-28T12:46:02.665627+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__bearish__bull|hype_15m_neutral_fallback_1h": {
+      "alpha_ewma": 2.514159292035399,
+      "beta_a": 75.5,
+      "beta_b": 51.0,
+      "last_updated": "2026-05-28T14:53:49.836196+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -0.5890987521579629,
+      "beta_a": 7.5,
+      "beta_b": 10.5,
+      "last_updated": "2026-05-28T06:27:48.148802+00:00",
+      "n": 9
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 0.7069722537176689,
+      "beta_a": 2621.0,
+      "beta_b": 2942.0,
+      "last_updated": "2026-05-28T04:33:27.792877+00:00",
+      "n": 11
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 2.037458709677419,
+      "beta_a": 4.5,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-27T13:00:23.457632+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 0.11661822843611463,
+      "beta_a": 14.0,
+      "beta_b": 11.5,
+      "last_updated": "2026-05-27T14:17:52.681286+00:00",
+      "n": 8
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__bearish__bull|hype_15m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__bullish__bull|hype_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 22.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 1756.5,
+      "beta_b": 1747.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__neutral__bull|hype_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 9.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|15m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 10.5,
+      "beta_b": 7.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|down|bearish__bearish__bull|hype_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 13.0,
+      "beta_b": 26.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 533.5,
+      "beta_b": 682.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|up|bullish__bullish__bull|hype_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 263.5,
+      "beta_b": 333.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|1h|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+      "alpha_ewma": 4.198493327006171,
+      "beta_a": 15.5,
+      "beta_b": 18.5,
+      "last_updated": "2026-05-28T06:08:22.061014+00:00",
+      "n": 9
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish__bull|hype_5m_native": {
+      "alpha_ewma": 3.128553628869047,
+      "beta_a": 10.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-28T14:53:50.286717+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish__bull|hype_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish__bull|hype_5m_neutral_fallback_1h": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.5,
+      "beta_b": 15.0,
+      "last_updated": "2026-05-28T14:43:47.455253+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 397.0,
+      "beta_b": 444.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 33.0,
+      "beta_b": 42.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+      "alpha_ewma": 2.7459565252976184,
+      "beta_a": 9.5,
+      "beta_b": 11.0,
+      "last_updated": "2026-05-27T14:21:42.319583+00:00",
+      "n": 7
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bearish__bull|hype_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bearish__bull|hype_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bearish__bull|hype_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 5.0,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bullish__bull|hype_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 17.0,
+      "beta_b": 9.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bullish__bull|hype_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 5.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 328.5,
+      "beta_b": 331.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__neutral__bull|hype_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 17.0,
+      "beta_b": 10.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__neutral__bull|hype_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::hype_macro|5m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 30.5,
+      "beta_b": 23.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__bearish__bull|sol_15m_native": {
+      "alpha_ewma": -0.5607450287605823,
+      "beta_a": 5.5,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-28T14:18:16.817806+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -0.2734473872595222,
+      "beta_a": 27.5,
+      "beta_b": 16.5,
+      "last_updated": "2026-05-27T22:02:08.979468+00:00",
+      "n": 25
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": -2.0170009883330566,
+      "beta_a": 1645.0,
+      "beta_b": 1568.5,
+      "last_updated": "2026-05-28T04:53:07.511575+00:00",
+      "n": 16
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 379.5,
+      "beta_b": 635.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": -1.5764397394136807,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-26T13:45:29.124339+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 0.7069712400782797,
+      "beta_a": 4.0,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-27T13:19:58.629257+00:00",
+      "n": 3
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 694.5,
+      "beta_b": 1022.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|up|bullish__bullish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 191.5,
+      "beta_b": 129.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|up|bullish__neutral__bull|sol_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 17.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|15m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 13.5,
+      "beta_b": 9.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|down|bearish__bearish__bull|sol_1h_native": {
+      "alpha_ewma": 1.8682291666666668,
+      "beta_a": 26.0,
+      "beta_b": 42.0,
+      "last_updated": "2026-05-28T11:44:59.988063+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 3.896662162162162,
+      "beta_a": 6.5,
+      "beta_b": 4.5,
+      "last_updated": "2026-05-27T13:36:39.840752+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": -4.399669491525423,
+      "beta_a": 410.5,
+      "beta_b": 472.5,
+      "last_updated": "2026-05-28T04:18:46.960034+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 44.0,
+      "beta_b": 72.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 58.5,
+      "beta_b": 79.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|up|bullish__bullish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|1h|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+      "alpha_ewma": -0.1512541815474331,
+      "beta_a": 74.0,
+      "beta_b": 67.5,
+      "last_updated": "2026-05-28T06:09:31.893108+00:00",
+      "n": 44
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|neutral_macro": {
+      "alpha_ewma": 5.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-26T10:00:04.880338+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|sol_5m_native": {
+      "alpha_ewma": 2.41625,
+      "beta_a": 12.5,
+      "beta_b": 10.0,
+      "last_updated": "2026-05-28T15:25:35.824591+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|sol_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|sol_5m_neutral_fallback_1h": {
+      "alpha_ewma": -3.5,
+      "beta_a": 11.0,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-28T13:18:35.362035+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 475.0,
+      "beta_b": 486.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__bullish__bull|sol_5m_vs_slower": {
+      "alpha_ewma": 3.5,
+      "beta_a": 3.5,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-28T21:03:48.211367+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+      "alpha_ewma": 3.5403909285714286,
+      "beta_a": 7.5,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-27T18:47:47.738596+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|down|bearish__neutral__bull|sol_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bearish__bull|sol_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bearish__bull|sol_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 14.5,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 10.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bullish__bull|sol_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bullish__bull|sol_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 5.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bullish__bull|sol_5m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 4.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 330.5,
+      "beta_b": 358.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__neutral__bull|sol_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 14.5,
+      "beta_b": 8.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::sol_macro|5m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 51.0,
+      "beta_b": 22.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": -3.2327350996955313,
+      "beta_a": 17.5,
+      "beta_b": 8.0,
+      "last_updated": "2026-05-28T05:19:42.814420+00:00",
+      "n": 10
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": -0.959642126990805,
+      "beta_a": 3078.5,
+      "beta_b": 2727.0,
+      "last_updated": "2026-05-28T06:06:54.834362+00:00",
+      "n": 31
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__bearish__bull|xrp_15m_native": {
+      "alpha_ewma": -3.67214,
+      "beta_a": 5.5,
+      "beta_b": 4.0,
+      "last_updated": "2026-05-28T12:31:42.580701+00:00",
+      "n": 3
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__bearish__bull|xrp_15m_neutral_fallback_1h": {
+      "alpha_ewma": 2.664424778761062,
+      "beta_a": 12.5,
+      "beta_b": 14.0,
+      "last_updated": "2026-05-28T08:34:42.196106+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 2.5308965517241373,
+      "beta_a": 12.5,
+      "beta_b": 7.0,
+      "last_updated": "2026-05-26T13:38:41.544766+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__bearish__bull|xrp_15m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 1499.5,
+      "beta_b": 1629.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__bullish__bull|xrp_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 20.5,
+      "beta_b": 8.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__bullish__bull|xrp_15m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 10.5,
+      "beta_b": 11.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 5.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 21.0,
+      "beta_b": 15.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|15m|up|bullish__neutral__bull|xrp_15m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 19.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|down|bearish__bearish__bull|spike": {
+      "alpha_ewma": 2.6098750000000006,
+      "beta_a": 7.5,
+      "beta_b": 7.5,
+      "last_updated": "2026-05-26T09:17:43.708579+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 0.42797356249999985,
+      "beta_a": 521.5,
+      "beta_b": 622.5,
+      "last_updated": "2026-05-28T00:55:14.594909+00:00",
+      "n": 4
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|down|bearish__bearish__bull|xrp_1h_native": {
+      "alpha_ewma": -4.300285714285714,
+      "beta_a": 9.5,
+      "beta_b": 5.5,
+      "last_updated": "2026-05-28T12:24:30.166841+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|down|bearish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|down|bearish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.0,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__bullish__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 168.5,
+      "beta_b": 270.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__bullish__bull|xrp_1h_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 9.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__neutral__bull|spike": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|1h|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 19.5,
+      "beta_b": 5.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+      "alpha_ewma": -0.23909346092564954,
+      "beta_a": 45.0,
+      "beta_b": 28.0,
+      "last_updated": "2026-05-27T21:59:22.101153+00:00",
+      "n": 28
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 350.0,
+      "beta_b": 389.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish__bull|xrp_5m_native": {
+      "alpha_ewma": -3.5,
+      "beta_a": 5.0,
+      "beta_b": 5.5,
+      "last_updated": "2026-05-28T12:28:10.693961+00:00",
+      "n": 2
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish__bull|xrp_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.0,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish__bull|xrp_5m_neutral_fallback_1h": {
+      "alpha_ewma": 5.0,
+      "beta_a": 5.5,
+      "beta_b": 6.0,
+      "last_updated": "2026-05-28T08:34:43.941800+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bearish|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 35.5,
+      "beta_b": 35.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__bullish__bull|xrp_5m_vs_slower": {
+      "alpha_ewma": -5.0,
+      "beta_a": 4.0,
+      "beta_b": 3.5,
+      "last_updated": "2026-05-28T19:51:27.477596+00:00",
+      "n": 1
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+      "alpha_ewma": 4.522847393154761,
+      "beta_a": 6.0,
+      "beta_b": 9.0,
+      "last_updated": "2026-05-26T15:09:25.362127+00:00",
+      "n": 5
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|down|bearish__neutral__bull|xrp_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bearish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 8.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bearish__bull|xrp_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 2.5,
+      "beta_b": 3.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bearish__bull|xrp_5m_vs_slower": {
+      "alpha_ewma": 1.0,
+      "beta_a": 7.0,
+      "beta_b": 7.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bullish__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 278.0,
+      "beta_b": 280.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bullish__bull|xrp_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 11.5,
+      "beta_b": 8.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bullish__bull|xrp_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.0,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__bullish__bull|xrp_5m_neutral_fallback_1h": {
+      "alpha_ewma": 1.0,
+      "beta_a": 4.5,
+      "beta_b": 3.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__neutral__bull|standard": {
+      "alpha_ewma": 1.0,
+      "beta_a": 51.0,
+      "beta_b": 27.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__neutral__bull|xrp_5m_native": {
+      "alpha_ewma": 1.0,
+      "beta_a": 15.0,
+      "beta_b": 6.5,
+      "last_updated": "",
+      "n": 0
+    },
+    "lane_identity_v2_source_resolver::xrp_macro|5m|up|bullish__neutral__bull|xrp_5m_neutral_fallback_15m": {
+      "alpha_ewma": 1.0,
+      "beta_a": 3.5,
+      "beta_b": 4.0,
+      "last_updated": "",
+      "n": 0
     },
     "sol_macro|15m|down|bearish__bearish__bull|late_window": {
       "alpha_ewma": -2.6890319999999996,
@@ -582,18 +2409,18 @@
       "n": 2
     },
     "sol_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": -0.19037233256330818,
-      "beta_a": 9.0,
-      "beta_b": 17.0,
-      "last_updated": "2026-05-25T03:18:39.130297+00:00",
-      "n": 21
+      "alpha_ewma": -0.22361024689994458,
+      "beta_a": 13.0,
+      "beta_b": 24.0,
+      "last_updated": "2026-05-26T05:17:28.403508+00:00",
+      "n": 32
     },
     "sol_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -0.19505659977030948,
-      "beta_a": 628.0,
-      "beta_b": 720.0,
-      "last_updated": "2026-05-25T03:01:09.171630+00:00",
-      "n": 43
+      "alpha_ewma": 0.22498265464007572,
+      "beta_a": 1240.5,
+      "beta_b": 1410.0,
+      "last_updated": "2026-05-26T04:22:49.517864+00:00",
+      "n": 61
     },
     "sol_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": -5.0,
@@ -604,29 +2431,29 @@
     },
     "sol_macro|15m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": -5.0,
-      "beta_a": 1635.5,
-      "beta_b": 1829.0,
+      "beta_a": 2904.5,
+      "beta_b": 2780.0,
       "last_updated": "2026-05-20T17:48:39.938284+00:00",
       "n": 1
     },
     "sol_macro|1h|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 1.2782882882882882,
-      "beta_a": 2.0,
-      "beta_b": 4.0,
-      "last_updated": "2026-05-25T02:02:53.948006+00:00",
-      "n": 1
+      "alpha_ewma": 1.022759974470958,
+      "beta_a": 3.0,
+      "beta_b": 5.0,
+      "last_updated": "2026-05-25T21:54:05.699869+00:00",
+      "n": 3
     },
     "sol_macro|1h|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -2.078699628712871,
-      "beta_a": 275.0,
-      "beta_b": 289.0,
-      "last_updated": "2026-05-22T18:31:58.928314+00:00",
-      "n": 4
+      "alpha_ewma": -2.5168946844059406,
+      "beta_a": 395.5,
+      "beta_b": 407.5,
+      "last_updated": "2026-05-26T01:03:13.680800+00:00",
+      "n": 5
     },
     "sol_macro|1h|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 2.8106554249174924,
-      "beta_a": 215.0,
-      "beta_b": 127.5,
+      "beta_a": 261.0,
+      "beta_b": 165.0,
       "last_updated": "2026-05-19T16:35:21.521321+00:00",
       "n": 2
     },
@@ -638,32 +2465,32 @@
       "n": 1
     },
     "sol_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": -0.38225379703667894,
-      "beta_a": 352.0,
-      "beta_b": 381.0,
-      "last_updated": "2026-05-25T04:28:24.726361+00:00",
-      "n": 92
+      "alpha_ewma": -2.195858290468267,
+      "beta_a": 540.5,
+      "beta_b": 563.5,
+      "last_updated": "2026-05-26T05:34:23.429442+00:00",
+      "n": 140
     },
     "sol_macro|5m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 5.0,
-      "beta_a": 469.0,
-      "beta_b": 435.5,
+      "beta_a": 675.0,
+      "beta_b": 670.0,
       "last_updated": "2026-05-19T23:23:29.422724+00:00",
       "n": 2
     },
     "xrp_macro|15m|down|bearish__bearish__bull|spike": {
-      "alpha_ewma": 0.06462714506003608,
-      "beta_a": 18.0,
-      "beta_b": 27.0,
-      "last_updated": "2026-05-25T04:31:49.510253+00:00",
-      "n": 40
+      "alpha_ewma": -0.4845317791747627,
+      "beta_a": 21.0,
+      "beta_b": 31.0,
+      "last_updated": "2026-05-26T03:15:48.749558+00:00",
+      "n": 47
     },
     "xrp_macro|15m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.6845832224314596,
-      "beta_a": 1462.5,
-      "beta_b": 1833.0,
-      "last_updated": "2026-05-25T04:21:40.096519+00:00",
-      "n": 88
+      "alpha_ewma": -0.8944860873760013,
+      "beta_a": 2547.5,
+      "beta_b": 2793.0,
+      "last_updated": "2026-05-26T03:06:21.289467+00:00",
+      "n": 107
     },
     "xrp_macro|15m|up|bullish__bullish__bull|spike": {
       "alpha_ewma": -2.77151667277569,
@@ -674,8 +2501,8 @@
     },
     "xrp_macro|15m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": -3.5019968637931043,
-      "beta_a": 2448.0,
-      "beta_b": 1875.5,
+      "beta_a": 3719.0,
+      "beta_b": 2845.5,
       "last_updated": "2026-05-20T17:32:37.914246+00:00",
       "n": 6
     },
@@ -687,25 +2514,25 @@
       "n": 6
     },
     "xrp_macro|1h|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.9981229879472805,
-      "beta_a": 235.5,
-      "beta_b": 348.5,
-      "last_updated": "2026-05-25T03:23:10.780468+00:00",
-      "n": 8
+      "alpha_ewma": 0.2969974302204814,
+      "beta_a": 393.0,
+      "beta_b": 542.5,
+      "last_updated": "2026-05-26T01:03:15.613446+00:00",
+      "n": 10
     },
     "xrp_macro|1h|up|bullish__bullish__bull|standard": {
       "alpha_ewma": 1.0,
-      "beta_a": 323.5,
-      "beta_b": 279.0,
+      "beta_a": 519.5,
+      "beta_b": 484.5,
       "last_updated": "",
       "n": 0
     },
     "xrp_macro|5m|down|bearish__bearish__bull|standard": {
-      "alpha_ewma": 0.6657532539459121,
-      "beta_a": 201.0,
-      "beta_b": 197.5,
-      "last_updated": "2026-05-25T02:37:35.267951+00:00",
-      "n": 64
+      "alpha_ewma": 1.4721268559992922,
+      "beta_a": 278.5,
+      "beta_b": 279.0,
+      "last_updated": "2026-05-26T03:17:04.801443+00:00",
+      "n": 76
     },
     "xrp_macro|5m|down|neutral__neutral__bull|standard": {
       "alpha_ewma": 1.0,
@@ -716,11 +2543,12 @@
     },
     "xrp_macro|5m|up|bullish__bullish__bull|standard": {
       "alpha_ewma": -5.0,
-      "beta_a": 434.5,
-      "beta_b": 466.5,
+      "beta_a": 575.5,
+      "beta_b": 665.0,
       "last_updated": "2026-05-21T21:13:15.289238+00:00",
       "n": 4
     }
   },
+  "posterior_version": "lane_identity_v2_source_resolver",
   "schema_version": 1
 }

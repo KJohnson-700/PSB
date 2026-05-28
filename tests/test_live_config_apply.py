@@ -58,7 +58,6 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
             "xrp_macro": {"enabled": False, "kelly_fraction": 0.10},
             "doge_macro": {"enabled": False, "kelly_fraction": 0.10},
             "bnb_macro": {"enabled": False, "kelly_fraction": 0.10},
-            "weather": {"enabled": False, "kelly_fraction": 0.25},
         },
         "exposure": {"loss_kill_switch_enabled": True},
         "polymarket": {"min_liquidity": 10000, "scanner_sync_timeout_sec": 90},
@@ -73,9 +72,6 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    _weather_em = _FakeExposureManager()
-    bot.weather_exposure_manager = _weather_em
-    bot.event_exposure_manager = _weather_em
     bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = object()
@@ -91,7 +87,6 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
             "strategies": {
                 "bitcoin": {"enabled": False, "kelly_fraction": 0.20},
                 "eth_macro": {"enabled": True},
-                "weather": {"enabled": True},
             },
             "exposure": {"loss_kill_switch_enabled": False},
         }
@@ -105,10 +100,8 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.kelly_sizer.get_asset_config("bitcoin").base_kelly_fraction == 0.20
     assert bot.bitcoin_strategy.enabled is False
     assert bot.eth_macro_strategy.enabled is True
-    assert bot.weather_strategy.enabled is True
     assert callable(bot.bitcoin_strategy.dead_zone_skip_callback)
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
-    assert bot.event_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.notifier.reloaded_with is bot.config
     assert bot.bitcoin_strategy.lane_calibrator is bot.lane_calibrator
     assert bot.sol_macro_strategy.lane_calibrator is bot.lane_calibrator
@@ -132,7 +125,6 @@ def test_apply_config_updates_does_not_mutate_exposure_env_override(monkeypatch)
             "xrp_macro": {"enabled": True},
             "doge_macro": {"enabled": True},
             "bnb_macro": {"enabled": True},
-            "weather": {"enabled": False},
         },
         "exposure": {"loss_kill_switch_enabled": True},
         "polymarket": {},
@@ -147,8 +139,6 @@ def test_apply_config_updates_does_not_mutate_exposure_env_override(monkeypatch)
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    bot.weather_exposure_manager = _FakeExposureManager()
-    bot.event_exposure_manager = bot.weather_exposure_manager
     bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = object()
@@ -200,7 +190,6 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
             "xrp_macro": {"enabled": True},
             "doge_macro": {"enabled": True},
             "bnb_macro": {"enabled": True},
-            "weather": {"enabled": True},
         },
         "exposure": {},
         "polymarket": {},
@@ -215,8 +204,6 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    bot.weather_exposure_manager = _FakeExposureManager()
-    bot.event_exposure_manager = bot.weather_exposure_manager
     bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = _FakeCalibrator()

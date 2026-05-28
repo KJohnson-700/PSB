@@ -204,6 +204,59 @@ def test_bitcoin_direction_resolver_suppresses_quant_flip_without_momentum():
     assert any("quant_flip_suppressed=no_down_momentum" in part for part in reason_parts)
 
 
+def test_bitcoin_direction_guard_blocks_quant_flip_buy_no_by_default():
+    cfg = _make_config()
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    decision = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=MagicMock(histogram_rising=True),
+        reason_parts=[],
+        raw_est_prob=0.44,
+        mom=MagicMock(m15_direction="DRIFT_DOWN", m5_direction="NONE"),
+    )
+
+    reason = strat._btc_direction_guard_reason(
+        window_size="5m",
+        decision=decision,
+        yes_price=0.74,
+        btc_1h_regime="BULL",
+        eval_mins_left=1.0,
+    )
+
+    assert decision.side_source == "btc_quant_disagree_flip"
+    assert reason == "quant_disagree_flip_buy_no_disabled"
+
+
+def test_bitcoin_direction_guard_blocks_expensive_bull_regime_buy_no():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "allow_quant_disagree_flip_buy_no": True,
+            "bull_regime_buy_no_max_yes_price_5m": 0.68,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    decision = strat._resolve_btc_direction(
+        htf_bias="BEARISH",
+        allowed_side="SHORT",
+        macd_4h=MagicMock(histogram_rising=False),
+        reason_parts=[],
+        mom=MagicMock(m15_direction="DRIFT_DOWN", m5_direction="NONE"),
+    )
+
+    reason = strat._btc_direction_guard_reason(
+        window_size="5m",
+        decision=decision,
+        yes_price=0.70,
+        btc_1h_regime="BULL",
+        eval_mins_left=3.0,
+    )
+
+    assert decision.action == "BUY_NO"
+    assert reason == "bull_regime_expensive_short"
+
+
 def test_bitcoin_bias_quant_disagree_override_allows_moderate_non5m_long_gap():
     cfg = _make_config()
     cfg["strategies"]["bitcoin"].update(

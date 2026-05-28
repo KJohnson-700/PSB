@@ -113,7 +113,7 @@ def test_reversal_halt_requires_full_lookback_history():
 
 def test_reversal_halt_ignores_non_crypto_positions():
     mgr = CircuitBreakerManager(_cfg())
-    positions = [FakePosition("NO", strategy="weather") for _ in range(5)]
+    positions = [FakePosition("NO", strategy="consensus") for _ in range(5)]
     mgr.record_btc_price(100_000, now=1000)
 
     decision = mgr.can_enter(

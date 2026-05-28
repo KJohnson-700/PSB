@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-28 — BNB-local 5m downside guard plus explicit BUY_YES/BUY_NO wiring coverage
+
+- **What changed:** In [src/strategies/bnb_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bnb_macro.py), added BNB-local post-scan guards that block `5m` `BUY_NO` neutral-fallback branches in `btc_1h_regime=BULL`, and block `bnb_5m_native` `BUY_NO` when BNB 1H is no longer bearish or the YES side is already too rich (`bnb_5m_native_buy_no_max_yes_price_bull_1h`, default `0.60`). Added focused BNB guard tests in [tests/test_bnb_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_bnb_macro.py) and explicit `bnb_macro` `BUY_YES` / `BUY_NO` execution-path coverage in [tests/test_strategy_execution_drivers.py](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py).
+- **Why:** The 126-trade session showed BNB losses concentrated in `5m BUY_NO`, especially `bnb_5m_neutral_fallback_*` and late/expensive native shorts, while the operator explicitly asked to verify BNB side wiring before any broader 1h review.
+- **Hypothesis:** BNB should preserve clean native downside entries while dropping the worst `5m` short branches that were producing stop-loss-heavy outcomes under bullish BTC 1h context. Explicit BUY-side execution coverage should prevent hidden side-routing drift.
+- **Expected outcome:** Future BNB skip stats should show `local_bnb_guard`; `5m` BNB short losses should compress without removing valid `15m` or `BUY_YES` paths.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
 
 - **What changed:** BNB inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.

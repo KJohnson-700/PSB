@@ -194,6 +194,39 @@ def test_buy_no_ltf_override_rejects_weak_bearish_noise():
     assert "btc5m" not in reason.lower()
 
 
+def test_sol_local_guard_blocks_vs_slower_short_against_bullish_alt_1h():
+    cfg = _make_config()
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    reason = strategy._sol_signal_guard_reason(
+        window_size="5m",
+        action="BUY_NO",
+        side_source="sol_5m_vs_slower",
+        yes_price=0.43,
+        btc_1h_regime="RANGE",
+        alt_h1_trend="BULLISH",
+    )
+
+    assert reason == "sol_vs_slower_short_against_h1"
+
+
+def test_sol_local_guard_blocks_expensive_15m_short_in_bull_regime():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["sol_15m_buy_no_max_yes_price_bull_1h"] = 0.49
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    reason = strategy._sol_signal_guard_reason(
+        window_size="15m",
+        action="BUY_NO",
+        side_source="sol_15m_native",
+        yes_price=0.50,
+        btc_1h_regime="BULL",
+        alt_h1_trend="BEARISH",
+    )
+
+    assert reason == "sol_15m_bull_regime_expensive_short"
+
+
 def _make_ta_bullish_rally() -> SOLTechnicalAnalysis:
     return SOLTechnicalAnalysis(
         sol=SOLAnalysis(

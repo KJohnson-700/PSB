@@ -2837,8 +2837,9 @@ Reply with only the JSON object required by the system message (four keys: reaso
         system_prompt: Optional[str] = None,
     ) -> Optional[AIAnalysis]:
         """Call the Kimi Code CLI OAuth gateway, not the Moonshot billing API."""
-        if openai is None:
-            raise ImportError("openai package is not installed")
+        # NOTE: openai-package check is deferred to inside the per-model loop so that
+        # cooldown bail-outs raise their explicit RuntimeError instead of being
+        # masked by ImportError when openai isn't installed (e.g. test env).
         pc = provider_config or {}
         provider_label = str(pc.get("name") or "kimi_coding")
         base_url = str(pc.get("base_url") or "https://api.kimi.com/coding/v1")
@@ -2868,6 +2869,8 @@ Reply with only the JSON object required by the system message (four keys: reaso
                     remaining,
                 )
                 continue
+            if openai is None:
+                raise ImportError("openai package is not installed")
             self._bump_local_quota_and_warn(provider_label)
             force_refresh = False
             while True:

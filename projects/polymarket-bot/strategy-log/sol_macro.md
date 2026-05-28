@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-28 — Local SOL short-lane guards after 126-trade session review
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added SOL-only local guards that block `sol_5m_vs_slower` `BUY_NO` entries when SOL 1H is bullish, and block `sol_15m_native` `BUY_NO` entries when BTC 1H regime is `BULL` and the YES side is already expensive (`sol_15m_buy_no_max_yes_price_bull_1h`, default `0.48`). Added focused regression coverage in [tests/test_sol_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py).
+- **Why:** The 126-trade session review showed SOL was not a broad loser, but its repeat damage clustered in those two short-side subpaths while `sol_5m_native` remained the healthy lane.
+- **Hypothesis:** SOL should keep its native 5m path active while cutting the specific short-side branches that were leaking expectancy in bullish higher-timeframe context.
+- **Expected outcome:** Future SOL skips should include `sol_vs_slower_short_against_h1` and `sol_15m_bull_regime_expensive_short`; `sol_5m_native` throughput should remain intact.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — `sell_5m_low_corr` hard skip downgraded to diagnostic context
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates. Low alt-vs-BTC correlation is now appended as `diag_sell_5m_low_corr(...)` in the signal reason while later alt-native signal, edge, price, liquidity, and risk gates still decide admission.

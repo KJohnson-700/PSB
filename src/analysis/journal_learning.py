@@ -32,7 +32,6 @@ _STRATEGY_CONFIG_KEYS = (
     "eth_macro",
     "hype_macro",
     "xrp_macro",
-    "weather",
 )
 
 

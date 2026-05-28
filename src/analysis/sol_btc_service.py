@@ -108,6 +108,18 @@ class MACDResult:
 
 
 @dataclass
+class TimeframeIndicatorState:
+    """Per-timeframe indicator snapshot for uniform bias helpers."""
+    timeframe: str = ""
+    price: float = 0.0
+    ema_9: float = 0.0
+    ema_21: float = 0.0
+    ema_50: float = 0.0
+    rsi_14: float = 50.0
+    macd: MACDResult = field(default_factory=MACDResult)
+
+
+@dataclass
 class SOLAnalysis:
     """SOL price data and technical indicators."""
     current_price: float = 0.0
@@ -137,6 +149,11 @@ class SOLAnalysis:
     # Trend
     trend_direction: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
     trend_strength: float = 0.0       # 0.0 - 1.0
+    # Explicit per-timeframe snapshots for uniform bias resolution
+    tf_5m: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_15m: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_1h: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_4h: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
     # Meta
     timestamp: datetime = field(default_factory=datetime.now)
 
@@ -672,25 +689,50 @@ class SOLBTCService:
             logger.warning("Could not fetch SOL 15m klines")
             return SOLAnalysis()
 
+        def _build_tf_state(tf: str, df: pd.DataFrame) -> TimeframeIndicatorState:
+            if df.empty:
+                return TimeframeIndicatorState(timeframe=tf)
+            close = df["close"]
+            price = float(close.iloc[-1])
+            ema_9 = float(self._calc_ema(close, 9).iloc[-1]) if len(close) >= 9 else price
+            ema_21 = float(self._calc_ema(close, 21).iloc[-1]) if len(close) >= 21 else ema_9
+            ema_50 = float(self._calc_ema(close, 50).iloc[-1]) if len(close) >= 50 else 0.0
+            rsi_14 = float(self._calc_rsi(close, 14).iloc[-1]) if len(close) >= 14 else 50.0
+            macd = self.calc_macd(df, fast=12, slow=26, signal=9) if len(df) >= 30 else MACDResult()
+            return TimeframeIndicatorState(
+                timeframe=tf,
+                price=price,
+                ema_9=ema_9,
+                ema_21=ema_21,
+                ema_50=ema_50,
+                rsi_14=rsi_14,
+                macd=macd,
+            )
+
+        tf_5m = _build_tf_state("5m", df_5m)
+        tf_15m = _build_tf_state("15m", df_15m)
+        tf_1h = _build_tf_state("1h", df_1h)
+        tf_4h = _build_tf_state("4h", df_4h)
+
         current_price = float(df_15m["close"].iloc[-1])
         close_15m = df_15m["close"]
 
         # EMAs from 15m
-        ema_9 = float(self._calc_ema(close_15m, 9).iloc[-1])
-        ema_21 = float(self._calc_ema(close_15m, 21).iloc[-1])
-        ema_50 = float(self._calc_ema(close_15m, 50).iloc[-1]) if len(df_15m) >= 50 else 0.0
+        ema_9 = tf_15m.ema_9
+        ema_21 = tf_15m.ema_21
+        ema_50 = tf_15m.ema_50
 
         # RSI from 15m
-        rsi_14 = float(self._calc_rsi(close_15m, 14).iloc[-1])
+        rsi_14 = tf_15m.rsi_14
 
         # ATR from 15m
         atr_14 = float(self._calc_atr(df_15m, 14).iloc[-1])
 
         # MACD on 4H (slow-trend histogram slope — alt-native input for buy_yes/buy_no 4H-hist overrides)
-        macd_4h = self.calc_macd(df_4h, fast=12, slow=26, signal=9) if not df_4h.empty and len(df_4h) >= 30 else MACDResult()
+        macd_4h = tf_4h.macd
 
         # MACD on 1H (HTF histogram gate — matches backtest engine htf_key="1h" for SOL)
-        macd_1h = self.calc_macd(df_1h, fast=12, slow=26, signal=9) if not df_1h.empty and len(df_1h) >= 30 else MACDResult()
+        macd_1h = tf_1h.macd
 
         if df_30m.empty and len(df_15m) >= 60:
             df_30m = (
@@ -713,10 +755,10 @@ class SOLBTCService:
         )
 
         # MACD on 15m (trend confirmation)
-        macd_15m = self.calc_macd(df_15m, fast=12, slow=26, signal=9)
+        macd_15m = tf_15m.macd
 
         # MACD on 5m (entry timing)
-        macd_5m = self.calc_macd(df_5m, fast=12, slow=26, signal=9) if not df_5m.empty else MACDResult()
+        macd_5m = tf_5m.macd
 
         # Determine trend from EMA alignment + RSI
         trend_dir, trend_str = self._determine_sol_trend(
@@ -746,6 +788,10 @@ class SOLBTCService:
             oracle_basis_bps=basis_bps,
             trend_direction=trend_dir,
             trend_strength=trend_str,
+            tf_5m=tf_5m,
+            tf_15m=tf_15m,
+            tf_1h=tf_1h,
+            tf_4h=tf_4h,
         )
 
     @staticmethod

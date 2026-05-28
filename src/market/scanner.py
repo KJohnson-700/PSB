@@ -25,56 +25,6 @@ from src.utils.http_retry import requests_get_with_retries
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 
-_WEATHER_MARKET_HINT_RE = re.compile(
-    r"\b("
-    r"highest\s+temperature|high\s+temperature|low\s+temperature|"
-    r"temperature\s+in|degrees?\s+in|"
-    r"precipitation|rainfall|snowfall|"
-    r"inches?\s+of\s+(?:rain|snow)|mm\s+of\s+(?:rain|snow)|cm\s+of\s+snow|"
-    r"will\s+it\s+rain|will\s+it\s+snow"
-    r")\b",
-    re.IGNORECASE,
-)
-_WEATHER_TEMP_SLUG_RE = re.compile(
-    r"(?:^|-)("
-    r"highest-temperature|high-temperature|low-temperature|temperature"
-    r")(?:-|$)",
-    re.IGNORECASE,
-)
-_WEATHER_TEMP_TEXT_RE = re.compile(
-    r"\bhighest\s+temperature\s+in\s+[a-z0-9 .'-]+\s+on\s+"
-    r"(?:[a-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}|[a-z]{3}\.?\s+\d{1,2}(?:,)?\s+\d{4})\b",
-    re.IGNORECASE,
-)
-_WEATHER_PRECIP_SLUG_RE = re.compile(
-    r"(?:\bprecipitation\b|\brainfall\b|\bsnowfall\b|"
-    r"\b(?:rain|snow)\b.*\b(?:mm|cm|inch|inches)\b|"
-    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation)\b)",
-    re.IGNORECASE,
-)
-_WEATHER_PRECIP_TEXT_RE = re.compile(
-    r"\b(?:rain|snow|precipitation|rainfall|snowfall)\b.*\b(?:mm|cm|inch|inches)\b|"
-    r"\b(?:mm|cm|inch|inches)\b.*\b(?:rain|snow|precipitation|rainfall|snowfall)\b",
-    re.IGNORECASE,
-)
-_WEATHER_TITLE_HINT_RE = re.compile(
-    r"\b(highest\s+temperature|high\s+temperature|low\s+temperature|"
-    r"precipitation|rainfall|snowfall|"
-    r"inches?\s+of\s+(?:rain|snow)|mm\s+of\s+(?:rain|snow)|cm\s+of\s+snow)\b|"
-    r"\b(?:mm|inch|inches|cm|°f|°c)\b",
-    re.IGNORECASE,
-)
-_WEATHER_EVENT_TAG_SLUGS = ("weather", "climate-and-weather")
-_WEATHER_EVENT_HINT_RE = re.compile(
-    r"\b("
-    r"highest\s+temperature|low(?:est)?\s+temperature|high(?:est)?\s+temperature|"
-    r"precipitation|rainfall|snowfall|"
-    r"will\s+it\s+rain|will\s+it\s+snow"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
 @dataclass
 class Market:
     """Represents a Polymarket market"""
@@ -404,9 +354,6 @@ class MarketScanner:
             max_workers=2, thread_name_prefix="scanner-bg"
         )
         self._slow_fetch_lock = Lock()
-        self._weather_refresh_future: Optional[Future[List[Market]]] = None
-        self._weather_cache: List[Market] = []
-        self._weather_cache_updated_at: Optional[datetime] = None
         self._slug_cache_lock = Lock()
         self._cycle_empty_event_slugs: set[str] = set()
         self._slug_fetch_stats: Dict[str, Dict[str, int]] = {}
@@ -422,15 +369,7 @@ class MarketScanner:
         """Refresh derived thresholds from the shared config dict."""
         _pm = self.config.get("polymarket", {}) or {}
         _tr = self.config.get("trading", {}) or {}
-        _wx = (self.config.get("strategies", {}) or {}).get("weather", {}) or {}
         self.min_liquidity = _pm.get("min_liquidity", 10000)
-        self.weather_min_liquidity = float(
-            _wx.get("min_liquidity", _wx.get("min_volume", self.min_liquidity))
-        )
-        self.weather_scan_limit = max(20, int(_wx.get("scan_limit", 120)))
-        self._weather_warmup_wait_sec = max(
-            0.0, float(_pm.get("weather_warmup_wait_sec", 3.0))
-        )
         self._cycle_interval_sec = float(_tr.get("cycle_interval_sec", 120))
         configured_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
         # Never let a sync timeout outrun the trading cadence. Leave a small gap so
@@ -501,24 +440,7 @@ class MarketScanner:
                 logger.debug("Failed to close Gamma requests session", exc_info=True)
 
     def _market_liquidity_threshold(self, question: str, description: str = "") -> float:
-        text = f"{question or ''} {description or ''}"
-        if _WEATHER_MARKET_HINT_RE.search(text):
-            return self.weather_min_liquidity
         return self.min_liquidity
-
-    @staticmethod
-    def _is_dedicated_weather_candidate(market: Market) -> bool:
-        slug = (market.slug or "").lower()
-        title_text = f"{market.question} {market.group_item_title}".lower()
-        if _WEATHER_TEMP_SLUG_RE.match(slug):
-            return True
-        if _WEATHER_TEMP_TEXT_RE.search(title_text):
-            return True
-        if _WEATHER_PRECIP_SLUG_RE.search(slug):
-            return True
-        if _WEATHER_PRECIP_TEXT_RE.search(title_text):
-            return True
-        return bool(_WEATHER_TITLE_HINT_RE.search(f"{slug} {title_text}"))
 
     def _should_fetch_hype_alt_markets(self) -> bool:
         """HYPE alt slug fetch is slow; default follows strategies.hype_macro.enabled.
@@ -531,11 +453,6 @@ class MarketScanner:
         return bool(
             (self.config.get("strategies") or {}).get("hype_macro", {}).get("enabled", False)
         )
-
-    def _should_fetch_weather_markets(self) -> bool:
-        # Weather is being retired; keep it off the scanner even if old config
-        # blocks still carry weather flags.
-        return False
 
     def _resolve_hourly_crypto_scan_every_n_cycles(self) -> int:
         trading_cfg = (self.config.get("trading", {}) or {})
@@ -576,7 +493,6 @@ class MarketScanner:
         List[Market],
         List[Market],
         List[Market],
-        List[Market],
         int,
         int,
         int,
@@ -591,8 +507,6 @@ class MarketScanner:
             self._slug_fetch_stats = {}
         look_ahead_15m, look_ahead_5m, look_ahead_1h = self._resolve_updown_lookahead()
         fetch_hype = self._should_fetch_hype_alt_markets()
-        fetch_weather = self._should_fetch_weather_markets()
-        weather_snapshot = self._get_weather_market_snapshot() if fetch_weather else []
 
         tasks = {
             "gamma": lambda: self._fetch_markets_gamma(limit=200),
@@ -668,85 +582,10 @@ class MarketScanner:
             results.get("updown_5m", []),
             updown_1h_markets,
             results.get("hype_alt", []),
-            weather_snapshot,
             look_ahead_15m,
             look_ahead_5m,
             look_ahead_1h,
         )
-
-    def _get_weather_market_snapshot(self) -> List[Market]:
-        """Return the last completed weather snapshot and keep refresh running in background.
-
-        Weather discovery can outrun the scanner sync deadline. We therefore avoid putting it
-        on the critical path each cycle and instead refresh it opportunistically.
-        """
-        self._harvest_weather_refresh_result()
-
-        with self._slow_fetch_lock:
-            future = self._weather_refresh_future
-            if future is None:
-                self._weather_refresh_future = self._background_fetch_pool.submit(
-                    self._run_weather_refresh
-                )
-                future = self._weather_refresh_future
-            cached = list(self._weather_cache)
-
-        # First cycle after process start often sees empty cache because refresh
-        # runs asynchronously. Wait briefly once so weather does not report 0
-        # purely due to warm-up race.
-        if not cached and future is not None:
-            wait_sec = min(
-                self._weather_warmup_wait_sec,
-                max(0.0, self._scanner_sync_timeout * 0.5),
-            )
-            if wait_sec > 0:
-                try:
-                    markets = future.result(timeout=wait_sec) or []
-                    with self._slow_fetch_lock:
-                        self._weather_cache = list(markets)
-                        self._weather_cache_updated_at = datetime.now(timezone.utc)
-                        self._weather_refresh_future = None
-                        cached = list(self._weather_cache)
-                    logger.info(
-                        "Scanner: weather warm-up fetched %d dedicated markets (wait=%.1fs)",
-                        len(cached),
-                        wait_sec,
-                    )
-                except FuturesTimeoutError:
-                    logger.info(
-                        "Scanner: weather warm-up timed out after %.1fs; using background refresh",
-                        wait_sec,
-                    )
-                except Exception as e:
-                    logger.warning("Scanner: weather warm-up error: %s", e)
-
-        return cached
-
-    def _run_weather_refresh(self) -> List[Market]:
-        markets = self.fetch_weather_markets(limit=self.weather_scan_limit) or []
-        logger.info(
-            "Scanner: weather background refresh fetched %d dedicated markets",
-            len(markets),
-        )
-        return markets
-
-    def _harvest_weather_refresh_result(self) -> None:
-        with self._slow_fetch_lock:
-            future = self._weather_refresh_future
-
-        if future is None or not future.done():
-            return
-
-        try:
-            markets = future.result() or []
-        except Exception as e:
-            logger.error("weather background refresh error: %s", e)
-            markets = []
-
-        with self._slow_fetch_lock:
-            self._weather_cache = list(markets)
-            self._weather_cache_updated_at = datetime.now(timezone.utc)
-            self._weather_refresh_future = None
 
     def _empty_scan_result(self, sync_timeout: bool = False) -> Dict[str, Any]:
         meta: Dict[str, Any] = {
@@ -757,7 +596,6 @@ class MarketScanner:
             "updown_5m_count": 0,
             "updown_1h_count": 0,
             "updown_hype_alt_count": 0,
-            "weather_market_count": 0,
             "slug_fetch_stats": {},
         }
         if sync_timeout:
@@ -772,7 +610,6 @@ class MarketScanner:
             "updown_5m": [],
             "updown_1h": [],
             "updown_hype_alt": [],
-            "weather": [],
             "scanner_meta": meta,
         }
 
@@ -1500,132 +1337,12 @@ class MarketScanner:
             logger.info(f"Fetched {len(markets)} Hyperliquid/HYPE alt up/down markets")
         return markets
 
-    def fetch_weather_markets(
-        self,
-        cities: Optional[List[str]] = None,
-        limit: int = 600,
-    ) -> List[Market]:
-        """Fetch open weather markets from Gamma.
-
-        Fast path: query `/events` by weather tag slug and parse embedded markets.
-        Fallback path: broad `/markets` crawl with dedicated-weather filters.
-        """
-        city_filter = {city.lower() for city in (cities or [])}
-        markets: List[Market] = []
-        seen_market_ids: set[str] = set()
-        raw_candidates = 0
-
-        def _city_allowed(market: Market) -> bool:
-            if not city_filter:
-                return True
-            text = (
-                f"{market.slug} {market.question} {market.description} {market.group_item_title}"
-            ).lower()
-            return any(city in text for city in city_filter)
-
-        # Fast path: tagged weather events.
-        try:
-            for tag_slug in _WEATHER_EVENT_TAG_SLUGS:
-                offset = 0
-                # Keep this bounded; background refresh runs every cycle.
-                for _ in range(0, 20):
-                    if len(markets) >= limit:
-                        break
-                    params = {
-                        "limit": 100,
-                        "offset": offset,
-                        "active": "true",
-                        "closed": "false",
-                        "tag_slug": tag_slug,
-                    }
-                    resp = self._gamma_get("/events", params=params, timeout=8)
-                    try:
-                        resp.raise_for_status()
-                        events = resp.json() or []
-                    finally:
-                        resp.close()
-                    if not events:
-                        break
-                    for event in events:
-                        event_text = (
-                            f"{event.get('slug','')} {event.get('title','')} "
-                            f"{event.get('description','')}"
-                        )
-                        # Ignore broad climate/disaster events that are not temp/precip style.
-                        if not _WEATHER_EVENT_HINT_RE.search(event_text):
-                            continue
-                        parsed_batch = self._parse_markets(event.get("markets", []) or [])
-                        for market in parsed_batch:
-                            if not self._is_dedicated_weather_candidate(market):
-                                continue
-                            raw_candidates += 1
-                            if not _city_allowed(market):
-                                continue
-                            if market.id in seen_market_ids:
-                                continue
-                            seen_market_ids.add(market.id)
-                            markets.append(market)
-                            if len(markets) >= limit:
-                                break
-                        if len(markets) >= limit:
-                            break
-                    if len(events) < params["limit"]:
-                        break
-                    offset += len(events)
-
-            # Fallback: broad market crawl only if tag path found nothing.
-            if not markets:
-                offset = 0
-                while len(markets) < limit:
-                    params = {
-                        "limit": min(100, limit - len(markets)),
-                        "offset": offset,
-                        "active": "true",
-                        "closed": "false",
-                    }
-                    resp = self._gamma_get("/markets", params=params, timeout=8)
-                    try:
-                        resp.raise_for_status()
-                        batch = resp.json()
-                    finally:
-                        resp.close()
-                    if not batch:
-                        break
-                    parsed_batch = self._parse_markets(batch)
-                    for market in parsed_batch:
-                        if not self._is_dedicated_weather_candidate(market):
-                            continue
-                        raw_candidates += 1
-                        if not _city_allowed(market):
-                            continue
-                        if market.id in seen_market_ids:
-                            continue
-                        seen_market_ids.add(market.id)
-                        markets.append(market)
-                    offset += len(batch)
-                    if len(batch) < params["limit"]:
-                        break
-            if markets:
-                sample = [m.question[:100] for m in markets[:3]]
-                logger.info(
-                    "Fetched %d dedicated weather markets from Gamma (raw_candidates=%d, sample=%s)",
-                    len(markets),
-                    raw_candidates,
-                    sample,
-                )
-            else:
-                logger.info("Fetched 0 dedicated weather markets from Gamma")
-            return markets
-        except Exception as e:
-            logger.error(f"Weather market fetch error: {e}")
-            return markets
-
     async def scan_for_opportunities(self) -> Dict[str, Any]:
         """Scan for different types of opportunities.
 
         Sync HTTP (Gamma + updown + optional HYPE alt) runs in a worker thread with a
         timeout so the asyncio event loop is not blocked for minutes on slow APIs.
-        Price hydration for gamma, weather, 15m / 5m / 1h updown batches runs in
+        Price hydration for gamma, 15m / 5m / 1h updown batches runs in
         parallel via asyncio.gather; HYPE alt hydrates after dedupe against those IDs.
         """
         t_scan_start = time.perf_counter()
@@ -1653,7 +1370,6 @@ class MarketScanner:
                 updown_5m,
                 updown_1h,
                 hype_alt,
-                weather,
                 look_ahead_15m,
                 look_ahead_5m,
                 look_ahead_1h,
@@ -1681,9 +1397,8 @@ class MarketScanner:
         async def _hydrate(ms: List[Market]) -> List[Market]:
             return await self.update_market_prices(ms) if ms else []
 
-        markets, weather, updown, updown_5m, updown_1h = await asyncio.gather(
+        markets, updown, updown_5m, updown_1h = await asyncio.gather(
             _hydrate(markets),
-            _hydrate(weather),
             _hydrate(updown),
             _hydrate(updown_5m),
             _hydrate(updown_1h),
@@ -1743,12 +1458,6 @@ class MarketScanner:
         else:
             opportunities["updown_hype_alt"] = []
 
-        if weather:
-            opportunities["high_liquidity"].extend(weather)
-            opportunities["weather"] = weather
-        else:
-            opportunities["weather"] = []
-
         opportunities["scanner_meta"] = {
             "look_ahead_15m": look_ahead_15m,
             "look_ahead_5m": look_ahead_5m,
@@ -1759,7 +1468,6 @@ class MarketScanner:
             "updown_5m_count": len(opportunities.get("updown_5m", [])),
             "updown_1h_count": len(opportunities.get("updown_1h", [])),
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
-            "weather_market_count": len(opportunities.get("weather", [])),
             "slug_fetch_stats": self._get_slug_fetch_stats_snapshot(),
         }
 

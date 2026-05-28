@@ -8,7 +8,6 @@ polymarket:
   max_spread: 0.05
   scanner_sync_timeout_sec: 35
   fetch_hype_alt_markets: true
-  fetch_weather_markets: false
   gamma_http_max_retries: 3
   gamma_http_retry_backoff_base_sec: 0.5
 hyperliquid:
@@ -172,11 +171,6 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-data_collection:
-  weather:
-    enabled: false
-    interval_sec: 300
-    path: data/market_prices/weather_prices.jsonl
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
@@ -209,6 +203,11 @@ lane_calibration:
     min_bucket_n: 50
     wr_veto_threshold: 0.4
     recommended_max_mean: 0.4
+    # Once a lane has at least this many accepted live trades, the veto
+    # decision uses live data alone (ghost dropped). Catches selection
+    # bias inside accepted cells where ghost rejected-pool WR is healthy
+    # but the bot's selection within the cell is bleeding.
+    live_mature_n: 50
     path: data/calibration/lane_thresholds.json
 entry_policy:
   defaults:
@@ -222,35 +221,9 @@ strategies:
     threshold: 0.85
     min_opposite_liquidity: 500
     expiration_window_hours: 48
-  weather:
-    enabled: false
-    gap_min: 0.15
-    borderline_high: 0.1
-    min_ev: 0.05
-    min_liquidity: 1000
-    min_volume: 2000
-    scan_limit: 120
-    scan_from_general_markets: false
-    resolution_window_enabled: false
-    min_hours_to_resolution: 2.0
-    max_hours_to_resolution: 72.0
-    max_yes_price: 0.45
-    kelly_fraction: 0.37
-    max_position_size: 20
-    metar_enabled: true
-    forecast_horizon_days: 3
-    use_weather_ai: false
-    max_weather_ai_calls_per_scan: 3
-    ensemble_disagreement_threshold: 0.12
-    ensemble_min_confidence: 0.55
-    weather_ai_timeout_sec: 25
-    weather_ai_cache_ttl_sec: 600
-    calibration_min_observations: 30
-    uncalibrated_kelly_edge_cap: 0.12
-    skip_extended_precip_without_calibration: true
   bitcoin:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09
@@ -317,7 +290,7 @@ strategies:
             entry_window_min: 0.5
             entry_window_max: 5.5
           down:
-            min_edge: 0.09
+            min_edge: 0.11
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -332,7 +305,7 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 19.0
           down:
-            min_edge: 0.06
+            min_edge: 0.08
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -346,6 +319,7 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 1.0
             entry_window_max: 59.0
+            size_multiplier: 0.3
           down:
             min_edge: 0.09
             ai_override_min_edge: 0.1
@@ -353,6 +327,7 @@ strategies:
             entry_price_max: 0.55
             entry_window_min: 1.0
             entry_window_max: 59.0
+            size_multiplier: 0.3
     clear_edge_low: 0.2
     clear_edge_high: 0.8
     look_ahead_15m: 8
@@ -361,8 +336,6 @@ strategies:
     prediction_window_bonus_15m: 0.0
     prediction_window_bonus_5m: 0.0
     blocked_utc_hours_updown:
-    # Ghost-justified (n=272k): only hour with WR<40% & n>=500.
-    # Prior list rolled back — 9 of 10 hours had ghost WR 47.5-66.4%.
     - 3
     disable_buy_yes: false
     disable_buy_no_counter_trend: false
@@ -371,10 +344,15 @@ strategies:
     btc_htf_boost_strong_15m: 0.12
     btc_htf_boost_weak_15m: 0.06
     quant_disagree_flip_thresh: 0.48
+    allow_quant_disagree_flip_buy_no: false
+    bull_regime_buy_no_max_yes_price: 0.66
+    bull_regime_buy_no_max_yes_price_5m: 0.68
+    bull_regime_buy_no_max_yes_price_15m: 0.62
+    bull_regime_buy_no_min_mins_left: 2.0
+    bull_regime_buy_no_min_mins_left_15m: 4.0
     bias_quant_disagree_override_enabled: true
-    bias_quant_disagree_aligned_max_gap_non5m: 1.0
-    bias_quant_disagree_aligned_min_edge_non5m: -1.0
-    bias_quant_disagree_size_multiplier: 0.5
+    bias_quant_disagree_aligned_max_gap_non5m: 0.15
+    bias_quant_disagree_aligned_min_edge_non5m: -0.1
     hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
@@ -425,7 +403,7 @@ strategies:
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -444,7 +422,7 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        min_edge: 0.05
+        min_edge: 0.085
         min_edge_buy_no: 0.05
         entry_window_min: 0.0
         entry_window_max: 4.0
@@ -522,9 +500,9 @@ strategies:
     min_btc_move_pct_15m_for_lag_entries: 0.25
     iql_15m_enabled: true
     iql_15m_hist_floor: 0.06
+    iql_15m_hist_floor_aligned_short: 0.02
+    sol_15m_buy_no_max_yes_price_bull_1h: 0.48
     blocked_utc_hours_updown:
-    # Ghost-justified (n=272k): only hour with WR<40% & n>=500.
-    # Prior list rolled back — hrs 1,19,20,21,22 ghost WR 47-54% on n=1.6k-2.2k each.
     - 3
     look_ahead_15m: 8
     look_ahead_5m: 1
@@ -576,17 +554,19 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
           down:
-            min_edge: 0.09
+            min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -603,7 +583,7 @@ strategies:
         BEAR: 0.5
   eth_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     eth_momentum_confirm:
       buy_yes:
@@ -628,11 +608,11 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        min_edge: 0.1
+        min_edge: 0.11
         entry_window_min: 0.5
         entry_window_max: 4.0
       15m:
-        min_edge: 0.09
+        min_edge: 0.1
         entry_window_min: 1.0
         entry_window_max: 24.0
       1h:
@@ -704,12 +684,12 @@ strategies:
     eth_follow_15m_min_adj: 0.04
     eth_follow_15m_min_adj_short: 0.03
     eth_follow_1h_min_adj: 0.02
+    eth_5m_buy_no_max_yes_price_bull_1h: 0.68
+    eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral: 68.0
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
     blocked_utc_hours_updown:
-    # Ghost-justified (n=272k): hrs with WR<40% & n>=1500.
-    # Prior list rolled back — hrs 0,6,8 ghost WR 48-61%; 2 borderline 44%.
     - 3
     - 11
     - 18
@@ -737,21 +717,21 @@ strategies:
             entry_window_max: 4.0
             size_multiplier: 0.4
           down:
-            min_edge: 0.1
+            min_edge: 0.12
             entry_price_min: 0.42
-            entry_price_max: 0.58
+            entry_price_max: 0.55
             entry_window_min: 0.5
             entry_window_max: 4.0
-            size_multiplier: 0.4
+            size_multiplier: 0.25
         15m:
           up:
-            min_edge: 0.09
+            min_edge: 0.11
             entry_price_min: 0.42
-            entry_price_max: 0.58
+            entry_price_max: 0.55
             entry_window_min: 1.0
             entry_window_max: 24.0
           down:
-            min_edge: 0.09
+            min_edge: 0.1
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -763,12 +743,14 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
           down:
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
     updown_min_edge_mins_left_ramp_start_min: 15.0
     updown_min_edge_mins_left_ramp_max_add: 0.03
     updown_min_edge_mins_left_ramp_span_min: 24.0
@@ -787,8 +769,6 @@ strategies:
     flat_btc_only_blocks_when_alt_neutral: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
-    iql_15m_enabled: true
-    iql_15m_hist_floor: 4.0
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -805,7 +785,7 @@ strategies:
         BEAR: 0.5
   hype_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -832,7 +812,7 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 5.5
       15m:
-        min_edge: 0.09
+        min_edge: 0.08
         entry_window_min: 2.0
         entry_window_max: 36.0
       1h:
@@ -883,9 +863,7 @@ strategies:
     low_corr_threshold_1h: 0.4
     low_corr_damping: 0.75
     low_corr_suppresses_entries: false
-    # HYPE: gate stays ENABLED but no hours blocked — ghost shows no HYPE hour
-    # <40% WR on n>=500. Empty list means gate is a no-op until/unless a bad
-    # hour appears in future data, then add it here (don't flip enabled flag).
+    hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
@@ -938,12 +916,14 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 59.0
+            size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
             entry_window_max: 59.0
+            size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
     lag_signal_min_pct: 0.12
@@ -983,7 +963,7 @@ strategies:
         BEAR: 0.5
   xrp_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1006,10 +986,10 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.07
+        min_edge: 0.085
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
-        entry_window_max: 16.0
+        entry_window_max: 32.0
       1h:
         min_edge: 0.05
         min_edge_buy_no: 0.06
@@ -1078,8 +1058,6 @@ strategies:
     dynamic_beta_extreme_max: 3.5
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    # XRP: ghost-justified (n=272k) — hrs 3,4 confirmed bad (34.1%, 39.3% on n>=1468).
-    # hrs 2,22 rolled back — ghost WR 49.2% / 61.9% respectively.
     blocked_utc_hours_updown:
     - 3
     - 4
@@ -1119,26 +1097,28 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.06
+            min_edge: 0.05
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1155,7 +1135,7 @@ strategies:
         BEAR: 0.5
   doge_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1181,9 +1161,9 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.06
+        min_edge: 0.085
         entry_window_min: 2.0
-        entry_window_max: 16.0
+        entry_window_max: 32.0
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
@@ -1245,8 +1225,6 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    # DOGE: ghost-justified (n=272k) — 4 hrs <40% WR on n>=1500.
-    # hrs 4,22,23 rolled back; hrs 1,2,18 newly added from ghost evidence.
     blocked_utc_hours_updown:
     - 1
     - 2
@@ -1288,26 +1266,28 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
         1h:
           up:
+            min_edge: 0.04
+            entry_price_min: 0.42
+            entry_price_max: 0.58
+            entry_window_min: 0.0
+            entry_window_max: 60.0
+            size_multiplier: 0.3
+          down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
-          down:
-            min_edge: 0.08
-            entry_price_min: 0.42
-            entry_price_max: 0.58
-            entry_window_min: 0.0
-            entry_window_max: 60.0
+            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1324,13 +1304,12 @@ strategies:
         BEAR: 0.5
   bnb_macro:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
       buy_yes: []
-      buy_no:
-      - 5m
+      buy_no: []
     min_liquidity: 750
     min_liquidity_buy_no: 300
     min_liquidity_buy_yes: 300
@@ -1350,10 +1329,10 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.09
+        min_edge: 0.085
         min_edge_buy_no: 0.05
         entry_window_min: 2.0
-        entry_window_max: 16.0
+        entry_window_max: 32.0
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
@@ -1408,6 +1387,7 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
+    bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.60
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45
@@ -1418,8 +1398,6 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    # BNB: ghost-justified (n=272k) — only hr 13 <40% WR (39.8% on n=2289).
-    # hrs 2,4,14,22 rolled back — all ghost WR 44-57% on n>=1477.
     blocked_utc_hours_updown:
     - 13
     look_ahead_15m: 8
@@ -1458,26 +1436,28 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 16.0
+            entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 60.0
+            size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
@@ -1646,14 +1626,10 @@ exposure:
   full_min_trade_usd: 10.0
   moderate_min_trade_usd: 10.0
   minimal_min_trade_usd: 5.0
-  # Loss-kill OFF until auto-reenable-after-recoup is implemented. Turning
-  # it on without that creates lanes paused for the rest of the session.
   loss_kill_switch_enabled: false
   max_consecutive_losses: 3
   pause_cycles: 2
   max_pause_cycles: 4
-  # auto = lane unpauses when conditions improve; manual = sits until you hit
-  # the toggle in the exposure manager UI (/api/exposure/resume/<lane>).
   live_resume_mode: auto
   high_vol_pct: 0.015
   low_vol_pct: 0.005
@@ -1737,8 +1713,6 @@ dashboard:
   dashboard_port: 8081
   auto_sol5_backtest_on_startup: false
   auto_sol5_backtest_on_reset: false
-  auto_weather_backtest_on_startup: false
-  auto_weather_backtest_on_reset: false
 lane_direction_fsm_active: false
 lane_direction_t_enter: 0.3
 lane_direction_t_exit: 0.1

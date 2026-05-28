@@ -31,7 +31,7 @@ import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -98,6 +98,17 @@ class BTCDirectionDecision:
     htf_side: str
     quant_side: Optional[str] = None
     momentum_side: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BTCBiasResolution:
+    allowed_side: Optional[str]
+    side_source: str
+    horizon_tf: str
+    horizon_bias: str
+    slower_biases: Dict[str, str]
+    primary_htf_bias: str
+    confidence_penalty: float = 0.0
 
 
 class BitcoinSignal(BaseModel):
@@ -336,6 +347,21 @@ class BitcoinStrategy:
             return "LONG"
         return None
 
+    def _btc_quant_side(self, raw_est_prob: Optional[float]) -> Optional[str]:
+        if raw_est_prob is None:
+            return None
+        try:
+            thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
+        except (TypeError, ValueError):
+            thresh = 0.48
+        upper = 1.0 - thresh
+        raw = float(raw_est_prob)
+        if raw < thresh:
+            return "SHORT"
+        if raw > upper:
+            return "LONG"
+        return None
+
     def _resolve_btc_direction(
         self,
         *,
@@ -347,97 +373,114 @@ class BitcoinStrategy:
         mom: Any = None,
         current: Optional[BTCDirectionDecision] = None,
     ) -> BTCDirectionDecision:
-        """Resolve BTC side once, with explicit conflict metadata.
-
-        The first call establishes the HTF/rollover side. A later call with
-        raw_est_prob applies the existing quant-disagreement flip policy.
-        """
+        """Resolve BTC side in one compact path with explicit suppression rules."""
         htf_side = "LONG" if htf_bias == "BULLISH" else "SHORT" if htf_bias == "BEARISH" else allowed_side
         momentum_side = self._btc_momentum_side(mom)
+        counter_trend_disabled = bool(self.config.get("disable_buy_no_counter_trend", False))
+        rollover_short = (
+            not counter_trend_disabled
+            and htf_bias == "BULLISH"
+            and not bool(getattr(macd_4h, "histogram_rising", False))
+        )
 
-        if current is None:
-            counter_trend_disabled = bool(self.config.get("disable_buy_no_counter_trend", False))
-            rollover_short = (
-                not counter_trend_disabled
-                and htf_bias == "BULLISH"
-                and not bool(getattr(macd_4h, "histogram_rising", False))
-            )
-            if rollover_short:
-                reason_parts.append("counter_trend=btc_4h_hist_declining")
-                action, direction, effective_side = self._btc_action_for_side("SHORT")
-                return BTCDirectionDecision(
-                    action=action,
-                    direction=direction,
-                    effective_side=effective_side,
-                    side_source="btc_bull_rollover_countertrend",
-                    conflict_type="bullish_htf_rollover_down",
-                    resolver_path="htf_bull__4h_hist_declining",
-                    htf_side=htf_side,
-                    momentum_side=momentum_side,
-                )
-
-            action, direction, effective_side = self._btc_action_for_side(allowed_side)
-            return BTCDirectionDecision(
-                action=action,
-                direction=direction,
-                effective_side=effective_side,
-                side_source="btc_htf_bias",
-                conflict_type="none" if effective_side == htf_side else "neutral_resolver",
-                resolver_path=f"htf_{htf_bias.lower()}__side_{allowed_side.lower()}",
-                htf_side=htf_side,
-                momentum_side=momentum_side,
-            )
-
-        quant_side: Optional[str] = None
-        if raw_est_prob is not None:
-            try:
-                thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
-            except (TypeError, ValueError):
-                thresh = 0.48
-            upper = 1.0 - thresh
-            raw = float(raw_est_prob)
-            if raw < thresh:
-                quant_side = "SHORT"
-            elif raw > upper:
-                quant_side = "LONG"
-
-        if quant_side is None or quant_side == current.effective_side:
-            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
-
-        if quant_side == "SHORT" and bool(self.config.get("disable_buy_no_counter_trend", False)):
-            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
-        if quant_side == "LONG" and bool(self.config.get("disable_buy_yes", False)):
-            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
-
-        require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
-        if require_mom and mom is not None and momentum_side != quant_side:
-            if quant_side == "SHORT":
-                reason_parts.append(f"quant_flip_suppressed=no_down_momentum(raw={float(raw_est_prob):.3f})")
-            else:
-                reason_parts.append(f"quant_flip_suppressed=no_up_momentum(raw={float(raw_est_prob):.3f})")
-            return replace(current, quant_side=quant_side, momentum_side=momentum_side)
-
-        try:
-            thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
-        except (TypeError, ValueError):
-            thresh = 0.48
-        if quant_side == "SHORT":
-            reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})<{thresh:.2f}")
+        base_side = "SHORT" if rollover_short else allowed_side
+        if rollover_short:
+            reason_parts.append("counter_trend=btc_4h_hist_declining")
+            base_source = "btc_bull_rollover_countertrend"
+            base_conflict = "bullish_htf_rollover_down"
+            base_path = "htf_bull__4h_hist_declining"
         else:
-            reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})>{1.0 - thresh:.2f}")
+            base_source = "btc_htf_bias"
+            base_conflict = "none" if base_side == htf_side else "neutral_resolver"
+            base_path = f"htf_{htf_bias.lower()}__side_{base_side.lower()}"
 
-        action, direction, effective_side = self._btc_action_for_side(quant_side)
+        final_side = base_side
+        side_source = base_source
+        conflict_type = base_conflict
+        resolver_path = base_path
+
+        quant_side = self._btc_quant_side(raw_est_prob)
+        if quant_side is not None and quant_side != base_side:
+            if quant_side == "SHORT" and bool(self.config.get("disable_buy_no_counter_trend", False)):
+                pass
+            elif quant_side == "LONG" and bool(self.config.get("disable_buy_yes", False)):
+                pass
+            else:
+                require_mom = bool(self.config.get("quant_flip_require_momentum_confirm", True))
+                if require_mom and mom is not None and momentum_side != quant_side:
+                    if quant_side == "SHORT":
+                        reason_parts.append(f"quant_flip_suppressed=no_down_momentum(raw={float(raw_est_prob):.3f})")
+                    else:
+                        reason_parts.append(f"quant_flip_suppressed=no_up_momentum(raw={float(raw_est_prob):.3f})")
+                else:
+                    try:
+                        thresh = float(self.config.get("quant_disagree_flip_thresh", 0.48))
+                    except (TypeError, ValueError):
+                        thresh = 0.48
+                    if quant_side == "SHORT":
+                        reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})<{thresh:.2f}")
+                    else:
+                        reason_parts.append(f"quant_flip=raw({float(raw_est_prob):.3f})>{1.0 - thresh:.2f}")
+                    final_side = quant_side
+                    side_source = "btc_quant_disagree_flip"
+                    conflict_type = f"{base_side.lower()}_to_{quant_side.lower()}_quant_disagree"
+                    resolver_path = f"{base_path}__quant_{quant_side.lower()}"
+
+        action, direction, effective_side = self._btc_action_for_side(final_side)
         return BTCDirectionDecision(
             action=action,
             direction=direction,
             effective_side=effective_side,
-            side_source="btc_quant_disagree_flip",
-            conflict_type=f"{current.effective_side.lower()}_to_{quant_side.lower()}_quant_disagree",
-            resolver_path=f"{current.resolver_path}__quant_{quant_side.lower()}",
-            htf_side=current.htf_side,
+            side_source=side_source,
+            conflict_type=conflict_type,
+            resolver_path=resolver_path,
+            htf_side=htf_side,
             quant_side=quant_side,
             momentum_side=momentum_side,
         )
+
+    def _btc_direction_guard_reason(
+        self,
+        *,
+        window_size: str,
+        decision: BTCDirectionDecision,
+        yes_price: float,
+        btc_1h_regime: Optional[str],
+        eval_mins_left: float,
+    ) -> Optional[str]:
+        """Block known-bad BTC direction paths before threshold tuning.
+
+        Session review showed the main BTC loss engine was not the clean HTF-bias
+        short path; it was quant-disagree short flips plus very expensive/late
+        BUY_NO entries while BTC 1H regime remained bullish.
+        """
+        regime = str(btc_1h_regime or "").upper()
+
+        if (
+            decision.action == "BUY_NO"
+            and decision.side_source == "btc_quant_disagree_flip"
+            and not bool(self.config.get("allow_quant_disagree_flip_buy_no", False))
+        ):
+            return "quant_disagree_flip_buy_no_disabled"
+
+        if decision.action != "BUY_NO" or regime != "BULL":
+            return None
+
+        max_yes_key = f"bull_regime_buy_no_max_yes_price_{window_size}"
+        max_yes_price = self.config.get(max_yes_key)
+        if max_yes_price is None:
+            max_yes_price = self.config.get("bull_regime_buy_no_max_yes_price")
+        if max_yes_price is not None and yes_price >= float(max_yes_price):
+            return "bull_regime_expensive_short"
+
+        min_left_key = f"bull_regime_buy_no_min_mins_left_{window_size}"
+        min_mins_left = self.config.get(min_left_key)
+        if min_mins_left is None:
+            min_mins_left = self.config.get("bull_regime_buy_no_min_mins_left")
+        if min_mins_left is not None and eval_mins_left <= float(min_mins_left):
+            return "bull_regime_late_short"
+
+        return None
 
     def _calibrate_est_prob(
         self,
@@ -983,6 +1026,204 @@ class BitcoinStrategy:
 
         return bias
 
+    @staticmethod
+    def _bias_to_side(bias: str) -> Optional[str]:
+        if bias == "BULLISH":
+            return "LONG"
+        if bias == "BEARISH":
+            return "SHORT"
+        return None
+
+    def _get_btc_tf_state(self, ta: TechnicalAnalysis, tf: str) -> Any:
+        state = getattr(ta, f"tf_{tf}", None)
+        if state is not None and (
+            float(getattr(state, "price", 0.0) or 0.0) > 0
+            or float(getattr(state, "ema_9", 0.0) or 0.0) > 0
+        ):
+            return state
+        macd = getattr(ta, f"macd_{tf}", None) if tf in {"15m", "1h", "4h"} else None
+        if tf == "5m":
+            macd = None
+        return type(
+            "FallbackTFState",
+            (),
+            {
+                "timeframe": tf,
+                "price": float(getattr(ta, "current_price", 0.0) or 0.0),
+                "ema_9": float(getattr(ta, "ema_9", 0.0) or 0.0),
+                "ema_21": float(getattr(ta, "ema_21", 0.0) or 0.0),
+                "ema_50": float(getattr(ta, "ema_50", 0.0) or 0.0),
+                "rsi_14": float(getattr(ta, "rsi_14", 50.0) or 50.0),
+                "macd": macd,
+            },
+        )()
+
+    def _vote_macd_bias(self, macd: Any, *, min_hist_magnitude: float) -> str:
+        if macd is None:
+            return "NEUTRAL"
+        bull_votes = 0
+        bear_votes = 0
+        if bool(getattr(macd, "above_zero", False)):
+            bull_votes += 1
+        else:
+            bear_votes += 1
+        crossover = str(getattr(macd, "crossover", "") or "")
+        if crossover == "BULLISH_CROSS":
+            bull_votes += 1
+        elif crossover == "BEARISH_CROSS":
+            bear_votes += 1
+        hist = float(getattr(macd, "histogram", 0.0) or 0.0)
+        if abs(hist) < float(min_hist_magnitude):
+            return "NEUTRAL"
+        if bool(getattr(macd, "histogram_rising", False)):
+            bull_votes += 1
+        else:
+            bear_votes += 1
+        if bull_votes >= 2:
+            return "BULLISH"
+        if bear_votes >= 2:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _vote_rsi_bias(rsi: float) -> str:
+        if rsi >= 55.0:
+            return "BULLISH"
+        if rsi <= 45.0:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _vote_ema_bias(price: float, ema_9: float, ema_21: float, ema_50: float) -> str:
+        if ema_50 > 0 and price > ema_9 > ema_21 > ema_50:
+            return "BULLISH"
+        if ema_50 > 0 and price < ema_9 < ema_21 < ema_50:
+            return "BEARISH"
+        if price > ema_9 > ema_21:
+            return "BULLISH"
+        if price < ema_9 < ema_21:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    def _resolve_voted_bias(
+        self,
+        *,
+        macd: Any,
+        price: float,
+        ema_9: float,
+        ema_21: float,
+        ema_50: float,
+        rsi: float,
+        min_hist_magnitude: float,
+    ) -> str:
+        votes = [
+            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
+            self._vote_rsi_bias(rsi),
+            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
+        ]
+        bull_votes = sum(1 for vote in votes if vote == "BULLISH")
+        bear_votes = sum(1 for vote in votes if vote == "BEARISH")
+        if bull_votes >= 2:
+            return "BULLISH"
+        if bear_votes >= 2:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    def _get_5m_bias(self, ta: TechnicalAnalysis) -> str:
+        state = self._get_btc_tf_state(ta, "5m")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=float(self._tf_cfg("5m", "min_hist_magnitude", 0.0) or 0.0),
+        )
+
+    def _get_15m_bias(self, ta: TechnicalAnalysis) -> str:
+        state = self._get_btc_tf_state(ta, "15m")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=float(self._tf_cfg("15m", "min_hist_magnitude", 0.0) or 0.0),
+        )
+
+    def _get_1h_bias(self, ta: TechnicalAnalysis) -> str:
+        state = self._get_btc_tf_state(ta, "1h")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=float(self._tf_cfg("1h", "min_hist_magnitude", 0.0) or 0.0),
+        )
+
+    def _resolve_bias_for_tf(self, ta: TechnicalAnalysis, tf: str) -> BTCBiasResolution:
+        backup_4h_bias = self._get_higher_tf_bias(ta)
+        if tf == "5m":
+            horizon_bias = self._get_5m_bias(ta)
+            slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
+        elif tf == "15m":
+            horizon_bias = self._get_15m_bias(ta)
+            slower_biases = {"1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
+        else:
+            horizon_bias = self._get_1h_bias(ta)
+            slower_biases = {"4h": backup_4h_bias}
+
+        if horizon_bias in {"BULLISH", "BEARISH"}:
+            side_source = f"btc_{tf}_native"
+            penalty = 0.0
+            for slower_tf, slower_bias in slower_biases.items():
+                if slower_bias not in {"BULLISH", "BEARISH"}:
+                    continue
+                if slower_bias != horizon_bias:
+                    penalty += 0.03
+                    side_source = f"btc_{tf}_vs_slower"
+            return BTCBiasResolution(
+                allowed_side=self._bias_to_side(horizon_bias),
+                side_source=side_source,
+                horizon_tf=tf,
+                horizon_bias=horizon_bias,
+                slower_biases=slower_biases,
+                primary_htf_bias=horizon_bias,
+                confidence_penalty=penalty,
+            )
+
+        for slower_tf, slower_bias in slower_biases.items():
+            if slower_bias not in {"BULLISH", "BEARISH"}:
+                continue
+            return BTCBiasResolution(
+                allowed_side=self._bias_to_side(slower_bias),
+                side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
+                horizon_tf=tf,
+                horizon_bias=horizon_bias,
+                slower_biases=slower_biases,
+                primary_htf_bias=slower_bias,
+                confidence_penalty=0.04,
+            )
+
+        return BTCBiasResolution(
+            allowed_side=None,
+            side_source=f"btc_{tf}_neutral",
+            horizon_tf=tf,
+            horizon_bias=horizon_bias,
+            slower_biases=slower_biases,
+            primary_htf_bias="NEUTRAL",
+        )
+
     # ──────────────────────────────────────────────────────────────
     # LAYER 2: Lower Timeframe Confirmation (15m MACD)
     # ──────────────────────────────────────────────────────────────
@@ -1315,13 +1556,13 @@ class BitcoinStrategy:
             logger.info(f"Bitcoin strategy: PAUSED — {exp_reason}")
             return []
 
-        # ══════════════════════════════════════════════════════════
-        # LAYER 1: Determine higher TF bias — this gates everything
-        # ══════════════════════════════════════════════════════════
         htf_bias = self._get_higher_tf_bias(ta)
+        bias_1h = self._get_1h_bias(ta)
+        bias_15m = self._get_15m_bias(ta)
+        bias_5m = self._get_5m_bias(ta)
 
         logger.info(
-            f"BTC ${btc_price:,.0f} | HTF BIAS: {htf_bias} | "
+            f"BTC ${btc_price:,.0f} | bias_4h={htf_bias} bias_1h={bias_1h} bias_15m={bias_15m} bias_5m={bias_5m} | "
             f"Sabre={'BULL' if sabre.trend==1 else 'BEAR'} MA=${sabre.ma_value:,.0f} "
             f"Trail=${sabre.trail_value:,.0f} tension={sabre.tension:+.1f} | "
             f"4H MACD hist={macd_4h.histogram:+.0f} {'above' if macd_4h.above_zero else 'below'}0 "
@@ -1331,94 +1572,6 @@ class BitcoinStrategy:
             f"Mom 15m={mom.m15_direction}({mom.m15_move_pct:+.3f}%) "
             f"5m={mom.m5_direction}({mom.m5_move_pct:+.3f}%)"
         )
-
-        # BUG FIX: has_updown must be assigned before the NEUTRAL check that reads it
-        has_updown = any(self._is_updown_market(m) for m in btc_markets)
-
-        if htf_bias == "NEUTRAL":
-            if not has_updown:
-                logger.info("Bitcoin strategy: HTF bias NEUTRAL — sitting out this cycle")
-                return []
-            # NEUTRAL + updown markets: lean on 4H MACD histogram direction (more current
-            # than Sabre, avoids Sabre-vs-histogram deadlock where SHORT is chosen but
-            # hist_gate blocks it because histogram is actually rising).
-            # Fall back to Sabre only when histogram direction is ambiguous.
-            if macd_4h.histogram_rising and macd_4h.histogram > 0:
-                allowed_side = "LONG"
-            elif not macd_4h.histogram_rising and macd_4h.histogram < 0:
-                allowed_side = "SHORT"
-            else:
-                # Ambiguous 4H MACD (flat / transitioning). Hard sit-out via
-                # neutral_updown_skip_ambiguous_4h starved BTC up/down overnight while
-                # Sol-style lanes still traded — prefer active tape then Sabre lean.
-                if mom.m15_direction in ("SPIKE_UP", "DRIFT_UP"):
-                    allowed_side = "LONG"
-                    logger.info(
-                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — 15m momentum lean LONG (%s)",
-                        mom.m15_direction,
-                    )
-                elif mom.m15_direction in ("SPIKE_DOWN", "DRIFT_DOWN"):
-                    allowed_side = "SHORT"
-                    logger.info(
-                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — 15m momentum lean SHORT (%s)",
-                        mom.m15_direction,
-                    )
-                else:
-                    allowed_side = "LONG" if sabre.trend == 1 else "SHORT"
-                    logger.info(
-                        "Bitcoin: HTF NEUTRAL + ambiguous 4H MACD — Sabre lean=%s "
-                        "(no strong 15m impulse)",
-                        allowed_side,
-                    )
-            logger.info(
-                f"Bitcoin: HTF NEUTRAL + updown markets → lean={allowed_side} "
-                f"(4H hist={macd_4h.histogram:+.1f} rising={macd_4h.histogram_rising}, "
-                f"Sabre={'BULL' if sabre.trend==1 else 'BEAR'}) — tighter edge required"
-            )
-        else:
-            # Determine allowed trading side based on HTF bias
-            # BULLISH HTF → only LONG (buy the dip, ride the trend up)
-            # BEARISH HTF → only SHORT (sell the rip, ride the trend down)
-            allowed_side = "LONG" if htf_bias == "BULLISH" else "SHORT"
-
-        # ══════════════════════════════════════════════════════════
-        # LAYER 2: Check 15m MACD confirmation
-        # ══════════════════════════════════════════════════════════
-        ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side)
-
-        # ANTI-LTF GATE: Backtest (90 days, 1904 → 1119 trades) shows:
-        #   LTF confirmed   (strength >= 0.50) → 49.5% WR  ← BAD, MACD fires after the move peaks
-        #   LTF unconfirmed (strength < 0.50)  → 54.9% WR  ← GOOD, early momentum phase
-        # Trading the early-momentum window (before 15m MACD catches up) captures the
-        # trend continuation phase. Once confirmed, the window is at exhaustion risk.
-        if ltf_confirmed:
-            self.last_scan_stats = {
-                "enabled": True,
-                "signals": 0,
-                "ai_calls": 0,
-                "ai_assists": 0,
-                "ai_vetos": 0,
-                "ai_holds": 0,
-                "htf_bias": htf_bias,
-                "allowed_side": allowed_side,
-                "ltf_strength": round(float(ltf_strength), 4),
-                "top_skip_reasons": {"ltf_confirmed_late_entry": 1},
-                "gate_distributions": {},
-            }
-            logger.info(
-                f"Bitcoin strategy: LTF confirmed = late-entry risk (MACD already crossed), "
-                f"skipping. strength={ltf_strength:.2f}"
-            )
-            return []
-
-        logger.info(f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f} (unconfirmed)")
-
-        # ══════════════════════════════════════════════════════════
-        # LAYER 3: Check timing
-        # ══════════════════════════════════════════════════════════
-        timing_bonus, timing_reasons = self._check_timing(ta, allowed_side)
-        if timing_reasons:
-            logger.info(f"  Timing: bonus={timing_bonus:+.3f} [{', '.join(timing_reasons)}]")
 
         # ══════════════════════════════════════════════════════════
         # LAYER 4: Evaluate each market
@@ -1495,8 +1648,11 @@ class BitcoinStrategy:
                     payload=payload,
                 )
 
-        _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
+        # Loop-locals referenced in last_scan_stats below — init to safe defaults so
+        # an early-continue path (e.g. all markets hit neutral_bias) doesn't trigger
+        # UnboundLocalError when the stats dict is built post-loop.
+        ltf_strength = 0.0
 
         for market in btc_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -1511,12 +1667,49 @@ class BitcoinStrategy:
             )
             is_5m = _updown_tf == "5m"
             is_1h = _updown_tf == "1h"
+            resolution = self._resolve_bias_for_tf(ta, _updown_tf)
+            allowed_side = resolution.allowed_side
+            if allowed_side is None:
+                _bump_skip("neutral_bias")
+                logger.info(
+                    "BTC skip '%s' — no usable %s bias (4h=%s 1h=%s 15m=%s 5m=%s)",
+                    market.question[:40],
+                    _updown_tf,
+                    htf_bias,
+                    bias_1h,
+                    bias_15m,
+                    bias_5m,
+                )
+                continue
+            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side)
+            _sample("ltf_strength", ltf_strength)
+            timing_bonus, timing_reasons = self._check_timing(ta, allowed_side)
+            if (not is_5m) and ltf_confirmed:
+                _bump_skip("ltf_confirmed_late_entry")
+                logger.info(
+                    "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
+                    market.question[:40],
+                    ltf_strength,
+                )
+                continue
             ai_used = False
             threshold = None
             direction = "UP"  # default; overridden below
-            side_source = "btc_htf_bias"
+            side_source = resolution.side_source
             direction_decision: Optional[BTCDirectionDecision] = None
-            reason_parts = [f"HTF={htf_bias}", f"side={allowed_side}"]
+            reason_parts = [
+                f"HTF4={htf_bias}",
+                f"HTF1={bias_1h}",
+                f"HTF15={bias_15m}",
+                f"HTF5={bias_5m}",
+                f"PRIMARY={resolution.primary_htf_bias}",
+                f"side={allowed_side}",
+                f"side_src={side_source}",
+            ]
+            if resolution.horizon_bias == "NEUTRAL":
+                reason_parts.append(f"{_updown_tf}_neutral")
+            if resolution.confidence_penalty > 0:
+                reason_parts.append(f"bias_penalty={resolution.confidence_penalty:.3f}")
             dead_zone_would_block = False
             dead_zone_hour = None
 
@@ -1741,6 +1934,12 @@ class BitcoinStrategy:
                         m5_reasons.append("5m predict window")
 
                     raw_est_prob = quant.est_prob_up
+                    if resolution.confidence_penalty > 0:
+                        raw_est_prob += (
+                            -resolution.confidence_penalty
+                            if allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
                     direction_decision = self._resolve_btc_direction(
                         htf_bias=htf_bias,
                         allowed_side=allowed_side,
@@ -1770,6 +1969,28 @@ class BitcoinStrategy:
                         action=action,
                     )
                     confidence = quant.confidence
+                    _direction_guard = self._btc_direction_guard_reason(
+                        window_size=_updown_tf,
+                        decision=direction_decision,
+                        yes_price=yes_price,
+                        btc_1h_regime=btc_1h_regime if ta else None,
+                        eval_mins_left=float(_eval_left),
+                    )
+                    if _direction_guard:
+                        _bump_skip(_direction_guard)
+                        if action == "BUY_NO":
+                            _record_buy_no_skip(
+                                market=market,
+                                skip_reason=_direction_guard,
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=float(self._tf_cfg(_updown_tf, "min_edge", self.config.get("min_edge", 0.0) or 0.0)),
+                                rsi=ta.rsi_14,
+                                htf_bias_value=htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                window_size=_updown_tf,
+                            )
+                        continue
 
                     reason_parts.extend([
                         "[5m]",
@@ -1826,6 +2047,12 @@ class BitcoinStrategy:
                         htf_boost = -htf_boost_weak
                     # else: mixed votes → no directional boost (htf_boost stays 0.0)
                     est_prob_up += htf_boost
+                    if resolution.confidence_penalty > 0:
+                        est_prob_up += (
+                            -resolution.confidence_penalty
+                            if allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
 
                     # 4H/1H HISTOGRAM GATE (matches backtest engine)
                     # BTC 15m: without gate 50.7% WR; with gate 53.4% WR → improved further with anti-LTF.
@@ -1971,6 +2198,28 @@ class BitcoinStrategy:
                         edge = (1.0 - estimated_prob) - (1.0 - yes_price)
 
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * timing_weight)
+                    _direction_guard = self._btc_direction_guard_reason(
+                        window_size=_updown_tf,
+                        decision=direction_decision,
+                        yes_price=yes_price,
+                        btc_1h_regime=btc_1h_regime if ta else None,
+                        eval_mins_left=float(_eval_left),
+                    )
+                    if _direction_guard:
+                        _bump_skip(_direction_guard)
+                        if action == "BUY_NO":
+                            _record_buy_no_skip(
+                                market=market,
+                                skip_reason=_direction_guard,
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=float(self._tf_cfg(_updown_tf, "min_edge", self.config.get("min_edge", 0.0) or 0.0)),
+                                rsi=ta.rsi_14,
+                                htf_bias_value=htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                window_size=_updown_tf,
+                            )
+                        continue
 
                     reason_parts.extend([
                         f"UPDOWN_{window_label}",

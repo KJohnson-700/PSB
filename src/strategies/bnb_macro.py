@@ -6,14 +6,14 @@ BTC is secondary context only. This reuses the shared alt-macro base exactly
 like XRP/HYPE so rejected-candidate logging and calibration stay comparable.
 """
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from src.analysis.ai_agent import AIAgent
 from src.analysis.math_utils import PositionSizer
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager
 from src.market.scanner import Market
-from src.strategies.sol_macro import SolMacroStrategy
+from src.strategies.sol_macro import SolMacroSignal, SolMacroStrategy
 from src.strategies.strategy_config import resolve_enabled_flag
 
 import logging
@@ -49,6 +49,30 @@ NON_BNB_ASSET_TERMS = (
 
 class BNBMacroStrategy(SolMacroStrategy):
     """BNB macro strategy with BNB-first direction and BNBUSDT data."""
+
+    def _bnb_signal_guard_reason(self, signal: SolMacroSignal) -> str | None:
+        if signal.action != "BUY_NO":
+            return None
+        if signal.window_size != "5m":
+            return None
+        if str(signal.btc_1h_regime or "").upper() != "BULL":
+            return None
+
+        side_source = str(signal.side_source or "")
+        alt_h1 = str(signal.alt_htf_bias or "").upper()
+        yes_price = 1.0 - float(signal.price or 0.0)
+
+        if "neutral_fallback" in side_source:
+            return "bnb_5m_neutral_fallback_short_disabled"
+
+        if side_source == "bnb_5m_native":
+            max_yes = float(self.config.get("bnb_5m_native_buy_no_max_yes_price_bull_1h", 0.60))
+            if alt_h1 != "BEARISH":
+                return "bnb_5m_native_short_requires_bearish_alt_1h"
+            if yes_price >= max_yes:
+                return "bnb_5m_native_expensive_short_bull_1h"
+
+        return None
 
     def _build_alt_service(self) -> SOLBTCService:
         return SOLBTCService(
@@ -117,3 +141,31 @@ class BNBMacroStrategy(SolMacroStrategy):
             return True
         text = f"{market.question} {getattr(market, 'group_item_title', '') or ''}"
         return bool(BNB_UPDOWN_PATTERN.search(text))
+
+    async def scan_and_analyze(self, markets: List[Market], bankroll: float) -> List[SolMacroSignal]:
+        signals = await super().scan_and_analyze(markets, bankroll)
+        filtered: List[SolMacroSignal] = []
+        guard_rejected = 0
+
+        for signal in signals:
+            guard_reason = self._bnb_signal_guard_reason(signal)
+            if guard_reason:
+                guard_rejected += 1
+                logger.info(
+                    "BNB local guard skip '%s...' reason=%s side_source=%s",
+                    signal.market_question[:45],
+                    guard_reason,
+                    signal.side_source,
+                )
+                continue
+            filtered.append(signal)
+
+        if guard_rejected:
+            stats = dict(getattr(self, "last_scan_stats", {}) or {})
+            top = dict(stats.get("top_skip_reasons", {}) or {})
+            top["local_bnb_guard"] = int(top.get("local_bnb_guard", 0)) + guard_rejected
+            stats["top_skip_reasons"] = top
+            stats["signals"] = len(filtered)
+            self.last_scan_stats = stats
+
+        return filtered

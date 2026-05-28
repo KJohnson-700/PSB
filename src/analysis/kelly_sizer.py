@@ -84,7 +84,6 @@ class KellySizer:
             "xrp_macro":        AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.5, streak_threshold=3, min_kelly_fraction=0.05),
             "doge_macro":       AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.05),
             "bnb_macro":        AssetKellyConfig(base_kelly_fraction=0.10, streak_multiplier_max=1.4, streak_threshold=3, min_kelly_fraction=0.05),
-            "weather":         AssetKellyConfig(base_kelly_fraction=0.25, streak_multiplier_max=1.2, streak_threshold=4, min_kelly_fraction=0.10),
         }
 
         for strat, cfg in self._defaults.items():

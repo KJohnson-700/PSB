@@ -1,11 +1,34 @@
 from src.analysis.lane_manager import LaneManager
 
 
-def test_lane_manager_blocks_paused_lane() -> None:
+def test_lane_manager_reports_paused_lane_without_blocking_execution() -> None:
     mgr = LaneManager(
         {
             "lane_management": {
                 "enabled": True,
+                "default_state": "paper",
+                "states": {
+                    "bitcoin|5m|down": "paused",
+                },
+            }
+        }
+    )
+    allowed, reason, state, matched = mgr.can_execute(
+        "bitcoin|5m|down|bearish|drift",
+        dry_run=True,
+    )
+    assert allowed is True
+    assert reason == "lane_advisory_only"
+    assert state == "paused"
+    assert matched == "bitcoin|5m|down"
+
+
+def test_lane_manager_blocks_paused_only_when_execution_enforcement_enabled() -> None:
+    mgr = LaneManager(
+        {
+            "lane_management": {
+                "enabled": True,
+                "execution_enforcement_enabled": True,
                 "default_state": "paper",
                 "states": {
                     "bitcoin|5m|down": "paused",
@@ -23,7 +46,7 @@ def test_lane_manager_blocks_paused_lane() -> None:
     assert matched == "bitcoin|5m|down"
 
 
-def test_lane_manager_blocks_paper_lane_in_live_mode() -> None:
+def test_lane_manager_reports_paper_lane_without_blocking_live_execution() -> None:
     mgr = LaneManager(
         {
             "lane_management": {
@@ -39,8 +62,51 @@ def test_lane_manager_blocks_paper_lane_in_live_mode() -> None:
         "eth_macro|15m|up|bullish|standard",
         dry_run=False,
     )
-    assert allowed is False
-    assert reason == "lane_paper_only"
+    assert allowed is True
+    assert reason == "lane_advisory_only"
+    assert state == "paper"
+    assert matched == "eth_macro|15m|up"
+
+
+def test_lane_manager_default_paper_does_not_block_live_when_enabled() -> None:
+    mgr = LaneManager(
+        {
+            "lane_management": {
+                "enabled": True,
+                "default_state": "paper",
+                "states": {},
+            }
+        }
+    )
+    allowed, reason, state, matched = mgr.can_execute(
+        "eth_macro|15m|up|bullish|standard",
+        dry_run=False,
+    )
+    assert allowed is True
+    assert reason == "lane_advisory_only"
+    assert state == "paper"
+    assert matched == ""
+
+
+def test_lane_manager_paper_state_never_blocks_live_mode() -> None:
+    mgr = LaneManager(
+        {
+            "lane_management": {
+                "enabled": True,
+                "execution_enforcement_enabled": True,
+                "default_state": "paper",
+                "states": {
+                    "eth_macro|15m|up": "paper",
+                },
+            }
+        }
+    )
+    allowed, reason, state, matched = mgr.can_execute(
+        "eth_macro|15m|up|bullish|standard",
+        dry_run=False,
+    )
+    assert allowed is True
+    assert reason == "lane_allowed"
     assert state == "paper"
     assert matched == "eth_macro|15m|up"
 
@@ -66,10 +132,10 @@ def test_lane_manager_allows_live_lane_in_paper_and_live_mode() -> None:
         dry_run=False,
     )
     assert allowed_paper is True
-    assert reason_paper == "lane_allowed"
+    assert reason_paper == "lane_advisory_only"
     assert state_paper == "live"
     assert allowed_live is True
-    assert reason_live == "lane_allowed"
+    assert reason_live == "lane_advisory_only"
     assert state_live == "live"
 
 

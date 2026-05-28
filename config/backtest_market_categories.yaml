@@ -92,26 +92,12 @@ categories:
   fade_tech_ai:
     strategy: fade
     keywords: [model release, gpt, ai, openai, breakthrough]
-  fade_weather_disaster:
-    strategy: fade
-    keywords: [hurricane, earthquake, natural disaster]
   fade_long_dated_macro:
     strategy: fade
     keywords: [recession timing, inflation target]
   fade_celebrity_media:
     strategy: fade
     keywords: [awards, oscar, emmy, tv show, entertainment]
-
-  # --- Weather strategy (NOAA/Open-Meteo vs market price; gap >15¢ = edge) ---
-  weather_temperature:
-    strategy: weather
-    keywords: [temperature, degrees, celsius, fahrenheit, weather, hot, cold]
-  weather_precipitation:
-    strategy: weather
-    keywords: [rain, snow, precipitation, weather, storm]
-  weather_city:
-    strategy: weather
-    keywords: [london, new york, nyc, seoul, weather, temperature]
 
   # --- Both strategies (high value) ---
   both_elections:

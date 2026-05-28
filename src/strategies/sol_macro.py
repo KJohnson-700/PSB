@@ -44,6 +44,7 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -100,6 +101,18 @@ from src.analysis.rejected_candidate_log import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BiasResolution:
+    allowed_side: Optional[str]
+    side_source: str
+    horizon_tf: str
+    horizon_bias: str
+    slower_biases: Dict[str, str] = field(default_factory=dict)
+    primary_htf_bias: str = "NEUTRAL"
+    confidence_penalty: float = 0.0
+    penalty_reasons: List[str] = field(default_factory=list)
 
 
 def macd_bearish_momentum_ok(m: Any) -> bool:
@@ -559,6 +572,11 @@ class SolMacroStrategy:
         self.sell_5m_min_corr = float(self.config.get("sell_5m_min_corr", -1.0))
         self.iql_15m_enabled = bool(self.config.get("iql_15m_enabled", False))
         self.iql_15m_hist_floor = float(self.config.get("iql_15m_hist_floor", 0.03))
+        # Bias-aligned loose floor for (BEARISH, SHORT) only. Defaults to the standard
+        # floor so omitting the key preserves prior behavior.
+        self.iql_15m_hist_floor_aligned_short = float(
+            self.config.get("iql_15m_hist_floor_aligned_short", self.iql_15m_hist_floor)
+        )
         # LTF policy switches.
         # Default behavior keeps the historical anti-LTF gate (skip confirmed entries).
         self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
@@ -974,6 +992,35 @@ class SolMacroStrategy:
 
         return None, "skip", "neutral_htf_no_resolver"
 
+    def _sol_signal_guard_reason(
+        self,
+        *,
+        window_size: str,
+        action: str,
+        side_source: Optional[str],
+        yes_price: float,
+        btc_1h_regime: Optional[str],
+        alt_h1_trend: Optional[str],
+    ) -> Optional[str]:
+        if str(self._signal_strategy_name or "") != "sol_macro":
+            return None
+        if action != "BUY_NO":
+            return None
+
+        source = str(side_source or "")
+        regime = str(btc_1h_regime or "").upper()
+        alt_h1 = str(alt_h1_trend or "").upper()
+
+        if window_size == "5m" and source.endswith("_vs_slower") and alt_h1 == "BULLISH":
+            return "sol_vs_slower_short_against_h1"
+
+        if window_size == "15m" and source.endswith("15m_native") and regime == "BULL":
+            max_yes = float(self.config.get("sol_15m_buy_no_max_yes_price_bull_1h", 0.48))
+            if yes_price >= max_yes:
+                return "sol_15m_bull_regime_expensive_short"
+
+        return None
+
     def _make_buy_no_skip_payload(
         self,
         *,
@@ -1083,6 +1130,249 @@ class SolMacroStrategy:
     def _is_5m_market(self, market: Market) -> bool:
         """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
         return _market_window_minutes(market) <= 5
+
+    @staticmethod
+    def _bias_to_side(bias: str) -> Optional[str]:
+        if bias == "BULLISH":
+            return "LONG"
+        if bias == "BEARISH":
+            return "SHORT"
+        return None
+
+    def _hist_conviction_threshold(self, tf: str) -> float:
+        fallback = {
+            "5m": 0.0,
+            "15m": float(getattr(self, "iql_15m_hist_floor", 0.0) or 0.0),
+            "1h": 0.0,
+            "4h": 0.0,
+        }.get(tf, 0.0)
+        raw = self._tf_cfg(tf, "min_hist_magnitude", self.config.get(f"min_{tf}_hist_magnitude", fallback))
+        try:
+            return float(raw or 0.0)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _get_alt_tf_state(self, ta: SOLTechnicalAnalysis, tf: str) -> Any:
+        state = getattr(ta.sol, f"tf_{tf}", None)
+        if state is not None and (
+            float(getattr(state, "price", 0.0) or 0.0) > 0
+            or float(getattr(state, "ema_9", 0.0) or 0.0) > 0
+        ):
+            return state
+        sol = ta.sol
+        macd = getattr(sol, f"macd_{tf}", None) if tf in {"5m", "15m", "1h", "4h"} else None
+        if macd is None and tf == "1h":
+            macd = getattr(sol, "macd_1h", None)
+        return type(
+            "FallbackTFState",
+            (),
+            {
+                "legacy_fallback": True,
+                "timeframe": tf,
+                "price": float(getattr(sol, "current_price", 0.0) or 0.0),
+                "ema_9": float(getattr(sol, "ema_9", 0.0) or 0.0),
+                "ema_21": float(getattr(sol, "ema_21", 0.0) or 0.0),
+                "ema_50": float(getattr(sol, "ema_50", 0.0) or 0.0),
+                "rsi_14": float(getattr(sol, "rsi_14", 50.0) or 50.0),
+                "macd": macd,
+            },
+        )()
+
+    def _vote_macd_bias(self, macd: Any, *, min_hist_magnitude: float) -> str:
+        if macd is None:
+            return "NEUTRAL"
+        bull_votes = 0
+        bear_votes = 0
+
+        if bool(getattr(macd, "above_zero", False)):
+            bull_votes += 1
+        else:
+            bear_votes += 1
+
+        crossover = str(getattr(macd, "crossover", "") or "")
+        if crossover == "BULLISH_CROSS":
+            bull_votes += 1
+        elif crossover == "BEARISH_CROSS":
+            bear_votes += 1
+
+        hist = float(getattr(macd, "histogram", 0.0) or 0.0)
+        if abs(hist) < float(min_hist_magnitude):
+            return "NEUTRAL"
+        if bool(getattr(macd, "histogram_rising", False)):
+            bull_votes += 1
+        else:
+            bear_votes += 1
+
+        if bull_votes >= 2:
+            return "BULLISH"
+        if bear_votes >= 2:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _vote_rsi_bias(rsi: float) -> str:
+        if rsi >= 55.0:
+            return "BULLISH"
+        if rsi <= 45.0:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _vote_ema_bias(price: float, ema_9: float, ema_21: float, ema_50: float) -> str:
+        if ema_50 > 0 and price > ema_9 > ema_21 > ema_50:
+            return "BULLISH"
+        if ema_50 > 0 and price < ema_9 < ema_21 < ema_50:
+            return "BEARISH"
+        if price > ema_9 > ema_21:
+            return "BULLISH"
+        if price < ema_9 < ema_21:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    def _resolve_voted_bias(self, *, macd: Any, price: float, ema_9: float, ema_21: float, ema_50: float, rsi: float, min_hist_magnitude: float) -> str:
+        votes = [
+            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
+            self._vote_rsi_bias(rsi),
+            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
+        ]
+        bull_votes = sum(1 for vote in votes if vote == "BULLISH")
+        bear_votes = sum(1 for vote in votes if vote == "BEARISH")
+        if bull_votes >= 2:
+            return "BULLISH"
+        if bear_votes >= 2:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    def _get_5m_bias(self, ta: SOLTechnicalAnalysis) -> str:
+        state = self._get_alt_tf_state(ta, "5m")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=self._hist_conviction_threshold("5m"),
+        )
+
+    def _get_15m_bias(self, ta: SOLTechnicalAnalysis) -> str:
+        state = self._get_alt_tf_state(ta, "15m")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=self._hist_conviction_threshold("15m"),
+        )
+
+    def _get_1h_bias(self, ta: SOLTechnicalAnalysis) -> str:
+        state = self._get_alt_tf_state(ta, "1h")
+        if state is None or bool(getattr(state, "legacy_fallback", False)):
+            mtt = ta.multi_tf
+            sol = ta.sol
+            bull_votes = 0
+            bear_votes = 0
+            if mtt.h1_trend == "BULLISH":
+                bull_votes += 1
+            elif mtt.h1_trend == "BEARISH":
+                bear_votes += 1
+            ema_vote = self._vote_ema_bias(
+                float(getattr(sol, "current_price", 0.0) or 0.0),
+                float(getattr(sol, "ema_9", 0.0) or 0.0),
+                float(getattr(sol, "ema_21", 0.0) or 0.0),
+                float(getattr(sol, "ema_50", 0.0) or 0.0),
+            )
+            if ema_vote == "BULLISH":
+                bull_votes += 1
+            elif ema_vote == "BEARISH":
+                bear_votes += 1
+            rsi_vote = self._vote_rsi_bias(float(getattr(sol, "rsi_14", 50.0) or 50.0))
+            if rsi_vote == "BULLISH":
+                bull_votes += 1
+            elif rsi_vote == "BEARISH":
+                bear_votes += 1
+            if bull_votes >= 2:
+                return "BULLISH"
+            if bear_votes >= 2:
+                return "BEARISH"
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=self._hist_conviction_threshold("1h"),
+        )
+
+    def _resolve_alt_bias_for_tf(self, ta: SOLTechnicalAnalysis, tf: str) -> BiasResolution:
+        asset = self._alt_asset_code()
+        if tf == "5m":
+            horizon_bias = self._get_5m_bias(ta)
+            slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta)}
+        elif tf == "15m":
+            horizon_bias = self._get_15m_bias(ta)
+            slower_biases = {"1h": self._get_1h_bias(ta)}
+        else:
+            horizon_bias = self._get_1h_bias(ta)
+            slower_biases = {}
+
+        primary_htf_bias = horizon_bias if horizon_bias in {"BULLISH", "BEARISH"} else "NEUTRAL"
+        penalty = 0.0
+        penalty_reasons: List[str] = []
+
+        if horizon_bias in {"BULLISH", "BEARISH"}:
+            allowed_side = self._bias_to_side(horizon_bias)
+            side_source = f"{asset}_{tf}_native"
+            for slower_tf, slower_bias in slower_biases.items():
+                if slower_bias not in {"BULLISH", "BEARISH"}:
+                    continue
+                if slower_bias != horizon_bias:
+                    penalty += 0.03
+                    penalty_reasons.append(f"{slower_tf}_disagrees")
+                    side_source = f"{asset}_{tf}_vs_slower"
+            primary_htf_bias = horizon_bias
+            return BiasResolution(
+                allowed_side=allowed_side,
+                side_source=side_source,
+                horizon_tf=tf,
+                horizon_bias=horizon_bias,
+                slower_biases=slower_biases,
+                primary_htf_bias=primary_htf_bias,
+                confidence_penalty=penalty,
+                penalty_reasons=penalty_reasons,
+            )
+
+        for slower_tf, slower_bias in slower_biases.items():
+            if slower_bias not in {"BULLISH", "BEARISH"}:
+                continue
+            penalty = 0.04
+            penalty_reasons = [f"{tf}_neutral_fallback", f"{slower_tf}_fallback"]
+            return BiasResolution(
+                allowed_side=self._bias_to_side(slower_bias),
+                side_source=f"{asset}_{tf}_neutral_fallback_{slower_tf}",
+                horizon_tf=tf,
+                horizon_bias=horizon_bias,
+                slower_biases=slower_biases,
+                primary_htf_bias=slower_bias,
+                confidence_penalty=penalty,
+                penalty_reasons=penalty_reasons,
+            )
+
+        return BiasResolution(
+            allowed_side=None,
+            side_source=f"{asset}_{tf}_neutral",
+            horizon_tf=tf,
+            horizon_bias=horizon_bias,
+            slower_biases=slower_biases,
+        )
 
     def _resolve_entry_window_bounds(self, *, tf: str, default_min: float, default_max: float) -> tuple[float, float]:
         """Return entry window bounds, optionally widened to align with scan cadence."""
@@ -1441,44 +1731,8 @@ class SolMacroStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _get_macro_trend(self, ta: SOLTechnicalAnalysis) -> str:
-        """Determine 1H macro trend for SOL. This gates everything.
-
-        Uses:
-        1. 1H EMA alignment (9 > 21 > 50 = bullish, reverse = bearish)
-        2. 1H RSI zone (>55 = bull bias, <45 = bear bias)
-        3. Multi-TF alignment score
-
-        Returns: "BULLISH", "BEARISH", or "NEUTRAL"
-        """
-        mtt = ta.multi_tf
-        sol = ta.sol
-
-        bull_votes = 0
-        bear_votes = 0
-
-        # Vote 1: 1H trend from multi-TF analysis
-        if mtt.h1_trend == "BULLISH":
-            bull_votes += 1
-        elif mtt.h1_trend == "BEARISH":
-            bear_votes += 1
-
-        # Vote 2: EMA alignment on 15m (proxy for sustained direction)
-        if sol.ema_9 > sol.ema_21 > sol.ema_50:
-            bull_votes += 1
-        elif sol.ema_9 < sol.ema_21 < sol.ema_50:
-            bear_votes += 1
-
-        # Vote 3: RSI zone
-        if sol.rsi_14 > 55:
-            bull_votes += 1
-        elif sol.rsi_14 < 45:
-            bear_votes += 1
-
-        if bull_votes >= 2:
-            return "BULLISH"
-        elif bear_votes >= 2:
-            return "BEARISH"
-        return "NEUTRAL"
+        """Back-compat alias for the explicit 1H bias producer."""
+        return self._get_1h_bias(ta)
 
     def _get_btc_htf_bias_details(self, ta: TechnicalAnalysis) -> Dict[str, Any]:
         """Return BTC 4H bias plus vote-level diagnostics for entry logging."""
@@ -1612,13 +1866,32 @@ class SolMacroStrategy:
             return True
         return m5_adj >= threshold
 
-    def _passes_15m_iql(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> bool:
+    def _effective_iql_15m_floor(
+        self, allowed_side: str, htf_bias: Optional[str]
+    ) -> float:
+        """Select the IQL floor based on (htf_bias, side).
+
+        Only BEARISH×SHORT uses the loose floor — ghost data shows the standard
+        floor inverts signal there. All other combos use the default tight floor.
+        """
+        bias = (htf_bias or "").upper()
+        if bias == "BEARISH" and allowed_side == "SHORT":
+            return self.iql_15m_hist_floor_aligned_short
+        return self.iql_15m_hist_floor
+
+    def _passes_15m_iql(
+        self,
+        ta: SOLTechnicalAnalysis,
+        allowed_side: str,
+        htf_bias: Optional[str] = None,
+    ) -> bool:
         """Indicator Quality Layer (IQL) for 15m entries.
 
         Reuses `_check_15m_confirmation` so cycle-level LTF strength and IQL agree on
         the same MACD scoring: if 15m is already "confirmed" (late, strong
         structure), IQL passes. Otherwise apply the relaxed cross / hist-floor rule
-        used for early entries.
+        used for early entries. Floor is bias-conditional via
+        `_effective_iql_15m_floor`.
         """
         if not self.iql_15m_enabled:
             return True
@@ -1627,14 +1900,15 @@ class SolMacroStrategy:
             return True
         macd_15m = ta.sol.macd_15m
         hist = float(macd_15m.histogram)
+        floor = self._effective_iql_15m_floor(allowed_side, htf_bias)
         if allowed_side == "LONG":
             return (
                 macd_15m.crossover == "BULLISH_CROSS"
-                or (hist >= self.iql_15m_hist_floor and macd_15m.histogram_rising)
+                or (hist >= floor and macd_15m.histogram_rising)
             )
         return (
             macd_15m.crossover == "BEARISH_CROSS"
-            or (hist <= -self.iql_15m_hist_floor and not macd_15m.histogram_rising)
+            or (hist <= -floor and not macd_15m.histogram_rising)
         )
 
     def _calibrate_est_prob(
@@ -1987,17 +2261,13 @@ class SolMacroStrategy:
             logger.info(f"{_brand} strategy: PAUSED — {exp_reason}")
             return []
 
-        # ═══════════════════════════════════════════════
-        # LAYER 1: Macro trend (1H)
-        # ═══════════════════════════════════════════════
-        macro_trend = self._get_macro_trend(ta)
-        # Non-BTC strategies are alt-first: the alt HTF establishes direction;
-        # BTC is secondary context/fallback when the alt has no usable bias.
-        primary_htf_bias = macro_trend if macro_trend != "NEUTRAL" else (btc_htf_bias or macro_trend)
+        macro_trend = self._get_1h_bias(ta)
+        bias_15m = self._get_15m_bias(ta)
+        bias_5m = self._get_5m_bias(ta)
 
         logger.info(
-            f"{_alt_label} ${sol_price:,.2f} | ALT_HTF: {macro_trend} | BTC_HTF: {btc_htf_bias or 'UNAVAILABLE'} | "
-            f"PRIMARY: {primary_htf_bias} | "
+            f"{_alt_label} ${sol_price:,.2f} | bias_1h={macro_trend} bias_15m={bias_15m} bias_5m={bias_5m} | "
+            f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} | "
             f"1H={mtt.h1_trend} 15m={mtt.m15_trend} 5m={mtt.m5_trend} | "
             f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover} | "
             f"RSI={sol.rsi_14:.0f} | "
@@ -2010,153 +2280,20 @@ class SolMacroStrategy:
                 f"{_brand}: correlation degraded "
                 f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
             )
-
-        # Check for updown markets
-        has_updown = any(self._is_updown_market(m) for m in sol_markets)
-
-        _is_neutral_macro = primary_htf_bias == "NEUTRAL"
-
-        if _is_neutral_macro:
-            if not has_updown:
-                logger.info(f"{_brand} strategy: BTC+ALT HTF neutral — sitting out")
-                return []
-            # NEUTRAL alt HTF: alt-native side ONLY.
-            # 2026-05-21 audit: BTC spike-direction and lag opportunity_direction were
-            # previously allowed to set allowed_side here; that's BTC literally deciding
-            # the alt's direction, which violates "alts decided by alt-native indicators."
-            # BTC spike/lag remain useful for diagnostic logging and downstream catalyst
-            # gating, but they must not pick the alt side. If the alt's own 1h trend has
-            # no bias, sit out.
-            allowed_side = (
-                "LONG" if corr.sol_trend == "BULLISH"
-                else "SHORT" if corr.sol_trend == "BEARISH"
-                else None
-            )
-            _btc_ctx_bits = []
-            if corr.btc_spike_detected:
-                _btc_ctx_bits.append(f"BTC spike {corr.btc_move_5m_pct:+.2f}%")
-            if corr.lag_opportunity:
-                _btc_ctx_bits.append(
-                    f"BTC lag dir={corr.opportunity_direction} mag={abs(corr.opportunity_magnitude):.2f}%"
-                )
-            _btc_ctx = f" [diagnostic: {', '.join(_btc_ctx_bits)}]" if _btc_ctx_bits else ""
-            if allowed_side is None:
-                logger.info(
-                    f"{_brand}: Macro NEUTRAL, no {_alt_label} 1H bias — sitting out{_btc_ctx}"
-                )
-                return []
+        if ta.multi_tf.aligned:
             logger.info(
-                f"{_brand}: Macro NEUTRAL, using {_alt_label} 1H bias: {allowed_side}{_btc_ctx}"
+                f"{_brand}: MTF fully aligned — entry price filter will gate quality "
+                f"(lag is secondary; macro+LTF is primary signal)"
             )
-        else:
-            # BULLISH or BEARISH alt macro — alt HTF is primary; BTC is secondary.
-            # Four-path resolver gates BOTH directions with LTF momentum when its feature
-            # flags are enabled. Falls back to legacy regime-default when both flags off.
-            allowed_side = "LONG" if primary_htf_bias == "BULLISH" else "SHORT"
-            side_source = "primary_htf"
-            resolver_active = (
-                self.buy_yes_ltf_override_enabled
-                or self.buy_no_ltf_override_enabled
-                or self.buy_yes_4h_hist_override_enabled
-                or self.buy_no_4h_hist_override_enabled
+        if corr.lag_opportunity:
+            logger.info(
+                f"{_brand}: Lag confirmer active — {corr.opportunity_direction} "
+                f"mag={corr.opportunity_magnitude:+.2f}% (secondary boost applied)"
             )
-            if resolver_active:
-                _resolved_side, _resolved_source, _resolved_detail = (
-                    self._resolve_allowed_side_with_ltf_overrides(ta, primary_htf_bias)
-                )
-                # Additive-only resolver: side is never None for BULLISH/BEARISH inputs.
-                # Defaults match legacy behavior; only the exception path can flip side.
-                if _resolved_side and _resolved_side != allowed_side:
-                    logger.info(
-                        "%s: LTF resolver flipped to exception → %s (%s) — %s",
-                        _brand,
-                        _resolved_side,
-                        _resolved_source,
-                        _resolved_detail,
-                    )
-                if _resolved_side is not None:
-                    allowed_side = _resolved_side
-                    side_source = _resolved_source
-            elif primary_htf_bias == "BULLISH" and self.buy_no_ltf_override_enabled:
-                # Legacy path retained for back-compat when only buy_no flag is on.
-                _short_override, _short_override_reason = self._buy_no_ltf_override(ta)
-                if _short_override:
-                    allowed_side = "SHORT"
-                    side_source = "bearish_ltf_override"
-                    logger.info(
-                        "%s: bullish macro SHORT override enabled — %s",
-                        _brand,
-                        _short_override_reason,
-                    )
-
-            # MTF alignment note: fully aligned = trend has been running.
-            # Live data shows lag=None trades (63% WR) outperform lag=value (50% WR) —
-            # do NOT require lag to enter. Macro + LTF is the real edge.
-            # Just log alignment status; entry price filter (0.46-0.49) is the gatekeeper.
-            if has_updown and ta.multi_tf.aligned:
-                logger.info(
-                    f"{_brand}: MTF fully aligned — entry price filter will gate quality "
-                    f"(lag is secondary; macro+LTF is primary signal)"
-                )
-
-            # ── Lag as SECONDARY confirmer (not entry gate) ──
-            # Live data: lag=None macro trades = 63% WR; lag=value = 50% WR.
-            # The lag signal arrives AFTER the market has partially priced in the move.
-            # Macro + LTF is the primary signal; lag adds a small probability boost only.
-            if corr.lag_opportunity:
-                logger.info(
-                    f"{_brand}: Lag confirmer active — {corr.opportunity_direction} "
-                    f"mag={corr.opportunity_magnitude:+.2f}% (secondary boost applied)"
-                )
-            elif corr.btc_spike_detected:
-                logger.info(
-                    f"{_brand}: BTC spike ({corr.btc_move_5m_pct:+.2f}%) — timing boost applied"
-                )
-
-        # ═══════════════════════════════════════════════
-        # LAYER 2: 15m confirmation
-        # ═══════════════════════════════════════════════
-        ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
-
-        # LTF gate policy.
-        # Default keeps anti-LTF behavior (skip confirmed entries), but strategy-specific
-        # configs can opt into requiring confirmation when an asset performs poorly in
-        # weak/unconfirmed windows.
-        skip_15m_reason = None
-        if self.require_ltf_confirmation:
-            if not ltf_confirmed:
-                # 5m path has its own lag/timing signal stack and should not be blocked
-                # by the 15m confirmation requirement.
-                skip_15m_reason = "ltf_required_unconfirmed_15m"
-                logger.info(
-                    f"{_brand}: LTF confirmation required, but unconfirmed "
-                    f"(strength={ltf_strength:.2f}) — 15m entries will be skipped (5m unaffected)"
-                )
-            else:
-                logger.info(
-                    f"  LTF confirmation required and passed: {allowed_side}, strength={ltf_strength:.2f}"
-                )
-        else:
-            # ANTI-LTF GATE: Backtest (90 days, 2180 → 1208 trades) shows:
-            #   LTF confirmed   (strength >= 0.35) → 51.9% WR  ← BAD, MACD fires after move peaks
-            #   LTF unconfirmed (strength < 0.35)  → 65.0% WR  ← EXCELLENT, early momentum phase
-            if self.anti_ltf_gate_enabled and ltf_confirmed:
-                skip_15m_reason = "anti_ltf_confirmed_15m"
-                logger.info(
-                    f"{_brand}: LTF confirmed = late-entry risk (MACD crossed = exhaustion risk), "
-                    f"15m entries will be skipped. strength={ltf_strength:.2f}"
-                )
-            else:
-                logger.info(
-                    f"  Anti-LTF gate passed: {allowed_side} — early momentum, strength={ltf_strength:.2f}"
-                )
-
-        # ═══════════════════════════════════════════════
-        # LAYER 3: 5m entry timing + lag detection
-        # ═══════════════════════════════════════════════
-        timing_bonus, timing_reasons = self._check_entry_timing(ta, allowed_side)
-        if timing_reasons:
-            logger.info(f"  Timing: bonus={timing_bonus:+.3f} [{', '.join(timing_reasons)}]")
+        elif corr.btc_spike_detected:
+            logger.info(
+                f"{_brand}: BTC spike ({corr.btc_move_5m_pct:+.2f}%) — timing boost applied"
+            )
 
         # ═══════════════════════════════════════════════
         # LAYER 4: Evaluate each market
@@ -2381,8 +2518,6 @@ class SolMacroStrategy:
             task.add_done_callback(_finalize_observer)
             observer_tasks.append(task)
 
-        # Sample LTF strength (cycle-level, applies to all markets that reach the loop)
-        _sample("ltf_strength", ltf_strength)
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
 
         for market in sol_markets:
@@ -2392,10 +2527,41 @@ class SolMacroStrategy:
                 if is_updown
                 else "15m"
             )
+            resolution = self._resolve_alt_bias_for_tf(ta, _updown_tf)
+            allowed_side = resolution.allowed_side
+            side_source = resolution.side_source
+            primary_htf_bias = resolution.primary_htf_bias
+            if allowed_side is None:
+                _bump_skip("neutral_bias")
+                logger.info(
+                    "%s skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
+                    _brand,
+                    market.question[:40],
+                    _updown_tf,
+                    macro_trend,
+                    bias_15m,
+                    bias_5m,
+                )
+                continue
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
-            primary_htf_bias = "BULLISH" if allowed_side == "LONG" else "BEARISH"
+            ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
+            _sample("ltf_strength", ltf_strength)
+            skip_15m_reason = None
+            if self.require_ltf_confirmation:
+                if not ltf_confirmed:
+                    skip_15m_reason = "ltf_required_unconfirmed_15m"
+                else:
+                    logger.info(
+                        "  LTF confirmation required and passed: %s, strength=%.2f",
+                        allowed_side,
+                        ltf_strength,
+                    )
+            elif self.anti_ltf_gate_enabled and ltf_confirmed:
+                skip_15m_reason = "anti_ltf_confirmed_15m"
+
+            timing_bonus, timing_reasons = self._check_entry_timing(ta, allowed_side)
 
             # Alt-native momentum guards. 2026-05-23 ghost-counterfactual review:
             # default-on guards were over-pruning (blocking trades that would have
@@ -2405,8 +2571,23 @@ class SolMacroStrategy:
             # side. Uses the alt's own MACD only — BTC is not consulted.
             _alt_mc_cfg = self.config.get("alt_momentum_confirm") or {}
             _alt_mc_window = _updown_tf if is_updown else "15m"
+            # Bias-aligned bypass: when the trade aligns with primary_htf_bias the
+            # gate is provably inverting (ghost data 5/22→5/27: BEARISH×SHORT blocked
+            # WR > traded WR by +11 to +16pp across sol/hype/xrp/bnb; LONG side
+            # parallel — ETH BULLISH×LONG was neutral, alt LONG-blocked WRs 48-55%).
+            # Keep gate active for counter-trend trades, where momentum confirm has
+            # genuine signal value.
+            _bias_aligned_short = (
+                action == "BUY_NO"
+                and (primary_htf_bias or "").upper() == "BEARISH"
+            )
+            _bias_aligned_long = (
+                action == "BUY_YES"
+                and (primary_htf_bias or "").upper() == "BULLISH"
+            )
             if (
                 action == "BUY_NO"
+                and not _bias_aligned_short
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_no") or [])
             ):
                 _alt_bear_confirmed = (
@@ -2438,6 +2619,7 @@ class SolMacroStrategy:
                     continue
             if (
                 action == "BUY_YES"
+                and not _bias_aligned_long
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_yes") or [])
             ):
                 _alt_bull_confirmed = (
@@ -2516,15 +2698,22 @@ class SolMacroStrategy:
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
             reason_parts = [
-                f"ALT_HTF={macro_trend}",
+                f"ALT_1H={macro_trend}",
+                f"ALT_15M={bias_15m}",
+                f"ALT_5M={bias_5m}",
                 f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'}",
                 f"PRIMARY_HTF={primary_htf_bias}",
                 f"side={allowed_side}",
+                f"side_src={side_source}",
             ]
+            if resolution.horizon_bias == "NEUTRAL":
+                reason_parts.append(f"{_updown_tf}_neutral")
+            if resolution.penalty_reasons:
+                reason_parts.append(
+                    f"bias_penalty={resolution.confidence_penalty:.3f}:{','.join(resolution.penalty_reasons)}"
+                )
             dead_zone_would_block = False
             dead_zone_hour = None
-            if _is_neutral_macro:
-                reason_parts.append("NEUTRAL_MACRO")
 
             # ── UP/DOWN MARKETS (15m or 5m) ──
             if is_updown:
@@ -2593,7 +2782,7 @@ class SolMacroStrategy:
                 # ~6k settled rejections; symmetric reject was throwing them out.
                 _sample("entry_price", yes_price)
                 _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
-                if _our_price < 0.20:
+                if _our_price < 0.12:
                     _bump_skip("price_too_far_from_even")
                     _log_skip_reject(
                         market=market,
@@ -2606,15 +2795,15 @@ class SolMacroStrategy:
                         context={
                             "entry_price": float(_our_price),
                             "yes_price": float(yes_price),
-                            "our_side_price_min": 0.20,
+                            "our_side_price_min": 0.12,
                         },
                         probe_variants=build_range_probe_variants(
                             metric_name="our_side_entry_price",
                             observed_value=float(_our_price),
-                            baseline_min=0.20,
+                            baseline_min=0.12,
                             baseline_max=1.0,
-                            relax_steps=[0.02, 0.05, 0.10],
-                            tighten_steps=[0.02, 0.05],
+                            relax_steps=[0.02, 0.04],
+                            tighten_steps=[0.03, 0.08],
                         ),
                         policy_version="entry_price_band_v2_side_aware",
                     )
@@ -2826,6 +3015,12 @@ class SolMacroStrategy:
                     est_prob_up = self._apply_degraded_corr_bias(
                         est_prob_up, primary_htf_bias, corr
                     )
+                    if resolution.confidence_penalty > 0:
+                        est_prob_up += (
+                            -resolution.confidence_penalty
+                            if allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
 
                     # 1H histogram alignment (Move 2, 2026-05-16 calibration). Previously
                     # diagnostic-only; now dampens est_prob_up toward neutral when 1H
@@ -3053,8 +3248,11 @@ class SolMacroStrategy:
                     timing_weight = 0.50 if is_hourly else 1.00
                     rsi_extreme = 0.02 if is_hourly else 0.03
 
-                    if not self._passes_15m_iql(ta, allowed_side):
+                    if not self._passes_15m_iql(ta, allowed_side, primary_htf_bias):
                         _bump_skip("iql_15m_reject")
+                        effective_floor = self._effective_iql_15m_floor(
+                            allowed_side, primary_htf_bias
+                        )
                         log_rejected_candidate(
                             strategy=self._signal_strategy_name, window=window_label,
                             side=allowed_side, action=action,
@@ -3065,7 +3263,11 @@ class SolMacroStrategy:
                             context={
                                 "macd_15m_histogram": float(getattr(sol.macd_15m, "histogram", 0.0) or 0.0),
                                 "macd_15m_crossover": str(getattr(sol.macd_15m, "crossover", "")),
-                                "iql_15m_hist_floor": float(self.iql_15m_hist_floor),
+                                "iql_15m_hist_floor": float(effective_floor),
+                                "iql_15m_hist_floor_default": float(self.iql_15m_hist_floor),
+                                "iql_15m_hist_floor_aligned_short": float(
+                                    self.iql_15m_hist_floor_aligned_short
+                                ),
                                 **build_market_context(
                                     asset_spot=sol.current_price,
                                     btc_spot=corr.btc_price,
@@ -3077,7 +3279,8 @@ class SolMacroStrategy:
                         logger.info(
                             f"  {_alt_label} [{window_label}] skip '{market.question[:40]}' — "
                             f"IQL reject (hist={sol.macd_15m.histogram:+.3f} "
-                            f"cross={sol.macd_15m.crossover}, floor={self.iql_15m_hist_floor:.3f})"
+                            f"cross={sol.macd_15m.crossover}, floor={effective_floor:.3f}, "
+                            f"bias={primary_htf_bias})"
                         )
                         continue
 
@@ -3088,6 +3291,12 @@ class SolMacroStrategy:
                     est_prob_up = self._apply_degraded_corr_bias(
                         est_prob_up, primary_htf_bias, corr
                     )
+                    if resolution.confidence_penalty > 0:
+                        est_prob_up += (
+                            -resolution.confidence_penalty
+                            if allowed_side == "LONG"
+                            else resolution.confidence_penalty
+                        )
 
                     # 1H histogram alignment (Move 2, 2026-05-16 calibration). Every losing
                     # SHORT lane in this cohort had 1H disagreement; previously logged only.
@@ -3302,6 +3511,49 @@ class SolMacroStrategy:
                     reason_parts.extend(timing_reasons)
 
                 confidence = min(0.85, 0.50 + ltf_strength * 0.20 + timing_bonus + distance_pct * 0.5)
+
+            if is_updown:
+                sol_guard_reason = self._sol_signal_guard_reason(
+                    window_size=_updown_tf,
+                    action=action,
+                    side_source=side_source,
+                    yes_price=yes_price,
+                    btc_1h_regime=btc_1h_regime if btc_ta else None,
+                    alt_h1_trend=mtt.h1_trend,
+                )
+                if sol_guard_reason:
+                    _bump_skip(sol_guard_reason)
+                    logger.info(
+                        "  %s [%s] skip '%s' — local SOL guard %s",
+                        self._signal_strategy_name,
+                        window_label,
+                        market.question[:40],
+                        sol_guard_reason,
+                    )
+                    if action == "BUY_NO":
+                        self._emit_buy_no_skip(
+                            market=market,
+                            bankroll=bankroll,
+                            payload=self._make_buy_no_skip_payload(
+                                market=market,
+                                skip_reason=sol_guard_reason,
+                                window_size=_updown_tf,
+                                yes_price=yes_price,
+                                edge=edge,
+                                effective_min_edge=float(self._min_edge_for_window(_updown_tf)),
+                                rsi=sol.rsi_14,
+                                htf_bias=primary_htf_bias,
+                                signal_reason=" | ".join(r for r in reason_parts if r),
+                                alt_1h_trend=mtt.h1_trend,
+                                extra={
+                                    "side_source": side_source,
+                                    "btc_1h_regime": btc_1h_regime if btc_ta else None,
+                                },
+                            ),
+                            counts=buy_no_skip_counts,
+                            last_sample=last_buy_no_skip_sample,
+                        )
+                    continue
 
                 # AI-hold soft veto: block any entry (marginal or strong) if AI said HOLD
                 # on this market within the veto TTL.
@@ -4325,10 +4577,10 @@ class SolMacroStrategy:
             logger.info(f"  [gate-dist] {gate_distributions}")
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
-            f"{_brand} SCAN_DIAG side={allowed_side} source={side_source if 'side_source' in locals() else 'neutral_macro'} "
-            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} PRIMARY_HTF={primary_htf_bias} "
+            f"{_brand} SCAN_DIAG side={locals().get('allowed_side')} source={locals().get('side_source', 'neutral_macro')} "
+            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} PRIMARY_HTF={locals().get('primary_htf_bias', 'NEUTRAL')} "
             f"alt_1H_trend={mtt.h1_trend} enforce_alt_1h={self.enforce_alt_1h_alignment} "
-            f"skip_15m={skip_15m_reason!s} markets={len(sol_markets)} signals={len(signals)} "
+            f"skip_15m={locals().get('skip_15m_reason')!s} markets={len(sol_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"
         )
         self.last_scan_stats = {
@@ -4340,14 +4592,14 @@ class SolMacroStrategy:
                 self._btc_1h_regime_gates.get("enabled", False)
             ),
             "btc_htf_bias": btc_htf_bias,
-            "primary_htf_bias": primary_htf_bias,
+            "primary_htf_bias": locals().get("primary_htf_bias", "NEUTRAL"),
             "alt_htf_bias": macro_trend,
-            "allowed_side": allowed_side,
+            "allowed_side": locals().get("allowed_side"),
             "action_counts": dict(sorted(action_counts.items())),
             "side_source_counts": dict(sorted(side_source_counts.items())),
             "alt_1h_trend": mtt.h1_trend,
             "enforce_alt_1h_alignment": self.enforce_alt_1h_alignment,
-            "skip_15m_gate": skip_15m_reason,
+            "skip_15m_gate": locals().get("skip_15m_reason"),
             "ai_calls": ai_calls,
             "shadow_pipeline_calls": shadow_pipeline_calls,
             "shadow_pipeline_ok": shadow_pipeline_ok,

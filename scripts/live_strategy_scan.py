@@ -44,13 +44,8 @@ def _asset_label(question: str) -> str:
 
 
 def _run_scan(config: dict) -> int:
-    # Scanner health check focuses on crypto lane freshness; disable weather background
-    # refresh to keep this script deterministic and avoid long-lived background threads.
+    # Scanner health check focuses on crypto lane freshness.
     run_cfg = copy.deepcopy(config)
-    strategies = run_cfg.setdefault("strategies", {})
-    weather_cfg = strategies.setdefault("weather", {})
-    weather_cfg["enabled"] = False
-    weather_cfg["scan_limit"] = 0
 
     scanner = MarketScanner(run_cfg)
     start = time.perf_counter()
@@ -60,7 +55,6 @@ def _run_scan(config: dict) -> int:
         up5,
         up1h,
         hype_alt,
-        weather,
         look_ahead_15m,
         look_ahead_5m,
         look_ahead_1h,
@@ -80,7 +74,6 @@ def _run_scan(config: dict) -> int:
     print(f"updown_15m: {len(up15)}")
     print(f"updown_5m: {len(up5)}")
     print(f"updown_1h: {len(up1h)}")
-    print(f"weather: {len(weather)}")
 
     if up15 or up5 or up1h:
         by_asset_window: dict[tuple[str, str], int] = {}

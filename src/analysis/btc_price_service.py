@@ -74,6 +74,18 @@ class MACDResult:
 
 
 @dataclass
+class TimeframeIndicatorState:
+    """Per-timeframe indicator snapshot for uniform bias helpers."""
+    timeframe: str = ""
+    price: float = 0.0
+    ema_9: float = 0.0
+    ema_21: float = 0.0
+    ema_50: float = 0.0
+    rsi_14: float = 50.0
+    macd: MACDResult = field(default_factory=MACDResult)
+
+
+@dataclass
 class TrendSabreResult:
     """Adaptive Trend Sabre (BOSWaves) output."""
     ma_value: float = 0.0         # SMA(35)
@@ -161,6 +173,10 @@ class TechnicalAnalysis:
     daily_trend: str = "NEUTRAL"
     h4_trend: str = "NEUTRAL"
     h1_trend: str = "NEUTRAL"
+    tf_5m: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_15m: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_1h: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
+    tf_4h: TimeframeIndicatorState = field(default_factory=TimeframeIndicatorState)
     # 1H close vs SMA(20) — regime buckets for alt macro gates (see btc_1h_regime.py)
     sma_1h_20: float = 0.0
     btc_1h_close: float = 0.0  # last 1H candle close; mirrors current_price when TA is built from 1H
@@ -1062,12 +1078,38 @@ class BTCPriceService:
         df_1h = self.fetch_klines("1h", 200)
         df_4h = self.fetch_klines("4h", 200)
         df_1d = self.fetch_klines("1d", 200)
+        df_5m = self.fetch_klines("5m", 120)
         df_15m = self.fetch_klines("15m", 100)
         df_30m = self.fetch_klines("30m", 120)
 
         if df_1h.empty or df_4h.empty or df_1d.empty:
             logger.warning("Could not fetch BTC klines for analysis")
             return None
+
+        def _build_tf_state(tf: str, df: pd.DataFrame) -> TimeframeIndicatorState:
+            if df.empty:
+                return TimeframeIndicatorState(timeframe=tf)
+            close = df["close"]
+            price = float(close.iloc[-1])
+            ema_9 = float(self._calc_ema(close, 9).iloc[-1]) if len(close) >= 9 else price
+            ema_21 = float(self._calc_ema(close, 21).iloc[-1]) if len(close) >= 21 else ema_9
+            ema_50 = float(self._calc_ema(close, 50).iloc[-1]) if len(close) >= 50 else 0.0
+            rsi_14 = float(self._calc_rsi(close, 14).iloc[-1]) if len(close) >= 14 else 50.0
+            macd = self.calc_macd(df, fast=12, slow=26, signal=9) if len(df) >= 30 else MACDResult()
+            return TimeframeIndicatorState(
+                timeframe=tf,
+                price=price,
+                ema_9=ema_9,
+                ema_21=ema_21,
+                ema_50=ema_50,
+                rsi_14=rsi_14,
+                macd=macd,
+            )
+
+        tf_5m = _build_tf_state("5m", df_5m)
+        tf_15m = _build_tf_state("15m", df_15m)
+        tf_1h = _build_tf_state("1h", df_1h)
+        tf_4h = _build_tf_state("4h", df_4h)
 
         current_price = float(df_1h["close"].iloc[-1])
         close_1h = df_1h["close"]
@@ -1077,22 +1119,22 @@ class BTCPriceService:
 
         # --- EMAs from 4h ---
         close_4h = df_4h["close"]
-        ema_9 = float(self._calc_ema(close_4h, 9).iloc[-1])
-        ema_21 = float(self._calc_ema(close_4h, 21).iloc[-1])
-        ema_50 = float(self._calc_ema(close_4h, 50).iloc[-1])
+        ema_9 = tf_4h.ema_9
+        ema_21 = tf_4h.ema_21
+        ema_50 = tf_4h.ema_50
         ema_200 = float(self._calc_ema(close_4h, 200).iloc[-1]) if len(df_4h) >= 200 else 0.0
 
         # --- RSI from 4h ---
-        rsi_14 = float(self._calc_rsi(close_4h, 14).iloc[-1])
+        rsi_14 = tf_4h.rsi_14
 
         # --- MACD on 4h (higher TF trend filter) ---
-        macd_4h = self.calc_macd(df_4h, fast=12, slow=26, signal=9)
+        macd_4h = tf_4h.macd
 
         # --- MACD on 1h (intermediate TF — fallback gate when 4H is decelerating) ---
-        macd_1h = self.calc_macd(df_1h, fast=12, slow=26, signal=9)
+        macd_1h = tf_1h.macd
 
         # --- MACD on 15m (lower TF entry confirmation) ---
-        macd_15m = self.calc_macd(df_15m, fast=12, slow=26, signal=9) if not df_15m.empty else MACDResult()
+        macd_15m = tf_15m.macd
 
         if df_30m.empty and not df_15m.empty and len(df_15m) >= 60:
             df_30m = (
@@ -1204,6 +1246,10 @@ class BTCPriceService:
             daily_trend=daily_trend,
             h4_trend=h4_trend,
             h1_trend=h1_trend,
+            tf_5m=tf_5m,
+            tf_15m=tf_15m,
+            tf_1h=tf_1h,
+            tf_4h=tf_4h,
             volume_profile=vol_profile,
             chainlink_price=cl_price,
             chainlink_updated_at=cl_updated,

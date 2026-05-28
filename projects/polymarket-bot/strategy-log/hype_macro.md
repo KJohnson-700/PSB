@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-05-28 — HYPE-local neutral-fallback short filter
+
+- **What changed:** In [src/strategies/hype_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/hype_macro.py), added HYPE-only post-scan filtering that blocks `5m` `neutral_fallback` `BUY_NO` signals entirely and blocks `15m` `neutral_fallback` `BUY_NO` signals in `btc_1h_regime=BULL` when the YES side is already expensive (`hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h`, default `0.45`). Added focused regression coverage in [tests/test_hype_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_hype_macro.py).
+- **Why:** The 126-trade session review showed HYPE’s damage came from neutral-fallback short branches, while `hype_5m_native` was the clean path worth preserving.
+- **Hypothesis:** HYPE should stop leaking through weak fallback shorts without re-coupling its logic to SOL or disturbing the native HYPE 5m lane.
+- **Expected outcome:** Future HYPE skip stats should show `local_hype_guard` / neutral-fallback suppression while native 5m entries continue to pass through the normal edge/risk checks.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
 
 - **What changed:** HYPE inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.
