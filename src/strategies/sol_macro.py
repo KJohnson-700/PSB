@@ -3150,32 +3150,55 @@ class SolMacroStrategy:
                             if action == "BUY_NO"
                             else self.min_positive_m5_adj_5m
                         )
-                        _bump_skip("weak_5m_signal")
-                        log_rejected_candidate(
-                            strategy=self._signal_strategy_name, window="5m",
-                            side=allowed_side, action=action,
-                            reason="weak_5m_signal", market=market,
-                            yes_price=yes_price, est_prob_up=est_prob_up,
-                            htf_bias=primary_htf_bias,
-                            stage="signal_strength_5m",
-                            context={
-                                "m5_adj": float(m5_adj),
-                                "min_required": float(_min_req),
-                                "macd_5m_crossover": str(getattr(macd_5m, "crossover", "")),
-                                "macd_5m_histogram": float(getattr(macd_5m, "histogram", 0.0) or 0.0),
-                                **build_market_context(
-                                    asset_spot=sol.current_price,
-                                    btc_spot=corr.btc_price,
-                                    rsi_14=sol.rsi_14,
-                                    atr_14=sol.atr_14,
-                                ),
-                            },
-                        )
-                        logger.info(
-                            f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
-                            f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={_min_req:.2f})"
-                        )
-                        continue
+                        # 2026-05-29: bearish_dip_default / bearish_dip_exception
+                        # legitimately fire when 5m is counter-HTF (the "dip"
+                        # is what we're trading) — so a weak 5m signal in the
+                        # SHORT direction is expected. Baseline session
+                        # test_20260527_042014 made +$43 on xrp 5m bearish_dip
+                        # via this exact setup; converting hard reject to soft
+                        # penalty for this side_source family recovers it
+                        # without affecting other paths. Penalty caps the
+                        # confidence boost so we don't trade weak setups at
+                        # full conviction.
+                        _is_dip_path = str(side_source or "").startswith("bearish_dip")
+                        if _is_dip_path:
+                            _dip_penalty = 0.02  # est_prob shrink toward 0.5
+                            if allowed_side == "LONG":
+                                est_prob_up -= _dip_penalty
+                            else:
+                                est_prob_up += _dip_penalty
+                            reason_parts.append(
+                                f"weak_5m_penalty_dip(m5_adj={m5_adj:+.2f})"
+                            )
+                            # fall through to the rest of scoring; do not reject
+                        else:
+                            _bump_skip("weak_5m_signal")
+                            log_rejected_candidate(
+                                strategy=self._signal_strategy_name, window="5m",
+                                side=allowed_side, action=action,
+                                reason="weak_5m_signal", market=market,
+                                yes_price=yes_price, est_prob_up=est_prob_up,
+                                htf_bias=primary_htf_bias,
+                                stage="signal_strength_5m",
+                                context={
+                                    "m5_adj": float(m5_adj),
+                                    "min_required": float(_min_req),
+                                    "side_source": str(side_source or ""),
+                                    "macd_5m_crossover": str(getattr(macd_5m, "crossover", "")),
+                                    "macd_5m_histogram": float(getattr(macd_5m, "histogram", 0.0) or 0.0),
+                                    **build_market_context(
+                                        asset_spot=sol.current_price,
+                                        btc_spot=corr.btc_price,
+                                        rsi_14=sol.rsi_14,
+                                        atr_14=sol.atr_14,
+                                    ),
+                                },
+                            )
+                            logger.info(
+                                f"  {_alt_label} [5m] skip '{market.question[:40]}' — "
+                                f"5m signal too weak (m5_adj={m5_adj:+.2f}, min={_min_req:.2f})"
+                            )
+                            continue
 
                     if allowed_side == "LONG":
                         est_prob_up += m5_adj
