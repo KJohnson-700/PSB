@@ -1872,6 +1872,31 @@ class SolMacroStrategy:
             return 0.0
         return float(self.config.get("hourly_buy_yes_native_bonus_1h", 0.0))
 
+    def _alt_buy_yes_bullish_floor_bump(
+        self,
+        *,
+        window_size: str,
+        action: str,
+        htf_bias: str,
+    ) -> float:
+        """Post-calibration BUY_YES floor bump — mirror of the BTC hook.
+
+        The alt model under-shoots UP probability under bullish bias, so in-window
+        BUY_YES is rejected as negative edge while the ghost log settles those same
+        candidates at 68–76% WR / +EV (2026-05-28). Applied in calibrated/edge space
+        (unlike `_hourly_buy_yes_native_bonus`, which adds pre-calibration), so the
+        config'd amount maps ~1:1 onto edge. Asymmetric — BUY_NO untouched. Per-asset
+        per-window via `{strategy}.<tf>_buy_yes_bullish_floor_bump`; unset => 0.0 (off).
+        SOL and DOGE/XRP 15m are intentionally left unset (ghost −EV).
+        """
+        if action != "BUY_YES" or htf_bias != "BULLISH":
+            return 0.0
+        if window_size not in ("5m", "15m", "1h"):
+            return 0.0
+        return float(
+            self.config.get(f"{window_size}_buy_yes_bullish_floor_bump", 0.0)
+        )
+
     def _strong_enough_5m_signal(self, m5_adj: float, action: str) -> bool:
         """Optional guard for weak 5m-only entries.
 
@@ -3221,6 +3246,13 @@ class SolMacroStrategy:
                         btc_1h_regime=btc_1h_regime if btc_ta else None,
                     )
 
+                    _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
+                        window_size="5m", action=action, htf_bias=primary_htf_bias,
+                    )
+                    if _byn_floor_5m > 0:
+                        estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
+                        reason_parts.append(f"5m_buy_yes_floor=+{_byn_floor_5m:.2f}")
+
                     if action == "BUY_YES":
                         edge = estimated_prob - yes_price
                     else:
@@ -3429,6 +3461,13 @@ class SolMacroStrategy:
                         alt_htf_bias=mtt.h1_trend,
                         btc_1h_regime=btc_1h_regime if btc_ta else None,
                     )
+
+                    _byn_floor = self._alt_buy_yes_bullish_floor_bump(
+                        window_size=window_label, action=action, htf_bias=primary_htf_bias,
+                    )
+                    if _byn_floor > 0:
+                        estimated_prob = min(0.90, estimated_prob + _byn_floor)
+                        reason_parts.append(f"{window_label}_buy_yes_floor=+{_byn_floor:.2f}")
 
                     if action == "BUY_YES":
                         edge = estimated_prob - yes_price

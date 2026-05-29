@@ -203,10 +203,6 @@ lane_calibration:
     min_bucket_n: 50
     wr_veto_threshold: 0.4
     recommended_max_mean: 0.4
-    # Once a lane has at least this many accepted live trades, the veto
-    # decision uses live data alone (ghost dropped). Catches selection
-    # bias inside accepted cells where ghost rejected-pool WR is healthy
-    # but the bot's selection within the cell is bleeding.
     live_mature_n: 50
     path: data/calibration/lane_thresholds.json
 entry_policy:
@@ -343,6 +339,12 @@ strategies:
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
     btc_htf_boost_weak_15m: 0.06
+    # BUY_YES bullish floor bumps — model under-shoots UP prob under BULLISH bias.
+    # Ghost (2026-05-28) settles rejected in-window BUY_YES at 71–73% WR / +0.07 per
+    # $1; sized so median est clears min_edge (≈ realized WR). 1h uses code default
+    # (0.08). Set to 0.0 to disable a window without redeploy.
+    btc_5m_buy_yes_bullish_floor_bump: 0.20
+    btc_15m_buy_yes_bullish_floor_bump: 0.26
     quant_disagree_flip_thresh: 0.48
     allow_quant_disagree_flip_buy_no: false
     bull_regime_buy_no_max_yes_price: 0.66
@@ -865,6 +867,11 @@ strategies:
     low_corr_suppresses_entries: false
     hourly_buy_yes_native_bonus_1h: 0.03
     hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
+    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost (2026-05-28):
+    # hype 15m 72% WR/+0.077, 5m 71% WR/+0.038 on rejected in-window BUY_YES. Sized so
+    # median est clears min_edge. 0.0 disables a window.
+    5m_buy_yes_bullish_floor_bump: 0.18
+    15m_buy_yes_bullish_floor_bump: 0.10
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
@@ -1391,7 +1398,12 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
-    bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.60
+    bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.6
+    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost (2026-05-28):
+    # bnb 15m 76% WR/+0.025, 5m 68% WR/+0.019 on rejected in-window BUY_YES. Sized so
+    # median est clears min_edge. 0.0 disables a window.
+    5m_buy_yes_bullish_floor_bump: 0.19
+    15m_buy_yes_bullish_floor_bump: 0.19
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45

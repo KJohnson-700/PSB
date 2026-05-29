@@ -2192,22 +2192,25 @@ class BitcoinStrategy:
                         resolver_path=direction_decision.resolver_path,
                     )
 
-                    # BTC 1h BUY_YES asymmetric floor — observed BUY_YES inversion
-                    # in raw est_prob 0.45–0.50 bucket (79% WR n=29 over 14d).
-                    # Bullish-bias × BUY_YES on 1h lifts by config'd amount,
-                    # clamped to 0.90. Config off (= 0.0) disables.
-                    if (
-                        is_1h
-                        and action == "BUY_YES"
-                        and htf_bias == "BULLISH"
-                    ):
+                    # BTC BUY_YES asymmetric floor — model systematically
+                    # under-shoots UP probability under BULLISH bias, so in-window
+                    # BUY_YES is rejected as negative edge while the ghost log
+                    # settles those same candidates at 71–73% WR / +0.07 per $1
+                    # (5m+15m, 2026-05-28). Per-window config'd lift, clamped to
+                    # 0.90. Asymmetric — BUY_NO path untouched. Any window's bump
+                    # = 0.0 disables it without redeploy.
+                    if action == "BUY_YES" and htf_bias == "BULLISH":
+                        _bump_default = 0.08 if is_1h else 0.0
                         _floor_bump = float(
-                            self.config.get("btc_1h_buy_yes_bullish_floor_bump", 0.08)
+                            self.config.get(
+                                f"btc_{_updown_tf}_buy_yes_bullish_floor_bump",
+                                _bump_default,
+                            )
                         )
                         if _floor_bump > 0:
                             estimated_prob = min(0.90, estimated_prob + _floor_bump)
                             reason_parts.append(
-                                f"btc_1h_buy_yes_floor=+{_floor_bump:.2f}"
+                                f"btc_{_updown_tf}_buy_yes_floor=+{_floor_bump:.2f}"
                             )
 
                     if action == "BUY_YES":

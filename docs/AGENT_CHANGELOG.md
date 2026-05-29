@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-28 — Per-lane BUY_YES floor bumps on 5m/15m (BTC + BNB + HYPE)
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Extended the BTC-1h BUY_YES floor-bump pattern (`7d28c4e`) down to **5m and 15m** and to the **alt** strategies. Diagnosis: 98% of BUY_YES candidates carry a *correct* BULLISH bias but are rejected on `lane_min_edge` because `est_prob_up` under-shoots UP probability — median `yes_price` (0.55–0.90) sits above the model `est` (0.44–0.58), so model-edge goes negative. The ghost log (`rejected_candidates_settled.jsonl`) settles those rejected in-window BUY_YES at **68–76% WR** and **+EV per $1** on btc/hype/bnb 5m+15m, confirming the gate is firing on miscalibrated input rather than real −EV. (`lane_entry_window` reject volume is mostly the future-market ladder being correctly skipped, not starvation.)
+
+- BTC: generalized the `bitcoin.py` floor hook to read `btc_<tf>_buy_yes_bullish_floor_bump` per window; config adds `btc_5m=0.20`, `btc_15m=0.26` (1h keeps code default 0.08).
+- Alts: new `_alt_buy_yes_bullish_floor_bump` helper, applied **post-calibration** (edge space, mirrors BTC) in both the 5m and 15m/1h updown paths. Asymmetric (BUY_NO untouched), BULLISH-only. Enabled via `<tf>_buy_yes_bullish_floor_bump` per strategy: `hype_macro` 5m=0.18/15m=0.10, `bnb_macro` 5m=0.19/15m=0.19.
+- Sizing is ghost-calibrated per lane so the median in-window est lifts to ≈ realized WR (just clears `min_edge`). **SOL (all TFs) and DOGE/XRP 15m are intentionally left off — ghost shows them −EV.** DOGE-1h / XRP-1h +EV is real but uncapturable (entry price ≈0.90 vs the 0.90 est clamp), so not bumped. Any window's bump = 0.0 disables it without redeploy.
+
+---
+
 ## 2026-05-28 — Alt 1H BUY_YES native-bias uplift
 
 **[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py), [`tests/test_xrp_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_xrp_macro.py), [`tests/test_hype_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_hype_macro.py):** Added a narrow raw-probability uplift hook for SOL-family strategies on **native 1h bullish BUY_YES** lanes when 15m confirmation is already present, but left the hook **default-off** in shared code. It is now explicitly enabled only for `xrp_macro` and `hype_macro` in config. The uplift is limited to `window_size == "1h"`, `allowed_side == "LONG"`, `*_1h_native` side sources, and a minimum LTF-strength threshold, so mixed or fallback hourly lanes are unchanged and DOGE does not inherit it by accident. BTC was intentionally left untouched in this edit.
