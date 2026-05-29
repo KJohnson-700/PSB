@@ -1624,6 +1624,7 @@ class BitcoinStrategy:
             htf_bias_value: str,
             signal_reason: str,
             window_size: str,
+            ghost_blind: bool = False,
         ) -> None:
             payload = {
                 "strategy": "bitcoin",
@@ -1637,6 +1638,10 @@ class BitcoinStrategy:
                 "htf_bias": htf_bias_value,
                 "signal_reason": signal_reason,
             }
+            # See sol_macro._make_buy_no_skip_payload: mark suppressions not already
+            # written to the ghost log so the central callback settles them.
+            if ghost_blind:
+                payload["_ghost_blind"] = True
             buy_no_skip_counts[skip_reason] = buy_no_skip_counts.get(skip_reason, 0) + 1
             last_buy_no_skip_sample.clear()
             last_buy_no_skip_sample.update(payload)
@@ -1989,6 +1994,7 @@ class BitcoinStrategy:
                                 htf_bias_value=htf_bias,
                                 signal_reason=" | ".join(r for r in reason_parts if r),
                                 window_size=_updown_tf,
+                                ghost_blind=True,
                             )
                         continue
 
@@ -2239,6 +2245,7 @@ class BitcoinStrategy:
                                 htf_bias_value=htf_bias,
                                 signal_reason=" | ".join(r for r in reason_parts if r),
                                 window_size=_updown_tf,
+                                ghost_blind=True,
                             )
                         continue
 

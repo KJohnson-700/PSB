@@ -1014,7 +1014,20 @@ class SolMacroStrategy:
         if window_size == "5m" and source.endswith("_vs_slower") and alt_h1 == "BULLISH":
             return "sol_vs_slower_short_against_h1"
 
-        if window_size == "15m" and source.endswith("15m_native") and regime == "BULL":
+        # BTC→SOL decoupling (2026-05-29): this branch gated a SOL-*native* 15m
+        # short on BTC's 1h regime, violating the standing "alts not decided by
+        # BTC" rule (see feedback_alts_not_decided_by_btc). It was also firing
+        # unconditionally because the regime classifier was pinned to "BULL" while
+        # btc_1h_regime_gates was disabled — ~877 SOL 15m shorts/day blocked vs 4
+        # trades. Now opt-in only via `sol_15m_bull_regime_short_block` (default
+        # OFF); these candidates are also ghost-logged so the block can be
+        # validated against settled outcomes before anyone re-enables it.
+        if (
+            window_size == "15m"
+            and source.endswith("15m_native")
+            and regime == "BULL"
+            and bool(self.config.get("sol_15m_bull_regime_short_block", False))
+        ):
             max_yes = float(self.config.get("sol_15m_buy_no_max_yes_price_bull_1h", 0.48))
             if yes_price >= max_yes:
                 return "sol_15m_bull_regime_expensive_short"
@@ -1034,6 +1047,7 @@ class SolMacroStrategy:
         htf_bias: str,
         signal_reason: str,
         alt_1h_trend: Optional[str] = None,
+        ghost_blind: bool = False,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -1050,6 +1064,14 @@ class SolMacroStrategy:
         }
         if alt_1h_trend:
             payload["alt_1h_trend"] = alt_1h_trend
+        # _ghost_blind marks BUY_NO suppressions that are NOT already written to
+        # the ghost log via a sibling log_rejected_candidate / _log_skip_reject
+        # call on the same candidate. The central buy_no_skip_callback ghost-logs
+        # only these, so they get settled against real outcomes (closing the
+        # counterfactual blind spot found 2026-05-29). Default False = assume the
+        # candidate is already ghosted elsewhere → never double-log.
+        if ghost_blind:
+            payload["_ghost_blind"] = True
         if extra:
             payload.update(extra)
         return payload
@@ -1076,10 +1098,18 @@ class SolMacroStrategy:
             )
 
     def _classify_btc_1h_regime(self, btc_ta: TechnicalAnalysis) -> str:
-        """BULL / RANGE / BEAR from 1H close vs SMA(20)."""
+        """BULL / RANGE / BEAR from 1H close vs SMA(20).
+
+        Always returns the *real* regime. The previous `if not enabled: return
+        "BULL"` early-out (2026-05-29) silently pinned the regime to "BULL"
+        whenever btc_1h_regime_gates was disabled — which poisoned lane labels
+        and, worse, kept BTC-regime guards (e.g. sol_15m_bull_regime_expensive_short)
+        permanently armed despite the gates being "off". The `enabled` flag still
+        gates whether the min_edge/size multipliers actually fire (see call sites);
+        it must NOT fabricate the regime value. classify_btc_1h_sma_regime returns
+        "RANGE" on missing/zero data, so this is safe when btc_ta is sparse.
+        """
         cfg = self._btc_1h_regime_gates
-        if not cfg.get("enabled", False):
-            return "BULL"
         band = float(cfg.get("range_band_pct", 0.0012))
         price = regime_price(btc_ta)
         sma = float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0)
@@ -2940,6 +2970,7 @@ class SolMacroStrategy:
                                 htf_bias=primary_htf_bias,
                                 signal_reason=" | ".join(reason_parts),
                                 alt_1h_trend=mtt.h1_trend,
+                                ghost_blind=True,
                             ),
                             counts=buy_no_skip_counts,
                             last_sample=last_buy_no_skip_sample,
@@ -3640,6 +3671,7 @@ class SolMacroStrategy:
                                 htf_bias=primary_htf_bias,
                                 signal_reason=" | ".join(r for r in reason_parts if r),
                                 alt_1h_trend=mtt.h1_trend,
+                                ghost_blind=True,
                                 extra={
                                     "side_source": side_source,
                                     "btc_1h_regime": btc_1h_regime if btc_ta else None,
@@ -4502,6 +4534,7 @@ class SolMacroStrategy:
                                 htf_bias=primary_htf_bias,
                                 signal_reason=" | ".join(r for r in reason_parts if r),
                                 alt_1h_trend=mtt.h1_trend,
+                                ghost_blind=True,
                             ),
                             counts=buy_no_skip_counts,
                             last_sample=last_buy_no_skip_sample,
@@ -4557,6 +4590,7 @@ class SolMacroStrategy:
                             rsi=sol.rsi_14,
                             htf_bias=primary_htf_bias,
                             signal_reason=" | ".join(r for r in reason_parts if r),
+                            ghost_blind=True,
                             alt_1h_trend=mtt.h1_trend,
                         ),
                         counts=buy_no_skip_counts,

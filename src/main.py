@@ -54,6 +54,7 @@ from src.analysis.journal_learning import (
     log_learning_summary_to_logger,
 )
 from src.analysis.lane_identity import build_lane_metadata
+from src.analysis.rejected_candidate_log import log_rejected_candidate
 from src.analysis.lane_manager import LaneManager
 from src.analysis.circuit_breakers import CircuitBreakerManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
@@ -542,6 +543,32 @@ class PolyBot:
                 alt_1h_trend=lane_payload.get("alt_1h_trend"),
                 extra=lane_payload,
             )
+            # Ghost-log BUY_NO suppressions that are NOT already written to the
+            # ghost log via a sibling log_rejected_candidate/_log_skip_reject call
+            # (flagged with _ghost_blind at the emit site). This routes blind
+            # BUY_NO guards — sol_15m_bull_regime_expensive_short,
+            # quant_disagree_flip_buy_no_disabled, bull_regime_*, rsi_hard_blocked,
+            # lane_price_band, lane_size_too_small — into the settle pipeline so
+            # their counterfactual win rate becomes measurable. Reasons that
+            # already ghost-log elsewhere never set the flag, so no double-logging.
+            if lane_payload.get("_ghost_blind"):
+                try:
+                    log_rejected_candidate(
+                        strategy=strategy,
+                        window=str(lane_payload.get("window_size") or ""),
+                        side=str(lane_payload.get("side") or "SHORT"),
+                        action="BUY_NO",
+                        reason=skip_reason,
+                        market=market,
+                        yes_price=float(lane_payload.get("yes_price", 0.0) or 0.0),
+                        est_prob_up=0.5,
+                        htf_bias=(str(lane_payload.get("htf_bias")) or None),
+                        context=dict(lane_payload),
+                        stage="buy_no_skip",
+                        btc_1h_regime=lane_payload.get("btc_1h_regime"),
+                    )
+                except Exception as exc:  # noqa: BLE001 — telemetry must not block scan
+                    logging.debug("buy_no ghost-log failed: %s", exc)
 
         self._dead_zone_skip_callback = _dead_zone_skip_callback
         self._buy_no_skip_callback = _buy_no_skip_callback

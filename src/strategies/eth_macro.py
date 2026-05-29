@@ -271,10 +271,15 @@ class ETHMacroStrategy(SolMacroStrategy):
         btc_bias = str(btc_htf_bias or "").upper()
         alt_bias = str(alt_h1_trend or "").upper()
 
+        # BTC→ETH decoupling (2026-05-29): same issue as the SOL 15m guard — a
+        # BTC-1h-regime gate on an ETH short, violating "alts not decided by BTC".
+        # Opt-in only via `eth_5m_bull_regime_short_block` (default OFF). See the
+        # parallel note in sol_macro._sol_signal_guard_reason.
         if (
             window_size == "5m"
             and decision.action == "BUY_NO"
             and regime == "BULL"
+            and bool(self.config.get("eth_5m_bull_regime_short_block", False))
         ):
             max_yes = float(self.config.get("eth_5m_buy_no_max_yes_price_bull_1h", 0.68))
             if yes_price >= max_yes:
