@@ -37,6 +37,11 @@ data/backtest/reports/*.json
 data/backtest/polymarket_marks/*.parquet
 data/calibration/rejected_candidates.jsonl
 data/calibration/rejected_candidates_settled.jsonl
+# backup/pre-rewrite snapshots of the above — regenerated artifacts, never track
+# (these 600MB+ files made the branch unpushable, see 2026-05-29 history cleanup)
+data/calibration/rejected_candidates*.jsonl.bak
+data/calibration/rejected_candidates*.jsonl.pre-backfill.bak
+data/calibration/rejected_candidates*.jsonl.pre_*
 
 # IDE / local agents
 .cursor/
