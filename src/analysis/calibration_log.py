@@ -106,15 +106,19 @@ def build_record_from_closed_trade(
     realized_pct = (pnl / notional) if notional else 0.0
 
     stated_edge = _coerce_float(closed.get("edge"))
-    stated_est_prob = _coerce_float(signal.get("est_prob"))
-    if stated_est_prob is None:
-        stated_est_prob = _coerce_float(signal.get("raw_est_prob"))
+    # signal.est_prob carries the *calibrated* (post-blend) value used to
+    # compute the actual entry edge. signal.raw_est_prob carries the raw
+    # model output before calibration. Mapping was previously identical
+    # (both pulled from signal.est_prob) which made the audit columns
+    # useless. Split corrected 2026-05-29 so trades.jsonl rows let us
+    # compare raw vs calibrated directly.
     raw_est_prob = _coerce_float(signal.get("raw_est_prob"))
-    if raw_est_prob is None:
-        raw_est_prob = stated_est_prob
     calibrated_est_prob = _coerce_float(signal.get("est_prob"))
+    if raw_est_prob is None:
+        raw_est_prob = calibrated_est_prob
     if calibrated_est_prob is None:
-        calibrated_est_prob = stated_est_prob
+        calibrated_est_prob = raw_est_prob
+    stated_est_prob = raw_est_prob
     lane_id = _resolve_lane_id(closed)
     side_source = str(signal.get("side_source") or "").strip()
     resolver_path = str(signal.get("resolver_path") or side_source).strip()

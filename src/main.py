@@ -724,12 +724,21 @@ class PolyBot:
         from src.analysis.lane_calibration import (
             BETA_VETO_MAX_MEAN as _DEFAULT_BETA_VETO_MAX_MEAN,
             BETA_VETO_MIN_N as _DEFAULT_BETA_VETO_MIN_N,
+            BETA_BLEND_N_FLOOR as _DEFAULT_BLEND_N_FLOOR,
+            BETA_BLEND_N_FULL as _DEFAULT_BLEND_N_FULL,
         )
         beta_veto_max_mean = float(
             cal_cfg.get("beta_veto_max_mean", _DEFAULT_BETA_VETO_MAX_MEAN)
         )
         beta_veto_min_n = int(
             cal_cfg.get("beta_veto_min_n", _DEFAULT_BETA_VETO_MIN_N) or 0
+        )
+        beta_blend_enabled = bool(cal_cfg.get("beta_blend_enabled", True))
+        beta_blend_n_floor = int(
+            cal_cfg.get("beta_blend_n_floor", _DEFAULT_BLEND_N_FLOOR) or _DEFAULT_BLEND_N_FLOOR
+        )
+        beta_blend_n_full = int(
+            cal_cfg.get("beta_blend_n_full", _DEFAULT_BLEND_N_FULL) or _DEFAULT_BLEND_N_FULL
         )
         posterior_version = str(
             cal_cfg.get("posterior_version") or "lane_identity_v2_source_resolver"
@@ -766,6 +775,9 @@ class PolyBot:
                 per_lane_thresholds_enabled=plt_enabled,
                 per_lane_thresholds=per_lane_thresholds,
                 posterior_version=posterior_version,
+                beta_blend_enabled=beta_blend_enabled,
+                beta_blend_n_floor=beta_blend_n_floor,
+                beta_blend_n_full=beta_blend_n_full,
             )
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)

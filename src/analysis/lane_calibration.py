@@ -63,6 +63,15 @@ DEFAULT_POSTERIOR_VERSION = ""
 BETA_VETO_MAX_MEAN = 0.40
 BETA_VETO_MIN_N = 30
 
+# Pull-to-beta blend: when a lane has enough live samples, blend the raw
+# probability toward the observed posterior mean instead of toward 0.5.
+# The previous "alpha * (p - 0.5)" formula could only reduce confidence,
+# never flip direction — so lanes whose true WR was on the opposite side of
+# 0.5 from the model's prediction bled indefinitely until the binary veto
+# fired at n>=BETA_VETO_MIN_N. The blend closes that gap smoothly.
+BETA_BLEND_N_FLOOR = 30   # no blend below this many live samples
+BETA_BLEND_N_FULL = 100   # full pull-to-beta at this many samples
+
 
 @dataclass
 class LanePosterior:
@@ -98,6 +107,9 @@ class LaneCalibrator:
         per_lane_thresholds_enabled: bool = False,
         per_lane_thresholds: Optional[Dict[str, Dict[str, Any]]] = None,
         posterior_version: str = DEFAULT_POSTERIOR_VERSION,
+        beta_blend_enabled: bool = True,
+        beta_blend_n_floor: int = BETA_BLEND_N_FLOOR,
+        beta_blend_n_full: int = BETA_BLEND_N_FULL,
     ):
         self.path: Path = Path(path) if path is not None else DEFAULT_POSTERIORS_PATH
         self.shadow_mode: bool = bool(shadow_mode)
@@ -105,6 +117,11 @@ class LaneCalibrator:
         # β_mean veto thresholds. Set max_mean=0.0 or min_n<=0 to disable.
         self.beta_veto_max_mean: float = float(beta_veto_max_mean)
         self.beta_veto_min_n: int = int(beta_veto_min_n)
+        self.beta_blend_enabled: bool = bool(beta_blend_enabled)
+        self.beta_blend_n_floor: int = max(1, int(beta_blend_n_floor))
+        self.beta_blend_n_full: int = max(
+            self.beta_blend_n_floor + 1, int(beta_blend_n_full)
+        )
         # Per-lane threshold overrides derived from ghost data. Off by default
         # — the operator inspects the recommendations (lane_thresholds.json)
         # and flips per_lane_thresholds_enabled to True when satisfied.
@@ -381,9 +398,15 @@ class LaneCalibrator:
     def calibrate(self, lane_id: str, raw_est_prob: float) -> float:
         """Return calibrated p (identity in shadow mode).
 
-        Math: ``p_cal = clamp(0.5 + alpha * (p_raw - 0.5), 0.01, 0.99)``.
-        The downstream caller clamps to its own range; we use a conservative
-        absolute bound to avoid returning probabilities outside (0, 1).
+        Two stacked corrections:
+          1. α-shrink (legacy): ``0.5 + α * (p_raw - 0.5)`` — pulls toward
+             0.5 when the model is over-confident in a direction that's
+             panning out. Cannot flip direction.
+          2. β-blend (added 2026-05-29): when lane has enough live samples,
+             additionally blend toward the observed posterior mean (which
+             IS the side-specific reality). Closes the gap where realized
+             WR is on the *opposite* side of 0.5 from the model's
+             prediction — the α-only formula could never reach that.
         """
         try:
             p_raw = float(raw_est_prob)
@@ -398,8 +421,40 @@ class LaneCalibrator:
             return p_raw
         a = self.alpha(lane_id)
         p_cal = 0.5 + a * (p_raw - 0.5)
+        if self.beta_blend_enabled:
+            p_cal = self._beta_blend(lane_id, p_cal)
         # Safety clamp — never hand off something outside (0, 1).
         return max(0.01, min(0.99, p_cal))
+
+    def _beta_blend(self, lane_id: str, p_cal: float) -> float:
+        """Pull p toward the lane's observed β posterior mean of P(YES wins).
+
+        Returns p_cal unchanged if posterior n is below floor (insufficient
+        evidence) or if the lane is unknown. Weight scales linearly between
+        n_floor and n_full so corrections phase in smoothly.
+
+        β tracks P(this lane's chosen side wins). For BUY_YES lanes the side
+        IS YES, so beta_mean directly estimates P(YES). For BUY_NO lanes the
+        side is NO, so P(YES) = 1 - beta_mean. The lane_id slot 2 carries
+        the side ('up' for BUY_YES, 'down' for BUY_NO).
+        """
+        if not lane_id:
+            return p_cal
+        p = self._posteriors.get(self._lane_key(lane_id))
+        if p is None or p.n < self.beta_blend_n_floor:
+            return p_cal
+        # Convert β posterior to a YES-probability for blending with p_cal
+        # (which is also P(YES wins)). Lane slot 2 is 'up' (YES) or 'down' (NO).
+        parts = lane_id.split("|")
+        side_slot = parts[2] if len(parts) > 2 else ""
+        beta_mean_side = self._beta_mean(p)  # P(chosen side wins)
+        beta_target_yes = (
+            beta_mean_side if side_slot == "up" else (1.0 - beta_mean_side)
+        )
+        # Linear ramp of blend weight between n_floor and n_full.
+        span = max(1, self.beta_blend_n_full - self.beta_blend_n_floor)
+        w = min(1.0, (p.n - self.beta_blend_n_floor) / span)
+        return (1.0 - w) * p_cal + w * beta_target_yes
 
     def record(
         self,

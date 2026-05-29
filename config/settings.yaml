@@ -196,6 +196,13 @@ lane_calibration:
   min_samples_to_apply_live: 30
   beta_veto_max_mean: 0.0
   beta_veto_min_n: 0
+  # Pull-to-beta blend (added 2026-05-29). Once a lane has >= n_floor live
+  # trades, est_prob is blended toward the observed posterior mean instead
+  # of just toward 0.5 — closes the calibration gap on lanes where actual
+  # WR is on the opposite side of 0.5 from the model's prediction.
+  beta_blend_enabled: true
+  beta_blend_n_floor: 30
+  beta_blend_n_full: 100
   per_lane_thresholds:
     enabled: true
     recompute_on_settle: true
@@ -816,6 +823,9 @@ strategies:
         entry_window_max: 5.5
       15m:
         min_edge: 0.08
+        # 2026-05-29 ghost: lane_min_edge rejected 459 BUY_NO candidates at
+        # 71% WR; dropping floor 0.08->0.07 admits 63 of those (67% WR).
+        min_edge_buy_no: 0.07
         entry_window_min: 2.0
         entry_window_max: 36.0
       1h:
