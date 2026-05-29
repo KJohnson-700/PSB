@@ -98,6 +98,19 @@ def resolve_entry_family(
     window = clean_lane_part(window_size, default="")
     side = clean_lane_part(lane_side, default="")
 
+    # Trigger-family keywords win over side-source taxonomy: drift/spike/
+    # predict_window describe what fired the signal, which is more predictive
+    # for posterior calibration than how the side was picked.
+    context = " ".join(str(x or "") for x in (reason, signal_reason)).lower()
+    if "late_window" in context:
+        return "late_window"
+    if "spike_" in context:
+        return "spike"
+    if "drift_" in context:
+        return "drift"
+    if "predict window" in context:
+        return "predict_window"
+
     source_uniform = resolve_uniform_bias_family(source)
     if source_uniform:
         return source_uniform
@@ -105,15 +118,9 @@ def resolve_entry_family(
     if resolver_uniform:
         return resolver_uniform
 
-    # BTC side selection is itself a regime decision. Keep the family split by
-    # resolver path so HTF, rollover, and quant-disagreement buckets no longer
-    # share one posterior.
     if strat == "bitcoin":
         return resolver or source or "standard"
 
-    # The current alt bleed concentrates in 5m downside standard lanes. Split
-    # that high-volume bucket by source so calibration can learn whether e.g.
-    # bearish dip defaults, BTC-follow paths, or overrides are the actual issue.
     if strat.endswith("_macro") and window == "5m" and side == "down" and source:
         return source
 
@@ -126,15 +133,6 @@ def resolve_entry_family(
     if ai_used:
         return "ai_assisted"
 
-    context = " ".join(str(x or "") for x in (reason, signal_reason)).lower()
-    if "late_window" in context:
-        return "late_window"
-    if "spike_" in context:
-        return "spike"
-    if "drift_" in context:
-        return "drift"
-    if "predict window" in context:
-        return "predict_window"
     return "standard"
 
 

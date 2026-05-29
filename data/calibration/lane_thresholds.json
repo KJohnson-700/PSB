@@ -1,192 +1,117 @@
 {
-  "computed_at": "2026-05-28T22:26:15.865315+00:00",
+  "computed_at": "2026-05-29T08:15:04.081521+00:00",
   "live_mature_n": 50,
-  "min_bucket_n": 50,
+  "min_bucket_n": 100,
   "schema_version": 1,
   "thresholds": {
-    "bitcoin|15m|down|bearish|htf_bearish_side_short": {
-      "decision_source": "live",
-      "ghost_n": 279,
-      "ghost_wr": 0.7061,
-      "live_n": 147,
-      "live_pnl": -38.95,
-      "live_wr": 0.3333,
-      "n": 147,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3333
-    },
     "bitcoin|15m|down|bearish|standard": {
-      "decision_source": "live",
+      "decision_source": "combined",
       "ghost_n": 6953,
       "ghost_wr": 0.5163,
-      "live_n": 56,
-      "live_pnl": 6.82,
-      "live_wr": 0.3929,
-      "n": 56,
+      "live_n": 49,
+      "live_pnl": 16.14,
+      "live_wr": 0.4082,
+      "n": 7002,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "veto_suppressed_reason": "profitable_despite_low_wr",
-      "wr": 0.3929
+      "wr": 0.5156
     },
     "bitcoin|15m|down|bullish|standard": {
       "decision_source": "combined",
       "ghost_n": 271,
       "ghost_wr": 0.6494,
-      "live_n": 32,
-      "live_pnl": -29.93,
-      "live_wr": 0.25,
-      "n": 303,
+      "live_n": 0,
+      "n": 271,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6073
+      "wr": 0.6494
     },
     "bitcoin|15m|up|bearish|htf_bearish_side_long": {
       "decision_source": "combined",
-      "ghost_n": 75,
-      "ghost_wr": 0.7467,
+      "ghost_n": 131,
+      "ghost_wr": 0.7252,
       "live_n": 0,
-      "n": 75,
+      "n": 131,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.7467
+      "wr": 0.7252
     },
     "bitcoin|15m|up|bullish|standard": {
       "decision_source": "combined",
       "ghost_n": 215,
       "ghost_wr": 0.5116,
-      "live_n": 1,
-      "live_pnl": 2.7,
-      "live_wr": 1.0,
-      "n": 216,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.5139
-    },
-    "bitcoin|15m|up|neutral|standard": {
-      "decision_source": "combined",
-      "ghost_n": 75,
-      "ghost_wr": 0.52,
       "live_n": 0,
-      "n": 75,
+      "n": 215,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.52
+      "wr": 0.5116
     },
     "bitcoin|1h|down|bearish|htf_bearish_side_short": {
       "decision_source": "combined",
-      "ghost_n": 110,
-      "ghost_wr": 0.7818,
-      "live_n": 40,
-      "live_pnl": 9.96,
-      "live_wr": 0.375,
-      "n": 150,
+      "ghost_n": 123,
+      "ghost_wr": 0.7642,
+      "live_n": 19,
+      "live_pnl": 17.58,
+      "live_wr": 0.4211,
+      "n": 142,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6733
+      "wr": 0.7183
     },
     "bitcoin|1h|down|bearish|standard": {
       "decision_source": "combined",
       "ghost_n": 417,
       "ghost_wr": 0.7506,
-      "live_n": 7,
-      "live_pnl": -7.57,
-      "live_wr": 0.1429,
-      "n": 424,
+      "live_n": 4,
+      "live_pnl": 0.07,
+      "live_wr": 0.25,
+      "n": 421,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.7406
-    },
-    "bitcoin|1h|down|bullish|standard": {
-      "decision_source": "combined",
-      "ghost_n": 88,
-      "ghost_wr": 0.5909,
-      "live_n": 11,
-      "live_pnl": 3.92,
-      "live_wr": 0.3636,
-      "n": 99,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.5657
-    },
-    "bitcoin|1h|up|bullish|standard": {
-      "decision_source": "combined",
-      "ghost_n": 56,
-      "ghost_wr": 0.6786,
-      "live_n": 0,
-      "n": 56,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.6786
+      "wr": 0.7458
     },
     "bitcoin|5m|down|bearish|drift": {
       "decision_source": "live",
       "ghost_n": 0,
-      "live_n": 60,
-      "live_pnl": -38.32,
-      "live_wr": 0.35,
-      "n": 60,
+      "live_n": 100,
+      "live_pnl": -114.88,
+      "live_wr": 0.29,
+      "n": 100,
       "recommended_max_mean": 0.4,
       "veto_recommended": true,
-      "wr": 0.35
-    },
-    "bitcoin|5m|down|bearish|htf_bearish_side_short": {
-      "decision_source": "live",
-      "ghost_n": 795,
-      "ghost_wr": 0.6252,
-      "live_n": 147,
-      "live_pnl": -73.56,
-      "live_wr": 0.3129,
-      "n": 147,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3129
-    },
-    "bitcoin|5m|down|bearish|standard": {
-      "decision_source": "live",
-      "ghost_n": 1810,
-      "ghost_wr": 0.5177,
-      "live_n": 74,
-      "live_pnl": -6.51,
-      "live_wr": 0.3919,
-      "n": 74,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3919
+      "wr": 0.29
     },
     "bitcoin|5m|down|bullish|standard": {
-      "decision_source": "live",
+      "decision_source": "combined",
       "ghost_n": 421,
       "ghost_wr": 0.5273,
-      "live_n": 63,
-      "live_pnl": 83.4,
-      "live_wr": 0.4127,
-      "n": 63,
+      "live_n": 0,
+      "n": 421,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4127
+      "wr": 0.5273
     },
     "bitcoin|5m|down|neutral|htf_neutral_side_short": {
       "decision_source": "combined",
       "ghost_n": 123,
       "ghost_wr": 0.5285,
-      "live_n": 23,
-      "live_pnl": 5.04,
-      "live_wr": 0.3913,
-      "n": 146,
+      "live_n": 11,
+      "live_pnl": -17.28,
+      "live_wr": 0.2727,
+      "n": 134,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5068
+      "wr": 0.5075
     },
     "bitcoin|5m|up|bearish|htf_bearish_side_long": {
       "decision_source": "combined",
-      "ghost_n": 125,
-      "ghost_wr": 0.664,
+      "ghost_n": 201,
+      "ghost_wr": 0.6866,
       "live_n": 0,
-      "n": 125,
+      "n": 201,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.664
+      "wr": 0.6866
     },
     "bitcoin|5m|up|bullish|standard": {
       "decision_source": "combined",
@@ -198,81 +123,55 @@
       "veto_recommended": false,
       "wr": 0.5514
     },
-    "bnb_macro|15m|down|bearish__bearish__bull|bnb_15m_native": {
+    "bnb_macro|15m|down|bearish__bearish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 53,
-      "ghost_wr": 0.5472,
-      "live_n": 11,
-      "live_pnl": 11.62,
-      "live_wr": 0.4545,
-      "n": 64,
+      "ghost_n": 843,
+      "ghost_wr": 0.5563,
+      "live_n": 0,
+      "n": 843,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5312
+      "wr": 0.5563
     },
-    "bnb_macro|15m|down|bearish__bearish__bull|spike": {
+    "bnb_macro|15m|up|bullish__bullish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 51,
-      "ghost_wr": 0.8627,
-      "live_n": 15,
-      "live_pnl": 14.53,
-      "live_wr": 0.4,
-      "n": 66,
+      "ghost_n": 118,
+      "ghost_wr": 0.339,
+      "live_n": 0,
+      "n": 118,
       "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.7576
-    },
-    "bnb_macro|15m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 22542,
-      "ghost_wr": 0.5221,
-      "live_n": 54,
-      "live_pnl": 39.12,
-      "live_wr": 0.4259,
-      "n": 54,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.4259
+      "veto_recommended": true,
+      "wr": 0.339
     },
     "bnb_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 11330,
-      "ghost_wr": 0.4569,
+      "ghost_n": 11533,
+      "ghost_wr": 0.4543,
       "live_n": 0,
-      "n": 11330,
+      "n": 11533,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4569
+      "wr": 0.4543
     },
-    "bnb_macro|15m|up|bullish__neutral__bull|bnb_15m_native": {
+    "bnb_macro|1h|down|bearish__bearish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 61,
-      "ghost_wr": 0.7049,
+      "ghost_n": 121,
+      "ghost_wr": 0.3471,
       "live_n": 0,
-      "n": 61,
+      "n": 121,
       "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.7049
-    },
-    "bnb_macro|15m|up|bullish__neutral__bull|standard": {
-      "decision_source": "combined",
-      "ghost_n": 50,
-      "ghost_wr": 0.8,
-      "live_n": 0,
-      "n": 50,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.8
+      "veto_recommended": true,
+      "wr": 0.3471
     },
     "bnb_macro|1h|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 4332,
-      "ghost_wr": 0.5656,
+      "ghost_n": 4334,
+      "ghost_wr": 0.5653,
       "live_n": 0,
-      "n": 4332,
+      "n": 4334,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5656
+      "wr": 0.5653
     },
     "bnb_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
@@ -284,195 +183,131 @@
       "veto_recommended": false,
       "wr": 0.5175
     },
-    "bnb_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
-      "decision_source": "live",
-      "ghost_n": 200,
-      "ghost_wr": 0.76,
-      "live_n": 53,
-      "live_pnl": -8.58,
-      "live_wr": 0.3585,
-      "n": 53,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3585
-    },
-    "bnb_macro|5m|down|bearish__bearish__bull|bnb_5m_native": {
-      "decision_source": "combined",
-      "ghost_n": 62,
-      "ghost_wr": 0.4677,
-      "live_n": 6,
-      "live_pnl": 18.69,
-      "live_wr": 0.5,
-      "n": 68,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.4706
-    },
-    "bnb_macro|5m|down|bearish__bearish__bull|bnb_5m_neutral_fallback_15m": {
-      "decision_source": "combined",
-      "ghost_n": 58,
-      "ghost_wr": 0.4655,
-      "live_n": 2,
-      "live_pnl": -14.66,
-      "live_wr": 0.0,
-      "n": 60,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.45
-    },
     "bnb_macro|5m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
+      "decision_source": "combined",
       "ghost_n": 4230,
       "ghost_wr": 0.5009,
-      "live_n": 81,
-      "live_pnl": -51.58,
-      "live_wr": 0.3086,
-      "n": 81,
+      "live_n": 0,
+      "n": 4230,
       "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3086
+      "veto_recommended": false,
+      "wr": 0.5009
     },
     "bnb_macro|5m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2113,
-      "ghost_wr": 0.4856,
+      "ghost_n": 2121,
+      "ghost_wr": 0.4847,
       "live_n": 0,
-      "n": 2113,
+      "n": 2121,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4856
-    },
-    "bnb_macro|5m|up|bullish__neutral__bull|standard": {
-      "decision_source": "combined",
-      "ghost_n": 87,
-      "ghost_wr": 0.7241,
-      "live_n": 0,
-      "n": 87,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.7241
+      "wr": 0.4847
     },
     "doge_macro|15m|down|bearish__bearish__bull|doge_15m_neutral_fallback_1h": {
       "decision_source": "combined",
       "ghost_n": 601,
       "ghost_wr": 0.5957,
-      "live_n": 4,
-      "live_pnl": 7.16,
+      "live_n": 2,
+      "live_pnl": 3.23,
       "live_wr": 0.5,
-      "n": 605,
+      "n": 603,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.595
+      "wr": 0.5954
     },
-    "doge_macro|15m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 17850,
-      "ghost_wr": 0.451,
-      "live_n": 61,
-      "live_pnl": 24.68,
-      "live_wr": 0.4426,
-      "n": 61,
+    "doge_macro|15m|down|bearish__bearish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 638,
+      "ghost_wr": 0.5298,
+      "live_n": 0,
+      "n": 638,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4426
+      "wr": 0.5298
+    },
+    "doge_macro|15m|up|bullish__bullish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 234,
+      "ghost_wr": 0.3462,
+      "live_n": 0,
+      "n": 234,
+      "recommended_max_mean": 0.4,
+      "veto_recommended": true,
+      "wr": 0.3462
     },
     "doge_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 14922,
-      "ghost_wr": 0.4942,
+      "ghost_n": 15102,
+      "ghost_wr": 0.4922,
       "live_n": 0,
-      "n": 14922,
+      "n": 15102,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4942
-    },
-    "doge_macro|15m|up|bullish__neutral__bull|doge_15m_native": {
-      "decision_source": "combined",
-      "ghost_n": 52,
-      "ghost_wr": 0.8462,
-      "live_n": 0,
-      "n": 52,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.8462
+      "wr": 0.4922
     },
     "doge_macro|1h|down|bearish__bearish__bull|doge_1h_native": {
       "decision_source": "combined",
-      "ghost_n": 133,
-      "ghost_wr": 0.5714,
+      "ghost_n": 134,
+      "ghost_wr": 0.5672,
       "live_n": 0,
-      "n": 133,
+      "n": 134,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5714
+      "wr": 0.5672
     },
     "doge_macro|1h|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 3407,
-      "ghost_wr": 0.4106,
+      "ghost_n": 3409,
+      "ghost_wr": 0.4104,
       "live_n": 3,
       "live_pnl": -11.75,
       "live_wr": 0.0,
-      "n": 3410,
+      "n": 3412,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4103
+      "wr": 0.41
     },
     "doge_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2652,
-      "ghost_wr": 0.4302,
+      "ghost_n": 2656,
+      "ghost_wr": 0.4303,
       "live_n": 0,
-      "n": 2652,
+      "n": 2656,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4302
+      "wr": 0.4303
     },
     "doge_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
-      "decision_source": "combined",
+      "decision_source": "live",
       "ghost_n": 143,
       "ghost_wr": 0.6643,
-      "live_n": 45,
-      "live_pnl": -44.57,
-      "live_wr": 0.3556,
-      "n": 188,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.5904
-    },
-    "doge_macro|5m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 3374,
-      "ghost_wr": 0.487,
-      "live_n": 90,
-      "live_pnl": -58.37,
-      "live_wr": 0.3333,
-      "n": 90,
+      "live_n": 119,
+      "live_pnl": -95.49,
+      "live_wr": 0.3361,
+      "n": 119,
       "recommended_max_mean": 0.4,
       "veto_recommended": true,
-      "wr": 0.3333
+      "wr": 0.3361
     },
-    "doge_macro|5m|down|bearish__neutral__bull|bearish_dip_default": {
+    "doge_macro|5m|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 35,
-      "ghost_wr": 0.8,
-      "live_n": 19,
-      "live_pnl": 28.88,
-      "live_wr": 0.4737,
-      "n": 54,
+      "ghost_n": 3374,
+      "ghost_wr": 0.487,
+      "live_n": 0,
+      "n": 3374,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6852
+      "wr": 0.487
     },
     "doge_macro|5m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2979,
-      "ghost_wr": 0.5029,
+      "ghost_n": 2983,
+      "ghost_wr": 0.5028,
       "live_n": 0,
-      "n": 2979,
+      "n": 2983,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5029
+      "wr": 0.5028
     },
     "doge_macro|5m|up|bullish__neutral__bull|standard": {
       "decision_source": "combined",
@@ -494,6 +329,16 @@
       "veto_recommended": false,
       "wr": 0.4281
     },
+    "eth_macro|15m|down|bearish__bearish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 268,
+      "ghost_wr": 0.6343,
+      "live_n": 0,
+      "n": 268,
+      "recommended_max_mean": 0.4,
+      "veto_recommended": false,
+      "wr": 0.6343
+    },
     "eth_macro|15m|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
       "ghost_n": 13801,
@@ -508,13 +353,13 @@
     },
     "eth_macro|15m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 11676,
-      "ghost_wr": 0.4927,
+      "ghost_n": 12365,
+      "ghost_wr": 0.4939,
       "live_n": 0,
-      "n": 11676,
+      "n": 12365,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4927
+      "wr": 0.4939
     },
     "eth_macro|15m|down|bearish__bearish|standard": {
       "decision_source": "combined",
@@ -525,6 +370,16 @@
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
       "wr": 0.4185
+    },
+    "eth_macro|15m|up|bullish__bullish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 168,
+      "ghost_wr": 0.3929,
+      "live_n": 0,
+      "n": 168,
+      "recommended_max_mean": 0.4,
+      "veto_recommended": true,
+      "wr": 0.3929
     },
     "eth_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
@@ -540,23 +395,23 @@
     },
     "eth_macro|15m|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 3813,
-      "ghost_wr": 0.5004,
+      "ghost_n": 4161,
+      "ghost_wr": 0.4932,
       "live_n": 0,
-      "n": 3813,
+      "n": 4161,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5004
+      "wr": 0.4932
     },
     "eth_macro|15m|up|bullish__bullish|standard": {
       "decision_source": "combined",
-      "ghost_n": 432,
-      "ghost_wr": 0.4329,
+      "ghost_n": 568,
+      "ghost_wr": 0.4507,
       "live_n": 0,
-      "n": 432,
+      "n": 568,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4329
+      "wr": 0.4507
     },
     "eth_macro|1h|down|bearish__bearish__bull|eth_1h_native": {
       "decision_source": "combined",
@@ -582,23 +437,23 @@
     },
     "eth_macro|1h|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 1382,
-      "ghost_wr": 0.4645,
+      "ghost_n": 1535,
+      "ghost_wr": 0.4371,
       "live_n": 0,
-      "n": 1382,
+      "n": 1535,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4645
+      "wr": 0.4371
     },
     "eth_macro|1h|down|bearish__bearish|standard": {
       "decision_source": "combined",
-      "ghost_n": 237,
-      "ghost_wr": 0.4008,
+      "ghost_n": 239,
+      "ghost_wr": 0.4059,
       "live_n": 0,
-      "n": 237,
+      "n": 239,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4008
+      "wr": 0.4059
     },
     "eth_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
@@ -624,25 +479,25 @@
     },
     "eth_macro|5m|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 3381,
-      "ghost_wr": 0.4771,
-      "live_n": 39,
-      "live_pnl": -52.88,
-      "live_wr": 0.2821,
-      "n": 3420,
+      "ghost_n": 3386,
+      "ghost_wr": 0.4773,
+      "live_n": 35,
+      "live_pnl": -30.97,
+      "live_wr": 0.3143,
+      "n": 3421,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4749
+      "wr": 0.4756
     },
     "eth_macro|5m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 2009,
-      "ghost_wr": 0.5157,
+      "ghost_n": 2148,
+      "ghost_wr": 0.513,
       "live_n": 0,
-      "n": 2009,
+      "n": 2148,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5157
+      "wr": 0.513
     },
     "eth_macro|5m|down|bearish__bearish|standard": {
       "decision_source": "combined",
@@ -668,13 +523,13 @@
     },
     "eth_macro|5m|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 818,
-      "ghost_wr": 0.5024,
+      "ghost_n": 948,
+      "ghost_wr": 0.5074,
       "live_n": 0,
-      "n": 818,
+      "n": 948,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5024
+      "wr": 0.5074
     },
     "eth_macro|5m|up|bullish__bullish|standard": {
       "decision_source": "combined",
@@ -690,49 +545,43 @@
       "decision_source": "combined",
       "ghost_n": 241,
       "ghost_wr": 0.61,
-      "live_n": 1,
-      "live_pnl": -1.42,
-      "live_wr": 0.0,
-      "n": 242,
+      "live_n": 0,
+      "n": 241,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6074
+      "wr": 0.61
     },
-    "hype_macro|15m|down|bearish__bearish__bull|spike": {
+    "hype_macro|15m|down|bearish__bearish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 45,
-      "ghost_wr": 0.7333,
-      "live_n": 36,
-      "live_pnl": 43.37,
-      "live_wr": 0.4167,
-      "n": 81,
+      "ghost_n": 117,
+      "ghost_wr": 0.6496,
+      "live_n": 0,
+      "n": 117,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5926
+      "wr": 0.6496
     },
-    "hype_macro|15m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 20615,
-      "ghost_wr": 0.5163,
-      "live_n": 63,
-      "live_pnl": -39.64,
-      "live_wr": 0.2698,
-      "n": 63,
+    "hype_macro|15m|up|bullish__bullish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 844,
+      "ghost_wr": 0.4621,
+      "live_n": 0,
+      "n": 844,
       "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.2698
+      "veto_recommended": false,
+      "wr": 0.4621
     },
     "hype_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 10532,
-      "ghost_wr": 0.4912,
+      "ghost_n": 10846,
+      "ghost_wr": 0.4925,
       "live_n": 34,
       "live_pnl": 36.43,
       "live_wr": 0.4706,
-      "n": 10566,
+      "n": 10880,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4911
+      "wr": 0.4925
     },
     "hype_macro|15m|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
@@ -743,16 +592,6 @@
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
       "wr": 0.567
-    },
-    "hype_macro|1h|down|bearish__bearish__bull|hype_1h_native": {
-      "decision_source": "combined",
-      "ghost_n": 68,
-      "ghost_wr": 0.3235,
-      "live_n": 0,
-      "n": 68,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": true,
-      "wr": 0.3235
     },
     "hype_macro|1h|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
@@ -768,35 +607,35 @@
     },
     "hype_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2009,
-      "ghost_wr": 0.4136,
+      "ghost_n": 2128,
+      "ghost_wr": 0.4088,
       "live_n": 0,
-      "n": 2009,
+      "n": 2128,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4136
+      "wr": 0.4088
     },
     "hype_macro|5m|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
       "ghost_n": 2371,
       "ghost_wr": 0.4842,
-      "live_n": 8,
-      "live_pnl": -10.05,
-      "live_wr": 0.25,
-      "n": 2379,
+      "live_n": 1,
+      "live_pnl": -5.42,
+      "live_wr": 0.0,
+      "n": 2372,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4834
+      "wr": 0.484
     },
     "hype_macro|5m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 2920,
-      "ghost_wr": 0.5045,
+      "ghost_n": 2958,
+      "ghost_wr": 0.5034,
       "live_n": 0,
-      "n": 2920,
+      "n": 2958,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5045
+      "wr": 0.5034
     },
     "hype_macro|5m|down|bearish__bearish|standard": {
       "decision_source": "combined",
@@ -808,62 +647,37 @@
       "veto_recommended": false,
       "wr": 0.4397
     },
+    "hype_macro|5m|up|bullish__bullish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 110,
+      "ghost_wr": 0.4091,
+      "live_n": 0,
+      "n": 110,
+      "recommended_max_mean": 0.4,
+      "veto_recommended": false,
+      "wr": 0.4091
+    },
     "hype_macro|5m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2126,
-      "ghost_wr": 0.4859,
+      "ghost_n": 2133,
+      "ghost_wr": 0.4852,
       "live_n": 22,
       "live_pnl": -25.34,
       "live_wr": 0.2727,
-      "n": 2148,
+      "n": 2155,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4837
-    },
-    "hype_macro|5m|up|bullish__neutral__bull|standard": {
-      "decision_source": "combined",
-      "ghost_n": 97,
-      "ghost_wr": 0.5876,
-      "live_n": 0,
-      "n": 97,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.5876
-    },
-    "sol_macro|15m|down|bearish__bearish__bull|spike": {
-      "decision_source": "combined",
-      "ghost_n": 37,
-      "ghost_wr": 0.8378,
-      "live_n": 45,
-      "live_pnl": 39.86,
-      "live_wr": 0.4222,
-      "n": 82,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.6098
-    },
-    "sol_macro|15m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 9875,
-      "ghost_wr": 0.5023,
-      "live_n": 53,
-      "live_pnl": 31.7,
-      "live_wr": 0.3585,
-      "n": 53,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "veto_suppressed_reason": "profitable_despite_low_wr",
-      "wr": 0.3585
+      "wr": 0.4831
     },
     "sol_macro|15m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 11700,
-      "ghost_wr": 0.5179,
+      "ghost_n": 12247,
+      "ghost_wr": 0.513,
       "live_n": 0,
-      "n": 11700,
+      "n": 12247,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5179
+      "wr": 0.513
     },
     "sol_macro|15m|down|bearish__bearish|standard": {
       "decision_source": "combined",
@@ -877,45 +691,45 @@
     },
     "sol_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 9020,
-      "ghost_wr": 0.4978,
+      "ghost_n": 9022,
+      "ghost_wr": 0.4977,
       "live_n": 0,
-      "n": 9020,
+      "n": 9022,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4978
+      "wr": 0.4977
     },
     "sol_macro|15m|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 6171,
-      "ghost_wr": 0.4516,
+      "ghost_n": 6721,
+      "ghost_wr": 0.4438,
       "live_n": 0,
-      "n": 6171,
+      "n": 6721,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4516
+      "wr": 0.4438
     },
     "sol_macro|15m|up|bullish__bullish|standard": {
       "decision_source": "combined",
-      "ghost_n": 631,
-      "ghost_wr": 0.6006,
+      "ghost_n": 943,
+      "ghost_wr": 0.5133,
       "live_n": 0,
-      "n": 631,
+      "n": 943,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6006
+      "wr": 0.5133
     },
     "sol_macro|1h|down|bearish__bearish__bull|sol_1h_native": {
       "decision_source": "combined",
-      "ghost_n": 124,
-      "ghost_wr": 0.3871,
+      "ghost_n": 128,
+      "ghost_wr": 0.3984,
       "live_n": 1,
       "live_pnl": -3.59,
       "live_wr": 0.0,
-      "n": 125,
+      "n": 129,
       "recommended_max_mean": 0.4,
       "veto_recommended": true,
-      "wr": 0.384
+      "wr": 0.3953
     },
     "sol_macro|1h|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
@@ -931,69 +745,67 @@
     },
     "sol_macro|1h|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 706,
-      "ghost_wr": 0.4008,
+      "ghost_n": 742,
+      "ghost_wr": 0.3814,
       "live_n": 0,
-      "n": 706,
+      "n": 742,
       "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.4008
+      "veto_recommended": true,
+      "wr": 0.3814
     },
     "sol_macro|1h|down|bearish__bearish|standard": {
       "decision_source": "combined",
-      "ghost_n": 222,
-      "ghost_wr": 0.3784,
+      "ghost_n": 224,
+      "ghost_wr": 0.375,
       "live_n": 0,
-      "n": 222,
+      "n": 224,
       "recommended_max_mean": 0.4,
       "veto_recommended": true,
-      "wr": 0.3784
+      "wr": 0.375
     },
     "sol_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 567,
-      "ghost_wr": 0.5238,
+      "ghost_n": 572,
+      "ghost_wr": 0.5262,
       "live_n": 1,
       "live_pnl": 2.66,
       "live_wr": 1.0,
-      "n": 568,
+      "n": 573,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5246
+      "wr": 0.5271
     },
     "sol_macro|1h|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 2171,
-      "ghost_wr": 0.4574,
+      "ghost_n": 2219,
+      "ghost_wr": 0.4615,
       "live_n": 0,
-      "n": 2171,
+      "n": 2219,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4574
+      "wr": 0.4615
     },
-    "sol_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
+    "sol_macro|5m|down|bearish__bearish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 185,
-      "ghost_wr": 0.6811,
-      "live_n": 44,
-      "live_pnl": -80.92,
-      "live_wr": 0.2045,
-      "n": 229,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.5895
-    },
-    "sol_macro|5m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 3701,
-      "ghost_wr": 0.5263,
-      "live_n": 111,
-      "live_pnl": -33.2,
-      "live_wr": 0.2883,
-      "n": 111,
+      "ghost_n": 110,
+      "ghost_wr": 0.3727,
+      "live_n": 0,
+      "n": 110,
       "recommended_max_mean": 0.4,
       "veto_recommended": true,
-      "wr": 0.2883
+      "wr": 0.3727
+    },
+    "sol_macro|5m|down|bearish__bearish__bull|standard": {
+      "decision_source": "combined",
+      "ghost_n": 3703,
+      "ghost_wr": 0.5261,
+      "live_n": 32,
+      "live_pnl": -30.0,
+      "live_wr": 0.2812,
+      "n": 3735,
+      "recommended_max_mean": 0.4,
+      "veto_recommended": false,
+      "wr": 0.524
     },
     "sol_macro|5m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
@@ -1007,15 +819,15 @@
     },
     "sol_macro|5m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2829,
-      "ghost_wr": 0.4973,
+      "ghost_n": 2836,
+      "ghost_wr": 0.4961,
       "live_n": 1,
       "live_pnl": 9.28,
       "live_wr": 1.0,
-      "n": 2830,
+      "n": 2837,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4975
+      "wr": 0.4963
     },
     "sol_macro|5m|up|bullish__bullish|pre_resolver_reject": {
       "decision_source": "combined",
@@ -1037,52 +849,37 @@
       "veto_recommended": false,
       "wr": 0.7206
     },
-    "xrp_macro|15m|down|bearish__bearish__bull|spike": {
+    "xrp_macro|15m|down|bearish__bearish__bull|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 41,
-      "ghost_wr": 0.7317,
-      "live_n": 43,
-      "live_pnl": 50.14,
-      "live_wr": 0.4419,
-      "n": 84,
+      "ghost_n": 653,
+      "ghost_wr": 0.5115,
+      "live_n": 0,
+      "n": 653,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5833
+      "wr": 0.5115
     },
-    "xrp_macro|15m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
-      "ghost_n": 20746,
-      "ghost_wr": 0.5153,
-      "live_n": 93,
-      "live_pnl": 30.28,
-      "live_wr": 0.3763,
-      "n": 93,
+    "xrp_macro|15m|up|bullish__bullish__bull|pre_resolver_reject": {
+      "decision_source": "combined",
+      "ghost_n": 150,
+      "ghost_wr": 0.5533,
+      "live_n": 0,
+      "n": 150,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "veto_suppressed_reason": "profitable_despite_low_wr",
-      "wr": 0.3763
+      "wr": 0.5533
     },
     "xrp_macro|15m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 12429,
-      "ghost_wr": 0.5119,
+      "ghost_n": 12717,
+      "ghost_wr": 0.5099,
       "live_n": 5,
       "live_pnl": -10.13,
       "live_wr": 0.2,
-      "n": 12434,
+      "n": 12722,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5117
-    },
-    "xrp_macro|15m|up|bullish__neutral__bull|standard": {
-      "decision_source": "combined",
-      "ghost_n": 62,
-      "ghost_wr": 0.6129,
-      "live_n": 0,
-      "n": 62,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.6129
+      "wr": 0.5097
     },
     "xrp_macro|1h|down|bearish__bearish__bull|standard": {
       "decision_source": "combined",
@@ -1098,79 +895,69 @@
     },
     "xrp_macro|1h|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 1977,
-      "ghost_wr": 0.4396,
+      "ghost_n": 2104,
+      "ghost_wr": 0.4363,
       "live_n": 0,
-      "n": 1977,
+      "n": 2104,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4396
+      "wr": 0.4363
     },
     "xrp_macro|5m|down|bearish__bearish__bull|bearish_dip_default": {
       "decision_source": "combined",
       "ghost_n": 80,
       "ghost_wr": 0.725,
-      "live_n": 28,
-      "live_pnl": 41.58,
-      "live_wr": 0.5,
-      "n": 108,
+      "live_n": 42,
+      "live_pnl": 63.14,
+      "live_wr": 0.4762,
+      "n": 122,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.6667
+      "wr": 0.6393
     },
     "xrp_macro|5m|down|bearish__bearish__bull|standard": {
-      "decision_source": "live",
+      "decision_source": "combined",
       "ghost_n": 2255,
       "ghost_wr": 0.5042,
-      "live_n": 53,
-      "live_pnl": 29.11,
-      "live_wr": 0.4151,
-      "n": 53,
+      "live_n": 22,
+      "live_pnl": 1.66,
+      "live_wr": 0.4091,
+      "n": 2277,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4151
+      "wr": 0.5033
     },
     "xrp_macro|5m|down|bearish__bearish|pre_resolver_reject": {
       "decision_source": "combined",
-      "ghost_n": 2586,
-      "ghost_wr": 0.5062,
+      "ghost_n": 2699,
+      "ghost_wr": 0.5057,
       "live_n": 0,
-      "n": 2586,
+      "n": 2699,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5062
+      "wr": 0.5057
     },
     "xrp_macro|5m|down|bearish__bearish|standard": {
       "decision_source": "combined",
-      "ghost_n": 132,
-      "ghost_wr": 0.5076,
+      "ghost_n": 140,
+      "ghost_wr": 0.5214,
       "live_n": 0,
-      "n": 132,
+      "n": 140,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.5076
+      "wr": 0.5214
     },
     "xrp_macro|5m|up|bullish__bullish__bull|standard": {
       "decision_source": "combined",
-      "ghost_n": 2339,
-      "ghost_wr": 0.4733,
+      "ghost_n": 2342,
+      "ghost_wr": 0.4727,
       "live_n": 1,
       "live_pnl": -5.38,
       "live_wr": 0.0,
-      "n": 2340,
+      "n": 2343,
       "recommended_max_mean": 0.4,
       "veto_recommended": false,
-      "wr": 0.4731
-    },
-    "xrp_macro|5m|up|bullish__bullish|pre_resolver_reject": {
-      "decision_source": "combined",
-      "ghost_n": 58,
-      "ghost_wr": 0.6207,
-      "live_n": 0,
-      "n": 58,
-      "recommended_max_mean": 0.4,
-      "veto_recommended": false,
-      "wr": 0.6207
+      "wr": 0.4725
     },
     "xrp_macro|5m|up|bullish__neutral__bull|standard": {
       "decision_source": "combined",

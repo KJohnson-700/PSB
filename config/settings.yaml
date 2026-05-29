@@ -349,8 +349,13 @@ strategies:
     bull_regime_buy_no_min_mins_left: 2.0
     bull_regime_buy_no_min_mins_left_15m: 4.0
     bias_quant_disagree_override_enabled: true
-    bias_quant_disagree_aligned_max_gap_non5m: 0.2
-    bias_quant_disagree_aligned_min_edge_non5m: -0.1
+    # 2026-05-29 ghost-derived loosening: prior 0.2/-0.1 passed 0 of 379
+    # BTC 1h+15m BUY_NO HTF-aligned candidates (74.8% would-be WR). New
+    # thresholds pass 242/379 (75% WR); blocked 137 (69% WR — borderline,
+    # kept conservative). 0.33x size further halves risk on the cohort.
+    bias_quant_disagree_aligned_max_gap_non5m: 0.30
+    bias_quant_disagree_aligned_min_edge_non5m: -0.40
+    bias_quant_disagree_size_multiplier: 0.33
     hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
@@ -740,9 +745,6 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            # Widened 60->120 (2026-05-28). Ghost lane_entry_window rejects on
-            # eth_macro|1h|LONG 60-120 min: n=143 WR 66.4% +EV 0.349. Small n
-            # but strongest WR signal in the analysis. Watch first 50 admitted.
             entry_window_max: 120.0
             size_multiplier: 0.3
           down:
@@ -905,8 +907,6 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            # Widened 36->50 (2026-05-28). Ghost lane_entry_window rejects on
-            # hype_macro|15m|LONG 40-50 min: n=568 WR 53.2% +EV 0.063.
             entry_window_max: 50.0
           down:
             min_edge: 0.06
@@ -929,9 +929,6 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            # Widened 59->120 (2026-05-28). Ghost lane_entry_window rejects on
-            # hype_macro|1h|SHORT 60-120 min: n=499 WR 58.9% +EV 0.179.
-            # Strongest +EV signal in the ghost analysis.
             entry_window_max: 120.0
             size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
@@ -1456,10 +1453,6 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            # Widened 32->50 (2026-05-28). Ghost lane_entry_window rejects at
-            # 30-50 min eval_mins_left: bnb_macro|15m|SHORT 30-40 n=1496 WR 53.1%
-            # +EV 0.063 / 40-50 n=1515 WR 52.8% +EV 0.056. Clean monotone +EV
-            # bridge from current bound.
             entry_window_max: 50.0
         1h:
           up:
@@ -1474,9 +1467,6 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            # Widened 60->120 (2026-05-28). Ghost lane_entry_window rejects on
-            # bnb_macro|1h|SHORT 60-120 min: n=756 WR 55.2% +EV 0.107. 1h
-            # strategy structurally suited to 60-120 min markets.
             entry_window_max: 120.0
             size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
@@ -1507,8 +1497,6 @@ ai:
   free_tier_daily_request_budget: 1200
   consensus_enabled: false
   consensus_min_agree: 2
-  # Kimi removed 2026-05-28. MiniMax is now the primary (and only paid) decision
-  # provider, upgraded to the highspeed M2.7 build for faster decision cycles.
   direct_decision_provider_names:
   - minimax
   direct_decision_fallback_to_chain: false
@@ -1688,26 +1676,9 @@ learning_loop:
   kelly_rule_max_ai_trades: 50
   backtest_expectations: {}
 performance_feedback:
-  # CLOSED 2026-05-28. The loop has two halves:
-  #   (1) DRIFT-TIGHTEN — compares live vs data/backtest/reports/*.json. Those
-  #       263 reports are KNOWN-BROKEN (CLAUDE.md): they claim ~12% win rates vs
-  #       40-50% real, so every strategy reads as "diverging" and min_edge gets
-  #       tightened to the ceiling. THIS is why enabling the loop always made the
-  #       bot worse and kept getting reverted. It is permanently DISARMED below
-  #       by clamping every drift multiplier to 1.0 (no-op), regardless of what
-  #       garbage the backtest reports contain.
-  #   (2) OVERTIGHT-LOOSEN — reads rejected_candidates_settled.jsonl (the ghost
-  #       log, the truthful counterfactual) and loosens min_edge on lanes whose
-  #       ghost-rejected pool wins >= overtight_ghost_wr_threshold. This is the
-  #       half we WANT and it is now live.
   enabled: true
   refresh_every_n_cycles: 6
   min_live_sample: 15
-  # --- DRIFT-TIGHTEN knobs clamped to 1.0 = permanently disarmed ---
-  # mem = max(min_min_edge_mult, min(diverge_min_edge_mult, max_min_edge_mult)).
-  # All three at 1.0 => drift multiplier is always 1.0, so broken backtest
-  # expectations can never tighten the gate. Do NOT raise these until the
-  # backtester is fixed and its reports are trustworthy.
   min_min_edge_mult: 1.0
   max_min_edge_mult: 1.0
   diverge_min_edge_mult: 1.0
@@ -1715,13 +1686,6 @@ performance_feedback:
   kelly_mult_min: 0.5
   kelly_mult_max: 1.0
   overtight_reasons:
-  # ONLY lane_min_edge: check_overtight's loosen math requires edge +
-  # effective_min_edge context and a positive (threshold - edge) gap. Time/
-  # quality gates (lane_entry_window, iql_15m_reject, hist_gate_*) reject
-  # BEFORE the edge gate so they carry no edge context — adding them is inert
-  # at best and dilutes lane WR buckets at worst. The entry-window starvation
-  # is handled directly via per-lane window widening (see 2026-05-28 changelog),
-  # not through this min_edge loosener.
   - lane_min_edge
   overtight_min_lane_sample: 25
   overtight_min_pass_sample: 12
