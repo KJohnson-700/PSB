@@ -1762,7 +1762,6 @@ def _process_env_ai_keys() -> Dict[str, str]:
     names = (
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
-        "MOONSHOT_API_KEY",
         "GOOGLE_API_KEY",
         "MINIMAX_API_KEY",
         "ANTHROPIC_API_KEY",
@@ -4821,7 +4820,7 @@ async def get_session_ai_summary(session_id: Optional[str] = None):
                         "content-type": "application/json",
                     },
                     json={
-                        "model": "MiniMax-M2.7",
+                        "model": "MiniMax-M2.7-highspeed",
                         "max_tokens": 200,
                         "messages": [{"role": "user", "content": prompt}],
                     },

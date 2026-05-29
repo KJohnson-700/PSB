@@ -339,11 +339,7 @@ strategies:
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
     btc_htf_boost_weak_15m: 0.06
-    # BUY_YES bullish floor bumps — model under-shoots UP prob under BULLISH bias.
-    # Ghost (2026-05-28) settles rejected in-window BUY_YES at 71–73% WR / +0.07 per
-    # $1; sized so median est clears min_edge (≈ realized WR). 1h uses code default
-    # (0.08). Set to 0.0 to disable a window without redeploy.
-    btc_5m_buy_yes_bullish_floor_bump: 0.20
+    btc_5m_buy_yes_bullish_floor_bump: 0.2
     btc_15m_buy_yes_bullish_floor_bump: 0.26
     quant_disagree_flip_thresh: 0.48
     allow_quant_disagree_flip_buy_no: false
@@ -744,7 +740,10 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0
+            # Widened 60->120 (2026-05-28). Ghost lane_entry_window rejects on
+            # eth_macro|1h|LONG 60-120 min: n=143 WR 66.4% +EV 0.349. Small n
+            # but strongest WR signal in the analysis. Watch first 50 admitted.
+            entry_window_max: 120.0
             size_multiplier: 0.3
           down:
             min_edge: 0.09
@@ -867,11 +866,8 @@ strategies:
     low_corr_suppresses_entries: false
     hourly_buy_yes_native_bonus_1h: 0.03
     hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
-    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost (2026-05-28):
-    # hype 15m 72% WR/+0.077, 5m 71% WR/+0.038 on rejected in-window BUY_YES. Sized so
-    # median est clears min_edge. 0.0 disables a window.
     5m_buy_yes_bullish_floor_bump: 0.18
-    15m_buy_yes_bullish_floor_bump: 0.10
+    15m_buy_yes_bullish_floor_bump: 0.1
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
@@ -909,7 +905,9 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 2.0
-            entry_window_max: 36.0
+            # Widened 36->50 (2026-05-28). Ghost lane_entry_window rejects on
+            # hype_macro|15m|LONG 40-50 min: n=568 WR 53.2% +EV 0.063.
+            entry_window_max: 50.0
           down:
             min_edge: 0.06
             hard_min_edge: 0.0
@@ -931,7 +929,10 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 59.0
+            # Widened 59->120 (2026-05-28). Ghost lane_entry_window rejects on
+            # hype_macro|1h|SHORT 60-120 min: n=499 WR 58.9% +EV 0.179.
+            # Strongest +EV signal in the ghost analysis.
+            entry_window_max: 120.0
             size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1399,9 +1400,6 @@ strategies:
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
     bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.6
-    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost (2026-05-28):
-    # bnb 15m 76% WR/+0.025, 5m 68% WR/+0.019 on rejected in-window BUY_YES. Sized so
-    # median est clears min_edge. 0.0 disables a window.
     5m_buy_yes_bullish_floor_bump: 0.19
     15m_buy_yes_bullish_floor_bump: 0.19
     skip_on_degraded_correlation: true
@@ -1458,7 +1456,11 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 32.0
+            # Widened 32->50 (2026-05-28). Ghost lane_entry_window rejects at
+            # 30-50 min eval_mins_left: bnb_macro|15m|SHORT 30-40 n=1496 WR 53.1%
+            # +EV 0.063 / 40-50 n=1515 WR 52.8% +EV 0.056. Clean monotone +EV
+            # bridge from current bound.
+            entry_window_max: 50.0
         1h:
           up:
             min_edge: 0.08
@@ -1472,7 +1474,10 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0
+            # Widened 60->120 (2026-05-28). Ghost lane_entry_window rejects on
+            # bnb_macro|1h|SHORT 60-120 min: n=756 WR 55.2% +EV 0.107. 1h
+            # strategy structurally suited to 60-120 min markets.
+            entry_window_max: 120.0
             size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
@@ -1502,29 +1507,15 @@ ai:
   free_tier_daily_request_budget: 1200
   consensus_enabled: false
   consensus_min_agree: 2
+  # Kimi removed 2026-05-28. MiniMax is now the primary (and only paid) decision
+  # provider, upgraded to the highspeed M2.7 build for faster decision cycles.
   direct_decision_provider_names:
-  - kimi_coding
+  - minimax
   direct_decision_fallback_to_chain: false
   provider_chain:
-  - name: kimi_coding
-    type: kimi_coding
-    base_url: https://api.kimi.com/coding/v1
-    model: kimi-for-coding
-    credentials_path: ~/.kimi/credentials/kimi-code.json
-    device_id_path: ~/.kimi/device_id
-    user_agent: KimiCLI/1.44.0
-    cli_version: 1.44.0
-    json_mode: true
-    temperature: 0.0
-    max_tokens: 3000
-    timeout_seconds: 75
-    cooldown_on_429_seconds: 1800
-    cooldown_on_usage_limit_seconds: 7200
-    cooldown_on_parse_error_seconds: 600
-    retry_without_json_mode_on_400: false
   - name: minimax
     type: minimax
-    model: MiniMax-M2.7
+    model: MiniMax-M2.7-highspeed
     api_key_secret: MINIMAX_API_KEY
     json_mode: true
     timeout_seconds: 120
@@ -1697,16 +1688,40 @@ learning_loop:
   kelly_rule_max_ai_trades: 50
   backtest_expectations: {}
 performance_feedback:
-  enabled: false
+  # CLOSED 2026-05-28. The loop has two halves:
+  #   (1) DRIFT-TIGHTEN — compares live vs data/backtest/reports/*.json. Those
+  #       263 reports are KNOWN-BROKEN (CLAUDE.md): they claim ~12% win rates vs
+  #       40-50% real, so every strategy reads as "diverging" and min_edge gets
+  #       tightened to the ceiling. THIS is why enabling the loop always made the
+  #       bot worse and kept getting reverted. It is permanently DISARMED below
+  #       by clamping every drift multiplier to 1.0 (no-op), regardless of what
+  #       garbage the backtest reports contain.
+  #   (2) OVERTIGHT-LOOSEN — reads rejected_candidates_settled.jsonl (the ghost
+  #       log, the truthful counterfactual) and loosens min_edge on lanes whose
+  #       ghost-rejected pool wins >= overtight_ghost_wr_threshold. This is the
+  #       half we WANT and it is now live.
+  enabled: true
   refresh_every_n_cycles: 6
   min_live_sample: 15
+  # --- DRIFT-TIGHTEN knobs clamped to 1.0 = permanently disarmed ---
+  # mem = max(min_min_edge_mult, min(diverge_min_edge_mult, max_min_edge_mult)).
+  # All three at 1.0 => drift multiplier is always 1.0, so broken backtest
+  # expectations can never tighten the gate. Do NOT raise these until the
+  # backtester is fixed and its reports are trustworthy.
   min_min_edge_mult: 1.0
-  max_min_edge_mult: 1.15
-  diverge_min_edge_mult: 1.08
+  max_min_edge_mult: 1.0
+  diverge_min_edge_mult: 1.0
   kelly_mult_when_diverging: 1.0
   kelly_mult_min: 0.5
   kelly_mult_max: 1.0
   overtight_reasons:
+  # ONLY lane_min_edge: check_overtight's loosen math requires edge +
+  # effective_min_edge context and a positive (threshold - edge) gap. Time/
+  # quality gates (lane_entry_window, iql_15m_reject, hist_gate_*) reject
+  # BEFORE the edge gate so they carry no edge context — adding them is inert
+  # at best and dilutes lane WR buckets at worst. The entry-window starvation
+  # is handled directly via per-lane window widening (see 2026-05-28 changelog),
+  # not through this min_edge loosener.
   - lane_min_edge
   overtight_min_lane_sample: 25
   overtight_min_pass_sample: 12

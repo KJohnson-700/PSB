@@ -91,8 +91,8 @@ def test_coerce_confidence_phrases() -> None:
 
 
 def test_extract_openai_message_text_does_not_fall_back_to_reasoning_content() -> None:
-    # Regression: kimi-for-coding (and other reasoning models) consume the
-    # max_tokens budget on reasoning_content before emitting `content`. The
+    # Regression: some reasoning models consume the max_tokens budget on
+    # reasoning_content before emitting `content`. The
     # extractor MUST NOT substitute reasoning prose when content is empty —
     # doing so feeds CoT text to the JSON parser, masking the real cause
     # (budget exhaustion) as a parse error and triggering a 600s cooldown.
@@ -137,93 +137,6 @@ def test_extract_openai_message_text_uses_parsed_and_refusal_fallbacks() -> None
     assert AIAgent._extract_openai_message_text(refusal_response) == "cannot comply"
 
 
-def test_kimi_empty_content_cools_down_without_second_attempt(monkeypatch) -> None:
-    calls = {"n": 0}
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            calls["n"] += 1
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
-                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=0),
-            )
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-        def close(self):
-            return None
-
-    ag = AIAgent(
-        {
-            "ai": {
-                "enabled": True,
-                "provider_chain": [],
-                "temperature": 0.1,
-                "max_tokens": 800,
-            }
-        }
-    )
-
-    async def fake_token(provider_config, *, force_refresh=False):
-        return "token"
-
-    monkeypatch.setattr(ai_agent_mod, "openai", SimpleNamespace(AsyncOpenAI=FakeClient))
-    monkeypatch.setattr(ag, "_kimi_code_access_token", fake_token)
-
-    with pytest.raises(AIResponseValidationError, match="empty Kimi response"):
-        run_async(
-            ag._analyze_with_kimi_coding(
-                "prompt",
-                "m-kimi-empty",
-                "kimi-for-coding",
-                "oauth",
-                {
-                    "name": "kimi_coding",
-                    "type": "kimi_coding",
-                    "json_mode": True,
-                    "cooldown_on_parse_error_seconds": 600,
-                    "retry_without_json_mode_on_400": False,
-                },
-                0.52,
-            )
-        )
-
-    assert calls["n"] == 1
-    assert ag._on_cooldown("kimi_coding:kimi-for-coding") is True
-
-
-def test_kimi_cooldown_raises_explicit_reason() -> None:
-    ag = AIAgent(
-        {
-            "ai": {
-                "enabled": True,
-                "provider_chain": [],
-                "temperature": 0.1,
-                "max_tokens": 800,
-            }
-        }
-    )
-    ag._set_cooldown("kimi_coding:kimi-for-coding", 600)
-
-    with pytest.raises(RuntimeError, match="kimi_coding_cooldown:kimi-for-coding"):
-        run_async(
-            ag._analyze_with_kimi_coding(
-                "prompt",
-                "m-kimi-cooldown",
-                "kimi-for-coding",
-                "oauth",
-                {
-                    "name": "kimi_coding",
-                    "type": "kimi_coding",
-                    "model": "kimi-for-coding",
-                },
-                0.52,
-            )
-        )
-
-
 def test_direct_decision_scope_uses_only_configured_provider() -> None:
     calls = []
     ag = AIAgent(
@@ -232,20 +145,20 @@ def test_direct_decision_scope_uses_only_configured_provider() -> None:
                 "enabled": True,
                 "live_inferencing": True,
                 "provider_chain": [
-                    {"name": "kimi_coding", "type": "fake_kimi", "model": "kimi", "local": True},
                     {"name": "minimax", "type": "fake_minimax", "model": "mini", "local": True},
+                    {"name": "ollama_local", "type": "fake_local", "model": "qwen", "local": True},
                 ],
-                "direct_decision_provider_names": ["kimi_coding"],
+                "direct_decision_provider_names": ["minimax"],
                 "direct_decision_fallback_to_chain": False,
                 "min_call_gap": 0,
             }
         }
     )
 
-    async def fake_kimi(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+    async def fake_minimax(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
         calls.append(provider_config["name"])
         return AIAnalysis(
-            reasoning="kimi decision",
+            reasoning="minimax decision",
             confidence_score=0.7,
             estimated_probability=0.62,
             recommendation="BUY_YES",
@@ -253,10 +166,10 @@ def test_direct_decision_scope_uses_only_configured_provider() -> None:
             timestamp=datetime.utcnow(),
         )
 
-    async def fake_minimax(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+    async def fake_local(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
         calls.append(provider_config["name"])
         return AIAnalysis(
-            reasoning="minimax fallback",
+            reasoning="local fallback",
             confidence_score=0.7,
             estimated_probability=0.38,
             recommendation="BUY_NO",
@@ -264,8 +177,8 @@ def test_direct_decision_scope_uses_only_configured_provider() -> None:
             timestamp=datetime.utcnow(),
         )
 
-    ag._analyze_with_fake_kimi = MethodType(fake_kimi, ag)  # type: ignore[attr-defined]
     ag._analyze_with_fake_minimax = MethodType(fake_minimax, ag)  # type: ignore[attr-defined]
+    ag._analyze_with_fake_local = MethodType(fake_local, ag)  # type: ignore[attr-defined]
 
     out = run_async(
         ag.analyze_market(
@@ -281,10 +194,10 @@ def test_direct_decision_scope_uses_only_configured_provider() -> None:
 
     assert out is not None
     assert out.recommendation == "BUY_YES"
-    assert calls == ["kimi_coding"]
+    assert calls == ["minimax"]
 
 
-def test_analysis_scope_can_still_use_minimax_provider() -> None:
+def test_analysis_scope_falls_through_to_chain_after_primary_fails() -> None:
     calls = []
     ag = AIAgent(
         {
@@ -292,20 +205,20 @@ def test_analysis_scope_can_still_use_minimax_provider() -> None:
                 "enabled": True,
                 "live_inferencing": True,
                 "provider_chain": [
-                    {"name": "kimi_coding", "type": "fake_kimi", "model": "kimi", "local": True},
                     {"name": "minimax", "type": "fake_minimax", "model": "mini", "local": True},
+                    {"name": "ollama_local", "type": "fake_local", "model": "qwen", "local": True},
                 ],
-                "direct_decision_provider_names": ["kimi_coding"],
+                "direct_decision_provider_names": ["minimax"],
                 "min_call_gap": 0,
             }
         }
     )
 
-    async def fake_kimi(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
-        calls.append(provider_config["name"])
-        raise RuntimeError("kimi unavailable")
-
     async def fake_minimax(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
+        calls.append(provider_config["name"])
+        raise RuntimeError("minimax unavailable")
+
+    async def fake_local(self, prompt, market_id, model, api_key, provider_config, anchor_yes_price):
         calls.append(provider_config["name"])
         return AIAnalysis(
             reasoning="analysis fallback",
@@ -316,8 +229,8 @@ def test_analysis_scope_can_still_use_minimax_provider() -> None:
             timestamp=datetime.utcnow(),
         )
 
-    ag._analyze_with_fake_kimi = MethodType(fake_kimi, ag)  # type: ignore[attr-defined]
     ag._analyze_with_fake_minimax = MethodType(fake_minimax, ag)  # type: ignore[attr-defined]
+    ag._analyze_with_fake_local = MethodType(fake_local, ag)  # type: ignore[attr-defined]
 
     out = run_async(
         ag.analyze_market(
@@ -332,7 +245,7 @@ def test_analysis_scope_can_still_use_minimax_provider() -> None:
 
     assert out is not None
     assert out.recommendation == "BUY_NO"
-    assert calls == ["kimi_coding", "minimax"]
+    assert calls == ["minimax", "ollama_local"]
 
 
 def test_short_window_cache_ttl_overrides_legacy_default() -> None:

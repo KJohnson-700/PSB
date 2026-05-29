@@ -8,6 +8,58 @@
 
 ---
 
+## 2026-05-28 — Kimi removed; MiniMax promoted to primary + upgraded to highspeed
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/ai_status.py`](/Users/mainfolder/Documents/psb-main%201/src/ai_status.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), tests:** Removed the Kimi (kimi_coding / Moonshot-OAuth) integration entirely and made MiniMax the sole paid decision provider, upgraded to the highspeed M2.7 build for faster decision cycles.
+
+- **Config:** `direct_decision_provider_names` `[kimi_coding]` → `[minimax]`; dropped the `kimi_coding` `provider_chain` block; `minimax` model `MiniMax-M2.7` → `MiniMax-M2.7-highspeed`. Chain is now `minimax (highspeed) → ollama_local`.
+- **ai_agent.py:** deleted `_kimi_oauth_lock`, `_is_kimi_coding_provider`, `_kimi_code_device_model`, `_kimi_code_common_headers`, `_kimi_code_access_token`, `_analyze_with_kimi_coding` and the kimi-only helpers `_expand_user_path` / `_ascii_header_value`; removed the now-unused `import platform`; `run_minimax_live_probe` default model → highspeed. Provider dispatch is dynamic (`_analyze_with_<type>`), so no router edits were needed.
+- **ai_status.py:** removed the kimi_coding OAuth readiness branch + `_has_kimi_code_oauth`.
+- **main.py / dashboard/server.py:** dropped `MOONSHOT_API_KEY` from key loading; dashboard `_ai_summary_minimax` model → highspeed.
+- **usage_tracker.py:** unchanged — `MiniMax-M2.7-highspeed` pricing ($0.60/$2.40 per M, 2× standard) already present; cost resolves by model string.
+- **Tests:** deleted the two `_analyze_with_kimi_coding` unit tests and the two kimi OAuth `ai_status` tests; rewrote the provider-scope tests to use minimax-primary + local-fallback. `tests/test_ai_agent_parse.py` + `tests/test_ai_status.py` (36) and `tests/test_ops_pulse.py` (5) green.
+
+**Cost note:** highspeed is 2× per-token vs standard M2.7. With the decision layer still `ai.decision_layer.enabled: false`, MiniMax currently runs only shadow/research/narration, so live decision spend is unchanged until the decision layer is turned on. `.env` `MINIMAX_API_KEY` retained; legacy `MOONSHOT_API_KEY` is now unused (left in `.env`, no longer read).
+
+---
+
+## 2026-05-28 — Performance-feedback loop CLOSED (loosen live, tighten disarmed)
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Flipped `performance_feedback.enabled` to `true` and made it safe to leave on. Root cause of every prior failed "close": the loop has two halves and enabling it turned on both —
+
+1. **Drift-tighten** ([`refresh_performance_feedback`](/Users/mainfolder/Documents/psb-main%201/src/execution/performance_feedback.py) → `load_backtest_expectations`) compares live performance to `data/backtest/reports/backtest_*.json`. There are **263** such reports and they are known-broken (per CLAUDE.md): they report ~8–25% win rates against a 40–50% reality. With those expectations, `check_drift` flags every strategy as "diverging" and pushes `min_edge` to the `max_min_edge_mult` ceiling (1.15). That is the mechanism that tightened the bot every time the loop was switched on.
+2. **Overtight-loosen** ([`check_overtight`](/Users/mainfolder/Documents/psb-main%201/src/execution/performance_feedback.py)) reads `rejected_candidates_settled.jsonl` (the ghost log — the truthful counterfactual) and *loosens* `min_edge` on lanes whose ghost-rejected pool wins ≥ `overtight_ghost_wr_threshold` (0.58). This is the half we want.
+
+**Fix (config-only, robust):** permanently disarm the tighten half by clamping `min_min_edge_mult = max_min_edge_mult = diverge_min_edge_mult = kelly_mult_when_diverging = 1.0`. The drift multiplier is `max(min, min(diverge, max))`, so at 1.0/1.0/1.0 it is unconditionally 1.0 — the broken backtests can never tighten the gate again, no matter what they contain or how live samples grow. The loosen half runs unaffected off the ghost log.
+
+**Verified live** against the real config + ghost log (not asserted): all 7 strategies return drift `min_edge ×1.000` / `kelly ×1.000` with the 263 broken reports present; loosen side returns `hype_macro|15m|down|bearish ×0.966` (ghost WR 72%, n=451) and `hype_macro|15m|up|bullish ×0.934` (ghost WR 64%, n=387) — matching the baseline doc's overtight flags.
+
+Also reverted a same-day mistaken edit that added `lane_entry_window`/`iql_15m_reject`/`hist_gate_15m_short_reject` to `overtight_reasons`: the loosen math requires edge context that time/quality rejects don't carry, so those reasons are inert there and only risk diluting lane WR buckets. Entry-window starvation is handled by the per-lane window widening below.
+
+**Do not raise the drift multipliers until the backtester is fixed and its reports are trustworthy.**
+
+---
+
+## 2026-05-28 — Per-lane `lane_entry_window` widening + overtight watchlist expansion
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** `lane_entry_window` is the largest rejection gate (~44% of ghost rejects). The previous take — "mostly future-market ladder being correctly skipped" — was partially right: ladder noise dominates the count, but the gate was *also* killing real +EV markets where ghost-settled WR clears 53–66% on lanes the bot would gladly take. Bucketed all 4,445 `lane_entry_window` rejects by `(strategy, window, side, eval_mins_left)` and kept only adjacent buckets with n≥150 AND WR≥53% AND EV≥+0.04. Five lanes qualified:
+
+| Lane | Window | Ghost evidence |
+|---|---|---|
+| `bnb_macro\|15m\|SHORT` | 2–32 → **2–50** | 30–40 n=1496 WR 53.1% +0.063 / 40–50 n=1515 WR 52.8% +0.056 |
+| `bnb_macro\|1h\|SHORT`  | 0–60 → **0–120** | 60–120 n=756 WR 55.2% +0.107 |
+| `hype_macro\|15m\|LONG` | 2–36 → **2–50** | 40–50 n=568 WR 53.2% +0.063 |
+| `hype_macro\|1h\|SHORT` | 1–59 → **1–120** | 60–120 n=499 WR 58.9% +0.179 |
+| `eth_macro\|1h\|LONG`   | 0–60 → **0–120** | 60–120 n=143 WR 66.4% +0.349 (smaller n; watch first 50 admitted) |
+
+Lanes deliberately untouched: all SOL (−EV outside window), all DOGE (−EV), all 5m (−EV adjacent), all 15m LONG on bnb/doge/xrp (−EV bridge), XRP 15m (non-monotone bridge — the 30–60 trough is mildly −EV even though 60–120 recovers). Removing the gate entirely was rejected — exit logic assumes short remaining-time windows and the rejected pool is dominated by random-WR ladder noise, so removal would flood without quality filtering.
+
+Separately, `performance_feedback.overtight_reasons` was only watching `lane_min_edge` — adding `lane_entry_window`, `iql_15m_reject`, and `hist_gate_15m_short_reject` (the top three rejection gates by count). The auto-loosener stays gated by `performance_feedback.enabled: false`; this is preparation only.
+
+Plan file: `/Users/mainfolder/.claude/plans/whimsical-purring-owl.md`.
+
+---
+
 ## 2026-05-28 — Per-lane BUY_YES floor bumps on 5m/15m (BTC + BNB + HYPE)
 
 **[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Extended the BTC-1h BUY_YES floor-bump pattern (`7d28c4e`) down to **5m and 15m** and to the **alt** strategies. Diagnosis: 98% of BUY_YES candidates carry a *correct* BULLISH bias but are rejected on `lane_min_edge` because `est_prob_up` under-shoots UP probability — median `yes_price` (0.55–0.90) sits above the model `est` (0.44–0.58), so model-edge goes negative. The ghost log (`rejected_candidates_settled.jsonl`) settles those rejected in-window BUY_YES at **68–76% WR** and **+EV per $1** on btc/hype/bnb 5m+15m, confirming the gate is firing on miscalibrated input rather than real −EV. (`lane_entry_window` reject volume is mostly the future-market ladder being correctly skipped, not starvation.)

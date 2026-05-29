@@ -23,7 +23,6 @@ import hashlib
 import json
 import logging
 import os
-import platform
 import random
 import re
 import socket
@@ -253,7 +252,6 @@ OUTPUT (machine-parseable — follow exactly):
         self._last_call_time = 0.0
         self._min_call_gap = self.config.get('min_call_gap', 1.5)  # seconds between API calls
         self._rate_lock: Optional[asyncio.Lock] = None  # Created lazily inside event loop
-        self._kimi_oauth_lock: Optional[asyncio.Lock] = None
         # Backpressure: cap how many callers may queue on the rate-limit lock.
         # With min_call_gap=2.0 and depth=6, worst-case wait ≈ 12s (safely under
         # the 15s decision and 20s observer timeouts). Excess callers fail fast.
@@ -296,10 +294,6 @@ OUTPUT (machine-parseable — follow exactly):
         # Round-robin first model for OpenRouter free tier (spread per-model limits).
         self._openrouter_model_rr: Dict[str, int] = {}
 
-    @staticmethod
-    def _is_kimi_coding_provider(provider_config: Optional[Dict[str, Any]]) -> bool:
-        return str((provider_config or {}).get("type") or "").strip() == "kimi_coding"
-
     def _api_key_for_provider(
         self,
         provider_config: Dict[str, Any],
@@ -307,8 +301,6 @@ OUTPUT (machine-parseable — follow exactly):
         """Return provider credential token or a missing-secret name."""
         if provider_config.get("local", False):
             return "local", None
-        if self._is_kimi_coding_provider(provider_config):
-            return "oauth", None
         api_key_name = provider_config.get("api_key_secret")
         api_key = self.api_keys.get(api_key_name)
         if api_key:
@@ -539,9 +531,9 @@ OUTPUT (machine-parseable — follow exactly):
         """
         Providers allowed to affect entry decisions.
 
-        This intentionally differs from ``provider_chain``: MiniMax can remain
-        available for shadow/research/narration while Kimi is the only premium
-        tie-breaker allowed to steer execution.
+        Narrows ``provider_chain`` to the subset permitted to steer execution.
+        MiniMax is the primary decision provider; shadow/research/narration may
+        use the same or other chain entries without affecting entries.
         """
         raw_names = self.config.get("direct_decision_provider_names")
         if raw_names is None:
@@ -1631,7 +1623,7 @@ OUTPUT (machine-parseable — follow exactly):
         return max(5.0, float(self.timeout))
 
     def _provider_max_tokens(self, provider_config: Optional[Dict[str, Any]]) -> int:
-        """Per-provider output cap. Kimi quota is wasted when it free-rambles."""
+        """Per-provider output cap to bound cost when a model free-rambles."""
         pc = provider_config or {}
         raw = pc.get("max_tokens")
         if raw is not None:
@@ -2244,7 +2236,7 @@ OUTPUT (machine-parseable — follow exactly):
 
     @staticmethod
     def _extract_openai_message_text(response: Any) -> str:
-        """Extract text from OpenAI-compatible responses, including Kimi variants."""
+        """Extract text from OpenAI-compatible response shapes."""
         with suppress(Exception):
             choice = response.choices[0]
             message = getattr(choice, "message", None)
@@ -2679,316 +2671,6 @@ Reply with only the JSON object required by the system message (four keys: reaso
         
         return prompt
 
-    @staticmethod
-    def _expand_user_path(raw: str) -> Path:
-        return Path(os.path.expandvars(os.path.expanduser(raw)))
-
-    @staticmethod
-    def _kimi_code_device_model() -> str:
-        system = platform.system()
-        arch = platform.machine() or ""
-        if system == "Darwin":
-            version = platform.mac_ver()[0] or platform.release()
-            return f"macOS {version} {arch}".strip()
-        if system:
-            version = platform.release()
-            return f"{system} {version} {arch}".strip()
-        return "Unknown"
-
-    @staticmethod
-    def _ascii_header_value(value: str, *, fallback: str = "unknown") -> str:
-        try:
-            value.encode("ascii")
-            return value.strip()
-        except UnicodeEncodeError:
-            sanitized = value.encode("ascii", errors="ignore").decode("ascii").strip()
-            return sanitized or fallback
-
-    def _kimi_code_common_headers(self, provider_config: Dict[str, Any]) -> Dict[str, str]:
-        device_id_path = self._expand_user_path(
-            str(provider_config.get("device_id_path") or "~/.kimi/device_id")
-        )
-        device_id = ""
-        with suppress(OSError):
-            device_id = device_id_path.read_text(encoding="utf-8").strip()
-        headers = {
-            "User-Agent": str(provider_config.get("user_agent") or "KimiCLI/1.44.0"),
-            "X-Msh-Platform": "kimi_cli",
-            "X-Msh-Version": str(provider_config.get("cli_version") or "1.44.0"),
-            "X-Msh-Device-Name": platform.node() or socket.gethostname(),
-            "X-Msh-Device-Model": self._kimi_code_device_model(),
-            "X-Msh-Os-Version": platform.version(),
-            "X-Msh-Device-Id": device_id,
-        }
-        custom = provider_config.get("default_headers")
-        if isinstance(custom, dict):
-            headers.update({str(k): str(v) for k, v in custom.items()})
-        return {
-            key: self._ascii_header_value(value)
-            for key, value in headers.items()
-            if value
-        }
-
-    async def _kimi_code_access_token(
-        self,
-        provider_config: Dict[str, Any],
-        *,
-        force_refresh: bool = False,
-    ) -> str:
-        """Load and refresh the Kimi Code CLI OAuth token without exposing it in config."""
-        if self._kimi_oauth_lock is None:
-            self._kimi_oauth_lock = asyncio.Lock()
-        async with self._kimi_oauth_lock:
-            credentials_path = self._expand_user_path(
-                str(provider_config.get("credentials_path") or "~/.kimi/credentials/kimi-code.json")
-            )
-            try:
-                payload = json.loads(credentials_path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Kimi Code OAuth credentials unavailable at {credentials_path}"
-                ) from exc
-            if not isinstance(payload, dict):
-                raise RuntimeError("Kimi Code OAuth credentials are malformed")
-
-            expires_at = float(payload.get("expires_at") or 0.0)
-            refresh_window = float(provider_config.get("refresh_window_seconds") or 300.0)
-            access_token = str(payload.get("access_token") or "")
-            if access_token and not force_refresh and expires_at > time.time() + refresh_window:
-                return access_token
-
-            refresh_token = str(payload.get("refresh_token") or "")
-            if not refresh_token:
-                raise RuntimeError("Kimi Code OAuth refresh token missing")
-
-            import aiohttp
-
-            auth_host = str(provider_config.get("auth_host") or "https://auth.kimi.com").rstrip("/")
-            client_id = str(
-                provider_config.get("client_id")
-                or "17e5f671-d194-4dfb-9706-5516cb48c098"
-            )
-            data = {
-                "client_id": client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            }
-            timeout = aiohttp.ClientTimeout(total=30, sock_connect=10, sock_read=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{auth_host}/api/oauth/token",
-                    data=data,
-                    headers=self._kimi_code_common_headers(provider_config),
-                ) as response:
-                    response_payload = await response.json(content_type=None)
-                    status = response.status
-
-            if status != 200:
-                detail = (
-                    response_payload.get("error_description")
-                    if isinstance(response_payload, dict)
-                    else None
-                )
-                raise RuntimeError(
-                    f"Kimi Code OAuth refresh failed HTTP {status}: {detail or response_payload}"
-                )
-            if not isinstance(response_payload, dict):
-                raise RuntimeError("Kimi Code OAuth refresh returned malformed response")
-
-            expires_in = float(response_payload.get("expires_in") or 900.0)
-            refreshed = {
-                "access_token": str(response_payload["access_token"]),
-                "refresh_token": str(response_payload["refresh_token"]),
-                "token_type": str(response_payload.get("token_type") or "Bearer"),
-                "expires_in": expires_in,
-                "scope": str(response_payload.get("scope") or "kimi-code"),
-                "expires_at": time.time() + expires_in,
-            }
-            credentials_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=credentials_path.parent, suffix=".tmp")
-            try:
-                raw = json.dumps(refreshed, ensure_ascii=False).encode("utf-8")
-                written = os.write(fd, raw)
-                if written != len(raw):
-                    raise OSError(f"Short write: {written}/{len(raw)} bytes")
-                os.fsync(fd)
-                os.close(fd)
-                fd = -1
-                with suppress(OSError):
-                    os.chmod(tmp_path, 0o600)
-                os.replace(tmp_path, credentials_path)
-            finally:
-                if fd >= 0:
-                    with suppress(OSError):
-                        os.close(fd)
-                with suppress(OSError):
-                    os.unlink(tmp_path)
-            return refreshed["access_token"]
-
-    async def _analyze_with_kimi_coding(
-        self,
-        prompt: str,
-        market_id: str,
-        model: str,
-        api_key: str,
-        provider_config: Optional[Dict[str, Any]] = None,
-        anchor_yes_price: float = 0.0,
-        response_parser: Optional[Callable[[str, str, float], Any]] = None,
-        system_prompt: Optional[str] = None,
-    ) -> Optional[AIAnalysis]:
-        """Call the Kimi Code CLI OAuth gateway, not the Moonshot billing API."""
-        # NOTE: openai-package check is deferred to inside the per-model loop so that
-        # cooldown bail-outs raise their explicit RuntimeError instead of being
-        # masked by ImportError when openai isn't installed (e.g. test env).
-        pc = provider_config or {}
-        provider_label = str(pc.get("name") or "kimi_coding")
-        base_url = str(pc.get("base_url") or "https://api.kimi.com/coding/v1")
-        call_timeout = self._provider_timeout(pc)
-        max_tokens = self._provider_max_tokens(pc)
-        temperature = self._provider_temperature(pc)
-        cooldown_429 = float(pc.get("cooldown_on_429_seconds", 1800.0))
-        cooldown_usage = float(pc.get("cooldown_on_usage_limit_seconds", cooldown_429))
-        cooldown_parse = float(pc.get("cooldown_on_parse_error_seconds", 300.0))
-        retry_non_json_on_400 = bool(pc.get("retry_without_json_mode_on_400", False))
-        parser = response_parser or self._parse_response
-        models = self._models_for_provider(pc, model)
-        if not models:
-            logger.warning("Kimi Code provider has no model configured — skipping.")
-            return None
-
-        last_err: Optional[BaseException] = None
-        skipped_cooldowns: List[tuple[str, float]] = []
-        for m in models:
-            ck = self._cooldown_key(provider_label, m)
-            if self._on_cooldown(ck):
-                remaining = self._cooldown_remaining_seconds(ck)
-                skipped_cooldowns.append((m, remaining))
-                logger.info(
-                    "Kimi Code model %s on cooldown for %.0fs — skipping.",
-                    m,
-                    remaining,
-                )
-                continue
-            if openai is None:
-                raise ImportError("openai package is not installed")
-            self._bump_local_quota_and_warn(provider_label)
-            force_refresh = False
-            while True:
-                access_token = await self._kimi_code_access_token(
-                    pc,
-                    force_refresh=force_refresh,
-                )
-                headers = self._kimi_code_common_headers(pc)
-                client = openai.AsyncOpenAI(
-                    api_key=access_token,
-                    base_url=base_url,
-                    default_headers=headers,
-                    max_retries=0,
-                )
-                try:
-                    json_attempts = [bool(pc.get("json_mode", True))]
-                    if retry_non_json_on_400 and json_attempts[0]:
-                        json_attempts.append(False)
-                    for use_json_mode in json_attempts:
-                        kwargs: Dict[str, Any] = dict(
-                            model=m,
-                            messages=[
-                                {"role": "system", "content": system_prompt or self.SYSTEM_PROMPT},
-                                {"role": "user", "content": prompt},
-                            ],
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                        )
-                        if use_json_mode:
-                            kwargs["response_format"] = {"type": "json_object"}
-                        start_time = time.time()
-                        try:
-                            response = await asyncio.wait_for(
-                                client.chat.completions.create(**kwargs),
-                                timeout=call_timeout,
-                            )
-                        except Exception as exc:
-                            status_code = getattr(exc, "status_code", None)
-                            if status_code == 400 and use_json_mode:
-                                last_err = exc
-                                continue
-                            raise
-
-                        content = self._extract_openai_message_text(response)
-                        usage = getattr(response, "usage", None)
-                        latency = time.time() - start_time
-                        if usage:
-                            self.usage_tracker.record_usage(
-                                provider="kimi_coding",
-                                model=m,
-                                input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-                                output_tokens=getattr(usage, "completion_tokens", 0) or 0,
-                                latency=latency,
-                            )
-                        if not content.strip():
-                            raise AIResponseValidationError(
-                                f"market={market_id} empty Kimi response content"
-                            )
-                        try:
-                            return parser(content, market_id, anchor_yes_price)
-                        except AIResponseValidationError as exc:
-                            logger.warning(
-                                "Kimi Code: schema/parse error model=%s: %s — cooling down %.0fs.",
-                                m,
-                                exc,
-                                cooldown_parse,
-                            )
-                            self._set_cooldown(ck, cooldown_parse)
-                            last_err = exc
-                            break
-                except Exception as exc:
-                    last_err = exc
-                    status_code = getattr(exc, "status_code", None)
-                    if status_code == 401 and not force_refresh:
-                        logger.warning(
-                            "Kimi Code returned 401 for %s; refreshing OAuth token once.",
-                            provider_label,
-                        )
-                        force_refresh = True
-                        continue
-                    msg = str(exc).lower()
-                    if isinstance(exc, AIResponseValidationError):
-                        self._set_cooldown(ck, cooldown_parse)
-                        logger.warning(
-                            "Kimi Code parse/empty response model=%s — cooling down %.0fs.",
-                            m,
-                            cooldown_parse,
-                        )
-                    if (
-                        status_code == 429
-                        or "429" in msg
-                        or "rate_limit" in msg
-                        or "usage limit" in msg
-                    ):
-                        cooldown = cooldown_usage if "usage limit" in msg else cooldown_429
-                        self._set_cooldown(ck, cooldown)
-                        logger.warning(
-                            "Kimi Code rate-limited model=%s — cooling down %.0fs.",
-                            m,
-                            cooldown,
-                        )
-                    logger.warning(
-                        "Kimi Code error model=%s: %s: %s",
-                        m,
-                        type(exc).__name__,
-                        exc,
-                    )
-                    break
-                finally:
-                    await _close_async_client_quietly(client)
-                break
-
-        if last_err:
-            raise last_err
-        if skipped_cooldowns:
-            details = ", ".join(f"{m}:{remaining:.0f}s" for m, remaining in skipped_cooldowns)
-            raise RuntimeError(f"kimi_coding_cooldown:{details}")
-        return None
     
     async def _analyze_with_openai(
         self,
@@ -3737,7 +3419,7 @@ async def run_minimax_live_probe(
 
     agent = AIAgent(merged_config)
     agent.set_api_keys(api_keys)
-    model = str(pc.get("model") or "MiniMax-M2.7")
+    model = str(pc.get("model") or "MiniMax-M2.7-highspeed")
     timeout = float(ai.get("timeout", 30))
     prompt = (
         "Diagnostic: hypothetical market — fair coin flip for heads. "
