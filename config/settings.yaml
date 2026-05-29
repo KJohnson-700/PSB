@@ -196,11 +196,7 @@ lane_calibration:
   min_samples_to_apply_live: 30
   beta_veto_max_mean: 0.0
   beta_veto_min_n: 0
-  # Pull-to-beta blend (added 2026-05-29). Once a lane has >= n_floor live
-  # trades, est_prob is blended toward the observed posterior mean instead
-  # of just toward 0.5 — closes the calibration gap on lanes where actual
-  # WR is on the opposite side of 0.5 from the model's prediction.
-  beta_blend_enabled: true
+  beta_blend_enabled: false  # 2026-05-29: disabled — at w=1.0 it replaced per-signal est_prob with a per-lane constant, fabricating edge (e.g. btc|15m|down|drift pinned est_YES≈0.634) and collapsing within-lane discrimination. Revert to alpha-only.
   beta_blend_n_floor: 30
   beta_blend_n_full: 100
   per_lane_thresholds:
@@ -356,12 +352,8 @@ strategies:
     bull_regime_buy_no_min_mins_left: 2.0
     bull_regime_buy_no_min_mins_left_15m: 4.0
     bias_quant_disagree_override_enabled: true
-    # 2026-05-29 ghost-derived loosening: prior 0.2/-0.1 passed 0 of 379
-    # BTC 1h+15m BUY_NO HTF-aligned candidates (74.8% would-be WR). New
-    # thresholds pass 242/379 (75% WR); blocked 137 (69% WR — borderline,
-    # kept conservative). 0.33x size further halves risk on the cohort.
-    bias_quant_disagree_aligned_max_gap_non5m: 0.30
-    bias_quant_disagree_aligned_min_edge_non5m: -0.40
+    bias_quant_disagree_aligned_max_gap_non5m: 0.3
+    bias_quant_disagree_aligned_min_edge_non5m: -0.4
     bias_quant_disagree_size_multiplier: 0.33
     hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
@@ -495,8 +487,13 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
+    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost 2026-05-29 current-config era:
+    # sol 5m 73.5% WR / 15m 83.5% WR on rejected in-window BUY_YES (lane_min_edge); median est < realized WR.
+    # Sized to lift median est to ≈ realized WR. Extends 53948c1 (btc/hype/bnb) to sol per current ghost.
+    5m_buy_yes_bullish_floor_bump: 0.19
+    15m_buy_yes_bullish_floor_bump: 0.21
     require_btc_catalyst_5m: true
-    low_corr_suppresses_entries: true
+    low_corr_suppresses_entries: false  # 2026-05-29: BTC-corr suppression contradicts alt-decouple; ghost: suppressed entries 61.5% WR
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     late_window_block_mins: 1.0
@@ -618,11 +615,11 @@ strategies:
       ai_override_min_edge: 0.1
     by_tf:
       5m:
-        min_edge: 0.11
+        min_edge: 0.10  # 2026-05-29: revert post-refactor tightening 0.11->0.10 (no-tightening policy)
         entry_window_min: 0.5
         entry_window_max: 4.0
       15m:
-        min_edge: 0.1
+        min_edge: 0.09  # 2026-05-29: revert post-refactor tightening 0.10->0.09 (no-tightening policy)
         entry_window_min: 1.0
         entry_window_max: 24.0
       1h:
@@ -823,8 +820,6 @@ strategies:
         entry_window_max: 5.5
       15m:
         min_edge: 0.08
-        # 2026-05-29 ghost: lane_min_edge rejected 459 BUY_NO candidates at
-        # 71% WR; dropping floor 0.08->0.07 admits 63 of those (67% WR).
         min_edge_buy_no: 0.07
         entry_window_min: 2.0
         entry_window_max: 36.0
@@ -1070,6 +1065,10 @@ strategies:
     iql_15m_hist_floor: 0.03
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.5
+    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost 2026-05-29 current-config era:
+    # xrp 5m 73.0% WR / 15m 71.9% WR on rejected in-window BUY_YES (lane_min_edge); sized to lift median est to ≈ realized WR.
+    5m_buy_yes_bullish_floor_bump: 0.22
+    15m_buy_yes_bullish_floor_bump: 0.13
     dynamic_beta_min: 0.6
     dynamic_beta_max: 2.5
     dynamic_beta_extreme_max: 3.5
@@ -1242,6 +1241,10 @@ strategies:
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
     iql_15m_enabled: false
+    # BUY_YES bullish floor bumps (post-calibration, edge space). Ghost 2026-05-29 current-config era:
+    # doge 5m 69.3% WR / 15m 71.4% WR on rejected in-window BUY_YES (lane_min_edge); sized to lift median est to ≈ realized WR.
+    5m_buy_yes_bullish_floor_bump: 0.17
+    15m_buy_yes_bullish_floor_bump: 0.11
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
     blocked_utc_hours_updown:
