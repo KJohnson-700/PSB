@@ -33,6 +33,11 @@ DEFAULT_CALIBRATION_DIR = (
 )
 DEFAULT_REJECTED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates.jsonl"
 DEFAULT_SETTLED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates_settled.jsonl"
+# Derived idempotency sidecar (one ghost_id per line) — see step 3a of
+# docs/GHOST_LOG_CHECKPOINT_SPEC.md. Lets the settle loop skip the full scan of
+# the (large) settled jsonl when checking what is already settled. Pure cache:
+# always rebuildable from DEFAULT_SETTLED_LOG; never the source of truth.
+DEFAULT_SETTLED_INDEX = DEFAULT_CALIBRATION_DIR / "settled_index.txt"
 DEFAULT_REGIME_LOG = DEFAULT_CALIBRATION_DIR / "market_regime.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
 RESOLVED_BUFFER_SEC = 90
@@ -49,7 +54,8 @@ REGIME_LABEL_FIELDS = ("price_regime", "polymarket_regime", "combined_regime")
 REJECTED_COPY_FIELDS = (
     "btc_1h_regime",
     "context",
-    "probe_variants",
+    # "probe_variants" intentionally dropped: not persisted by the writer and
+    # read by no consumer. Its signal lives in the convergence_* scalars.
     "policy_version",
     "feature_hash",
     "side_source",
@@ -59,6 +65,7 @@ REJECTED_COPY_FIELDS = (
     "btc_htf_bias",
     "lane_family",
     "entry_policy_snapshot",
+    "lane_min_edge",
     "effective_min_edge",
     "raw_est_prob",
     "calibrated_est_prob",
@@ -77,7 +84,6 @@ REJECTED_COPY_FIELDS = (
     "correlation_bucket",
     "side_source_bucket",
     "regime_tag_bucket",
-    "gate_family_bucket",
     "rsi_bucket",
     "atr_bucket",
 )
@@ -113,6 +119,193 @@ def _load_settled_ids(path: Path) -> set[str]:
         for obj in _iter_jsonl(path)
         if obj.get("ghost_id")
     }
+
+
+# ── Settled-index sidecar (step 3a) ───────────────────────────────────────────
+# The index is a derived cache of the ghost_ids present in the settled record(s).
+# It exists solely to avoid re-reading the multi-hundred-MB settled jsonl every
+# cycle just to learn "what is already settled". The closed-loop guarantee is
+# preserved because the index is ALWAYS reconciled to — and rebuildable from —
+# the settled SOURCE OF TRUTH. After archival (step 3c) the source of truth is
+# the live settled jsonl PLUS the compressed archive shards, so a rebuild scans
+# both; this is why a shrunk live file (intentional archival) never causes the
+# archived ghost_ids to be forgotten. If the index is missing or its meta is
+# absent/garbled, we rebuild from that full source. Worst case == today's scan.
+
+
+def _archived_settled_dir(settled_path: Path) -> Path:
+    return settled_path.parent / "archive"
+
+
+def _iter_archived_settled_ids(settled_path: Path) -> Iterable[str]:
+    """Yield ghost_ids from compressed archive shards (step 3c output), if any.
+
+    Archived rows are still settled — their ids MUST remain known so the loop
+    never re-settles an archived ghost. Missing/unreadable shards are skipped
+    (best-effort), but the live settled jsonl always remains authoritative.
+    """
+    import gzip
+
+    archive_dir = _archived_settled_dir(settled_path)
+    if not archive_dir.exists():
+        return
+    for shard in sorted(archive_dir.glob("*settled*archive*.jsonl.gz")):
+        try:
+            with gzip.open(shard, "rt", encoding="utf-8") as gz:
+                for line in gz:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("ghost_id"):
+                        yield str(obj["ghost_id"])
+        except OSError as exc:
+            logger.warning("settled_index: archive shard read failed (%s): %s", shard, exc)
+
+
+def _settled_index_meta_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".meta.json")
+
+
+def _read_settled_index_meta(index_path: Path) -> Optional[Dict[str, Any]]:
+    meta_path = _settled_index_meta_path(index_path)
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_settled_index_meta(index_path: Path, settled_path: Path) -> None:
+    """Record the settled file's identity (inode) + high-water size, so the next
+    load can detect rotation/truncation and reconcile only the appended tail."""
+    meta_path = _settled_index_meta_path(index_path)
+    try:
+        st = settled_path.stat() if settled_path.exists() else None
+        meta = {
+            "settled_inode": int(st.st_ino) if st else 0,
+            "settled_offset": int(st.st_size) if st else 0,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = meta_path.with_name(meta_path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+        os.replace(tmp, meta_path)  # atomic
+    except OSError as exc:
+        logger.warning("settled_index: meta write failed (%s): %s", meta_path, exc)
+
+
+def _iter_ghost_ids_from_settled(path: Path, *, start_offset: int = 0) -> Iterable[str]:
+    """Yield ghost_ids from the settled jsonl, optionally from a byte offset
+    (the settled jsonl is append-only, so an offset is a valid resume point)."""
+    if not path.exists():
+        return
+    try:
+        with open(path, "rb") as fh:
+            if start_offset:
+                fh.seek(start_offset)
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and obj.get("ghost_id"):
+                    yield str(obj["ghost_id"])
+    except OSError as exc:
+        logger.warning("settled_index: tail read failed (%s): %s", path, exc)
+
+
+def _write_settled_index(index_path: Path, gids: Iterable[str], settled_path: Path) -> None:
+    """Atomically (re)write the full index file + refresh its meta."""
+    try:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = index_path.with_name(index_path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for gid in gids:
+                fh.write(str(gid) + "\n")
+        os.replace(tmp, index_path)  # atomic
+        _write_settled_index_meta(index_path, settled_path)
+    except OSError as exc:
+        logger.warning("settled_index: write failed (%s): %s", index_path, exc)
+
+
+def _append_settled_index(index_path: Path, gids: Iterable[str]) -> None:
+    """Append newly-settled ghost_ids to the index (lock-step with settled jsonl)."""
+    try:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(index_path, "a", encoding="utf-8") as fh:
+            for gid in gids:
+                fh.write(str(gid) + "\n")
+    except OSError as exc:
+        logger.warning("settled_index: append failed (%s): %s", index_path, exc)
+
+
+def _rebuild_settled_index(settled_path: Path, index_path: Path) -> set[str]:
+    # Source of truth = live settled jsonl UNION archive shards. Including the
+    # archives is what guarantees the loop stays closed after step-3c archival:
+    # a ghost that was settled-then-archived is still recognized as settled.
+    ids = _load_settled_ids(settled_path)
+    ids.update(_iter_archived_settled_ids(settled_path))
+    _write_settled_index(index_path, ids, settled_path)
+    return ids
+
+
+def _load_settled_ids_indexed(settled_path: Path, index_path: Path) -> set[str]:
+    """Return the set of already-settled ghost_ids via the sidecar index.
+
+    Robust by construction — the returned set is always consistent with the
+    settled source of truth (live jsonl + any archive shards), so settlement
+    idempotency (the closed-loop guarantee) is preserved exactly. Falls back to
+    a full rebuild whenever the cache cannot be trusted.
+    """
+    if not index_path.exists():
+        return _rebuild_settled_index(settled_path, index_path)
+
+    meta = _read_settled_index_meta(index_path)
+    try:
+        st = settled_path.stat() if settled_path.exists() else None
+    except OSError:
+        st = None
+
+    # Cache is untrustworthy if: no meta, settled file gone, inode changed
+    # (rotation), or recorded offset overruns current size (truncation/replace).
+    if (
+        meta is None
+        or st is None
+        or int(meta.get("settled_inode", -1)) != int(st.st_ino)
+        or int(meta.get("settled_offset", -1)) > int(st.st_size)
+    ):
+        return _rebuild_settled_index(settled_path, index_path)
+
+    # Load the cached ids.
+    try:
+        with open(index_path, encoding="utf-8") as fh:
+            ids = {line.strip() for line in fh if line.strip()}
+    except OSError as exc:
+        logger.warning("settled_index: load failed (%s); rebuilding: %s", index_path, exc)
+        return _rebuild_settled_index(settled_path, index_path)
+
+    # Reconcile any rows appended to the settled jsonl since the index was last
+    # updated (e.g. by an external backfill tool). Cheap: reads only the tail.
+    offset = int(meta.get("settled_offset", 0))
+    if int(st.st_size) > offset:
+        new_ids = list(_iter_ghost_ids_from_settled(settled_path, start_offset=offset))
+        missing = [g for g in new_ids if g not in ids]
+        if missing:
+            ids.update(missing)
+            _append_settled_index(index_path, missing)
+        _write_settled_index_meta(index_path, settled_path)
+
+    return ids
 
 
 def _load_rejected_by_id(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -538,6 +731,8 @@ def settle_rejected_candidates(
     input_path: Path = DEFAULT_REJECTED_LOG,
     output_path: Path = DEFAULT_SETTLED_LOG,
     regime_path: Path = DEFAULT_REGIME_LOG,
+    index_path: Path = DEFAULT_SETTLED_INDEX,
+    use_index: bool = True,
     regime_max_age_sec: float = REGIME_MATCH_MAX_AGE_SEC,
     now: Optional[datetime] = None,
     dry_run: bool = False,
@@ -570,10 +765,15 @@ def settle_rejected_candidates(
     if not input_path.exists():
         return summary
 
-    settled_ids = _load_settled_ids(output_path)
+    settled_ids = (
+        _load_settled_ids_indexed(output_path, index_path)
+        if use_index
+        else _load_settled_ids(output_path)
+    )
     regime_snapshots = load_regime_snapshots(regime_path)
     cache: Dict[str, Optional[str]] = {}
     settle_records: List[Dict[str, Any]] = []
+    newly_settled_ids: List[str] = []
     ts_now = now or datetime.now(timezone.utc)
 
     for rec in _iter_jsonl(input_path):
@@ -654,6 +854,7 @@ def settle_rejected_candidates(
         else:
             summary["regime_unmatched"] += 1
         settle_records.append(settled_rec)
+        newly_settled_ids.append(gid)
         summary["newly_settled"] += 1
 
         # Self-healing: feed ghost outcome into calibrator β at reduced weight,
@@ -688,6 +889,13 @@ def settle_rejected_candidates(
                     summary["written"] += 1
             finally:
                 os.close(fd)
+            # Keep the idempotency index in lock-step with the settled jsonl so
+            # the next cycle does not re-settle these rows, and advance the tail
+            # offset to the new EOF. Best-effort: a failure here only costs a
+            # future rebuild (the index self-heals), never correctness.
+            if use_index and newly_settled_ids:
+                _append_settled_index(index_path, newly_settled_ids)
+                _write_settled_index_meta(index_path, output_path)
         except OSError as exc:
             logger.warning("rejected_candidate_tracker append failed (%s): %s", output_path, exc)
 
@@ -700,64 +908,53 @@ def build_ghost_calibration_status(
     settled_path: Path = DEFAULT_SETTLED_LOG,
 ) -> Dict[str, Any]:
     """Return a compact status block for OPS_JSON / dashboard consumers."""
-    rejected = list(_iter_jsonl(rejected_path) or [])
-    settled = list(_iter_jsonl(settled_path) or [])
-    total_rejected = len(rejected)
-    total_settled = len(settled)
-    unresolved = max(0, total_rejected - total_settled)
+    # Stream both logs once each instead of materializing ~GB of dicts via
+    # list() and looping the settled records three separate times. The rejected
+    # log is only needed for its row count, so it is never materialized. Output
+    # is byte-for-byte identical to the previous multi-pass implementation.
+    total_rejected = sum(1 for _ in _iter_jsonl(rejected_path))
 
+    total_settled = 0
     wins = 0
     losses = 0
     by_reason_action: Dict[str, Dict[str, int]] = {}
     last_settled_at = ""
-    for rec in settled:
-        if rec.get("win") is True:
+    regime_stats: Dict[str, Dict[str, Any]] = {}
+    conv_buckets = {"high": 0, "medium": 0, "low": 0, "none": 0}
+
+    for rec in _iter_jsonl(settled_path):
+        total_settled += 1
+        win = rec.get("win")
+        if win is True:
             wins += 1
-        elif rec.get("win") is False:
+        elif win is False:
             losses += 1
+
+        # reason|action breakdown
         reason = str(rec.get("reason") or "?")
         action = str(rec.get("action") or "?")
         key = f"{reason}|{action}"
         bucket = by_reason_action.setdefault(key, {"wins": 0, "losses": 0, "n": 0})
-        if rec.get("win") is True:
+        if win is True:
             bucket["wins"] += 1
-        elif rec.get("win") is False:
+        elif win is False:
             bucket["losses"] += 1
         bucket["n"] += 1
+
         settled_at = str(rec.get("settled_at") or "")
         if settled_at and settled_at > last_settled_at:
             last_settled_at = settled_at
 
-    ordered = sorted(
-        by_reason_action.items(),
-        key=lambda kv: kv[1]["n"],
-        reverse=True,
-    )[:10]
-    total_decided = wins + losses
-
-    # BTC 1H regime breakdown
-    regime_stats: Dict[str, Dict[str, Any]] = {}
-    for rec in settled:
+        # BTC 1H regime breakdown
         regime = str(rec.get("btc_1h_regime") or "UNKNOWN")
-        bucket = regime_stats.setdefault(regime, {"wins": 0, "losses": 0, "n": 0})
-        bucket["n"] += 1
-        if rec.get("win") is True:
-            bucket["wins"] += 1
-        elif rec.get("win") is False:
-            bucket["losses"] += 1
-    regime_breakdown = {}
-    for regime, stats in sorted(regime_stats.items()):
-        decided = stats["wins"] + stats["losses"]
-        regime_breakdown[regime] = {
-            "n": stats["n"],
-            "wins": stats["wins"],
-            "losses": stats["losses"],
-            "win_rate": round(stats["wins"] / decided, 4) if decided else None,
-        }
+        rbucket = regime_stats.setdefault(regime, {"wins": 0, "losses": 0, "n": 0})
+        rbucket["n"] += 1
+        if win is True:
+            rbucket["wins"] += 1
+        elif win is False:
+            rbucket["losses"] += 1
 
-    # Convergence score breakdown
-    conv_buckets = {"high": 0, "medium": 0, "low": 0, "none": 0}
-    for rec in settled:
+        # Convergence score breakdown
         score = rec.get("convergence_score")
         if score is None:
             conv_buckets["none"] += 1
@@ -767,6 +964,25 @@ def build_ghost_calibration_status(
             conv_buckets["medium"] += 1
         else:
             conv_buckets["low"] += 1
+
+    unresolved = max(0, total_rejected - total_settled)
+
+    ordered = sorted(
+        by_reason_action.items(),
+        key=lambda kv: kv[1]["n"],
+        reverse=True,
+    )[:10]
+    total_decided = wins + losses
+
+    regime_breakdown = {}
+    for regime, stats in sorted(regime_stats.items()):
+        decided = stats["wins"] + stats["losses"]
+        regime_breakdown[regime] = {
+            "n": stats["n"],
+            "wins": stats["wins"],
+            "losses": stats["losses"],
+            "win_rate": round(stats["wins"] / decided, 4) if decided else None,
+        }
 
     return {
         "rejected_log_exists": rejected_path.exists(),

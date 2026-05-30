@@ -576,7 +576,11 @@ def log_rejected_candidate(
             "htf_bias": htf_bias,
             "btc_1h_regime": btc_1h_regime_text or None,
             "context": record_context,
-            "probe_variants": probe_variants or [],
+            # NOTE: raw `probe_variants` is intentionally NOT persisted. It is the
+            # largest single field per row (~38% of the serialized row on recent
+            # data) and is read by no consumer. Its information is distilled into the
+            # `convergence_*` scalars below via compute_convergence_telemetry(), and
+            # those ARE consumed downstream.
             "policy_version": str(policy_version or "").strip(),
             "feature_hash": str(feature_hash or "").strip(),
             "side_source": str(side_source or "").strip(),

@@ -42,6 +42,10 @@ data/calibration/rejected_candidates_settled.jsonl
 data/calibration/rejected_candidates*.jsonl.bak
 data/calibration/rejected_candidates*.jsonl.pre-backfill.bak
 data/calibration/rejected_candidates*.jsonl.pre_*
+# derived idempotency cache for the settle loop — rebuildable from the settled
+# jsonl, never source of truth (see docs/GHOST_LOG_CHECKPOINT_SPEC.md step 3a)
+data/calibration/settled_index.txt
+data/calibration/settled_index.txt.meta.json
 
 # IDE / local agents
 .cursor/

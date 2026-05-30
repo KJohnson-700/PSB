@@ -1456,7 +1456,13 @@ class PolyBot:
         # Fire-and-forget: narrate the previous session into the new session dir.
         # Off the trading hot path; never awaited.
         asyncio.create_task(self._run_startup_narrators())
-        await asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
+        # Ghost-settle reads the full (~GB) rejected/settled calibration logs.
+        # Do NOT block the trading loop or dashboard on it at boot: background it.
+        # It also runs every cycle (_unified_cycle) and self-heals, so a
+        # backgrounded first pass changes only timing, never settle correctness.
+        asyncio.create_task(
+            asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
+        )
 
         # Start the async-decoupled AI decision broker. After this returns,
         # strategies can enqueue/lookup decisions via self.ai_broker.
