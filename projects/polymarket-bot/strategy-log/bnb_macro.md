@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-31 — Ghost-validated BUY_YES entry-window expansion
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened BNB `BUY_YES` entry windows where settled ghosts showed the old window was blocking profitable candidates: `5m up 4.5 → 10.0`, `15m up 32.0 → 150.0`, and `1h up 60.0 → 360.0`. Also widened `15m down 50.0 → 180.0` from the smaller positive ghost bucket. Kept unrelated DOGE/XRP/SOL windows unchanged.
+- **Why:** Settled ghosts since `2026-05-30T00:00Z` showed BNB entry-window rejects were the largest missed-EV family: `bnb_macro|15m|BUY_YES|lane_entry_window` `n=8,972`, `WR=59.8%`, `netGate=-1,689`; `bnb_macro|5m|BUY_YES|lane_entry_window` `n=1,107`, `WR=58.6%`, `netGate=-201`; `bnb_macro|1h|BUY_YES|lane_entry_window` `n=371`, `WR=74.4%`, `netGate=-184`.
+- **Hypothesis:** BNB should admit more high-conviction upside candidates instead of sitting out profitable future-ladder windows, while existing edge, price-band, oracle, and Kelly/risk limits still control quality and sizing.
+- **Expected outcome:** BNB `lane_entry_window` skip volume should fall sharply on `BUY_YES`; post-change BNB `BUY_YES` closed trades should maintain positive expectancy after at least 15 closed trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — BNB-local 5m downside guard plus explicit BUY_YES/BUY_NO wiring coverage
 
 - **What changed:** In [src/strategies/bnb_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bnb_macro.py), added BNB-local post-scan guards that block `5m` `BUY_NO` neutral-fallback branches in `btc_1h_regime=BULL`, and block `bnb_5m_native` `BUY_NO` when BNB 1H is no longer bearish or the YES side is already too rich (`bnb_5m_native_buy_no_max_yes_price_bull_1h`, default `0.60`). Added focused BNB guard tests in [tests/test_bnb_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_bnb_macro.py) and explicit `bnb_macro` `BUY_YES` / `BUY_NO` execution-path coverage in [tests/test_strategy_execution_drivers.py](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py).

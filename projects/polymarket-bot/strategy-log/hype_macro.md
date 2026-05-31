@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-05-31 — Ghost-validated 1h BUY_YES entry-window expansion
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened HYPE `1h up` entry window from `59.0 → 360.0`. HYPE `15m up` was left unchanged because the aggregate confidence was marginal and the nearer 50–90 minute buckets were not clearly positive.
+- **Why:** Settled ghosts since `2026-05-30T00:00Z` showed `hype_macro|1h|BUY_YES|lane_entry_window` at `n=367`, `WR=66.2%`, `netGate=-118`; the positive signal persisted across `120–360` minutes-left buckets.
+- **Hypothesis:** HYPE should admit more strong hourly upside candidates without disturbing the noisier 15m ladder, preserving the existing edge, price-band, oracle, and risk controls.
+- **Expected outcome:** HYPE 1h `BUY_YES` `lane_entry_window` skips should fall; post-change HYPE 1h upside trades need at least 15 closed samples before confirming or reverting.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — HYPE-local neutral-fallback short filter
 
 - **What changed:** In [src/strategies/hype_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/hype_macro.py), added HYPE-only post-scan filtering that blocks `5m` `neutral_fallback` `BUY_NO` signals entirely and blocks `15m` `neutral_fallback` `BUY_NO` signals in `btc_1h_regime=BULL` when the YES side is already expensive (`hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h`, default `0.45`). Added focused regression coverage in [tests/test_hype_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_hype_macro.py).

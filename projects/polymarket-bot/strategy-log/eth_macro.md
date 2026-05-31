@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-31 — Ghost-validated BUY_YES entry-window expansion
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened ETH upside entry windows where settled ghosts showed the old window was blocking profitable candidates: `15m up 24.0 → 120.0` and `1h up 120.0 → 360.0`. The ETH downside windows were left unchanged because the same ghost slice showed `15m BUY_NO lane_entry_window` was protective.
+- **Why:** Settled ghosts since `2026-05-30T00:00Z` showed ETH upside entry-window misses: `eth_macro|15m|BUY_YES|lane_entry_window` `n=2,636`, `WR=53.0%`, `netGate=-164`; `eth_macro|1h|BUY_YES|lane_entry_window` `n=467`, `WR=79.0%`, `netGate=-271`. For ETH 15m, the `120+` minute bucket was protective, so the expansion stops at `120.0`.
+- **Hypothesis:** ETH should recover upside participation during strong regimes without reopening weak downside lanes; remaining edge, price-band, oracle, and Kelly/risk controls still gate final entries.
+- **Expected outcome:** ETH `BUY_YES` starvation from `lane_entry_window` should fall, especially on `15m` and `1h`; review actual closed ETH trades after at least 15 post-change exits.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — BTC-follow LONG hard skips converted to soft penalties
 
 - **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), `btc_1h_not_following` and `btc_15m_not_following` no longer hard-skip ETH LONG candidates. They now mirror the SHORT path: dampen `est_prob_up`, add a small min-edge penalty, and preserve the candidate for later ETH-native gates.

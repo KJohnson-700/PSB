@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-05-31 — Ghost-backed entry-window optimization + stale legacy tests retired
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py), [`tests/test_eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_eth_macro.py):** Widened only the entry-window cells with clear settled-ghost missed EV since `2026-05-30T00:00Z`: BNB `5m/15m/1h BUY_YES`, BNB `15m BUY_NO`, ETH `15m/1h BUY_YES`, and HYPE `1h BUY_YES`. Left protective/noisy DOGE, XRP, SOL, ETH downside, and HYPE 15m buckets unchanged.
+
+**Why:** `lane_entry_window` was still blocking profitable upside candidates after the earlier May 28 pass. The largest current misses were `bnb_macro|15m|BUY_YES|lane_entry_window` (`n=8,972`, `WR=59.8%`, `netGate=-1,689`), `eth_macro|1h|BUY_YES|lane_entry_window` (`n=467`, `WR=79.0%`, `netGate=-271`), and `hype_macro|1h|BUY_YES|lane_entry_window` (`n=367`, `WR=66.2%`, `netGate=-118`).
+
+**Legacy cleanup:** Updated stale tests that still expected BTC-regime short blockers to fire by default and called the removed `_passes_15m_iql` helper. The tests now assert the intended replacement behavior: BTC-regime short blocks are opt-in only, and IQL coverage uses the current horizon-aware `_passes_iql` helper.
+
+---
+
 ## 2026-05-28 — Kimi removed; MiniMax promoted to primary + upgraded to highspeed
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/ai_status.py`](/Users/mainfolder/Documents/psb-main%201/src/ai_status.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), tests:** Removed the Kimi (kimi_coding / Moonshot-OAuth) integration entirely and made MiniMax the sole paid decision provider, upgraded to the highspeed M2.7 build for faster decision cycles.

@@ -92,7 +92,7 @@ def test_eth_15m_follow_threshold_can_relax_short_lane_only():
     assert strat._eth_follow_15m_required_adj("SHORT") == 0.03
 
 
-def test_eth_direction_guard_blocks_5m_buy_no_when_btc_1h_bull_and_no_too_cheap():
+def test_eth_direction_guard_does_not_default_to_btc_bull_regime_short_block():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
     decision = strat._resolve_eth_direction(
         market_allowed_side="SHORT",
@@ -112,6 +112,30 @@ def test_eth_direction_guard_blocks_5m_buy_no_when_btc_1h_bull_and_no_too_cheap(
     )
 
     assert decision.action == "BUY_NO"
+    assert reason is None
+
+
+def test_eth_direction_guard_opt_in_blocks_5m_buy_no_when_btc_1h_bull_and_no_too_cheap():
+    cfg = _config()
+    cfg["strategies"]["eth_macro"]["eth_5m_bull_regime_short_block"] = True
+    strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
+    decision = strat._resolve_eth_direction(
+        market_allowed_side="SHORT",
+        side_source="eth_5m_native",
+        raw_est_prob=0.42,
+        momentum_bias="BEARISH",
+    )
+
+    reason = strat._eth_direction_guard_reason(
+        window_size="5m",
+        decision=decision,
+        yes_price=0.72,
+        btc_htf_bias="BEARISH",
+        btc_1h_regime="BULL",
+        alt_h1_trend="BEARISH",
+        rsi_14=42.0,
+    )
+
     assert reason == "eth_5m_bull_regime_expensive_short"
 
 

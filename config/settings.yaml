@@ -621,11 +621,11 @@ strategies:
       15m:
         min_edge: 0.09  # 2026-05-29: revert post-refactor tightening 0.10->0.09 (no-tightening policy)
         entry_window_min: 1.0
-        entry_window_max: 24.0
+        entry_window_max: 120.0
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0
+        entry_window_max: 360.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -748,7 +748,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 1.0
-            entry_window_max: 24.0
+            entry_window_max: 120.0
           down:
             min_edge: 0.1
             entry_price_min: 0.42
@@ -761,7 +761,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 120.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
           down:
             min_edge: 0.09
@@ -939,7 +939,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 59.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
           down:
             min_edge: 0.06
@@ -1361,16 +1361,16 @@ strategies:
         min_edge: 0.085
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 4.5
+        entry_window_max: 10.0
       15m:
         min_edge: 0.085
         min_edge_buy_no: 0.05
         entry_window_min: 2.0
-        entry_window_max: 32.0
+        entry_window_max: 150.0
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0
+        entry_window_max: 360.0
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1457,7 +1457,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 4.5
+            entry_window_max: 10.0
             size_multiplier: 0.3
           down:
             min_edge: 0.06
@@ -1472,20 +1472,20 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
-            entry_window_max: 32.0
+            entry_window_max: 150.0
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 50.0
+            entry_window_max: 180.0
         1h:
           up:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
           down:
             min_edge: 0.08

@@ -254,8 +254,26 @@ def test_sol_local_guard_blocks_vs_slower_short_against_bullish_alt_1h():
     assert reason == "sol_vs_slower_short_against_h1"
 
 
-def test_sol_local_guard_blocks_expensive_15m_short_in_bull_regime():
+def test_sol_local_guard_does_not_default_to_btc_bull_regime_short_block():
     cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["sol_15m_buy_no_max_yes_price_bull_1h"] = 0.49
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    reason = strategy._sol_signal_guard_reason(
+        window_size="15m",
+        action="BUY_NO",
+        side_source="sol_15m_native",
+        yes_price=0.50,
+        btc_1h_regime="BULL",
+        alt_h1_trend="BEARISH",
+    )
+
+    assert reason is None
+
+
+def test_sol_local_guard_opt_in_blocks_expensive_15m_short_in_bull_regime():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["sol_15m_bull_regime_short_block"] = True
     cfg["strategies"]["sol_macro"]["sol_15m_buy_no_max_yes_price_bull_1h"] = 0.49
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
@@ -1616,10 +1634,10 @@ class TestSOL15mIQL(unittest.TestCase):
         ta = _make_choppy_ta()
         with patch.object(
             self.strategy,
-            "_check_15m_confirmation",
+            "_check_macd_confirmation",
             return_value=(True, 0.55, ["stub"]),
         ):
-            self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
+            self.assertTrue(self.strategy._passes_iql(ta, "LONG", tf="15m"))
 
     def test_iql_relaxed_hist_floor_when_unconfirmed(self):
         ta = _make_choppy_ta()
@@ -1631,7 +1649,7 @@ class TestSOL15mIQL(unittest.TestCase):
         ta.sol.macd_15m.signal_line = 0.01
         confirmed, _, _ = self.strategy._check_15m_confirmation(ta, "LONG")
         self.assertFalse(confirmed)
-        self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
+        self.assertTrue(self.strategy._passes_iql(ta, "LONG", tf="15m"))
 
     def test_iql_rejects_when_unconfirmed_and_no_relaxed_signal(self):
         ta = _make_choppy_ta()
@@ -1641,12 +1659,12 @@ class TestSOL15mIQL(unittest.TestCase):
         ta.sol.macd_15m.prev_histogram = 0.01
         ta.sol.macd_15m.macd_line = -1.0
         ta.sol.macd_15m.signal_line = 1.0
-        self.assertFalse(self.strategy._passes_15m_iql(ta, "LONG"))
+        self.assertFalse(self.strategy._passes_iql(ta, "LONG", tf="15m"))
 
     def test_iql_disabled_always_passes(self):
         self.strategy.iql_15m_enabled = False
         ta = _make_choppy_ta()
-        self.assertTrue(self.strategy._passes_15m_iql(ta, "LONG"))
+        self.assertTrue(self.strategy._passes_iql(ta, "LONG", tf="15m"))
 
 
 def test_macd_bearish_momentum_ok_bear_cross():
