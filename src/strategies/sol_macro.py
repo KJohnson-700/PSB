@@ -2650,6 +2650,14 @@ class SolMacroStrategy:
                 if is_updown
                 else "15m"
             )
+            # Threshold-market-only locals. Up/down markets never assign these, but the
+            # shared AI-tiebreaker context path below reads them. Bind safe defaults so
+            # up/down candidates can't raise UnboundLocalError on the AI path (regression
+            # surfaced when MiniMax came back online and the AI tiebreaker became
+            # reachable for marginal-edge up/down candidates).
+            threshold: Optional[float] = None
+            distance_pct: float = 0.0
+            days_to_resolution: int = 30
             resolution = self._resolve_alt_bias_for_tf(ta, _updown_tf)
             allowed_side = resolution.allowed_side
             side_source = resolution.side_source
@@ -3805,14 +3813,30 @@ class SolMacroStrategy:
                             f"skipping marginal '{market.question[:40]}...'"
                         )
                         continue
+                    # Up/down markets have no price threshold — give MiniMax a coherent
+                    # instrument description instead of a meaningless "Threshold: $None".
+                    if is_updown:
+                        _ai_instrument_line = (
+                            f"{_alt_label} Price: ${sol_price:,.2f} | "
+                            f"{_updown_tf} up/down market, resolves {direction}\n"
+                        )
+                        _ai_horizon_line = f"Horizon: {_updown_tf} window to resolution\n\n"
+                    else:
+                        _ai_instrument_line = (
+                            f"{_alt_label} Price: ${sol_price:,.2f} | "
+                            f"Threshold: ${threshold:,.2f} ({direction})\n"
+                        )
+                        _ai_horizon_line = (
+                            f"Distance: {distance_pct:.1%} | Days left: {days_to_resolution}\n\n"
+                        )
                     ai_context = (
                         f"{market.description}\n\n"
                         f"=== LIVE {_alt_label} DATA ===\n"
-                        f"{_alt_label} Price: ${sol_price:,.2f} | Threshold: ${threshold:,.2f} ({direction})\n"
-                        f"{_alt_label} Oracle: {sol.chainlink_network or 'n/a'} "
-                        f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} | "
-                        f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
-                        f"Distance: {distance_pct:.1%} | Days left: {days_to_resolution}\n\n"
+                        + _ai_instrument_line
+                        + f"{_alt_label} Oracle: {sol.chainlink_network or 'n/a'} "
+                        + f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} | "
+                        + f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
+                        + _ai_horizon_line
                     ) + (
                         f"=== BTC-{_alt_label} CORRELATION ===\n"
                         f"BTC: ${corr.btc_price:,.2f} | Correlation: {corr.correlation_1h:.2f}\n"

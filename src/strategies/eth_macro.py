@@ -1362,7 +1362,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                             max(0.03, self.eth_follow_15m_min_adj * 0.8),
                         )
                     )
-                    if eth_1h_adj < eth_1h_min_adj:
+                    # Ghost-validated 2026-05-30: this hard skip is correct for SHORT
+                    # (42.5% WR rejects) but destroys profitable LONGs (61.4% WR / +19.6%
+                    # ROI on 593 ghosts). eth_1h_adj is ALSO applied as a soft penalty at
+                    # est_prob_up below, so weak-confirm LONGs already get dampened + face
+                    # min_edge — the hard veto was redundant for them. Scope it to SHORT;
+                    # opt back in for longs via eth_1h_weak_confirm_skip_longs: true.
+                    _eth_1h_skip_longs = bool(
+                        self.config.get("eth_1h_weak_confirm_skip_longs", False)
+                    )
+                    if eth_1h_adj < eth_1h_min_adj and (
+                        market_allowed_side == "SHORT" or _eth_1h_skip_longs
+                    ):
                         _bump_skip("eth_1h_weak_confirm")
                         log_rejected_candidate(
                             strategy=self._signal_strategy_name, window="1h",
