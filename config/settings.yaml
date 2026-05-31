@@ -691,6 +691,11 @@ strategies:
     eth_follow_15m_min_adj: 0.04
     eth_follow_15m_min_adj_short: 0.03
     eth_follow_1h_min_adj: 0.02
+    # 2026-05-31 ghost-validated: eth_1h_weak_confirm hard skip is correct for SHORT
+    # (42.5% WR rejects) but blocked profitable LONGs (61.4% WR / +19.6% ROI, n=593).
+    # Default scopes the hard veto to SHORT; weak-confirm LONGs fall through to the
+    # existing soft est_prob penalty + min_edge. Set true to restore the symmetric veto.
+    eth_1h_weak_confirm_skip_longs: false
     eth_5m_buy_no_max_yes_price_bull_1h: 0.68
     eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral: 68.0
     # 2026-05-30 broken-logic fix (eth-only). eth's bearish/short signal is
@@ -1514,7 +1519,7 @@ ai:
   policy_version: decision-layer-v1
   enabled: true
   live_inferencing: true
-  free_tier_daily_request_budget: 1200
+  free_tier_daily_request_budget: 4000
   consensus_enabled: false
   consensus_min_agree: 2
   direct_decision_provider_names:
@@ -1576,7 +1581,9 @@ ai:
       - marginal
   shadow_pipeline:
     enabled: true
-    max_calls_per_scan: 1
+    # 2026-05-31: bumped 1->3 to fill a clean post-context-fix validation window
+    # faster (MiniMax decision data to validate the decision_layer veto before live).
+    max_calls_per_scan: 3
     min_confidence_to_log: 0.6
     log_jsonl: true
     provider_name: minimax
