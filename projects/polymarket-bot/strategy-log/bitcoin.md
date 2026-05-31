@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-05-31 — Disable counter-trend BUY_NO (shorting into bullish HTF)
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) set bitcoin `disable_buy_no_counter_trend: true`. The flag and code already existed at [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) `_resolve_btc_direction`; flipping it stops the `btc_bull_rollover_countertrend` short (BUY_NO when HTF is BULLISH but 4H MACD histogram is declining) and, via the shared guard, the quant-disagree SHORT flip. Commit `5d8cbc0`.
+- **Why:** Held-to-resolution analysis of `data/calibration/trades_settled.jsonl` (n=632): BUY_NO while `primary_htf_bias=BULLISH` settled at 35% WR (n=88, all bitcoin); `conflict_type=bullish_htf_rollover_down` at 34% (n=53). Shorting into a bullish HTF is anti-predictive — below coin flip.
+- **Hypothesis:** BTC stops manufacturing sub-coin-flip counter-trend shorts; BUY_YES (~48%) and bias-aligned BEARISH shorts are unaffected.
+- **Expected outcome:** `btc_bull_rollover_countertrend` / `bullish_htf_rollover_down` BUY_NO entries vanish; BTC BUY_NO held-WR rises from 36%.
+- **Actual outcome:** `pending` (needs bot restart + ~15 closed post-change BTC trades)
+- **Status:** `pending`
+
 ### 2026-05-26 — Timeframe-scoped entry control config
 
 - **What changed:** Moved BTC entry-control thresholds and windows from legacy flat timeframe keys (`min_edge_5m`, `entry_window_*`) into canonical `defaults` / `by_tf` config, and routed BTC entry policy reads through the shared timeframe resolver.

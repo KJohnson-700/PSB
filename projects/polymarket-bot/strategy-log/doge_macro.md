@@ -12,6 +12,15 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
+
+- **What changed:** Set doge_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.
+- **Why:** `doge_5m_native` BUY_NO held-to-resolution WR was 27.8%, part of the consistent cross-alt 5m-short inversion vs 15m-native at 50-65%.
+- **Hypothesis:** DOGE BUY_NO held-WR rises toward 50%; 5m longs and 15m shorts unaffected.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears for DOGE; DOGE BUY_NO held-WR rises from 39.4%.
+- **Actual outcome:** `pending` (needs restart + ~15 closed trades)
+- **Status:** `pending`
+
 ### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
 
 - **What changed:** DOGE inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.

@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
+
+- **What changed:** Set bnb_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.
+- **Why:** The cross-alt 5m-native short inversion (eth 11.8% / xrp 16.7% / doge 27.8% / sol 33% vs 50-65% on 15m-native) is consistent and structural; BNB is suppressed for parity ahead of its own 5m n building up (BNB BUY_NO overall 54.5%, but driven by 15m).
+- **Hypothesis:** BNB 5m short bleed removed without touching its healthy 15m short lane.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears for BNB.
+- **Actual outcome:** `pending` (needs restart + ~15 closed trades)
+- **Status:** `pending`
+
 ### 2026-05-31 — Ghost-validated BUY_YES entry-window expansion
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened BNB `BUY_YES` entry windows where settled ghosts showed the old window was blocking profitable candidates: `5m up 4.5 → 10.0`, `15m up 32.0 → 150.0`, and `1h up 60.0 → 360.0`. Also widened `15m down 50.0 → 180.0` from the smaller positive ghost bucket. Kept unrelated DOGE/XRP/SOL windows unchanged.

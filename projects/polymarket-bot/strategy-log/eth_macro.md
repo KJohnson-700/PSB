@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
+
+- **What changed:** Set eth_macro `disable_buy_no_5m_native: true`. ETH inherits the suppression in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) `_resolve_alt_bias_for_tf` via `ETHMacroStrategy(SolMacroStrategy)`; 5m BUY_NO sits out and ghost-logs as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. See `sol_macro.md` same date for the full rationale.
+- **Why:** `eth_5m_native` BUY_NO held-to-resolution WR was 11.8% — the worst 5m short cell of any alt — vs ETH 15m-native at 50%. The 5m short signal is inverted (MACD-confirmed 5m shorts lose).
+- **Hypothesis:** ETH BUY_NO held-WR rises toward 50%; ETH 5m longs and 15m shorts unaffected.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears for ETH; ETH BUY_NO held-WR rises from 38.6%.
+- **Actual outcome:** `pending` (needs restart + ~15 closed trades)
+- **Status:** `pending`
+
 ### 2026-05-31 — Ghost-validated BUY_YES entry-window expansion
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened ETH upside entry windows where settled ghosts showed the old window was blocking profitable candidates: `15m up 24.0 → 120.0` and `1h up 120.0 → 360.0`. The ETH downside windows were left unchanged because the same ghost slice showed `15m BUY_NO lane_entry_window` was protective.

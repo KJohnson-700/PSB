@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts (all alts)
+
+- **What changed:** New opt-in `disable_buy_no_5m_native` (set `true` for all 6 alts). In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) `_resolve_alt_bias_for_tf` consumer, 5m up/down `BUY_NO` candidates are sat out when the flag is set, routed through `_log_skip_reject` (reason `buy_no_5m_native_suppressed`) so the counterfactual keeps settling in the ghost log. ETH inherits this via `ETHMacroStrategy(SolMacroStrategy)` — single edit covers all alts. Commit `5d8cbc0`.
+- **Why:** Held-to-resolution (`data/calibration/trades_settled.jsonl`): 5m-native shorts are anti-predictive — eth 11.8%, xrp 16.7%, doge 27.8%, sol 33.3% WR vs the SAME alt's 15m-native at 50-65%. Ghost-reject correlation showed the MACD veto on 5m shorts is a coin-flip (47.7% resolve YES, n=2483), i.e. the 5m short *signal* is inverted — so suppression beats soft-scoring (IQL/MACD soft-scoring parked).
+- **Hypothesis:** Removing the inverted 5m short cell lifts alt BUY_NO held-WR toward 50% without touching longs or 15m shorts; throughput loss is bounded to a -EV cell.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears in `rejected_candidates.jsonl`; alt BUY_NO held-WR rises; 5m BUY_YES and 15m BUY_NO unchanged.
+- **Actual outcome:** `pending` (needs bot restart + ~15 closed post-change trades)
+- **Status:** `pending`
+
 ### 2026-05-28 — Local SOL short-lane guards after 126-trade session review
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added SOL-only local guards that block `sol_5m_vs_slower` `BUY_NO` entries when SOL 1H is bullish, and block `sol_15m_native` `BUY_NO` entries when BTC 1H regime is `BULL` and the YES side is already expensive (`sol_15m_buy_no_max_yes_price_bull_1h`, default `0.48`). Added focused regression coverage in [tests/test_sol_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py).

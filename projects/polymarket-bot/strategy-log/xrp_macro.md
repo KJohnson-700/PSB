@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
+
+- **What changed:** Set xrp_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.
+- **Why:** `xrp_5m_native` BUY_NO held-to-resolution WR was 16.7%, vs XRP 15m-native at a healthy 65.4% — the 5m short signal is inverted. (XRP BUY_NO overall is the least-bad alt at 52.5%, but the 5m cell is the exception.)
+- **Hypothesis:** Removing the inverted 5m short cell preserves XRP's strong 15m short lane while cutting the 5m bleed.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears for XRP; 15m BUY_NO and all BUY_YES unchanged.
+- **Actual outcome:** `pending` (needs restart + ~15 closed trades)
+- **Status:** `pending`
+
 ### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
 
 - **What changed:** XRP inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.

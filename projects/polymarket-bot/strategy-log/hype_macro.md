@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
+
+- **What changed:** Set hype_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.
+- **Why:** The cross-alt held-to-resolution pattern (eth 11.8% / xrp 16.7% / doge 27.8% / sol 33% on 5m-native shorts vs 50-65% on 15m-native) is consistent and structural; HYPE is suppressed for parity ahead of its own n building up.
+- **Hypothesis:** HYPE BUY_NO held-WR rises toward 50%; 5m longs and 15m shorts unaffected.
+- **Expected outcome:** `buy_no_5m_native_suppressed` appears for HYPE.
+- **Actual outcome:** `pending` (needs restart + ~15 closed trades)
+- **Status:** `pending`
+
 ### 2026-05-31 — Ghost-validated 1h BUY_YES entry-window expansion
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened HYPE `1h up` entry window from `59.0 → 360.0`. HYPE `15m up` was left unchanged because the aggregate confidence was marginal and the nearer 50–90 minute buckets were not clearly positive.

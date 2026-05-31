@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-05-31 — Suppress anti-predictive BUY_NO short cells
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml)** — commit `5d8cbc0`. Held-to-resolution analysis of `trades_settled.jsonl` (n=632) found true entry accuracy 45.6% (below coin flip), driven entirely by BUY_NO/short (40.1% vs BUY_YES 49.9%). Disabled two structural-contradiction short cells: BTC counter-trend `disable_buy_no_counter_trend: true` (BUY_NO-while-BULLISH, 35% WR n=88), and a new opt-in `disable_buy_no_5m_native` (ON for all 6 alts) suppressing inverted 5m-native shorts (eth 11.8% / xrp 16.7% / doge 27.8% / sol 33% vs 15m-native 50-65%), routed through `_log_skip_reject` to keep ghost-logging. IQL/MACD soft-scoring (Kimi plan) parked — correlation showed the 5m-short veto is a coin-flip, so the signal not the gate is inverted. Hypothesis tracking in the strategy vault (`bitcoin.md`, `sol_macro.md`, and alt files, 2026-05-31).
+
+---
+
 ## 2026-05-31 — Ghost-backed entry-window optimization + stale legacy tests retired
 
 **[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py), [`tests/test_eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_eth_macro.py):** Widened only the entry-window cells with clear settled-ghost missed EV since `2026-05-30T00:00Z`: BNB `5m/15m/1h BUY_YES`, BNB `15m BUY_NO`, ETH `15m/1h BUY_YES`, and HYPE `1h BUY_YES`. Left protective/noisy DOGE, XRP, SOL, ETH downside, and HYPE 15m buckets unchanged.
