@@ -146,6 +146,21 @@ def build_record_from_closed_trade(
         or indicator_snapshot.get("corr_1h")
         or indicator_snapshot.get("correlation_1h")
     )
+    # Raw atr/spot/rsi for vol- and rsi-bucketing. Threaded onto indicator_snapshot
+    # by the strategy signal builders under ghost-matching keys (atr_14, asset_spot,
+    # rsi_14; alts also carry alt_rsi_14). Bucketed identically to the ghost log so
+    # trades.jsonl atr_bucket/rsi_bucket line up with rejected_candidates_settled.
+    atr_value = _coerce_float(
+        signal.get("atr_14") or indicator_snapshot.get("atr_14")
+    )
+    asset_spot_value = _coerce_float(
+        signal.get("asset_spot") or indicator_snapshot.get("asset_spot")
+    )
+    rsi_value = _coerce_float(
+        signal.get("rsi_14")
+        or indicator_snapshot.get("rsi_14")
+        or indicator_snapshot.get("alt_rsi_14")
+    )
 
     timestamp = (now or datetime.now(timezone.utc)).isoformat()
     bucket_tags = build_bucket_tags(
@@ -156,6 +171,9 @@ def build_record_from_closed_trade(
         regime_tag=primary_htf_bias,
         gate_reason=gate_reason,
         gate_stage=gate_stage,
+        rsi=rsi_value,
+        atr=atr_value,
+        asset_spot=asset_spot_value,
     )
 
     return {

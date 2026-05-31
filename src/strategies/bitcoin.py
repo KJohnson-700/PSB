@@ -3302,6 +3302,24 @@ class BitcoinStrategy:
                         float((getattr(ta.trend_sabre, "atr", 0.0) or 0.0) / max(float(ta.current_price or 1.0), 1.0)),
                         6,
                     ),
+                    # Raw atr/spot/rsi for replay + calibration vol-bucketing (audit
+                    # only, not read by any decision path). Keys mirror the ghost-log
+                    # context so trades.jsonl atr_bucket matches ghosts exactly.
+                    "atr_14": (
+                        round(float(getattr(ta.trend_sabre, "atr", 0.0) or 0.0), 6)
+                        if getattr(ta.trend_sabre, "atr", None) is not None
+                        else None
+                    ),
+                    "asset_spot": (
+                        round(float(ta.current_price), 6)
+                        if getattr(ta, "current_price", None) is not None
+                        else None
+                    ),
+                    "rsi_14": (
+                        round(float(ta.rsi_14), 2)
+                        if getattr(ta, "rsi_14", None) is not None
+                        else None
+                    ),
                     "btc_4h_histogram": round(float(macd_4h.histogram or 0.0), 4),
                     "btc_4h_histogram_rising": bool(macd_4h.histogram_rising),
                     "btc_4h_crossover": str(getattr(macd_4h, "crossover", "NONE") or "NONE"),

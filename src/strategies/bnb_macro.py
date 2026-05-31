@@ -5,6 +5,8 @@ BNB is its own alt leg: BNB spot/HTF/oracle data drives primary direction.
 BTC is secondary context only. This reuses the shared alt-macro base exactly
 like XRP/HYPE so rejected-candidate logging and calibration stay comparable.
 """
+from __future__ import annotations  # PEP 604 `X | None` annotations on Python 3.9
+
 import re
 from typing import Any, Dict, List
 

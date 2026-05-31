@@ -5,6 +5,8 @@ HYPE is its own alt leg: HYPE spot/HTF/oracle data drives primary direction.
 BTC is secondary context only. The class still reuses the shared alt-macro base
 until that base is renamed/split, so keep HYPE-specific overrides explicit here.
 """
+from __future__ import annotations  # PEP 604 `X | None` annotations on Python 3.9
+
 import re
 from typing import Any, Dict, List
 

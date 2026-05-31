@@ -864,6 +864,19 @@ class SolMacroStrategy:
                 "alt_ema_21": round(float(getattr(alt, "ema_21", 0.0) or 0.0), 4),
                 "alt_ema_50": round(float(getattr(alt, "ema_50", 0.0) or 0.0), 4),
                 "alt_rsi_14": round(float(getattr(alt, "rsi_14", 50.0) or 50.0), 2),
+                # Raw atr/spot for replay + calibration vol-bucketing (audit only,
+                # not read by any decision path). Keys mirror the ghost-log context
+                # so trades.jsonl atr_bucket is computed identically to ghosts.
+                "atr_14": (
+                    round(float(getattr(alt, "atr_14", 0.0) or 0.0), 6)
+                    if getattr(alt, "atr_14", None) is not None
+                    else None
+                ),
+                "asset_spot": (
+                    round(float(getattr(alt, "current_price", 0.0) or 0.0), 6)
+                    if getattr(alt, "current_price", None) is not None
+                    else None
+                ),
                 "btc_move_5m_pct": round(
                     float(getattr(correlation, "btc_move_5m_pct", 0.0) or 0.0), 4
                 ),
