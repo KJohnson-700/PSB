@@ -16,6 +16,7 @@ and never propagate into the strategy path. There is no behavior side-effect.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import math
@@ -75,6 +76,12 @@ def _flush_pending() -> None:
         with _pending_lock:
             if _pending_buffer and _pending_buffer[0] == (path, line):
                 _pending_buffer.popleft()
+
+
+# Drain any buffered (previously-failed) records on normal interpreter exit, so
+# they aren't lost when no further append happens to trigger the inline flush.
+atexit.register(_flush_pending)
+
 
 DEFAULT_CALIBRATION_DIR = (
     Path(__file__).resolve().parent.parent.parent / "data" / "calibration"

@@ -362,6 +362,10 @@ class PolyBot:
     def __init__(self, config_path: str = None):
         # Load configuration
         self.config = self._load_config(config_path)
+        # Strong refs to fire-and-forget background tasks: without this the event
+        # loop only weakly references tasks and may GC them mid-flight (silently
+        # killing e.g. the price websocket). See _spawn_bg.
+        self._bg_tasks: set = set()
         self.lane_manager = LaneManager(self.config)
         self.lane_calibrator = self._build_lane_calibrator()
         self._apply_exposure_env_overrides()
@@ -1437,6 +1441,31 @@ class PolyBot:
                 logging.debug("clob ws subscription loop: %s", e)
             await asyncio.sleep(max(5.0, interval))
 
+    def _spawn_bg(self, coro, name: str = ""):
+        """Create a tracked background task.
+
+        Keeps a strong reference (so the task can't be garbage-collected before it
+        finishes) and attaches a done-callback that logs any exception — otherwise
+        fire-and-forget tasks fail silently (surfacing only as "Task exception was
+        never retrieved" at GC time).
+        """
+        task = asyncio.create_task(coro)
+        label = name or getattr(coro, "__name__", "") or "bg_task"
+        self._bg_tasks.add(task)
+
+        def _on_done(t: "asyncio.Task") -> None:
+            self._bg_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logging.error(
+                    "Background task '%s' failed: %s", label, exc, exc_info=exc
+                )
+
+        task.add_done_callback(_on_done)
+        return task
+
     async def start(self):
         """Start the trading bot"""
         self.running = True
@@ -1455,12 +1484,12 @@ class PolyBot:
 
         # Fire-and-forget: narrate the previous session into the new session dir.
         # Off the trading hot path; never awaited.
-        asyncio.create_task(self._run_startup_narrators())
+        self._spawn_bg(self._run_startup_narrators())
         # Ghost-settle reads the full (~GB) rejected/settled calibration logs.
         # Do NOT block the trading loop or dashboard on it at boot: background it.
         # It also runs every cycle (_unified_cycle) and self-heals, so a
         # backgrounded first pass changes only timing, never settle correctness.
-        asyncio.create_task(
+        self._spawn_bg(
             asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
         )
 
@@ -1471,8 +1500,8 @@ class PolyBot:
 
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("enabled", True):
-            asyncio.create_task(self.ws_client.listen())
-            asyncio.create_task(self._clob_ws_subscription_loop())
+            self._spawn_bg(self.ws_client.listen())
+            self._spawn_bg(self._clob_ws_subscription_loop())
 
         from src.ops_pulse import log_ops_startup
 
@@ -1977,7 +2006,7 @@ class PolyBot:
                 "xrp_macro",
                 "xrp_dump_hedge",
             ):
-                asyncio.create_task(
+                self._spawn_bg(
                     self.notifier.notify_kill_global(st, "manual global stop")
                 )
             return
@@ -3066,7 +3095,7 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
-            asyncio.create_task(self._annotate_entry_async(
+            self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
                 market_question=signal.market_question,
@@ -3353,7 +3382,7 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
-            asyncio.create_task(self._annotate_entry_async(
+            self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
                 market_question=signal.market_question,
@@ -3403,6 +3432,19 @@ class PolyBot:
         # Stop dashboard server
         if self._dashboard_server:
             self._dashboard_server.should_exit = True
+
+        # Flush data loggers before any forced/hard exit (_os._exit / os._exit on
+        # timeout) can skip Python teardown and lose buffered rows.
+        try:
+            from src.analysis.rejected_candidate_log import _flush_pending
+            _flush_pending()
+        except Exception:
+            logging.exception("reject-log flush on shutdown failed")
+        try:
+            for _h in list(logging.getLogger().handlers):
+                _h.flush()
+        except Exception:
+            pass
 
         logging.info("PolyBot shutdown complete")
         _write_runtime_status(
