@@ -77,8 +77,12 @@ def resolve_lane_entry_policy(
     side: str,
     full_config: Dict[str, Any],
     legacy_policy: Optional[Dict[str, Any]] = None,
+    _assert: bool = False,
 ) -> LaneEntryPolicy:
-    """Resolve lane-specific entry policy for a strategy/window/side tuple."""
+    """Resolve lane-specific entry policy for a strategy/window/side tuple.
+
+    Raises ValueError if required keys are missing from config when _assert=True.
+    """
     params: Dict[str, Any] = {
         "enabled": True,
         "min_edge": 0.0,
@@ -90,6 +94,21 @@ def resolve_lane_entry_policy(
         "entry_window_max": 0.0,
         "size_multiplier": 1.0,
     }
+    if _assert:
+        strategies_cfg = full_config.get("strategies", {}) if isinstance(full_config, dict) else {}
+        if strategy_name not in strategies_cfg:
+            raise ValueError(
+                f"Strategy '{strategy_name}' not found in config. "
+                f"Available: {list(strategies_cfg.keys())}. "
+                f"Refactoring gap: check if '{strategy_name}' was renamed or removed."
+            )
+        strat_cfg = strategies_cfg.get(strategy_name, {})
+        entry_cfg = strat_cfg.get("entry_policy", {})
+        if not entry_cfg:
+            raise ValueError(
+                f"entry_policy missing for strategy '{strategy_name}'. "
+                f"Refactoring gap: entry_policy section was removed or renamed."
+            )
     params.update(_normalize_entry_policy_map(legacy_policy or {}))
 
     top_entry_cfg = (full_config.get("entry_policy") or {}) if isinstance(full_config, dict) else {}

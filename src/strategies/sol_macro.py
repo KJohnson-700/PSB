@@ -577,10 +577,25 @@ class SolMacroStrategy:
         self.iql_15m_hist_floor_aligned_short = float(
             self.config.get("iql_15m_hist_floor_aligned_short", self.iql_15m_hist_floor)
         )
+        # 2026-05-30 horizon-coherence fix: 1h markets must gate on 1h MACD, not 15m
+        # (per the horizon-coherent refactor). 1h histogram is a different magnitude
+        # scale than 15m, so it gets its own floor. Defaults to the 15m floor — TUNE
+        # this once 1h taken-trade data accrues; it may need a different scale.
+        self.iql_1h_hist_floor = float(
+            self.config.get("iql_1h_hist_floor", self.iql_15m_hist_floor)
+        )
         # LTF policy switches.
         # Default behavior keeps the historical anti-LTF gate (skip confirmed entries).
         self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
         self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
+        # 2026-05-30: opt-in (default OFF, so non-enabling alts are unchanged). When ON,
+        # a BEARISH bias requires the responsive MACD vote — it will NOT short on lagging
+        # EMA/RSI votes alone when MACD disagrees. Fixes eth's anti-predictive shorts:
+        # eth's confident-down shorts won only 44.7% (price grinds up) because the lagging
+        # votes call BEARISH on pullbacks inside an uptrend. Longs (which work) untouched.
+        self.require_macd_for_bearish_bias = bool(
+            self.config.get("require_macd_for_bearish_bias", False)
+        )
         self.dynamic_beta_min = float(self.config.get("dynamic_beta_min", 0.8))
         self.dynamic_beta_max = float(self.config.get("dynamic_beta_max", 3.0))
         self.dynamic_beta_extreme_max = float(
@@ -1265,11 +1280,17 @@ class SolMacroStrategy:
             self._vote_rsi_bias(rsi),
             self._vote_ema_bias(price, ema_9, ema_21, ema_50),
         ]
+        macd_vote = votes[0]
         bull_votes = sum(1 for vote in votes if vote == "BULLISH")
         bear_votes = sum(1 for vote in votes if vote == "BEARISH")
         if bull_votes >= 2:
             return "BULLISH"
         if bear_votes >= 2:
+            # Asymmetric fix (eth): don't emit a BEARISH call carried by lagging EMA/RSI
+            # when the responsive MACD vote disagrees — those shorts are anti-predictive
+            # (eth's confident-down shorts won only 44.7%). Sit out instead of shorting.
+            if self.require_macd_for_bearish_bias and macd_vote != "BEARISH":
+                return "NEUTRAL"
             return "BEARISH"
         return "NEUTRAL"
 
@@ -1956,36 +1977,43 @@ class SolMacroStrategy:
             return self.iql_15m_hist_floor_aligned_short
         return self.iql_15m_hist_floor
 
-    def _passes_15m_iql(
+    def _passes_iql(
         self,
         ta: SOLTechnicalAnalysis,
         allowed_side: str,
         htf_bias: Optional[str] = None,
+        tf: str = "15m",
     ) -> bool:
-        """Indicator Quality Layer (IQL) for 15m entries.
+        """Indicator Quality Layer (IQL), horizon-coherent.
 
-        Reuses `_check_15m_confirmation` so cycle-level LTF strength and IQL agree on
-        the same MACD scoring: if 15m is already "confirmed" (late, strong
-        structure), IQL passes. Otherwise apply the relaxed cross / hist-floor rule
-        used for early entries. Floor is bias-conditional via
-        `_effective_iql_15m_floor`.
+        A market gates on its OWN timeframe's MACD: 1h markets use macd_1h, 15m use
+        macd_15m (per the horizon-coherent refactor). Reuses
+        `_check_macd_confirmation` so cycle-level LTF strength and IQL agree on the
+        same scoring: if the timeframe is already "confirmed" (late, strong
+        structure), IQL passes; otherwise apply the relaxed cross / hist-floor rule.
         """
         if not self.iql_15m_enabled:
             return True
-        confirmed, _, _ = self._check_15m_confirmation(ta, allowed_side)
+        is_hourly = tf == "1h"
+        macd = ta.sol.macd_1h if is_hourly else ta.sol.macd_15m
+        label = "1h" if is_hourly else "15m"
+        confirmed, _, _ = self._check_macd_confirmation(macd, allowed_side, label=label)
         if confirmed:
             return True
-        macd_15m = ta.sol.macd_15m
-        hist = float(macd_15m.histogram)
-        floor = self._effective_iql_15m_floor(allowed_side, htf_bias)
+        hist = float(macd.histogram)
+        floor = (
+            self.iql_1h_hist_floor
+            if is_hourly
+            else self._effective_iql_15m_floor(allowed_side, htf_bias)
+        )
         if allowed_side == "LONG":
             return (
-                macd_15m.crossover == "BULLISH_CROSS"
-                or (hist >= floor and macd_15m.histogram_rising)
+                macd.crossover == "BULLISH_CROSS"
+                or (hist >= floor and macd.histogram_rising)
             )
         return (
-            macd_15m.crossover == "BEARISH_CROSS"
-            or (hist <= -floor and not macd_15m.histogram_rising)
+            macd.crossover == "BEARISH_CROSS"
+            or (hist <= -floor and not macd.histogram_rising)
         )
 
     def _calibrate_est_prob(
@@ -2040,42 +2068,47 @@ class SolMacroStrategy:
     # ──────────────────────────────────────────────────────────────
 
     def _check_15m_confirmation(self, ta: SOLTechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check if 15m MACD confirms the allowed direction.
+        """Check if 15m MACD confirms the allowed direction (back-compat wrapper)."""
+        return self._check_macd_confirmation(ta.sol.macd_15m, allowed_side, label="15m")
 
-        Returns: (confirmed: bool, strength: float, reasons: list)
+    def _check_macd_confirmation(self, macd: Any, allowed_side: str, label: str = "15m") -> tuple:
+        """Check if the given-timeframe MACD confirms the allowed direction.
+
+        Horizon-agnostic: callers pass the MACD for the candidate's own timeframe
+        (1h markets pass macd_1h, 15m markets pass macd_15m). Returns
+        (confirmed: bool, strength: float, reasons: list).
         """
-        macd_15m = ta.sol.macd_15m
         reasons = []
         strength = 0.0
 
         if allowed_side == "LONG":
-            if macd_15m.crossover == "BULLISH_CROSS":
+            if macd.crossover == "BULLISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bull cross")
-            if macd_15m.histogram_rising:
-                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
+                reasons.append(f"{label} MACD bull cross")
+            if macd.histogram_rising:
+                if macd.prev_histogram < 0 and macd.histogram > 0:
                     strength += 0.35
-                    reasons.append("15m hist red-to-green")
-                elif macd_15m.histogram > macd_15m.prev_histogram:
+                    reasons.append(f"{label} hist red-to-green")
+                elif macd.histogram > macd.prev_histogram:
                     strength += 0.15
-                    reasons.append("15m hist rising")
-            if macd_15m.macd_line > macd_15m.signal_line:
+                    reasons.append(f"{label} hist rising")
+            if macd.macd_line > macd.signal_line:
                 strength += 0.10
-                reasons.append("15m MACD above signal")
+                reasons.append(f"{label} MACD above signal")
         else:  # SHORT
-            if macd_15m.crossover == "BEARISH_CROSS":
+            if macd.crossover == "BEARISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bear cross")
-            if not macd_15m.histogram_rising:
-                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
+                reasons.append(f"{label} MACD bear cross")
+            if not macd.histogram_rising:
+                if macd.prev_histogram > 0 and macd.histogram < 0:
                     strength += 0.35
-                    reasons.append("15m hist green-to-red")
-                elif macd_15m.histogram < macd_15m.prev_histogram:
+                    reasons.append(f"{label} hist green-to-red")
+                elif macd.histogram < macd.prev_histogram:
                     strength += 0.15
-                    reasons.append("15m hist falling")
-            if macd_15m.macd_line < macd_15m.signal_line:
+                    reasons.append(f"{label} hist falling")
+            if macd.macd_line < macd.signal_line:
                 strength += 0.10
-                reasons.append("15m MACD below signal")
+                reasons.append(f"{label} MACD below signal")
 
         # Keep at 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35
         # on WR and net PnL, and this gate treats confirmed LTF as late-entry risk.
@@ -2623,7 +2656,14 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
-            ltf_confirmed, ltf_strength, ltf_reasons = self._check_15m_confirmation(ta, allowed_side)
+            # 2026-05-30 horizon-coherence: a 1h market confirms on 1h MACD, not 15m
+            # (per the refactor). 5m/15m keep macd_15m (higher-tf confirm is intentional
+            # there); only the incoherent 15m-on-1h case changes.
+            _ltf_macd = ta.sol.macd_1h if _updown_tf == "1h" else ta.sol.macd_15m
+            _ltf_label = "1h" if _updown_tf == "1h" else "15m"
+            ltf_confirmed, ltf_strength, ltf_reasons = self._check_macd_confirmation(
+                _ltf_macd, allowed_side, label=_ltf_label
+            )
             _sample("ltf_strength", ltf_strength)
             skip_15m_reason = None
             if self.require_ltf_confirmation:
@@ -3356,10 +3396,12 @@ class SolMacroStrategy:
                     timing_weight = 0.50 if is_hourly else 1.00
                     rsi_extreme = 0.02 if is_hourly else 0.03
 
-                    if not self._passes_15m_iql(ta, allowed_side, primary_htf_bias):
+                    if not self._passes_iql(ta, allowed_side, primary_htf_bias, _updown_tf):
                         _bump_skip("iql_15m_reject")
-                        effective_floor = self._effective_iql_15m_floor(
-                            allowed_side, primary_htf_bias
+                        effective_floor = (
+                            self.iql_1h_hist_floor
+                            if is_hourly
+                            else self._effective_iql_15m_floor(allowed_side, primary_htf_bias)
                         )
                         log_rejected_candidate(
                             strategy=self._signal_strategy_name, window=window_label,

@@ -101,10 +101,18 @@ def _wilson_interval(wins: int, n: int, z: float = 1.96) -> Dict[str, float]:
 
 
 def _econ_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    realized = [_as_float(r.get("realized_pct")) or 0.0 for r in rows]
-    wins = sum(1 for r in rows if bool(r.get("win")) is True)
-    losses = sum(1 for r in rows if bool(r.get("win")) is False)
-    n = len(rows)
+    # Filter out rows with null realized_pct — they are unknown outcomes, not zeros
+    valid = [r for r in rows if _as_float(r.get("realized_pct")) is not None]
+    if not valid:
+        return {"n": 0, "wins": 0, "losses": 0, "win_rate": 0.0,
+                "avg_realized_pct": 0.0, "total_realized_pct": 0.0,
+                "missed_ev_pct": 0.0, "protected_loss_pct": 0.0,
+                "net_gate_value_pct": 0.0,
+                "win_rate_ci_low": 0.0, "win_rate_ci_high": 0.0}
+    realized = [_as_float(r.get("realized_pct")) or 0.0 for r in valid]
+    wins = sum(1 for r in valid if bool(r.get("win")) is True)
+    losses = sum(1 for r in valid if bool(r.get("win")) is False)
+    n = len(valid)
     missed_ev = sum(max(v, 0.0) for v in realized)
     protected_loss = sum(max(-v, 0.0) for v in realized)
     total_realized = sum(realized)

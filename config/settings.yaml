@@ -693,6 +693,13 @@ strategies:
     eth_follow_1h_min_adj: 0.02
     eth_5m_buy_no_max_yes_price_bull_1h: 0.68
     eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral: 68.0
+    # 2026-05-30 broken-logic fix (eth-only). eth's bearish/short signal is
+    # anti-predictive — confident-down shorts won only 44.7% (price grinds up) vs
+    # high-conviction longs winning 58.7%. Stops eth emitting BEARISH bias on lagging
+    # EMA/RSI votes when MACD disagrees, so it stops shorting the grind-up. Longs
+    # untouched. NOT ghost-validatable (new candidate-gen) — verify live eth short WR
+    # after reload; flip false to revert. Other alts default off / unaffected.
+    require_macd_for_bearish_bias: true
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
