@@ -337,7 +337,7 @@ strategies:
     blocked_utc_hours_updown:
     - 3
     disable_buy_yes: false
-    disable_buy_no_counter_trend: false
+    disable_buy_no_counter_trend: true   # 2026-05-31: btc_bull_rollover_countertrend held-WR 34% (n=53); BUY_NO-while-BULLISH 35% (n=88)
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -404,6 +404,7 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: 5m-native shorts anti-predictive (held-WR ~22-33%)
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -589,6 +590,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   eth_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: 5m-native shorts anti-predictive (eth_5m_native held-WR 11.8%)
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -803,6 +805,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: 5m-native shorts anti-predictive (held-WR ~22-33%)
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -986,6 +989,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: xrp_5m_native held-WR 16.7% (15m-native fine at 65%)
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1164,6 +1168,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: doge_5m_native held-WR 27.8%
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1337,6 +1342,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    disable_buy_no_5m_native: true   # 2026-05-31: 5m-native shorts anti-predictive (parity w/ sibling alts)
     enabled: true
     dead_zone_enabled: false
     use_ai: true

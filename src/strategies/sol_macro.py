@@ -2677,6 +2677,29 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
+            # 2026-05-31: 5m-native BUY_NO is anti-predictive — held-to-resolution WR
+            # ~22% across eth/xrp/doge/sol vs 50-65% on 15m-native; MACD-confirmed 5m
+            # shorts lose, so the signal (not the gate) is inverted. Opt-in sit-out,
+            # ghost-logged via _log_skip_reject so the counterfactual keeps settling.
+            # Longs (BUY_YES) are ~50% and unaffected.
+            if (
+                is_updown
+                and _updown_tf == "5m"
+                and action == "BUY_NO"
+                and bool(self.config.get("disable_buy_no_5m_native", False))
+            ):
+                _bump_skip("buy_no_5m_native_suppressed")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_no_5m_native_suppressed",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
             # 2026-05-30 horizon-coherence: a 1h market confirms on 1h MACD, not 15m
             # (per the refactor). 5m/15m keep macd_15m (higher-tf confirm is intentional
             # there); only the incoherent 15m-on-1h case changes.
