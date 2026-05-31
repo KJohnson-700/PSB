@@ -564,6 +564,48 @@ logger = logging.getLogger(__name__)
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "settings.yaml"
+
+
+def _roundtrip_yaml():
+    """ruamel.yaml round-trip handler that preserves comments + formatting.
+
+    Returns None if ruamel is unavailable so callers can fall back to PyYAML
+    (comment-stripping, legacy behaviour) instead of crashing.
+    """
+    try:
+        from ruamel.yaml import YAML
+    except ImportError:
+        return None
+    y = YAML()
+    y.preserve_quotes = True
+    y.width = 4096  # don't reflow long scalars/comment lines
+    return y
+
+
+def _load_settings_config():
+    """Load settings.yaml preserving comments where possible.
+
+    Returns (handler, config): if handler is not None, save via that handler to
+    keep the human-authored comments/rationale that the dashboard would otherwise
+    strip on every write. Falls back to PyYAML plain load when ruamel is missing.
+    """
+    y = _roundtrip_yaml()
+    if y is not None:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return y, (y.load(f) or {})
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return None, (yaml.safe_load(f) or {})
+
+
+def _save_settings_config(handler, config) -> None:
+    """Persist settings.yaml, preserving comments when handler (ruamel) is set."""
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        if handler is not None:
+            handler.dump(config, f)
+        else:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+
 LANE_STATE_AUDIT_LOG = DATA_ROOT / "lane_state_audit.jsonl"
 LANE_CANDIDATE_STATUS_PATH = DATA_ROOT / "lane_candidate_status.json"
 DEFAULT_MARKET_REGIME_LOG = DATA_ROOT / "calibration" / "market_regime.jsonl"
@@ -5949,11 +5991,9 @@ async def update_config(request: Request):
     if not CONFIG_PATH.exists():
         raise HTTPException(status_code=404, detail="settings.yaml not found")
     try:
-        with open(CONFIG_PATH) as f:
-            config = yaml.safe_load(f)
+        handler, config = _load_settings_config()
         _deep_merge(config, updates_dict)
-        with open(CONFIG_PATH, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        _save_settings_config(handler, config)
         live_apply_ok = True
         live_apply_error = None
         bot = _full_bot_instance()
@@ -6022,8 +6062,7 @@ async def update_lane_state(request: Request):
         raise HTTPException(status_code=404, detail="settings.yaml not found")
 
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
+        handler, config = _load_settings_config()
         lane_cfg = config.setdefault("lane_management", {})
         lane_cfg.setdefault("default_state", "paper")
         states = lane_cfg.setdefault("states", {})
@@ -6050,8 +6089,7 @@ async def update_lane_state(request: Request):
             "last_effective_state": states.get(lane_id, lane_cfg.get("default_state", "paper")),
         }
         state_meta[lane_id] = next_meta
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        _save_settings_config(handler, config)
         audit_row = {
             "timestamp": updated_at,
             "lane_id": lane_id,
