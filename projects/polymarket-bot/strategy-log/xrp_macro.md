@@ -14,6 +14,42 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. XRP was fully shut off on the AI path: **0/16** approved (all marginal; 12 HOLD + 4 timeout).
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** XRP 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — BUY_YES overconfidence soft repair
+
+- **What changed:** Added lane-specific BUY_YES soft repairs for XRP `5m native`, `15m native`, and `5m neutral_fallback_1h`: probability haircuts plus min-edge adders, with an extra small min-edge add when oracle basis is elevated. No XRP BUY_YES lane is disabled.
+- **Why:** Past-3-day attribution showed XRP BUY_YES as the worst WR source: `xrp_5m_native` `10` trades / `10.0%` WR, `xrp_15m_native` `6` trades / `16.7%` WR, and `xrp_5m_neutral_fallback_1h` `5` trades / `20.0%` WR.
+- **Hypothesis:** XRP BUY_YES false positives are overconfidence/edge-quality failures; haircuts and min-edge adders should force weak entries to settle as ghosts before any hard lane pause is considered.
+- **Expected outcome:** Lower XRP BUY_YES throughput from weak overconfident cohorts, with remaining trades showing stronger post-repair edge.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-01 — Revert XRP BUY_YES disable
+
+- **What changed:** Reverted the same-day XRP `5m up`, `15m up`, and `1h up` entry-policy disables. XRP BUY_YES returns to prior gating.
+- **Why:** Operator rejected disabling losing lanes as a lazy WR fix. XRP needs direct diagnosis of why BUY_YES entries are false-positive heavy.
+- **Hypothesis:** Restoring XRP BUY_YES preserves evidence for a proper repair pass across probability construction, price bands, BTC-secondary gates, and oracle basis.
+- **Expected outcome:** XRP BUY_YES resumes prior admission; no disabled-lane effect from the rejected WR-mode change.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — Disable XRP BUY_YES for WR target
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), disabled XRP `5m up`, `15m up`, and `1h up` entry-policy lanes.
+- **Why:** Past-3-day BUY_YES review showed XRP BUY_YES at `25` trades / `20.0%` WR / `-$45.79`, with `5m` at `18` trades / `16.7%` WR and `15m` at `7` trades / `28.6%` WR.
+- **Hypothesis:** XRP stops dragging aggregate BUY_YES WR while downside and ghost logging continue; upside can be re-enabled only after a ghost/live cohort clears the `55%` minimum.
+- **Expected outcome:** XRP BUY_YES entries cease; XRP upside candidates should appear as disabled-lane ghosts for future review.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
 
 - **What changed:** Set xrp_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.

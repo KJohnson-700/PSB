@@ -12,6 +12,33 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** Also raised `max_ai_calls_per_scan` 3→5 (BNB pegged the 3-call/scan budget in ~41% of scans). The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. BNB approved only 4/89 AI-evaluated candidates in the window.
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** BNB 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — Revert BNB BUY_YES price-band clamp
+
+- **What changed:** Reverted the same-day BNB BUY_YES price-band narrowing and `1h up` disable. BNB BUY_YES returns to prior price bands and entry-policy behavior.
+- **Why:** Operator rejected narrowing winners/losers as a lazy WR fix. BNB needs causal repair of false positives, not post-hoc price slicing from a tiny short-window sample.
+- **Hypothesis:** Restoring BNB BUY_YES keeps the sample honest while the next pass inspects whether the model overstates edge by price, window, family, or oracle-basis condition.
+- **Expected outcome:** BNB BUY_YES resumes prior admission; no price-band clamp effect from the rejected WR-mode change.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — Narrow BNB BUY_YES price bands for WR target
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), narrowed BNB BUY_YES admission to recent high-WR price bands: `5m up` YES price `0.46–0.48`, `15m up` YES price `0.44–0.46`, and disabled `1h up`.
+- **Why:** Past-3-day BUY_YES review showed broad BNB BUY_YES at `75` trades / `45.3%` WR. The retained historical slices were `5m` price `0.46–0.48` at `16` trades / `62.5%` WR and `15m` price `0.44–0.46` at `5` trades / `80.0%` WR.
+- **Hypothesis:** BNB keeps some upside throughput while lifting hit rate toward the operator's `55%` minimum / `62%` goal; 1h is paused because its sample was only `n=3`.
+- **Expected outcome:** BNB BUY_YES entries outside the narrowed price bands should skip via `lane_price_band`; review after at least 15 closed post-change BNB BUY_YES trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
 
 - **What changed:** Set bnb_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.

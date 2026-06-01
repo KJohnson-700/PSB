@@ -70,6 +70,7 @@ from src.analysis.lane_entry_policy import (
     resolve_entry_policy_side,
     resolve_lane_entry_policy,
 )
+from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
@@ -3996,6 +3997,7 @@ class SolMacroStrategy:
                         raw_probability=raw_est_prob,
                         post_calibration_probability=estimated_prob,
                         require_shadow_portfolio=False,
+                        veto_only=True,
                     )
                     ai_calls += 1
                     self._log_decision_layer(
@@ -4009,6 +4011,10 @@ class SolMacroStrategy:
                         continue
                     ai_used = True
                     ai_analysis = ai_decision.direct_analysis
+                    # veto-only marginal pass: central layer already cleared this
+                    # (no confident opposition) — admit on quant terms, skip the
+                    # redundant local HOLD/supports/confidence/edge re-gate.
+                    _mpass = ai_decision.reason == "direct_ai_marginal_pass"
                     # Log reasoning so we can audit what the model is actually deciding
                     if ai_analysis:
                         logger.info(
@@ -4031,13 +4037,13 @@ class SolMacroStrategy:
                         _bump_skip("ai_none_marginal_threshold")
                         _log_ai_veto("ai_none_marginal_threshold")
                         continue
-                    if ai_decision.action == "HOLD":
+                    if not _mpass and ai_decision.action == "HOLD":
                         self._ai_hold_cache[market.id] = time.time()
                         _bump_skip("ai_hold_marginal_threshold")
                         _log_ai_veto("ai_hold_marginal_threshold")
                         logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
                         continue
-                    if not ai_recommendation_supports_action(
+                    if not _mpass and not ai_recommendation_supports_action(
                         ai_decision.action, action
                     ):
                         _bump_skip("ai_veto_marginal_threshold")
@@ -4047,7 +4053,7 @@ class SolMacroStrategy:
                             f"on '{market.question[:40]}...'"
                         )
                         continue
-                    if ai_decision.confidence < self.ai_confidence_threshold:
+                    if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
                         _bump_skip("ai_low_confidence_marginal_threshold")
                         _log_ai_veto("ai_low_confidence_marginal_threshold", ai_confidence=float(ai_decision.confidence))
                         logger.debug(
@@ -4056,7 +4062,7 @@ class SolMacroStrategy:
                         )
                         continue
                     ai_edge = float(ai_decision.edge or 0.0)
-                    if ai_edge <= 0:
+                    if not _mpass and ai_edge <= 0:
                         _bump_skip("ai_nonpositive_edge_marginal_threshold")
                         _log_ai_veto("ai_nonpositive_edge_marginal_threshold", ai_edge=ai_edge)
                         logger.debug(
@@ -4256,6 +4262,45 @@ class SolMacroStrategy:
                 regime=macro_trend,
             )
 
+            if is_updown and action == "BUY_YES":
+                _lane_meta = build_lane_metadata(
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    direction=direction,
+                    entry_leg="YES",
+                    side_source=side_source,
+                    signal_reason=" | ".join(str(r) for r in reason_parts if r),
+                    primary_htf_bias=primary_htf_bias,
+                    alt_htf_bias=mtt.h1_trend,
+                    btc_1h_regime=btc_1h_regime if btc_ta else None,
+                )
+                _repair = resolve_buy_yes_lane_repair(
+                    strategy_config=self.config,
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    lane_side=lane_side,
+                    entry_family=str(_lane_meta.get("entry_family") or ""),
+                    estimated_prob=estimated_prob,
+                    yes_price=yes_price,
+                    edge=edge,
+                    effective_min_edge=effective_min_edge,
+                    oracle_basis_bps=sol.oracle_basis_bps,
+                )
+                if _repair.matched:
+                    estimated_prob = _repair.estimated_prob
+                    edge = _repair.edge
+                    effective_min_edge = _repair.effective_min_edge
+                    reason_parts.append(_repair.reason_token)
+                    entry_policy_meta["buy_yes_lane_repair"] = {
+                        "rule": _repair.rule_name,
+                        "lane_key": _repair.lane_key,
+                        "probability_haircut": _repair.probability_haircut,
+                        "min_edge_add": _repair.min_edge_add,
+                        "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
+                    }
+
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
             if (
                 is_updown
@@ -4304,8 +4349,9 @@ class SolMacroStrategy:
                     ).get("lane_id")
                     or ""
                 )
-                # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
-                # below-threshold marginal extras only trade WITH AI blessing.
+                # Synchronous (no async enqueue/expire). 15m/1h only. VETO-ONLY:
+                # the HTF gate already selected this below-threshold extra; the AI
+                # can only block it with a confident, directly-opposing call.
                 ai_decision = await self._evaluate_trade_decision_with_timeout(
                     market_question=market.question,
                     market_description=ai_context2,
@@ -4320,6 +4366,7 @@ class SolMacroStrategy:
                     raw_probability=raw_est_prob,
                     post_calibration_probability=estimated_prob,
                     require_shadow_portfolio=False,
+                    veto_only=True,
                 )
                 ai_calls += 1
                 self._log_decision_layer(

@@ -62,6 +62,7 @@ from src.analysis.lane_entry_policy import (
     resolve_entry_policy_side,
     resolve_lane_entry_policy,
 )
+from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
     resolve_enabled_flag,
@@ -2700,6 +2701,49 @@ class BitcoinStrategy:
                 regime=htf_bias,
             )
 
+            if is_updown and action == "BUY_YES":
+                _lane_meta = build_lane_metadata(
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    direction=direction,
+                    entry_leg="YES",
+                    side_source=side_source,
+                    resolver_path=(
+                        direction_decision.resolver_path
+                        if direction_decision is not None
+                        else ""
+                    ),
+                    signal_reason=" | ".join(str(r) for r in reason_parts if r),
+                    htf_bias=htf_bias,
+                    btc_1h_regime=btc_1h_regime if ta else None,
+                )
+                _repair = resolve_buy_yes_lane_repair(
+                    strategy_config=self.config,
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    lane_side=lane_side,
+                    entry_family=str(_lane_meta.get("entry_family") or ""),
+                    estimated_prob=estimated_prob,
+                    yes_price=yes_price,
+                    edge=edge,
+                    effective_min_edge=effective_min_edge,
+                    oracle_basis_bps=None,
+                )
+                if _repair.matched:
+                    estimated_prob = _repair.estimated_prob
+                    edge = _repair.edge
+                    effective_min_edge = _repair.effective_min_edge
+                    reason_parts.append(_repair.reason_token)
+                    entry_policy_meta["buy_yes_lane_repair"] = {
+                        "rule": _repair.rule_name,
+                        "lane_key": _repair.lane_key,
+                        "probability_haircut": _repair.probability_haircut,
+                        "min_edge_add": _repair.min_edge_add,
+                        "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
+                    }
+
             # ── AI-hold soft veto ────────────────────────────────────────────
             # If AI said HOLD on this market within the last ai_hold_veto_ttl_sec,
             # the 5m quant path must clear the higher min_edge_5m_ai_override
@@ -2794,6 +2838,9 @@ class BitcoinStrategy:
                         if _needs_ai_for_low_conf_neutral_15m
                         else self._requires_shadow_for_lane("marginal")
                     ),
+                    # Veto-only for the marginal lane only; neutral_15m keeps the
+                    # strict contract (it needs the AI to supply a direction).
+                    veto_only=(not _needs_ai_for_low_conf_neutral_15m),
                 )
                 ai_calls += 1
                 ai_used = True
@@ -2832,7 +2879,10 @@ class BitcoinStrategy:
                     f"edge={float(ai_decision.edge or 0.0):.4f}] "
                     f"'{market.question[:45]}' | {ai_decision.reason}"
                 )
-                if not ai_recommendation_supports_action(ai_decision.action, action):
+                # veto-only marginal pass: central layer cleared this (no confident
+                # opposition) — admit on quant terms, skip the redundant local re-gate.
+                _mpass = ai_decision.reason == "direct_ai_marginal_pass"
+                if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
                     ai_vetos += 1
                     _bump_skip("ai_veto_marginal_updown")
                     logger.info(
@@ -2840,7 +2890,7 @@ class BitcoinStrategy:
                         f"conflicts with action={action}"
                     )
                     continue
-                if ai_decision.confidence < self.ai_confidence_threshold:
+                if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
                     _bump_skip("ai_low_confidence_marginal_updown")
                     logger.info(
                         f"  BTC AI skip '{market.question[:45]}' — confidence "
@@ -2849,7 +2899,7 @@ class BitcoinStrategy:
                     continue
 
                 ai_edge = float(ai_decision.edge or 0.0)
-                if ai_edge <= 0:
+                if not _mpass and ai_edge <= 0:
                     _bump_skip("ai_nonpositive_edge_marginal_updown")
                     logger.info(
                         f"  BTC AI skip '{market.question[:45]}' — non-positive ai_edge={ai_edge:.4f}"

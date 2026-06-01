@@ -8,6 +8,17 @@
 
 ---
 
+## 2026-06-01 — Marginal AI gate → veto-only + BTC decision-timeout fix + per-asset AI-call budget bump
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):**
+
+- **Diagnosis (5.5h of `data/logs/ai_pipeline/decision_layer.jsonl`):** the rebuilt gate approved only **10/307 (3%)** of AI-evaluated candidates. Causes: (1) system prompt biases toward HOLD ("be conservative" + HOLD offered as a co-equal option) → **77% HOLD** on near-coin-flip 15m/1h markets; (2) `min_confidence: 0.60` is structurally unreachable for honest ~50/50 calls; (3) HOLD is a hard veto on the fail-closed marginal lane; (4) **34% of calls time out** (BTC at 15s, alts' MiniMax tail past 40s). Net effect: XRP **0/16**, DOGE **0/63**, HYPE **1/95**, BNB **4/89** on the AI path — 15m/1h effectively shut off, surviving only on the 5m pure-quant path.
+- **Marginal lane → veto-only:** new `veto_only` param on `evaluate_trade_decision`. The AI may only REJECT a marginal candidate with a *confident, directly-opposing* directional call (conf ≥ `min_confidence`); HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Threaded through the 4 marginal call sites (sol_macro ×2, eth_macro, bitcoin marginal-branch only — `neutral_15m` keeps the strict contract); guarded the redundant local re-gate at the "thick" sites. Opt-out: `decision_layer.marginal_veto_only: true`.
+- **BTC decision timeout:** added `ai_decision_timeout_sec: 40` to the BTC block (was falling back to legacy 15s → 100% timeout vs MiniMax ~22s).
+- **AI-call budget:** `max_ai_calls_per_scan` 3→5 for HYPE/DOGE/BNB (pegged the budget in 41–52% of scans; serial-call latency ~15s median vs ~214s scan cadence leaves ample headroom). BTC/ETH/SOL/XRP left at 3 (not budget-constrained).
+- **Test fix:** `_bare_polybot()` now seeds `_bg_tasks` (the fixture skips `__init__`, so the `_spawn_bg` background-task registry was missing → 11 pre-existing red tests in `test_strategy_execution_drivers.py`, unrelated to the backtest removal). Now green.
+- **Boundary:** AI-gate behavior is forward-test only (not ghost-validatable). `dry_run` throughout. Needs a bot restart to load. Tests: 234 (ai_agent/bitcoin/sol/eth) + 25 (execution drivers) + 14 (buy_yes/self_healing) green. Bundles in-progress parallel-agent BUY_YES lane-repair / self-healing work already present in the working tree.
+
 ## 2026-05-31 — AI decision layer rebuilt (sync, 15m/1h-only, fail-open) + 68GB disk reclaim + 1h/15m→4h neutral fallback
 
 **[`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/analysis/ai_decision_settler.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_decision_settler.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), `.gitignore`:**

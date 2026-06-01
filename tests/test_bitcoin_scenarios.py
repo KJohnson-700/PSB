@@ -722,7 +722,12 @@ class TestBitcoinAIIntegration:
         self.sizer = PositionSizer(kelly_fraction=0.25, max_position_pct=0.05)
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
 
-    def test_5m_default_lane_uses_async_ai_broker_even_when_legacy_5m_flag_is_off(self):
+    def test_5m_default_lane_is_pure_quant_no_ai_no_broker(self):
+        """5m is pure quant: AI latency >> the 5m entry window, so the decision
+        layer is gated to 15m/1h only (commit 77ebda1). Even when the 'default'
+        lane is enforced, a 5m market must NOT call AI, must NOT enqueue to the
+        async broker (that path silently dropped trades), and produces a quant
+        signal directly."""
         class FakeBroker:
             def __init__(self):
                 self.enqueued = []
@@ -751,14 +756,18 @@ class TestBitcoinAIIntegration:
         with patch.object(self.strategy.btc_service, "get_full_analysis", return_value=ta):
             signals = run_async(self.strategy.scan_and_analyze([market], 10000))
 
-        assert signals == []
-        assert len(broker.enqueued) == 1
-        snapshot = broker.enqueued[0]
-        assert snapshot.key[0] == "bitcoin"
-        assert snapshot.key[1] == market.id
-        assert "5m" in snapshot.key[2]
-        assert snapshot.action == "BUY_YES"
-        assert self.strategy.last_scan_stats["top_skip_reasons"]["ai_pending_default"] == 1
+        # 5m produces a quant signal without consulting AI.
+        assert len(signals) == 1
+        assert signals[0].action == "BUY_YES"
+        assert signals[0].ai_used is False
+        # The async enqueue/expire broker is never used for 5m.
+        assert broker.enqueued == []
+        # 5m never calls the AI decision layer.
+        assert self.ai.evaluate_trade_decision.await_count == 0
+        # The old async-broker "ai_pending_default" skip reason is gone.
+        assert "ai_pending_default" not in self.strategy.last_scan_stats.get(
+            "top_skip_reasons", {}
+        )
 
     @pytest.mark.skip(
         reason="Stale vs horizon-coherent bias arch (2026-05-28). _make_bullish_ta "

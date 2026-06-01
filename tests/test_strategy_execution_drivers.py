@@ -21,7 +21,11 @@ from src.strategies.sol_macro import SolMacroSignal
 
 def _bare_polybot() -> PolyBot:
     """PolyBot instance without running __init__ (no scanner/ws)."""
-    return object.__new__(PolyBot)
+    bot = object.__new__(PolyBot)
+    # __init__ is skipped here, so seed the attrs the execute paths touch
+    # unconditionally (e.g. _spawn_bg's background-task registry).
+    bot._bg_tasks = set()
+    return bot
 
 
 def _base_config() -> dict:

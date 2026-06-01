@@ -257,6 +257,7 @@ strategies:
     ai_confidence_threshold: 0.6
     max_ai_calls_per_scan: 3
     ai_call_timeout_sec: 15
+    ai_decision_timeout_sec: 40
     use_ai_updown_5m: false
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
@@ -695,6 +696,36 @@ strategies:
     eth_1h_weak_confirm_skip_longs: false
     eth_5m_buy_no_max_yes_price_bull_1h: 0.68
     eth_15m_buy_yes_max_rsi_when_btc_bearish_alt_neutral: 68.0
+    buy_yes_lane_repair:
+      enabled: true
+      rules:
+      - name: eth_5m_native_overconfidence_20260601
+        window: 5m
+        entry_family: eth_5m_native
+        probability_haircut: 0.06
+        min_edge_add: 0.03
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
+      - name: eth_15m_native_overconfidence_20260601
+        window: 15m
+        entry_family: eth_15m_native
+        probability_haircut: 0.04
+        min_edge_add: 0.015
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
+      - name: eth_1h_native_overconfidence_20260601
+        window: 1h
+        entry_family: eth_1h_native
+        probability_haircut: 0.06
+        min_edge_add: 0.025
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
+      - name: eth_drift_overconfidence_20260601
+        entry_family: drift
+        probability_haircut: 0.06
+        min_edge_add: 0.025
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
     require_macd_for_bearish_bias: true
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
@@ -850,7 +881,7 @@ strategies:
     center_price_requires_catalyst: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     use_ai_updown: true
@@ -879,6 +910,16 @@ strategies:
     hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
     5m_buy_yes_bullish_floor_bump: 0.18
     15m_buy_yes_bullish_floor_bump: 0.1
+    buy_yes_lane_repair:
+      enabled: true
+      rules:
+      - name: hype_15m_spike_overconfidence_20260601
+        window: 15m
+        entry_family: spike
+        probability_haircut: 0.06
+        min_edge_add: 0.025
+        oracle_basis_abs_bps_min: 25.0
+        oracle_basis_min_edge_add: 0.01
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
     blocked_utc_hours_updown: []
     look_ahead_15m: 8
@@ -1079,6 +1120,30 @@ strategies:
     low_corr_damping: 0.8
     hourly_buy_yes_native_bonus_1h: 0.03
     hourly_buy_yes_native_bonus_min_ltf_strength_1h: 0.3
+    buy_yes_lane_repair:
+      enabled: true
+      rules:
+      - name: xrp_5m_native_overconfidence_20260601
+        window: 5m
+        entry_family: xrp_5m_native
+        probability_haircut: 0.06
+        min_edge_add: 0.03
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
+      - name: xrp_15m_native_overconfidence_20260601
+        window: 15m
+        entry_family: xrp_15m_native
+        probability_haircut: 0.08
+        min_edge_add: 0.035
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
+      - name: xrp_5m_neutral_fallback_overconfidence_20260601
+        window: 5m
+        entry_family: xrp_5m_neutral_fallback_1h
+        probability_haircut: 0.04
+        min_edge_add: 0.025
+        oracle_basis_abs_bps_min: 15.0
+        oracle_basis_min_edge_add: 0.01
     blocked_utc_hours_updown:
     - 3
     - 4
@@ -1193,7 +1258,7 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 300
@@ -1365,7 +1430,7 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 300
@@ -1556,6 +1621,10 @@ ai:
   decision_layer:
     enabled: true
     min_confidence: 0.6
+    # Marginal lane: AI may only veto a candidate with a confident, directly-
+    # opposing directional call. HOLD/low-confidence/agreement -> take the quant
+    # trade (fail-open). Set false to restore strict (HOLD vetoes) behavior.
+    marginal_veto_only: true
     hard_skip_if_unavailable_on_enforced: false
     use_shadow_portfolio: false
     enforced_lanes:
@@ -1721,6 +1790,27 @@ performance_feedback:
   overtight_min_edge_mult_floor: 0.7
   overtight_min_edge_mult_ceil: 1.0
   merge_learning_loop_expectations: true
+self_healing:
+  enabled: false
+  run_every_n_cycles: 6
+  cold_lane:
+    enabled: true
+    cold_hours: 24
+  wr_collapse:
+    enabled: true
+    window_n: 30
+    min_sample: 25
+    collapse_delta: 0.15
+  auto_apply:
+    enabled: true
+    ttl_hours: 12
+    min_edge_mult_floor: 0.7
+    cold_min_lane_sample: 12
+    cold_min_pass_sample: 8
+  escalation:
+    queue_dir: data/learning/escalations
+    notify: true
+    codex_dispatch: false
 logging:
   level: INFO
   max_file_size: 10

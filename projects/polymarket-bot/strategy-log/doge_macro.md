@@ -12,6 +12,33 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** Also raised `max_ai_calls_per_scan` 3→5 (DOGE pegged the 3-call/scan budget in ~52% of scans). The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. DOGE was fully shut off on the AI path: **0/63** approved.
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** DOGE 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — Revert DOGE BUY_YES disable
+
+- **What changed:** Reverted the same-day DOGE `5m up`, `15m up`, and `1h up` entry-policy disables. DOGE BUY_YES returns to prior gating.
+- **Why:** Operator rejected disabling losers as the wrong correction path. DOGE needs sample-backed tuning of the signal inputs and calibration, not a blanket upside pause.
+- **Hypothesis:** Restored DOGE BUY_YES admission keeps enough evidence to determine whether the issue is family mix, probability inflation, price band, or timing.
+- **Expected outcome:** DOGE BUY_YES resumes prior admission; no disabled-lane effect from the rejected WR-mode change.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — Disable DOGE BUY_YES for WR target
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), disabled DOGE `5m up`, `15m up`, and `1h up` entry-policy lanes.
+- **Why:** Past-3-day BUY_YES review showed DOGE BUY_YES at `27` trades / `48.1%` WR. A tiny 5m native slice reached `60%` WR (`n=5`), but the broader DOGE upside sample did not clear the operator's `55%` minimum.
+- **Hypothesis:** DOGE BUY_YES sits out until a larger ghost/live cohort supports re-enabling; aggregate BUY_YES WR improves immediately by removing the below-minimum broad lane.
+- **Expected outcome:** DOGE BUY_YES entries cease; review disabled-lane ghosts before reopening any DOGE upside family.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
 
 - **What changed:** Set doge_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.

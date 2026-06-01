@@ -21,6 +21,7 @@ from src.market.scanner import Market, resolved_updown_window_minutes, updown_ti
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
 from src.analysis.lane_entry_policy import entry_policy_to_dict
+from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
 from src.analysis.lane_identity import build_lane_metadata
 from src.strategies.sol_macro import (
     SolMacroSignal,
@@ -1739,6 +1740,45 @@ class ETHMacroStrategy(SolMacroStrategy):
                 regime=primary_htf_bias,
             )
 
+            if action == "BUY_YES":
+                _lane_meta = build_lane_metadata(
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    direction=direction,
+                    entry_leg="YES",
+                    side_source=side_source,
+                    signal_reason=" | ".join(str(r) for r in reason_parts if r),
+                    primary_htf_bias=primary_htf_bias,
+                    alt_htf_bias=mtt.h1_trend,
+                    btc_1h_regime=btc_1h_regime if btc_ta else None,
+                )
+                _repair = resolve_buy_yes_lane_repair(
+                    strategy_config=self.config,
+                    strategy=self._signal_strategy_name,
+                    window_size=_updown_tf,
+                    action=action,
+                    lane_side=lane_side,
+                    entry_family=str(_lane_meta.get("entry_family") or ""),
+                    estimated_prob=estimated_prob,
+                    yes_price=yes_price,
+                    edge=edge,
+                    effective_min_edge=effective_min_edge,
+                    oracle_basis_bps=eth.oracle_basis_bps,
+                )
+                if _repair.matched:
+                    estimated_prob = _repair.estimated_prob
+                    edge = _repair.edge
+                    effective_min_edge = _repair.effective_min_edge
+                    reason_parts.append(_repair.reason_token)
+                    entry_policy_meta["buy_yes_lane_repair"] = {
+                        "rule": _repair.rule_name,
+                        "lane_key": _repair.lane_key,
+                        "probability_haircut": _repair.probability_haircut,
+                        "min_edge_add": _repair.min_edge_add,
+                        "oracle_basis_min_edge_add": _repair.oracle_basis_min_edge_add,
+                    }
+
             _hold_ts = self._ai_hold_cache.get(market.id, 0)
             _hold_age = time.time() - _hold_ts
             _ai_override_bar = max(lane_policy.ai_override_min_edge, lane_policy.min_edge)
@@ -1818,6 +1858,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                     raw_probability=raw_est_prob,
                     post_calibration_probability=estimated_prob,
                     require_shadow_portfolio=False,
+                    veto_only=True,
                 )
                 ai_calls += 1
                 self._log_decision_layer(
@@ -1857,21 +1898,24 @@ class ETHMacroStrategy(SolMacroStrategy):
                     _bump_skip("ai_none")
                     _log_ai_veto("ai_none")
                     continue
-                if ai_decision.action == "HOLD":
+                # veto-only marginal pass: central layer cleared this (no confident
+                # opposition) — admit on quant terms, skip the redundant local re-gate.
+                _mpass = ai_decision.reason == "direct_ai_marginal_pass"
+                if not _mpass and ai_decision.action == "HOLD":
                     self._ai_hold_cache[market.id] = time.time()
                     _bump_skip("ai_hold")
                     _log_ai_veto("ai_hold")
                     continue
-                if not ai_recommendation_supports_action(ai_decision.action, action):
+                if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
                     _bump_skip("ai_veto")
                     _log_ai_veto("ai_veto", ai_action=str(ai_decision.action))
                     continue
-                if ai_decision.confidence < self.ai_confidence_threshold:
+                if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
                     _bump_skip("ai_low_confidence")
                     _log_ai_veto("ai_low_confidence", ai_confidence=float(ai_decision.confidence))
                     continue
                 ai_edge = float(ai_decision.edge or 0.0)
-                if ai_edge <= 0:
+                if not _mpass and ai_edge <= 0:
                     _bump_skip("ai_nonpositive_edge")
                     _log_ai_veto("ai_nonpositive_edge", ai_edge=ai_edge)
                     continue

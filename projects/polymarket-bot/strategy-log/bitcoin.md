@@ -17,6 +17,42 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** Also fixed BTC's AI decision timeout: it was silently falling back to the legacy **15s** (`ai_call_timeout_sec`) while MiniMax answers in ~22s, so *every* BTC decision-layer call timed out — added `ai_decision_timeout_sec: 40` to the BTC config block. The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. BTC's gate had effectively never run (100% timeout at 15s); after the timeout fix the marginal lane becomes live and veto-only.
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** BTC 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — BUY_YES attribution hook, BTC report-only
+
+- **What changed:** Wired BTC through the shared BUY_YES lane-repair helper, but added no active BTC repair rule. The past-3-day BTC `15m htf_bullish_side_long` cohort stays report-only.
+- **Why:** Attribution showed BTC `15m htf_bullish_side_long` had low WR but positive PnL and average raw probability below average YES price, so it did not match the overconfidence failure found in ETH/XRP/HYPE.
+- **Hypothesis:** BTC should not be penalized until a causal false-positive pattern is identified; the hook exists only for future soft repairs.
+- **Expected outcome:** No BTC behavior change from this entry.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-01 — Revert BUY_YES WR-mode family allowlist
+
+- **What changed:** Reverted the same-day BTC `buy_yes_wr_mode` code/config clamp. BTC BUY_YES is no longer blocked by a family allowlist just to lift reported WR.
+- **Why:** Operator rejected the approach as over-tightening and not a real correction. The failure to hit the `55%` minimum / `62%` goal needs feature, calibration, and entry-quality repair, not scoreboard pruning.
+- **Hypothesis:** Restoring admission keeps BUY_YES sample collection intact while the next review attributes false positives by probability construction, entry family, price, oracle basis, and regime context.
+- **Expected outcome:** No new `buy_yes_wr_mode_family_block` rejects; BTC BUY_YES resumes prior gating behavior.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — BUY_YES WR-mode family allowlist
+
+- **What changed:** Added `buy_yes_wr_mode` to BTC and [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), allowing BTC BUY_YES only for the `15m` `spike` family; `5m` and `1h` BUY_YES are blocked by the WR-mode family gate.
+- **Why:** Past-3-day BUY_YES review (`2026-05-29 00:00 PT`–`2026-06-01 00:00 PT`) showed broad BTC BUY_YES at `107` trades / `43.0%` WR, while `bitcoin|15m|up|bullish|spike` was `7` trades / `57.1%` WR. Generic `htf_bullish_side_long` was `72` trades / `37.5%` WR, below the operator's `55%` minimum and `62%` goal.
+- **Hypothesis:** BTC BUY_YES count falls sharply, but admitted BUY_YES shifts from generic bullish bias toward the only recent BTC family above the minimum WR bar.
+- **Expected outcome:** New rejected candidates include `buy_yes_wr_mode_family_block`; post-change BTC BUY_YES WR should be reviewed after at least 15 closed BTC BUY_YES entries.
+- **Actual outcome:** `pending` (configuration/code change only; needs live post-change sample)
+- **Status:** `pending`
+
 ### 2026-05-31 — Disable counter-trend BUY_NO (shorting into bullish HTF)
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) set bitcoin `disable_buy_no_counter_trend: true`. The flag and code already existed at [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) `_resolve_btc_direction`; flipping it stops the `btc_bull_rollover_countertrend` short (BUY_NO when HTF is BULLISH but 4H MACD histogram is declining) and, via the shared guard, the quant-disagree SHORT flip. Commit `5d8cbc0`.

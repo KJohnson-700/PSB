@@ -13,6 +13,42 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. SOL approved only 1/19 AI-evaluated candidates in the window.
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** SOL 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — Shared BUY_YES soft-repair hook
+
+- **What changed:** Added a shared BUY_YES lane-repair hook to the SOL-family macro path. The hook can only apply configured probability haircuts and min-edge adders; it cannot disable lanes or allowlist families. SOL has no active rule in this change.
+- **Why:** Operator rejected disabling losers as a WR shortcut. The shared path needs a safer repair surface for XRP/HYPE and future SOL-family BUY_YES overconfidence fixes.
+- **Hypothesis:** Future SOL-family BUY_YES tuning can target false-positive causes without removing whole lanes from evidence collection.
+- **Expected outcome:** No SOL behavior change unless a SOL-specific `buy_yes_lane_repair` rule is added later.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-01 — Revert BUY_YES WR-mode side/window cleanup
+
+- **What changed:** Reverted the same-day SOL BUY_YES lane disables. SOL `5m up`, `15m up`, and `1h up` return to their prior entry-policy behavior.
+- **Why:** Operator rejected lane disabling as a lazy WR fix. The next correction needs to diagnose why BUY_YES false positives pass edge/price/regime gates.
+- **Hypothesis:** Restoring admission preserves live/ghost evidence while future work changes causal signal quality rather than removing losing cohorts wholesale.
+- **Expected outcome:** SOL BUY_YES no longer stops because of this WR-mode cleanup; next review should isolate calibration, BTC-secondary context, oracle basis, and entry-family effects.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — BUY_YES WR-mode side/window cleanup
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), disabled SOL `5m up` and `1h up` entry-policy lanes while leaving `15m up` enabled.
+- **Why:** Past-3-day BUY_YES review showed SOL `5m` at `14` trades / `42.9%` WR, below the operator's `55%` minimum. SOL `15m` was small but above target at `6` trades / `66.7%` WR.
+- **Hypothesis:** SOL BUY_YES sample shifts toward the better recent 15m cell while 5m/1h upside pauses until ghosts/live journals justify re-enabling.
+- **Expected outcome:** SOL `5m up` / `1h up` BUY_YES entries should stop; review SOL 15m BUY_YES after at least 15 closed post-change trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts (all alts)
 
 - **What changed:** New opt-in `disable_buy_no_5m_native` (set `true` for all 6 alts). In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) `_resolve_alt_bias_for_tf` consumer, 5m up/down `BUY_NO` candidates are sat out when the flag is set, routed through `_log_skip_reject` (reason `buy_no_5m_native_suppressed`) so the counterfactual keeps settling in the ghost log. ETH inherits this via `ETHMacroStrategy(SolMacroStrategy)` — single edit covers all alts. Commit `5d8cbc0`.

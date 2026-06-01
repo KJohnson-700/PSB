@@ -2140,6 +2140,24 @@ class PolyBot:
                     "performance_feedback refresh failed: %s", e, exc_info=True
                 )
 
+        # Loop 3 — self-healing supervisor. Runs immediately AFTER perf-feedback
+        # (which clobbers _runtime_feedback) so it can re-inject its loosen overrides.
+        _sh = self.config.get("self_healing") or {}
+        _shn = max(1, int(_sh.get("run_every_n_cycles", 6)))
+        if bool(_sh.get("enabled", False)) and (self._performance_feedback_cycle % _shn == 0):
+            try:
+                from src.analysis.self_healing import SelfHealingSupervisor
+
+                _sh_result = SelfHealingSupervisor(self.config).run()
+                for _msg in _sh_result.notify_messages:
+                    try:
+                        await self.notifier.send_discord(_msg)
+                        await self.notifier.send_telegram(_msg)
+                    except Exception as _ne:  # noqa: BLE001 — notify is best-effort
+                        logging.debug("self_healing notify failed: %s", _ne)
+            except Exception as e:
+                logging.warning("self_healing run failed: %s", e, exc_info=True)
+
         _write_runtime_status(
             phase="scanner_sync",
             session_id=getattr(self.journal, "session_id", None),

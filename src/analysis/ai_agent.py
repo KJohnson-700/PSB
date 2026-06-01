@@ -1386,11 +1386,18 @@ OUTPUT (machine-parseable — follow exactly):
         raw_probability: Optional[float] = None,
         post_calibration_probability: Optional[float] = None,
         require_shadow_portfolio: Optional[bool] = None,
+        veto_only: bool = False,
     ) -> AIDecision:
         """Enforced pre-entry AI decision layer.
 
         This is deliberately stricter than log-only narrators: a HOLD/SKIP,
         action mismatch, low confidence, or non-positive AI edge rejects the trade.
+
+        ``veto_only`` flips the marginal lane to a veto-only contract: the HTF
+        gate + quant edge already selected the candidate, so the AI may only
+        REJECT it with a confident, directly-opposing directional call. A HOLD,
+        SKIP, low-confidence, or agreeing verdict falls back to the quant trade
+        (fail-open) instead of killing it. Opt-out: decision_layer.marginal_veto_only.
         """
         if not self.decision_layer_enabled():
             return AIDecision(
@@ -1432,6 +1439,41 @@ OUTPUT (machine-parseable — follow exactly):
             return AIDecision(False, "SKIP", 0.0, None, None, "direct_ai_failed", "direct")
 
         rec = str(analysis.recommendation or "").strip().upper()
+
+        if veto_only and bool(self.decision_layer_cfg.get("marginal_veto_only", True)):
+            # Marginal lane: veto only on a confident, directly-opposing call.
+            conf = float(analysis.confidence_score)
+            norm = self._normalize_recommendation(rec)
+            if norm in {"BUY_YES", "BUY_NO"} and norm != action and conf >= min_confidence:
+                return AIDecision(
+                    False,
+                    norm,
+                    conf,
+                    float(analysis.estimated_probability),
+                    None,
+                    "direct_ai_confident_opposition",
+                    "direct",
+                    direct_analysis=analysis,
+                )
+            # Pass: surface the AI edge only when it agrees and is positive, so the
+            # call site can bump; otherwise proceed on the quant edge (edge=None).
+            ai_edge = (
+                float(analysis.estimated_probability) - float(current_yes_price)
+                if action == "BUY_YES"
+                else float(current_yes_price) - float(analysis.estimated_probability)
+            )
+            agree_bump = norm == action and ai_edge > 0
+            return AIDecision(
+                True,
+                action,
+                conf,
+                float(analysis.estimated_probability),
+                ai_edge if agree_bump else None,
+                "direct_ai_marginal_pass",
+                "direct",
+                direct_analysis=analysis,
+            )
+
         if rec == "HOLD":
             return AIDecision(
                 False,

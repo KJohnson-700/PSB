@@ -13,6 +13,42 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-01 — Marginal lane → AI veto-only (unblock 15m/1h)
+
+- **What changed:** Also raised `max_ai_calls_per_scan` 3→5 (HYPE pegged the 3-call/scan budget in ~49% of scans). The marginal-lane AI gate flipped from fail-closed to **veto-only**: the AI can now only REJECT a below-threshold candidate with a *confident, directly-opposing* directional call (conf ≥ `decision_layer.min_confidence`). HOLD / SKIP / low-confidence / agreement fall back to the quant trade. Central change in [`evaluate_trade_decision`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) (new `veto_only` param) threaded through the marginal call site(s); guarded the redundant local re-checks; opt-out `decision_layer.marginal_veto_only`.
+- **Why:** Over a 5.5h window (`decision_layer.jsonl`) the gate approved only **3%** of AI-evaluated candidates — the model returned **HOLD 77%** of the time (conservative system prompt + a 0.60 confidence bar that near-coin-flip 15m/1h markets can't honestly clear), and HOLD was a hard veto. HYPE approved only 1/95 AI-evaluated candidates in the window.
+- **Hypothesis:** Restoring marginal admission (blocked only on confident AI opposition) reopens 15m/1h frequency without losing the AI's ability to stop a conviction-wrong trade.
+- **Expected outcome:** HYPE 15m/1h marginal entries resume; AI still vetoes confident-opposite cases.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only (AI-gate behavior is not ghost-validatable); needs bot restart to load.
+
+### 2026-06-01 — BUY_YES spike overconfidence soft repair
+
+- **What changed:** Added a HYPE `15m spike` BUY_YES probability haircut and min-edge adder, plus a small oracle-basis min-edge add when basis is elevated. No HYPE BUY_YES family is disabled or allowlisted.
+- **Why:** Past-3-day attribution showed HYPE `15m spike` BUY_YES at `21` trades / `28.6%` WR / `-$6.27`, with average raw probability `0.616` against average YES price `0.495`.
+- **Hypothesis:** HYPE spike longs need stronger post-haircut edge before entry, reducing inflated-probability false positives while keeping the lane available when evidence is genuinely strong.
+- **Expected outcome:** Weak HYPE spike BUY_YES candidates increasingly miss `lane_min_edge`; stronger spike candidates can still trade.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-01 — Revert HYPE BUY_YES WR-mode allowlist
+
+- **What changed:** Reverted the same-day HYPE `buy_yes_wr_mode` allowlist. HYPE BUY_YES is no longer restricted to one 15m family by WR-mode code/config.
+- **Why:** Operator rejected the allowlist as scoreboard pruning rather than signal repair. HYPE should be improved by diagnosing the false-positive mechanism, not by hiding broader upside traffic.
+- **Hypothesis:** Restored HYPE BUY_YES admission keeps enough sample to compare native, spike, and neutral-fallback probability quality under the same live gates.
+- **Expected outcome:** No new `buy_yes_wr_mode_family_block` rejects for HYPE; next review should focus on probability calibration and family-specific edge construction.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌`
+
+### 2026-06-01 — BUY_YES WR-mode neutral-fallback allowlist
+
+- **What changed:** Added shared `buy_yes_wr_mode` support in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) and configured HYPE BUY_YES to allow only `15m` `hype_15m_neutral_fallback_1h`; `5m`, `1h`, `spike`, and `hype_15m_native` BUY_YES families are blocked.
+- **Why:** Past-3-day BUY_YES review showed HYPE overall positive but not high enough for WR mode: `80` trades / `47.5%` WR. The neutral-fallback 15m family was `7` trades / `71.4%` WR, while broader HYPE 5m and native/spike families diluted aggregate WR.
+- **Hypothesis:** HYPE BUY_YES volume falls, but admitted HYPE upside should clear the operator's `55%` minimum and target the `62%` goal.
+- **Expected outcome:** HYPE BUY_YES rejects should include `buy_yes_wr_mode_family_block`; review after at least 15 closed post-change HYPE BUY_YES entries.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Suppress anti-predictive 5m-native BUY_NO shorts
 
 - **What changed:** Set hype_macro `disable_buy_no_5m_native: true`; inherits the 5m BUY_NO sit-out in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), ghost-logged as `buy_no_5m_native_suppressed`. Commit `5d8cbc0`. Full rationale in `sol_macro.md` same date.
