@@ -881,7 +881,7 @@ strategies:
     center_price_requires_catalyst: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 5
+    max_ai_calls_per_scan: 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     use_ai_updown: true
@@ -1258,7 +1258,7 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 5
+    max_ai_calls_per_scan: 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 300
@@ -1430,7 +1430,7 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 5
+    max_ai_calls_per_scan: 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 300
@@ -1571,7 +1571,7 @@ updown_composite:
   regime_action_gate_enabled: true
   regime_action_min_convergence: 0.55
 ai:
-  prompt_version: lane-feedback-v1
+  prompt_version: lane-feedback-v2-decisive
   policy_version: decision-layer-v1
   enabled: true
   live_inferencing: true

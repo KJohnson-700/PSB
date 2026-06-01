@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-06-01 — Decisive AI system prompt (root-cause HOLD bias) + budget 5→6 for HYPE/DOGE/BNB
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
+
+- **Root cause:** even after the marginal lane went veto-only, the shared decision/analysis `SYSTEM_PROMPT` was the deeper driver of the 77%-HOLD / 3%-approval behavior — it told the model to "be conservative — prediction markets often overestimate certain outcomes" and offered HOLD as a co-equal third option with no usage guidance, so a conservative engine on near-coin-flip 15m/1h markets defaulted to HOLD.
+- **Rewrite:** removed the inaction bias; instructed it to commit to a direction on any real evidence lean; reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty); clarified `confidence_score` = strength of the directional evidence, not certainty of outcome. Generic phrasing (no quant-edge assumption) so it's safe for all `analyze_market` callers (decision layer, narrators, strategy assists, annotation).
+- **Versioning:** `DEFAULT_PROMPT_VERSION` + config `prompt_version` → `lane-feedback-v2-decisive` so `ai_decision_settler` can split pre/post verdicts.
+- **Budget:** `max_ai_calls_per_scan` 5→6 for HYPE/DOGE/BNB (chose 6 over 7: serial-call worst case 6×40s=240s stays near the ~214s median scan cadence; 7×40s=280s would overrun under timeout clusters / tight p25 cadence — revisit upward only after trimming the alt decision timeout).
+- **Boundary:** forward-test only (not ghost-validatable). Needs bot restart. Watch HOLD% / approval% in `decision_layer.jsonl`. Tests: 238 green (ai_agent_parse/bitcoin/sol/eth/exec-drivers).
+
 ## 2026-06-01 — Marginal AI gate → veto-only + BTC decision-timeout fix + per-asset AI-call budget bump
 
 **[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py):**
