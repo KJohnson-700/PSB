@@ -14,6 +14,24 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-01 — Per-lane exit policy: hold+trail on xrp 5m/15m BUY_YES
+
+- **What changed:** Held-vs-realized scorecard shows xrp longs are exit-killed: **5m BUY_YES** held 46% / realized 15% (held −$4.3 vs realized −$23.3), **15m BUY_YES** held 71% / realized 29% (held +$42.2 thrown away as −$9.1). Added hold-winners + trailing floor (`arm 0.10 / gap 0.15`) to both. (15m BUY_NO already on hold+trail from 1ea32a5.)
+- **Why:** This corrected an earlier wrong instinct to *suppress* xrp longs — held-WR proves the entries are directionally fine (even +$42 on 15m); the **exit** is the bleed, not the entry. Suppression would have thrown away good signal.
+- **Hypothesis:** holding xrp longs to resolution with a trailing floor recovers the directional edge.
+- **Expected outcome:** xrp BUY_YES realized-WR converges toward held-WR (46%/71%); the −$23/−$9 realized losses shrink or flip positive.
+- **Actual outcome:** `pending` — forward-test only; needs bot restart.
+- **Status:** `pending`
+
+### 2026-06-01 — Reopen ghost-positive 5m native BUY_NO gate
+
+- **What changed:** Set `xrp_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), reopening the shared 5m native BUY_NO path previously ghost-logged as `buy_no_5m_native_suppressed`.
+- **Why:** Settled ghosts for `xrp_macro|5m|BUY_NO|buy_no_5m_native_suppressed` now show `n=651`, `WR=59.8%`, missed EV `357.060`, protected loss `262.000`, net gate value `-95.060`; the current session also shows XRP as the largest drag, so reopening the positive short-side ghost cohort is the least blunt way to address the gate without disabling upside lanes.
+- **Hypothesis:** Reopening XRP 5m native BUY_NO should improve XRP trade mix by admitting a ghost-positive downside cohort while existing BUY_YES soft repairs continue filtering overconfident upside entries.
+- **Expected outcome:** XRP 5m native BUY_NO entries resume; after at least 15 closed post-change XRP 5m BUY_NO trades, WR should remain above breakeven and XRP aggregate PnL should stop being dominated by missed downside opportunities.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Early-TP regret: hold winners + positive trailing floor (BUY_NO 15m)
 
 - **What changed:** Added `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`) to the existing `xrp_macro` 15m `down` (BUY_NO) block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). New floor mechanic in [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py): once peak clears +10%, exit floor trails at `peak − 15%`, can be positive (banks gains), never wider than base stop; coexists with the lane's existing in-profit tighten via `max()`.

@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-01 — Reopen ghost-positive 5m native BUY_NO gate
+
+- **What changed:** Set `hype_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), reopening the shared 5m native BUY_NO path previously ghost-logged as `buy_no_5m_native_suppressed`.
+- **Why:** Settled ghosts for `hype_macro|5m|BUY_NO|buy_no_5m_native_suppressed` now show `n=303`, `WR=61.7%`, missed EV `151.241`, protected loss `116.000`, net gate value `-35.241`; the suppression is now costing expected value on HYPE specifically.
+- **Hypothesis:** Reopening only HYPE 5m native BUY_NO should add profitable downside samples without reopening weaker SOL/DOGE/BNB 5m BUY_NO cohorts.
+- **Expected outcome:** HYPE 5m native BUY_NO entries resume; after at least 15 closed post-change HYPE 5m BUY_NO trades, WR should stay above breakeven and PnL should not repeat the prior suppressed-lane rationale.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts. Also raised `max_ai_calls_per_scan` 5→6 for added budget headroom.

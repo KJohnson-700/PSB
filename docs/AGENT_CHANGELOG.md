@@ -8,6 +8,41 @@
 
 ---
 
+## 2026-06-01 — Exact AI gate economics logging (no more inferred PnL)
+
+**[`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`scripts/ai_gate_value_report.py`](/Users/mainfolder/Documents/psb-main%201/scripts/ai_gate_value_report.py):**
+
+- **Fix:** enriched every real AI decision-layer log call with decision-time economics: `yes_price`, derived `no_price`, derived side `entry_price`, `quant_edge`, `quant_confidence`, `quant_threshold`, raw/calibrated probabilities, and `lane_id` where available.
+- **Why:** previous AI gate value analysis could only score direction from `decision_layer.jsonl`; it did **not** have price/size, so rejected-trade PnL estimates were assumption-heavy and not valid for live quant calibration.
+- **Report:** added `scripts/ai_gate_value_report.py`, which computes exact normalized-stake gate value only for enriched rows and explicitly skips old rows missing entry economics.
+- **Boundary:** no trading logic changed. This is instrumentation for future forward-test evidence; current historical AI gate rows remain unsuitable for exact PnL analysis.
+
+---
+
+## 2026-06-01 — Per-lane exit policy: scorecard + shadow recommender + A-lane expansion
+
+**[`src/analysis/lane_exit_audit.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_audit.py), [`src/analysis/lane_exit_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_policy.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
+
+- **Premise:** the bot's realized WR (~45%) sits far below its held-to-resolution accuracy. The gap is the EXIT, and it is per-lane *opposite* — the +30% TP / stop destroys edge on some lanes and is the profit engine on others. One global exit can't serve both.
+- **Scorecard (`lane_exit_audit.py`):** reads `trades_settled.jsonl`, compares held-WR vs realized-WR and dollar gap per `(strategy,window,side)`, classifies A (exit kills edge → hold+trail), B (exit is engine → keep tight TP/SL), C (entry-broken → not an exit fix). Forward-test scorecard; exits are NOT ghost-validatable.
+- **Recommender (`lane_exit_policy.py`):** shadow-only. Writes `data/calibration/lane_exit_policy.json` with per-lane recommendation + live config, flagging `drift` (config vs data, n≥20). Never edits config or live exits — exit changes stay human-applied + forward-tested. Mirrors the entry-side `per_lane_thresholds` pattern.
+- **A-lane config expansion** (held≫realized, exit kills edge): added hold-winners + positive trailing floor (`arm 0.10 / gap 0.15`) to `eth_macro` BUY_YES 5m/1h, `eth_macro` BUY_NO 15m, `xrp_macro` BUY_YES 5m/15m (joining the eth/xrp/bnb 15m + xrp 15m BUY_NO lanes from commit 1ea32a5). Bitcoin 15m BUY_YES (+$43 realized vs −$49 held) and hype 15m BUY_YES (+$47) left on tight TP/SL — exit is their engine.
+- **Drift surfaced, not auto-changed:** bnb 5m/15m BUY_YES held-WR ~47.5% (just under the A-bar); kept hold+trail (gap positive, holding harmless) per operator decision.
+- Tests: classifier bucketing incl. C-over-B precedence (4 cases). Full suite 734+ green.
+- Tooling committed in `2c91e6d`; config A-lane edits land here.
+- NOTE: this `settings.yaml` commit also carries concurrent parallel-session gate edits (`disable_buy_no_5m_native` flips, `min_min_edge_mult`, `enabled` toggles) that arrived in the same file and could not be split non-interactively.
+
+---
+
+## 2026-06-01 — Reopen ghost-positive XRP/HYPE 5m native BUY_NO gates
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), strategy logs:**
+
+- **Config:** set `xrp_macro.disable_buy_no_5m_native: false` and `hype_macro.disable_buy_no_5m_native: false`; SOL/DOGE/BNB remain suppressed.
+- **Why:** current session review showed the bot was collecting evidence but not closing most gate loops. Settled ghosts now show the previous 5m native BUY_NO suppression is negative gate value on XRP and HYPE specifically: XRP `n=651`, `WR=59.8%`, net gate value `-95.060`; HYPE `n=303`, `WR=61.7%`, net gate value `-35.241`.
+- **Boundary:** did **not** globally expand `performance_feedback.overtight_reasons`; non-`lane_min_edge` gates generally lack `effective_min_edge` fields, so the current relax math would be inert. Did **not** loosen `eth_1h_weak_confirm` BUY_NO because the full settled sample is protective (`n=859`, `WR=48.2%`, net gate value `+77.111`). Did **not** raise AI call caps from the current forward-test config; full-file `ai_call_limit_marginal_threshold` evidence is mixed.
+- **Validation:** forward-test only for reopened live entries; strategy-log outcomes remain `pending` until at least 15 closed post-change trades per reopened lane.
+
 ## 2026-05-31 — Positive trailing-floor exit (true trailing-after-MFE) for up/down lanes
 
 **[`src/execution/updown_exit_shared.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py), [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**

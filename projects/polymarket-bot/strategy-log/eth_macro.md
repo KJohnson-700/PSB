@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-01 — Per-lane exit policy: extend hold+trail to eth 5m/1h BUY_YES + 15m BUY_NO
+
+- **What changed:** Held-vs-realized scorecard ([`lane_exit_audit.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_audit.py)) classifies eth as Policy-A (exit kills edge) on more than 15m BUY_YES. Added hold-winners + trailing floor (`arm 0.10 / gap 0.15`) to **eth 5m BUY_YES** (held 60% / realized 20%, n=5 thin), **eth 1h BUY_YES** (held 55% / realized 23%, n=22), and **eth 15m BUY_NO** (held 50% / realized 34%, n=38 — a legit 15m short, NOT the suppressed 5m-native).
+- **Why:** eth's realized WR is far below held-to-resolution across windows; the +30% TP / stop is converting directionally-correct entries into losses. eth 1h BUY_YES alone throws away ~$24; 15m BUY_NO ~$38.
+- **Hypothesis:** holding these to resolution with a positive trailing floor recovers the directional edge the exit was discarding.
+- **Expected outcome:** eth realized-WR converges toward held-WR; fewer `take_profit`/`updown_stop_loss` exits on these lanes.
+- **Actual outcome:** `pending` — forward-test only (exits not ghost-validatable); needs bot restart. Track via `python -m src.analysis.lane_exit_audit`.
+- **Status:** `pending`
+
 ### 2026-05-31 — Early-TP regret: hold winners + positive trailing floor (BUY_YES 15m)
 
 - **What changed:** Added an `up` (BUY_YES) block to `eth_macro` 15m in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Backed by the new floor mechanic in [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py) — once peak clears +10%, exit floor trails at `peak − 15%` and can be positive (banks gains), never wider than the base stop.

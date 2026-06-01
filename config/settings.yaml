@@ -73,20 +73,17 @@ trading:
     updown_in_profit_stop_tighten_to_pct: 0.0
     updown_overrides:
       bnb_macro:
-        # Early-TP regret experiment (forward-test, 2026-05-31): BUY_YES 5m/15m
-        # left money on the table exiting at +30%. Hold winners + positive
-        # trailing floor (bank peak-15% once up >=10%).
         window_lane_overrides:
           5m:
             up:
               updown_stop_loss_pct: 0.15
-              updown_trail_arm_pct: 0.10
+              updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
           15m:
             up:
               updown_stop_loss_pct: 0.17
-              updown_trail_arm_pct: 0.10
+              updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
       eth_macro:
@@ -94,6 +91,14 @@ trading:
         updown_exit_window_mins: 3.0
         window_lane_overrides:
           5m:
+            up:
+              # 2026-06-01: eth BUY_YES 5m held-WR 60% / realized 20%, held
+              # +$19.1 vs realized -$5.7 — exit destroys directional edge. (n=5,
+              # thin; same pattern as 15m/1h so included.) Hold winners + trail.
+              updown_stop_loss_pct: 0.14
+              updown_trail_arm_pct: 0.10
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
             down:
               updown_stop_loss_pct: 0.14
               updown_stop_cents: 0.015
@@ -105,13 +110,14 @@ trading:
               updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
             up:
-              # Early-TP regret experiment (forward-test, 2026-05-31): BUY_YES
-              # 15m held-to-resolution beat +30% TP. Hold + positive trail floor.
               updown_stop_loss_pct: 0.16
-              updown_trail_arm_pct: 0.10
+              updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
             down:
+              # 2026-06-01: eth BUY_NO 15m held-WR 50% / realized 34%, held
+              # +$24.1 vs realized -$13.7 (n=38) — Policy-A exit-kills-edge lane
+              # on the short side (this 15m short is NOT the suppressed 5m-native).
               updown_stop_loss_pct: 0.16
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.5
@@ -120,6 +126,18 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
+              updown_trail_arm_pct: 0.10
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
+          1h:
+            up:
+              # 2026-06-01: eth BUY_YES 1h held-WR 55% / realized 23%, held
+              # +$16.1 thrown away as realized -$7.6 (n=22). Exit kills edge.
+              # Hold winners to resolution + positive trailing floor.
+              updown_stop_loss_pct: 0.17
+              updown_trail_arm_pct: 0.10
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
       sol_macro:
         window_lane_overrides:
           5m:
@@ -177,6 +195,15 @@ trading:
         updown_exit_window_mins: 2.25
         window_lane_overrides:
           5m:
+            up:
+              # 2026-06-01: held-vs-realized gap indicts EXIT not entry — xrp
+              # BUY_YES 5m held-WR 46% / realized 15%, held -$4.3 vs realized
+              # -$23.3. Entries near coin-flip; TP/SL amplifies losses. Hold
+              # winners + positive trailing floor to stop the exit bleed.
+              updown_stop_loss_pct: 0.15
+              updown_trail_arm_pct: 0.10
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -187,6 +214,14 @@ trading:
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
+            up:
+              # 2026-06-01: xrp BUY_YES 15m held-WR 71% / realized 29%, held
+              # +$42.2 thrown away as realized -$9.1 by the exit. Hold winners
+              # to resolution + trail floor to capture the directional edge.
+              updown_stop_loss_pct: 0.17
+              updown_trail_arm_pct: 0.10
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
             down:
               updown_stop_loss_pct: 0.17
               updown_stop_cents: 0.02
@@ -196,9 +231,7 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-              # Early-TP regret experiment (forward-test, 2026-05-31): BUY_NO 15m
-              # held-to-resolution beat +30% TP (+$3.84/trade). Hold + trail floor.
-              updown_trail_arm_pct: 0.10
+              updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
 lane_management:
@@ -854,7 +887,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
-    disable_buy_no_5m_native: true
+    disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1048,7 +1081,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
-    disable_buy_no_5m_native: true
+    disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1650,9 +1683,6 @@ ai:
   decision_layer:
     enabled: true
     min_confidence: 0.6
-    # Marginal lane: AI may only veto a candidate with a confident, directly-
-    # opposing directional call. HOLD/low-confidence/agreement -> take the quant
-    # trade (fail-open). Set false to restore strict (HOLD vetoes) behavior.
     marginal_veto_only: true
     hard_skip_if_unavailable_on_enforced: false
     use_shadow_portfolio: false
@@ -1784,7 +1814,7 @@ backtest:
   min_edge_hype_15m: 0.09
   min_edge_hype_5m: 0.07
 learning_loop:
-  enabled: false
+  enabled: true
   min_trades_for_rules: 15
   min_trades_per_segment: 15
   include_archive: true
@@ -1804,7 +1834,7 @@ performance_feedback:
   enabled: true
   refresh_every_n_cycles: 6
   min_live_sample: 15
-  min_min_edge_mult: 1.0
+  min_min_edge_mult: 0.7
   max_min_edge_mult: 1.0
   diverge_min_edge_mult: 1.0
   kelly_mult_when_diverging: 1.0
@@ -1820,7 +1850,7 @@ performance_feedback:
   overtight_min_edge_mult_ceil: 1.0
   merge_learning_loop_expectations: true
 self_healing:
-  enabled: false
+  enabled: true
   run_every_n_cycles: 6
   cold_lane:
     enabled: true
