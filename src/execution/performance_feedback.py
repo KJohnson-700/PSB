@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.analysis.ghost_calibration import DEFAULT_SETTLED_LOG
-from src.execution.backtest_expectations import load_backtest_expectations
 from src.execution.live_testing import PerformanceTracker
 
 logger = logging.getLogger(__name__)
@@ -216,7 +215,8 @@ def refresh_performance_feedback(
         }
         return
 
-    expectations = load_backtest_expectations(config, data_root=data_root)
+    # Backtest expectations removed (ghost calibration is primary validation system)
+    expectations: Dict[str, Dict[str, float]] = {}
     min_sample = int(pf.get("min_live_sample", 15))
     drift = []
     if expectations:
@@ -226,7 +226,7 @@ def refresh_performance_feedback(
         drift = tracker.check_drift(expectations, min_live_sample=min_sample)
     else:
         logger.info(
-            "performance_feedback: no expectations (reports/YAML empty); skip drift tighten"
+            "performance_feedback: no expectations (backtest infrastructure removed); skip drift tighten"
         )
 
     diverge_mult = float(pf.get("diverge_min_edge_mult", 1.08))

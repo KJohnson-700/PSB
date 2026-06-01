@@ -104,13 +104,15 @@ def _make_btc_updown_market(
     yes_price=0.40,
     mins_until_end=13.0,
     market_id="btc-updown-test",
+    question="Bitcoin Up or Down - 12:00AM-12:15AM ET?",
+    description="Bitcoin 15m up/down candle",
 ):
     """15m Bitcoin Up/Down candle (matches `UPDOWN_PATTERN` + entry window)."""
     end = datetime.now(timezone.utc) + timedelta(minutes=mins_until_end)
     return Market(
         id=market_id,
-        question="Bitcoin Up or Down - 12:00AM-12:15AM ET?",
-        description="Bitcoin 15m up/down candle",
+        question=question,
+        description=description,
         volume=500000,
         liquidity=50000,
         yes_price=yes_price,
@@ -700,6 +702,8 @@ class TestBitcoinAIIntegration:
         self.ai = MagicMock()
         self.ai.is_available = MagicMock(return_value=True)
         self.ai.analyze_market = AsyncMock(return_value=None)
+        self.ai.decision_layer_lane_enforced = MagicMock(return_value=False)
+        self.ai.decision_layer_lane_requires_shadow = MagicMock(return_value=False)
         self.ai.shadow_pipeline_enabled = MagicMock(return_value=False)
         self.ai.shadow_pipeline_max_calls_per_scan = MagicMock(return_value=0)
         self.ai.shadow_pipeline_min_confidence = MagicMock(return_value=1.0)
@@ -717,6 +721,44 @@ class TestBitcoinAIIntegration:
         )
         self.sizer = PositionSizer(kelly_fraction=0.25, max_position_pct=0.05)
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
+
+    def test_5m_default_lane_uses_async_ai_broker_even_when_legacy_5m_flag_is_off(self):
+        class FakeBroker:
+            def __init__(self):
+                self.enqueued = []
+
+            def get_resolved(self, *args, **kwargs):
+                return None
+
+            def enqueue(self, snapshot):
+                self.enqueued.append(snapshot)
+
+        self.ai.decision_layer_lane_enforced = MagicMock(
+            side_effect=lambda strategy, lane: strategy == "bitcoin" and lane == "default"
+        )
+        self.config["strategies"]["bitcoin"]["use_ai_updown_5m"] = False
+        broker = FakeBroker()
+        self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer, ai_broker=broker)
+        ta = _ltf_unconfirmed_bull(_make_bullish_ta(82000))
+        market = _make_btc_updown_market(
+            yes_price=0.50,
+            mins_until_end=3.0,
+            market_id="btc-updown-5m-ai-default",
+            question="Bitcoin Up or Down - 12:00AM-12:05AM ET?",
+            description="Bitcoin 5m up/down candle",
+        )
+
+        with patch.object(self.strategy.btc_service, "get_full_analysis", return_value=ta):
+            signals = run_async(self.strategy.scan_and_analyze([market], 10000))
+
+        assert signals == []
+        assert len(broker.enqueued) == 1
+        snapshot = broker.enqueued[0]
+        assert snapshot.key[0] == "bitcoin"
+        assert snapshot.key[1] == market.id
+        assert "5m" in snapshot.key[2]
+        assert snapshot.action == "BUY_YES"
+        assert self.strategy.last_scan_stats["top_skip_reasons"]["ai_pending_default"] == 1
 
     @pytest.mark.skip(
         reason="Stale vs horizon-coherent bias arch (2026-05-28). _make_bullish_ta "
@@ -1016,4 +1058,3 @@ class TestResolutionTracker:
             )
 
         assert len(settled) == 0  # Not resolved yet
-

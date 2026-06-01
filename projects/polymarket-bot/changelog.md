@@ -4,6 +4,15 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-05-31 — AI decision layer rebuilt + 68GB disk reclaim + 1h/15m→4h neutral fallback
+
+- **What changed:** (1) Reclaimed **68 GB** of `.git` garbage (2,311 abandoned `tmp_pack_*` from auto-gc failing on a full disk); untracked all of `data/` from git (`git rm --cached -r data/` + ignore `data/`), deleted broken `data/backtest/`. Ghost calibration data kept on disk. (2) Rebuilt the AI **decision layer** as a **synchronous, fail-open** gate on **15m/1h only** (5m is pure quant — AI latency ≫ a 5m window). All AI paths (default/marginal/neutral_15m) moved off the async enqueue/expire broker that was silently dropping trades. Default lane fail-OPEN; marginal/neutral fail-CLOSED. Gate timeout 40s. New `ai_decision_settler.py` scores live verdicts (`decision_layer.jsonl`) against outcomes. (3) Added asset-own **4h neutral fallback** for the 1h and 15m lanes (`_get_4h_bias`), so a neutral horizon resolves an alt-native direction instead of sitting out (BTC already had this).
+- **Why:** The "complete for months" AI layer was never live (`enabled:false`) and Codex's flip-on used an async broker + default-lane gate that starved trades. Disk was 100% full (bot writes blocked). 1h-neutral lanes sat out for lack of a higher reference.
+- **Hypothesis:** Real AI gating on slow lanes (where latency is harmless) plus fail-open + 5m-quant recovers/keeps trade frequency while finally measuring AI accuracy; 4h fallback recovers neutral-1h/15m participation.
+- **Expected outcome:** `decision_layer.jsonl` fills with real approved/rejected verdicts (settler-scorable); `_neutral_fallback_4h` cohorts appear; no AI-induced starvation.
+- **Actual outcome:** `pending` — forward-test only (candidate-gen, NOT ghost-validatable). `dry_run` live check confirmed gate fires + fail-open lets trades through. Needs ≥ a full session + settler run to judge gate accuracy.
+- **Status:** `pending` (needs bot restart to load; 213 tests pass).
+
 ## 2026-05-28 — Calibration throughput guardrails
 
 - **What changed:** Restored paper loss-pause behavior so paper-mode lanes auto-resume during calibration instead of requiring manual intervention after a loss-streak pause. Manual resume semantics still apply to explicit live/manual pause mode. Added a Codex working note at [projects/polymarket-bot/codex-working-notes.md](/Users/mainfolder/Documents/psb-main%201/projects/polymarket-bot/codex-working-notes.md) anchoring the current calibration recommendation.

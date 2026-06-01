@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import src.execution.trade_journal as trade_journal_module
 
+import pytest
+
 from src.execution.trade_journal import TradeJournal, is_phantom_exit_row
 
 
@@ -58,6 +60,45 @@ def test_summary_file_updates_immediately_on_entry(tmp_path: Path, monkeypatch) 
     assert summary["total_entries"] == 1
     assert summary["open_positions"] == 1
     assert summary["total_cost"] == 5.0
+
+
+def test_bnb_and_doge_updown_entries_are_written_to_fill_log(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path / "journals")
+    fill_log = tmp_path / "updown_fills.jsonl"
+    monkeypatch.setattr(trade_journal_module, "ENTRY_PRICE_LOG", fill_log)
+    journal = TradeJournal(session_id="20260531_fill_log", resume_latest=False)
+
+    journal.log_entry(
+        trade_id="bnb-no",
+        market_id="bnb-updown-1",
+        market_question="BNB Up or Down",
+        strategy="bnb_macro",
+        action="BUY_NO",
+        side="BUY",
+        outcome="NO",
+        size=10.0,
+        entry_price=0.43,
+        bankroll=500.0,
+    )
+    journal.log_entry(
+        trade_id="doge-yes",
+        market_id="doge-updown-1",
+        market_question="Dogecoin Up or Down",
+        strategy="doge_macro",
+        action="BUY_YES",
+        side="BUY",
+        outcome="YES",
+        size=10.0,
+        entry_price=0.54,
+        bankroll=500.0,
+    )
+
+    rows = [json.loads(line) for line in fill_log.read_text().splitlines()]
+    assert [row["strategy"] for row in rows] == ["bnb_macro", "doge_macro"]
+    assert rows[0]["yes_price"] == pytest.approx(0.57)
+    assert rows[1]["yes_price"] == 0.54
 
 
 def test_dead_zone_skip_records_and_resolves(tmp_path: Path, monkeypatch) -> None:

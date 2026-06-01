@@ -22,6 +22,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 - **Actual outcome:** `pending` (needs bot restart + ~15 closed post-change trades)
 - **Status:** `pending`
 
+### 2026-05-31 — SOL 1h starvation window repair
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened SOL 1h entry windows from `60.0` to `360.0` minutes in both `by_tf.1h` and `entry_policy.window_side_overrides.1h` for `up` and `down`.
+- **Why:** The May 31 morning audit showed 1h alt starvation from `lane_entry_window`: the feed was mostly surfacing 1h candidates `61-298` minutes out, while SOL still capped 1h admission at `60.0`. May 30 settled ghosts showed SOL 1h rejected candidates at `59.4%` WR / `+12.9%` ROI (`n=962`), including `sol_macro|1h|LONG|lane_entry_window` at `68.9%` WR / `+37.9%` ROI (`n=61`).
+- **Hypothesis:** SOL 1h should resume collecting paper fills instead of starving on future-listed markets; downstream edge, price, oracle, and risk gates still decide final admission.
+- **Expected outcome:** SOL 1h `lane_entry_window` rejects should fall and 1h trade count should become nonzero in comparable sessions.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — Local SOL short-lane guards after 126-trade session review
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added SOL-only local guards that block `sol_5m_vs_slower` `BUY_NO` entries when SOL 1H is bullish, and block `sol_15m_native` `BUY_NO` entries when BTC 1H regime is `BULL` and the YES side is already expensive (`sol_15m_buy_no_max_yes_price_bull_1h`, default `0.48`). Added focused regression coverage in [tests/test_sol_macro.py](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py).

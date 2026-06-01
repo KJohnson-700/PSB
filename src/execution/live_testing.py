@@ -51,6 +51,15 @@ class ExitDecision:
     reason: str  # "take_profit", "stop_loss", "time_limit"
     unrealized_pnl: float
     hours_held: float
+    # Exit-calibration telemetry (additive; None on legacy/reload paths).
+    # mae_pct/mfe_pct: worst/best token-price excursion vs entry over the hold.
+    # pnl_pct_at_exit: pnl_pct at the moment the exit fired.
+    # effective_stop_loss_pct: the (dynamic) stop threshold in force at exit — lets
+    # us measure stop OVERSHOOT (how far past the threshold the fill landed).
+    mae_pct: Optional[float] = None
+    mfe_pct: Optional[float] = None
+    pnl_pct_at_exit: Optional[float] = None
+    effective_stop_loss_pct: Optional[float] = None
 
 
 @dataclass
@@ -219,10 +228,27 @@ class PositionExitManager:
                 if pos.entry_price > 0
                 else 0.0
             )
+            # Mirror the peak tracker to capture max adverse excursion (MAE): the
+            # lowest token price the position touched. Persisted on the position so
+            # it accumulates across cycles, same as peak_token_price.
+            trough_token_price = float(
+                getattr(pos, "trough_token_price", 0.0) or pos.entry_price
+            )
+            if current_token_price < trough_token_price:
+                trough_token_price = current_token_price
+                setattr(pos, "trough_token_price", trough_token_price)
+            mae_pct = (
+                (trough_token_price - pos.entry_price) / pos.entry_price
+                if pos.entry_price > 0
+                else 0.0
+            )
             entry_signal = dict(getattr(pos, "entry_signal", {}) or {})
 
             # Check exit conditions
             reason = None
+            # Stop threshold in force at exit (for overshoot telemetry); set in the
+            # branch that actually evaluates the stop below.
+            effective_stop_for_log: Optional[float] = None
             is_updown = (
                 strategy_name in CRYPTO_UPDOWN_STRATEGIES
                 and "up or down" in getattr(pos, "market_question", "").lower()
@@ -270,6 +296,7 @@ class PositionExitManager:
                     dynamic_stop_low_convergence_threshold=resolved.dynamic_stop_low_convergence_threshold,
                     dynamic_stop_high_convergence_threshold=resolved.dynamic_stop_high_convergence_threshold,
                 )
+                effective_stop_for_log = effective_stop_loss_pct
 
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
@@ -330,6 +357,7 @@ class PositionExitManager:
                         # end_date: if still open after updown_max_hold_mins, exit.
                         reason = "updown_time_limit"
             else:
+                effective_stop_for_log = self.stop_loss_pct
                 if pnl_pct >= self.take_profit_pct:
                     reason = "take_profit"
                 elif pnl_pct <= -self.stop_loss_pct:
@@ -365,6 +393,14 @@ class PositionExitManager:
                         reason=reason,
                         unrealized_pnl=round(unrealized_pnl, 2),
                         hours_held=round(hours_held, 1),
+                        mae_pct=round(mae_pct, 4),
+                        mfe_pct=round(peak_pnl_pct, 4),
+                        pnl_pct_at_exit=round(pnl_pct, 4),
+                        effective_stop_loss_pct=(
+                            round(effective_stop_for_log, 4)
+                            if effective_stop_for_log is not None
+                            else None
+                        ),
                     )
                 )
 

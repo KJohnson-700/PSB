@@ -50,7 +50,6 @@ from src.analysis.lane_thresholds import load_lane_thresholds
 from src.config_merge import deep_merge_config as _deep_merge
 from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
-from src.execution.backtest_expectations import load_backtest_expectations
 from src.execution.performance_feedback import public_feedback_status
 
 # Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
@@ -3157,42 +3156,14 @@ async def get_live_performance():
 
 @app.get("/api/live/drift")
 async def get_live_drift():
-    """Compare live performance against backtest expectations."""
-    from src.execution.live_testing import PerformanceTracker
+    """Compare live performance against backtest expectations.
 
-    perf = PerformanceTracker()
-    cfg: Dict[str, Any] = {}
-    bot = _full_bot_instance()
-    if bot is not None:
-        cfg = bot.config
-    elif CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                cfg = yaml.safe_load(f) or {}
-        except Exception:
-            cfg = {}
-    expectations = load_backtest_expectations(cfg, data_root=DATA_ROOT)
-    min_s = int((cfg.get("performance_feedback") or {}).get("min_live_sample", 15))
-    drift = perf.check_drift(expectations, min_live_sample=min_s)
+    DEPRECATED: backtest infrastructure has been removed.
+    Use ghost calibration and paper trade sessions for performance validation.
+    """
     return {
-        "reports": [
-            {
-                "strategy": r.strategy,
-                "bt_win_rate": round(r.bt_win_rate, 4),
-                "live_win_rate": round(r.live_win_rate, 4),
-                "win_rate_drift": round(r.win_rate_drift, 4),
-                "bt_avg_edge": round(r.bt_avg_edge, 4),
-                "live_avg_edge": round(r.live_avg_edge, 4),
-                "edge_drift": round(r.edge_drift, 4),
-                "bt_trades_per_day": round(r.bt_trades_per_day, 4),
-                "live_trades_per_day": round(r.live_trades_per_day, 4),
-                "trade_freq_drift": round(r.trade_freq_drift, 4),
-                "live_sample_size": r.live_sample_size,
-                "is_diverging": r.is_diverging,
-                "verdict": r.verdict,
-            }
-            for r in drift
-        ]
+        "reports": [],
+        "notice": "backtest infrastructure removed — use ghost calibration and paper trade sessions",
     }
 
 

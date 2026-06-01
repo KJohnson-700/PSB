@@ -215,6 +215,13 @@ def build_record_from_closed_trade(
         "raw_est_prob": raw_est_prob,
         "gate_reason": gate_reason,
         "gate_stage": gate_stage,
+        # Exit-calibration telemetry (None on legacy/reload exits). mae/mfe are the
+        # worst/best excursion vs entry; effective_stop_loss_pct is the threshold in
+        # force at exit, so (realized_pct vs -effective_stop_loss_pct) = stop overshoot.
+        "mae_pct": _coerce_float(closed.get("mae_pct")),
+        "mfe_pct": _coerce_float(closed.get("mfe_pct")),
+        "pnl_pct_at_exit": _coerce_float(closed.get("pnl_pct_at_exit")),
+        "effective_stop_loss_pct": _coerce_float(closed.get("effective_stop_loss_pct")),
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         **bucket_tags,
     }

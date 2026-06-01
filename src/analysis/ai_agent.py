@@ -267,10 +267,13 @@ OUTPUT (machine-parseable — follow exactly):
         self._model_cooldown_until: Dict[str, float] = {}
         self.live_inferencing = self.config.get("live_inferencing", True)
         self.structured_log = bool(self.config.get("structured_log", False))
+        # Data/telemetry layer: these can write reasoning and observations, but
+        # cannot approve or reject entries by themselves.
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.shadow_observer_cfg = dict(self.config.get("shadow_observer", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
+        # Execution decision layer: the only AI config block that may gate entry.
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
         self.prompt_version = str(
             self.config.get("prompt_version", DEFAULT_PROMPT_VERSION)
@@ -328,6 +331,8 @@ OUTPUT (machine-parseable — follow exactly):
         self._free_tier_daily_budget = self.config.get("free_tier_daily_request_budget") or 0
         self.live_inferencing = self.config.get("live_inferencing", True)
         self.structured_log = bool(self.config.get("structured_log", False))
+        # Keep execution gating separate from data/telemetry after live config
+        # refreshes as well.
         self.research_narrative_cfg = dict(self.config.get("research_narrative", {}) or {})
         self.shadow_pipeline_cfg = dict(self.config.get("shadow_pipeline", {}) or {})
         self.shadow_observer_cfg = dict(self.config.get("shadow_observer", {}) or {})
@@ -447,6 +452,7 @@ OUTPUT (machine-parseable — follow exactly):
         return float(ai_confidence) < threshold
 
     def decision_layer_enabled(self) -> bool:
+        """Execution toggle. False means AI data layers may run, but entries are not AI-gated."""
         return bool(self.decision_layer_cfg.get("enabled", False))
 
     def decision_layer_min_confidence(self) -> float:
@@ -459,6 +465,8 @@ OUTPUT (machine-parseable — follow exactly):
         return bool(self.decision_layer_cfg.get("use_shadow_portfolio", False))
 
     def decision_layer_lane_enforced(self, strategy: str, lane: str) -> bool:
+        if not self.decision_layer_enabled():
+            return False
         lanes = self.decision_layer_cfg.get("enforced_lanes")
         if isinstance(lanes, dict):
             configured = lanes.get(str(strategy or "").strip())
@@ -471,6 +479,8 @@ OUTPUT (machine-parseable — follow exactly):
         return False
 
     def decision_layer_lane_requires_shadow(self, strategy: str, lane: str) -> bool:
+        if not self.decision_layer_enabled():
+            return False
         if self.decision_layer_use_shadow_portfolio():
             return True
         lanes = self.decision_layer_cfg.get("shadow_required_lanes")
@@ -1423,17 +1433,6 @@ OUTPUT (machine-parseable — follow exactly):
 
         rec = str(analysis.recommendation or "").strip().upper()
         if rec == "HOLD":
-            if is_marginal:
-                return AIDecision(
-                    True,
-                    action,
-                    float(quant_confidence),
-                    float(analysis.estimated_probability),
-                    float(quant_edge),
-                    "direct_ai_hold_abstain_marginal",
-                    "direct_abstain",
-                    direct_analysis=analysis,
-                )
             return AIDecision(
                 False,
                 rec,
@@ -1456,17 +1455,6 @@ OUTPUT (machine-parseable — follow exactly):
                 direct_analysis=analysis,
             )
         if float(analysis.confidence_score) < min_confidence:
-            if is_marginal:
-                return AIDecision(
-                    True,
-                    action,
-                    max(float(quant_confidence), float(analysis.confidence_score)),
-                    float(analysis.estimated_probability),
-                    float(quant_edge),
-                    "direct_ai_low_confidence_abstain_marginal",
-                    "direct_abstain",
-                    direct_analysis=analysis,
-                )
             return AIDecision(
                 False,
                 rec,
@@ -1528,21 +1516,6 @@ OUTPUT (machine-parseable — follow exactly):
                 )
             portfolio_action = str(shadow.get("portfolio_action") or "").upper()
             if portfolio_action in {"HOLD", "SKIP"}:
-                if is_marginal:
-                    return AIDecision(
-                        True,
-                        action,
-                        max(
-                            float(quant_confidence),
-                            float(shadow.get("shadow_confidence") or analysis.confidence_score),
-                        ),
-                        float(analysis.estimated_probability),
-                        float(quant_edge),
-                        "shadow_portfolio_hold_abstain_marginal",
-                        "shadow_portfolio_abstain",
-                        direct_analysis=analysis,
-                        shadow_result=shadow,
-                    )
                 return AIDecision(
                     False,
                     portfolio_action,
@@ -1568,18 +1541,6 @@ OUTPUT (machine-parseable — follow exactly):
                 )
             shadow_confidence = float(shadow.get("shadow_confidence") or analysis.confidence_score)
             if shadow_confidence < min_confidence:
-                if is_marginal:
-                    return AIDecision(
-                        True,
-                        action,
-                        max(float(quant_confidence), shadow_confidence),
-                        float(analysis.estimated_probability),
-                        float(quant_edge),
-                        "shadow_portfolio_low_confidence_abstain_marginal",
-                        "shadow_portfolio_abstain",
-                        direct_analysis=analysis,
-                        shadow_result=shadow,
-                    )
                 return AIDecision(
                     False,
                     portfolio_action,

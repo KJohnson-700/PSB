@@ -542,6 +542,54 @@ class SolMacroStrategy:
             )
             return None
 
+    # Windows where the AI decision gate is allowed to run. 5m is excluded on
+    # purpose: AI round-trip latency is large vs a 5m entry window and would drop
+    # the trade. 15m/1h windows are minutes-to-hours, so the latency is negligible.
+    _DECISION_GATE_WINDOWS = frozenset({"15m", "1h"})
+
+    def _log_decision_layer(
+        self,
+        *,
+        market,
+        window: str,
+        quant_action: str,
+        ai_decision,
+        lane: str = "default",
+        fail_open_reason: Optional[str] = None,
+    ) -> None:
+        """Append every real decision-layer verdict to decision_layer.jsonl.
+
+        This is the record the settler scores against outcomes — the thing that
+        was missing, which is why the gate was never testable. Best-effort; never
+        let logging failure affect trading.
+        """
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+
+            rec = {
+                "ts_utc": datetime.utcnow().isoformat() + "Z",
+                "strategy": self._signal_strategy_name,
+                "market_id": getattr(market, "id", None),
+                "market_question": (getattr(market, "question", "") or "")[:140],
+                "window": window,
+                "lane": lane,
+                "quant_action": quant_action,
+                "approved": getattr(ai_decision, "approved", None) if ai_decision else None,
+                "ai_action": getattr(ai_decision, "action", None) if ai_decision else None,
+                "confidence": getattr(ai_decision, "confidence", None) if ai_decision else None,
+                "estimated_probability": getattr(ai_decision, "estimated_probability", None) if ai_decision else None,
+                "edge": getattr(ai_decision, "edge", None) if ai_decision else None,
+                "reason": getattr(ai_decision, "reason", None) if ai_decision else None,
+                "fail_open": fail_open_reason,
+            }
+            path = _Path("data/logs/ai_pipeline/decision_layer.jsonl")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(rec) + "\n")
+        except Exception:  # pragma: no cover - logging must never break trading
+            pass
+
     def _apply_strategy_config(self, *, rebuild_service: bool = False) -> None:
         # Thresholds from config first — before any other init work — so
         # scan_and_analyze always sees instance values from YAML, not class fallbacks.
@@ -1376,6 +1424,26 @@ class SolMacroStrategy:
             min_hist_magnitude=self._hist_conviction_threshold("1h"),
         )
 
+    def _get_4h_bias(self, ta: SOLTechnicalAnalysis) -> str:
+        """Asset's own 4h voted bias (same MACD/EMA/RSI vote as 1h).
+
+        Used only as the 1h lane's fallback when the 1h horizon is NEUTRAL, so the
+        1h lane resolves an alt-native direction instead of sitting out. 4h klines
+        are already fetched by the service (tf_4h). Returns NEUTRAL if 4h is missing.
+        """
+        state = self._get_alt_tf_state(ta, "4h")
+        if state is None:
+            return "NEUTRAL"
+        return self._resolve_voted_bias(
+            macd=getattr(state, "macd", None),
+            price=float(getattr(state, "price", 0.0) or 0.0),
+            ema_9=float(getattr(state, "ema_9", 0.0) or 0.0),
+            ema_21=float(getattr(state, "ema_21", 0.0) or 0.0),
+            ema_50=float(getattr(state, "ema_50", 0.0) or 0.0),
+            rsi=float(getattr(state, "rsi_14", 50.0) or 50.0),
+            min_hist_magnitude=self._hist_conviction_threshold("4h"),
+        )
+
     def _resolve_alt_bias_for_tf(self, ta: SOLTechnicalAnalysis, tf: str) -> BiasResolution:
         asset = self._alt_asset_code()
         if tf == "5m":
@@ -1383,10 +1451,24 @@ class SolMacroStrategy:
             slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta)}
         elif tf == "15m":
             horizon_bias = self._get_15m_bias(ta)
-            slower_biases = {"1h": self._get_1h_bias(ta)}
+            # Decided 15m keeps its existing 1h-only disagreement check. When 15m is
+            # NEUTRAL, cascade 1h -> 4h so the lane can still resolve a direction if
+            # 1h is also neutral but 4h has a clear trend (neutral-only; no penalty
+            # change on confident 15m trades).
+            if horizon_bias in {"BULLISH", "BEARISH"}:
+                slower_biases = {"1h": self._get_1h_bias(ta)}
+            else:
+                slower_biases = {"1h": self._get_1h_bias(ta), "4h": self._get_4h_bias(ta)}
         else:
             horizon_bias = self._get_1h_bias(ta)
-            slower_biases = {}
+            # 1h is the top horizon for alts. When it resolves NEUTRAL, fall back to
+            # the asset's OWN 4h so the 1h lane picks a direction instead of sitting
+            # out. When 1h is already decided, do NOT consult 4h (no behavior change
+            # / no disagreement penalty on confident 1h trades).
+            if horizon_bias in {"BULLISH", "BEARISH"}:
+                slower_biases = {}
+            else:
+                slower_biases = {"4h": self._get_4h_bias(ta)}
 
         primary_htf_bias = horizon_bias if horizon_bias in {"BULLISH", "BEARISH"} else "NEUTRAL"
         penalty = 0.0
@@ -3794,7 +3876,11 @@ class SolMacroStrategy:
                 _marginal_min_edge = self._min_edge_for_window(
                     _updown_tf if is_updown else "15m"
                 )
-                if edge < _marginal_min_edge and edge > 0.03:
+                if (
+                    edge < _marginal_min_edge and edge > 0.03
+                    # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
+                    and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                ):
                     def _log_ai_veto(_reason: str, **extra: Any) -> None:
                         _log_skip_reject(
                             market=market,
@@ -3893,42 +3979,30 @@ class SolMacroStrategy:
                         ).get("lane_id")
                         or ""
                     )
-                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                    # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
+                    # marginal candidates are below threshold and only trade WITH AI
+                    # blessing, so no AI => skip (returns to quant baseline).
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
                         lane_id=ai_lane_id,
-                        market=market,
-                        ai_context=ai_context,
-                        yes_price=yes_price,
-                        edge=edge,
-                        confidence=confidence,
-                        action=action,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
                         quant_threshold=_marginal_min_edge,
-                        raw_est_prob=raw_est_prob,
-                        estimated_prob=estimated_prob,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
                         require_shadow_portfolio=False,
-                        htf_bias=btc_htf_bias,
                     )
-                    if _broker_state == "pending":
-                        ai_calls += 1
-                        _bump_skip("ai_pending_marginal_threshold")
-                        _log_ai_veto("ai_pending_marginal_threshold")
-                        continue
-                    if _broker_state == "unavailable":
-                        ai_decision = await self._evaluate_trade_decision_with_timeout(
-                            market_question=market.question,
-                            market_description=ai_context,
-                            current_yes_price=yes_price,
-                            market_id=market.id,
-                            strategy_hint=self._signal_strategy_name,
-                            lane_id=ai_lane_id,
-                            quant_action=action,
-                            quant_edge=edge,
-                            quant_confidence=confidence,
-                            quant_threshold=_marginal_min_edge,
-                            raw_probability=raw_est_prob,
-                            post_calibration_probability=estimated_prob,
-                            require_shadow_portfolio=False,
-                        )
                     ai_calls += 1
+                    self._log_decision_layer(
+                        market=market, window=(_updown_tf if is_updown else "15m"),
+                        quant_action=action, ai_decision=ai_decision, lane="marginal",
+                        fail_open_reason=None if ai_decision is not None else "timeout",
+                    )
                     if ai_decision is None:
                         _bump_skip("ai_decision_timeout_marginal_threshold")
                         _log_ai_veto("ai_decision_timeout_marginal_threshold")
@@ -4192,6 +4266,8 @@ class SolMacroStrategy:
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
                 and ai_calls < self.max_ai_calls_per_scan
+                # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
+                and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
             ):
                 _win = _updown_tf if is_updown else "15m"
                 ai_context2 = (
@@ -4228,41 +4304,29 @@ class SolMacroStrategy:
                     ).get("lane_id")
                     or ""
                 )
-                _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
+                # below-threshold marginal extras only trade WITH AI blessing.
+                ai_decision = await self._evaluate_trade_decision_with_timeout(
+                    market_question=market.question,
+                    market_description=ai_context2,
+                    current_yes_price=yes_price,
+                    market_id=market.id,
+                    strategy_hint=self._signal_strategy_name,
                     lane_id=ai_lane_id,
-                    market=market,
-                    ai_context=ai_context2,
-                    yes_price=yes_price,
-                    edge=edge,
-                    confidence=confidence,
-                    action=action,
+                    quant_action=action,
+                    quant_edge=edge,
+                    quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
-                    raw_est_prob=raw_est_prob,
-                    estimated_prob=estimated_prob,
+                    raw_probability=raw_est_prob,
+                    post_calibration_probability=estimated_prob,
                     require_shadow_portfolio=False,
-                    htf_bias=btc_htf_bias,
                 )
-                if _broker_state == "pending":
-                    ai_calls += 1
-                    _bump_skip("ai_pending")
-                    continue
-                if _broker_state == "unavailable":
-                    ai_decision = await self._evaluate_trade_decision_with_timeout(
-                        market_question=market.question,
-                        market_description=ai_context2,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint=self._signal_strategy_name,
-                        lane_id=ai_lane_id,
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
-                        quant_threshold=effective_min_edge,
-                        raw_probability=raw_est_prob,
-                        post_calibration_probability=estimated_prob,
-                        require_shadow_portfolio=False,
-                    )
                 ai_calls += 1
+                self._log_decision_layer(
+                    market=market, window=_win, quant_action=action,
+                    ai_decision=ai_decision, lane="marginal",
+                    fail_open_reason=None if ai_decision is not None else "timeout",
+                )
                 if ai_decision is None:
                     _bump_skip("ai_decision_timeout")
                     continue
@@ -4453,82 +4517,65 @@ class SolMacroStrategy:
                     )
                     continue
 
+                _win = _updown_tf if is_updown else "15m"
                 if (
                     self._requires_ai_for_lane(_updown_lane)
                     and not ai_used
+                    # 5m bypasses the AI gate entirely (latency >> entry window).
+                    and _win in self._DECISION_GATE_WINDOWS
                 ):
+                    # Synchronous, FAIL-OPEN gate. AI off / unavailable / over budget
+                    # / timed out => take the quant trade. The gate can only ever
+                    # REJECT on a real verdict, never drop a trade to latency.
                     if not self.config.get("use_ai", True) or not self.ai_agent.is_available():
-                        _bump_skip(f"ai_unavailable_{_updown_lane}")
-                        logger.info(
-                            "%s AI-enforced lane skip '%s...' lane=%s action=%s "
-                            "edge=%.4f conf=%.2f composite=%.3f oracle_basis=%s",
-                            self._signal_strategy_name,
-                            market.question[:45],
-                            _updown_lane,
-                            action,
-                            edge,
-                            confidence,
-                            composite.score,
-                            oracle_validation.basis_bps,
+                        self._log_decision_layer(
+                            market=market, window=_win, quant_action=action,
+                            ai_decision=None, fail_open_reason="ai_unavailable",
                         )
-                        continue
-                    if ai_calls >= self.max_ai_calls_per_scan:
-                        _bump_skip(f"ai_call_limit_{_updown_lane}")
-                        continue
-                    _win = _updown_tf if is_updown else "15m"
-                    ai_context3 = (
-                        f"{market.description}\n\n"
-                        f"=== {_brand} ENFORCED UPDOWN CONTEXT ({_win}) ===\n"
-                        f"Action={action} YES={yes_price:.3f} edge={edge:.4f} "
-                        f"confidence={confidence:.2f} composite={composite.score:.3f}/{composite.floor:.3f}\n"
-                        f"Oracle price={oracle_validation.oracle_price if oracle_validation.oracle_price is not None else 'n/a'} "
-                        f"exchange_spot={oracle_validation.exchange_spot if oracle_validation.exchange_spot is not None else 'n/a'} "
-                        f"basis_bps={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
-                        f"freshness_sec={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}\n"
-                        f"Components={composite.components}\n"
-                        f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} "
-                        f"PRIMARY_HTF={primary_htf_bias} "
-                        f"LTF_strength={ltf_strength:.2f}\n\n"
-                        f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
-                        "Answer with BUY_YES, BUY_NO, or HOLD."
-                    )
-                    ai_lane_id = str(
-                        build_lane_metadata(
-                            strategy=self._signal_strategy_name,
-                            window_size=_win,
-                            action=action,
-                            direction=direction,
-                            entry_leg=("NO" if action == "BUY_NO" else "YES"),
-                            side_source=_updown_lane,
-                            ai_used=True,
-                            reason="ai_decision",
-                            signal_reason=f"ai_decision_{_updown_lane}",
-                            htf_bias=btc_htf_bias,
-                            primary_htf_bias=primary_htf_bias,
-                            alt_htf_bias=macro_trend,
-                            btc_1h_regime=btc_1h_regime,
-                        ).get("lane_id")
-                        or ""
-                    )
-                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
-                        lane_id=ai_lane_id,
-                        market=market,
-                        ai_context=ai_context3,
-                        yes_price=yes_price,
-                        edge=edge,
-                        confidence=confidence,
-                        action=action,
-                        quant_threshold=effective_min_edge,
-                        raw_est_prob=raw_est_prob,
-                        estimated_prob=estimated_prob,
-                        require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
-                        htf_bias=btc_htf_bias,
-                    )
-                    if _broker_state == "pending":
-                        ai_calls += 1
-                        _bump_skip(f"ai_pending_{_updown_lane}")
-                        continue
-                    if _broker_state == "unavailable":
+                        reason_parts.append("ai_decision=fail_open_unavailable")
+                    elif ai_calls >= self.max_ai_calls_per_scan:
+                        self._log_decision_layer(
+                            market=market, window=_win, quant_action=action,
+                            ai_decision=None, fail_open_reason="ai_call_limit",
+                        )
+                        reason_parts.append("ai_decision=fail_open_budget")
+                    else:
+                        ai_context3 = (
+                            f"{market.description}\n\n"
+                            f"=== {_brand} ENFORCED UPDOWN CONTEXT ({_win}) ===\n"
+                            f"Action={action} YES={yes_price:.3f} edge={edge:.4f} "
+                            f"confidence={confidence:.2f} composite={composite.score:.3f}/{composite.floor:.3f}\n"
+                            f"Oracle price={oracle_validation.oracle_price if oracle_validation.oracle_price is not None else 'n/a'} "
+                            f"exchange_spot={oracle_validation.exchange_spot if oracle_validation.exchange_spot is not None else 'n/a'} "
+                            f"basis_bps={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
+                            f"freshness_sec={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}\n"
+                            f"Components={composite.components}\n"
+                            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} "
+                            f"PRIMARY_HTF={primary_htf_bias} "
+                            f"LTF_strength={ltf_strength:.2f}\n\n"
+                            f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
+                            "Answer with BUY_YES, BUY_NO, or HOLD."
+                        )
+                        ai_lane_id = str(
+                            build_lane_metadata(
+                                strategy=self._signal_strategy_name,
+                                window_size=_win,
+                                action=action,
+                                direction=direction,
+                                entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                                side_source=_updown_lane,
+                                ai_used=True,
+                                reason="ai_decision",
+                                signal_reason=f"ai_decision_{_updown_lane}",
+                                htf_bias=btc_htf_bias,
+                                primary_htf_bias=primary_htf_bias,
+                                alt_htf_bias=macro_trend,
+                                btc_1h_regime=btc_1h_regime,
+                            ).get("lane_id")
+                            or ""
+                        )
+                        # Direct synchronous call with a bounded timeout — no async
+                        # enqueue/expire broker (that path silently dropped trades).
                         ai_decision = await self._evaluate_trade_decision_with_timeout(
                             market_question=market.question,
                             market_description=ai_context3,
@@ -4544,37 +4591,46 @@ class SolMacroStrategy:
                             post_calibration_probability=estimated_prob,
                             require_shadow_portfolio=self._requires_shadow_for_lane(_updown_lane),
                         )
-                    ai_calls += 1
-                    if ai_decision is None:
-                        _bump_skip(f"ai_decision_timeout_{_updown_lane}")
-                        continue
-                    ai_used = True
-                    if ai_decision.shadow_result is not None:
-                        shadow_pipeline_calls += 1
-                        if ai_decision.shadow_result.get("ok"):
-                            shadow_pipeline_ok += 1
-                    if not ai_decision.approved:
-                        _bump_skip(f"ai_decision_{ai_decision.reason}")
-                        logger.info(
-                            "%s AI-enforced lane rejected '%s...' lane=%s reason=%s "
-                            "action=%s conf=%.2f edge=%s composite=%.3f",
-                            self._signal_strategy_name,
-                            market.question[:45],
-                            _updown_lane,
-                            ai_decision.reason,
-                            ai_decision.action,
-                            ai_decision.confidence,
-                            ai_decision.edge,
-                            composite.score,
-                        )
-                        continue
-                    ai_edge = float(ai_decision.edge or 0.0)
-                    if ai_edge <= 0:
-                        _bump_skip(f"ai_nonpositive_edge_{_updown_lane}")
-                        continue
-                    edge = max(edge, ai_edge)
-                    confidence = max(confidence, ai_decision.confidence)
-                    reason_parts.append(f"ai_decision={ai_decision.source}")
+                        ai_calls += 1
+                        if ai_decision is None:
+                            # FAIL-OPEN on timeout — do NOT drop the trade.
+                            self._log_decision_layer(
+                                market=market, window=_win, quant_action=action,
+                                ai_decision=None, fail_open_reason="timeout",
+                            )
+                            reason_parts.append("ai_decision=fail_open_timeout")
+                        else:
+                            ai_used = True
+                            self._log_decision_layer(
+                                market=market, window=_win, quant_action=action,
+                                ai_decision=ai_decision,
+                            )
+                            if ai_decision.shadow_result is not None:
+                                shadow_pipeline_calls += 1
+                                if ai_decision.shadow_result.get("ok"):
+                                    shadow_pipeline_ok += 1
+                            if not ai_decision.approved:
+                                _bump_skip(f"ai_decision_{ai_decision.reason}")
+                                logger.info(
+                                    "%s AI-enforced lane rejected '%s...' lane=%s reason=%s "
+                                    "action=%s conf=%.2f edge=%s composite=%.3f",
+                                    self._signal_strategy_name,
+                                    market.question[:45],
+                                    _updown_lane,
+                                    ai_decision.reason,
+                                    ai_decision.action,
+                                    ai_decision.confidence,
+                                    ai_decision.edge,
+                                    composite.score,
+                                )
+                                continue
+                            ai_edge = float(ai_decision.edge or 0.0)
+                            if ai_edge <= 0:
+                                _bump_skip(f"ai_nonpositive_edge_{_updown_lane}")
+                                continue
+                            edge = max(edge, ai_edge)
+                            confidence = max(confidence, ai_decision.confidence)
+                            reason_parts.append(f"ai_decision={ai_decision.source}")
 
             if is_updown and self.center_price_band > 0:
                 _is_centered = abs(yes_price - 0.50) <= self.center_price_band

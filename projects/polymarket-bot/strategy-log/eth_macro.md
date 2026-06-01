@@ -21,6 +21,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 - **Actual outcome:** `pending` (needs restart + ~15 closed trades)
 - **Status:** `pending`
 
+### 2026-05-31 — Morning-session exit and ETH weak-confirm repair
+
+- **What changed:** Lowered global up/down `take_profit_pct` from `0.50` to `0.30` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Added `eth_15m_weak_confirm_hard_gate_enabled: false` and changed [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) so ETH 15m weak confirmation becomes a soft min-edge penalty instead of a hard discard.
+- **Why:** Active session `test_20260531_041319` was `112` exits, `39.3%` WR, `-$4.64`; ETH was `6/17`, `-$8.62`. Replaying the active session's marks showed `tp=0.30` would have produced `51.3%` WR / `+$44.39` across replayable crypto paths versus `42.3%` WR / `+$4.33` at `tp=0.50`. Today's settled ghosts showed `eth_15m_weak_confirm` rejects at `61.5%` WR / `+21.3%` ROI (`n=600`), so the hard gate was blocking a profitable current-regime ETH cohort.
+- **Hypothesis:** ETH 15m should stop starving valid weak-confirm candidates while still charging them extra edge, and the lower TP should bring realized paper WR closer to the requested ~50% lane target without changing stop-loss logic.
+- **Expected outcome:** ETH `eth_15m_weak_confirm` hard rejects should fall; ETH 15m admitted weak-confirm-soft trades should be reviewed after at least 15 closed ETH trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-31 — Ghost-validated BUY_YES entry-window expansion
 
 - **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened ETH upside entry windows where settled ghosts showed the old window was blocking profitable candidates: `15m up 24.0 → 120.0` and `1h up 120.0 → 360.0`. The ETH downside windows were left unchanged because the same ghost slice showed `15m BUY_NO lane_entry_window` was protective.

@@ -8,11 +8,49 @@
 
 ---
 
+## 2026-05-31 — AI decision layer rebuilt (sync, 15m/1h-only, fail-open) + 68GB disk reclaim + 1h/15m→4h neutral fallback
+
+**[`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`src/analysis/ai_decision_settler.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_decision_settler.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), `.gitignore`:**
+
+- **Disk:** reclaimed **68 GB** by deleting 2,311 abandoned `.git/objects/pack/tmp_pack_*` files (garbage from auto-gc dying on a full disk; real history is only 387 MB). Root cause: runtime data files tracked in git. Fix: `git rm --cached -r data/` (working copies kept) + ignore `data/` wholesale; deleted broken `data/backtest/`. Ghost calibration data preserved on disk.
+- **AI decision layer made real:** every AI entry path (default + marginal + btc neutral_15m) converted from the async enqueue/expire broker (which silently dropped trades) to a **synchronous, bounded-timeout** call. **5m never calls AI** (latency ≫ window) — pure quant. Gate runs **15m/1h only**. **Default lane fail-OPEN** (AI down/slow/timeout → take quant trade); marginal/neutral fail-CLOSED (skip the below-threshold extra). Gate timeout 60s→40s (MiniMax answers ~22s). Every verdict logged to `data/logs/ai_pipeline/decision_layer.jsonl`.
+- **Settler:** new `ai_decision_settler.py` scores logged verdicts vs real Polymarket outcomes (Brier, directional hit-rate, veto quality, REAL-DECISION-LAYER section for the live gate).
+- **1h/15m neutral fallback:** when an alt's 1h (or 15m) horizon bias is NEUTRAL it falls back to the asset's OWN 4h (`_get_4h_bias`), neutral-only, so the lane resolves an alt-native direction instead of sitting out. BTC already had this. Decided trades unchanged.
+
+**Boundary:** AI gate + fallback edits are forward-test only (candidate-gen / not ghost-validatable). `dry_run: true` throughout. Needs a bot restart to load.
+
+**Verification:** `py_compile` all touched modules; `pytest tests/test_bitcoin.py tests/test_sol_macro.py tests/test_eth_macro.py tests/test_ai_agent_parse.py` → **213 passed**. Live dry_run confirmed gate fires and fail-open lets trades through (no starvation).
+
 ## 2026-05-31 — Suppress anti-predictive BUY_NO short cells
 
 **[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml)** — commit `5d8cbc0`. Held-to-resolution analysis of `trades_settled.jsonl` (n=632) found true entry accuracy 45.6% (below coin flip), driven entirely by BUY_NO/short (40.1% vs BUY_YES 49.9%). Disabled two structural-contradiction short cells: BTC counter-trend `disable_buy_no_counter_trend: true` (BUY_NO-while-BULLISH, 35% WR n=88), and a new opt-in `disable_buy_no_5m_native` (ON for all 6 alts) suppressing inverted 5m-native shorts (eth 11.8% / xrp 16.7% / doge 27.8% / sol 33% vs 15m-native 50-65%), routed through `_log_skip_reject` to keep ghost-logging. IQL/MACD soft-scoring (Kimi plan) parked — correlation showed the 5m-short veto is a coin-flip, so the signal not the gate is inverted. Hypothesis tracking in the strategy vault (`bitcoin.md`, `sol_macro.md`, and alt files, 2026-05-31).
 
 ---
+
+## 2026-05-31 — AI decision layer made binding on default entry lanes
+
+**[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), tests:** Corrected the AI decision layer from marginal/shadow-style behavior toward actual bounded entry control.
+
+- `AIAgent.evaluate_trade_decision()` no longer turns marginal `HOLD`, low-confidence direct answers, or shadow-portfolio holds into approved “abstain” decisions. Those now reject the candidate with explicit `direct_ai_hold`, `direct_ai_low_confidence`, `shadow_portfolio_hold`, or `shadow_portfolio_low_confidence` reasons.
+- Enabled `default` decision-layer enforcement for SOL-family alt strategies (`sol_macro`, `hype_macro`, `xrp_macro`, `doge_macro`, `bnb_macro`) via the existing post-composite default-lane hook.
+- Wired `eth_macro` default-lane entries into the enforced AI decision path explicitly, since ETH has a separate scan loop and would not honor the config-only `default` lane otherwise.
+- Wired BTC default up/down entries into the same enforced decision path, including 5m candidates through the async decision broker. The legacy `use_ai_updown_5m` marginal-assist flag remains separate; the execution layer now keys off `ai.decision_layer.enforced_lanes.bitcoin: [default, neutral_15m, marginal]`.
+- Made the boundary explicit: `ai.decision_layer` is the execution layer and is toggleable via `ai.decision_layer.enabled`; `ai.shadow_pipeline` / `ai.shadow_observer` are data/telemetry layers only and do not gate entries when the decision layer is off.
+
+**Boundary:** This is not structural-gate bypass yet. Hard/safety gates remain deterministic; AI now supervises admitted default entry candidates and existing marginal candidates.
+
+**Verification:** `.venv/bin/python -m pytest tests/test_ai_agent_parse.py tests/test_ops_pulse.py tests/test_ai_decision_broker.py tests/test_eth_macro.py tests/test_sol_macro.py -q` passed (`175 passed`, one upstream `websockets.legacy` deprecation warning).
+Additional BTC/broker verification: `.venv/bin/python -m pytest tests/test_ai_agent_parse.py tests/test_ai_decision_broker.py tests/test_strategy_two_cycle_resolve.py tests/test_bitcoin_scenarios.py -q` passed (`66 passed, 2 skipped`).
+
+## 2026-05-31 — Morning-session damage control: exits, ETH gate, SOL/XRP 1h starvation
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), strategy logs:** Audited active local session `test_20260531_041319` against May 30/May 31 ghost and journal data, then shipped three scoped repairs.
+
+- Lowered global up/down `take_profit_pct` from `0.50` to `0.30`; active-session mark replay showed `tp=0.30` at `51.3%` WR / `+$44.39` on replayable crypto paths versus `42.3%` WR / `+$4.33` at `tp=0.50`.
+- Added `eth_15m_weak_confirm_hard_gate_enabled: false`; ETH 15m weak confirmation now adds a soft min-edge penalty instead of hard-skipping when disabled. May 31 settled ghosts showed that gate blocking `61.5%` WR / `+21.3%` ROI (`n=600`).
+- Widened SOL and XRP 1h entry windows from `60.0` to `360.0` in both `by_tf` and entry-policy overrides, matching the future-listed 1h market feed and prior ghost evidence. DOGE 1h was left capped because its 1h ghost lane was below 50%.
+
+Validation: `.venv/bin/python -m pytest tests/test_eth_macro.py tests/test_sol_macro.py tests/test_updown_exit_shared.py` passed (`146 passed`).
 
 ## 2026-05-31 — Ghost-backed entry-window optimization + stale legacy tests retired
 

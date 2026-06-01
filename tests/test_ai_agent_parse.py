@@ -790,6 +790,52 @@ def test_decision_layer_approves_matching_ai_action() -> None:
     assert decision.edge == pytest.approx(0.12)
 
 
+def test_decision_layer_disabled_does_not_gate_even_with_data_layers_enabled() -> None:
+    ag = AIAgent(
+        {
+            "ai": {
+                "enabled": True,
+                "live_inferencing": True,
+                "provider_chain": [{"name": "fake", "type": "fake"}],
+                "decision_layer": {
+                    "enabled": False,
+                    "enforced_lanes": {"sol_macro": ["default"]},
+                },
+                "shadow_pipeline": {"enabled": True, "max_calls_per_scan": 3},
+                "shadow_observer": {
+                    "enabled": True,
+                    "reasons": ["lane_entry_window"],
+                },
+            }
+        }
+    )
+
+    async def should_not_be_called(**kwargs):
+        raise AssertionError("decision layer disabled should not call the provider")
+
+    ag.analyze_market = should_not_be_called  # type: ignore[method-assign]
+    decision = run_async(
+        ag.evaluate_trade_decision(
+            market_question="SOL up?",
+            market_description="context",
+            current_yes_price=0.52,
+            market_id="m-decision-disabled",
+            strategy_hint="sol_macro",
+            lane_id="sol_macro|15m|up|default",
+            quant_action="BUY_YES",
+            quant_edge=0.08,
+            quant_confidence=0.54,
+            quant_threshold=0.09,
+        )
+    )
+    assert decision.approved is True
+    assert decision.reason == "decision_layer_disabled"
+    assert ag.decision_layer_lane_enforced("sol_macro", "default") is False
+    assert ag.decision_layer_lane_requires_shadow("sol_macro", "default") is False
+    assert ag.shadow_pipeline_enabled() is True
+    assert ag.shadow_observer_enabled() is True
+
+
 def test_decision_layer_rejects_low_confidence_ai_action() -> None:
     ag = AIAgent(
         {
@@ -929,7 +975,7 @@ def test_decision_layer_rejects_hold_and_action_mismatch() -> None:
     assert mismatch.reason == "direct_ai_action_mismatch"
 
 
-def test_decision_layer_abstains_on_marginal_hold_and_low_confidence() -> None:
+def test_decision_layer_rejects_marginal_hold_and_low_confidence() -> None:
     ag = AIAgent(
         {
             "ai": {
@@ -965,9 +1011,9 @@ def test_decision_layer_abstains_on_marginal_hold_and_low_confidence() -> None:
             quant_threshold=0.12,
         )
     )
-    assert hold.approved is True
-    assert hold.action == "BUY_YES"
-    assert hold.reason == "direct_ai_hold_abstain_marginal"
+    assert hold.approved is False
+    assert hold.action == "HOLD"
+    assert hold.reason == "direct_ai_hold"
 
     async def fake_low_conf(**kwargs):
         return AIAnalysis(
@@ -993,9 +1039,9 @@ def test_decision_layer_abstains_on_marginal_hold_and_low_confidence() -> None:
             quant_threshold=0.12,
         )
     )
-    assert low_conf.approved is True
+    assert low_conf.approved is False
     assert low_conf.action == "BUY_YES"
-    assert low_conf.reason == "direct_ai_low_confidence_abstain_marginal"
+    assert low_conf.reason == "direct_ai_low_confidence"
 
 
 def test_decision_layer_rejects_ai_unavailable_and_shadow_mismatch_when_required() -> None:

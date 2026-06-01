@@ -23,6 +23,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 - **Actual outcome:** `pending` (needs restart + ~15 closed trades)
 - **Status:** `pending`
 
+### 2026-05-31 — XRP 1h starvation window repair after bad morning sample
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), widened XRP 1h entry windows from `60.0` to `360.0` minutes in both `by_tf.1h` and `entry_policy.window_side_overrides.1h` for `up` and `down`.
+- **Why:** Active session `test_20260531_041319` showed XRP at `0/7`, `-$28.49`; those losses were concentrated in 5m/15m `BUY_YES`, while the 1h XRP path was effectively starved. May 30 settled ghosts showed XRP 1h rejected candidates at `54.1%` WR (`n=471`), with `xrp_macro|1h|LONG|lane_min_edge` at `98.6%` WR / `+19.9%` ROI (`n=74`), indicating the current 1h starvation is the wrong place to restrict XRP learning.
+- **Hypothesis:** XRP should shift some sample collection toward the less-starved 1h path while existing edge, price-band, oracle, and `0.3x` 1h sizing controls limit exposure.
+- **Expected outcome:** XRP 1h entries should appear in the next comparable run; XRP 5m/15m BUY_YES remains a watch item because today's closed sample was materially bad.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
 ### 2026-05-28 — Inherited `sell_5m_low_corr` hard skip downgraded
 
 - **What changed:** XRP inherits the shared SOL-family scan path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py); `sell_5m_low_corr` no longer hard-skips 5m `BUY_NO` candidates and is now diagnostic context only.

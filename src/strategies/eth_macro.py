@@ -1462,7 +1462,10 @@ class ETHMacroStrategy(SolMacroStrategy):
                     required_eth_15m_adj = self._eth_follow_15m_required_adj(
                         market_allowed_side
                     )
-                    if eth_15m_adj < required_eth_15m_adj:
+                    eth_15m_hard_gate = bool(
+                        self.config.get("eth_15m_weak_confirm_hard_gate_enabled", True)
+                    )
+                    if eth_15m_adj < required_eth_15m_adj and eth_15m_hard_gate:
                         _bump_skip("eth_15m_weak_confirm")
                         log_rejected_candidate(
                             strategy=self._signal_strategy_name, window="15m",
@@ -1493,6 +1496,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                             policy_version="eth_15m_confirm_v2",
                         )
                         continue
+                    if eth_15m_adj < required_eth_15m_adj:
+                        follow_penalty_min_edge_add += max(
+                            0.0, float(required_eth_15m_adj) - float(eth_15m_adj)
+                        )
+                        reason_parts.append("eth_15m_weak_confirm_soft")
                     est_prob_up = self._apply_primary_htf_bias(est_prob_up, primary_htf_bias, 0.08)
                     if resolution.confidence_penalty > 0:
                         est_prob_up += (
@@ -1746,6 +1754,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
                 and ai_calls < self.max_ai_calls_per_scan
+                # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
+                and _updown_tf in self._DECISION_GATE_WINDOWS
             ):
                 _window = _updown_tf
                 if btc_ta:
@@ -1792,41 +1802,29 @@ class ETHMacroStrategy(SolMacroStrategy):
                     ).get("lane_id")
                     or ""
                 )
-                _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
+                # below-threshold marginal extras only trade WITH AI blessing.
+                ai_decision = await self._evaluate_trade_decision_with_timeout(
+                    market_question=market.question,
+                    market_description=ai_context,
+                    current_yes_price=yes_price,
+                    market_id=market.id,
+                    strategy_hint=self._signal_strategy_name,
                     lane_id=ai_lane_id,
-                    market=market,
-                    ai_context=ai_context,
-                    yes_price=yes_price,
-                    edge=edge,
-                    confidence=confidence,
-                    action=action,
+                    quant_action=action,
+                    quant_edge=edge,
+                    quant_confidence=confidence,
                     quant_threshold=effective_min_edge,
-                    raw_est_prob=raw_est_prob,
-                    estimated_prob=estimated_prob,
+                    raw_probability=raw_est_prob,
+                    post_calibration_probability=estimated_prob,
                     require_shadow_portfolio=False,
-                    htf_bias=btc_htf_bias,
                 )
-                if _broker_state == "pending":
-                    ai_calls += 1
-                    _bump_skip("ai_pending")
-                    continue
-                if _broker_state == "unavailable":
-                    ai_decision = await self._evaluate_trade_decision_with_timeout(
-                        market_question=market.question,
-                        market_description=ai_context,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint=self._signal_strategy_name,
-                        lane_id=ai_lane_id,
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
-                        quant_threshold=effective_min_edge,
-                        raw_probability=raw_est_prob,
-                        post_calibration_probability=estimated_prob,
-                        require_shadow_portfolio=False,
-                    )
                 ai_calls += 1
+                self._log_decision_layer(
+                    market=market, window=_window, quant_action=action,
+                    ai_decision=ai_decision, lane="marginal",
+                    fail_open_reason=None if ai_decision is not None else "timeout",
+                )
                 def _log_ai_veto(_reason: str, **extra: Any) -> None:
                     _log_skip_reject(
                         market=market,
@@ -2023,6 +2021,108 @@ class ETHMacroStrategy(SolMacroStrategy):
                         last_sample=last_buy_no_skip_sample,
                     )
                 continue
+
+            if (
+                self._requires_ai_for_lane("default")
+                and not ai_used
+                # 5m bypasses the AI gate entirely (latency >> entry window).
+                and _updown_tf in self._DECISION_GATE_WINDOWS
+            ):
+                # Synchronous, FAIL-OPEN gate. AI off / unavailable / over budget /
+                # timed out => take the quant trade. Can only REJECT on a real
+                # verdict, never drop a trade to latency.
+                if not self.config.get("use_ai", True) or not self.ai_agent.is_available():
+                    self._log_decision_layer(
+                        market=market, window=_updown_tf, quant_action=action,
+                        ai_decision=None, fail_open_reason="ai_unavailable",
+                    )
+                    reason_parts.append("ai_decision=fail_open_unavailable")
+                elif ai_calls >= self.max_ai_calls_per_scan:
+                    self._log_decision_layer(
+                        market=market, window=_updown_tf, quant_action=action,
+                        ai_decision=None, fail_open_reason="ai_call_limit",
+                    )
+                    reason_parts.append("ai_decision=fail_open_budget")
+                else:
+                    ai_context_default = (
+                        f"{market.description}\n\n"
+                        f"=== ETH ENFORCED ENTRY CONTEXT ({_updown_tf}) ===\n"
+                        f"Action={action} YES={yes_price:.3f} edge={edge:.4f} "
+                        f"threshold={effective_min_edge:.4f} confidence={confidence:.2f}\n"
+                        f"ETH price=${eth.current_price:,.2f} RSI={eth.rsi_14:.1f} "
+                        f"ETH 1H={mtt.h1_trend} ETH 15m={mtt.m15_trend} ETH 5m={mtt.m5_trend}\n"
+                        f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} BTC_1H_REGIME={btc_1h_regime or 'UNKNOWN'} "
+                        f"side_source={side_source}\n"
+                        f"Oracle basis={oracle_validation.basis_bps if oracle_validation else 'n/a'} "
+                        f"freshness={oracle_validation.freshness_sec if oracle_validation else 'n/a'}\n\n"
+                        f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
+                        "Answer with BUY_YES, BUY_NO, or HOLD."
+                    )
+                    ai_lane_id = str(
+                        build_lane_metadata(
+                            strategy=self._signal_strategy_name,
+                            window_size=_updown_tf,
+                            action=action,
+                            direction=("down" if action == "BUY_NO" else "up"),
+                            entry_leg=("NO" if action == "BUY_NO" else "YES"),
+                            side_source="default",
+                            ai_used=True,
+                            reason="ai_decision",
+                            signal_reason="ai_decision_default",
+                            htf_bias=btc_htf_bias,
+                            primary_htf_bias=primary_htf_bias,
+                            alt_htf_bias=mtt.h1_trend,
+                            btc_1h_regime=btc_1h_regime if btc_ta else None,
+                        ).get("lane_id")
+                        or ""
+                    )
+                    # Direct synchronous call with bounded timeout — no async
+                    # enqueue/expire broker (that path silently dropped trades).
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context_default,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=self._requires_shadow_for_lane("default"),
+                    )
+                    ai_calls += 1
+                    if ai_decision is None:
+                        # FAIL-OPEN on timeout — do NOT drop the trade.
+                        self._log_decision_layer(
+                            market=market, window=_updown_tf, quant_action=action,
+                            ai_decision=None, fail_open_reason="timeout",
+                        )
+                        reason_parts.append("ai_decision=fail_open_timeout")
+                    else:
+                        ai_used = True
+                        self._log_decision_layer(
+                            market=market, window=_updown_tf, quant_action=action,
+                            ai_decision=ai_decision,
+                        )
+                        if ai_decision.shadow_result is not None:
+                            shadow_pipeline_calls += 1
+                            if ai_decision.shadow_result.get("ok"):
+                                shadow_pipeline_ok += 1
+                        if not ai_decision.approved:
+                            _bump_skip(f"ai_decision_{ai_decision.reason}")
+                            if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
+                                self._ai_hold_cache[market.id] = time.time()
+                            continue
+                        ai_edge = float(ai_decision.edge or 0.0)
+                        if ai_edge <= 0:
+                            _bump_skip("ai_nonpositive_edge_default")
+                            continue
+                        edge = max(edge, ai_edge)
+                        confidence = max(confidence, ai_decision.confidence)
+                        reason_parts.append(f"ai_decision={ai_decision.source}")
 
             # Centered-price gate: near 50/50 entries need a higher edge bar.
             # 2026-05-22: BTC catalyst requirement (center_price_requires_catalyst)

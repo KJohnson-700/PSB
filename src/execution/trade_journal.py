@@ -21,7 +21,17 @@ JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "paper_tr
 # Append-only log of actual CLOB fill prices for updown markets.
 # Used by updown_engine to replace N(0.50, 0.06) with empirical distribution.
 ENTRY_PRICE_LOG = Path(__file__).resolve().parent.parent.parent / "data" / "entry_prices" / "updown_fills.jsonl"
-_UPDOWN_STRATEGIES = frozenset({"bitcoin", "sol_macro", "xrp_macro", "eth_macro", "hype_macro"})
+_UPDOWN_STRATEGIES = frozenset(
+    {
+        "bitcoin",
+        "sol_macro",
+        "xrp_macro",
+        "eth_macro",
+        "hype_macro",
+        "doge_macro",
+        "bnb_macro",
+    }
+)
 
 
 def infer_entry_leg(pos: Dict[str, Any]) -> str:
@@ -399,8 +409,14 @@ class TradeJournal:
         exit_price: float,
         bankroll: float,
         reason: str = "manual",
+        exit_telemetry: Optional[dict] = None,
     ):
-        """Log a trade exit with realized PnL."""
+        """Log a trade exit with realized PnL.
+
+        exit_telemetry: optional exit-calibration fields (mae_pct, mfe_pct,
+        pnl_pct_at_exit, effective_stop_loss_pct) recorded onto the exit row so the
+        stop can be tuned from data — see src/analysis/taken_exit_settler.py.
+        """
         pos = self.open_positions.get(trade_id)
         if not pos:
             logger.warning(f"Cannot exit unknown trade: {trade_id}")
@@ -447,6 +463,11 @@ class TradeJournal:
             "entry_confidence": pos.get("confidence"),
         }
         exit_extra = enrich_exit_extra(exit_extra, pos.get("opened_at"))
+        if exit_telemetry:
+            # Only stamp keys that carry a value so legacy/reload exits stay clean.
+            for _k, _v in exit_telemetry.items():
+                if _v is not None:
+                    exit_extra[_k] = _v
 
         entry = JournalEntry(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -473,6 +494,12 @@ class TradeJournal:
         pos["exit_price"] = exit_price
         pos["pnl"] = round(pnl, 4)
         pos["exit_reason"] = reason
+        if exit_telemetry:
+            # Carry onto the closed-trade dict so it lands in the calibration row
+            # (trades.jsonl) via build_record_from_closed_trade, not just entries.jsonl.
+            for _k, _v in exit_telemetry.items():
+                if _v is not None:
+                    pos[_k] = _v
         self.closed_trades.append(pos)
         del self.open_positions[trade_id]
         self.total_entries = len(self.open_positions) + len(self.closed_trades)

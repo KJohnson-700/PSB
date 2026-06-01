@@ -640,6 +640,20 @@ class PolyBot:
         _cint = self.config.get("trading", {}).get("cycle_interval_sec", 120)
         self.scan_interval = max(30, int(_cint))  # single unified loop: scan + crypto + exits
         self._unified_cycle_count = 0
+        # Fast exit monitor: the 60s scan loop checks stops only ~5x over a 5m
+        # market's life, so fast adverse moves blow through the stop before it
+        # fires (fills land at -60%..-99% on a 14-20% stop). This decoupled loop
+        # re-checks TP/SL on held positions every exit_check_interval_sec using a
+        # cheap per-token book fetch — no scan/AI — so the stop fires near its
+        # threshold. 0/None disables it (falls back to scan-loop-only exits).
+        _eint = self.config.get("trading", {}).get("exit_check_interval_sec", 10)
+        try:
+            self.exit_check_interval = float(_eint) if _eint else 0.0
+        except (TypeError, ValueError):
+            self.exit_check_interval = 0.0
+        # Shared by the scan loop and fast exit loop to serialize exit handling so
+        # a position can't be exited twice. Created in start() (needs a live loop).
+        self._exit_lock: Optional[asyncio.Lock] = None
         _recovery_sleep = (
             self.config.get("trading", {}).get("overrun_recovery_sleep_sec")
         )
@@ -1519,6 +1533,13 @@ class PolyBot:
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
         )
+        # Create the exit lock on the running loop, then start the fast exit
+        # monitor alongside the scan loop (no-op if exit_check_interval_sec<=0).
+        if self._exit_lock is None:
+            self._exit_lock = asyncio.Lock()
+        if self.exit_check_interval and self.exit_check_interval > 0:
+            self._spawn_bg(self._fast_exit_loop(), name="fast_exit_loop")
+
         await asyncio.gather(
             self._unified_trading_loop(),
             self._daily_coach_loop(),
@@ -1902,6 +1923,93 @@ class PolyBot:
         )
         return False
 
+    async def _run_exit_checks(
+        self,
+        market_prices: Dict[str, float],
+        market_token_ids: Dict[str, Any],
+    ) -> int:
+        """Evaluate + handle exits for held positions under the exit lock.
+
+        Shared by the 60s scan loop and the fast exit loop. The lock serializes the
+        check+handle sequence between the two callers so a position can't produce two
+        ExitDecisions (and two close orders) from concurrent passes. Returns the
+        number of exits handled.
+        """
+        if self._exit_lock is None:
+            self._exit_lock = asyncio.Lock()
+        async with self._exit_lock:
+            exits = self.exit_manager.check_exits(
+                self.risk_manager.active_positions, market_prices, market_token_ids
+            )
+            for exit_decision in exits:
+                await self._handle_exit_decision(exit_decision)
+            return len(exits)
+
+    async def _fetch_held_market_prices(self):
+        """Build (market_prices, market_token_ids) for currently held markets only.
+
+        Uses a cheap per-token CLOB book snapshot (no scan, no AI) to get a fresh YES
+        mid for each market we hold a position in — this is what lets the fast exit
+        loop run far more often than the scan loop without the scan cost.
+        """
+        market_prices: Dict[str, float] = {}
+        market_token_ids: Dict[str, Any] = {}
+        seen: set = set()
+        for pos in list(self.risk_manager.active_positions.values()):
+            mid = getattr(pos, "market_id", "")
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            yes_token = getattr(pos, "token_id_yes", "") or ""
+            no_token = getattr(pos, "token_id_no", "") or ""
+            if not yes_token:
+                continue
+            book = await self.clob_client.fetch_order_book_snapshot(yes_token)
+            if not book:
+                continue
+            bids = book.get("bids") or []
+            asks = book.get("asks") or []
+            best_bid = max((b["price"] for b in bids), default=None)
+            best_ask = min((a["price"] for a in asks), default=None)
+            if best_bid is not None and best_ask is not None:
+                yes_price = (best_bid + best_ask) / 2.0
+            elif best_bid is not None:
+                yes_price = best_bid
+            elif best_ask is not None:
+                yes_price = best_ask
+            else:
+                continue
+            market_prices[mid] = yes_price
+            market_token_ids[mid] = (yes_token, no_token)
+        return market_prices, market_token_ids
+
+    async def _fast_exit_loop(self) -> None:
+        """Decoupled TP/SL monitor — see exit_check_interval in __init__.
+
+        Runs only the exit path on held positions at a fast cadence so the stop fires
+        near its configured threshold instead of after a fast-moving short-window
+        contract has already collapsed. Skips entirely when no positions are open.
+        """
+        interval = self.exit_check_interval
+        if not interval or interval <= 0:
+            logging.info("[fast-exit] disabled (exit_check_interval_sec<=0)")
+            return
+        if self._exit_lock is None:
+            self._exit_lock = asyncio.Lock()
+        logging.info("[fast-exit] monitor active: every %.0fs", interval)
+        await asyncio.sleep(5)
+        while self.running:
+            try:
+                if self.risk_manager.active_positions:
+                    market_prices, market_token_ids = await self._fetch_held_market_prices()
+                    if market_prices:
+                        n = await self._run_exit_checks(market_prices, market_token_ids)
+                        if n:
+                            logging.info("[fast-exit] handled %d exit(s)", n)
+            except Exception as e:  # never let the monitor die
+                logging.error("[fast-exit] error: %s", e, exc_info=True)
+            await asyncio.sleep(interval)
+
     async def _handle_exit_decision(self, exit_decision: ExitDecision) -> None:
         """Exit order + journal + risk updates (serialized with other execution)."""
         async with self._execution_lock:
@@ -1949,6 +2057,12 @@ class PolyBot:
                         exit_price=exit_decision.exit_price,
                         bankroll=self.bankroll,
                         reason=exit_decision.reason,
+                        exit_telemetry={
+                            "mae_pct": exit_decision.mae_pct,
+                            "mfe_pct": exit_decision.mfe_pct,
+                            "pnl_pct_at_exit": exit_decision.pnl_pct_at_exit,
+                            "effective_stop_loss_pct": exit_decision.effective_stop_loss_pct,
+                        },
                     )
                     self.circuit_breakers.record_exit(
                         reason=exit_decision.reason,
@@ -2065,11 +2179,7 @@ class PolyBot:
             market_token_ids = {
                 m.id: (m.token_id_yes, m.token_id_no) for m in high_liquidity
             }
-            exits = self.exit_manager.check_exits(
-                self.risk_manager.active_positions, market_prices, market_token_ids
-            )
-            for exit_decision in exits:
-                await self._handle_exit_decision(exit_decision)
+            await self._run_exit_checks(market_prices, market_token_ids)
         except Exception as e:
             logging.error(f"Exit check error: {e}")
 
