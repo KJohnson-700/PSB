@@ -745,6 +745,7 @@ class BitcoinStrategy:
         ai_decision,
         lane: str = "default",
         fail_open_reason=None,
+        entry_context=None,
     ) -> None:
         """Append every real decision-layer verdict to decision_layer.jsonl (best-effort)."""
         try:
@@ -768,6 +769,22 @@ class BitcoinStrategy:
                 "reason": getattr(ai_decision, "reason", None) if ai_decision else None,
                 "fail_open": fail_open_reason,
             }
+            if entry_context:
+                ctx = dict(entry_context)
+                yes_price = ctx.get("yes_price")
+                if yes_price is not None:
+                    try:
+                        yp = float(yes_price)
+                        ctx.setdefault("yes_price", yp)
+                        ctx.setdefault("no_price", 1.0 - yp)
+                        ctx.setdefault(
+                            "entry_price",
+                            yp if quant_action == "BUY_YES" else 1.0 - yp,
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                rec["entry_context_schema"] = 1
+                rec.update(ctx)
             path = _Path("data/logs/ai_pipeline/decision_layer.jsonl")
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
@@ -2848,6 +2865,15 @@ class BitcoinStrategy:
                     market=market, window=_window, quant_action=action,
                     ai_decision=ai_decision, lane=_dl_lane,
                     fail_open_reason=None if ai_decision is not None else "timeout",
+                    entry_context={
+                        "lane_id": _broker_lane,
+                        "yes_price": yes_price,
+                        "quant_edge": edge,
+                        "quant_confidence": confidence,
+                        "quant_threshold": effective_min_edge,
+                        "raw_est_prob": raw_est_prob,
+                        "estimated_prob": estimated_prob,
+                    },
                 )
 
                 if ai_decision is None:
@@ -3096,12 +3122,28 @@ class BitcoinStrategy:
                     self._log_decision_layer(
                         market=market, window=_updown_tf, quant_action=action,
                         ai_decision=None, fail_open_reason="ai_unavailable",
+                        entry_context={
+                            "yes_price": yes_price,
+                            "quant_edge": edge,
+                            "quant_confidence": confidence,
+                            "quant_threshold": effective_min_edge,
+                            "raw_est_prob": raw_est_prob,
+                            "estimated_prob": estimated_prob,
+                        },
                     )
                     reason_parts.append("ai_decision=fail_open_unavailable")
                 elif ai_calls >= self.max_ai_calls_per_scan:
                     self._log_decision_layer(
                         market=market, window=_updown_tf, quant_action=action,
                         ai_decision=None, fail_open_reason="ai_call_limit",
+                        entry_context={
+                            "yes_price": yes_price,
+                            "quant_edge": edge,
+                            "quant_confidence": confidence,
+                            "quant_threshold": effective_min_edge,
+                            "raw_est_prob": raw_est_prob,
+                            "estimated_prob": estimated_prob,
+                        },
                     )
                     reason_parts.append("ai_decision=fail_open_budget")
                 else:
@@ -3164,6 +3206,15 @@ class BitcoinStrategy:
                         self._log_decision_layer(
                             market=market, window=_updown_tf, quant_action=action,
                             ai_decision=None, fail_open_reason="timeout",
+                            entry_context={
+                                "lane_id": ai_lane_id,
+                                "yes_price": yes_price,
+                                "quant_edge": edge,
+                                "quant_confidence": confidence,
+                                "quant_threshold": effective_min_edge,
+                                "raw_est_prob": raw_est_prob,
+                                "estimated_prob": estimated_prob,
+                            },
                         )
                         reason_parts.append("ai_decision=fail_open_timeout")
                     else:
@@ -3171,6 +3222,15 @@ class BitcoinStrategy:
                         self._log_decision_layer(
                             market=market, window=_updown_tf, quant_action=action,
                             ai_decision=ai_decision,
+                            entry_context={
+                                "lane_id": ai_lane_id,
+                                "yes_price": yes_price,
+                                "quant_edge": edge,
+                                "quant_confidence": confidence,
+                                "quant_threshold": effective_min_edge,
+                                "raw_est_prob": raw_est_prob,
+                                "estimated_prob": estimated_prob,
+                            },
                         )
                         if ai_decision.shadow_result is not None:
                             shadow_pipeline_calls += 1
@@ -3297,6 +3357,14 @@ class BitcoinStrategy:
                         market=market, window=(_updown_tf if is_updown else "15m"),
                         quant_action=action, ai_decision=ai_decision, lane="neutral_15m",
                         fail_open_reason=None if ai_decision is not None else "timeout",
+                        entry_context={
+                            "yes_price": yes_price,
+                            "quant_edge": edge,
+                            "quant_confidence": confidence,
+                            "quant_threshold": effective_min_edge,
+                            "raw_est_prob": raw_est_prob,
+                            "estimated_prob": estimated_prob,
+                        },
                     )
                     if ai_decision is None:
                         _bump_skip("ai_decision_timeout")
