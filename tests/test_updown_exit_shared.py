@@ -105,6 +105,50 @@ def test_effective_stop_loss_tightens_in_profit():
     )
 
 
+def test_positive_trailing_floor_locks_gains():
+    # Below arm: trailing inactive, base stop in force.
+    assert (
+        effective_updown_stop_loss_pct(
+            0.17, 0.05, peak_pnl_pct=0.05,
+            in_profit_trigger_pct=0.0, tighten_to_pct=0.0,
+            trail_arm_pct=0.10, trail_gap_pct=0.15,
+        )
+        == 0.17
+    )
+    # Peaked +30%, gap 15% -> floor at +15%, returned as negative magnitude so
+    # caller's `pnl <= -mag` fires at +0.15 (banks gains, not just caps loss).
+    assert (
+        effective_updown_stop_loss_pct(
+            0.17, 0.20, peak_pnl_pct=0.30,
+            in_profit_trigger_pct=0.0, tighten_to_pct=0.0,
+            trail_arm_pct=0.10, trail_gap_pct=0.15,
+        )
+        == pytest.approx(-0.15)
+    )
+    # Trailing floor is only ever MORE protective than the from-entry stop:
+    # early in the run (peak just above arm) it tightens toward entry, never
+    # wider than the base stop.
+    assert (
+        effective_updown_stop_loss_pct(
+            0.17, 0.08, peak_pnl_pct=0.10,
+            in_profit_trigger_pct=0.0, tighten_to_pct=0.0,
+            trail_arm_pct=0.10, trail_gap_pct=0.15,
+        )
+        == pytest.approx(0.05)
+    )
+
+
+def test_trailing_floor_defaults_off_preserve_legacy():
+    # No trail args supplied -> identical to legacy behavior.
+    assert (
+        effective_updown_stop_loss_pct(
+            0.17, 0.40, peak_pnl_pct=0.40,
+            in_profit_trigger_pct=0.0, tighten_to_pct=0.0,
+        )
+        == 0.17
+    )
+
+
 def test_effective_stop_loss_applies_dynamic_regime_volatility_and_convergence():
     assert (
         effective_updown_stop_loss_pct(

@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-05-31 — Early-TP regret: hold winners + positive trailing floor (BUY_YES 5m/15m)
+
+- **What changed:** Added a `bnb_macro` `updown_overrides` block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) for BUY_YES (leg=up) 5m and 15m: `updown_hold_winners_to_resolution: true` + a new **positive trailing floor** (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). New floor mechanic added to [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py): once the high-water mark clears +10%, the exit floor trails at `peak − 15%` and **can be positive** (banks gains), vs. the prior in-profit tighten that only capped the from-entry loss. Floor is always `max(base_stop, peak−gap)` — never wider than the base stop.
+- **Why:** On 230 settled `take_profit` rows, BNB BUY_YES showed the strongest positive early-TP regret: 5m n=15 (+$10.0, 87% held-WR) and 15m n=11 (+$23.6, 82% held-WR). Exiting at +30% left money on the table on a directionally-correct lane.
+- **Hypothesis:** Holding winners with a trailing floor captures the run BNB BUY_YES was giving up at +30%, while the floor protects most of the give-back when a winner reverses.
+- **Expected outcome:** BNB BUY_YES 5m/15m mean realized PnL per winner rises above the +30% TP cap; `exit_reason` shifts from `take_profit` toward `updown_resolution`/trail exits.
+- **Actual outcome:** `pending` — forward-test only (exits can't be ghost-validated); needs bot restart. Watch BNB BUY_YES exit reasons + realized PnL in `trades_settled.jsonl`.
+- **Status:** `pending`
+
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts. Also raised `max_ai_calls_per_scan` 5→6 for added budget headroom.

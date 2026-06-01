@@ -8,6 +8,18 @@
 
 ---
 
+## 2026-05-31 — Positive trailing-floor exit (true trailing-after-MFE) for up/down lanes
+
+**[`src/execution/updown_exit_shared.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py), [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
+
+- **New mechanic:** `effective_updown_stop_loss_pct` gained two optional params (`trail_arm_pct`, `trail_gap_pct`, default `0.0` = off). Once the persisted high-water mark (`peak_pnl_pct`) clears `trail_arm_pct`, the exit floor trails at `peak − trail_gap_pct` and **may be positive** — banking gains, not just capping the from-entry loss like the existing `in_profit_stop_tighten`. Floor is `max(base_stop, peak − gap)`, so it is only ever *more* protective. Encoded as a possibly-negative magnitude; caller guard relaxed `> 0` → `!= 0` to admit positive floors.
+- **Plumbing:** params threaded through `UpdownExitGlobals` / `UpdownResolvedExitParams` / `_UPDOWN_EXIT_PARAM_KEYS` / `parse_updown_exit_globals` / `resolve_updown_exit_params_for_position`, so they resolve at strategy→window→leg granularity like the other exit knobs. Defaults preserve byte-identical legacy behavior on every untouched lane.
+- **Config:** enabled (`arm=0.10`, `gap=0.15`, `hold_winners=true`) on the three positive-early-TP-regret lanes only — `bnb_macro` BUY_YES 5m/15m (new block), `eth_macro` BUY_YES 15m (new `up` block), `xrp_macro` BUY_NO 15m. `bitcoin`/`hype` deliberately untouched (their TP-at-0.30 tested *negative* regret).
+- **Provenance:** derived from per-lane `hold_minus_exit_pnl` on 230 `take_profit` rows in `data/calibration/trades_settled.jsonl`. Forward-test only — exits are not ghost-validatable. Needs bot restart.
+- **Tests:** 2 new cases in `tests/test_updown_exit_shared.py` (positive floor locks gains; defaults-off preserve legacy). Full suite **731 passed, 2 skipped**.
+
+---
+
 ## 2026-06-01 — Decisive AI system prompt (root-cause HOLD bias) + budget 5→6 for HYPE/DOGE/BNB
 
 **[`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**

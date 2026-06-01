@@ -278,6 +278,8 @@ class PositionExitManager:
                     peak_pnl_pct=peak_pnl_pct,
                     in_profit_trigger_pct=resolved.updown_in_profit_stop_trigger_pct,
                     tighten_to_pct=resolved.updown_in_profit_stop_tighten_to_pct,
+                    trail_arm_pct=resolved.updown_trail_arm_pct,
+                    trail_gap_pct=resolved.updown_trail_gap_pct,
                     dynamic_stop_enabled=resolved.dynamic_stop_enabled,
                     btc_1h_regime=entry_signal.get("btc_1h_regime"),
                     entry_volatility=entry_signal.get("entry_volatility"),
@@ -305,7 +307,7 @@ class PositionExitManager:
                     and pnl_pct >= resolved.take_profit_pct
                 ):
                     reason = "take_profit"
-                elif effective_stop_loss_pct > 0 and pnl_pct <= -effective_stop_loss_pct:
+                elif effective_stop_loss_pct != 0 and pnl_pct <= -effective_stop_loss_pct:
                     # Same-position percentage stop: cuts adverse drift early instead of
                     # waiting for the late-window cents stop, which fires at whatever price
                     # the position has already collapsed to.

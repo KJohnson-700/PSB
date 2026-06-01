@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-05-31 — Early-TP regret: hold winners + positive trailing floor (BUY_YES 15m)
+
+- **What changed:** Added an `up` (BUY_YES) block to `eth_macro` 15m in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Backed by the new floor mechanic in [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py) — once peak clears +10%, exit floor trails at `peak − 15%` and can be positive (banks gains), never wider than the base stop.
+- **Why:** Settled `take_profit` rows: ETH BUY_YES 15m n=14, +$20.9 regret, 86% held-WR. Directionally-correct lane exiting too early at +30%. (5m n=1 and 1h n=5 too thin — left out.)
+- **Hypothesis:** Trailing-after-MFE on ETH 15m longs captures the run currently surrendered at the +30% TP while limiting reversal give-back.
+- **Expected outcome:** ETH BUY_YES 15m realized PnL per winner rises above the +30% cap; fewer `take_profit` exits.
+- **Actual outcome:** `pending` — forward-test only (no ghost validation for exits); needs bot restart. Watch ETH BUY_YES 15m in `trades_settled.jsonl`.
+- **Status:** `pending`
+
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts.

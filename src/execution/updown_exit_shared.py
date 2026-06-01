@@ -55,6 +55,8 @@ class UpdownExitGlobals:
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
     updown_in_profit_stop_tighten_to_pct: float
+    updown_trail_arm_pct: float
+    updown_trail_gap_pct: float
     dynamic_stop_enabled: bool
     dynamic_stop_bull_mult: float
     dynamic_stop_range_mult: float
@@ -82,6 +84,8 @@ class UpdownResolvedExitParams:
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
     updown_in_profit_stop_tighten_to_pct: float
+    updown_trail_arm_pct: float
+    updown_trail_gap_pct: float
     dynamic_stop_enabled: bool
     dynamic_stop_bull_mult: float
     dynamic_stop_range_mult: float
@@ -107,6 +111,8 @@ _UPDOWN_EXIT_PARAM_KEYS = frozenset(
         "updown_high_entry_threshold",
         "updown_in_profit_stop_trigger_pct",
         "updown_in_profit_stop_tighten_to_pct",
+        "updown_trail_arm_pct",
+        "updown_trail_gap_pct",
         "dynamic_stop_enabled",
         "dynamic_stop_bull_mult",
         "dynamic_stop_range_mult",
@@ -191,6 +197,8 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         updown_in_profit_stop_tighten_to_pct=float(
             ec.get("updown_in_profit_stop_tighten_to_pct", 0.0) or 0.0
         ),
+        updown_trail_arm_pct=float(ec.get("updown_trail_arm_pct", 0.0) or 0.0),
+        updown_trail_gap_pct=float(ec.get("updown_trail_gap_pct", 0.0) or 0.0),
         dynamic_stop_enabled=bool(ec.get("dynamic_stop_enabled", True)),
         dynamic_stop_bull_mult=float(ec.get("dynamic_stop_bull_mult", 0.95) or 0.95),
         dynamic_stop_range_mult=float(ec.get("dynamic_stop_range_mult", 1.05) or 1.05),
@@ -292,6 +300,8 @@ def resolve_updown_exit_params_for_position(
         "updown_high_entry_threshold": g.updown_high_entry_threshold,
         "updown_in_profit_stop_trigger_pct": g.updown_in_profit_stop_trigger_pct,
         "updown_in_profit_stop_tighten_to_pct": g.updown_in_profit_stop_tighten_to_pct,
+        "updown_trail_arm_pct": g.updown_trail_arm_pct,
+        "updown_trail_gap_pct": g.updown_trail_gap_pct,
         "dynamic_stop_enabled": g.dynamic_stop_enabled,
         "dynamic_stop_bull_mult": g.dynamic_stop_bull_mult,
         "dynamic_stop_range_mult": g.dynamic_stop_range_mult,
@@ -327,6 +337,8 @@ def resolve_updown_exit_params_for_position(
         updown_high_entry_threshold=float(params["updown_high_entry_threshold"]),
         updown_in_profit_stop_trigger_pct=float(params["updown_in_profit_stop_trigger_pct"]),
         updown_in_profit_stop_tighten_to_pct=float(params["updown_in_profit_stop_tighten_to_pct"]),
+        updown_trail_arm_pct=float(params["updown_trail_arm_pct"]),
+        updown_trail_gap_pct=float(params["updown_trail_gap_pct"]),
         dynamic_stop_enabled=bool(params["dynamic_stop_enabled"]),
         dynamic_stop_bull_mult=float(params["dynamic_stop_bull_mult"]),
         dynamic_stop_range_mult=float(params["dynamic_stop_range_mult"]),
@@ -364,6 +376,8 @@ def effective_updown_stop_loss_pct(
     peak_pnl_pct: Optional[float] = None,
     in_profit_trigger_pct: float,
     tighten_to_pct: float,
+    trail_arm_pct: float = 0.0,
+    trail_gap_pct: float = 0.0,
     dynamic_stop_enabled: bool = False,
     btc_1h_regime: Optional[str] = None,
     entry_volatility: Optional[float] = None,
@@ -416,8 +430,25 @@ def effective_updown_stop_loss_pct(
         and trigger_pnl_pct >= in_profit_trigger_pct
         and 0 < tighten_to_pct < effective_base
     ):
-        return float(tighten_to_pct)
-    return float(effective_base)
+        stop_mag = float(tighten_to_pct)
+    else:
+        stop_mag = float(effective_base)
+
+    # Positive trailing floor: once the high-water mark clears ``trail_arm_pct``,
+    # lock an exit floor at ``peak - trail_gap`` (which may itself be positive,
+    # banking gains rather than only capping the loss). Returned as a possibly
+    # negative magnitude so the caller's ``pnl <= -mag`` test fires at that
+    # floor. Only ever more protective than the from-entry stop, never wider.
+    if (
+        trail_arm_pct > 0
+        and trail_gap_pct > 0
+        and peak_pnl_pct is not None
+        and float(peak_pnl_pct) >= trail_arm_pct
+    ):
+        trail_floor = float(peak_pnl_pct) - float(trail_gap_pct)
+        exit_floor = max(-stop_mag, trail_floor)
+        return -exit_floor
+    return stop_mag
 
 
 def adverse_for_updown_cents_time_stop(
