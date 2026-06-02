@@ -8,6 +8,18 @@
 
 ---
 
+## 2026-06-01 — Exit-policy drift Discord alerts + revert 5m hold+trail
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/analysis/lane_exit_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_policy.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
+
+- **Discord drift alerts (recommend-only):** the exit-policy recommender now runs on settle and pings Discord when live exit config disagrees with settled data. Wired into `_refresh_ghost_calibration_state` (runs in a worker thread, so a blocking `urllib` webhook POST is safe). Gated by new `lane_exit_policy` config (`enabled`, `alert_discord`, `recompute_min_new_settles: 25`, `min_lane_n`). De-dups on a drift signature so the same drift isn't re-pinged every cycle; only re-alerts when a new lane drifts or a recommendation flips. Helpers added to `lane_exit_policy.py`: `recompute`, `drift_signature`, `format_drift_message`, `post_discord_blocking`. **Never auto-applies** — operator reviews + edits config + restarts.
+- **Reverted 5m hold+trail → plain +30% TP** on `eth/xrp/bnb 5m BUY_YES`. Diagnosis: the held→realized leak on these lanes is the STOP cutting winners (42–67% of held-winners stopped), which `hold_winners` doesn't touch (it only skips the take-profit). And the trailing floor, even at the live 10s fast-exit cadence, can't catch the worst 5m round-trips (observed bnb 5m: MFE +110% → realized −14% via stop). 5m lanes are coin-flip held-WR (46–48%) where this added variance with no upside. 15m/1h lanes kept on hold+trail.
+- **Correction to prior session note:** the fast-exit loop is NOT uncommitted — it's live at `exit_check_interval_sec: 10` and routes through `PositionExitManager` (the trailing-floor class). Earlier "exits at 60s / fast loop uncommitted" claim was wrong.
+- Tests: +4 (`test_lane_exit_policy.py`). Full suite 742 green.
+- Forward-test only; config changes need a bot restart to load.
+
+---
+
 ## 2026-06-01 — Exact AI gate economics logging (no more inferred PnL)
 
 **[`src/strategies/{bitcoin,sol_macro,eth_macro}.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), [`scripts/ai_gate_value_report.py`](/Users/mainfolder/Documents/psb-main%201/scripts/ai_gate_value_report.py):**

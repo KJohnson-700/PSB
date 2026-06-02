@@ -442,6 +442,9 @@ class PolyBot:
         self.last_buy_no_skip_samples: Dict[str, Dict[str, Any]] = {}
         self.ghost_calibration_status: Dict[str, Any] = {}
         self._last_ghost_calibration_refresh_monotonic: float = 0.0
+        # Exit-policy drift alerting: remember the last drift set we pinged so we
+        # only re-alert when a new lane drifts or a recommendation flips.
+        self._last_exit_drift_sig: frozenset = frozenset()
 
         # Trade journal: every process restart starts a FRESH session at
         # initial_bankroll (500). This ensures every restart = clean test run.
@@ -895,6 +898,14 @@ class PolyBot:
                     )
             except Exception as _te:  # noqa: BLE001 — telemetry only
                 logging.warning("lane_thresholds recompute skipped: %s", _te)
+        # Per-lane EXIT-policy drift: recompute the shadow recommendation from
+        # settled trades and Discord-ping when live config disagrees with the
+        # data. Recommend-only — never mutates exits. Runs in this worker thread
+        # so the blocking webhook POST is safe.
+        try:
+            self._maybe_alert_exit_policy_drift(settle_summary)
+        except Exception as _ee:  # noqa: BLE001 — alerting must never break settle
+            logging.warning("exit-policy drift alert skipped: %s", _ee)
         status = build_ghost_calibration_status()
         status["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
         status["last_settle_summary"] = settle_summary
@@ -909,6 +920,45 @@ class PolyBot:
                 status.get("total_settled", 0),
                 settle_summary.get("ghost_beta_updates", 0),
             )
+
+    def _maybe_alert_exit_policy_drift(self, settle_summary: Dict[str, Any]) -> None:
+        """Recompute the exit-policy shadow recommendation; Discord-ping on drift.
+
+        Gated by config ``lane_exit_policy``. Recommend-only: writes
+        ``lane_exit_policy.json`` and alerts when the live exit config disagrees
+        with the settled-data recommendation (a lane with n>=MIN_N_APPLY). Alerts
+        de-dup on the drift signature so the same drift isn't re-pinged every cycle.
+        """
+        cfg = (self.config.get("lane_exit_policy") or {})
+        if not bool(cfg.get("enabled", True)):
+            return
+        min_new = int(cfg.get("recompute_min_new_settles", 25) or 25)
+        if int(settle_summary.get("newly_settled", 0) or 0) < min_new:
+            return
+        from src.analysis.lane_exit_policy import (
+            recompute,
+            drift_signature,
+            format_drift_message,
+            post_discord_blocking,
+        )
+        _payload, drift = recompute(min_n=int(cfg.get("min_lane_n", 5) or 5))
+        sig = drift_signature(drift)
+        if sig == self._last_exit_drift_sig:
+            return  # nothing new since last alert
+        self._last_exit_drift_sig = sig
+        if not drift:
+            return
+        logging.info("[exit-policy] drift detected on %d lane(s)", len(drift))
+        if not bool(cfg.get("alert_discord", True)):
+            return
+        notif = (self.config.get("notifications") or {})
+        webhook = str(notif.get("discord_webhook") or "").strip()
+        if not webhook:
+            return
+        if post_discord_blocking(webhook, format_drift_message(drift)):
+            logging.info("[exit-policy] drift alert sent to Discord (%d lanes)", len(drift))
+        else:
+            logging.warning("[exit-policy] drift Discord post failed")
 
     def _validate_lane_calibration_runtime(self) -> None:
         """Fail fast if calibration mode and strategy wiring disagree."""

@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -109,6 +110,72 @@ def build(rows: List[Dict[str, Any]], min_n: int) -> Dict[str, Any]:
         "shadow_only": True,
         "lanes": lanes,
     }
+
+
+def recompute(
+    min_n: int = 5,
+    since: Optional[str] = None,
+    out_path: Path | str = OUT_PATH,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Load settled trades, rebuild the policy file, return (payload, drift_lanes).
+
+    Safe to call from a worker thread (pure I/O + compute). Drift lanes are those
+    where the live config disagrees with the data-recommended policy AND the lane
+    has cleared ``MIN_N_APPLY`` settled trades.
+    """
+    rows = _load(SETTLED_PATH, since)
+    payload = build(rows, min_n)
+    Path(out_path).write_text(json.dumps(payload, indent=2))
+    drift = [l for l in payload["lanes"] if l.get("drift")]
+    return payload, drift
+
+
+def drift_signature(drift_lanes: List[Dict[str, Any]]) -> frozenset:
+    """Stable identity of the current drift set, to suppress repeat alerts.
+
+    Keyed on (lane, recommended-hold) so an alert re-fires only when a new lane
+    drifts or an existing lane's recommendation flips — not every settle cycle.
+    """
+    return frozenset(
+        (l["lane"], bool(l["recommended"].get("updown_hold_winners_to_resolution")))
+        for l in drift_lanes
+    )
+
+
+def format_drift_message(drift_lanes: List[Dict[str, Any]]) -> str:
+    """Human-readable Discord alert body for the current drift set."""
+    if not drift_lanes:
+        return ""
+    lines = ["⚠️ **Exit-policy drift** — live config disagrees with settled data:"]
+    for l in sorted(drift_lanes, key=lambda x: -abs(x.get("gap", 0))):
+        want = ("hold+trail" if l["recommended"].get("updown_hold_winners_to_resolution")
+                else "tight TP/SL")
+        have = "hold+trail" if l["live_hold_winners"] else "tight TP/SL"
+        lines.append(
+            f"• `{l['lane']}` (n={l['n']}): held {l['held_wr']:.0f}% / "
+            f"realized {l['realized_wr']:.0f}%, gap {l['gap']:+.1f} — "
+            f"**data wants {want}**, live is {have}"
+        )
+    lines.append("_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._")
+    return "\n".join(lines)
+
+
+def post_discord_blocking(webhook: str, content: str, *, timeout: float = 8.0) -> bool:
+    """Blocking POST to a Discord webhook. For use from sync/worker-thread code.
+
+    Returns True on 2xx. Never raises — alerting must not break the settle loop.
+    """
+    if not webhook or not content:
+        return False
+    try:
+        data = json.dumps({"content": content[:1900]}).encode("utf-8")
+        req = urllib.request.Request(
+            webhook, data=data, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
 
 
 def main() -> None:
