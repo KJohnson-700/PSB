@@ -8,6 +8,50 @@
 
 ---
 
+## 2026-06-03 — Horizon-coherence: own-TF decider + larger-TF fallback (all strategies)
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):**
+
+- **Rule enforced:** every lane decides on its OWN timeframe, fallback to the next LARGER timeframe only (5m→15m→1h→4h). No smaller timeframe may gate or decide a larger lane.
+- **Deciders audited clean:** `_resolve_bias_for_tf` (BTC) and `_resolve_alt_bias_for_tf` (ETH + sol-family) already follow the ladder — larger TFs only add a disagreement penalty or act as neutral fallback.
+- **Violations fixed:**
+  - `bitcoin._check_lower_tf_confirmation` hardcoded `macd_15m` and hard-skipped 1h markets ("LTF confirmed late-entry") on a 15m signal → now horizon-coherent (`1h→macd_1h`, else `macd_15m`); call site passes `_updown_tf`.
+  - sol/eth momentum-confirm else-branch could consult `macd_5m` for a 15m lane → restructured to own-TF + next-larger fallback.
+  - `sol._passes_iql` skips entirely on 1h (15m-calibrated floor was wrong TF) — was flooding SOL 1h with `iql_15m_reject` (commit 0473711).
+- **Commits:** `0473711`, `8384048`. Needs restart.
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):**
+
+- **Self-heal Discord rate-limit fix:** the self-healing supervisor sent one Discord/Telegram message per cold-lane escalation. On the first cycle of a new day, 25+ lanes escalate at once → 25 webhook calls → Discord 429s. Now all escalations from a run are batched into a **single** message, capped at `self_healing.escalation.max_notify_per_run` (default 3) with a `…+N more suppressed` suffix.
+- **Regime-feed health badge (Ghost Lab tab):** `_glRenderCounts` now renders a chip from `current_deadzone` (`/api/ghosts/lab`) — 🟢 `REGIME FEED LIVE · <age>` when fresh, 🔴 `REGIME FEED STALE · <age>` (pulsing) when the feed drifts past `max_age_sec`, with a tooltip showing the restart command. Surfaces the failure mode where `tools/enhanced_price_tracker.py` (the standalone daemon that writes `market_regime.jsonl`, now under launchd `com.psb.regime-tracker`) dies and the deadzone heatmap silently freezes — which went unnoticed for 8 days (May 25 → Jun 3).
+- **Validation:** `python -m py_compile src/main.py` + `node --check` on extracted page JS both pass; dashboard endpoints smoke-tested 200 via TestClient.
+
+## 2026-06-02 — HYPE Binance 451 cooldown
+
+**[`src/analysis/hyperliquid_hype_service.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/hyperliquid_hype_service.py), tests:**
+
+- **Diagnosis:** local session logs showed repeated `Binance USDM HYPE ... 451 Client Error ... falling back to Hyperliquid` lines. Binance Futures was geo-blocked from the active network route, but the service retried Binance for every HYPE interval on every cycle before falling back, adding log noise and latency.
+- **Fix:** when Binance returns HTTP `451` for HYPE klines, the service now starts a 1-hour Binance cooldown and routes HYPE directly to Hyperliquid during that window. Other transient Binance failures keep the existing one-shot fallback behavior.
+- **Validation:** `.venv/bin/python -m pytest tests/test_market_data_fallbacks.py` → 10 passed.
+
+## 2026-06-02 — Discord 429 fix for manual global stop alerts
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), tests:**
+
+- **Diagnosis:** Discord webhook was loaded, but local logs showed repeated `Discord webhook failed: 429` immediately after `Manual global stop active (data/KILL_SWITCH present)`. The kill-switch branch spawned six manual-stop Discord embeds every skipped cycle, which kept the webhook rate-limited and also caused exit-policy drift alerts to fail.
+- **Fix:** de-duped manual global stop Discord notifications so the bot sends one six-strategy alert burst per kill-switch activation, then suppresses repeats until the kill switch clears.
+- **Validation:** `.venv/bin/python -m pytest tests/test_strategy_execution_drivers.py::test_manual_global_stop_discord_alert_is_deduped_per_activation tests/test_notification_manager.py` → 11 passed.
+
+## 2026-06-02 — Paper-session loss regression: stale-window execution guard + paper daily cap
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py), tests:**
+
+- **Diagnosis:** current local paper session `test_20260601_163448` closed 102 trades at `-99.52` PnL / `32.4%` WR. Losses clustered around stale short-window execution: the strategy scan phase reached ~202s, so 5m signals could be generated in-window but executed near/at market end. Worst cluster: `eth_macro` 5m `BUY_NO` (`n=10`, `WR=10%`, `PnL=-39.38`), with several entries showing `minutes_to_market_end=0`.
+- **Risk bug:** config had `trading.daily_loss_limit: 0.15`, but `RiskManager` read only `risk.daily_loss_limit`; paper mode also ignored the daily loss cap and waited for the 25% emergency stop. `RiskManager` now falls back to `trading.daily_loss_limit` and enforces daily loss in paper by default (`risk.enforce_daily_loss_limit_in_paper`, default `true`).
+- **Execution fix:** added a final `_check_fresh_entry_window` guard in both BTC and SOL-family execution paths, immediately before risk sizing/order placement. It recalculates seconds left from `signal.end_date` and logs `stale_signal_window` instead of placing orders that aged out behind slow scans/AI. Defaults: 5m needs at least 1.0 min left, 15m 2.0 min, 1h 3.0 min; strategy `entry_window_min` can only make that stricter.
+- **Operator safety:** created `data/KILL_SWITCH` so the currently running old-code process cannot resume entries before a controlled restart. Restart required to load the code patch.
+- **Validation:** `pytest tests/test_risk_manager_hardening.py tests/test_strategy_execution_drivers.py` → 34 passed.
+
 ## 2026-06-01 — Exit-policy drift Discord alerts + revert 5m hold+trail
 
 **[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/analysis/lane_exit_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_policy.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
