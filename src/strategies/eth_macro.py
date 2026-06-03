@@ -229,6 +229,23 @@ class ETHMacroStrategy(SolMacroStrategy):
             return float(self.eth_follow_15m_min_adj_short)
         return float(self.eth_follow_15m_min_adj_long)
 
+    def _admit_marginal_quant_short(self, edge, action, timing_open) -> bool:
+        """When the AI decision layer is OFF, admit sub-threshold marginal BUY_NO
+        candidates on quant terms instead of dying on the AI tiebreaker (no-op when
+        the layer is disabled) or the lane_min_edge gate. Default OFF, BUY_NO-only,
+        timing-open, edge above the marginal floor. Self-disables when the decision
+        layer is re-enabled."""
+        try:
+            return (
+                bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False))
+                and not self.ai_agent.decision_layer_enabled()
+                and action == "BUY_NO"
+                and bool(timing_open)
+                and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
+            )
+        except Exception:
+            return False
+
     def _resolve_eth_direction(
         self,
         *,
@@ -938,12 +955,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_no") or [])
                 if _block or _shadow:
-                    _eth_bear_confirmed = (
-                        eth.macd_5m.crossover == "BEARISH_CROSS"
-                        or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
-                        or eth.macd_15m.crossover == "BEARISH_CROSS"
-                        or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
-                    )
+                    if _updown_tf == "1h":
+                        _eth_bear_confirmed = (
+                            eth.macd_1h.crossover == "BEARISH_CROSS"
+                            or (eth.macd_1h.histogram < 0 and not eth.macd_1h.histogram_rising)
+                        )
+                    else:
+                        _eth_bear_confirmed = (
+                            eth.macd_5m.crossover == "BEARISH_CROSS"
+                            or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
+                            or eth.macd_15m.crossover == "BEARISH_CROSS"
+                            or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
+                        )
                     if not _eth_bear_confirmed:
                         _reason = "buy_no_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
                         ctx = _eth_mc_context()
@@ -966,12 +989,18 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_yes") or [])
                 if _block or _shadow:
-                    _eth_bull_confirmed = (
-                        eth.macd_5m.crossover == "BULLISH_CROSS"
-                        or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
-                        or eth.macd_15m.crossover == "BULLISH_CROSS"
-                        or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
-                    )
+                    if _updown_tf == "1h":
+                        _eth_bull_confirmed = (
+                            eth.macd_1h.crossover == "BULLISH_CROSS"
+                            or (eth.macd_1h.histogram > 0 and eth.macd_1h.histogram_rising)
+                        )
+                    else:
+                        _eth_bull_confirmed = (
+                            eth.macd_5m.crossover == "BULLISH_CROSS"
+                            or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
+                            or eth.macd_15m.crossover == "BULLISH_CROSS"
+                            or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
+                        )
                     if not _eth_bull_confirmed:
                         _reason = "buy_yes_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
                         ctx = _eth_mc_context()
@@ -1796,6 +1825,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and ai_calls < self.max_ai_calls_per_scan
                 # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                 and _updown_tf in self._DECISION_GATE_WINDOWS
+                and not self._admit_marginal_quant_short(edge, action, _timing_window_open)
             ):
                 _window = _updown_tf
                 if btc_ta:
@@ -2008,7 +2038,13 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             _sample("est_prob_up", est_prob_up)
             _sample("edge", edge)
-            if edge < effective_min_edge:
+            # 2026-06-02: admit sub-threshold marginal BUY_NO on quant terms when the
+            # AI decision layer is OFF (no-op tiebreaker can't rescue them). The upstream
+            # AI block is also skipped for these so they reach here, not ai_none.
+            _admit_marginal_no_ai = self._admit_marginal_quant_short(
+                edge, action, _timing_window_open
+            )
+            if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
                 _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))

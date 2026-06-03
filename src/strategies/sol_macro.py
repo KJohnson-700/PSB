@@ -433,6 +433,23 @@ class SolMacroStrategy:
     def _min_edge_for_window(self, window_size: str) -> float:
         return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
 
+    def _admit_marginal_quant_short(self, edge, allowed_side, timing_open) -> bool:
+        """When the AI decision layer is OFF, admit sub-threshold marginal SHORTs on
+        quant terms instead of letting them die on the AI tiebreaker (no-op when the
+        layer is disabled) or the final lane_min_edge gate. Default OFF, SHORT-only,
+        timing-open, edge above the marginal floor. Self-disables when the decision
+        layer is re-enabled. Ghost-validated BEARISH×SHORT marginals (2026-06-02)."""
+        try:
+            return (
+                bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False))
+                and not self.ai_agent.decision_layer_enabled()
+                and allowed_side == "SHORT"
+                and bool(timing_open)
+                and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
+            )
+        except Exception:
+            return False
+
     def _ai_override_min_edge_for_window(self, window_size: str) -> float:
         return float(
             self._tf_cfg(window_size, "ai_override_min_edge", self.min_edge_5m_ai_override)
@@ -2107,6 +2124,8 @@ class SolMacroStrategy:
         """
         if not self.iql_15m_enabled:
             return True
+        if tf == "1h":
+            return True
         is_hourly = tf == "1h"
         macd = ta.sol.macd_1h if is_hourly else ta.sol.macd_15m
         label = "1h" if is_hourly else "15m"
@@ -2851,12 +2870,18 @@ class SolMacroStrategy:
                 and not _bias_aligned_short
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_no") or [])
             ):
-                _alt_bear_confirmed = (
-                    sol.macd_5m.crossover == "BEARISH_CROSS"
-                    or (sol.macd_5m.histogram < 0 and not sol.macd_5m.histogram_rising)
-                    or sol.macd_15m.crossover == "BEARISH_CROSS"
-                    or (sol.macd_15m.histogram < 0 and not sol.macd_15m.histogram_rising)
-                )
+                if _alt_mc_window == "1h":
+                    _alt_bear_confirmed = (
+                        sol.macd_1h.crossover == "BEARISH_CROSS"
+                        or (sol.macd_1h.histogram < 0 and not sol.macd_1h.histogram_rising)
+                    )
+                else:
+                    _alt_bear_confirmed = (
+                        sol.macd_5m.crossover == "BEARISH_CROSS"
+                        or (sol.macd_5m.histogram < 0 and not sol.macd_5m.histogram_rising)
+                        or sol.macd_15m.crossover == "BEARISH_CROSS"
+                        or (sol.macd_15m.histogram < 0 and not sol.macd_15m.histogram_rising)
+                    )
                 if not _alt_bear_confirmed:
                     _bump_skip("buy_no_no_alt_momentum_confirm")
                     _log_skip_reject(
@@ -2883,12 +2908,18 @@ class SolMacroStrategy:
                 and not _bias_aligned_long
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_yes") or [])
             ):
-                _alt_bull_confirmed = (
-                    sol.macd_5m.crossover == "BULLISH_CROSS"
-                    or (sol.macd_5m.histogram > 0 and sol.macd_5m.histogram_rising)
-                    or sol.macd_15m.crossover == "BULLISH_CROSS"
-                    or (sol.macd_15m.histogram > 0 and sol.macd_15m.histogram_rising)
-                )
+                if _alt_mc_window == "1h":
+                    _alt_bull_confirmed = (
+                        sol.macd_1h.crossover == "BULLISH_CROSS"
+                        or (sol.macd_1h.histogram > 0 and sol.macd_1h.histogram_rising)
+                    )
+                else:
+                    _alt_bull_confirmed = (
+                        sol.macd_5m.crossover == "BULLISH_CROSS"
+                        or (sol.macd_5m.histogram > 0 and sol.macd_5m.histogram_rising)
+                        or sol.macd_15m.crossover == "BULLISH_CROSS"
+                        or (sol.macd_15m.histogram > 0 and sol.macd_15m.histogram_rising)
+                    )
                 if not _alt_bull_confirmed:
                     _bump_skip("buy_yes_no_alt_momentum_confirm")
                     _log_skip_reject(
@@ -3898,6 +3929,8 @@ class SolMacroStrategy:
                     edge < _marginal_min_edge and edge > 0.03
                     # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                     and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                    # decision layer off + flag on: skip AI, admit on quant terms downstream
+                    and not self._admit_marginal_quant_short(edge, allowed_side, _timing_window_open)
                 ):
                     def _log_ai_veto(_reason: str, **extra: Any) -> None:
                         _log_skip_reject(
@@ -4339,6 +4372,7 @@ class SolMacroStrategy:
                 and ai_calls < self.max_ai_calls_per_scan
                 # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                 and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                and not self._admit_marginal_quant_short(edge, allowed_side, _timing_window_open)
             ):
                 _win = _updown_tf if is_updown else "15m"
                 ai_context2 = (
@@ -4481,7 +4515,14 @@ class SolMacroStrategy:
             except NameError:
                 pass
             _sample("edge", edge)
-            if edge < effective_min_edge:
+            # 2026-06-02: when the AI decision layer is OFF, sub-threshold marginal
+            # SHORTs are admitted on quant terms (see _admit_marginal_quant_short) —
+            # the composite scorer is the quality gate instead of an auto lane_min_edge
+            # reject. The two upstream AI tiebreaker blocks are also skipped for these.
+            _admit_marginal_no_ai = self._admit_marginal_quant_short(
+                edge, allowed_side, _timing_window_open
+            )
+            if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
                 _vetoed = bool(getattr(self, "_last_calibration_vetoed", False))
