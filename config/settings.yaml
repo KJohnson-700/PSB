@@ -74,18 +74,18 @@ trading:
     updown_overrides:
       bnb_macro:
         window_lane_overrides:
-          15m:
-            up:
-              updown_stop_loss_pct: 0.17
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+          5m:
+            down:
               updown_hold_winners_to_resolution: true
       eth_macro:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
         window_lane_overrides:
           1h:
-            down:
+            up:
+              updown_stop_loss_pct: 0.17
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
           5m:
             down:
@@ -113,12 +113,6 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
-              updown_hold_winners_to_resolution: true
-          1h:
-            up:
-              updown_stop_loss_pct: 0.17
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
@@ -216,11 +210,6 @@ trading:
           5m:
             down:
               updown_hold_winners_to_resolution: true
-      bnb_macro:
-        window_lane_overrides:
-          5m:
-            down:
-              updown_hold_winners_to_resolution: true
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
@@ -246,9 +235,16 @@ lane_calibration:
   min_samples_to_apply_live: 30
   beta_veto_max_mean: 0.0
   beta_veto_min_n: 0
-  beta_blend_enabled: false
+  # Corrected bias-SHIFT pull-to-beta (rebuilt 2026-06-03). The 2026-05-29
+  # version (e665c6e) blended toward a per-lane constant with weight→1.0 and
+  # collapsed within-lane discrimination — disabled same day. This version adds
+  # a bounded per-lane OFFSET (p += w*(beta_target_yes-0.5)) that preserves the
+  # per-signal spread while correcting/flipping systematic directional error.
+  beta_blend_enabled: true
   beta_blend_n_floor: 30
   beta_blend_n_full: 100
+  beta_blend_w_max: 0.60     # cap on shift weight — never reaches collapse regime
+  beta_blend_min_bias: 0.05  # ignore directional lean smaller than this
   per_lane_thresholds:
     enabled: true
     recompute_on_settle: true

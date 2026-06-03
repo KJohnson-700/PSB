@@ -70,7 +70,11 @@ BETA_VETO_MIN_N = 30
 # 0.5 from the model's prediction bled indefinitely until the binary veto
 # fired at n>=BETA_VETO_MIN_N. The blend closes that gap smoothly.
 BETA_BLEND_N_FLOOR = 30   # no blend below this many live samples
-BETA_BLEND_N_FULL = 100   # full pull-to-beta at this many samples
+BETA_BLEND_N_FULL = 100   # max bias-shift weight reached at this many samples
+BETA_BLEND_W_MAX = 0.60   # cap on bias-shift weight — stays out of the
+                          # discrimination-collapse regime (w→1 flattened every
+                          # lane to a constant in the e665c6e version)
+BETA_BLEND_MIN_BIAS = 0.05  # ignore directional bias smaller than this
 
 
 @dataclass
@@ -110,6 +114,8 @@ class LaneCalibrator:
         beta_blend_enabled: bool = True,
         beta_blend_n_floor: int = BETA_BLEND_N_FLOOR,
         beta_blend_n_full: int = BETA_BLEND_N_FULL,
+        beta_blend_w_max: float = BETA_BLEND_W_MAX,
+        beta_blend_min_bias: float = BETA_BLEND_MIN_BIAS,
     ):
         self.path: Path = Path(path) if path is not None else DEFAULT_POSTERIORS_PATH
         self.shadow_mode: bool = bool(shadow_mode)
@@ -122,6 +128,8 @@ class LaneCalibrator:
         self.beta_blend_n_full: int = max(
             self.beta_blend_n_floor + 1, int(beta_blend_n_full)
         )
+        self.beta_blend_w_max: float = max(0.0, min(1.0, float(beta_blend_w_max)))
+        self.beta_blend_min_bias: float = max(0.0, float(beta_blend_min_bias))
         # Per-lane threshold overrides derived from ghost data. Off by default
         # — the operator inspects the recommendations (lane_thresholds.json)
         # and flips per_lane_thresholds_enabled to True when satisfied.
@@ -427,34 +435,48 @@ class LaneCalibrator:
         return max(0.01, min(0.99, p_cal))
 
     def _beta_blend(self, lane_id: str, p_cal: float) -> float:
-        """Pull p toward the lane's observed β posterior mean of P(YES wins).
+        """Bias-SHIFT p toward the lane's observed directional reality.
 
-        Returns p_cal unchanged if posterior n is below floor (insufficient
-        evidence) or if the lane is unknown. Weight scales linearly between
-        n_floor and n_full so corrections phase in smoothly.
+        This is the corrected pull-to-beta (the e665c6e version blended toward
+        the constant ``beta_target_yes`` with weight → 1.0, which replaced every
+        trade's estimate with a single per-lane number and destroyed the model's
+        ability to discriminate good setups from bad — fabricated flat edge).
 
-        β tracks P(this lane's chosen side wins). For BUY_YES lanes the side
-        IS YES, so beta_mean directly estimates P(YES). For BUY_NO lanes the
-        side is NO, so P(YES) = 1 - beta_mean. The lane_id slot 2 carries
-        the side ('up' for BUY_YES, 'down' for BUY_NO).
+        Instead we add a per-lane *offset* equal to how far the lane's realized
+        side-win-rate sits from a coin flip, scaled by a bounded weight:
+
+            p_cal' = p_cal + w * (beta_target_yes - 0.5)
+
+        The per-signal spread of ``p_cal`` is preserved (still translated, not
+        flattened), so within-lane discrimination survives. When a lane is
+        strongly inverted the offset is large enough to carry the estimate
+        across 0.5 — flipping the side — which is exactly the correction an
+        inverted short lane needs.
+
+        β tracks P(this lane's chosen side wins). Lane slot 2 is the side
+        ('up' for BUY_YES, 'down' for BUY_NO), so for a BUY_NO lane the YES
+        probability is ``1 - beta_mean``.
         """
         if not lane_id:
             return p_cal
         p = self._posteriors.get(self._lane_key(lane_id))
         if p is None or p.n < self.beta_blend_n_floor:
             return p_cal
-        # Convert β posterior to a YES-probability for blending with p_cal
-        # (which is also P(YES wins)). Lane slot 2 is 'up' (YES) or 'down' (NO).
         parts = lane_id.split("|")
         side_slot = parts[2] if len(parts) > 2 else ""
         beta_mean_side = self._beta_mean(p)  # P(chosen side wins)
         beta_target_yes = (
             beta_mean_side if side_slot == "up" else (1.0 - beta_mean_side)
         )
-        # Linear ramp of blend weight between n_floor and n_full.
+        bias = beta_target_yes - 0.5
+        # Ignore tiny directional bias — only correct lanes with a real lean.
+        if abs(bias) < self.beta_blend_min_bias:
+            return p_cal
+        # Shrinkage ramp 0 → w_max between n_floor and n_full. Capped well below
+        # 1.0 so the shift can never dominate the per-signal estimate.
         span = max(1, self.beta_blend_n_full - self.beta_blend_n_floor)
-        w = min(1.0, (p.n - self.beta_blend_n_floor) / span)
-        return (1.0 - w) * p_cal + w * beta_target_yes
+        w = self.beta_blend_w_max * min(1.0, (p.n - self.beta_blend_n_floor) / span)
+        return p_cal + w * bias
 
     def record(
         self,

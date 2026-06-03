@@ -445,6 +445,8 @@ class PolyBot:
         # Exit-policy drift alerting: remember the last drift set we pinged so we
         # only re-alert when a new lane drifts or a recommendation flips.
         self._last_exit_drift_sig: frozenset = frozenset()
+        # Manual global stop alerting: one Discord burst per kill-switch episode.
+        self._manual_global_stop_alert_sent = False
 
         # Trade journal: every process restart starts a FRESH session at
         # initial_bankroll (500). This ensures every restart = clean test run.
@@ -788,6 +790,8 @@ class PolyBot:
         beta_blend_n_full = int(
             cal_cfg.get("beta_blend_n_full", _DEFAULT_BLEND_N_FULL) or _DEFAULT_BLEND_N_FULL
         )
+        beta_blend_w_max = float(cal_cfg.get("beta_blend_w_max", 0.60) or 0.60)
+        beta_blend_min_bias = float(cal_cfg.get("beta_blend_min_bias", 0.05) or 0.05)
         posterior_version = str(
             cal_cfg.get("posterior_version") or "lane_identity_v2_source_resolver"
         ).strip()
@@ -826,6 +830,8 @@ class PolyBot:
                 beta_blend_enabled=beta_blend_enabled,
                 beta_blend_n_floor=beta_blend_n_floor,
                 beta_blend_n_full=beta_blend_n_full,
+                beta_blend_w_max=beta_blend_w_max,
+                beta_blend_min_bias=beta_blend_min_bias,
             )
         except Exception as exc:  # noqa: BLE001 — telemetry init must not block startup
             logging.warning("lane_calibration init failed: %s", exc)
@@ -1854,6 +1860,23 @@ class PolyBot:
         """Return True if the manual global stop file exists (do not place new trades)."""
         return KILL_SWITCH_FILE.exists()
 
+    def _notify_manual_global_stop_once(self) -> None:
+        """Send the manual-stop Discord embeds once per kill-switch activation."""
+        if getattr(self, "_manual_global_stop_alert_sent", False):
+            return
+        self._manual_global_stop_alert_sent = True
+        for st in (
+            "bitcoin",
+            "sol_macro",
+            "eth_macro",
+            "hype_macro",
+            "xrp_macro",
+            "xrp_dump_hedge",
+        ):
+            self._spawn_bg(
+                self.notifier.notify_kill_global(st, "manual global stop")
+            )
+
     def _load_session_traded_market_ids(self) -> Set[str]:
         """Markets already entered this session; used to prevent short-window re-entry."""
         market_ids: Set[str] = set()
@@ -2162,18 +2185,9 @@ class PolyBot:
                 "Manual global stop active (data/KILL_SWITCH present). Skipping trading cycle."
             )
             log_ops_pulse(self, "main")
-            for st in (
-                "bitcoin",
-                "sol_macro",
-                "eth_macro",
-                "hype_macro",
-                "xrp_macro",
-                "xrp_dump_hedge",
-            ):
-                self._spawn_bg(
-                    self.notifier.notify_kill_global(st, "manual global stop")
-                )
+            self._notify_manual_global_stop_once()
             return
+        self._manual_global_stop_alert_sent = False
 
         self._performance_feedback_cycle += 1
         _pf = self.config.get("performance_feedback") or {}
@@ -2199,10 +2213,17 @@ class PolyBot:
                 from src.analysis.self_healing import SelfHealingSupervisor
 
                 _sh_result = SelfHealingSupervisor(self.config).run()
-                for _msg in _sh_result.notify_messages:
+                _sh_msgs = _sh_result.notify_messages
+                if _sh_msgs:
+                    # Batch into one Discord message to avoid rate-limit spam.
+                    _max = int((self.config.get("self_healing") or {}).get("escalation", {}).get("max_notify_per_run", 5))
+                    _shown = _sh_msgs[:_max]
+                    _batched = "\n".join(_shown)
+                    if len(_sh_msgs) > _max:
+                        _batched += f"\n…+{len(_sh_msgs) - _max} more suppressed (max_notify_per_run={_max})"
                     try:
-                        await self.notifier.send_discord(_msg)
-                        await self.notifier.send_telegram(_msg)
+                        await self.notifier.send_discord(_batched)
+                        await self.notifier.send_telegram(_batched)
                     except Exception as _ne:  # noqa: BLE001 — notify is best-effort
                         logging.debug("self_healing notify failed: %s", _ne)
             except Exception as e:
@@ -3023,6 +3044,75 @@ class PolyBot:
         )
         return False
 
+    def _check_fresh_entry_window(
+        self,
+        *,
+        strategy: str,
+        signal: Any,
+        lane_meta: Dict[str, Any],
+    ) -> bool:
+        """Reject signals that became too stale while slow scans/AI finished."""
+        end_date = getattr(signal, "end_date", None)
+        if end_date is None:
+            return True
+        try:
+            end_dt = end_date
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            seconds_left = (end_dt.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds()
+        except Exception:
+            return True
+
+        window = str(getattr(signal, "window_size", "") or lane_meta.get("lane_window") or "")
+        policy = getattr(signal, "entry_policy", None) or {}
+        configured_min = None
+        try:
+            configured_min = float(policy.get("entry_window_min"))
+        except (TypeError, ValueError, AttributeError):
+            configured_min = None
+        guard_cfg = ((self.config.get("trading") or {}).get("entry_execution_guard") or {})
+        default_min_by_window = {"5m": 1.0, "15m": 2.0, "1h": 3.0}
+        configured_by_window = guard_cfg.get("min_mins_left") or {}
+        try:
+            guard_min = float(configured_by_window.get(window, default_min_by_window.get(window, 1.0)))
+        except (TypeError, ValueError, AttributeError):
+            guard_min = default_min_by_window.get(window, 1.0)
+        min_mins_left = max(configured_min or 0.0, guard_min)
+        min_seconds_left = max(0.0, min_mins_left * 60.0)
+        if seconds_left >= min_seconds_left:
+            return True
+
+        reason = "stale_signal_window"
+        extra = self._lane_skip_extra(
+            lane_meta=lane_meta,
+            signal_reason=getattr(signal, "reason", None),
+            skip_reason=reason,
+        )
+        extra.update(
+            {
+                "window_size": window,
+                "seconds_left_at_execution": round(seconds_left, 3),
+                "min_seconds_left_at_execution": round(min_seconds_left, 3),
+            }
+        )
+        self.journal.log_skip(
+            signal.market_id,
+            signal.market_question,
+            strategy,
+            reason,
+            self.bankroll,
+            extra=extra,
+        )
+        logging.warning(
+            "%s stale signal blocked: market=%s window=%s seconds_left=%.1f min=%.1f",
+            strategy,
+            signal.market_id,
+            window,
+            seconds_left,
+            min_seconds_left,
+        )
+        return False
+
     async def _execute_bitcoin_signal(self, signal: BitcoinSignal):
         """Execute a Bitcoin Up/Down trade signal."""
         async with self._execution_lock:
@@ -3075,6 +3165,12 @@ class PolyBot:
             signal_reason=signal.reason,
             lane_meta=lane_meta,
             btc_price=getattr(signal, "btc_current", None),
+        ):
+            return
+        if not self._check_fresh_entry_window(
+            strategy="bitcoin",
+            signal=signal,
+            lane_meta=lane_meta,
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
@@ -3354,6 +3450,12 @@ class PolyBot:
             signal_reason=signal.reason,
             lane_meta=lane_meta,
             btc_price=getattr(signal, "btc_current", None),
+        ):
+            return
+        if not self._check_fresh_entry_window(
+            strategy=strat,
+            signal=signal,
+            lane_meta=lane_meta,
         ):
             return
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
