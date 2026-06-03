@@ -888,6 +888,11 @@ strategies:
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
+    # 5m neutral fallback skips 15m, jumps straight to 1h. Ghost data (2026-06-03):
+    # 5m->1h fallback held +0.064 realized (84% WR, n=135); 5m->15m fallback was
+    # the weaker leg. Both are larger-TF (correct direction); 1h is the stronger
+    # signal for HYPE so drop the 15m rung.
+    updown_5m_slower_tfs: ["1h"]
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []

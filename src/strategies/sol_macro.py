@@ -1483,7 +1483,15 @@ class SolMacroStrategy:
         asset = self._alt_asset_code()
         if tf == "5m":
             horizon_bias = self._get_5m_bias(ta)
-            slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta)}
+            # Larger-TF ladder for a neutral 5m (and disagreement check when
+            # decided). Per-asset configurable: some assets' nearest-larger (15m)
+            # fallback is weaker than a direct jump to 1h. Default keeps both.
+            _fb_tfs = self.config.get("updown_5m_slower_tfs", ["15m", "1h"])
+            slower_biases = {}
+            if "15m" in _fb_tfs:
+                slower_biases["15m"] = self._get_15m_bias(ta)
+            if "1h" in _fb_tfs:
+                slower_biases["1h"] = self._get_1h_bias(ta)
         elif tf == "15m":
             horizon_bias = self._get_15m_bias(ta)
             # Decided 15m keeps its existing 1h-only disagreement check. When 15m is
