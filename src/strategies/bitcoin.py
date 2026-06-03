@@ -1295,48 +1295,60 @@ class BitcoinStrategy:
     # LAYER 2: Lower Timeframe Confirmation (15m MACD)
     # ──────────────────────────────────────────────────────────────
 
-    def _check_lower_tf_confirmation(self, ta: TechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check if 15m MACD confirms the allowed direction.
+    def _check_lower_tf_confirmation(
+        self, ta: TechnicalAnalysis, allowed_side: str, tf: str = "15m"
+    ) -> tuple:
+        """Check if the next-SMALLER timeframe MACD confirms the allowed direction.
+
+        This is a late-entry filter: if the faster TF has already confirmed the
+        move, we're late. It must look at the timeframe one step BELOW the
+        market's own — 1h market → 15m, 15m market → 5m. 5m markets are excluded
+        by the caller (nothing faster in the ladder).
 
         allowed_side: "LONG" or "SHORT"
 
         Returns: (confirmed: bool, strength: float, reasons: list)
         """
-        macd_15m = ta.macd_15m
+        if tf == "15m":
+            macd = ta.tf_5m.macd
+            label = "5m"
+        else:  # 1h (and the 15m-default legacy path)
+            macd = ta.macd_15m
+            label = "15m"
         reasons = []
         strength = 0.0
 
         if allowed_side == "LONG":
             # Need: bullish cross OR rising histogram (red→green) OR MACD above signal
-            if macd_15m.crossover == "BULLISH_CROSS":
+            if macd.crossover == "BULLISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bull cross")
-            if macd_15m.histogram_rising and macd_15m.histogram > macd_15m.prev_histogram:
+                reasons.append(f"{label} MACD bull cross")
+            if macd.histogram_rising and macd.histogram > macd.prev_histogram:
                 # Histogram turning from red to green (or getting more green)
-                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
+                if macd.prev_histogram < 0 and macd.histogram > 0:
                     strength += 0.35
-                    reasons.append("15m hist red->green")
-                elif macd_15m.histogram_rising:
+                    reasons.append(f"{label} hist red->green")
+                elif macd.histogram_rising:
                     strength += 0.20
-                    reasons.append("15m hist rising")
-            if macd_15m.macd_line > macd_15m.signal_line:
+                    reasons.append(f"{label} hist rising")
+            if macd.macd_line > macd.signal_line:
                 strength += 0.15
-                reasons.append("15m MACD>signal")
+                reasons.append(f"{label} MACD>signal")
 
         elif allowed_side == "SHORT":
-            if macd_15m.crossover == "BEARISH_CROSS":
+            if macd.crossover == "BEARISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bear cross")
-            if not macd_15m.histogram_rising and macd_15m.histogram < macd_15m.prev_histogram:
-                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
+                reasons.append(f"{label} MACD bear cross")
+            if not macd.histogram_rising and macd.histogram < macd.prev_histogram:
+                if macd.prev_histogram > 0 and macd.histogram < 0:
                     strength += 0.35
-                    reasons.append("15m hist green->red")
-                elif not macd_15m.histogram_rising:
+                    reasons.append(f"{label} hist green->red")
+                elif not macd.histogram_rising:
                     strength += 0.20
-                    reasons.append("15m hist falling")
-            if macd_15m.macd_line < macd_15m.signal_line:
+                    reasons.append(f"{label} hist falling")
+            if macd.macd_line < macd.signal_line:
                 strength += 0.15
-                reasons.append("15m MACD<signal")
+                reasons.append(f"{label} MACD<signal")
 
         # Require stronger composite confirmation (0.50 instead of 0.35).
         # Single signals (crossover=0.40, hist flip=0.35) no longer auto-confirm —
@@ -1753,7 +1765,7 @@ class BitcoinStrategy:
                     bias_5m,
                 )
                 continue
-            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side)
+            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
             _sample("ltf_strength", ltf_strength)
             timing_bonus, timing_reasons = self._check_timing(ta, allowed_side)
             if (not is_5m) and ltf_confirmed:
