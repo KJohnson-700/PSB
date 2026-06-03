@@ -262,7 +262,7 @@ lane_calibration:
   # still clear the normal edge gate (with β-corrected est_prob). Default OFF —
   # opt in after watching β-blend stop the bleed. Forward-test only.
   directional_flip:
-    enabled: false
+    enabled: true
 lane_exit_policy:
   enabled: true
   alert_discord: true

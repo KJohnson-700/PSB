@@ -90,6 +90,14 @@ DEFAULT_LIVE_MATURE_N = 50
 # losing money. The flipped side still has to clear the normal edge gate.
 DEFAULT_FLIP_MIN_N = 80
 DEFAULT_FLIP_WR_MAX = 0.40
+# Only strategies that actually consult flip_recommended at entry may flip; for
+# everyone else flip must NOT pre-empt the veto (otherwise a losing lane in an
+# unwired strategy would lose its veto AND not flip — trading unmanaged). The
+# flip injection lives in the shared sol_macro scan loop, inherited by the
+# sol-family. bitcoin and eth_macro have separate loops and are NOT wired.
+DEFAULT_FLIP_STRATEGIES = frozenset(
+    {"sol_macro", "xrp_macro", "hype_macro", "doge_macro", "bnb_macro"}
+)
 
 
 @dataclass
@@ -277,6 +285,7 @@ def compute_lane_thresholds(
     live_mature_n: int = DEFAULT_LIVE_MATURE_N,
     flip_min_n: int = DEFAULT_FLIP_MIN_N,
     flip_wr_max: float = DEFAULT_FLIP_WR_MAX,
+    flip_strategies: frozenset = DEFAULT_FLIP_STRATEGIES,
 ) -> Dict[str, Any]:
     """Compute per-lane threshold recommendations from ghost + live data.
 
@@ -331,8 +340,10 @@ def compute_lane_thresholds(
         # traded and lost on, at high sample. Ghost-only cells (l.n == 0, mostly
         # pre_resolver_reject identities that never match a live candidate) are
         # too weak to justify trading the opposite side and are excluded.
+        lane_strategy = lane_id.split("|", 1)[0]
         flip = (
-            decision_n >= flip_min_n
+            lane_strategy in flip_strategies
+            and decision_n >= flip_min_n
             and decision_wr <= flip_wr_max
             and live_pnl_negative
             and l.n >= flip_min_n
