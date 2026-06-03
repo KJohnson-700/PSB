@@ -84,6 +84,9 @@ trading:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
         window_lane_overrides:
+          1h:
+            down:
+              updown_hold_winners_to_resolution: true
           5m:
             down:
               updown_stop_loss_pct: 0.14
@@ -94,6 +97,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
+              updown_hold_winners_to_resolution: true
           15m:
             up:
               updown_stop_loss_pct: 0.16
@@ -156,6 +160,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
+              updown_hold_winners_to_resolution: true
           15m:
             up:
               updown_stop_loss_pct: 0.17
@@ -174,6 +179,9 @@ trading:
         updown_stop_cents: 0.03
         updown_exit_window_mins: 2.25
         window_lane_overrides:
+          1h:
+            down:
+              updown_hold_winners_to_resolution: true
           5m:
             down:
               updown_stop_loss_pct: 0.15
@@ -184,6 +192,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
+              updown_hold_winners_to_resolution: true
           15m:
             up:
               updown_stop_loss_pct: 0.17
@@ -201,6 +210,16 @@ trading:
               updown_in_profit_stop_tighten_to_pct: 0.1
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
+      doge_macro:
+        window_lane_overrides:
+          5m:
+            down:
+              updown_hold_winners_to_resolution: true
+      bnb_macro:
+        window_lane_overrides:
+          5m:
+            down:
               updown_hold_winners_to_resolution: true
 lane_management:
   enabled: true
@@ -239,14 +258,11 @@ lane_calibration:
     recommended_max_mean: 0.4
     live_mature_n: 50
     path: data/calibration/lane_thresholds.json
-# Per-lane EXIT-policy drift alerting (recommend-only — never auto-applies).
-# On settle, recompute held-vs-realized per lane and Discord-ping when the live
-# exit config disagrees with the data. You review + apply by hand, then restart.
 lane_exit_policy:
   enabled: true
   alert_discord: true
-  recompute_min_new_settles: 25   # only recompute after this many newly-settled
-  min_lane_n: 5                   # min settled trades to score a lane (drift needs n>=20)
+  recompute_min_new_settles: 25
+  min_lane_n: 5
 entry_policy:
   defaults:
     enabled: true
@@ -444,6 +460,7 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    admit_marginal_on_quant_when_ai_disabled: true
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -545,7 +562,7 @@ strategies:
     min_btc_move_pct_15m_for_lag_entries: 0.25
     iql_15m_enabled: true
     iql_15m_hist_floor: 0.06
-    iql_15m_hist_floor_aligned_short: 0.02
+    iql_15m_hist_floor_aligned_short: 0.0
     sol_15m_buy_no_max_yes_price_bull_1h: 0.48
     blocked_utc_hours_updown:
     - 3
@@ -797,7 +814,7 @@ strategies:
             size_multiplier: 0.4
           down:
             min_edge: 0.12
-            entry_price_min: 0.42
+            entry_price_min: 0.47
             entry_price_max: 0.55
             entry_window_min: 0.5
             entry_window_max: 4.0
@@ -870,8 +887,6 @@ strategies:
     alt_momentum_confirm:
       buy_yes: []
       buy_no:
-      - 5m
-      - 15m
       - 1h
     min_liquidity: 100
     min_liquidity_buy_no: 300
@@ -984,7 +999,7 @@ strategies:
             entry_window_max: 5.5
           down:
             min_edge: 0.08
-            entry_price_min: 0.42
+            entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 5.5
@@ -1057,6 +1072,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    admit_marginal_on_quant_when_ai_disabled: true
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
@@ -1210,7 +1226,7 @@ strategies:
             size_multiplier: 0.3
           down:
             min_edge: 0.06
-            entry_price_min: 0.42
+            entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
@@ -1258,6 +1274,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    admit_marginal_on_quant_when_ai_disabled: true
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -1266,8 +1283,6 @@ strategies:
     alt_momentum_confirm:
       buy_yes: []
       buy_no:
-      - 5m
-      - 15m
       - 1h
     min_liquidity: 750
     min_liquidity_buy_yes: 300
@@ -1382,7 +1397,7 @@ strategies:
             size_multiplier: 0.3
           down:
             min_edge: 0.08
-            entry_price_min: 0.42
+            entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
@@ -1406,14 +1421,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
@@ -1430,6 +1445,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    admit_marginal_on_quant_when_ai_disabled: true
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -1555,7 +1571,7 @@ strategies:
             size_multiplier: 0.3
           down:
             min_edge: 0.06
-            entry_price_min: 0.42
+            entry_price_min: 0.44
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 4.5
@@ -1586,7 +1602,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 120.0
+            entry_window_max: 360.0
             size_multiplier: 0.3
     btc_min_move_dollars_15m: 10.0
     btc_min_move_dollars_5m: 3.0
@@ -1657,7 +1673,7 @@ ai:
     log_jsonl: true
     provider_name: minimax
   decision_layer:
-    enabled: true
+    enabled: false
     min_confidence: 0.6
     marginal_veto_only: true
     hard_skip_if_unavailable_on_enforced: false
@@ -1846,6 +1862,7 @@ self_healing:
     queue_dir: data/learning/escalations
     notify: true
     codex_dispatch: false
+    max_notify_per_run: 3
 logging:
   level: INFO
   max_file_size: 10
