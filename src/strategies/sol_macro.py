@@ -3962,10 +3962,30 @@ class SolMacroStrategy:
                 _marginal_min_edge = self._min_edge_for_window(
                     _updown_tf if is_updown else "15m"
                 )
+                # Don't spend AI budget on markets outside the lane entry window
+                # (too early) — they're rejected by lane_entry_window below anyway.
+                # XRP this session: 100% of ai_call_limit rejects were 61-134 min
+                # out of a 32-min window, exhausting max_ai_calls_per_scan before
+                # in-window candidates could be scored. ETH's path already gates
+                # marginal AI on its timing window; the sol-family path did not.
+                # This early resolve is a budget pre-filter only — the authoritative
+                # window gate at lane_entry_window (below) re-resolves lane_policy.
+                _ai_pre_side, _ai_pre_policy = self._resolve_lane_entry_policy(
+                    window_size=_updown_tf if is_updown else "15m",
+                    action=action,
+                    direction=direction,
+                )
+                _ai_in_entry_window = (not is_updown) or (
+                    _ai_pre_policy.entry_window_min
+                    <= _eval_left
+                    <= _ai_pre_policy.entry_window_max
+                )
                 if (
                     edge < _marginal_min_edge and edge > 0.03
                     # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                     and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                    # don't burn AI budget on markets that aren't tradable yet
+                    and _ai_in_entry_window
                     # decision layer off + flag on: skip AI, admit on quant terms downstream
                     and not self._admit_marginal_quant_short(edge, allowed_side, _timing_window_open)
                 ):
