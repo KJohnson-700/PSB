@@ -885,6 +885,8 @@ class PolyBot:
                         plt_cfg.get("recommended_max_mean", 0.40) or 0.40
                     ),
                     live_mature_n=int(plt_cfg.get("live_mature_n", 50) or 50),
+                    flip_min_n=int(plt_cfg.get("flip_min_n", 80) or 80),
+                    flip_wr_max=float(plt_cfg.get("flip_wr_max", 0.40) or 0.40),
                 )
                 tpath = Path(plt_cfg.get("path") or str(DEFAULT_THRESHOLDS_PATH))
                 write_lane_thresholds(payload, path=tpath)

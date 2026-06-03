@@ -253,7 +253,16 @@ lane_calibration:
     wr_veto_threshold: 0.4
     recommended_max_mean: 0.4
     live_mature_n: 50
+    flip_min_n: 80          # min samples before a lane is eligible to flip
+    flip_wr_max: 0.40       # chosen-side WR at/below this (with neg live PnL) → flip
     path: data/calibration/lane_thresholds.json
+  # Posterior-driven side flip. When a lane's chosen side reliably loses at high
+  # sample (flip_recommended in lane_thresholds.json), trade the OPPOSITE side
+  # instead of vetoing. est_prob is side-independent P(UP); the flipped side must
+  # still clear the normal edge gate (with β-corrected est_prob). Default OFF —
+  # opt in after watching β-blend stop the bleed. Forward-test only.
+  directional_flip:
+    enabled: false
 lane_exit_policy:
   enabled: true
   alert_discord: true

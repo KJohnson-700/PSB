@@ -337,6 +337,24 @@ class LaneCalibrator:
             return False
         return self._is_vetoed_for_lane(lane_id)
 
+    def flip_recommended(self, lane_id: str) -> bool:
+        """True if this lane's chosen side reliably loses at high sample, so the
+        OPPOSITE side should be traded instead (binary up/down market).
+
+        Driven by the ghost-derived per-lane overrides (``flip_recommended`` in
+        lane_thresholds.json). Gated by ``per_lane_thresholds_enabled`` — the
+        same data pipeline as the veto, so flip and veto stay consistent
+        (compute_lane_thresholds makes them mutually exclusive: a flipped lane
+        is not also vetoed).
+        """
+        if not lane_id or not self.per_lane_thresholds_enabled:
+            return False
+        override = (
+            self.per_lane_thresholds.get(lane_id)
+            or self.per_lane_thresholds.get(self._lane_key(lane_id))
+        )
+        return bool(override and override.get("flip_recommended"))
+
     def record_ghost(
         self,
         lane_id: str,

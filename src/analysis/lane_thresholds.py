@@ -82,6 +82,15 @@ DEFAULT_RECOMMENDED_MAX_MEAN = 0.40
 # live is mature, mixing in ghost masks selection drift inside the cell.
 DEFAULT_LIVE_MATURE_N = 50
 
+# Directional-flip recommendation. A lane is flagged ``flip_recommended`` when
+# its chosen side reliably LOSES held-to-resolution at high sample — in a binary
+# up/down market that means the OPPOSITE side reliably wins, so the lane should
+# trade flipped rather than be vetoed. Stricter bar than the veto: more samples
+# and a lower WR ceiling, and (when live PnL is known) only on lanes actually
+# losing money. The flipped side still has to clear the normal edge gate.
+DEFAULT_FLIP_MIN_N = 80
+DEFAULT_FLIP_WR_MAX = 0.40
+
 
 @dataclass
 class LaneBucket:
@@ -266,6 +275,8 @@ def compute_lane_thresholds(
     wr_veto_threshold: float = DEFAULT_WR_VETO_THRESHOLD,
     recommended_max_mean: float = DEFAULT_RECOMMENDED_MAX_MEAN,
     live_mature_n: int = DEFAULT_LIVE_MATURE_N,
+    flip_min_n: int = DEFAULT_FLIP_MIN_N,
+    flip_wr_max: float = DEFAULT_FLIP_WR_MAX,
 ) -> Dict[str, Any]:
     """Compute per-lane threshold recommendations from ghost + live data.
 
@@ -310,7 +321,23 @@ def compute_lane_thresholds(
         # only decisions we fall back to pure WR because we have no
         # realized PnL to consult.
         live_pnl_positive = l.n > 0 and l.pnl_sum > 0.0
-        veto = wr_below_floor and not live_pnl_positive
+        live_pnl_negative = l.n > 0 and l.pnl_sum < 0.0
+        # Flip takes precedence over veto: a strongly-inverted lane with enough
+        # samples should trade the opposite side, not be killed. Require the
+        # stricter sample floor + WR ceiling, and — when live PnL is known —
+        # only flip lanes actually losing money (don't flip a low-WR cell that
+        # is net positive on uneven payouts).
+        # Require REAL live-money evidence: only flip lanes the bot actually
+        # traded and lost on, at high sample. Ghost-only cells (l.n == 0, mostly
+        # pre_resolver_reject identities that never match a live candidate) are
+        # too weak to justify trading the opposite side and are excluded.
+        flip = (
+            decision_n >= flip_min_n
+            and decision_wr <= flip_wr_max
+            and live_pnl_negative
+            and l.n >= flip_min_n
+        )
+        veto = wr_below_floor and not live_pnl_positive and not flip
         entry: Dict[str, Any] = {
             "n": int(decision_n),
             "wr": round(decision_wr, 4),
@@ -318,6 +345,7 @@ def compute_lane_thresholds(
             "ghost_n": int(g.n),
             "live_n": int(l.n),
             "veto_recommended": bool(veto),
+            "flip_recommended": bool(flip),
             "recommended_max_mean": float(recommended_max_mean),
         }
         if g.n > 0:
@@ -334,6 +362,8 @@ def compute_lane_thresholds(
         "min_bucket_n": int(min_bucket_n),
         "wr_veto_threshold": float(wr_veto_threshold),
         "live_mature_n": int(live_mature_n),
+        "flip_min_n": int(flip_min_n),
+        "flip_wr_max": float(flip_wr_max),
         "thresholds": thresholds,
     }
 

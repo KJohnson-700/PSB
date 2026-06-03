@@ -1672,6 +1672,12 @@ class SolMacroStrategy:
             "size_multiplier": float(size_multiplier),
         }
 
+    def _directional_flip_enabled(self) -> bool:
+        """Opt-in flag for posterior-driven side flips (default OFF)."""
+        cfg = getattr(self, "full_config", None) or {}
+        lc = cfg.get("lane_calibration") or {}
+        return bool((lc.get("directional_flip") or {}).get("enabled", False))
+
     def _resolve_lane_entry_policy(
         self,
         *,
@@ -3517,6 +3523,26 @@ class SolMacroStrategy:
                         alt_htf_bias=mtt.h1_trend,
                         btc_1h_regime=btc_1h_regime if btc_ta else None,
                     )
+
+                    # Directional flip (opt-in). If the calibrator has high-sample
+                    # evidence the bias-chosen side reliably LOSES, take the
+                    # OPPOSITE side. est_prob is P(UP) — side-independent — so no
+                    # recompute; the flipped action's edge is evaluated below with
+                    # the same β-corrected est_prob and must clear the normal edge
+                    # gate. Uses the exact lane_id the calibrator just keyed on.
+                    if self._directional_flip_enabled():
+                        _cal = getattr(self, "lane_calibrator", None)
+                        _flip_lid = getattr(self, "_last_calibration_lane_id", "")
+                        if _cal is not None and _flip_lid and _cal.flip_recommended(_flip_lid):
+                            action = "BUY_YES" if action == "BUY_NO" else "BUY_NO"
+                            direction = "UP" if action == "BUY_YES" else "DOWN"
+                            allowed_side = "LONG" if action == "BUY_YES" else "SHORT"
+                            side_source = f"{side_source or ''}+posterior_flip"
+                            reason_parts.append(f"posterior_flip<-{_flip_lid}")
+                            logger.info(
+                                "  %s POSTERIOR FLIP -> %s (lane %s reliably lost)",
+                                self._signal_strategy_name, action, _flip_lid,
+                            )
 
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=primary_htf_bias,
