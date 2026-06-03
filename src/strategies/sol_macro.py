@@ -2870,18 +2870,20 @@ class SolMacroStrategy:
                 and not _bias_aligned_short
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_no") or [])
             ):
+                # Horizon-coherent: confirm on the lane's OWN timeframe, with the
+                # next-LARGER timeframe as fallback. Never a smaller TF on a larger lane.
                 if _alt_mc_window == "1h":
-                    _alt_bear_confirmed = (
-                        sol.macd_1h.crossover == "BEARISH_CROSS"
-                        or (sol.macd_1h.histogram < 0 and not sol.macd_1h.histogram_rising)
-                    )
-                else:
-                    _alt_bear_confirmed = (
-                        sol.macd_5m.crossover == "BEARISH_CROSS"
-                        or (sol.macd_5m.histogram < 0 and not sol.macd_5m.histogram_rising)
-                        or sol.macd_15m.crossover == "BEARISH_CROSS"
-                        or (sol.macd_15m.histogram < 0 and not sol.macd_15m.histogram_rising)
-                    )
+                    _own, _larger = sol.macd_1h, sol.macd_1h
+                elif _alt_mc_window == "15m":
+                    _own, _larger = sol.macd_15m, sol.macd_1h
+                else:  # 5m
+                    _own, _larger = sol.macd_5m, sol.macd_15m
+                _alt_bear_confirmed = (
+                    _own.crossover == "BEARISH_CROSS"
+                    or (_own.histogram < 0 and not _own.histogram_rising)
+                    or _larger.crossover == "BEARISH_CROSS"
+                    or (_larger.histogram < 0 and not _larger.histogram_rising)
+                )
                 if not _alt_bear_confirmed:
                     _bump_skip("buy_no_no_alt_momentum_confirm")
                     _log_skip_reject(
@@ -2908,18 +2910,19 @@ class SolMacroStrategy:
                 and not _bias_aligned_long
                 and _alt_mc_window in (_alt_mc_cfg.get("buy_yes") or [])
             ):
+                # Horizon-coherent: own timeframe + next-larger fallback only.
                 if _alt_mc_window == "1h":
-                    _alt_bull_confirmed = (
-                        sol.macd_1h.crossover == "BULLISH_CROSS"
-                        or (sol.macd_1h.histogram > 0 and sol.macd_1h.histogram_rising)
-                    )
-                else:
-                    _alt_bull_confirmed = (
-                        sol.macd_5m.crossover == "BULLISH_CROSS"
-                        or (sol.macd_5m.histogram > 0 and sol.macd_5m.histogram_rising)
-                        or sol.macd_15m.crossover == "BULLISH_CROSS"
-                        or (sol.macd_15m.histogram > 0 and sol.macd_15m.histogram_rising)
-                    )
+                    _own, _larger = sol.macd_1h, sol.macd_1h
+                elif _alt_mc_window == "15m":
+                    _own, _larger = sol.macd_15m, sol.macd_1h
+                else:  # 5m
+                    _own, _larger = sol.macd_5m, sol.macd_15m
+                _alt_bull_confirmed = (
+                    _own.crossover == "BULLISH_CROSS"
+                    or (_own.histogram > 0 and _own.histogram_rising)
+                    or _larger.crossover == "BULLISH_CROSS"
+                    or (_larger.histogram > 0 and _larger.histogram_rising)
+                )
                 if not _alt_bull_confirmed:
                     _bump_skip("buy_yes_no_alt_momentum_confirm")
                     _log_skip_reject(

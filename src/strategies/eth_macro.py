@@ -955,18 +955,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_no") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_no") or [])
                 if _block or _shadow:
+                    # Horizon-coherent: own timeframe + next-larger fallback only.
                     if _updown_tf == "1h":
-                        _eth_bear_confirmed = (
-                            eth.macd_1h.crossover == "BEARISH_CROSS"
-                            or (eth.macd_1h.histogram < 0 and not eth.macd_1h.histogram_rising)
-                        )
-                    else:
-                        _eth_bear_confirmed = (
-                            eth.macd_5m.crossover == "BEARISH_CROSS"
-                            or (eth.macd_5m.histogram < 0 and not eth.macd_5m.histogram_rising)
-                            or eth.macd_15m.crossover == "BEARISH_CROSS"
-                            or (eth.macd_15m.histogram < 0 and not eth.macd_15m.histogram_rising)
-                        )
+                        _own, _larger = eth.macd_1h, eth.macd_1h
+                    elif _updown_tf == "15m":
+                        _own, _larger = eth.macd_15m, eth.macd_1h
+                    else:  # 5m
+                        _own, _larger = eth.macd_5m, eth.macd_15m
+                    _eth_bear_confirmed = (
+                        _own.crossover == "BEARISH_CROSS"
+                        or (_own.histogram < 0 and not _own.histogram_rising)
+                        or _larger.crossover == "BEARISH_CROSS"
+                        or (_larger.histogram < 0 and not _larger.histogram_rising)
+                    )
                     if not _eth_bear_confirmed:
                         _reason = "buy_no_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
                         ctx = _eth_mc_context()
@@ -989,18 +990,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _block = _updown_tf in (_eth_mc_cfg.get("buy_yes") or [])
                 _shadow = (not _block) and _updown_tf in (_eth_mc_shadow.get("buy_yes") or [])
                 if _block or _shadow:
+                    # Horizon-coherent: own timeframe + next-larger fallback only.
                     if _updown_tf == "1h":
-                        _eth_bull_confirmed = (
-                            eth.macd_1h.crossover == "BULLISH_CROSS"
-                            or (eth.macd_1h.histogram > 0 and eth.macd_1h.histogram_rising)
-                        )
-                    else:
-                        _eth_bull_confirmed = (
-                            eth.macd_5m.crossover == "BULLISH_CROSS"
-                            or (eth.macd_5m.histogram > 0 and eth.macd_5m.histogram_rising)
-                            or eth.macd_15m.crossover == "BULLISH_CROSS"
-                            or (eth.macd_15m.histogram > 0 and eth.macd_15m.histogram_rising)
-                        )
+                        _own, _larger = eth.macd_1h, eth.macd_1h
+                    elif _updown_tf == "15m":
+                        _own, _larger = eth.macd_15m, eth.macd_1h
+                    else:  # 5m
+                        _own, _larger = eth.macd_5m, eth.macd_15m
+                    _eth_bull_confirmed = (
+                        _own.crossover == "BULLISH_CROSS"
+                        or (_own.histogram > 0 and _own.histogram_rising)
+                        or _larger.crossover == "BULLISH_CROSS"
+                        or (_larger.histogram > 0 and _larger.histogram_rising)
+                    )
                     if not _eth_bull_confirmed:
                         _reason = "buy_yes_no_eth_momentum_confirm" + ("_shadow" if _shadow else "")
                         ctx = _eth_mc_context()

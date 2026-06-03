@@ -313,6 +313,23 @@ class BitcoinStrategy:
     def _min_edge_for_window(self, window_size: str) -> float:
         return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
 
+    def _admit_marginal_quant_short(self, edge, action, timing_open) -> bool:
+        """When the AI decision layer is OFF, admit sub-threshold marginal BUY_NO on
+        quant terms instead of dying on the AI tiebreaker (no-op when the layer is
+        disabled) or the lane_min_edge gate. Default OFF, BUY_NO-only, timing-open,
+        edge above the marginal floor. Self-disables when the decision layer is
+        re-enabled."""
+        try:
+            return (
+                bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False))
+                and not self.ai_agent.decision_layer_enabled()
+                and action == "BUY_NO"
+                and bool(timing_open)
+                and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
+            )
+        except Exception:
+            return False
+
     def _ai_override_min_edge_for_window(self, window_size: str) -> float:
         return float(
             self._tf_cfg(window_size, "ai_override_min_edge", self.min_edge_5m_ai_override)
@@ -1295,48 +1312,55 @@ class BitcoinStrategy:
     # LAYER 2: Lower Timeframe Confirmation (15m MACD)
     # ──────────────────────────────────────────────────────────────
 
-    def _check_lower_tf_confirmation(self, ta: TechnicalAnalysis, allowed_side: str) -> tuple:
-        """Check if 15m MACD confirms the allowed direction.
+    def _check_lower_tf_confirmation(
+        self, ta: TechnicalAnalysis, allowed_side: str, tf: str = "15m"
+    ) -> tuple:
+        """Check if the market's OWN-timeframe MACD confirms the allowed direction.
+
+        Horizon-coherent: a 1h market confirms on its own 1h MACD, a 15m market on
+        15m. Never lets a smaller timeframe gate a larger lane (1h must not be
+        decided by 15m). 5m markets are excluded from this gate by the caller.
 
         allowed_side: "LONG" or "SHORT"
 
         Returns: (confirmed: bool, strength: float, reasons: list)
         """
-        macd_15m = ta.macd_15m
+        macd = ta.macd_1h if tf == "1h" else ta.macd_15m
+        label = "1h" if tf == "1h" else "15m"
         reasons = []
         strength = 0.0
 
         if allowed_side == "LONG":
             # Need: bullish cross OR rising histogram (red→green) OR MACD above signal
-            if macd_15m.crossover == "BULLISH_CROSS":
+            if macd.crossover == "BULLISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bull cross")
-            if macd_15m.histogram_rising and macd_15m.histogram > macd_15m.prev_histogram:
+                reasons.append(f"{label} MACD bull cross")
+            if macd.histogram_rising and macd.histogram > macd.prev_histogram:
                 # Histogram turning from red to green (or getting more green)
-                if macd_15m.prev_histogram < 0 and macd_15m.histogram > 0:
+                if macd.prev_histogram < 0 and macd.histogram > 0:
                     strength += 0.35
-                    reasons.append("15m hist red->green")
-                elif macd_15m.histogram_rising:
+                    reasons.append(f"{label} hist red->green")
+                elif macd.histogram_rising:
                     strength += 0.20
-                    reasons.append("15m hist rising")
-            if macd_15m.macd_line > macd_15m.signal_line:
+                    reasons.append(f"{label} hist rising")
+            if macd.macd_line > macd.signal_line:
                 strength += 0.15
-                reasons.append("15m MACD>signal")
+                reasons.append(f"{label} MACD>signal")
 
         elif allowed_side == "SHORT":
-            if macd_15m.crossover == "BEARISH_CROSS":
+            if macd.crossover == "BEARISH_CROSS":
                 strength += 0.40
-                reasons.append("15m MACD bear cross")
-            if not macd_15m.histogram_rising and macd_15m.histogram < macd_15m.prev_histogram:
-                if macd_15m.prev_histogram > 0 and macd_15m.histogram < 0:
+                reasons.append(f"{label} MACD bear cross")
+            if not macd.histogram_rising and macd.histogram < macd.prev_histogram:
+                if macd.prev_histogram > 0 and macd.histogram < 0:
                     strength += 0.35
-                    reasons.append("15m hist green->red")
-                elif not macd_15m.histogram_rising:
+                    reasons.append(f"{label} hist green->red")
+                elif not macd.histogram_rising:
                     strength += 0.20
-                    reasons.append("15m hist falling")
-            if macd_15m.macd_line < macd_15m.signal_line:
+                    reasons.append(f"{label} hist falling")
+            if macd.macd_line < macd.signal_line:
                 strength += 0.15
-                reasons.append("15m MACD<signal")
+                reasons.append(f"{label} MACD<signal")
 
         # Require stronger composite confirmation (0.50 instead of 0.35).
         # Single signals (crossover=0.40, hist flip=0.35) no longer auto-confirm —
@@ -1753,7 +1777,7 @@ class BitcoinStrategy:
                     bias_5m,
                 )
                 continue
-            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side)
+            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
             _sample("ltf_strength", ltf_strength)
             timing_bonus, timing_reasons = self._check_timing(ta, allowed_side)
             if (not is_5m) and ltf_confirmed:
@@ -2411,7 +2435,10 @@ class BitcoinStrategy:
                     _marginal_min_edge = self._min_edge_for_window(
                         _updown_tf if is_updown else "15m"
                     )
-                    if edge < _marginal_min_edge and edge > 0.03:
+                    if (
+                        edge < _marginal_min_edge and edge > 0.03
+                        and not self._admit_marginal_quant_short(edge, action, _timing_window_open)
+                    ):
                         if not self.config.get("use_ai", True):
                             logger.debug(
                                 f"BTC: use_ai=false — skipping marginal trade "
@@ -2812,6 +2839,7 @@ class BitcoinStrategy:
                 and ai_calls < self.max_ai_calls_per_scan
                 # 5m never calls AI — quant only. AI gate is 15m/1h.
                 and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                and not self._admit_marginal_quant_short(edge, action, _timing_window_open)
             ):
                 _window = _updown_tf if is_updown else "15m"
                 ai_context = (
@@ -2971,7 +2999,13 @@ class BitcoinStrategy:
                 pass
             _sample("edge", edge)
             _bias_quant_size_multiplier = 1.0
-            if edge < effective_min_edge:
+            # 2026-06-02: admit sub-threshold marginal BUY_NO on quant terms when the
+            # AI decision layer is OFF (no-op tiebreaker can't rescue them). Upstream AI
+            # blocks are also skipped for these so they reach here, not ai_none.
+            _admit_marginal_no_ai = self._admit_marginal_quant_short(
+                edge, action, _timing_window_open
+            )
+            if edge < effective_min_edge and not _admit_marginal_no_ai:
                 # (3) Flag bias/quant directional disagreement so we can isolate this cohort
                 # in analysis. True when raw_est is on the opposite side of 0.50 from the
                 # direction the htf_bias picked, OR when raw_est < yes_price under BULLISH
