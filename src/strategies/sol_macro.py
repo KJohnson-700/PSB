@@ -2511,21 +2511,12 @@ class SolMacroStrategy:
             # poisoned lane labels and dampener decisions.
             btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
             if self._btc_1h_regime_gates.get("enabled", False):
-                logger.info(
-                    "BTC 1H regime: %s | min_edge×%.2f size×%.2f | 1H=%.0f SMA20=%.0f",
-                    btc_1h_regime,
-                    self._regime_min_edge_mult(btc_1h_regime),
-                    self._regime_size_mult(btc_1h_regime),
-                    regime_price(btc_ta),
-                    float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
-                )
+                pass
             else:
-                logger.debug(
-                    "BTC 1H regime classified (multipliers gated off): %s", btc_1h_regime
-                )
+                pass
         else:
             btc_htf_bias = None
-            logger.warning("BTC HTF unavailable — falling back to alt-only analysis")
+            logger.warning("External HTF context unavailable — continuing with alt-only analysis")
 
         sol_price = ta.sol.current_price
         sol = ta.sol
@@ -2548,13 +2539,9 @@ class SolMacroStrategy:
 
         logger.info(
             f"{_alt_label} ${sol_price:,.2f} | bias_1h={macro_trend} bias_15m={bias_15m} bias_5m={bias_5m} | "
-            f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} | "
             f"1H={mtt.h1_trend} 15m={mtt.m15_trend} 5m={mtt.m5_trend} | "
             f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover} | "
-            f"RSI={sol.rsi_14:.0f} | "
-            f"{_corr_lbl}={corr.correlation_1h:.2f} lag_opp={corr.lag_opportunity} "
-            f"lag_dir={corr.opportunity_direction} lag_mag={corr.opportunity_magnitude:+.2f}% | "
-            f"BTC spike={corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)"
+            f"RSI={sol.rsi_14:.0f}"
         )
         if getattr(corr, "degraded", False):
             logger.warning(
@@ -3035,8 +3022,7 @@ class SolMacroStrategy:
                 f"ALT_1H={macro_trend}",
                 f"ALT_15M={bias_15m}",
                 f"ALT_5M={bias_5m}",
-                f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'}",
-                f"PRIMARY_HTF={primary_htf_bias}",
+                f"PRIMARY_ALT_HTF={primary_htf_bias}",
                 f"side={allowed_side}",
                 f"side_src={side_source}",
             ]
@@ -3107,7 +3093,7 @@ class SolMacroStrategy:
                     _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                     _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
                 if _btc_price > 0 and _btc_move < _btc_min_move:
-                    reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
+                    pass
 
                 # Skip only when our entry-side price is in the unfavorable long
                 # tail (paying high premium against the market). The favorable
@@ -3393,11 +3379,9 @@ class SolMacroStrategy:
                     # trade could happen. Per "alts decided by alt-native indicators",
                     # admission must not depend on BTC state. The `require_btc_catalyst_5m`
                     # config key is now vestigial; BTC spike/lag still appear in scan
-                    # diagnostics for observability.
+                    # diagnostics for observability outside trade reasons.
                     if bool(self.config.get("require_btc_catalyst_5m", False)):
-                        reason_parts.append(
-                            f"diag_btc_catalyst(spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
-                        )
+                        pass
 
                     # 5m MACD — primary entry signal for 5m markets
                     # ta.sol.macd_5m exists on SOLAnalysis
@@ -3433,9 +3417,7 @@ class SolMacroStrategy:
 
                     _sample("m5_adj", m5_adj)
                     if action == "BUY_NO" and self.sell_5m_min_corr >= 0 and corr.correlation_1h < self.sell_5m_min_corr:
-                        reason_parts.append(
-                            f"diag_sell_5m_low_corr({corr.correlation_1h:.2f}<{self.sell_5m_min_corr:.2f})"
-                        )
+                        pass
 
                     if not self._strong_enough_5m_signal(m5_adj, action):
                         _min_req = (
@@ -3512,11 +3494,8 @@ class SolMacroStrategy:
                     elif sol.rsi_14 < 25:
                         est_prob_up += 0.02
 
-                    # Correlation confidence — log for diagnostics. For SOL, BTC
-                    # correlation must not alter admission or probability.
-                    if corr.correlation_1h > 0.85:
-                        reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
-                    elif self._low_corr_blocks_entry(corr):
+                    # BTC correlation must not alter admission or probability.
+                    if self._low_corr_blocks_entry(corr):
                         _bump_skip("low_corr_suppressed")
                         _log_skip_reject(
                             market=market,
@@ -3542,8 +3521,6 @@ class SolMacroStrategy:
                     elif self._btc_trade_inputs_enabled() and corr.correlation_1h < self.low_corr_threshold_1h:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr_5m({corr.correlation_1h:.2f})")
-                    elif corr.correlation_1h < self.low_corr_threshold_1h:
-                        reason_parts.append(f"diag_low_corr_5m({corr.correlation_1h:.2f})")
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
@@ -3604,29 +3581,22 @@ class SolMacroStrategy:
                         edge = estimated_prob - yes_price
                     else:
                         edge = (1.0 - estimated_prob) - (1.0 - yes_price)
-                    # Confidence: 5m MACD momentum + RSI alignment + correlation strength
+                    # Confidence: alt-native 5m MACD momentum + RSI alignment.
                     _rsi_conf_5m = 0.03 if (
                         (action == "BUY_YES" and sol.rsi_14 < 40) or
                         (action == "BUY_NO" and sol.rsi_14 > 60)
                     ) else 0.0
-                    _corr_conf_5m = (
-                        max(0.0, (corr.correlation_1h - 0.50) * 0.10)
-                        if self._btc_trade_inputs_enabled()
-                        else 0.0
-                    )
                     confidence = max(0.50, min(0.85,
-                        0.50 + abs(m5_adj) * 2.0 + _rsi_conf_5m + _corr_conf_5m + abs(timing_bonus) * 0.3
+                        0.50 + abs(m5_adj) * 2.0 + _rsi_conf_5m + abs(timing_bonus) * 0.3
                     ))
 
                     reason_parts.extend([
                         "[5m]",
                         "UPDOWN_5m",
                         f"{_spot_key}=${sol_price:,.2f}",
-                        f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                         f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
                         f"5m_MACD={'+' if macd_5m.macd_line > macd_5m.signal_line else '-'}{abs(macd_5m.histogram):.3f}",
-                        f"corr={corr.correlation_1h:.2f}",
                         f"RSI={sol.rsi_14:.0f}",
                     ])
                     reason_parts.extend(m5_reasons)
@@ -3731,14 +3701,11 @@ class SolMacroStrategy:
                     # Previously, when LTF was unconfirmed, skipped 15m alt entries
                     # unless BTC was spiking or had a lag opportunity (BTC gating
                     # admission). Per "alts decided by alt-native indicators", removed.
-                    # Vestigial config key logged as diagnostic only.
+                    # Vestigial config key is ignored for alt trade reasons.
                     if ltf_strength == 0.0 and bool(
                         self.config.get("require_btc_catalyst_15m_when_unconfirmed", False)
                     ):
-                        reason_parts.append(
-                            f"diag_btc_catalyst_unconfirmed(spike={corr.btc_spike_detected} "
-                            f"lag={corr.lag_opportunity})"
-                        )
+                        pass
 
                     # LTF confirmation — PRIMARY probability driver (increased from 0.18)
                     ltf_adj = ltf_strength * ltf_weight
@@ -3766,14 +3733,10 @@ class SolMacroStrategy:
                                 max(lag_boost_min, abs(corr.opportunity_magnitude) * 0.015),
                             )
                             est_prob_up += _lag_boost if allowed_side == "LONG" else -_lag_boost
-                            reason_parts.append(f"lag_boost={_lag_boost:+.3f}")
                         elif corr.btc_spike_detected:
                             est_prob_up += spike_boost if allowed_side == "LONG" else -spike_boost
-                            reason_parts.append("btc_spike_boost")
                     elif corr.lag_opportunity or corr.btc_spike_detected:
-                        reason_parts.append(
-                            f"diag_btc_context(spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
-                        )
+                        pass
 
                     # Timing / 5m momentum
                     if allowed_side == "LONG":
@@ -3787,10 +3750,8 @@ class SolMacroStrategy:
                     elif sol.rsi_14 < 25:
                         est_prob_up += rsi_extreme
 
-                    # Correlation confidence — diagnostic-only for SOL.
-                    if corr.correlation_1h > 0.85:
-                        reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
-                    elif self._low_corr_blocks_entry(corr):
+                    # BTC correlation must not alter admission or probability.
+                    if self._low_corr_blocks_entry(corr):
                         _bump_skip("low_corr_suppressed")
                         logger.info(
                             f"  {_alt_label} [15m] skip '{market.question[:40]}' — "
@@ -3801,8 +3762,6 @@ class SolMacroStrategy:
                     elif self._btc_trade_inputs_enabled() and corr.correlation_1h < self.low_corr_threshold_1h:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr({corr.correlation_1h:.2f})")
-                    elif corr.correlation_1h < self.low_corr_threshold_1h:
-                        reason_parts.append(f"diag_low_corr({corr.correlation_1h:.2f})")
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
@@ -3853,10 +3812,8 @@ class SolMacroStrategy:
                     reason_parts.extend([
                         f"UPDOWN_{window_label}",
                         f"{_spot_key}=${sol_price:,.2f}",
-                        f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                         f"est_up={estimated_prob:.3f}",
                         f"mkt_yes={yes_price:.3f}",
-                        f"corr={corr.correlation_1h:.2f}",
                         f"RSI={sol.rsi_14:.0f}",
                     ])
                     reason_parts.extend(ltf_reasons)
@@ -3944,13 +3901,10 @@ class SolMacroStrategy:
                     edge = (1.0 - estimated_prob) - (1.0 - yes_price)
                 reason_parts.extend([
                     f"{_spot_key}=${sol_price:,.2f}",
-                    f"btc=${corr.btc_price:,.0f}" if corr.btc_price else "",
                     f"target=${threshold:,.2f}",
                     f"dist={distance_pct:.1%}",
                     f"est_prob={estimated_prob:.2f}",
                     f"mkt_yes={yes_price:.2f}",
-                    f"corr={corr.correlation_1h:.2f}",
-                    f"macro_leg={corr.opportunity_magnitude:+.2f}%" if corr.lag_opportunity else "",
                 ])
                 reason_parts.extend(ltf_reasons)
                 if timing_reasons:
@@ -4121,10 +4075,6 @@ class SolMacroStrategy:
                         + f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
                         + _ai_horizon_line
                     ) + (
-                        f"=== BTC-{_alt_label} CORRELATION ===\n"
-                        f"BTC: ${corr.btc_price:,.2f} | Correlation: {corr.correlation_1h:.2f}\n"
-                        f"BTC spike: {corr.btc_spike_detected} ({corr.btc_move_5m_pct:+.2f}%)\n"
-                        f"{_alt_label} macro leg: {corr.lag_opportunity} dir={corr.opportunity_direction} mag={corr.opportunity_magnitude:+.2f}%\n\n"
                         f"=== MACRO (1H) — {macro_trend} ===\n"
                         f"Primary alt HTF bias: {primary_htf_bias}\n"
                         f"EMA: 9=${sol.ema_9:,.2f} 21=${sol.ema_21:,.2f} 50=${sol.ema_50:,.2f}\n"
@@ -4509,11 +4459,8 @@ class SolMacroStrategy:
                     f"Oracle={sol.chainlink_network or 'n/a'} "
                     f"{f'${sol.chainlink_price:,.2f}' if sol.chainlink_price is not None else 'n/a'} "
                     f"basis={f'{sol.oracle_basis_bps:+.1f}bps' if sol.oracle_basis_bps is not None else 'n/a'}\n"
-                    f"ALT_HTF={macro_trend} | BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} | "
-                    f"PRIMARY_HTF={primary_htf_bias} | "
+                    f"ALT_HTF={macro_trend} | PRIMARY_ALT_HTF={primary_htf_bias} | "
                     f"Quant edge={edge:.4f} required>={effective_min_edge:.4f}\n"
-                    f"BTC ${corr.btc_price:,.2f} corr1h={corr.correlation_1h:.3f} "
-                    f"macro_opp={corr.lag_opportunity} mag={corr.opportunity_magnitude:+.2f}%\n"
                     f"15m MACD hist={sol.macd_15m.histogram:+.3f} {sol.macd_15m.crossover}\n"
                     f"LTF_strength={ltf_strength:.2f}\n\n"
                     f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
@@ -4816,8 +4763,7 @@ class SolMacroStrategy:
                             f"basis_bps={oracle_validation.basis_bps if oracle_validation.basis_bps is not None else 'n/a'} "
                             f"freshness_sec={oracle_validation.freshness_sec if oracle_validation.freshness_sec is not None else 'n/a'}\n"
                             f"Components={composite.components}\n"
-                            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} "
-                            f"PRIMARY_HTF={primary_htf_bias} "
+                            f"ALT_HTF={macro_trend} PRIMARY_ALT_HTF={primary_htf_bias} "
                             f"LTF_strength={ltf_strength:.2f}\n\n"
                             f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
                             "Answer with BUY_YES, BUY_NO, or HOLD."
@@ -5165,7 +5111,7 @@ class SolMacroStrategy:
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
             f"{_brand} SCAN_DIAG side={locals().get('allowed_side')} source={locals().get('side_source', 'neutral_macro')} "
-            f"ALT_HTF={macro_trend} BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} PRIMARY_HTF={locals().get('primary_htf_bias', 'NEUTRAL')} "
+            f"ALT_HTF={macro_trend} PRIMARY_ALT_HTF={locals().get('primary_htf_bias', 'NEUTRAL')} "
             f"alt_1H_trend={mtt.h1_trend} enforce_alt_1h={self.enforce_alt_1h_alignment} "
             f"skip_15m={locals().get('skip_15m_reason')!s} markets={len(sol_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"

@@ -54,14 +54,6 @@ class HYPEMacroStrategy(SolMacroStrategy):
         if signal.window_size == "5m":
             return "hype_5m_neutral_fallback_short_disabled"
 
-        if signal.window_size == "15m" and str(signal.btc_1h_regime or "").upper() == "BULL":
-            yes_price = 1.0 - float(signal.price or 0.0)
-            max_yes = float(
-                self.config.get("hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h", 0.45)
-            )
-            if yes_price >= max_yes:
-                return "hype_15m_neutral_fallback_expensive_short"
-
         return None
 
     def _build_alt_service(self) -> HyperliquidHypeService:
@@ -155,7 +147,11 @@ class HYPEMacroStrategy(SolMacroStrategy):
                 )
                 continue
             hard_min_edge = base_hard
-            if self._btc_1h_regime_gates.get("enabled", False) and signal.btc_1h_regime:
+            if (
+                self._btc_trade_inputs_enabled()
+                and self._btc_1h_regime_gates.get("enabled", False)
+                and signal.btc_1h_regime
+            ):
                 hard_min_edge *= self._regime_min_edge_mult(signal.btc_1h_regime)
             hard_min_edge *= get_drift_min_edge_mult("hype_macro", self.full_config)
             if float(signal.edge or 0.0) < hard_min_edge:

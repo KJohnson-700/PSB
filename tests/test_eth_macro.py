@@ -115,7 +115,7 @@ def test_eth_direction_guard_does_not_default_to_btc_bull_regime_short_block():
     assert reason is None
 
 
-def test_eth_direction_guard_opt_in_blocks_5m_buy_no_when_btc_1h_bull_and_no_too_cheap():
+def test_eth_direction_guard_does_not_block_5m_buy_no_from_btc_1h_regime():
     cfg = _config()
     cfg["strategies"]["eth_macro"]["eth_5m_bull_regime_short_block"] = True
     strat = ETHMacroStrategy(cfg, MagicMock(), MagicMock())
@@ -136,10 +136,10 @@ def test_eth_direction_guard_opt_in_blocks_5m_buy_no_when_btc_1h_bull_and_no_too
         rsi_14=42.0,
     )
 
-    assert reason == "eth_5m_bull_regime_expensive_short"
+    assert reason is None
 
 
-def test_eth_direction_guard_blocks_15m_overbought_long_when_btc_bearish_and_alt_neutral():
+def test_eth_direction_guard_does_not_block_15m_long_from_btc_bearish_context():
     strat = ETHMacroStrategy(_config(), MagicMock(), MagicMock())
     decision = strat._resolve_eth_direction(
         market_allowed_side="LONG",
@@ -159,7 +159,7 @@ def test_eth_direction_guard_blocks_15m_overbought_long_when_btc_bearish_and_alt
     )
 
     assert decision.action == "BUY_YES"
-    assert reason == "eth_15m_overbought_long_vs_btc"
+    assert reason is None
 
 
 def test_eth_liquidity_floor_is_lane_aware_by_window_and_side():

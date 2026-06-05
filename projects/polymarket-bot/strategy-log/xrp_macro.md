@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from XRP trade reasons and AI contexts
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by XRP, removed BTC labels/values from trade reason strings, scan diagnostics, and AI decision context. Also removed the residual 5m confidence component based on BTC correlation.
+- **Why:** BTC was already disabled as a trade gate, but inherited XRP explanations still exposed BTC-looking diagnostics.
+- **Hypothesis:** XRP decisions and explanations read as XRP-native only after rollout.
+- **Expected outcome:** Post-restart XRP entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed XRP trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-01 — Per-lane exit policy: hold+trail on xrp 5m/15m BUY_YES
 
 - **What changed:** Held-vs-realized scorecard shows xrp longs are exit-killed: **5m BUY_YES** held 46% / realized 15% (held −$4.3 vs realized −$23.3), **15m BUY_YES** held 71% / realized 29% (held +$42.2 thrown away as −$9.1). Added hold-winners + trailing floor (`arm 0.10 / gap 0.15`) to both. (15m BUY_NO already on hold+trail from 1ea32a5.)

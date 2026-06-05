@@ -271,7 +271,7 @@ def test_sol_local_guard_does_not_default_to_btc_bull_regime_short_block():
     assert reason is None
 
 
-def test_sol_local_guard_opt_in_blocks_expensive_15m_short_in_bull_regime():
+def test_sol_local_guard_does_not_block_15m_short_from_btc_bull_regime():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["sol_15m_bull_regime_short_block"] = True
     cfg["strategies"]["sol_macro"]["sol_15m_buy_no_max_yes_price_bull_1h"] = 0.49
@@ -286,7 +286,7 @@ def test_sol_local_guard_opt_in_blocks_expensive_15m_short_in_bull_regime():
         alt_h1_trend="BEARISH",
     )
 
-    assert reason == "sol_15m_bull_regime_expensive_short"
+    assert reason is None
 
 
 def _make_ta_bullish_rally() -> SOLTechnicalAnalysis:
@@ -629,13 +629,13 @@ def test_sol_late_window_guard_blocks_and_tightens_edge():
     assert reason2 == "late_window_edge>=0.140"
 
 
-def test_sol_low_corr_hard_veto_uses_config():
+def test_sol_low_corr_is_diagnostic_not_hard_veto_even_when_configured():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["low_corr_suppresses_entries"] = True
     cfg["strategies"]["sol_macro"]["low_corr_threshold_1h"] = 0.5
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
     corr = BTCSOLCorrelation(correlation_1h=0.16)
-    assert strategy._low_corr_blocks_entry(corr) is True
+    assert strategy._low_corr_blocks_entry(corr) is False
 
 
 def test_sol_tuning_size_multiplier_uses_lane_config():

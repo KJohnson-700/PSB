@@ -13,6 +13,24 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from SOL-family trade reasons and AI contexts
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), removed BTC labels/values from alt trade reason strings, scan diagnostics, and AI decision context (`BTC_HTF`, `btc=$`, `corr=`, `diag_btc*`, `btc_spike_boost`, `lag_boost`). Also removed the residual 5m confidence component based on BTC correlation; confidence is now alt-native MACD/RSI/timing only.
+- **Why:** BTC was already disabled as a trade gate, but its diagnostic strings still leaked into SOL-family explanations and one confidence component still referenced BTC correlation.
+- **Hypothesis:** SOL/SOL-family decisions and explanations read as alt-native only; no BTC-looking tokens should appear in new alt signal reasons after rollout.
+- **Expected outcome:** Post-restart SOL/SOL-family entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-05 — Enforce alt-native rule: BTC no longer affects SOL trade decisions
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), disabled BTC-derived trade controls for SOL-family alt paths via `_btc_trade_inputs_enabled() == False`. BTC context remains logged, but no longer changes SOL admission, edge, confidence, min-edge, centered-price gating, low/degraded-correlation handling, macro-leg blocks, BTC 1h regime multipliers, or sizing. Updated SOL tests so even legacy opt-in BTC-regime / low-correlation config cannot make BTC decide a SOL entry.
+- **Why:** Operator reiterated the standing invariant: BTC must not decide alt trades. Current session `test_20260604_234611` showed SOL 5m BUY_YES entries carrying BTC context (`BTC_HTF`, BTC regime/correlation/catalyst diagnostics), and the code still retained BTC-derived boosts/gates despite comments saying diagnostic-only.
+- **Hypothesis:** SOL entries and skips become strictly SOL-native plus oracle/price/risk controls; BTC fields remain available for post-hoc context but cannot manufacture, block, or resize trades.
+- **Expected outcome:** Future SOL skip stats should stop showing BTC-derived hard reasons such as `degraded_correlation`, `low_corr_suppressed`, `macro_leg_blocks_long`, or `centered_price_no_catalyst`; signal reasons may still include `diag_*btc*` tokens.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed SOL trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts.

@@ -579,10 +579,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             btc_htf_bias = str(btc_htf_details["bias"])
         else:
             btc_htf_bias = "NEUTRAL"
-            logger.warning(
-                "ETH Macro: BTC full analysis unavailable — continuing on ETH leg "
-                "(correlation/BTC klines from alt service may still inform calc_correlation)"
-            )
+            logger.debug("ETH Macro: external market context unavailable; continuing on ETH leg")
 
         conditions = self.conditions_from_ta(eth_ta)
         exp_tier, exp_multiplier, _exp_max_size, exp_reason = self.exposure_manager.get_exposure(conditions)
@@ -615,19 +612,9 @@ class ETHMacroStrategy(SolMacroStrategy):
         if btc_ta:
             btc_1h_regime = self._classify_btc_1h_regime(btc_ta)
             if self._btc_1h_regime_gates.get("enabled", False):
-                logger.info(
-                    "ETH Macro BTC 1H regime: %s | min_edge×%.2f size×%.2f | spot=%.0f SMA20=%.0f",
-                    btc_1h_regime,
-                    self._regime_min_edge_mult(btc_1h_regime),
-                    self._regime_size_mult(btc_1h_regime),
-                    regime_price(btc_ta),
-                    float(getattr(btc_ta, "sma_1h_20", 0.0) or 0.0),
-                )
+                pass
             else:
-                logger.debug(
-                    "ETH Macro BTC 1H regime classified (multipliers gated off): %s",
-                    btc_1h_regime,
-                )
+                pass
 
         alt_1h_trend = self._get_1h_bias(eth_ta)
         alt_15m_trend = self._get_15m_bias(eth_ta)
@@ -647,19 +634,12 @@ class ETHMacroStrategy(SolMacroStrategy):
 
         if btc_ta:
             logger.info(
-                f"ETH ${eth_price:,.2f} | BTC_HTF={btc_htf_bias} raw={btc_htf_details['raw_bias'] if btc_htf_details else '?'} "
-                f"votes[s={btc_htf_details['sabre_vote'] if btc_htf_details else '?'} "
-                f"p={btc_htf_details['price_vs_ma_vote'] if btc_htf_details else '?'} "
-                f"m={btc_htf_details['macd_vote'] if btc_htf_details else '?'}:{btc_htf_details['macd_state'] if btc_htf_details else '?'}] "
-                f"BTC4H hist={btc_htf_details['macd_4h_histogram']:+.1f} "
-                f"BTC1H hist={btc_ta.macd_1h.histogram:+.2f} "
-                f"BTC15m={btc_ta.macd_15m.histogram:+.3f} BTC5m={btc_mom.m5_direction}({btc_mom.m5_move_pct:+.3f}%) "
-                f"| ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
+                f"ETH ${eth_price:,.2f} | ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
                 f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
             )
         else:
             logger.info(
-                f"ETH ${eth_price:,.2f} | BTC_HTF=UNAVAILABLE | "
+                f"ETH ${eth_price:,.2f} | "
                 f"ETH15m={eth.macd_15m.histogram:+.3f} {eth.macd_15m.crossover} "
                 f"| ETH5m={eth.macd_5m.histogram:+.3f} {eth.macd_5m.crossover} | RSI={eth.rsi_14:.0f}"
             )
@@ -1128,7 +1108,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
                 _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
             if _btc_price > 0 and _btc_move < _btc_min_move:
-                reason_parts.append(f"diag_btc_flat(${_btc_move:.0f}<${_btc_min_move:.0f})")
+                pass
 
             # Skip only when our entry-side price is in the unfavorable long
             # tail. Favorable tail (our side >= 0.80) ghost-WR 87–97%; kept.
@@ -1169,8 +1149,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 f"ETH_HTF={alt_1h_trend}",
                 f"ETH_15M={alt_15m_trend}",
                 f"ETH_5M={alt_5m_trend}",
-                f"BTC_HTF={btc_htf_bias}",
-                f"PRIMARY_HTF={primary_htf_bias}",
+                f"PRIMARY_ETH_HTF={primary_htf_bias}",
                 f"side={market_allowed_side}",
                 f"side_src={side_source}",
             ]
@@ -1898,22 +1877,14 @@ class ETHMacroStrategy(SolMacroStrategy):
             ):
                 _window = _updown_tf
                 if btc_ta:
-                    _btc_ai_block = (
-                        f"BTC 1H hist={btc_ta.macd_1h.histogram:+.2f} rising={btc_ta.macd_1h.histogram_rising}\n"
-                        f"BTC 15m hist={btc_ta.macd_15m.histogram:+.3f} cross={btc_ta.macd_15m.crossover}\n"
-                        f"BTC 5m={btc_mom.m5_direction} ({btc_mom.m5_move_pct:+.3f}%)\n"
-                    )
+                    _btc_ai_block = ""
                 else:
-                    _btc_ai_block = (
-                        "BTC full analysis unavailable (ETH-only cycle).\n"
-                        f"BTC moves from correlation path: 5m={corr.btc_move_5m_pct:+.3f}% "
-                        f"15m={corr.btc_move_15m_pct:+.3f}%\n"
-                    )
+                    _btc_ai_block = ""
                 ai_context = (
                     f"{market.description}\n\n"
-                    f"=== ETH BTC-FOLLOW CONTEXT ({_window}) ===\n"
+                    f"=== ETH UPDOWN CONTEXT ({_window}) ===\n"
                     f"ETH Price: ${eth_price:,.2f} | YES={yes_price:.3f} | action={action}\n"
-                    f"BTC_HTF={btc_htf_bias} | side={market_allowed_side}({side_source}) | Quant edge={edge:.4f} "
+                    f"PRIMARY_ETH_HTF={primary_htf_bias} | side={market_allowed_side}({side_source}) | Quant edge={edge:.4f} "
                     f"(threshold={effective_min_edge:.4f})\n"
                     f"Minutes left={_mins_left:.1f}\n\n"
                     f"{_btc_ai_block}"
@@ -2225,8 +2196,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                         f"threshold={effective_min_edge:.4f} confidence={confidence:.2f}\n"
                         f"ETH price=${eth.current_price:,.2f} RSI={eth.rsi_14:.1f} "
                         f"ETH 1H={mtt.h1_trend} ETH 15m={mtt.m15_trend} ETH 5m={mtt.m5_trend}\n"
-                        f"BTC_HTF={btc_htf_bias or 'UNAVAILABLE'} BTC_1H_REGIME={btc_1h_regime or 'UNKNOWN'} "
-                        f"side_source={side_source}\n"
+                        f"PRIMARY_ETH_HTF={primary_htf_bias} side_source={side_source}\n"
                         f"Oracle basis={oracle_validation.basis_bps if oracle_validation else 'n/a'} "
                         f"freshness={oracle_validation.freshness_sec if oracle_validation else 'n/a'}\n\n"
                         f"=== MARKET ===\n{format_market_metadata(market)}\n\n"
@@ -2571,7 +2541,7 @@ class ETHMacroStrategy(SolMacroStrategy):
         _skip_top = dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:6])
         logger.info(
             f"ETH Macro SCAN_DIAG base_side={locals().get('market_allowed_side')} "
-            f"side_sources={side_source_counts} BTC_HTF={btc_htf_bias} eth_1H_trend={mtt.h1_trend} "
+            f"side_sources={side_source_counts} eth_1H_trend={mtt.h1_trend} "
             f"enforce_alt_1h={self.enforce_alt_1h_alignment} markets={len(eth_markets)} signals={len(signals)} "
             f"skips_top6={_skip_top}"
         )

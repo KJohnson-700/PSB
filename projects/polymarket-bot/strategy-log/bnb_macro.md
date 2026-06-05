@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from BNB trade reasons and AI contexts
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by BNB, removed BTC labels/values from trade reason strings, scan diagnostics, and AI decision context. Also removed the residual 5m confidence component based on BTC correlation.
+- **Why:** BTC was already disabled as a trade gate, but inherited BNB explanations still exposed BTC-looking diagnostics.
+- **Hypothesis:** BNB decisions and explanations read as BNB-native only after rollout.
+- **Expected outcome:** Post-restart BNB entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed BNB trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-04 — Hold winners + trailing floor (15m BUY_NO exit leak, LOW confidence)
 
 - **What changed:** Added a `bnb_macro` `updown_overrides` `15m down` (leg=down / BUY_NO) block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Uses the same floor mechanic added 2026-05-31 for BNB BUY_YES. BNB previously had only a `5m down` override; no `15m` exit policy.

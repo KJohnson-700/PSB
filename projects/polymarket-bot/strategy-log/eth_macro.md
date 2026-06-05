@@ -12,6 +12,24 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from ETH trade reasons and AI contexts
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), removed BTC labels/values from ETH trade reason strings, scan diagnostics, and marginal AI decision context (`BTC_HTF`, BTC-follow prompt framing, BTC move/history blocks, BTC regime text).
+- **Why:** BTC was already disabled as an ETH trade gate, but residual BTC strings made ETH explanations look BTC-driven.
+- **Hypothesis:** ETH decisions and explanations read as ETH-native only; no BTC-looking tokens should appear in new ETH signal reasons or AI prompts after rollout.
+- **Expected outcome:** Post-restart ETH entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed ETH trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-05 — Enforce alt-native rule: BTC no longer affects ETH trade decisions
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), guarded ETH BTC-follow logic behind the shared disabled `_btc_trade_inputs_enabled()` path. BTC context remains logged, but no longer blocks ETH entries, adds BTC-follow penalties, boosts ETH 5m probability/confidence, applies BTC 1h regime min-edge/size multipliers, blocks macro-leg disagreement, or vetoes ETH direction via BTC bearish/bullish guards.
+- **Why:** Operator reiterated the standing invariant: BTC must not decide alt trades. ETH had custom override logic outside the shared SOL-family scan path, so the base-class fix alone would not remove BTC-follow trade effects.
+- **Hypothesis:** ETH entries and skips become ETH-native plus oracle/price/risk controls; BTC remains diagnostic context only.
+- **Expected outcome:** Future ETH diagnostics should stop hard-skipping or penalizing candidates through `btc_5m_no_impulse`, `btc_1h_follow_penalty_*`, `btc_15m_follow_penalty_*`, macro-leg blocks, BTC regime multipliers, or BTC direction guards.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed ETH trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-01 — Per-lane exit policy: extend hold+trail to eth 5m/1h BUY_YES + 15m BUY_NO
 
 - **What changed:** Held-vs-realized scorecard ([`lane_exit_audit.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_audit.py)) classifies eth as Policy-A (exit kills edge) on more than 15m BUY_YES. Added hold-winners + trailing floor (`arm 0.10 / gap 0.15`) to **eth 5m BUY_YES** (held 60% / realized 20%, n=5 thin), **eth 1h BUY_YES** (held 55% / realized 23%, n=22), and **eth 15m BUY_NO** (held 50% / realized 34%, n=38 — a legit 15m short, NOT the suppressed 5m-native).

@@ -12,6 +12,15 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from DOGE trade reasons and AI contexts
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by DOGE, removed BTC labels/values from trade reason strings, scan diagnostics, and AI decision context. Also removed the residual 5m confidence component based on BTC correlation.
+- **Why:** BTC was already disabled as a trade gate, but inherited DOGE explanations still exposed BTC-looking diagnostics.
+- **Hypothesis:** DOGE decisions and explanations read as DOGE-native only after rollout.
+- **Expected outcome:** Post-restart DOGE entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed DOGE trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-04 — Hold winners + trailing floor (5m BUY_YES exit leak)
 
 - **What changed:** Added a `doge_macro` `updown_overrides` `5m up` (leg=up / BUY_YES) block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Reuses the floor mechanic in [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py). DOGE previously had only a `5m down` override (the BUY_NO 5m-native suppression) and no `5m up` exit policy.

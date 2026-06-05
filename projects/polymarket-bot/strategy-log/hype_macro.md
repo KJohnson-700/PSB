@@ -13,6 +13,24 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-05 — Remove BTC leakage from HYPE trade reasons and AI contexts
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by HYPE, removed BTC labels/values from trade reason strings, scan diagnostics, and AI decision context. Also removed the residual 5m confidence component based on BTC correlation.
+- **Why:** BTC was already disabled as a trade gate, but inherited HYPE explanations still exposed BTC-looking diagnostics.
+- **Hypothesis:** HYPE decisions and explanations read as HYPE-native only after rollout.
+- **Expected outcome:** Post-restart HYPE entries/skips no longer include BTC labels in `signal_reason` or marginal AI contexts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed HYPE trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-05 — Enforce alt-native rule: BTC no longer affects HYPE trade decisions
+
+- **What changed:** In [src/strategies/hype_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/hype_macro.py), removed the BTC 1h regime branch from the HYPE neutral-fallback short guard and guarded the HYPE hard-min-edge BTC regime multiplier behind the shared disabled `_btc_trade_inputs_enabled()` path. HYPE still logs BTC context inherited from the shared alt path, but BTC no longer blocks or scales HYPE trades.
+- **Why:** Operator reiterated the standing invariant: BTC must not decide alt trades. HYPE had a local post-scan filter that still depended on `btc_1h_regime`.
+- **Hypothesis:** HYPE local filtering remains HYPE-native; BTC context remains diagnostic only.
+- **Expected outcome:** Future HYPE skips should no longer include BTC-regime-driven neutral-fallback short blocks or BTC-regime hard-edge multipliers.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed HYPE trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-01 — Reopen ghost-positive 5m native BUY_NO gate
 
 - **What changed:** Set `hype_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), reopening the shared 5m native BUY_NO path previously ghost-logged as `buy_no_5m_native_suppressed`.
