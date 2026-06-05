@@ -77,6 +77,15 @@ trading:
           5m:
             down:
               updown_hold_winners_to_resolution: true
+          15m:
+            down:
+              # 2026-06-04: hold+trail. Settled exit audit (lane_exit_policy.json,
+              # n=22): held_wr 50% / held_pnl +$4 vs realized 27% / -$21. LOW
+              # CONFIDENCE — thin n, marginal held edge. Forward-test only; needs
+              # restart; revisit once n grows.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
       eth_macro:
         updown_stop_cents: 0.02
         updown_exit_window_mins: 3.0
@@ -210,6 +219,14 @@ trading:
           5m:
             down:
               updown_hold_winners_to_resolution: true
+            up:
+              # 2026-06-04: hold+trail. Settled exit audit (lane_exit_policy.json,
+              # n=34): held_wr 53% / held_pnl +$35 vs realized 38% / -$24 — tight
+              # exit was leaking a profitable lane. Forward-test only (exit change,
+              # not ghost-validatable); needs restart; watch trades_settled.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
 lane_management:
   enabled: true
   execution_enforcement_enabled: false

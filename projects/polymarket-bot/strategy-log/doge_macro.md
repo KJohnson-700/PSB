@@ -12,6 +12,15 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-04 — Hold winners + trailing floor (5m BUY_YES exit leak)
+
+- **What changed:** Added a `doge_macro` `updown_overrides` `5m up` (leg=up / BUY_YES) block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Reuses the floor mechanic in [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py). DOGE previously had only a `5m down` override (the BUY_NO 5m-native suppression) and no `5m up` exit policy.
+- **Why:** Settled exit recompute (`data/calibration/lane_exit_policy.json`, n=34) classified `doge_macro|5m|BUY_YES` as policy **A — hold+trail (exit kills edge)**: held-to-resolution WR 53% / held PnL **+$35.17** vs realized WR 38% / **−$23.59** under the tight exit. The lane is directionally fine; the +30% TP cap and stop churn were turning a profitable lane into a loss. `drift: true` — live config diverged from the recompute recommendation.
+- **Hypothesis:** Holding 5m BUY_YES winners with a trailing floor recovers the run the +30% TP was giving up; the floor protects most of the give-back on reversals. Realized PnL moves toward the +$35 held counterfactual.
+- **Expected outcome:** DOGE 5m BUY_YES `exit_reason` shifts from `take_profit` toward `updown_resolution`/trail; mean realized PnL per winner rises; realized WR converges toward held 53%.
+- **Actual outcome:** `pending` — forward-test only (exits not ghost-validatable); needs bot restart. Watch DOGE 5m BUY_YES exit reasons + realized PnL in `trades_settled.jsonl`.
+- **Status:** `pending`
+
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts. Also raised `max_ai_calls_per_scan` 5→6 for added budget headroom.

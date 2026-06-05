@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-04 — Hold winners + trailing floor (15m BUY_NO exit leak, LOW confidence)
+
+- **What changed:** Added a `bnb_macro` `updown_overrides` `15m down` (leg=down / BUY_NO) block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml): `updown_hold_winners_to_resolution: true` + positive trailing floor (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). Uses the same floor mechanic added 2026-05-31 for BNB BUY_YES. BNB previously had only a `5m down` override; no `15m` exit policy.
+- **Why:** Settled exit recompute (`data/calibration/lane_exit_policy.json`, n=22) classified `bnb_macro|15m|BUY_NO` as policy **A — hold+trail (exit kills edge)**: held WR 50% / held PnL **+$4.10** vs realized WR 27% / **−$20.71**; `drift: true`. The tight exit is bleeding a roughly-breakeven held lane.
+- **Hypothesis:** Holding 15m BUY_NO winners with a trailing floor stops the realized-vs-held leak; realized PnL moves off −$21 toward the held +$4.
+- **Expected outcome:** BNB 15m BUY_NO `exit_reason` shifts toward `updown_resolution`/trail; realized WR rises off 27%.
+- **Actual outcome:** `pending` — forward-test only; needs bot restart. Watch `trades_settled.jsonl`.
+- **Status:** `pending` — **LOW CONFIDENCE**: n=22 and held edge is only +$4.10 (marginal, noisy). Revisit once the BNB 15m BUY_NO cohort grows; revert if realized PnL doesn't improve.
+
 ### 2026-05-31 — Early-TP regret: hold winners + positive trailing floor (BUY_YES 5m/15m)
 
 - **What changed:** Added a `bnb_macro` `updown_overrides` block in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) for BUY_YES (leg=up) 5m and 15m: `updown_hold_winners_to_resolution: true` + a new **positive trailing floor** (`updown_trail_arm_pct: 0.10`, `updown_trail_gap_pct: 0.15`). New floor mechanic added to [`effective_updown_stop_loss_pct`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py): once the high-water mark clears +10%, the exit floor trails at `peak − 15%` and **can be positive** (banks gains), vs. the prior in-profit tighten that only capped the from-entry loss. Floor is always `max(base_stop, peak−gap)` — never wider than the base stop.
