@@ -1798,7 +1798,7 @@ exposure:
   minimal_size: 8.0
   min_trade_usd: 1.0
   full_min_trade_usd: 15.0
-  moderate_min_trade_usd: 10.0
+  moderate_min_trade_usd: 15.0
   minimal_min_trade_usd: 5.0
   loss_kill_switch_enabled: false
   max_consecutive_losses: 3
