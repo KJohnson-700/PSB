@@ -28,8 +28,8 @@ trading:
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
-  default_position_size: 10
-  max_position_size: 15
+  default_position_size: 15
+  max_position_size: 25
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.05
@@ -257,7 +257,7 @@ lane_calibration:
   # collapsed within-lane discrimination — disabled same day. This version adds
   # a bounded per-lane OFFSET (p += w*(beta_target_yes-0.5)) that preserves the
   # per-signal spread while correcting/flipping systematic directional error.
-  beta_blend_enabled: true
+  beta_blend_enabled: false  # 2026-06-04: disabled — β-blend inflates BUY_YES edge +0.058→+0.219 (~4×), manufacturing ~457 losing longs/era @42% WR (below breakeven); removal = clean win (induced held-WR 44% < base 46%). Forward-test; re-enable to revert. α-shrink + per-lane veto/flip unaffected.
   beta_blend_n_floor: 30
   beta_blend_n_full: 100
   beta_blend_w_max: 0.60     # cap on shift weight — never reaches collapse regime
@@ -279,7 +279,7 @@ lane_calibration:
   # still clear the normal edge gate (with β-corrected est_prob). Default OFF —
   # opt in after watching β-blend stop the bleed. Forward-test only.
   directional_flip:
-    enabled: true
+    enabled: false  # 2026-06-04: disabled — posterior-driven side flips fire on ~0.50-AUC noise and don't recompute est_prob; suspected contributor to inverted (short-into-rising) sides. Forward-test; re-enable to revert.
 lane_exit_policy:
   enabled: true
   alert_discord: true
@@ -1797,7 +1797,7 @@ exposure:
   moderate_size: 15.0
   minimal_size: 8.0
   min_trade_usd: 1.0
-  full_min_trade_usd: 10.0
+  full_min_trade_usd: 15.0
   moderate_min_trade_usd: 10.0
   minimal_min_trade_usd: 5.0
   loss_kill_switch_enabled: false

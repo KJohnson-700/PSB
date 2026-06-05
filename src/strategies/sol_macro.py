@@ -62,6 +62,7 @@ from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BT
 from src.analysis.updown_composite_score import (
     CompositeScore,
     OracleValidation,
+    apply_fresh_cross_override,
     score_updown_candidate,
     validate_oracle_reference,
 )
@@ -1122,6 +1123,10 @@ class SolMacroStrategy:
         regime = str(btc_1h_regime or "").upper()
         alt_h1 = str(alt_h1_trend or "").upper()
 
+        # NOTE: neutral_fallback is now sat out at the source in
+        # _resolve_alt_bias_for_tf (alt_neutral_fallback_sit_out), so it never
+        # reaches this guard — both BUY_YES and BUY_NO are covered there.
+
         if window_size == "5m" and source.endswith("_vs_slower") and alt_h1 == "BULLISH":
             return "sol_vs_slower_short_against_h1"
 
@@ -1540,6 +1545,16 @@ class SolMacroStrategy:
             )
 
         for slower_tf, slower_bias in slower_biases.items():
+            # 2026-06-04: neutral_fallback sit-out (BOTH sides, all alt strategies).
+            # The slower-TF fallback that manufactures a direction when this TF is
+            # NEUTRAL settles at ~32% WR on both sides (BUY_NO n=40/32.5%/-13 PnL;
+            # BUY_YES n=37/32.4%/-59 PnL, full settled history) — every sub-rung a
+            # loser. Sit out instead (fall through to allowed_side=None below),
+            # consistent with "alt sits out when its own TF is NEUTRAL". Reverts the
+            # 2026-05-31 slower-TF fallback participation. Opt-out (default-on):
+            # alt_neutral_fallback_sit_out.
+            if bool(self.config.get("alt_neutral_fallback_sit_out", True)):
+                break
             if slower_bias not in {"BULLISH", "BEARISH"}:
                 continue
             penalty = 0.04
@@ -3517,6 +3532,17 @@ class SolMacroStrategy:
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
+
+                    # Fresh-opposing 5m cross override (uniform helper; see
+                    # apply_fresh_cross_override / changelog 2026-06-04).
+                    est_prob_up, action, allowed_side, direction, side_source = apply_fresh_cross_override(
+                        est_prob_up=est_prob_up, action=action, allowed_side=allowed_side,
+                        direction=direction, side_source=side_source, reason_parts=reason_parts,
+                        crossover=macd_5m.crossover, tf_label="5m",
+                        strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
+                        logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                    )
+
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     estimated_prob = self._calibrate_est_prob(
@@ -3755,6 +3781,17 @@ class SolMacroStrategy:
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
+
+                    # Fresh-opposing cross override — same-TF MACD (15m or 1h).
+                    est_prob_up, action, allowed_side, direction, side_source = apply_fresh_cross_override(
+                        est_prob_up=est_prob_up, action=action, allowed_side=allowed_side,
+                        direction=direction, side_source=side_source, reason_parts=reason_parts,
+                        crossover=(ta.sol.macd_1h if is_hourly else ta.sol.macd_15m).crossover,
+                        tf_label=window_label,
+                        strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
+                        logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                    )
+
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     estimated_prob = self._calibrate_est_prob(
@@ -4886,7 +4923,13 @@ class SolMacroStrategy:
                 if action == "BUY_YES":
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 elif action == "BUY_NO":
-                    _updown_band_bad = yes_price < _yp_low
+                    # Floor the NO price: shorting cheap NO (yes_price rich) is
+                    # adverse selection — NO<0.20 wins ~5% held-to-resolution
+                    # across every asset (n~8k ghost), −$97 realized. Block it.
+                    _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
+                    _updown_band_bad = (
+                        yes_price < _yp_low or yes_price > (1.0 - _buy_no_min_no)
+                    )
                 else:
                     _updown_band_bad = yes_price < _yp_low or yes_price > _yp_high
                 if _updown_band_bad:

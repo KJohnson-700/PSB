@@ -2488,7 +2488,7 @@
             <div id="action-perf-note" class="action-perf-note"></div>
         </div>
         <table id="strategy-table" style="margin-top:8px;">
-            <thead><tr><th>Strategy</th><th>Live Signals</th><th>Backtest Trades</th><th>Backtest PnL</th><th>Reports</th><th>Break-even</th></tr></thead>
+            <thead><tr><th>Strategy</th><th>Signals</th><th>Session Trades</th><th>Session PnL</th><th>Open</th><th>Break-even</th></tr></thead>
             <tbody></tbody>
         </table>
     </div>
@@ -3851,6 +3851,12 @@ function _currentMainView() {
     return active ? active.getAttribute('data-view') : 'live';
 }
 
+function _liveAssetPollEnabled(strategyKey) {
+    const state = lastStatusData && lastStatusData.strategy_state && lastStatusData.strategy_state[strategyKey];
+    if (!state) return true;
+    return Boolean(state.configured_enabled || state.runtime_enabled || state.runtime_present);
+}
+
 // Bounded fetch — aborts after `ms` so a stalled endpoint doesn't pile up
 // requests behind it on subsequent polls. Returns null on timeout/error.
 function fetchT(url, ms = 6000, init = {}) {
@@ -3890,31 +3896,48 @@ async function fetchAll() {
     const needUpdownWr = needLive || needPerformance;
     /** Journal + Performance both show session rollup; summary must be fetched for either. */
     const needJournalSummary = needJournal || needPerformance;
+
+    // ── Performance hero first, decoupled from the heavy batch ──────────────
+    // /api/live/performance shares its source (journal summary) with the SSE-fed
+    // Command Center, so the two must agree. But inside the 25-way Promise.all
+    // below it queues behind heavy optional endpoints (usage/records, trade_journey,
+    // reason-buckets) and, under the browser's ~6-per-host connection cap, aborts at
+    // its timeout — leaving the Performance count frozen at a stale value (e.g. 5)
+    // while Command Center keeps ticking (e.g. 8). Fetch + render it up front with a
+    // generous timeout so it can't be starved; the batch then skips its slot.
+    let _perfPrefetched = false;
+    if (needPerformance) {
+        try {
+            const _perfR = await fetchT('/api/live/performance', 9000);
+            if (_perfR?.ok) { updateLivePerf(await _perfR.json()); _perfPrefetched = true; }
+        } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
+    }
+
     let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
     try {
         [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
-            fetchT('/api/scans/latest'),
+            Promise.resolve(null),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
-            needJournalSummary ? fetchT('/api/journal/summary') : Promise.resolve(null),
-            needJournal ? fetchT('/api/journal/trades') : Promise.resolve(null),
+            needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
+            needJournal ? fetchT(_journalApiPath('/api/journal/trades')) : Promise.resolve(null),
             fetchT('/api/exposure'),
             needLive ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
-            needLive ? fetchT('/api/sol/analysis', 14000) : Promise.resolve(null),
-            needLive ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
-            needLive ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
-            needLive ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
-            needLive ? fetchT('/api/doge/analysis', 14000) : Promise.resolve(null),
-            needLive ? fetchT('/api/bnb/analysis', 14000) : Promise.resolve(null),
-            needPerformance ? fetchT('/api/live/performance') : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('sol_macro') ? fetchT('/api/sol/analysis', 14000) : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('eth_macro') ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('hype_macro') ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('xrp_macro') ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('doge_macro') ? fetchT('/api/doge/analysis', 14000) : Promise.resolve(null),
+            needLive && _liveAssetPollEnabled('bnb_macro') ? fetchT('/api/bnb/analysis', 14000) : Promise.resolve(null),
+            (needPerformance && !_perfPrefetched) ? fetchT('/api/live/performance') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
             needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
             needUpdownWr ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
             needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
             needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
-            fetchT('/api/journal/action_breakdown'),
+            needPerformance ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
             needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
@@ -4261,15 +4284,20 @@ function applyHeroMetrics(d) {
         }
     }
 
-    let openCount = (p && (p.total_positions != null && p.total_positions !== undefined))
-        ? Number(p.total_positions)
-        : (Array.isArray(d.positions) ? d.positions.length : (s && s.open != null ? Number(s.open) : 0));
-    const posArrLen = Array.isArray(d.positions) ? d.positions.length : 0;
-    if (posArrLen > 0) openCount = posArrLen;
-    else if (
-        openCount === 0 && lastStatusData && !lastStatusData.running &&
-        Array.isArray(lastStatusData.positions) && lastStatusData.positions.length > 0
+    const hasPositionsArray = Array.isArray(d.positions);
+    const posArrLen = hasPositionsArray ? d.positions.length : null;
+    let openCount = hasPositionsArray
+        ? posArrLen
+        : ((p && p.total_positions != null && p.total_positions !== undefined)
+            ? Number(p.total_positions)
+            : (s && s.open != null ? Number(s.open) : 0));
+    if (
+        !hasPositionsArray &&
+        lastStatusData &&
+        Array.isArray(lastStatusData.positions)
     ) {
+        // SSE frames only carry a numeric position count. Keep Command Center
+        // consistent with the pull-down, which is rendered from /api/status.
         openCount = lastStatusData.positions.length;
     }
     const posEl = document.getElementById('hero-positions');
@@ -4354,7 +4382,12 @@ function updateStatusBadgesAndKill(d) {
 function sseSnapshotToStatusShape(raw) {
     if (!raw || typeof raw !== 'object') return {};
     if (raw.portfolio && raw.session) return raw;
-    const openN = typeof raw.positions === 'number' ? raw.positions : 0;
+    const cachedPositions = Array.isArray(lastStatusData && lastStatusData.positions)
+        ? lastStatusData.positions
+        : null;
+    const openN = cachedPositions
+        ? cachedPositions.length
+        : (typeof raw.positions === 'number' ? raw.positions : 0);
     const sessOpen = raw.session_open != null && raw.session_open !== undefined ? Number(raw.session_open) : openN;
     return {
         bankroll: raw.bankroll,
@@ -4378,7 +4411,7 @@ function sseSnapshotToStatusShape(raw) {
             total_pnl: raw.session_total_pnl,
             session_staked_notional: raw.session_staked,
         },
-        positions: [],
+        positions: cachedPositions || undefined,
     };
 }
 
@@ -5062,7 +5095,7 @@ function updateMetrics(d) {
         const pnlCls = (m.pnl||0) >= 0 ? 'pnl-pos' : 'pnl-neg';
         const ageStr = m.last_cycle ? ` <span style="color:var(--text-muted);font-size:0.7rem;" title="${m.last_cycle}">${_cycleAge(m.last_cycle)}</span>` : '';
         const totalStr = m.total_signals > 0 ? ` <span style="color:var(--text-muted);font-size:0.7rem;">(${m.total_signals}Σ)</span>` : '';
-        return `<tr><td>${stratPillHTML(s)}</td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.reports||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
+        return `<tr><td>${stratPillHTML(s)}</td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.open_positions||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
     }).join('');
 }
 
@@ -6346,10 +6379,13 @@ async function postConfigPatch(updates) {
 async function toggleLossKillSwitch() {
     const status = document.getElementById('process-status');
     try {
+        let currentEnabled = Boolean(window._dashOperatorFlags?.lossKillSwitchEnabled);
         const r = await fetch('/api/config');
-        if (!r.ok) throw new Error('config load failed');
-        const d = await r.json();
-        const nextEnabled = !Boolean(d?.exposure?.loss_kill_switch_enabled);
+        if (r.ok) {
+            const d = await r.json();
+            currentEnabled = Boolean(d?.exposure?.loss_kill_switch_enabled);
+        }
+        const nextEnabled = !currentEnabled;
         await postConfigPatch({
             exposure: {
                 loss_kill_switch_enabled: nextEnabled,
@@ -6889,12 +6925,12 @@ function updateLivePerf(d) {
     if (!lpTrades || !lpWin || !lpPnl || !lpSharpe || !lpDd) return;
 
     const totalTrades = Number(d.total_trades || 0);
-    const winRate = Number(d.win_rate || 0);
+    const winRate = _winRateFraction(d.win_rate || 0);
     const totalPnl = Number(d.total_pnl || 0);
     const sharpe = Number(d.sharpe_ratio || 0);
     const maxDd = Number(d.max_drawdown || 0);
     lpTrades.textContent = String(totalTrades);
-    lpWin.textContent = winRate ? (winRate * 100).toFixed(0) + '%' : '-';
+    lpWin.textContent = totalTrades ? (winRate * 100).toFixed(0) + '%' : '-';
     lpPnl.textContent = '$' + totalPnl.toFixed(2);
     lpSharpe.textContent = sharpe ? sharpe.toFixed(2) : '-';
     lpDd.textContent = maxDd ? '-$' + maxDd.toFixed(2) : '-';
@@ -6910,7 +6946,7 @@ function updateLivePerf(d) {
         if (perfPairs.length > 0) {
             stratDiv.innerHTML = perfPairs.map(([s, m]) => {
                 const trades = Number(m?.trades || 0);
-                const wr = Number(m?.win_rate || 0);
+                const wr = _winRateFraction(m?.win_rate || 0);
                 const pnl = Number(m?.total_pnl ?? m?.pnl ?? 0);
                 const c = stratHex(s);
                 const label = { bitcoin:'BTC', sol_macro:'SOL', eth_macro:'ETH', hype_macro:'HYPE', xrp_macro:'XRP', doge_macro:'DOGE', bnb_macro:'BNB' }[s] || s;
@@ -7098,7 +7134,7 @@ function updateActionBreakdown(d) {
 
     if (noteEl) {
         if (fetchError) {
-            noteEl.textContent = `Could not load breakdown (${fetchError}). Restart the bot so /api/journal/action_breakdown is available, then hard-refresh.`;
+            noteEl.textContent = `Could not load breakdown (${fetchError}). /api/journal/action_breakdown did not respond; use Journal refresh after the dashboard process is healthy.`;
         } else if (sessionSlip && sessionSlip.action) {
             noteEl.textContent = 'Red row = slipping side for that strategy (3+ closes per side). Table below has backtest and live signal counts.';
         } else {
@@ -7131,7 +7167,7 @@ function updateUpdownBreakdown(ud) {
             labelEl.textContent = '🟢 New code since ' + ud.new_code_start.slice(11, 16);
             labelEl.style.color = 'var(--green)';
         } else {
-            labelEl.textContent = '🟡 Old code — restart bot to activate';
+            labelEl.textContent = '🟡 No new-code marker in recent logs';
             labelEl.style.color = '#f5a623';
         }
     }
@@ -8206,7 +8242,7 @@ async function loadGhostLab() {
     const sinceISO = sinceRaw === 'all'
         ? '1970-01-01T00:00:00Z'
         : new Date(Date.now() - parseInt(sinceRaw, 10) * 86400000).toISOString();
-    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=20000`;
+    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=5000`;
     try {
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
@@ -8578,7 +8614,29 @@ function _glRenderCounts() {
     const active = cur.in_market_deadzone ? 'active' : 'clear';
     const stale = cur.fresh === false ? ' stale' : '';
     const regime = cur.combined_regime || 'unknown';
-    el.innerHTML = `ghosts=<strong style="color:var(--text);">${c.ghost || 0}</strong> &middot; ` +
+
+    // Regime-feed tracker health chip. The feed (market_regime.jsonl) is written
+    // by the standalone tools/enhanced_price_tracker.py daemon (launchd:
+    // com.psb.regime-tracker), NOT by the bot. fresh===false => tracker is down
+    // and the deadzone heatmap is frozen.
+    const ageSec = Number(cur.age_sec);
+    let ageTxt = '?';
+    if (isFinite(ageSec)) {
+        if (ageSec < 90) ageTxt = Math.round(ageSec) + 's';
+        else if (ageSec < 5400) ageTxt = Math.round(ageSec / 60) + 'm';
+        else if (ageSec < 172800) ageTxt = (ageSec / 3600).toFixed(1) + 'h';
+        else ageTxt = (ageSec / 86400).toFixed(1) + 'd';
+    }
+    const feedFresh = cur.fresh === true;
+    const feedColor = feedFresh ? 'var(--gn)' : 'var(--rd)';
+    const feedLabel = feedFresh ? 'REGIME FEED LIVE' : 'REGIME FEED STALE';
+    const feedTip = feedFresh
+        ? `Regime tracker running — last snapshot ${ageTxt} ago (max ${Math.round(Number(cur.max_age_sec || 1800) / 60)}m). Written by tools/enhanced_price_tracker.py (launchd: com.psb.regime-tracker).`
+        : `Regime tracker DOWN — last snapshot ${ageTxt} ago, deadzone heatmap is frozen. Restart: launchctl kickstart -k gui/$(id -u)/com.psb.regime-tracker`;
+    const feedBadge = `<span title="${feedTip}" style="display:inline-block;padding:1px 7px;margin-right:8px;border:1px solid ${feedColor};border-radius:10px;color:${feedColor};font-weight:600;font-size:.72rem;letter-spacing:.3px;${feedFresh ? '' : 'animation:pulseOff 1.6s ease-in-out infinite;'}">● ${feedLabel} · ${ageTxt}</span>`;
+
+    el.innerHTML = feedBadge +
+                   `ghosts=<strong style="color:var(--text);">${c.ghost || 0}</strong> &middot; ` +
                    `deadzone=<strong style="color:#e0a64a;">${c.deadzone_skip || 0}</strong> &middot; ` +
                    `live=<strong style="color:var(--gn);">${c.live || 0}</strong> &middot; ` +
                    `now=<strong style="color:${cur.in_market_deadzone ? '#ffcc66' : 'var(--gn)'};">${active}${stale}</strong> ` +
@@ -9160,7 +9218,9 @@ function _renderExitTimingHud() {
         : [];
 
     if (!inWindow.length) {
-        body.innerHTML = '<div class="hud-empty">No trade points yet — awaiting /api/journal/trade-points</div>';
+        body.innerHTML = points.length
+            ? '<div class="hud-empty">No closed trades in the visible BTC chart window — pan or zoom to trade history.</div>'
+            : '<div class="hud-empty">No closed trade points yet — awaiting /api/journal/trade-points</div>';
         return;
     }
 

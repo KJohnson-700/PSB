@@ -188,6 +188,59 @@ def validate_oracle_reference(
     )
 
 
+def apply_fresh_cross_override(
+    *,
+    est_prob_up: float,
+    action: str,
+    allowed_side: str,
+    direction: str,
+    side_source: Optional[str],
+    reason_parts: list,
+    crossover: Optional[str],
+    tf_label: str,
+    strategy_name: str = "",
+    primary_htf_bias: str = "",
+    logger=None,
+    enabled: bool = True,
+):
+    """Flip to the momentum side when a FRESH MACD cross on the market's OWN
+    timeframe contradicts the lagging-bias-chosen side.
+
+    Background (2026-06-04): direction is selected from a lagging trend label and
+    ``est_prob_up`` is pinned to it, so in a reversal the bot keeps choosing the
+    trend-following side and shorts a rising market (observed: 5m hist bullish 84%
+    while bot 96% short into a tape that rose on every asset). ``est_prob_up`` is
+    P(UP) and side-independent, so flipping the action/side and pulling est_prob
+    across neutral yields a real-edge trade in the direction price just turned.
+    Only fires on a discrete cross; downstream edge/price-band/oracle gates still
+    apply. Pure function — returns the updated tuple, appends to ``reason_parts``.
+
+    Applied UNIFORMLY across every asset (sol-family, eth, btc) and every market
+    timeframe (5m/15m/1h), each reading its OWN-timeframe MACD crossover.
+    """
+    if not enabled or not crossover:
+        return est_prob_up, action, allowed_side, direction, side_source
+    flipped = None
+    if allowed_side == "SHORT" and crossover == "BULLISH_CROSS":
+        est_prob_up = max(est_prob_up, 0.55)
+        flipped = "BUY_YES"
+    elif allowed_side == "LONG" and crossover == "BEARISH_CROSS":
+        est_prob_up = min(est_prob_up, 0.45)
+        flipped = "BUY_NO"
+    if flipped is not None and flipped != action:
+        action = flipped
+        direction = "UP" if action == "BUY_YES" else "DOWN"
+        allowed_side = "LONG" if action == "BUY_YES" else "SHORT"
+        side_source = f"{side_source or ''}+fresh_{tf_label}_cross_flip"
+        reason_parts.append(f"fresh_{tf_label}_cross_flip->{action}")
+        if logger is not None:
+            logger.info(
+                "  %s FRESH %s CROSS FLIP -> %s (%s vs lagging bias %s)",
+                strategy_name, tf_label, action, crossover, primary_htf_bias,
+            )
+    return est_prob_up, action, allowed_side, direction, side_source
+
+
 def score_updown_candidate(
     *,
     edge: float,

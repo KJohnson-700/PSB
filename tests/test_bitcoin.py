@@ -468,25 +468,29 @@ class TestBitcoinLTFConfirmation:
         self.strategy = BitcoinStrategy(self.config, self.ai, self.sizer)
 
     def test_long_confirmed_by_bull_cross(self):
-        """Bullish MACD cross confirms LONG."""
+        """Bullish lower-TF MACD confirms LONG (composite clears the 0.50 bar)."""
         ta = _make_ta(
             macd_15m_cross="BULLISH_CROSS", macd_15m_hist=5, macd_15m_above_signal=True
         )
+        # Default tf="15m" reads the next-smaller TF (5m); point it at the
+        # configured MACD so the test exercises the real 15m-market path.
+        ta.tf_5m.macd = ta.macd_15m
         confirmed, strength, reasons = self.strategy._check_lower_tf_confirmation(
             ta, "LONG"
         )
         assert confirmed is True
-        assert strength >= 0.40  # Bull cross = 0.40
+        assert strength >= 0.40  # bull cross 0.40 + hist-rising 0.20 + MACD>signal 0.15
         assert any("bull cross" in r for r in reasons)
 
     def test_long_confirmed_by_rising_histogram(self):
-        """Rising histogram (red→green) confirms LONG."""
+        """Rising histogram (red→green) + MACD>signal confirms LONG (0.50)."""
         ta = _make_ta(
             macd_15m_cross="NONE", macd_15m_hist=2, macd_15m_above_signal=True
         )
         # Manually set prev_histogram to negative (red→green transition)
         ta.macd_15m.prev_histogram = -1
         ta.macd_15m.histogram_rising = True
+        ta.tf_5m.macd = ta.macd_15m  # method reads the next-smaller TF
         confirmed, strength, reasons = self.strategy._check_lower_tf_confirmation(
             ta, "LONG"
         )
@@ -500,6 +504,7 @@ class TestBitcoinLTFConfirmation:
             macd_15m_above_signal=False,
         )
         ta.macd_15m.histogram_rising = False
+        ta.tf_5m.macd = ta.macd_15m  # method reads the next-smaller TF
         confirmed, strength, reasons = self.strategy._check_lower_tf_confirmation(
             ta, "LONG"
         )
@@ -579,9 +584,10 @@ def test_short_confirmed_by_bear_cross():
         macd_15m_above_signal=False,
     )
     ta.macd_15m.histogram_rising = False
+    ta.tf_5m.macd = ta.macd_15m  # method reads the next-smaller TF
     confirmed, strength, reasons = strategy._check_lower_tf_confirmation(ta, "SHORT")
     assert confirmed is True
-    assert strength >= 0.40
+    assert strength >= 0.40  # bear cross 0.40 + MACD<signal 0.15
 
 
 def test_short_rejected_when_bullish():

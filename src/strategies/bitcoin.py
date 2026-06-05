@@ -56,7 +56,11 @@ from src.analysis.btc_1h_regime import (
     classify_btc_1h_sma_regime,
 )
 from src.analysis.kelly_sizer import KellySizer
-from src.analysis.updown_composite_score import OracleValidation, score_updown_candidate
+from src.analysis.updown_composite_score import (
+    OracleValidation,
+    apply_fresh_cross_override,
+    score_updown_candidate,
+)
 from src.analysis.lane_entry_policy import (
     entry_policy_to_dict,
     resolve_entry_policy_side,
@@ -1735,8 +1739,11 @@ class BitcoinStrategy:
         _latency_sec = float(self.config.get("entry_window_latency_buffer_sec", 0.0) or 0.0)
         # Loop-locals referenced in last_scan_stats below — init to safe defaults so
         # an early-continue path (e.g. all markets hit neutral_bias) doesn't trigger
-        # UnboundLocalError when the stats dict is built post-loop.
+        # UnboundLocalError when the stats dict is built post-loop. ltf_reasons /
+        # ltf_confirmed also need defaults now that the 5m path skips the LTF call.
         ltf_strength = 0.0
+        ltf_reasons: list = []
+        ltf_confirmed = False
 
         for market in btc_markets:
             if market.liquidity > 0 and market.liquidity < self.min_liquidity:
@@ -1765,17 +1772,23 @@ class BitcoinStrategy:
                     bias_5m,
                 )
                 continue
-            ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
-            _sample("ltf_strength", ltf_strength)
+            # Lower-TF late-entry filter only applies to 15m/1h — 5m has nothing
+            # faster in the ladder, so the call (and its result) was dead for 5m.
+            # 5m gets its own microstructure timing via _check_5m_entry_timing below.
+            # Reset per-iteration so a prior 15m market's values don't leak into 5m.
+            ltf_confirmed, ltf_strength, ltf_reasons = False, 0.0, []
+            if not is_5m:
+                ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
+                _sample("ltf_strength", ltf_strength)
+                if ltf_confirmed:
+                    _bump_skip("ltf_confirmed_late_entry")
+                    logger.info(
+                        "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
+                        market.question[:40],
+                        ltf_strength,
+                    )
+                    continue
             timing_bonus, timing_reasons = self._check_timing(ta, allowed_side)
-            if (not is_5m) and ltf_confirmed:
-                _bump_skip("ltf_confirmed_late_entry")
-                logger.info(
-                    "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
-                    market.question[:40],
-                    ltf_strength,
-                )
-                continue
             ai_used = False
             threshold = None
             direction = "UP"  # default; overridden below
@@ -2250,6 +2263,26 @@ class BitcoinStrategy:
                         if abs(price_vs_poc) < 0.003:
                             est_prob_up -= vp_chop_penalty
                         reason_parts.append(f"VP_POC=${vp.poc_price:,.0f}")
+
+                    # Fresh-opposing cross override — same-TF MACD (5m/15m/1h). BTC
+                    # derives its action from allowed_side in the resolver below, so
+                    # flip the side here and let the resolver re-derive the action.
+                    _btc_xover_macd = (
+                        ta.macd_1h if _updown_tf == "1h"
+                        else ta.macd_5m if _updown_tf == "5m"
+                        else ta.macd_15m
+                    )
+                    _btc_pre_action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+                    # side_source is produced by the resolver below; the flip is
+                    # recorded in reason_parts instead (pass None here).
+                    est_prob_up, _btc_pre_action, allowed_side, _, _ = apply_fresh_cross_override(
+                        est_prob_up=est_prob_up, action=_btc_pre_action, allowed_side=allowed_side,
+                        direction=("UP" if allowed_side == "LONG" else "DOWN"),
+                        side_source=None, reason_parts=reason_parts,
+                        crossover=_btc_xover_macd.crossover, tf_label=_updown_tf,
+                        strategy_name=self._signal_strategy_name, primary_htf_bias=htf_bias,
+                        logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                    )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
@@ -3434,11 +3467,15 @@ class BitcoinStrategy:
                 #   BUY_YES at yes_price > 0.54 and BUY_NO at yes_price < 0.46: consensus extremes
                 _up_min = lane_policy.entry_price_min
                 _up_max = lane_policy.entry_price_max
+                # Floor the NO price: shorting cheap NO (yes_price rich) is
+                # adverse selection — NO<0.20 wins ~5% held-to-resolution
+                # across every asset (n~8k ghost), −$97 realized. Block it.
+                _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
                 _updown_band_bad = (
                     (yes_price < _up_min or yes_price > _up_max)
                     if action == "BUY_YES"
                     else (
-                        yes_price < _up_min
+                        (yes_price < _up_min or yes_price > (1.0 - _buy_no_min_no))
                         if action == "BUY_NO"
                         else (yes_price < _up_min or yes_price > _up_max)
                     )

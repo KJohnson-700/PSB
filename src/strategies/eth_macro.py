@@ -21,6 +21,7 @@ from src.market.scanner import Market, resolved_updown_window_minutes, updown_ti
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
 from src.analysis.lane_entry_policy import entry_policy_to_dict
+from src.analysis.updown_composite_score import apply_fresh_cross_override
 from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
 from src.analysis.lane_identity import build_lane_metadata
 from src.strategies.sol_macro import (
@@ -288,6 +289,10 @@ class ETHMacroStrategy(SolMacroStrategy):
         regime = str(btc_1h_regime or "").upper()
         btc_bias = str(btc_htf_bias or "").upper()
         alt_bias = str(alt_h1_trend or "").upper()
+
+        # NOTE: neutral_fallback is now sat out at the source in the shared
+        # _resolve_alt_bias_for_tf (alt_neutral_fallback_sit_out, inherited from
+        # SolMacroStrategy), covering both BUY_YES and BUY_NO before this guard.
 
         # BTC→ETH decoupling (2026-05-29): same issue as the SOL 15m guard — a
         # BTC-1h-regime gate on an ETH short, violating "alts not decided by BTC".
@@ -1566,6 +1571,25 @@ class ETHMacroStrategy(SolMacroStrategy):
 
             if rsi_soft_delta != 0.0:
                 est_prob_up += rsi_soft_delta
+
+            # Fresh-opposing cross override — same-TF MACD (5m/15m/1h). ETH derives
+            # its action from market_allowed_side in the resolver below, so we flip
+            # the side here and the resolver re-derives the matching action.
+            _eth_xover_macd = (
+                eth.macd_1h if _updown_tf == "1h"
+                else eth.macd_5m if _updown_tf == "5m"
+                else eth.macd_15m
+            )
+            _eth_pre_action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
+            est_prob_up, _eth_pre_action, market_allowed_side, _, side_source = apply_fresh_cross_override(
+                est_prob_up=est_prob_up, action=_eth_pre_action, allowed_side=market_allowed_side,
+                direction=("UP" if market_allowed_side == "LONG" else "DOWN"),
+                side_source=side_source, reason_parts=reason_parts,
+                crossover=_eth_xover_macd.crossover, tf_label=_updown_tf,
+                strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
+                logger=logger, enabled=self.config.get("fresh_cross_override", True),
+            )
+
             est_prob_up = max(0.10, min(0.90, est_prob_up))
             raw_est_prob = est_prob_up
             direction_decision = self._resolve_eth_direction(
@@ -2269,7 +2293,13 @@ class ETHMacroStrategy(SolMacroStrategy):
             else:
                 # BUY_NO: allow rich-YES / cheap-NO setups above max YES;
                 # still reject overly bearish YES where NO is already expensive.
-                _entry_price_bad = yes_price < lane_policy.entry_price_min
+                # Floor the NO price though: NO<0.20 wins ~5% held-to-resolution
+                # across every asset (n~8k ghost), −$97 realized. Block cheap NO.
+                _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
+                _entry_price_bad = (
+                    yes_price < lane_policy.entry_price_min
+                    or yes_price > (1.0 - _buy_no_min_no)
+                )
             if _entry_price_bad:
                 _bump_skip("lane_price_band")
                 if action == "BUY_NO":
