@@ -929,6 +929,28 @@ def _get_journal_summary() -> Dict:
     return _empty
 
 
+# ── Short-TTL cache for the journal summary ───────────────────────────────────
+# get_summary() re-parses the journal and can take ~3s on an active session. The
+# SSE stream polls it every 2s and several endpoints call it per request, so the
+# raw call pins the single dashboard event loop ~100% (CPU-bound under the GIL).
+# Cache the result for a few seconds so the expensive parse runs at most once per
+# window; PnL/position hero stats do not need sub-TTL freshness.
+_journal_summary_cache: Dict[str, Any] = {"ts": 0.0, "summary": None}
+_JOURNAL_SUMMARY_TTL = 6.0  # seconds
+
+
+def _get_cached_journal_summary() -> Dict:
+    """``_get_journal_summary`` with a short TTL cache (see note above)."""
+    now = _time_mod.time()
+    cached = _journal_summary_cache.get("summary")
+    if cached is not None and (now - float(_journal_summary_cache.get("ts") or 0.0)) < _JOURNAL_SUMMARY_TTL:
+        return cached
+    summary = _get_journal_summary()
+    _journal_summary_cache["summary"] = summary
+    _journal_summary_cache["ts"] = now
+    return summary
+
+
 def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Compact session stats for Command Center (journal is source of truth)."""
     if not js:
@@ -1200,7 +1222,13 @@ async def sse_stream(request: Request):
                 js: Dict[str, Any] = {}
                 if bot and getattr(bot, "journal", None):
                     try:
-                        js = bot.journal.get_summary()
+                        # get_summary() parses the journal and can take ~3s. At the
+                        # 2s SSE cadence, calling it inline pins the single dashboard
+                        # event loop ~100% (CPU-bound under the GIL — a worker thread
+                        # does NOT help), starving candles/status/watchlist so the
+                        # live tab renders empty. Serve a short-TTL cached summary so
+                        # the expensive parse runs at most once per TTL window.
+                        js = _get_cached_journal_summary()
                     except Exception:
                         js = {}
                 open_stake = round(float(js.get("total_cost", 0) or 0), 2)
@@ -1215,7 +1243,7 @@ async def sse_stream(request: Request):
                 # Bot stopped: align SSE hero with /api/status (disk positions + journal).
                 if not bot:
                     try:
-                        js = _get_journal_summary()
+                        js = _get_cached_journal_summary()
                     except Exception:
                         js = {}
                     disk_pos = _load_disk_positions_for_status()
@@ -1612,7 +1640,7 @@ async def get_status():
             can_trade_reason = "Manual global stop active (data/KILL_SWITCH)"
 
         try:
-            _js = bot.journal.get_summary()
+            _js = _get_cached_journal_summary()
         except Exception:
             _js = {}
         bankroll_cash = getattr(bot, "bankroll", 0.0)
@@ -1709,7 +1737,7 @@ async def get_status():
         }
 
     # ── No bot_instance: read everything from disk ──
-    summary = _get_journal_summary()
+    summary = _get_cached_journal_summary()
     session_cc = _command_center_session(summary)
 
     # Infer dry_run and AI status from config if available
@@ -1924,7 +1952,7 @@ def _gl_parse_ts(s: Any) -> Optional[datetime]:
             return datetime.utcfromtimestamp(float(s)).replace(tzinfo=None)
         txt = str(s).replace("Z", "+00:00")
         dt = datetime.fromisoformat(txt)
-        return dt.astimezone(tz=None).replace(tzinfo=None) if dt.tzinfo else dt
+        return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
     except Exception:
         return None
 
@@ -2014,6 +2042,16 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     if not base.exists():
         return out
+
+    def _hour_utc_from_extra(extra: Dict[str, Any], fallback: int) -> int:
+        raw = extra.get("hour_utc")
+        if raw is None:
+            return fallback
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return fallback
+
     # Build a quick lookup of DEAD_ZONE_SKIP keys → resolved outcome so we can attach win/outcome.
     skip_outcomes: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     sessions = sorted(base.glob("test_*/entries.jsonl"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
@@ -2042,13 +2080,14 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                     if ts is None or ts < since:
                         continue
                     extra = rec.get("extra") or {}
+                    hour_utc = _hour_utc_from_extra(extra, ts.hour)
                     if event == "DEAD_ZONE_SKIP_RESOLVED":
                         # Attach outcome to the corresponding earlier SKIP.
                         key = (
                             str(rec.get("market_id") or ""),
                             str(rec.get("strategy") or ""),
                             str(extra.get("lane_id") or ""),
-                            str(extra.get("hour_utc") or ts.hour),
+                            str(hour_utc),
                         )
                         skip_outcomes[key] = {
                             "win": bool(extra.get("would_have_won")) if extra.get("would_have_won") is not None else None,
@@ -2059,7 +2098,7 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                     if event == "DEAD_ZONE_SKIP":
                         out.append({
                             "ts": ts.isoformat(),
-                            "hour_utc": ts.hour,
+                            "hour_utc": hour_utc,
                             "dow": ts.weekday(),
                             "lane_id": str(extra.get("lane_id") or ""),
                             "strategy": rec.get("strategy") or "",
@@ -2082,7 +2121,7 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                                 str(rec.get("market_id") or ""),
                                 str(rec.get("strategy") or ""),
                                 str(extra.get("lane_id") or ""),
-                                str(extra.get("hour_utc") or ts.hour),
+                                str(hour_utc),
                             ),
                             "blocked_hours_config": extra.get("blocked_hours_config"),
                         })
@@ -3074,19 +3113,12 @@ async def get_ghost_decision_digest(
 async def get_live_performance():
     """Live trade performance metrics sourced from summary.json (cached journal for
     closed-trade detail).  No fresh PerformanceTracker() construction per call."""
-    summary = _get_journal_summary()
+    summary = _get_cached_journal_summary()
     strategy_stats = summary.get("strategy_stats", {})
-    active_perf_strategies = (
-        "bitcoin",
-        "sol_macro",
-        "eth_macro",
-        "hype_macro",
-        "xrp_macro",
-    )
     strategy_stats_filtered: Dict[str, Any] = {}
     if isinstance(strategy_stats, dict):
         strategy_stats_filtered = {
-            k: v for k, v in strategy_stats.items() if k in active_perf_strategies
+            k: v for k, v in strategy_stats.items() if k in _DASHBOARD_STRATEGY_NAMES
         }
 
     # Build closed-trade list for equity curve etc. using the cached journal
@@ -3102,6 +3134,7 @@ async def get_live_performance():
     wins = summary.get("wins", 0)
     losses = summary.get("losses", 0)
     realized_pnl = summary.get("realized_pnl", 0.0)
+    total_pnl = summary.get("total_pnl", realized_pnl)
     win_rate = summary.get("win_rate", 0.0)
 
     # avg win / loss
@@ -3145,7 +3178,9 @@ async def get_live_performance():
         "avg_win": round(avg_win, 2),
         "avg_loss": round(avg_loss, 2),
         "profit_factor": round(profit_factor, 2),
-        "total_pnl": round(realized_pnl, 2),
+        "realized_pnl": round(realized_pnl, 2),
+        "unrealized_pnl": round(summary.get("unrealized_pnl", 0.0), 2),
+        "total_pnl": round(total_pnl, 2),
         "max_drawdown": round(max_drawdown, 2),
         "sharpe_ratio": 0.0,
         "by_strategy": strategy_stats_filtered,
@@ -3646,6 +3681,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "sol_macro": {
@@ -3653,6 +3689,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "eth_macro": {
@@ -3660,6 +3697,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "hype_macro": {
@@ -3667,6 +3705,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "xrp_macro": {
@@ -3674,6 +3713,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "doge_macro": {
@@ -3681,6 +3721,7 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
         "bnb_macro": {
@@ -3688,12 +3729,13 @@ async def get_strategy_metrics():
             "trades": 0,
             "pnl": 0,
             "win_rate": None,
+            "open_positions": 0,
             "reports": 0,
         },
     }
 
     # ── Primary: live trade stats from summary.json (disk-first) ──
-    summary = _get_journal_summary()
+    summary = _get_cached_journal_summary()
     for strat, s in summary.get("strategy_stats", {}).items():
         if strat in metrics:
             metrics[strat]["trades"] = s.get("trades", 0)
@@ -3756,6 +3798,13 @@ async def get_strategy_metrics():
                 metrics[strat]["open_positions"] = (
                     metrics[strat].get("open_positions", 0) + 1
                 )
+    else:
+        for p in _load_disk_positions_for_status():
+            strat = str(p.get("strategy") or "unknown")
+            if strat in metrics:
+                metrics[strat]["open_positions"] = (
+                    metrics[strat].get("open_positions", 0) + 1
+                )
 
     return metrics
 
@@ -3769,6 +3818,7 @@ async def invalidate_journal_cache(request: Request):
     _check_auth(request)
     global _journal_cache
     _journal_cache = {"path": None, "mtime": None, "journal": None}
+    _journal_summary_cache.update({"ts": 0.0, "summary": None})
     _exit_reason_summary_cache.clear()
     _action_breakdown_cache.clear()
     return {"status": "ok"}
@@ -3791,7 +3841,7 @@ async def get_journal_summary(session_id: Optional[str] = None):
             else "active"
         )
         return out
-    return _get_journal_summary()
+    return _get_cached_journal_summary()
 
 
 @app.get("/api/journal/positions")
@@ -4232,10 +4282,9 @@ async def get_trade_journey(
 
 
 @app.get("/api/journal/updown_breakdown")
-async def get_updown_breakdown():
+async def get_updown_breakdown(session_id: Optional[str] = None):
     """Break down closed trades by up/down bucket (1h / 30m / 15m / 5m per asset).
-    Also splits OLD CODE (pre-restart) vs NEW CODE (post-restart) results.
-    NEW CODE is detected by first appearance of 'Anti-LTF gate passed' in today's log.
+    Also splits trades before/after recent marker lines in local logs.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -4264,7 +4313,7 @@ async def get_updown_breakdown():
         except Exception:
             pass
 
-    j = _get_journal()
+    j = _journal_for_query(session_id) if session_id else _get_journal()
     closed = j.get_closed_trades() if j else []
 
     # Flat trades (|pnl| <= 0.01, including exact break-even resolutions) get

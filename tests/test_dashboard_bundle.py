@@ -13,7 +13,14 @@ INDEX = REPO / "src" / "dashboard" / "index.html"
 
 
 def _fetchall_promise_all_block(html: str) -> tuple[list[str], int]:
-    """Parse fetchAll()'s main Promise.all — 18-way poll; tolerate let + split try/catch."""
+    """Parse fetchAll()'s main Promise.all; tolerate let + split try/catch.
+
+    The invariant that keeps the in-browser destructuring aligned is
+    ``#bindings == #Promise.all array elements`` — NOT ``#fetch calls``. An element
+    can legitimately be a bare ``Promise.resolve(null)`` placeholder (a view-gated
+    or intentionally-disabled poll, e.g. /api/scans/latest), so count top-level
+    array elements (commas at paren/brace/bracket depth 0), not fetch() calls.
+    """
     m = re.search(
         r"(?:const )?\[([^\]]+)\]\s*=\s*await Promise\.all\(\[([\s\S]*?)\]\);\s*\n\s*\} catch",
         html,
@@ -21,16 +28,30 @@ def _fetchall_promise_all_block(html: str) -> tuple[list[str], int]:
     assert m, "fetchAll() Promise.all block not found (expected `] = await Promise.all([` then `} catch`)"
     names = [x.strip() for x in m.group(1).split(",")]
     block = m.group(2)
-    fetches = len(re.findall(r"\b(?:fetch|fetchT)\(", block))
-    return names, fetches
+    segments, depth, cur = [], 0, []
+    for ch in block:
+        if ch in "([{":
+            depth += 1
+            cur.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            cur.append(ch)
+        elif ch == "," and depth == 0:
+            segments.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    segments.append("".join(cur))
+    elements = sum(1 for s in segments if s.strip())  # ignores trailing comma
+    return names, elements
 
 
 def test_dashboard_index_fetchall_bind_count_matches_fetch_calls():
     html = INDEX.read_text(encoding="utf-8")
-    names, fetches = _fetchall_promise_all_block(html)
-    assert len(names) == fetches, (
-        f"fetchAll destructuring has {len(names)} vars but Promise.all has {fetches} "
-        f"fetch() calls — missing/extra binding breaks the whole dashboard in-browser."
+    names, elements = _fetchall_promise_all_block(html)
+    assert len(names) == elements, (
+        f"fetchAll destructuring has {len(names)} vars but Promise.all has {elements} "
+        f"array elements — missing/extra binding breaks the whole dashboard in-browser."
     )
 
 
@@ -217,6 +238,56 @@ def test_ghost_lab_uses_persistent_live_lane_from_settled_context(tmp_path, monk
     assert events[0]["ghost_lane_id"] == "sol_macro|5m|down|bearish|rejected"
 
 
+def test_ghost_lab_timestamp_parser_normalizes_to_utc():
+    from src.dashboard import server as dashboard_server
+
+    ts = dashboard_server._gl_parse_ts("2026-06-04T19:00:00-07:00")
+
+    assert ts is not None
+    assert ts.tzinfo is None
+    assert ts.isoformat() == "2026-06-05T02:00:00"
+
+
+def test_ghost_lab_deadzone_skip_preserves_midnight_utc_hour(tmp_path, monkeypatch):
+    from src.dashboard import server as dashboard_server
+
+    session_dir = tmp_path / "paper_trades" / "test_hour_zero"
+    session_dir.mkdir(parents=True)
+    base = {
+        "timestamp": "2026-06-05T00:15:00+00:00",
+        "market_id": "m1",
+        "strategy": "sol_macro",
+        "extra": {"lane_id": "sol_macro|15m|up", "hour_utc": 0},
+    }
+    records = [
+        {**base, "event": "DEAD_ZONE_SKIP", "reason": "dead_zone_disabled_hypothetical"},
+        {
+            **base,
+            "event": "DEAD_ZONE_SKIP_RESOLVED",
+            "extra": {
+                "lane_id": "sol_macro|15m|up",
+                "hour_utc": 0,
+                "would_have_won": True,
+                "hypothetical_payout": 7.5,
+            },
+        },
+    ]
+    (session_dir / "entries.jsonl").write_text(
+        "\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+
+    events = dashboard_server._gl_load_paper(
+        dashboard_server._gl_parse_ts("2026-06-04T00:00:00+00:00")
+    )
+
+    assert len(events) == 1
+    assert events[0]["hour_utc"] == 0
+    assert events[0]["win"] is True
+    assert events[0]["hypothetical_payout"] == 7.5
+
+
 def test_command_center_includes_ai_pipeline_digest_stub():
     html = INDEX.read_text(encoding="utf-8")
     assert 'id="ops-ai-pipeline"' in html
@@ -360,6 +431,129 @@ def test_action_breakdown_backend_includes_doge_and_bnb():
     assert '"bnb_macro"' in server
     assert "_ACTION_BREAKDOWN_STRATEGIES = _DASHBOARD_STRATEGY_NAMES" in server
     assert "_DASHBOARD_STRATEGY_NAMES = ACTIVE_STRATEGY_NAMES" in server
+
+
+def test_live_performance_backend_uses_live_strategy_set():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    start = server.find("async def get_live_performance(")
+    assert start != -1, "live performance handler missing"
+    end = server.find("# Build closed-trade list for equity curve", start)
+    assert end != -1, "live performance strategy filter block missing"
+    block = server[start:end]
+    assert "_DASHBOARD_STRATEGY_NAMES" in block
+    assert "active_perf_strategies" not in block
+
+
+def test_heavy_dashboard_endpoints_use_cached_journal_summary():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    for name in ("get_status", "get_live_performance", "get_strategy_metrics", "get_journal_summary"):
+        start = server.find(f"async def {name}(")
+        assert start != -1, f"{name} missing"
+        next_route = server.find("\n@app.", start + 1)
+        block = server[start: next_route if next_route != -1 else len(server)]
+        assert "_get_cached_journal_summary()" in block
+
+
+def test_manual_journal_refresh_clears_summary_cache():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    start = server.find("async def invalidate_journal_cache(")
+    assert start != -1, "journal cache invalidation route missing"
+    next_route = server.find("\n@app.", start + 1)
+    block = server[start: next_route if next_route != -1 else len(server)]
+    assert '_journal_summary_cache.update({"ts": 0.0, "summary": None})' in block
+
+
+@pytest.mark.asyncio
+async def test_live_performance_matches_journal_summary_pnl(monkeypatch):
+    from src.dashboard import server as dashboard_server
+
+    dashboard_server._journal_summary_cache.update({"ts": 0.0, "summary": None})
+    monkeypatch.setattr(
+        dashboard_server,
+        "_get_journal_summary",
+        lambda: {
+            "total_exits": 3,
+            "wins": 0,
+            "losses": 3,
+            "win_rate": 0.0,
+            "realized_pnl": -4.25,
+            "unrealized_pnl": 1.5,
+            "total_pnl": -2.75,
+            "strategy_stats": {
+                "bitcoin": {"trades": 3, "wins": 0, "pnl": -4.25, "win_rate": 0.0},
+                "unknown_legacy": {"trades": 99, "wins": 99, "pnl": 999, "win_rate": 1.0},
+            },
+        },
+    )
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: None)
+    monkeypatch.setattr(dashboard_server, "_kelly_state_payload", lambda: {})
+
+    payload = await dashboard_server.get_live_performance()
+
+    assert payload["total_trades"] == 3
+    assert payload["win_rate"] == 0.0
+    assert payload["realized_pnl"] == -4.25
+    assert payload["unrealized_pnl"] == 1.5
+    assert payload["total_pnl"] == -2.75
+    assert "bitcoin" in payload["by_strategy"]
+    assert "unknown_legacy" not in payload["by_strategy"]
+
+
+def test_live_performance_frontend_renders_zero_winrate_for_closed_trades():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "lpWin.textContent = totalTrades ? (winRate * 100).toFixed(0) + '%' : '-';" in html
+    assert "const winRate = _winRateFraction(d.win_rate || 0);" in html
+
+
+def test_command_center_sse_positions_do_not_override_empty_status_list():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "const cachedPositions = Array.isArray(lastStatusData && lastStatusData.positions)" in html
+    assert "positions: cachedPositions || undefined" in html
+    assert "openCount = lastStatusData.positions.length;" in html
+
+
+def test_exit_timing_hud_distinguishes_empty_window_from_no_data():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "No closed trades in the visible BTC chart window" in html
+    assert "No closed trade points yet" in html
+
+
+@pytest.mark.asyncio
+async def test_strategy_metrics_counts_disk_open_positions(monkeypatch):
+    from src.dashboard import server as dashboard_server
+
+    dashboard_server._journal_summary_cache.update({"ts": 0.0, "summary": None})
+    monkeypatch.setattr(dashboard_server, "bot_instance", None)
+    monkeypatch.setattr(
+        dashboard_server,
+        "_get_journal_summary",
+        lambda: {
+            "strategy_stats": {
+                "doge_macro": {
+                    "trades": 2,
+                    "pnl": 1.25,
+                    "win_rate": 0.5,
+                    "wins": 1,
+                    "avg_pnl": 0.625,
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_server,
+        "_load_disk_positions_for_status",
+        lambda: [
+            {"position_id": "p1", "strategy": "doge_macro"},
+            {"position_id": "p2", "strategy": "bnb_macro"},
+        ],
+    )
+
+    payload = await dashboard_server.get_strategy_metrics()
+
+    assert payload["doge_macro"]["trades"] == 2
+    assert payload["doge_macro"]["open_positions"] == 1
+    assert payload["bnb_macro"]["open_positions"] == 1
+    assert payload["bitcoin"]["open_positions"] == 0
 
 
 def test_reason_buckets_backend_includes_doge_and_bnb():
@@ -1124,3 +1318,97 @@ def test_dashboard_contains_lane_state_controls():
     assert "candidate just detected" in html
     assert "Recommend" in html
     assert "Reviewed" in html
+
+
+def test_performance_table_labels_session_metrics_not_backtest():
+    html = INDEX.read_text(encoding="utf-8")
+    table = html.split('id="strategy-table"', 1)[1].split("</table>", 1)[0]
+
+    assert "Session Trades" in table
+    assert "Session PnL" in table
+    assert "<th>Open</th>" in table
+    assert "Backtest Trades" not in table
+    assert "Backtest PnL" not in table
+    assert "${m.open_positions||0}" in html
+
+
+def test_dashboard_copy_does_not_instruct_operator_to_restart_bot():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "Restart the bot so /api/journal/action_breakdown is available" not in html
+    assert "Old code — restart bot to activate" not in html
+    assert "/api/journal/action_breakdown did not respond" in html
+    assert "No new-code marker in recent logs" in html
+
+
+def test_journal_archive_fetches_summary_and_trades_through_session_api():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary'" in html
+    assert "needJournal ? fetchT(_journalApiPath('/api/journal/trades'))" in html
+
+
+def test_fetchall_only_loads_action_breakdown_on_performance_tab():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "needPerformance ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null)" in html
+
+
+def test_fetchall_skips_retired_scan_endpoint():
+    html = INDEX.read_text(encoding="utf-8")
+    fetchall_start = html.find("async function fetchAll()")
+    assert fetchall_start != -1, "fetchAll missing"
+    fetchall_end = html.find("async function", fetchall_start + 1)
+    block = html[fetchall_start: fetchall_end if fetchall_end != -1 else len(html)]
+
+    assert "fetchT('/api/scans/latest')" not in block
+
+
+def test_fetchall_gates_alt_analysis_by_strategy_state():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "function _liveAssetPollEnabled(strategyKey)" in html
+    for strategy, endpoint in {
+        "sol_macro": "/api/sol/analysis",
+        "eth_macro": "/api/eth/analysis",
+        "hype_macro": "/api/hype/analysis",
+        "xrp_macro": "/api/xrp/analysis",
+        "doge_macro": "/api/doge/analysis",
+        "bnb_macro": "/api/bnb/analysis",
+    }.items():
+        assert f"needLive && _liveAssetPollEnabled('{strategy}') ? fetchT('{endpoint}', 14000)" in html
+
+
+def test_ghost_lab_initial_payload_is_bounded():
+    html = INDEX.read_text(encoding="utf-8")
+
+    assert "limit=5000" in html
+    assert "limit=20000" not in html
+
+
+def test_updown_breakdown_can_read_archive_session(monkeypatch, tmp_path):
+    pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+    from src.dashboard import server as dashboard_server
+
+    class FakeJournal:
+        def get_closed_trades(self):
+            return [
+                {
+                    "strategy": "sol_macro",
+                    "pnl": 4.25,
+                    "market_question": "Solana Up or Down - 15m",
+                    "closed_at": "2026-06-05T01:00:00",
+                }
+            ]
+
+    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(dashboard_server, "_get_journal", lambda: (_ for _ in ()).throw(AssertionError("used live journal")))
+    monkeypatch.setattr(dashboard_server, "_journal_for_query", lambda session_id: FakeJournal())
+
+    r = TestClient(dashboard_server.app).get("/api/journal/updown_breakdown?session_id=archive_session")
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["old_code"]["SOL_updown_15m"]["trades"] == 1
+    assert payload["old_code"]["SOL_updown_15m"]["pnl"] == 4.25
