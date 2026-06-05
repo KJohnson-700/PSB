@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-05 — Block 5m BUY_YES against bearish ETH 1h
+
+- **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), applied the same alt-native 1h alignment guard as SOL-family: ETH 5m `BUY_YES` is blocked when ETH's own 1h trend is `BEARISH`.
+- **Why:** The current regression was a 5m alt-long burst caused by fast 5m bullish flips fighting bearish/neutral 1h tape. ETH has a separate scan loop, so it needs the same guard explicitly.
+- **Hypothesis:** ETH 5m longs stop firing against bearish ETH 1h tape without using BTC context.
+- **Expected outcome:** Fewer ETH 5m `BUY_YES` stop-loss cascades during bearish ETH 1h tape.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed ETH 5m BUY_YES candidates after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Remove BTC leakage from ETH trade reasons and AI contexts
 
 - **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), removed BTC labels/values from ETH trade reason strings, scan diagnostics, and marginal AI decision context (`BTC_HTF`, BTC-follow prompt framing, BTC move/history blocks, BTC regime text).

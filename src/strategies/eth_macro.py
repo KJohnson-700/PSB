@@ -1179,6 +1179,34 @@ class ETHMacroStrategy(SolMacroStrategy):
                 )
 
             if self.enforce_alt_1h_alignment:
+                _alt_1h_block_reason = self._alt_1h_alignment_blocks_entry(
+                    action=action,
+                    window_size=_updown_tf,
+                    alt_1h_trend=mtt.h1_trend,
+                )
+                if _alt_1h_block_reason:
+                    _bump_skip(_alt_1h_block_reason)
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason=_alt_1h_block_reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_1h_trend": mtt.h1_trend,
+                            "window_size": _updown_tf,
+                            "side_source": side_source,
+                        },
+                    )
+                    logger.info(
+                        "  ETH skip %s on '%s' — ETH 1H=%s blocks 5m BUY_YES",
+                        action,
+                        market.question[:40],
+                        mtt.h1_trend,
+                    )
+                    continue
                 if action == "BUY_NO" and mtt.h1_trend == "BULLISH":
                     reason_parts.append("buy_no_against_alt_1h_bullish")
                     logger.info(

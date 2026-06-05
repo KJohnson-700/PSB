@@ -669,6 +669,66 @@ def test_flat_btc_gate_bypass_legacy_mode_still_requires_alignment():
     assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BEARISH") is False
 
 
+def test_alt_1h_bearish_blocks_5m_buy_yes():
+    strategy = SolMacroStrategy(_make_config(), MagicMock(), MagicMock())
+
+    assert (
+        strategy._alt_1h_alignment_blocks_entry(
+            action="BUY_YES",
+            window_size="5m",
+            alt_1h_trend="BEARISH",
+        )
+        == "alt_1h_bearish_blocks_5m_buy_yes"
+    )
+    assert (
+        strategy._alt_1h_alignment_blocks_entry(
+            action="BUY_YES",
+            window_size="15m",
+            alt_1h_trend="BEARISH",
+        )
+        is None
+    )
+    assert (
+        strategy._alt_1h_alignment_blocks_entry(
+            action="BUY_NO",
+            window_size="5m",
+            alt_1h_trend="BEARISH",
+        )
+        is None
+    )
+
+
+def test_buy_yes_floor_requires_bullish_alt_1h():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["5m_buy_yes_bullish_floor_bump"] = 0.19
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert (
+        strategy._alt_buy_yes_bullish_floor_bump(
+            window_size="5m",
+            action="BUY_YES",
+            htf_bias="BULLISH",
+        )
+        == 0.19
+    )
+    assert (
+        strategy._alt_buy_yes_bullish_floor_bump(
+            window_size="5m",
+            action="BUY_YES",
+            htf_bias="BEARISH",
+        )
+        == 0.0
+    )
+    assert (
+        strategy._alt_buy_yes_bullish_floor_bump(
+            window_size="5m",
+            action="BUY_YES",
+            htf_bias="NEUTRAL",
+        )
+        == 0.0
+    )
+
+
 def test_macro_oracle_feed_map_covers_all_crypto_lanes():
     assert ORACLE_FEEDS["SOLUSDT"][0] == "polygon"
     assert ORACLE_FEEDS["ETHUSDT"][0] == "polygon"

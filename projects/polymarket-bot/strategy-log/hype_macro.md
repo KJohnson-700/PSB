@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by HYPE, 5m `BUY_YES` is blocked when HYPE 1h is `BEARISH`, and the 5m bullish floor now requires the actual HYPE 1h trend to be `BULLISH`.
+- **Why:** Current session `test_20260605_130808` showed the 5m bullish floor inflating fast alt bounces during non-bullish 1h tape. The shared counterfactual would have filtered 12 of 15 alt 5m longs, covering `-26.4559` PnL.
+- **Hypothesis:** HYPE 5m longs stop firing on fast bounces unless the HYPE 1h tape confirms.
+- **Expected outcome:** Fewer HYPE 5m `BUY_YES` stop-loss cascades during bearish/neutral HYPE 1h tape.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected HYPE trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Remove BTC leakage from HYPE trade reasons and AI contexts
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by HYPE, removed BTC labels/values from trade reason strings, scan diagnostics, and AI decision context. Also removed the residual 5m confidence component based on BTC correlation.

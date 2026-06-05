@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-05 — Block 5m BUY_YES against bearish alt 1h and require true 1h bull for floor
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added an alt-native guard: 5m `BUY_YES` is blocked when the alt's own 1h trend is `BEARISH`. Also changed `*_buy_yes_bullish_floor_bump` to key off the actual alt 1h trend, not the derived `PRIMARY_ALT_HTF`.
+- **Why:** Current session `test_20260605_130808` regressed via a correlated 5m alt-long burst. Alt 5m `BUY_YES` entries with `5m_buy_yes_floor` produced `-34.7649`; the new guard/floor rule would have filtered 12 of 15 alt 5m longs, covering `-26.4559` of that loss. Worst cell: `ALT_1H=BEARISH` 5m longs, 10 trades, `-19.6471`.
+- **Hypothesis:** Fast 5m bounce entries stop firing when the alt 1h tape is still bearish, and weak neutral/bearish 1h bounces no longer get inflated by the bullish floor.
+- **Expected outcome:** Fewer clustered 5m `BUY_YES` entries across SOL-family alts during bearish/neutral 1h tape; reduced rapid stop-loss cascades without using BTC as a gate.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Remove BTC leakage from SOL-family trade reasons and AI contexts
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), removed BTC labels/values from alt trade reason strings, scan diagnostics, and AI decision context (`BTC_HTF`, `btc=$`, `corr=`, `diag_btc*`, `btc_spike_boost`, `lag_boost`). Also removed the residual 5m confidence component based on BTC correlation; confidence is now alt-native MACD/RSI/timing only.

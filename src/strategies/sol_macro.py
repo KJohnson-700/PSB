@@ -1784,6 +1784,23 @@ class SolMacroStrategy:
             return True
         return False
 
+    def _alt_1h_alignment_blocks_entry(
+        self,
+        *,
+        action: str,
+        window_size: str,
+        alt_1h_trend: Optional[str],
+    ) -> Optional[str]:
+        """Block fast entries that fight the alt's own 1h direction."""
+        if not self.enforce_alt_1h_alignment:
+            return None
+        if str(window_size or "").lower() != "5m":
+            return None
+        alt_h1 = str(alt_1h_trend or "NEUTRAL").upper()
+        if action == "BUY_YES" and alt_h1 == "BEARISH":
+            return "alt_1h_bearish_blocks_5m_buy_yes"
+        return None
+
     def _resolve_rsi_gate(self, action: str, rsi: float) -> tuple[bool, float]:
         """Return (hard_block, est_prob_delta) for RSI-based suppression policy."""
         buy_ceiling = self.config.get("rsi_buy_block_above")
@@ -3180,13 +3197,39 @@ class SolMacroStrategy:
                         else max(_abs_btc_move_5m, _abs_btc_move_15m)
                     )
                     if _btc_move_for_gate < _btc_min_move_pct:
-                        reason_parts.append(
-                            f"diag_flat_btc({_btc_move_for_gate:.3f}%<{_btc_min_move_pct:.3f}%)"
-                        )
+                        pass
 
-                # Alt 1H context is diagnostic-only here. Keep logging the disagreement so
-                # scans remain explainable, but do not block either side on this signal.
+                # Alt 1H alignment is a trade input; BTC context is not.
                 _h1_trend = mtt.h1_trend  # "BULLISH", "BEARISH", or "NEUTRAL"
+                _alt_1h_block_reason = self._alt_1h_alignment_blocks_entry(
+                    action=action,
+                    window_size=_updown_tf if is_updown else "15m",
+                    alt_1h_trend=_h1_trend,
+                )
+                if _alt_1h_block_reason:
+                    _bump_skip(_alt_1h_block_reason)
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason=_alt_1h_block_reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_1h_trend": _h1_trend,
+                            "window_size": _updown_tf if is_updown else "15m",
+                            "side_source": side_source,
+                        },
+                    )
+                    logger.info(
+                        "  %s skip %s on '%s' — alt 1H=%s blocks 5m BUY_YES",
+                        self._signal_strategy_name,
+                        action,
+                        market.question[:40],
+                        _h1_trend,
+                    )
+                    continue
                 if self.enforce_alt_1h_alignment:
                     if action == "BUY_NO" and _h1_trend == "BULLISH":
                         reason_parts.append("buy_no_against_alt_1h_bullish")
@@ -3571,7 +3614,7 @@ class SolMacroStrategy:
                             )
 
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
-                        window_size="5m", action=action, htf_bias=primary_htf_bias,
+                        window_size="5m", action=action, htf_bias=mtt.h1_trend,
                     )
                     if _byn_floor_5m > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
@@ -3796,7 +3839,7 @@ class SolMacroStrategy:
                     )
 
                     _byn_floor = self._alt_buy_yes_bullish_floor_bump(
-                        window_size=window_label, action=action, htf_bias=primary_htf_bias,
+                        window_size=window_label, action=action, htf_bias=mtt.h1_trend,
                     )
                     if _byn_floor > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor)
