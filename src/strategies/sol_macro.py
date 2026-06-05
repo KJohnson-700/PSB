@@ -1139,6 +1139,8 @@ class SolMacroStrategy:
         # OFF); these candidates are also ghost-logged so the block can be
         # validated against settled outcomes before anyone re-enables it.
         if (
+            self._btc_trade_inputs_enabled()
+            and
             window_size == "15m"
             and source.endswith("15m_native")
             and regime == "BULL"
@@ -2054,6 +2056,8 @@ class SolMacroStrategy:
         self, est_prob_up: float, primary_htf_bias: str, corr: BTCSOLCorrelation
     ) -> float:
         """When correlation is degraded, avoid defaulting bearish setups to near-coinflip."""
+        if not self._btc_trade_inputs_enabled():
+            return est_prob_up
         if not getattr(corr, "degraded", False):
             return est_prob_up
         if primary_htf_bias == "BEARISH":
@@ -2220,9 +2224,15 @@ class SolMacroStrategy:
     def _low_corr_blocks_entry(self, corr: BTCSOLCorrelation) -> bool:
         """Optional hard gate for assets whose BTC-lag thesis breaks when decoupled."""
         return (
+            self._btc_trade_inputs_enabled()
+            and
             self.low_corr_suppresses_entries
             and corr.correlation_1h < self.low_corr_threshold_1h
         )
+
+    def _btc_trade_inputs_enabled(self) -> bool:
+        """Whether BTC-derived context is allowed to change trade admission/edge/size."""
+        return False
 
     # ──────────────────────────────────────────────────────────────
     # LAYER 2: 15m Trend Confirmation
@@ -3151,13 +3161,18 @@ class SolMacroStrategy:
 
                 if getattr(corr, "degraded", False):
                     if self.skip_on_degraded_correlation:
-                        _bump_skip("degraded_correlation")
-                        logger.info(
-                            f"  {_brand} skip '{market.question[:40]}' — correlation degraded "
-                            f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
-                        )
-                        continue
-                    reason_parts.append("corr_degraded")
+                        if self._btc_trade_inputs_enabled():
+                            _bump_skip("degraded_correlation")
+                            logger.info(
+                                f"  {_brand} skip '{market.question[:40]}' — correlation degraded "
+                                f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
+                            )
+                            continue
+                        reason_parts.append("diag_corr_degraded")
+                    elif self._btc_trade_inputs_enabled():
+                        reason_parts.append("corr_degraded")
+                    else:
+                        reason_parts.append("diag_corr_degraded")
 
                 # 2026-05-22: require_btc_volatility_gate previously skipped alt trades
                 # when BTC was below a volatility floor (BTC deciding alt admission).
@@ -3497,10 +3512,8 @@ class SolMacroStrategy:
                     elif sol.rsi_14 < 25:
                         est_prob_up += 0.02
 
-                    # Correlation confidence — log for diagnostics.
-                    # Light damping on low corr: primary edge is macro+LTF, not correlation.
-                    # Previous: 5m used 0.55 cutoff / 0.5 damping (halved edge); 15m used 0.50.
-                    # Unified: both use 0.50 cutoff, 0.7 damping (30% reduction, not 50%).
+                    # Correlation confidence — log for diagnostics. For SOL, BTC
+                    # correlation must not alter admission or probability.
                     if corr.correlation_1h > 0.85:
                         reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
                     elif self._low_corr_blocks_entry(corr):
@@ -3526,9 +3539,11 @@ class SolMacroStrategy:
                             f"{self.low_corr_threshold_1h:.2f}"
                         )
                         continue
-                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                    elif self._btc_trade_inputs_enabled() and corr.correlation_1h < self.low_corr_threshold_1h:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr_5m({corr.correlation_1h:.2f})")
+                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                        reason_parts.append(f"diag_low_corr_5m({corr.correlation_1h:.2f})")
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
@@ -3594,7 +3609,11 @@ class SolMacroStrategy:
                         (action == "BUY_YES" and sol.rsi_14 < 40) or
                         (action == "BUY_NO" and sol.rsi_14 > 60)
                     ) else 0.0
-                    _corr_conf_5m = max(0.0, (corr.correlation_1h - 0.50) * 0.10)
+                    _corr_conf_5m = (
+                        max(0.0, (corr.correlation_1h - 0.50) * 0.10)
+                        if self._btc_trade_inputs_enabled()
+                        else 0.0
+                    )
                     confidence = max(0.50, min(0.85,
                         0.50 + abs(m5_adj) * 2.0 + _rsi_conf_5m + _corr_conf_5m + abs(timing_bonus) * 0.3
                     ))
@@ -3628,9 +3647,6 @@ class SolMacroStrategy:
                     primary_bias_weight = 0.09 if is_hourly else 0.07
                     h1_dampen = 0.07 if is_hourly else 0.05
                     ltf_weight = 0.12 if is_hourly else 0.22
-                    lag_boost_min = 0.015 if is_hourly else 0.02
-                    lag_boost_max = 0.03 if is_hourly else 0.04
-                    spike_boost = 0.02 if is_hourly else 0.03
                     timing_weight = 0.50 if is_hourly else 1.00
                     rsi_extreme = 0.02 if is_hourly else 0.03
 
@@ -3739,17 +3755,25 @@ class SolMacroStrategy:
                             f"hourly_buy_yes_native_bonus={hourly_buy_yes_bonus:+.3f}"
                         )
 
-                    # BTC catalyst boosts — lag/spike signal quality priced into est_prob
-                    if corr.lag_opportunity and corr.opportunity_direction == allowed_side:
-                        _lag_boost = min(
-                            lag_boost_max,
-                            max(lag_boost_min, abs(corr.opportunity_magnitude) * 0.015),
+                    # BTC catalyst context is diagnostic-only for SOL.
+                    if self._btc_trade_inputs_enabled():
+                        lag_boost_min = 0.015 if is_hourly else 0.02
+                        lag_boost_max = 0.03 if is_hourly else 0.04
+                        spike_boost = 0.02 if is_hourly else 0.03
+                        if corr.lag_opportunity and corr.opportunity_direction == allowed_side:
+                            _lag_boost = min(
+                                lag_boost_max,
+                                max(lag_boost_min, abs(corr.opportunity_magnitude) * 0.015),
+                            )
+                            est_prob_up += _lag_boost if allowed_side == "LONG" else -_lag_boost
+                            reason_parts.append(f"lag_boost={_lag_boost:+.3f}")
+                        elif corr.btc_spike_detected:
+                            est_prob_up += spike_boost if allowed_side == "LONG" else -spike_boost
+                            reason_parts.append("btc_spike_boost")
+                    elif corr.lag_opportunity or corr.btc_spike_detected:
+                        reason_parts.append(
+                            f"diag_btc_context(spike={corr.btc_spike_detected} lag={corr.lag_opportunity})"
                         )
-                        est_prob_up += _lag_boost if allowed_side == "LONG" else -_lag_boost
-                        reason_parts.append(f"lag_boost={_lag_boost:+.3f}")
-                    elif corr.btc_spike_detected:
-                        est_prob_up += spike_boost if allowed_side == "LONG" else -spike_boost
-                        reason_parts.append("btc_spike_boost")
 
                     # Timing / 5m momentum
                     if allowed_side == "LONG":
@@ -3763,8 +3787,7 @@ class SolMacroStrategy:
                     elif sol.rsi_14 < 25:
                         est_prob_up += rsi_extreme
 
-                    # Correlation confidence — unified with 5m path.
-                    # Light damping: primary edge is macro+LTF, not correlation.
+                    # Correlation confidence — diagnostic-only for SOL.
                     if corr.correlation_1h > 0.85:
                         reason_parts.append(f"high_corr({corr.correlation_1h:.2f})")
                     elif self._low_corr_blocks_entry(corr):
@@ -3775,19 +3798,25 @@ class SolMacroStrategy:
                             f"{self.low_corr_threshold_1h:.2f}"
                         )
                         continue
-                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                    elif self._btc_trade_inputs_enabled() and corr.correlation_1h < self.low_corr_threshold_1h:
                         est_prob_up = 0.50 + (est_prob_up - 0.50) * self.low_corr_damping
                         reason_parts.append(f"low_corr({corr.correlation_1h:.2f})")
+                    elif corr.correlation_1h < self.low_corr_threshold_1h:
+                        reason_parts.append(f"diag_low_corr({corr.correlation_1h:.2f})")
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
 
-                    # Fresh-opposing cross override — same-TF MACD (15m or 1h).
+                    # Fresh-opposing cross override — own-TF (15m/1h) + faster-TF
+                    # leads (1h reads 15m, 15m reads 5m) so the slow windows aren't
+                    # short-jammed when the fast MACD has already turned.
                     est_prob_up, action, allowed_side, direction, side_source = apply_fresh_cross_override(
                         est_prob_up=est_prob_up, action=action, allowed_side=allowed_side,
                         direction=direction, side_source=side_source, reason_parts=reason_parts,
                         crossover=(ta.sol.macd_1h if is_hourly else ta.sol.macd_15m).crossover,
                         tf_label=window_label,
+                        faster_crossover=(ta.sol.macd_15m if is_hourly else ta.sol.macd_5m).crossover,
+                        faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
                     )
@@ -4345,7 +4374,11 @@ class SolMacroStrategy:
                 effective_min_edge = max(
                     effective_min_edge, self.min_edge_15m_when_ltf_unconfirmed
                 )
-            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+            if (
+                self._btc_trade_inputs_enabled()
+                and self._btc_1h_regime_gates.get("enabled", False)
+                and btc_ta
+            ):
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
             # Far from expiry → more time-stop risk; require extra min_edge (SOL paper May 2026).
@@ -4365,7 +4398,7 @@ class SolMacroStrategy:
                     )
                     effective_min_edge += _edge_addon
 
-                if self.block_counter_macro_leg_updown:
+                if self._btc_trade_inputs_enabled() and self.block_counter_macro_leg_updown:
                     _lm = self._signal_lag_magnitude(corr)
                     if _lm is not None:
                         _long_floor = float(
@@ -4887,6 +4920,8 @@ class SolMacroStrategy:
                 _is_centered = abs(yes_price - 0.50) <= self.center_price_band
                 if _is_centered:
                     if (
+                        self._btc_trade_inputs_enabled()
+                        and
                         self.center_price_requires_catalyst
                         and not corr.lag_opportunity
                         and not corr.btc_spike_detected
@@ -4982,9 +5017,17 @@ class SolMacroStrategy:
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, sizing_edge
             )
-            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+            if (
+                self._btc_trade_inputs_enabled()
+                and self._btc_1h_regime_gates.get("enabled", False)
+                and btc_ta
+            ):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
-            if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
+            if (
+                self._btc_trade_inputs_enabled()
+                and getattr(corr, "degraded", False)
+                and not self.skip_on_degraded_correlation
+            ):
                 raw_size *= self.degraded_correlation_size_multiplier
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier

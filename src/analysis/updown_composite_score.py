@@ -198,13 +198,15 @@ def apply_fresh_cross_override(
     reason_parts: list,
     crossover: Optional[str],
     tf_label: str,
+    faster_crossover: Optional[str] = None,
+    faster_tf_label: Optional[str] = None,
     strategy_name: str = "",
     primary_htf_bias: str = "",
     logger=None,
     enabled: bool = True,
 ):
-    """Flip to the momentum side when a FRESH MACD cross on the market's OWN
-    timeframe contradicts the lagging-bias-chosen side.
+    """Flip to the momentum side when a FRESH MACD cross contradicts the
+    lagging-bias-chosen side.
 
     Background (2026-06-04): direction is selected from a lagging trend label and
     ``est_prob_up`` is pinned to it, so in a reversal the bot keeps choosing the
@@ -215,19 +217,38 @@ def apply_fresh_cross_override(
     Only fires on a discrete cross; downstream edge/price-band/oracle gates still
     apply. Pure function — returns the updated tuple, appends to ``reason_parts``.
 
-    Applied UNIFORMLY across every asset (sol-family, eth, btc) and every market
-    timeframe (5m/15m/1h), each reading its OWN-timeframe MACD crossover.
+    FASTER-TF-LEADS (2026-06-05): a market checks its OWN-timeframe cross first,
+    then optionally a NEXT-FASTER timeframe's cross (``faster_crossover``) as a
+    leading trigger. The 5m fast MACD catches reversals the slow 15m/1h MACD lags
+    by minutes, so 15m markets read 5m and 1h markets read 15m — otherwise the
+    slow windows stay short-jammed in a rising tape (1h produced 0 flips, ~all
+    candidates SHORT). 5m markets pass no faster TF.
     """
-    if not enabled or not crossover:
+    if not enabled:
         return est_prob_up, action, allowed_side, direction, side_source
+
+    def _src(want: str) -> Optional[str]:
+        # own-TF preferred; fall back to the faster leading TF
+        if crossover == want:
+            return tf_label
+        if faster_crossover == want:
+            return faster_tf_label or tf_label
+        return None
+
     flipped = None
-    if allowed_side == "SHORT" and crossover == "BULLISH_CROSS":
-        est_prob_up = max(est_prob_up, 0.55)
-        flipped = "BUY_YES"
-    elif allowed_side == "LONG" and crossover == "BEARISH_CROSS":
-        est_prob_up = min(est_prob_up, 0.45)
-        flipped = "BUY_NO"
+    src_tf = None
+    if allowed_side == "SHORT":
+        src_tf = _src("BULLISH_CROSS")
+        if src_tf is not None:
+            est_prob_up = max(est_prob_up, 0.55)
+            flipped = "BUY_YES"
+    elif allowed_side == "LONG":
+        src_tf = _src("BEARISH_CROSS")
+        if src_tf is not None:
+            est_prob_up = min(est_prob_up, 0.45)
+            flipped = "BUY_NO"
     if flipped is not None and flipped != action:
+        tf_label = src_tf or tf_label
         action = flipped
         direction = "UP" if action == "BUY_YES" else "DOWN"
         allowed_side = "LONG" if action == "BUY_YES" else "SHORT"
@@ -235,8 +256,8 @@ def apply_fresh_cross_override(
         reason_parts.append(f"fresh_{tf_label}_cross_flip->{action}")
         if logger is not None:
             logger.info(
-                "  %s FRESH %s CROSS FLIP -> %s (%s vs lagging bias %s)",
-                strategy_name, tf_label, action, crossover, primary_htf_bias,
+                "  %s FRESH %s CROSS FLIP -> %s (vs lagging bias %s)",
+                strategy_name, tf_label, action, primary_htf_bias,
             )
     return est_prob_up, action, allowed_side, direction, side_source
 

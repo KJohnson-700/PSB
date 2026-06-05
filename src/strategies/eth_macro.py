@@ -299,6 +299,8 @@ class ETHMacroStrategy(SolMacroStrategy):
         # Opt-in only via `eth_5m_bull_regime_short_block` (default OFF). See the
         # parallel note in sol_macro._sol_signal_guard_reason.
         if (
+            self._btc_trade_inputs_enabled()
+            and
             window_size == "5m"
             and decision.action == "BUY_NO"
             and regime == "BULL"
@@ -309,6 +311,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 return "eth_5m_bull_regime_expensive_short"
 
         if (
+            self._btc_trade_inputs_enabled()
+            and
             window_size == "15m"
             and decision.action == "BUY_YES"
             and alt_bias == "NEUTRAL"
@@ -1101,12 +1105,13 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
 
             if getattr(corr, "degraded", False) and self.skip_on_degraded_correlation:
-                _bump_skip("degraded_correlation")
-                logger.info(
-                    f"  ETH skip '{market.question[:40]}' — correlation degraded "
-                    f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
-                )
-                continue
+                if self._btc_trade_inputs_enabled():
+                    _bump_skip("degraded_correlation")
+                    logger.info(
+                        f"  ETH skip '{market.question[:40]}' — correlation degraded "
+                        f"({', '.join(getattr(corr, 'degraded_reasons', [])) or 'unknown'})"
+                    )
+                    continue
 
             # 2026-05-22: btc_min_move_dollars gate REMOVED. Previously skipped ETH
             # entries when BTC hadn't moved enough in dollars (BTC deciding ETH
@@ -1297,7 +1302,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 ):
                     _impulse_gate_ok = True
                     btc_reasons.append("bypass_5m_stf_macro_agrees")
-                if self.btc_follow_5m_requires_impulse and not _impulse_gate_ok:
+                if (
+                    self._btc_trade_inputs_enabled()
+                    and self.btc_follow_5m_requires_impulse
+                    and not _impulse_gate_ok
+                ):
                     _bump_skip("btc_5m_no_impulse")
                     log_rejected_candidate(
                         strategy=self._signal_strategy_name, window="5m",
@@ -1357,17 +1366,34 @@ class ETHMacroStrategy(SolMacroStrategy):
                     elif market_allowed_side == "SHORT" and mtt.h1_trend == "BULLISH":
                         est_prob_up += 0.04
                         reason_parts.append("h1_dampen_short_5m")
-                est_prob_up += btc_impulse if market_allowed_side == "LONG" else -btc_impulse
+                if self._btc_trade_inputs_enabled():
+                    est_prob_up += btc_impulse if market_allowed_side == "LONG" else -btc_impulse
                 est_prob_up += eth_5m_adj if market_allowed_side == "LONG" else -eth_5m_adj
                 if eth.rsi_14 > 75:
                     est_prob_up -= 0.02
                 elif eth.rsi_14 < 25:
                     est_prob_up += 0.02
-                confidence = max(0.55, min(0.85, 0.50 + abs(btc_impulse) * 1.8 + abs(eth_5m_adj) * 2.0))
+                confidence = max(
+                    0.55,
+                    min(
+                        0.85,
+                        0.50
+                        + (
+                            abs(btc_impulse) * 1.8
+                            if self._btc_trade_inputs_enabled()
+                            else 0.0
+                        )
+                        + abs(eth_5m_adj) * 2.0,
+                    ),
+                )
                 reason_parts.extend(["UPDOWN_5m", *btc_reasons, *eth_reasons])
             else:
                 if is_1h:
-                    if btc_full_ok and not self._btc_follow_1h_ok(btc_ta, market_allowed_side):
+                    if (
+                        self._btc_trade_inputs_enabled()
+                        and btc_full_ok
+                        and not self._btc_follow_1h_ok(btc_ta, market_allowed_side)
+                    ):
                         if market_allowed_side == "SHORT":
                             est_prob_up += float(
                                 self.config.get("btc_1h_not_following_short_penalty", 0.04)
@@ -1461,8 +1487,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                         ]
                     )
                 else:
-                    if btc_full_ok and not self._btc_follow_15m_impulse_ok(
+                    if (
+                        self._btc_trade_inputs_enabled()
+                        and btc_full_ok
+                        and not self._btc_follow_15m_impulse_ok(
                         btc_ta, market_allowed_side
+                        )
                     ):
                         if self._eth_stf_bypass_when_macro_agrees(btc_htf_bias, market_allowed_side):
                             pass
@@ -1580,12 +1610,21 @@ class ETHMacroStrategy(SolMacroStrategy):
                 else eth.macd_5m if _updown_tf == "5m"
                 else eth.macd_15m
             )
+            # faster-TF leads for the slow windows: 1h reads 15m, 15m reads 5m.
+            _eth_faster_macd = (
+                eth.macd_15m if _updown_tf == "1h"
+                else eth.macd_5m if _updown_tf == "15m"
+                else None
+            )
+            _eth_faster_tf = "15m" if _updown_tf == "1h" else "5m" if _updown_tf == "15m" else None
             _eth_pre_action = "BUY_YES" if market_allowed_side == "LONG" else "BUY_NO"
             est_prob_up, _eth_pre_action, market_allowed_side, _, side_source = apply_fresh_cross_override(
                 est_prob_up=est_prob_up, action=_eth_pre_action, allowed_side=market_allowed_side,
                 direction=("UP" if market_allowed_side == "LONG" else "DOWN"),
                 side_source=side_source, reason_parts=reason_parts,
                 crossover=_eth_xover_macd.crossover, tf_label=_updown_tf,
+                faster_crossover=(_eth_faster_macd.crossover if _eth_faster_macd is not None else None),
+                faster_tf_label=_eth_faster_tf,
                 strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                 logger=logger, enabled=self.config.get("fresh_cross_override", True),
             )
@@ -1715,7 +1754,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                     },
                 )
                 continue
-            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+            if (
+                self._btc_trade_inputs_enabled()
+                and self._btc_1h_regime_gates.get("enabled", False)
+                and btc_ta
+            ):
                 effective_min_edge *= self._regime_min_edge_mult(btc_1h_regime)
 
             # Far from expiry → more time-stop risk; require extra min_edge.
@@ -1733,7 +1776,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 effective_min_edge += _edge_addon
 
             # Block updown when journaled macro_leg disagrees with side (catch-up thesis off).
-            if self.block_counter_macro_leg_updown:
+            if self._btc_trade_inputs_enabled() and self.block_counter_macro_leg_updown:
                 _lm = self._signal_lag_magnitude(corr)
                 _blocked, _macro_skip, _macro_threshold = self._macro_leg_blocks_updown_side(
                     market_allowed_side, _lm
@@ -2343,9 +2386,17 @@ class ETHMacroStrategy(SolMacroStrategy):
             raw_size = self.kelly_sizer.size_from_edge(
                 self._signal_strategy_name, bankroll, sizing_edge
             )
-            if self._btc_1h_regime_gates.get("enabled", False) and btc_ta:
+            if (
+                self._btc_trade_inputs_enabled()
+                and self._btc_1h_regime_gates.get("enabled", False)
+                and btc_ta
+            ):
                 raw_size *= self._regime_size_mult(btc_1h_regime)
-            if getattr(corr, "degraded", False) and not self.skip_on_degraded_correlation:
+            if (
+                self._btc_trade_inputs_enabled()
+                and getattr(corr, "degraded", False)
+                and not self.skip_on_degraded_correlation
+            ):
                 raw_size *= self.degraded_correlation_size_multiplier
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier

@@ -2267,11 +2267,19 @@ class BitcoinStrategy:
                     # Fresh-opposing cross override — same-TF MACD (5m/15m/1h). BTC
                     # derives its action from allowed_side in the resolver below, so
                     # flip the side here and let the resolver re-derive the action.
+                    # BTC's 5m MACD lives under ta.tf_5m.macd (no top-level ta.macd_5m).
                     _btc_xover_macd = (
                         ta.macd_1h if _updown_tf == "1h"
-                        else ta.macd_5m if _updown_tf == "5m"
+                        else ta.tf_5m.macd if _updown_tf == "5m"
                         else ta.macd_15m
                     )
+                    # faster-TF leads for the slow windows: 1h reads 15m, 15m reads 5m.
+                    _btc_faster_macd = (
+                        ta.macd_15m if _updown_tf == "1h"
+                        else ta.tf_5m.macd if _updown_tf == "15m"
+                        else None
+                    )
+                    _btc_faster_tf = "15m" if _updown_tf == "1h" else "5m" if _updown_tf == "15m" else None
                     _btc_pre_action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
                     # side_source is produced by the resolver below; the flip is
                     # recorded in reason_parts instead (pass None here).
@@ -2280,6 +2288,8 @@ class BitcoinStrategy:
                         direction=("UP" if allowed_side == "LONG" else "DOWN"),
                         side_source=None, reason_parts=reason_parts,
                         crossover=_btc_xover_macd.crossover, tf_label=_updown_tf,
+                        faster_crossover=(_btc_faster_macd.crossover if _btc_faster_macd is not None else None),
+                        faster_tf_label=_btc_faster_tf,
                         strategy_name=self._signal_strategy_name, primary_htf_bias=htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
                     )
