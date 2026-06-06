@@ -57,6 +57,8 @@ class BNBMacroStrategy(SolMacroStrategy):
             return None
         if signal.window_size != "5m":
             return None
+        if str(signal.btc_1h_regime or "").upper() != "BULL":
+            return None
 
         side_source = str(signal.side_source or "")
         alt_h1 = str(signal.alt_htf_bias or "").upper()
@@ -66,11 +68,11 @@ class BNBMacroStrategy(SolMacroStrategy):
             return "bnb_5m_neutral_fallback_short_disabled"
 
         if side_source == "bnb_5m_native":
-            max_yes = float(self.config.get("bnb_5m_native_buy_no_max_yes_price", 0.60))
+            max_yes = float(self.config.get("bnb_5m_native_buy_no_max_yes_price_bull_1h", 0.60))
             if alt_h1 != "BEARISH":
                 return "bnb_5m_native_short_requires_bearish_alt_1h"
             if yes_price >= max_yes:
-                return "bnb_5m_native_expensive_short"
+                return "bnb_5m_native_expensive_short_bull_1h"
 
         return None
 

@@ -17,15 +17,6 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
-### 2026-06-06 — Block conflicted BTC BUY_YES
-
-- **What changed:** Added a BTC guard in [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py) that skips `BUY_YES` when `htf_side=LONG`, `quant_side=SHORT`, and `momentum_side=SHORT`, controlled by `bitcoin.block_buy_yes_when_quant_and_momentum_short: true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Kept `exposure.moderate_min_trade_usd: 15.0` because that sizing floor was already active in target session `test_20260604_234611`.
-- **Why:** Current session `test_20260606_013635` BTC dropped to `+$15.56` / `43.4% WR` vs target session `test_20260604_234611` BTC `+$187.39` / `70.2% WR`. The current BTC loss cluster included conflicted long entries where HTF selected long while both quant and momentum were short; that slice was `n=8`, `WR=12.5%`, `pnl=-$25.14` in the current run.
-- **Hypothesis:** BTC stops taking the specific long setup that failed in the current run while preserving clean bullish longs and bearish BUY_NO lanes.
-- **Expected outcome:** New BTC rejects include `buy_yes_quant_and_momentum_short`; BTC 15m drift BUY_YES losses should fall without suppressing all BTC BUY_YES.
-- **Actual outcome:** `pending`
-- **Status:** `pending`
-
 ### 2026-06-01 — Decisive AI prompt (kill the HOLD default)
 
 - **What changed:** Rewrote the shared decision/analysis system prompt ([`ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) `SYSTEM_PROMPT`): removed the "be conservative — markets overestimate" inaction bias, reframed HOLD as requiring a *specific, evidence-based* reason (never a default for uncertainty), told it to commit to a direction on any real lean, and clarified `confidence_score` = strength of the directional evidence. Bumped `prompt_version` → `lane-feedback-v2-decisive` so the settler can split pre/post verdicts.

@@ -12,7 +12,7 @@ def _make_config():
         "strategies": {
             "bnb_macro": {
                 "enabled": True,
-                "bnb_5m_native_buy_no_max_yes_price": 0.60,
+                "bnb_5m_native_buy_no_max_yes_price_bull_1h": 0.60,
             }
         },
         "exposure": {
@@ -79,22 +79,6 @@ def test_bnb_local_guard_blocks_5m_native_short_when_alt_h1_not_bearish():
         _signal(
             market_id="bnb-guard-2",
             side_source="bnb_5m_native",
-            alt_htf_bias="NEUTRAL",
-            yes_price=0.555,
-        )
-    )
-
-    assert reason == "bnb_5m_native_short_requires_bearish_alt_1h"
-
-
-def test_bnb_local_guard_does_not_depend_on_btc_1h_regime():
-    strategy = BNBMacroStrategy(_make_config(), MagicMock(), MagicMock())
-
-    reason = strategy._bnb_signal_guard_reason(
-        _signal(
-            market_id="bnb-btc-free",
-            side_source="bnb_5m_native",
-            btc_1h_regime="BEAR",
             alt_htf_bias="NEUTRAL",
             yes_price=0.555,
         )

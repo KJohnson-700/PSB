@@ -45,21 +45,9 @@ class HYPEMacroStrategy(SolMacroStrategy):
     """HYPE macro strategy with HYPE-first direction and Hyperliquid data."""
 
     def _hype_signal_guard_reason(self, signal: SolMacroSignal) -> str | None:
-        side_source = str(signal.side_source or "")
-        if (
-            bool(self.config.get("block_native_buy_yes_when_alt_1h_neutral", True))
-            and signal.action == "BUY_YES"
-            and str(signal.window_size or "").lower() in {"5m", "15m"}
-            and side_source.startswith("hype_")
-            and side_source.endswith("_native")
-            and str(signal.alt_htf_bias or "").upper() == "NEUTRAL"
-            and float(signal.convergence_score or 0.0)
-            < float(self.config.get("native_buy_yes_neutral_1h_min_convergence", 0.55))
-        ):
-            return "hype_native_buy_yes_alt_1h_neutral_weak_convergence"
-
         if signal.action != "BUY_NO":
             return None
+        side_source = str(signal.side_source or "")
         if "neutral_fallback" not in side_source:
             return None
 

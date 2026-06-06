@@ -13,24 +13,6 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
-### 2026-06-06 — Close the bias-aligned-bypass hole: counter-momentum veto for bias-aligned longs
-
-- **What changed:** New narrow veto in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) (helper `_bias_aligned_counter_momentum`, applied after the momentum-confirm gate) and ported to [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py). A **bullish-bias-aligned long** is now skipped (`buy_yes_bias_aligned_counter_momentum`) when its OWN timeframe momentum is clearly bearish — fresh `BEARISH_CROSS` or histogram `<0 and not rising`. Scoped to **15m/1h** (config `bias_aligned_counter_veto_windows`, default `["15m","1h"]`); opt-out `block_bias_aligned_long_on_counter_momentum`. Default ON. Affects all SOL-family alts (sol/xrp/hype/bnb/doge) + ETH.
-- **Why:** The momentum-confirm gate deliberately *bypasses* bias-aligned trades ([sol_macro.py:2952](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py)) because blocking on mere non-confirmation inverts (ghost 5/22→5/27: neutral-momentum bias-aligned longs win 48–55%). But that bypass let BNB 15m BUY_YES fire confident longs into *clearly falling* momentum — 0% WR / −$12.60. The floor-bump fix removes the manufactured edge; this closes the remaining hole on the signal side. "Trade the turn not the lag," finishing the [e8da113](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) job for the bias-aligned case.
-- **Hypothesis:** Bias-aligned 15m/1h longs into clear counter-momentum are blocked; neutral/recovering-momentum longs (the ghost-validated 48–55% WR winners) and all 5m longs (where the winning lanes live — bnb/hype/xrp 5m BUY_YES) are untouched. Larger-TF fresh bullish cross rescues a genuine turn.
-- **Expected outcome:** Fewer inverted bias-aligned longs on 15m/1h; `buy_yes_bias_aligned_counter_momentum` rejects appear in the reject log; 15m long avg/trade improves without 5m winner regression.
-- **Actual outcome:** `pending` (forward-test; needs restart; watch reject reason + 15m long WR). Unit test `test_bias_aligned_counter_momentum_vetoes_only_clear_counter` covers the boundary cases; 309 strategy tests pass.
-- **Status:** `pending`
-
-### 2026-06-06 — Narrow session trial: reopen SOL 5m native BUY_NO only
-
-- **What changed:** Set `sol_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). No shared 1h alignment rewrite or BTC composite rewrite was reintroduced.
-- **Why:** Previous settled rejected-candidate review suggested SOL 5m native BUY_NO may be usable, but the prior patch bundled this with unrelated shared changes. Current session `test_20260606_013635` still showed `buy_no_5m_native_suppressed`, confirming the running process had not loaded this intended trial config.
-- **Hypothesis:** SOL 5m native BUY_NO can be forward-tested without altering SOL BUY_YES or other alt behavior.
-- **Expected outcome:** SOL 5m native BUY_NO candidates are admitted again under existing gates; performance can be judged from live journal plus settled ghost comparison.
-- **Actual outcome:** `pending` — requires operator-run session and at least 15 closed affected SOL candidates.
-- **Status:** `pending`
-
 ### 2026-06-05 — Block 5m BUY_YES against bearish alt 1h and require true 1h bull for floor
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added an alt-native guard: 5m `BUY_YES` is blocked when the alt's own 1h trend is `BEARISH`. Also changed `*_buy_yes_bullish_floor_bump` to key off the actual alt 1h trend, not the derived `PRIMARY_ALT_HTF`.

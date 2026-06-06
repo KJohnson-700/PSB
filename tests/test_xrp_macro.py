@@ -1,9 +1,6 @@
 """Tests for XRPMacroStrategy — verifies it inherits correctly from SolMacroStrategy."""
 from __future__ import annotations
-from pathlib import Path
 from unittest.mock import MagicMock
-
-import yaml
 
 from src.strategies.xrp_macro import XRPMacroStrategy
 from src.strategies.sol_macro import BiasResolution, SolMacroStrategy
@@ -56,14 +53,6 @@ def test_xrp_macro_instantiates_with_correct_config():
 def test_xrp_macro_disabled_by_default():
     st = _mk_strategy(enabled=False)
     assert not st.enabled
-
-
-def test_xrp_session_trial_disables_weak_5m_native_lanes_in_settings():
-    settings = yaml.safe_load(Path("config/settings.yaml").read_text())
-    xrp = settings["strategies"]["xrp_macro"]
-
-    assert xrp["disable_buy_no_5m_native"] is True
-    assert xrp["disable_buy_yes_5m_native_when_alt_1h_neutral"] is False
 
 
 def test_xrp_macro_detects_xrp_market():

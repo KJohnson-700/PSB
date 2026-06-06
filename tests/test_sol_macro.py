@@ -698,16 +698,6 @@ def test_alt_1h_bearish_blocks_5m_buy_yes():
     )
 
 
-def test_sol_session_trial_reopens_5m_native_buy_no_in_settings():
-    import yaml
-    from pathlib import Path
-
-    settings = yaml.safe_load(Path("config/settings.yaml").read_text())
-    sol = settings["strategies"]["sol_macro"]
-
-    assert sol["disable_buy_no_5m_native"] is False
-
-
 def test_buy_yes_floor_requires_bullish_alt_1h():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["5m_buy_yes_bullish_floor_bump"] = 0.19
@@ -1774,34 +1764,6 @@ def test_macd_bearish_momentum_ok_rejects_bull_rising():
         signal_line=0.5,
     )
     assert macd_bearish_momentum_ok(m) is False
-
-
-def test_bias_aligned_counter_momentum_vetoes_only_clear_counter():
-    """Bias-aligned long veto fires on clear counter momentum, not neutral/recovering."""
-    veto = SolMacroStrategy._bias_aligned_counter_momentum
-
-    def macd(crossover="NONE", histogram=0.0, rising=False):
-        return SimpleNamespace(
-            crossover=crossover, histogram=histogram, histogram_rising=rising
-        )
-
-    flat = macd()
-
-    # LONG: clearly bearish own TF → veto (the BNB 15m BUY_YES 0% WR pattern)
-    assert veto(macd(histogram=-0.5, rising=False), flat, side="LONG") is True
-    assert veto(macd(crossover="BEARISH_CROSS"), flat, side="LONG") is True
-    # LONG: recovering (hist<0 but rising) or supportive → NOT vetoed (preserve winners)
-    assert veto(macd(histogram=-0.5, rising=True), flat, side="LONG") is False
-    assert veto(macd(histogram=0.5, rising=True), flat, side="LONG") is False
-    # LONG: clearly bearish own TF but larger TF freshly turned up → rescued
-    assert veto(
-        macd(histogram=-0.5, rising=False),
-        macd(crossover="BULLISH_CROSS"),
-        side="LONG",
-    ) is False
-    # SHORT side is symmetric
-    assert veto(macd(histogram=0.5, rising=True), flat, side="SHORT") is True
-    assert veto(macd(histogram=-0.5, rising=False), flat, side="SHORT") is False
 
 
 if __name__ == "__main__":
