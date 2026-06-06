@@ -2128,6 +2128,34 @@ class SolMacroStrategy:
             self.config.get(f"{window_size}_buy_yes_bullish_floor_bump", 0.0)
         )
 
+    @staticmethod
+    def _bias_aligned_counter_momentum(_own, _larger, *, side: str) -> bool:
+        """True when a BIAS-ALIGNED trade faces CLEARLY counter momentum.
+
+        The momentum-confirm gate bypasses bias-aligned trades because blocking
+        on mere non-confirmation inverts (ghost 5/22→5/27: blocked bias-aligned
+        WR > traded by +11–16pp; neutral-momentum longs win 48–55%). This veto is
+        deliberately *narrower*: it fires only on a fresh counter cross or the own
+        timeframe histogram moving deeper against the trade — "trade the turn, not
+        the lag." Neutral/recovering momentum (hist against but rising, or hist
+        with the trade) is NOT vetoed, so the validated bias-aligned winners are
+        preserved. A fresh same-direction cross on the LARGER timeframe (the turn
+        starting there) rescues the trade.
+        """
+        if side == "LONG":
+            own_counter = (
+                _own.crossover == "BEARISH_CROSS"
+                or (_own.histogram < 0 and not _own.histogram_rising)
+            )
+            rescue = _larger.crossover == "BULLISH_CROSS"
+        else:  # SHORT
+            own_counter = (
+                _own.crossover == "BULLISH_CROSS"
+                or (_own.histogram > 0 and _own.histogram_rising)
+            )
+            rescue = _larger.crossover == "BEARISH_CROSS"
+        return bool(own_counter and not rescue)
+
     def _strong_enough_5m_signal(self, m5_adj: float, action: str) -> bool:
         """Optional guard for weak 5m-only entries.
 
@@ -3019,6 +3047,48 @@ class SolMacroStrategy:
                         side=allowed_side,
                         action=action,
                         reason="buy_yes_no_alt_momentum_confirm",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "alt_macd_5m_hist": float(sol.macd_5m.histogram or 0.0),
+                            "alt_macd_5m_rising": bool(sol.macd_5m.histogram_rising),
+                            "alt_macd_5m_crossover": sol.macd_5m.crossover,
+                            "alt_macd_15m_hist": float(sol.macd_15m.histogram or 0.0),
+                            "alt_macd_15m_rising": bool(sol.macd_15m.histogram_rising),
+                            "alt_macd_15m_crossover": sol.macd_15m.crossover,
+                            "side_source": side_source if "side_source" in locals() else None,
+                        },
+                    )
+                    continue
+
+            # Counter-momentum veto for BIAS-ALIGNED LONGS — the case the gate
+            # above intentionally bypasses. "Trade the turn not the lag": a
+            # bullish-bias long must not fire when its OWN timeframe momentum is
+            # clearly bearish (fresh bearish cross or histogram falling deeper).
+            # Scoped to 15m/1h by default — the slow lanes where the lagging bias
+            # inverts (BNB 15m BUY_YES went 0% WR / -$12.60 this way); 5m turns are
+            # already handled by the fresh-cross override and 5m is where the
+            # winning long lanes live. Opt out: block_bias_aligned_long_on_counter_momentum.
+            _cm_windows = self.config.get("bias_aligned_counter_veto_windows") or ["15m", "1h"]
+            if (
+                _bias_aligned_long
+                and _alt_mc_window in _cm_windows
+                and bool(self.config.get("block_bias_aligned_long_on_counter_momentum", True))
+            ):
+                if _alt_mc_window == "1h":
+                    _own, _larger = sol.macd_1h, sol.macd_1h
+                elif _alt_mc_window == "15m":
+                    _own, _larger = sol.macd_15m, sol.macd_1h
+                else:
+                    _own, _larger = sol.macd_5m, sol.macd_15m
+                if self._bias_aligned_counter_momentum(_own, _larger, side="LONG"):
+                    _bump_skip("buy_yes_bias_aligned_counter_momentum")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="buy_yes_bias_aligned_counter_momentum",
                         yes_price=yes_price,
                         htf_bias=primary_htf_bias,
                         context={

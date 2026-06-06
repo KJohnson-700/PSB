@@ -1776,5 +1776,33 @@ def test_macd_bearish_momentum_ok_rejects_bull_rising():
     assert macd_bearish_momentum_ok(m) is False
 
 
+def test_bias_aligned_counter_momentum_vetoes_only_clear_counter():
+    """Bias-aligned long veto fires on clear counter momentum, not neutral/recovering."""
+    veto = SolMacroStrategy._bias_aligned_counter_momentum
+
+    def macd(crossover="NONE", histogram=0.0, rising=False):
+        return SimpleNamespace(
+            crossover=crossover, histogram=histogram, histogram_rising=rising
+        )
+
+    flat = macd()
+
+    # LONG: clearly bearish own TF → veto (the BNB 15m BUY_YES 0% WR pattern)
+    assert veto(macd(histogram=-0.5, rising=False), flat, side="LONG") is True
+    assert veto(macd(crossover="BEARISH_CROSS"), flat, side="LONG") is True
+    # LONG: recovering (hist<0 but rising) or supportive → NOT vetoed (preserve winners)
+    assert veto(macd(histogram=-0.5, rising=True), flat, side="LONG") is False
+    assert veto(macd(histogram=0.5, rising=True), flat, side="LONG") is False
+    # LONG: clearly bearish own TF but larger TF freshly turned up → rescued
+    assert veto(
+        macd(histogram=-0.5, rising=False),
+        macd(crossover="BULLISH_CROSS"),
+        side="LONG",
+    ) is False
+    # SHORT side is symmetric
+    assert veto(macd(histogram=0.5, rising=True), flat, side="SHORT") is True
+    assert veto(macd(histogram=-0.5, rising=False), flat, side="SHORT") is False
+
+
 if __name__ == "__main__":
     unittest.main()

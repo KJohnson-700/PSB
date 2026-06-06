@@ -1011,6 +1011,38 @@ class ETHMacroStrategy(SolMacroStrategy):
                         if _block:
                             continue
 
+            # Counter-momentum veto for BIAS-ALIGNED LONGS (ported from sol_macro):
+            # "trade the turn not the lag" — a bullish-bias ETH long must not fire
+            # when its OWN timeframe momentum is clearly bearish. Scoped to 15m/1h;
+            # narrow (only clear counter), preserving the bias-aligned bypass for
+            # neutral momentum. Opt out: block_bias_aligned_long_on_counter_momentum.
+            _eth_cm_windows = self.config.get("bias_aligned_counter_veto_windows") or ["15m", "1h"]
+            if (
+                _eth_bias_aligned_long
+                and _updown_tf in _eth_cm_windows
+                and bool(self.config.get("block_bias_aligned_long_on_counter_momentum", True))
+            ):
+                if _updown_tf == "1h":
+                    _own, _larger = eth.macd_1h, eth.macd_1h
+                elif _updown_tf == "15m":
+                    _own, _larger = eth.macd_15m, eth.macd_1h
+                else:
+                    _own, _larger = eth.macd_5m, eth.macd_15m
+                if self._bias_aligned_counter_momentum(_own, _larger, side="LONG"):
+                    _bump_skip("buy_yes_bias_aligned_counter_momentum")
+                    ctx = _eth_mc_context()
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason="buy_yes_bias_aligned_counter_momentum",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context=ctx,
+                    )
+                    continue
+
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf,
                 action=action,
