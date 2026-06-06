@@ -773,7 +773,12 @@ strategies:
     btc_follow_5m_allow_1h_impulse_bypass: false
     btc_follow_15m_allow_macd_grind: false
     btc_follow_stf_bypass_when_macro_agrees: false
-    btc_follow_5m_requires_impulse: true
+    # 2026-06-06: reverted true->false. ETH 5m BUY_NO is ETH's best lane
+    # (+$34.55 baseline test_20260604_234611, +$73.29/75%WR overnight
+    # test_20260606_013635). Requiring a BTC impulse tightens a winner AND
+    # re-couples ETH to BTC (against the decouple doctrine). Re-enable only if a
+    # ghost slice on eth|5m btc-follow BUY_YES specifically shows it losing.
+    btc_follow_5m_requires_impulse: false
     eth_follow_5m_min_adj: 0.02
     eth_follow_15m_hist_min: 0.02
     eth_follow_15m_min_adj: 0.04
@@ -913,7 +918,11 @@ strategies:
         BEAR: 0.5
   hype_macro:
     disable_buy_no_5m_native: false
-    block_native_buy_yes_when_alt_1h_neutral: true
+    # 2026-06-06: reverted true->false. HYPE BUY_YES is a consistent winner
+    # (+$29.55/61.5%WR baseline test_20260604_234611, +$4.61/66.7% overnight
+    # test_20260606_013635). Blocking native BUY_YES on a neutral 1h tightens a
+    # winner ("don't tweak winners"). min_convergence kept but inert while off.
+    block_native_buy_yes_when_alt_1h_neutral: false
     native_buy_yes_neutral_1h_min_convergence: 0.55
     enabled: true
     dead_zone_enabled: false

@@ -8,6 +8,22 @@
 
 ---
 
+## 2026-06-06 (later) — Baseline review vs +$257 session: untighten winners + instrument BTC guard
+
+New headline baseline recorded: `test_20260604_234611` (+$257.63, 143t, 52.4% WR; BTC short engine in a falling tape). See [`docs/PSB_BASELINE_SESSIONS.md`](docs/PSB_BASELINE_SESSIONS.md) Session E, last overnight follow-on Session F `test_20260606_013635` (+$99.91).
+
+| File | Change | Why |
+|--------|--------|-----|
+| `config/settings.yaml` | `eth_macro.btc_follow_5m_requires_impulse: true → false` | ETH 5m BUY_NO is ETH's best lane (+$34.55 baseline, +$73.29/75%WR overnight). The impulse requirement tightened a winner AND re-coupled ETH→BTC. Re-enable only on a ghost slice showing eth\|5m btc-follow BUY_YES losing. |
+| `config/settings.yaml` | `hype_macro.block_native_buy_yes_when_alt_1h_neutral: true → false` | HYPE BUY_YES won both sessions (+$29.55/61.5%, +$4.61/66.7%). Tightening a winner; against "don't tweak winners". |
+| `src/strategies/bitcoin.py` | New BTC conflicted-long guard (`buy_yes_quant_and_momentum_short`) now writes a settleable LONG ghost row (was bump-counter only, invisible to ghost log) tagged htf/quant/momentum sides | The guard is a new feature ghosts were blind to; this lets the next session settle the blocked longs and prove whether the guard clipped winners or losers. Guard left ON (targets overnight BTC 15m BUY_YES −$14/37%). |
+
+**Eval — `bf27f06` "Remove BTC leakage from alt macros" (bundled-reverted): standalone re-apply NOT recommended.** The commit was ~90% removing BTC strings from diagnostic logs and AI-narrator prompt blocks (`_btc_ai_block`, `diag_btc_*` reason_parts). The genuine decision-path decouple (BTC can't pick alt side / gate admission / shift edge) shipped 2026-05-22 (`62486e6`) and all markers remain in current code: `lag_adj=0.0`, "BTC correlation must not alter admission or probability", NEUTRAL sit-out, btc-volatility-doesn't-gate, `_btc_trade_inputs_enabled()` wired across eth_macro. Reverting bf27f06 restored only (1) BTC mentions in alt AI-prompt strings — moot, AI veto disabled — and (2) cosmetic diagnostics. The one residual BTC-in-ETH decision knob (`btc_follow_5m_requires_impulse`) is now off. Revisit stripping BTC from alt AI prompts only if/when the AI layer is re-enabled.
+
+All changes forward-test only; load on next bot restart. 85 BTC + 144 alt/decouple tests pass.
+
+---
+
 ## 2026-06-06 — Roll back post-session Codex edits; keep BNB-only fix
 
 | Commit | Summary |

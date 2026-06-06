@@ -2097,6 +2097,35 @@ class BitcoinStrategy:
                                 window_size=_updown_tf,
                                 ghost_blind=True,
                             )
+                        elif action == "BUY_YES":
+                            # 2026-06-06: the conflicted-long guard
+                            # (buy_yes_quant_and_momentum_short) only bumped an
+                            # in-memory counter and was invisible to the ghost log,
+                            # so it could not be validated (new feature, ghosts
+                            # blind). Write a settleable LONG ghost row tagged with
+                            # the three sides so the next session can show whether
+                            # the blocked longs would have won or lost.
+                            log_rejected_candidate(
+                                strategy="bitcoin",
+                                window=_updown_tf,
+                                side="LONG",
+                                action=action,
+                                reason=_direction_guard,
+                                market=market,
+                                yes_price=yes_price,
+                                est_prob_up=estimated_prob,
+                                htf_bias=htf_bias,
+                                btc_1h_regime=btc_1h_regime if ta else None,
+                                effective_min_edge=float(self._tf_cfg(_updown_tf, "min_edge", self.config.get("min_edge", 0.0) or 0.0)),
+                                context={
+                                    "guard": _direction_guard,
+                                    "htf_side": getattr(direction_decision, "htf_side", None),
+                                    "quant_side": getattr(direction_decision, "quant_side", None),
+                                    "momentum_side": getattr(direction_decision, "momentum_side", None),
+                                    "rsi_14": ta.rsi_14 if ta else None,
+                                    "edge": float(edge),
+                                },
+                            )
                         continue
 
                     reason_parts.extend([
@@ -2377,6 +2406,35 @@ class BitcoinStrategy:
                                 signal_reason=" | ".join(r for r in reason_parts if r),
                                 window_size=_updown_tf,
                                 ghost_blind=True,
+                            )
+                        elif action == "BUY_YES":
+                            # 2026-06-06: the conflicted-long guard
+                            # (buy_yes_quant_and_momentum_short) only bumped an
+                            # in-memory counter and was invisible to the ghost log,
+                            # so it could not be validated (new feature, ghosts
+                            # blind). Write a settleable LONG ghost row tagged with
+                            # the three sides so the next session can show whether
+                            # the blocked longs would have won or lost.
+                            log_rejected_candidate(
+                                strategy="bitcoin",
+                                window=_updown_tf,
+                                side="LONG",
+                                action=action,
+                                reason=_direction_guard,
+                                market=market,
+                                yes_price=yes_price,
+                                est_prob_up=estimated_prob,
+                                htf_bias=htf_bias,
+                                btc_1h_regime=btc_1h_regime if ta else None,
+                                effective_min_edge=float(self._tf_cfg(_updown_tf, "min_edge", self.config.get("min_edge", 0.0) or 0.0)),
+                                context={
+                                    "guard": _direction_guard,
+                                    "htf_side": getattr(direction_decision, "htf_side", None),
+                                    "quant_side": getattr(direction_decision, "quant_side", None),
+                                    "momentum_side": getattr(direction_decision, "momentum_side", None),
+                                    "rsi_14": ta.rsi_14 if ta else None,
+                                    "edge": float(edge),
+                                },
                             )
                         continue
 
