@@ -29,7 +29,18 @@ def _make_config():
     }
 
 
-def _signal(*, market_id: str, window_size: str, side_source: str, btc_1h_regime: str, action: str = "BUY_NO", yes_price: float = 0.50, edge: float = 0.08) -> SolMacroSignal:
+def _signal(
+    *,
+    market_id: str,
+    window_size: str,
+    side_source: str,
+    btc_1h_regime: str,
+    action: str = "BUY_NO",
+    yes_price: float = 0.50,
+    edge: float = 0.08,
+    alt_htf_bias: str = "NEUTRAL",
+    convergence_score: float = 0.45,
+) -> SolMacroSignal:
     price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
     return SolMacroSignal(
         market_id=market_id,
@@ -48,6 +59,8 @@ def _signal(*, market_id: str, window_size: str, side_source: str, btc_1h_regime
         alt_asset_code="hype",
         side_source=side_source,
         btc_1h_regime=btc_1h_regime,
+        alt_htf_bias=alt_htf_bias,
+        convergence_score=convergence_score,
         window_size=window_size,
         reason="test",
     )
@@ -89,6 +102,42 @@ def test_hype_scan_filters_local_guarded_signals():
 
     assert [signal.market_id for signal in signals] == ["hype_kept"]
     assert strategy.last_scan_stats["top_skip_reasons"]["local_hype_guard"] == 1
+
+
+def test_hype_local_guard_blocks_native_buy_yes_when_neutral_1h_convergence_weak():
+    strategy = HYPEMacroStrategy(_make_config(), MagicMock(), MagicMock())
+
+    reason = strategy._hype_signal_guard_reason(
+        _signal(
+            market_id="hype_weak_native",
+            window_size="15m",
+            side_source="hype_15m_native",
+            btc_1h_regime="RANGE",
+            action="BUY_YES",
+            alt_htf_bias="NEUTRAL",
+            convergence_score=0.45,
+        )
+    )
+
+    assert reason == "hype_native_buy_yes_alt_1h_neutral_weak_convergence"
+
+
+def test_hype_local_guard_allows_native_buy_yes_when_neutral_1h_convergence_strong():
+    strategy = HYPEMacroStrategy(_make_config(), MagicMock(), MagicMock())
+
+    reason = strategy._hype_signal_guard_reason(
+        _signal(
+            market_id="hype_strong_native",
+            window_size="15m",
+            side_source="hype_15m_native",
+            btc_1h_regime="RANGE",
+            action="BUY_YES",
+            alt_htf_bias="NEUTRAL",
+            convergence_score=0.58,
+        )
+    )
+
+    assert reason is None
 
 
 def test_hype_hourly_buy_yes_native_bonus_is_opted_in():

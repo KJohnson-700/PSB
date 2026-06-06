@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-06 — Narrow session trial: keep XRP neutral 5m BUY_YES, suppress only 5m native BUY_NO
+
+- **What changed:** Set `xrp_macro.disable_buy_no_5m_native: true` and `xrp_macro.disable_buy_yes_5m_native_when_alt_1h_neutral: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). The opt-in rejected-candidate logging path for neutral-XRP-1h native 5m `BUY_YES` remains in code but is dormant for XRP.
+- **Why:** The prior patch mixed XRP-specific suppression with unrelated shared rewrites. This version keeps the change XRP-scoped while continuing to collect settled ghost data for disabled candidates. Current session `test_20260606_013635` showed XRP under-admitted (`5` closed trades, `-$8.84`) and dominated by `lane_min_edge`/BTC-regime composite blocks, so the next review should focus on whether this XRP-specific suppression is helping or simply starving the lane.
+- **Hypothesis:** Settled ghosts did not support suppressing neutral-1h 5m BUY_YES (`buy_yes_5m_native_alt_1h_neutral_suppressed` was positive), so suppressing that lane would likely starve XRP further. Keep only the 5m native BUY_NO suppression for now.
+- **Expected outcome:** XRP neutral-1h 5m BUY_YES can enter again after operator restart; 5m native BUY_NO remains ghost-logged via `buy_no_5m_native_suppressed`.
+- **Actual outcome:** `pending` — requires operator-run session and settled ghost samples.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by XRP, 5m `BUY_YES` is blocked when XRP 1h is `BEARISH`, and the 5m bullish floor now requires the actual XRP 1h trend to be `BULLISH`.

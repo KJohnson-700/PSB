@@ -463,6 +463,15 @@ class BitcoinStrategy:
         regime = str(btc_1h_regime or "").upper()
 
         if (
+            decision.action == "BUY_YES"
+            and decision.htf_side == "LONG"
+            and decision.quant_side == "SHORT"
+            and decision.momentum_side == "SHORT"
+            and bool(self.config.get("block_buy_yes_when_quant_and_momentum_short", True))
+        ):
+            return "buy_yes_quant_and_momentum_short"
+
+        if (
             decision.action == "BUY_NO"
             and decision.side_source == "btc_quant_disagree_flip"
             and not bool(self.config.get("allow_quant_disagree_flip_buy_no", False))

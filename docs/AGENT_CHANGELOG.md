@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-06-06 — Roll back post-session Codex edits; keep BNB-only fix
+
+| Commit | Summary |
+|--------|---------|
+| `this commit` | Added a BTC-only guard for conflicted `BUY_YES` where HTF is long but both quant and momentum are short. Kept `exposure.moderate_min_trade_usd: 15.0` because that sizing floor was already active in target session `test_20260604_234611`. |
+| `this commit` | Narrow session trial after rollback: reactivated only ETH 5m BTC-impulse requirement, HYPE-local neutral-1h weak-convergence BUY_YES guard, XRP 5m native BUY_NO suppression with rejected-candidate logging, and SOL/DOGE 5m native BUY_NO reopen. DOGE broad BUY_YES suppression and XRP neutral-1h BUY_YES suppression were checked against ghosts and left inactive. Explicitly did not reapply the broad shared 1h rewrite, BTC composite rewrite, risk-manager changes, journal provenance, or BTC fresh-cross default-off change. |
+| `this commit` | Restored active code/config to the `test_20260604_234611` baseline (`b93ad0e`, config hash `209e2f96baa2`) by removing the broad uncommitted ETH/HYPE/SOL/XRP/DOGE/BTC/risk/journal edits. Kept only BNB-specific changes: BTC-free BNB 5m native BUY_NO local guard, BTC-free config key, and explicit BNB 15m BUY_YES exit override. Non-BNB ideas were moved to [`docs/CLAUDE_HANDOFF_2026-06-06_REVERTED_STRATEGY_IDEAS.md`](/Users/mainfolder/Documents/psb-main%201/docs/CLAUDE_HANDOFF_2026-06-06_REVERTED_STRATEGY_IDEAS.md). |
+
+---
+
 ## 2026-06-03 — Horizon-coherence: own-TF decider + larger-TF fallback (all strategies)
 
 **[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), [`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):**

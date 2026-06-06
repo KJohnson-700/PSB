@@ -2862,6 +2862,51 @@ class SolMacroStrategy:
                     context={"side_source": side_source},
                 )
                 continue
+            if is_updown and action == "BUY_YES" and bool(
+                self.config.get("disable_buy_yes_updown", False)
+            ):
+                _reason = "buy_yes_updown_suppressed"
+                _bump_skip(_reason)
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason=_reason,
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "side_source": side_source,
+                        "alt_1h_trend": getattr(mtt, "h1_trend", None),
+                    },
+                    policy_version="buy_yes_updown_suppression_v1",
+                )
+                continue
+            if (
+                is_updown
+                and _updown_tf == "5m"
+                and action == "BUY_YES"
+                and bool(self.config.get("disable_buy_yes_5m_native_when_alt_1h_neutral", False))
+                and str(side_source or "").endswith("_5m_native")
+                and str(getattr(mtt, "h1_trend", "") or "").upper() == "NEUTRAL"
+            ):
+                _reason = "buy_yes_5m_native_alt_1h_neutral_suppressed"
+                _bump_skip(_reason)
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason=_reason,
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "side_source": side_source,
+                        "alt_1h_trend": getattr(mtt, "h1_trend", None),
+                    },
+                    policy_version="buy_yes_5m_native_alt_1h_neutral_suppression_v1",
+                )
+                continue
             # 2026-05-30 horizon-coherence: a 1h market confirms on 1h MACD, not 15m
             # (per the refactor). 5m/15m keep macd_15m (higher-tf confirm is intentional
             # there); only the incoherent 15m-on-1h case changes.

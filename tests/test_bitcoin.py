@@ -228,6 +228,39 @@ def test_bitcoin_direction_guard_blocks_quant_flip_buy_no_by_default():
     assert reason == "quant_disagree_flip_buy_no_disabled"
 
 
+def test_bitcoin_direction_guard_blocks_buy_yes_when_quant_and_momentum_short():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"].update(
+        {
+            "disable_buy_no_counter_trend": True,
+            "block_buy_yes_when_quant_and_momentum_short": True,
+        }
+    )
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    decision = strat._resolve_btc_direction(
+        htf_bias="BULLISH",
+        allowed_side="LONG",
+        macd_4h=MagicMock(histogram_rising=True),
+        reason_parts=[],
+        raw_est_prob=0.42,
+        mom=MagicMock(m15_direction="DRIFT_DOWN", m5_direction="NONE"),
+    )
+
+    reason = strat._btc_direction_guard_reason(
+        window_size="15m",
+        decision=decision,
+        yes_price=0.45,
+        btc_1h_regime="BULL",
+        eval_mins_left=17.0,
+    )
+
+    assert decision.action == "BUY_YES"
+    assert decision.htf_side == "LONG"
+    assert decision.quant_side == "SHORT"
+    assert decision.momentum_side == "SHORT"
+    assert reason == "buy_yes_quant_and_momentum_short"
+
+
 def test_bitcoin_direction_guard_blocks_expensive_bull_regime_buy_no():
     cfg = _make_config()
     cfg["strategies"]["bitcoin"].update(

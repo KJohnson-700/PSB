@@ -698,6 +698,16 @@ def test_alt_1h_bearish_blocks_5m_buy_yes():
     )
 
 
+def test_sol_session_trial_reopens_5m_native_buy_no_in_settings():
+    import yaml
+    from pathlib import Path
+
+    settings = yaml.safe_load(Path("config/settings.yaml").read_text())
+    sol = settings["strategies"]["sol_macro"]
+
+    assert sol["disable_buy_no_5m_native"] is False
+
+
 def test_buy_yes_floor_requires_bullish_alt_1h():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["5m_buy_yes_bullish_floor_bump"] = 0.19

@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-06 — Narrow session trial: HYPE-native weak neutral-1h BUY_YES guard
+
+- **What changed:** Added a HYPE-local post-scan guard in [src/strategies/hype_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/hype_macro.py): native 5m/15m `BUY_YES` is skipped when HYPE 1h is `NEUTRAL` and convergence is below `native_buy_yes_neutral_1h_min_convergence` (`0.55`). This does not use BTC and does not change shared SOL-family alignment.
+- **Why:** HYPE does not reliably follow BTC, so the prior broad BTC/shared-gate approach was the wrong shape. This pass uses HYPE-native 1h/convergence only.
+- **Hypothesis:** Weak HYPE-native bounce longs during neutral HYPE 1h tape stop entering while stronger convergence entries still pass.
+- **Expected outcome:** Fewer weak HYPE BUY_YES entries from neutral 1h tape; skips are visible as `hype_native_buy_yes_alt_1h_neutral_weak_convergence`.
+- **Actual outcome:** `pending` — requires operator-run session and at least 15 closed affected HYPE candidates.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by HYPE, 5m `BUY_YES` is blocked when HYPE 1h is `BEARISH`, and the 5m bullish floor now requires the actual HYPE 1h trend to be `BULLISH`.

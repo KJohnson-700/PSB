@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-06 — Preserve BNB-only fixes after reverting Codex broad alt edits
+
+- **What changed:** Reverted the broad post-`test_20260604_234611` strategy edits back to commit `b93ad0e` behavior, then kept only BNB-local fixes: `BNBMacroStrategy._bnb_signal_guard_reason` no longer depends on BTC 1h regime, the config key is now `bnb_5m_native_buy_no_max_yes_price`, and BNB `15m up` has an explicit hold/trail override.
+- **Why:** Operator requested a return to the profitable `test_20260604_234611` state while preserving BNB improvements only. The prior Codex batch touched shared SOL-family and non-BNB surfaces too broadly.
+- **Hypothesis:** BNB remains BTC-independent in its local 5m native BUY_NO guard while other strategies return to the target session behavior.
+- **Expected outcome:** BNB local guard behavior is asset-native; non-BNB strategy behavior matches the target session unless changed elsewhere after restart.
+- **Actual outcome:** `pending` — requires operator restart and at least 15 closed affected BNB candidates after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by BNB, 5m `BUY_YES` is blocked when BNB 1h is `BEARISH`, and the 5m bullish floor now requires the actual BNB 1h trend to be `BULLISH`.

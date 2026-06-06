@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-06 — Narrow session trial: require BTC impulse only for ETH 5m follow path
+
+- **What changed:** Set `eth_macro.btc_follow_5m_requires_impulse: true` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). No ETH shared-guard rewrite was added in this pass.
+- **Why:** The previous broad patch mixed this ETH-specific hypothesis with unrelated HYPE/XRP/SOL/DOGE/shared-code changes. This reintroduces only the intended ETH 5m follow-path check for the next operator-run session.
+- **Hypothesis:** ETH 5m candidates that depend on BTC-follow context should require a real short-term BTC impulse instead of drifting through on weak BTC context.
+- **Expected outcome:** Fewer weak ETH 5m follow-style entries; no change to non-ETH strategy admission from this flag.
+- **Actual outcome:** `pending` — requires operator-run session and at least 15 closed affected ETH 5m candidates.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block 5m BUY_YES against bearish ETH 1h
 
 - **What changed:** In [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), applied the same alt-native 1h alignment guard as SOL-family: ETH 5m `BUY_YES` is blocked when ETH's own 1h trend is `BEARISH`.

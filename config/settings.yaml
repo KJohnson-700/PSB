@@ -78,11 +78,20 @@ trading:
             down:
               updown_hold_winners_to_resolution: true
           15m:
+            up:
+              # 2026-06-06: BNB-only restore. The profitable 2026-06-04 session
+              # had BNB active; this preserves the documented 15m BUY_YES
+              # hold/trail policy without touching other alt macros.
+              updown_stop_loss_pct: 0.17
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: true
             down:
               # 2026-06-04: hold+trail. Settled exit audit (lane_exit_policy.json,
               # n=22): held_wr 50% / held_pnl +$4 vs realized 27% / -$21. LOW
               # CONFIDENCE — thin n, marginal held edge. Forward-test only; needs
               # restart; revisit once n grows.
+              updown_stop_loss_pct: 0.17
               updown_hold_winners_to_resolution: true
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
@@ -430,6 +439,7 @@ strategies:
     bull_regime_buy_no_min_mins_left: 2.0
     bull_regime_buy_no_min_mins_left_15m: 4.0
     bias_quant_disagree_override_enabled: true
+    block_buy_yes_when_quant_and_momentum_short: true
     bias_quant_disagree_aligned_max_gap_non5m: 0.3
     bias_quant_disagree_aligned_min_edge_non5m: -0.4
     bias_quant_disagree_size_multiplier: 0.33
@@ -483,7 +493,7 @@ strategies:
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
     admit_marginal_on_quant_when_ai_disabled: true
-    disable_buy_no_5m_native: true
+    disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -763,7 +773,7 @@ strategies:
     btc_follow_5m_allow_1h_impulse_bypass: false
     btc_follow_15m_allow_macd_grind: false
     btc_follow_stf_bypass_when_macro_agrees: false
-    btc_follow_5m_requires_impulse: false
+    btc_follow_5m_requires_impulse: true
     eth_follow_5m_min_adj: 0.02
     eth_follow_15m_hist_min: 0.02
     eth_follow_15m_min_adj: 0.04
@@ -903,6 +913,8 @@ strategies:
         BEAR: 0.5
   hype_macro:
     disable_buy_no_5m_native: false
+    block_native_buy_yes_when_alt_1h_neutral: true
+    native_buy_yes_neutral_1h_min_convergence: 0.55
     enabled: true
     dead_zone_enabled: false
     # 5m neutral fallback skips 15m, jumps straight to 1h. Ghost data (2026-06-03):
@@ -1100,7 +1112,8 @@ strategies:
         BEAR: 0.5
   xrp_macro:
     admit_marginal_on_quant_when_ai_disabled: true
-    disable_buy_no_5m_native: false
+    disable_buy_no_5m_native: true
+    disable_buy_yes_5m_native_when_alt_1h_neutral: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1302,7 +1315,8 @@ strategies:
         BEAR: 0.5
   doge_macro:
     admit_marginal_on_quant_when_ai_disabled: true
-    disable_buy_no_5m_native: true
+    disable_buy_no_5m_native: false
+    disable_buy_yes_updown: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -1563,7 +1577,7 @@ strategies:
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
     rsi_soft_penalty_buy_no: 0.0
-    bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.6
+    bnb_5m_native_buy_no_max_yes_price: 0.6
     5m_buy_yes_bullish_floor_bump: 0.19
     15m_buy_yes_bullish_floor_bump: 0.19
     skip_on_degraded_correlation: true

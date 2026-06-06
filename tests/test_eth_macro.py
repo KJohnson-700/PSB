@@ -635,6 +635,7 @@ def test_eth_liquidity_reject_can_feed_shadow_observer():
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
+            "alt_neutral_fallback_sit_out": False,
         }
     )
     ai = MagicMock()
@@ -708,6 +709,7 @@ def test_eth_shadow_observer_timeout_consumes_scan_budget():
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
+            "alt_neutral_fallback_sit_out": False,
         }
     )
     ai = MagicMock()
@@ -784,6 +786,7 @@ def test_eth_shadow_observer_skips_repeated_market_during_cooldown():
             "use_ai_updown": True,
             "min_liquidity": 5000,
             "ai_observer_retry_cooldown_sec": 300,
+            "alt_neutral_fallback_sit_out": False,
         }
     )
     ai = MagicMock()

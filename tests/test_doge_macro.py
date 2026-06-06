@@ -1,7 +1,10 @@
 """Tests for DOGEMacroStrategy hourly BUY_YES behavior."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
+
+import yaml
 
 from src.analysis.math_utils import PositionSizer
 from src.strategies.doge_macro import DOGEMacroStrategy
@@ -53,3 +56,11 @@ def test_doge_macro_hourly_buy_yes_native_bonus_is_off_by_default() -> None:
         resolution=native,
         ltf_strength=0.35,
     ) == 0.0
+
+
+def test_doge_session_trial_keeps_buy_yes_and_reopens_buy_no_in_settings() -> None:
+    settings = yaml.safe_load(Path("config/settings.yaml").read_text())
+    doge = settings["strategies"]["doge_macro"]
+
+    assert doge["disable_buy_yes_updown"] is False
+    assert doge["disable_buy_no_5m_native"] is False

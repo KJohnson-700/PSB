@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-06 — Narrow session trial: reopen SOL 5m native BUY_NO only
+
+- **What changed:** Set `sol_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). No shared 1h alignment rewrite or BTC composite rewrite was reintroduced.
+- **Why:** Previous settled rejected-candidate review suggested SOL 5m native BUY_NO may be usable, but the prior patch bundled this with unrelated shared changes. Current session `test_20260606_013635` still showed `buy_no_5m_native_suppressed`, confirming the running process had not loaded this intended trial config.
+- **Hypothesis:** SOL 5m native BUY_NO can be forward-tested without altering SOL BUY_YES or other alt behavior.
+- **Expected outcome:** SOL 5m native BUY_NO candidates are admitted again under existing gates; performance can be judged from live journal plus settled ghost comparison.
+- **Actual outcome:** `pending` — requires operator-run session and at least 15 closed affected SOL candidates.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block 5m BUY_YES against bearish alt 1h and require true 1h bull for floor
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added an alt-native guard: 5m `BUY_YES` is blocked when the alt's own 1h trend is `BEARISH`. Also changed `*_buy_yes_bullish_floor_bump` to key off the actual alt 1h trend, not the derived `PRIMARY_ALT_HTF`.

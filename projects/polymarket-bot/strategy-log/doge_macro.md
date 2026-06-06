@@ -12,6 +12,24 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-06 — Stop DOGE BUY_YES bleeding, keep BUY_NO test open
+
+- **What changed:** Rechecked against settled ghosts and **did not** keep the broad DOGE BUY_YES disable active. `doge_macro.disable_buy_yes_updown: false` and `doge_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). Added an opt-in shared skip path in [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), but it is dormant unless a strategy enables `disable_buy_yes_updown`.
+- **Why:** Current paper session `test_20260606_013635` had DOGE `7` closed trades, `1` win, `-$23.28`, all exits via `updown_stop_loss`. All DOGE closed trades were BUY_YES; the strategy was bleeding while the intended BUY_NO reopen was not loaded in the running process.
+- **Hypothesis:** Ghost data says broad BUY_YES suppression is too blunt: DOGE BUY_NO should be reopened, while DOGE BUY_YES needs lane/exit-level review rather than a blanket kill.
+- **Expected outcome:** DOGE BUY_NO becomes eligible after operator restart; DOGE BUY_YES remains eligible but should be reviewed separately by lane/exit outcome.
+- **Actual outcome:** `pending` — requires operator-run session after restart and settled rejected-candidate review.
+- **Status:** `pending`
+
+### 2026-06-06 — Narrow session trial: reopen DOGE 5m native BUY_NO only
+
+- **What changed:** Set `doge_macro.disable_buy_no_5m_native: false` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). No DOGE shared 1h alignment rewrite was reintroduced.
+- **Why:** DOGE 5m native BUY_NO needs forward validation as its own lane, not bundled with broader shared strategy edits.
+- **Hypothesis:** DOGE 5m native BUY_NO can be tested under existing gates while preserving the target-session behavior elsewhere.
+- **Expected outcome:** DOGE 5m native BUY_NO candidates are admitted again; results should be separated from DOGE BUY_YES and exit-policy effects.
+- **Actual outcome:** `pending` — requires operator-run session and at least 15 closed affected DOGE candidates.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by DOGE, 5m `BUY_YES` is blocked when DOGE 1h is `BEARISH`, and the 5m bullish floor now requires the actual DOGE 1h trend to be `BULLISH`.
