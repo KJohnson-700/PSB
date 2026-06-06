@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-06 — ROOT-CAUSE FIX: kill the BNB 15m BUY_YES floor bump (entry, not exit)
+
+- **What changed:** `15m_buy_yes_bullish_floor_bump: 0.19 → 0.0` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). 5m bump (0.19) kept.
+- **Why:** The earlier 15m-up hold/trail exit override was a forward-test that could not fix this lane — the loss is an **entry/signal** bug. Live trades in baseline `test_20260604_234611`: BNB 15m BUY_YES went **4 trades / 0% WR / −$12.60**, every one a confident long (est_up 0.55–0.65) into a market that *crashed* (entry 0.42–0.53 → exit 0.29–0.40). The est was manufactured: the +0.19 floor bump (applied in edge space) inflated raw est ≈ 0.435 to a false 0.625. The momentum-confirm gate cannot catch these because bias-aligned bullish longs bypass it ([sol_macro.py:2952](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py)). No exit policy fixes inverted entries — holding to resolution would lose *more*.
+- **Hypothesis:** Without the bump, 3 of the 4 losers fire at negative real edge (yes 0.52/0.53/0.45 vs raw est 0.435/0.455/0.36) → blocked; the 4th is marginal (+0.01) and blocked by min_edge. Loss → ~$0. In-pattern: the bump docstring already leaves SOL/DOGE/XRP 15m unset as ghost −EV; live data puts BNB 15m in that same group. 5m BUY_YES (a winner, +$24.49/52% WR) is untouched (separate key).
+- **Expected outcome:** BNB 15m BUY_YES stops taking floor-bump-manufactured longs; lane only enters on genuine raw edge. Watch `trades.jsonl` BNB 15m BUY_YES count drop and avg/trade ≥ 0.
+- **Actual outcome:** `pending` (forward-test; needs restart; ≥10 closed BNB 15m trades).
+- **Status:** `pending`
+
 ### 2026-06-06 — Preserve BNB-only fixes after reverting Codex broad alt edits
 
 - **What changed:** Reverted the broad post-`test_20260604_234611` strategy edits back to commit `b93ad0e` behavior, then kept only BNB-local fixes: `BNBMacroStrategy._bnb_signal_guard_reason` no longer depends on BTC 1h regime, the config key is now `bnb_5m_native_buy_no_max_yes_price`, and BNB `15m up` has an explicit hold/trail override.

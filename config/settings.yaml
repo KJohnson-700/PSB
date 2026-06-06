@@ -1588,7 +1588,16 @@ strategies:
     rsi_soft_penalty_buy_no: 0.0
     bnb_5m_native_buy_no_max_yes_price: 0.6
     5m_buy_yes_bullish_floor_bump: 0.19
-    15m_buy_yes_bullish_floor_bump: 0.19
+    # 2026-06-06: 0.19 -> 0.0. ROOT-CAUSE FIX (not a forward-test) for the
+    # losing BNB 15m BUY_YES lane. Live trades test_20260604_234611: 4 longs,
+    # 0% WR, -$12.60 — all fired at est_up~0.625 because this +0.19 bump inflated
+    # raw est~0.435 in edge space; the market fell every time (entry 0.42-0.53 ->
+    # exit 0.29-0.40). The momentum-confirm gate can't catch these (bias-aligned
+    # bullish longs bypass it, sol_macro.py:2952). Removing the bump makes 3 of 4
+    # fire at negative real edge -> blocked; loss ~$0. In-pattern: the bump
+    # docstring already leaves SOL/DOGE/XRP 15m unset as ghost -EV; live data puts
+    # BNB 15m in that same group. 5m bump kept (5m BUY_YES is a winner, +$24.49).
+    15m_buy_yes_bullish_floor_bump: 0.0
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45
