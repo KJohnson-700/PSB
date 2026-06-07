@@ -72,6 +72,18 @@ trading:
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
     updown_overrides:
+      bitcoin:
+        window_lane_overrides:
+          1h:
+            down:
+              # 2026-06-06: hold to resolution. Settled-exit audit (trades_settled,
+              # n=22 BUY_NO): stop-loss leg realized -$23.47 but held +$2.02 (4/10
+              # stop-outs recover to a WIN by resolution); TP leg held +$62.81 vs
+              # realized +$53.94. A 1h market has room to recover a 20% adverse move
+              # — disable the % stop and let winners run. Late-window cents/time stop
+              # stays as the loser floor. Forward-test only; needs restart.
+              updown_hold_winners_to_resolution: true
+              updown_stop_loss_pct: 0.0
       bnb_macro:
         window_lane_overrides:
           5m:
@@ -96,6 +108,13 @@ trading:
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
+            down:
+              # 2026-06-06: widen stop (alt, thin n=9). Settled-exit audit
+              # (trades_settled, BUY_NO 1h): stop leg realized -$8.44 vs held +$7.99
+              # (2/3 recover). Too thin for full hold-to-resolution like BTC — widen
+              # the % stop 0.20->0.40 to give the 1h market room while keeping a
+              # backstop. Forward-test only; needs restart; revisit as n grows.
+              updown_stop_loss_pct: 0.40
           5m:
             down:
               updown_stop_loss_pct: 0.14
@@ -390,7 +409,7 @@ strategies:
             entry_window_max: 19.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.06   # 2026-06-06: 0.09->0.06; ghost BTC 1h lane_min_edge rejects settle 92% (n=91) — too-high bar starving 1h
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -398,7 +417,7 @@ strategies:
             entry_window_max: 59.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.09
+            min_edge: 0.06   # 2026-06-06: 0.09->0.06; same ghost finding (BTC 1h lane_min_edge 92% would-win)
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -427,12 +446,14 @@ strategies:
     bull_regime_buy_no_max_yes_price: 0.66
     bull_regime_buy_no_max_yes_price_5m: 0.68
     bull_regime_buy_no_max_yes_price_15m: 0.62
-    bull_regime_buy_no_min_mins_left: 2.0
-    bull_regime_buy_no_min_mins_left_15m: 4.0
+    bull_regime_buy_no_min_mins_left: 0.5   # 2026-06-06: loosened 2.0->0.5; ghost late BUY_NO shorts settle 82% (5m,n=354)/80% (1h) — gate was blocking winners
+    bull_regime_buy_no_min_mins_left_15m: 1.0   # 2026-06-06: loosened 4.0->1.0 (same ghost finding)
     bias_quant_disagree_override_enabled: true
-    bias_quant_disagree_aligned_max_gap_non5m: 0.3
+    bias_quant_disagree_aligned_max_gap_non5m: 0.45   # 2026-06-06: 0.3->0.45; ghost 1h bias/quant-disagree rejects settle 86% (n=72)
     bias_quant_disagree_aligned_min_edge_non5m: -0.4
     bias_quant_disagree_size_multiplier: 0.33
+    bias_quant_disagree_allow_5m: true        # 2026-06-06: enable BTC 5m disagreement admit, HIGH-GAP slice only
+    bias_quant_disagree_5m_min_gap: 0.15      # ghost: |yes-est| gap>=0.15 settles 77% (n=197); gap<0.10 ~40% (excluded as prior realized-neg)
     hist_gate_5m_short_hard_reject: false
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
@@ -638,14 +659,14 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.07
+            min_edge: 0.05  # 2026-06-06: 0.07->0.05; ghost 1h lane_min_edge rejects settle 69% would-win
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.07
+            min_edge: 0.05  # 2026-06-06: 0.07->0.05; ghost 1h lane_min_edge 69%
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1047,7 +1068,7 @@ strategies:
             entry_window_max: 36.0
         1h:
           up:
-            min_edge: 0.06
+            min_edge: 0.04  # 2026-06-06: 0.06->0.04; ghost 1h lane_min_edge rejects settle 90% would-win
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1055,7 +1076,7 @@ strategies:
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.06
+            min_edge: 0.04  # 2026-06-06: 0.06->0.04; ghost 1h lane_min_edge 90%
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -1273,14 +1294,14 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.05
+            min_edge: 0.03  # 2026-06-06: 0.05->0.03; ghost 1h lane_min_edge rejects settle 87% would-win
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.06
+            min_edge: 0.04  # 2026-06-06: 0.06->0.04; ghost 1h lane_min_edge 87%
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1444,14 +1465,14 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.04
+            min_edge: 0.03  # 2026-06-06: 0.04->0.03; ghost 1h lane_min_edge rejects settle 88% would-win
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.06
+            min_edge: 0.04  # 2026-06-06: 0.06->0.04; ghost 1h lane_min_edge 88%
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1623,14 +1644,14 @@ strategies:
             entry_window_max: 180.0
         1h:
           up:
-            min_edge: 0.08
+            min_edge: 0.05  # 2026-06-06: 0.08->0.05; ghost 1h lane_min_edge rejects settle 79% would-win
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.05  # 2026-06-06: 0.08->0.05; ghost 1h lane_min_edge 79%
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0

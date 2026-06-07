@@ -697,6 +697,16 @@ class SolMacroStrategy:
         self.enforce_alt_1h_alignment = bool(
             self.config.get("enforce_alt_1h_alignment", True)
         )
+        # 2026-06-06: HARD block of alt 5m BUY_YES when the alt's own 1h is BEARISH
+        # (added in b93ad0e, AFTER the +$257 baseline test_20260604_234611 which ran
+        # on e8da113 without it and traded balanced 69 longs/75 shorts @52% WR). It
+        # fired 127×/day, starving alt longs — a new restrictive gate, against the
+        # calibration-phase "no new gates / increase frequency" rule. Default OFF =
+        # lifted; the soft `enforce_alt_1h_alignment` dampening (which WAS in baseline)
+        # is untouched. Set True to re-enable the hard block.
+        self.block_alt_5m_longs_vs_bearish_1h = bool(
+            self.config.get("block_alt_5m_longs_vs_bearish_1h", False)
+        )
         # RSI gating policy:
         # - default soft penalty (preserve trend participation)
         # - optional hard block fallback for emergency suppression
@@ -1791,8 +1801,13 @@ class SolMacroStrategy:
         window_size: str,
         alt_1h_trend: Optional[str],
     ) -> Optional[str]:
-        """Block fast entries that fight the alt's own 1h direction."""
-        if not self.enforce_alt_1h_alignment:
+        """Block fast entries that fight the alt's own 1h direction.
+
+        Hard block, default OFF (see ``block_alt_5m_longs_vs_bearish_1h`` in __init__).
+        The soft ``enforce_alt_1h_alignment`` dampening is applied elsewhere and is
+        independent of this gate.
+        """
+        if not self.block_alt_5m_longs_vs_bearish_1h:
             return None
         if str(window_size or "").lower() != "5m":
             return None
