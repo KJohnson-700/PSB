@@ -12,6 +12,16 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-06 — 1h liquidity floor 250→100 (the one EV-clean 1h un-starve)
+
+- **What changed:** `config/settings.yaml` doge_macro `min_liquidity_1h` (+ `_1h_buy_no`, `_1h_buy_yes`) 250→100.
+- **Why:** After the EV-driven revert (see changelog), this is the single 1h block that recomputes **EV-positive across EVERY price band** (not WR-only noise): ghost `rejected_candidates_settled` doge 1h `liquidity` rejects (n=132) settle <.40 +15.6%, .40–.50 +56.6%, .50–.60 +87.7%, ≥.60 +81.6% (avg +48.6%). The blocked candidates' actual liquidity was 58–250 (median 187) — all under the 250 floor. Lowering to 100 admits the profitable bulk while keeping a floor against truly illiquid (<100) markets.
+- **Why ONLY this lane:** other 1h blocks failed the EV test — `lane_min_edge` rejects sit at ~0/negative computed edge (they're +EV only because 1h est_prob is under-confident — a calibration problem, not a gate, so a blanket min_edge cut is inert/risky), and hype liquidity has a −41% .50–.60 bulk. doge liquidity is the clean one.
+- **Hypothesis:** admits ~120 +EV doge 1h trades/era that were liquidity-gated; restores doge 1h frequency.
+- **Trade-off note:** ghost EV is hold-to-resolution; live exit policy (stops) may shave it, but the +EV margin is large and uniform. Paper/calibration phase. Forward-test only; needs bot **restart**. Revert = set back to 250.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — config-only, needs restart. Watch doge 1h `liquidity` skips drop + doge 1h fills appear.
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by DOGE, 5m `BUY_YES` is blocked when DOGE 1h is `BEARISH`, and the 5m bullish floor now requires the actual DOGE 1h trend to be `BULLISH`.

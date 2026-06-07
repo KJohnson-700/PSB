@@ -1313,9 +1313,9 @@ strategies:
       - 1h
     min_liquidity: 750
     min_liquidity_buy_yes: 300
-    min_liquidity_1h: 250
-    min_liquidity_1h_buy_no: 250
-    min_liquidity_1h_buy_yes: 250
+    min_liquidity_1h: 100  # 2026-06-06: 250->100; ghost doge 1h liquidity-blocked candidates +EV all price bands (avg +48.6%, n=132, liq median 187)
+    min_liquidity_1h_buy_no: 100
+    min_liquidity_1h_buy_yes: 100
     min_edge: 0.09
     defaults:
       min_edge: 0.09
