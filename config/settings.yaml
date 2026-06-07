@@ -390,7 +390,7 @@ strategies:
             entry_window_max: 19.0
         1h:
           up:
-            min_edge: 0.09
+            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +44%); candidates sit at edge 0.00-0.03
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -398,7 +398,7 @@ strategies:
             entry_window_max: 59.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.09
+            min_edge: 0.0
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -638,7 +638,7 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.07
+            min_edge: 0.07  # 2026-06-06: reverted to 0.07 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1047,7 +1047,7 @@ strategies:
             entry_window_max: 36.0
         1h:
           up:
-            min_edge: 0.06
+            min_edge: 0.06  # 2026-06-06: reverted to 0.06 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1273,14 +1273,14 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.05
+            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +47%); candidates sit at edge 0.00-0.03
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.06
+            min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1444,7 +1444,7 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.04
+            min_edge: 0.04  # 2026-06-06: reverted to 0.04 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1623,14 +1623,14 @@ strategies:
             entry_window_max: 180.0
         1h:
           up:
-            min_edge: 0.08
+            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +22%); candidates sit at edge 0.00-0.03
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0

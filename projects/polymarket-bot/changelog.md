@@ -4,6 +4,14 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-06 (LATEST) — 1h min_edge → 0.0 for BTC/XRP/BNB only (admit positive-edge 1h; sol/doge/hype excluded as EV traps)
+
+The real 1h starvation: `lane_min_edge` rejects sit at edge 0.00–0.03, below the old 0.06–0.09 bar, so they're gated. Setting 1h `min_edge=0.0` admits the **positive-edge** cohort (excludes negative-edge cheap shorts). EV-checked (avg realized_pct) and **double-reviewed by codex + kimi**, who agreed on per-asset:
+- **KEEP 0.0:** BTC (edge≥0 cohort EV +44.5%, n=13), XRP (+47%, dominant .50–.60 +57%, n=36), BNB (+22%, dominant .50–.60 +33%, n=60).
+- **REVERTED to baseline** (volume-dominated by a −EV price band — the WR≠EV trap): SOL (dominant .50–.60 n=211 **−6.1%**; +8% headline is a thin .40–.50 slice), DOGE (dominant .50–.60 **−14%**), HYPE (n=10 noise, dominant −2.7%).
+- ETH untouched (blocker is `eth_1h_weak_confirm`, −32%, correct).
+**Caveat (both reviewers):** `realized_pct` is hold-to-resolution = an unvalidated upper bound vs live early stops; kept only where margin is large + dominant band positive. Paired with the doge 1h liquidity floor 250→100 (ee926f2, EV-clean). Forward-test only; needs bot **restart**. Revert = set the three back to baseline.
+
 ## 2026-06-06 (LATER) — EV-driven revert: WR ≠ EV. Reverted 5 of 6 levers from commit 15835f5; kept only the alt long-gate lift
 
 After a kimi + codex review, recomputed every lever on **realized return (avg `realized_pct`)** instead of would-win **rate**. The original batch (15835f5) had validated entries on ghost WR — but many "winners" are cheap-NO shorts (win often, tiny payout, −100% on the rare loss), so high WR hid **negative EV**. Reverted config + `bitcoin.py` + `test_bitcoin.py` to parent; kept `sol_macro.py` (lever 5).
