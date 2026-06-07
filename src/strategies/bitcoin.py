@@ -2160,46 +2160,68 @@ class BitcoinStrategy:
                     macd_1h = ta.macd_1h
                     if effective_side == "LONG" and not macd_4h.histogram_rising:
                         if not macd_1h.histogram_rising:
-                            _bump_skip(f"hist_gate_{window_label}_long_reject")
-                            log_rejected_candidate(
-                                strategy="bitcoin", window=window_label, side="LONG", action=action,
-                                reason=f"hist_gate_{window_label}_long_reject", market=market,
-                                yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
-                                btc_1h_regime=btc_1h_regime if ta else None,
-                                context={
-                                    "btc_1h_regime": btc_1h_regime if ta else None,
-                                    "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
-                                    "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
-                                    "macd_4h_above_zero": bool(macd_4h.above_zero),
-                                    "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
-                                    **build_market_context(
-                                        asset_spot=ta.current_price,
-                                        btc_spot=ta.current_price,
-                                        rsi_14=ta.rsi_14,
-                                        atr_14=getattr(ta.trend_sabre, "atr", None),
+                            if bool(self.config.get(f"hist_gate_{window_label}_long_hard_reject", True)):
+                                _bump_skip(f"hist_gate_{window_label}_long_reject")
+                                log_rejected_candidate(
+                                    strategy="bitcoin", window=window_label, side="LONG", action=action,
+                                    reason=f"hist_gate_{window_label}_long_reject", market=market,
+                                    yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
+                                    btc_1h_regime=btc_1h_regime if ta else None,
+                                    context={
+                                        "btc_1h_regime": btc_1h_regime if ta else None,
+                                        "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
+                                        "macd_1h_histogram_rising": bool(macd_1h.histogram_rising),
+                                        "macd_4h_above_zero": bool(macd_4h.above_zero),
+                                        "sabre_trend": int(getattr(sabre, "trend", 0) or 0),
+                                        **build_market_context(
+                                            asset_spot=ta.current_price,
+                                            btc_spot=ta.current_price,
+                                            rsi_14=ta.rsi_14,
+                                            atr_14=getattr(ta.trend_sabre, "atr", None),
+                                        ),
+                                    },
+                                    probe_variants=build_threshold_probe_variants(
+                                        metric_name="hist_support_count",
+                                        observed_value=float(
+                                            int(bool(macd_4h.histogram_rising))
+                                            + int(bool(macd_1h.histogram_rising))
+                                        ),
+                                        baseline_threshold=1.0,
+                                        relax_steps=[1.0],
+                                        tighten_steps=[1.0],
                                     ),
-                                },
-                                probe_variants=build_threshold_probe_variants(
-                                    metric_name="hist_support_count",
-                                    observed_value=float(
-                                        int(bool(macd_4h.histogram_rising))
-                                        + int(bool(macd_1h.histogram_rising))
-                                    ),
-                                    baseline_threshold=1.0,
-                                    relax_steps=[1.0],
-                                    tighten_steps=[1.0],
-                                ),
-                                policy_version="hist_gate_support_count_v1",
+                                    policy_version="hist_gate_support_count_v1",
+                                )
+                                logger.info(
+                                    f"  BTC [{window_label}] skip '{market.question[:40]}' — "
+                                    f"4H falling, 1H also falling — no momentum building for LONG"
+                                )
+                                continue
+                            # Soft mode (hist_gate_<w>_long_hard_reject: false): penalize
+                            # est_prob instead of hard-rejecting — mirrors the SHORT side's
+                            # hist_gate_<w>_short_penalty so the long side isn't asymmetrically
+                            # guillotined. Session ghost: 1h LONG hist_gate rejects were +EV on
+                            # the dominant .50-.60/>=.60 bands; the penalty lets those through
+                            # while still docking the weak cheap-band entries downstream.
+                            _long_hist_penalty = float(
+                                self.config.get(
+                                    f"hist_gate_{window_label}_long_penalty",
+                                    0.03 if is_1h else 0.025,
+                                )
+                            )
+                            est_prob_up -= _long_hist_penalty
+                            reason_parts.append(
+                                f"hist_gate_{window_label}_long_penalty={_long_hist_penalty:.3f}"
                             )
                             logger.info(
-                                f"  BTC [{window_label}] skip '{market.question[:40]}' — "
-                                f"4H falling, 1H also falling — no momentum building for LONG"
+                                f"  BTC [{window_label}] soft hist penalty '{market.question[:40]}' — "
+                                f"4H+1H falling, -{_long_hist_penalty:.3f} est_prob (not hard-rejected)"
                             )
-                            continue
-                        logger.info(
-                            f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
-                            f"4H falling but 1H rising — local momentum recovery"
-                        )
+                        else:
+                            logger.info(
+                                f"  BTC [{window_label}] 1H gate pass '{market.question[:40]}' — "
+                                f"4H falling but 1H rising — local momentum recovery"
+                            )
                     if effective_side == "SHORT" and macd_4h.histogram_rising:
                         if macd_1h.histogram_rising:
                             short_hist_penalty = float(
@@ -2335,7 +2357,19 @@ class BitcoinStrategy:
                                 _bump_default,
                             )
                         )
-                        if _floor_bump > 0:
+                        # 1h is PRICE-BAND gated: BTC 1h long model-edge is ANTI-predictive
+                        # (ghost 2026-06-07 — the highest model-edge longs lose; the +EV is
+                        # the 0.50-0.60 yes-price band at +19% EV / 60% WR, n197). A blanket
+                        # bump admits the cheap-band losers (<.40 = -48% EV) by edge-rank, so
+                        # the 1h bump is restricted to that band; 5m/15m keep the blanket
+                        # bump (ghost-validated 2026-05-28). Pairs w/ the 1h hist-gate
+                        # softening that lets these reach the bump at all.
+                        _in_floor_band = True
+                        if is_1h:
+                            _fp_min = float(self.config.get("btc_1h_buy_yes_floor_price_min", 0.50))
+                            _fp_max = float(self.config.get("btc_1h_buy_yes_floor_price_max", 0.60))
+                            _in_floor_band = _fp_min <= yes_price <= _fp_max
+                        if _floor_bump > 0 and _in_floor_band:
                             estimated_prob = min(0.90, estimated_prob + _floor_bump)
                             reason_parts.append(
                                 f"btc_{_updown_tf}_buy_yes_floor=+{_floor_bump:.2f}"

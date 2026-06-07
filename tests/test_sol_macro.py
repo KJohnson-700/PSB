@@ -669,25 +669,8 @@ def test_flat_btc_gate_bypass_legacy_mode_still_requires_alignment():
     assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BEARISH") is False
 
 
-def test_alt_1h_long_block_is_off_by_default():
-    # 2026-06-06: the hard block (b93ad0e) is default OFF — it postdated the +$257
-    # baseline and starved alt longs. Default config must NOT block.
+def test_alt_1h_bearish_blocks_5m_buy_yes():
     strategy = SolMacroStrategy(_make_config(), MagicMock(), MagicMock())
-    assert strategy.block_alt_5m_longs_vs_bearish_1h is False
-    assert (
-        strategy._alt_1h_alignment_blocks_entry(
-            action="BUY_YES",
-            window_size="5m",
-            alt_1h_trend="BEARISH",
-        )
-        is None
-    )
-
-
-def test_alt_1h_bearish_blocks_5m_buy_yes_when_enabled():
-    cfg = _make_config()
-    cfg["strategies"]["sol_macro"]["block_alt_5m_longs_vs_bearish_1h"] = True
-    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
     assert (
         strategy._alt_1h_alignment_blocks_entry(

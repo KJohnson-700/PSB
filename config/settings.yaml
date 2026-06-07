@@ -227,6 +227,25 @@ trading:
               updown_hold_winners_to_resolution: true
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
+              # 2026-06-07: widen stop 0.20->0.30. Settled stop-loss leg gave up
+              # +$44.7 vs holding (held-win 53%, n34) — the tight stop was cutting
+              # directionally-right longs. Safety rail for the new marginal-long admits.
+              updown_stop_loss_pct: 0.30
+          15m:
+            up:
+              # 2026-06-07: hold winners + trail for newly-admitted marginal longs.
+              # NO stop widen — settled held-win 44% (n9), stop_gaveup NEGATIVE, so
+              # holding stopped trades would lose more. Forward-test; needs restart.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
+          1h:
+            up:
+              # 2026-06-07: hold winners + trail for newly-admitted marginal longs.
+              # No settled 1h-long history (lane was starved); conservative default.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
@@ -390,15 +409,17 @@ strategies:
             entry_window_max: 19.0
         1h:
           up:
-            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +44%); candidates sit at edge 0.00-0.03
+            min_edge: 0.09
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
-            entry_price_max: 0.55
+            # 2026-06-07: 0.55->0.60 so the +EV .50-.60 yes-price band (the BTC 1h long
+            # signal) is in-window and can reach the price-band floor bump. UP side only.
+            entry_price_max: 0.60
             entry_window_min: 1.0
             entry_window_max: 59.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.0
+            min_edge: 0.09
             ai_override_min_edge: 0.1
             entry_price_min: 0.45
             entry_price_max: 0.55
@@ -422,6 +443,13 @@ strategies:
     btc_htf_boost_weak_15m: 0.06
     btc_5m_buy_yes_bullish_floor_bump: 0.2
     btc_15m_buy_yes_bullish_floor_bump: 0.26
+    # 2026-06-07: BTC 1h BUY_YES floor bump, PRICE-BAND gated (0.50-0.60 only). Ghost:
+    # 1h long model-edge is anti-predictive; the +EV is the .50-.60 band (+19% EV, 60%
+    # WR, n197). Bump 0.30 clears that band past min_edge (sweep knee at 0.28; 0.30 for
+    # margin vs downstream adjustments). Blanket 1h bump was -EV (admits cheap-band losers).
+    btc_1h_buy_yes_bullish_floor_bump: 0.30
+    btc_1h_buy_yes_floor_price_min: 0.50
+    btc_1h_buy_yes_floor_price_max: 0.60
     quant_disagree_flip_thresh: 0.48
     allow_quant_disagree_flip_buy_no: false
     bull_regime_buy_no_max_yes_price: 0.66
@@ -434,6 +462,12 @@ strategies:
     bias_quant_disagree_aligned_min_edge_non5m: -0.4
     bias_quant_disagree_size_multiplier: 0.33
     hist_gate_5m_short_hard_reject: false
+    # 2026-06-07: soften the BTC 1h LONG histogram gate from hard-reject to a penalty.
+    # It hard-rejected longs when 4H+1H histograms both fall, while the SHORT side only
+    # got a soft penalty — asymmetric, and it left BTC 1h longs at 0 trades this session.
+    # Session ghost: those rejected 1h longs were +EV on the dominant .50-.60 (+19%, n197)
+    # and >=.60 (+33%) bands. Penalty (not removal) keeps cheap-band weak longs filtered.
+    hist_gate_1h_long_hard_reject: false
     min_edge_buy_no: 0.09
     macro_event_guard_enabled: true
     macro_event_guard_before_min: 30
@@ -483,6 +517,9 @@ strategies:
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
     admit_marginal_on_quant_when_ai_disabled: true
+    # 2026-06-07: admit marginal LONGs on quant (session ghost +12% EV, n252). LONG-only:
+    # marginal SHORTs are -9% EV this session (codex review), so don't re-admit them.
+    admit_marginal_on_quant_sides: long
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -638,7 +675,7 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.07  # 2026-06-06: reverted to 0.07 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
+            min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -902,6 +939,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # 2026-06-07: enable marginal quant-admit incl LONGs (session ghost +19% EV, n249).
+    admit_marginal_on_quant_when_ai_disabled: true
+    admit_marginal_on_quant_sides: both
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
@@ -1047,7 +1087,7 @@ strategies:
             entry_window_max: 36.0
         1h:
           up:
-            min_edge: 0.06  # 2026-06-06: reverted to 0.06 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
+            min_edge: 0.06
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1099,7 +1139,12 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
-    admit_marginal_on_quant_when_ai_disabled: true
+    # 2026-06-07: marginal quant-admit DISABLED for xrp. Both sides are -EV this session
+    # (LONG -5% n119, SHORT -9% n81; codex review), and the LONG side splits dangerously
+    # by window (15m +16% vs 1h -80%). The xrp 15m long recovery needs a window-specific
+    # lane_min_edge loosen, not this all-window marginal bypass. Was true/short-only.
+    admit_marginal_on_quant_when_ai_disabled: false
+    admit_marginal_on_quant_sides: short
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
@@ -1260,7 +1305,11 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            min_edge: 0.085
+            # 2026-06-07: min_edge 0.085->0.04. Codex-validated newly-admitted slice
+            # edge[0.04,0.085) = +11.9% EV net (.50-.60 +23.5%, >=.60 +9.8%, .40-.50 -6%
+            # n12 minor drag). This is the window-specific xrp long lever (the all-window
+            # marginal quant-admit was disabled for xrp because its 1h longs are -80%).
+            min_edge: 0.04
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
@@ -1273,14 +1322,14 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +47%); candidates sit at edge 0.00-0.03
+            min_edge: 0.05
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.0
+            min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1302,6 +1351,11 @@ strategies:
         BEAR: 0.5
   doge_macro:
     admit_marginal_on_quant_when_ai_disabled: true
+    # 2026-06-07: admit marginal LONGs on quant terms (was SHORT-only). Session ghost:
+    # in-scan AI gate killed marginal LONGs at 64% would-win/+26% EV while AI rec
+    # accuracy was 18%. LONG-only: marginal SHORTs are -13% EV now (codex review), so
+    # the pre-existing short admit is dropped. Forward-test; needs restart.
+    admit_marginal_on_quant_sides: long
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -1313,9 +1367,9 @@ strategies:
       - 1h
     min_liquidity: 750
     min_liquidity_buy_yes: 300
-    min_liquidity_1h: 100  # 2026-06-06: 250->100; ghost doge 1h liquidity-blocked candidates +EV all price bands (avg +48.6%, n=132, liq median 187)
-    min_liquidity_1h_buy_no: 100
-    min_liquidity_1h_buy_yes: 100
+    min_liquidity_1h: 250
+    min_liquidity_1h_buy_no: 250
+    min_liquidity_1h_buy_yes: 250
     min_edge: 0.09
     defaults:
       min_edge: 0.09
@@ -1444,7 +1498,7 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.04  # 2026-06-06: reverted to 0.04 — codex+kimi: edge>=0 1h cohort dominant band is -EV (trap); keep only btc/xrp/bnb at 0.0
+            min_edge: 0.04
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1473,6 +1527,9 @@ strategies:
         BEAR: 0.5
   bnb_macro:
     admit_marginal_on_quant_when_ai_disabled: true
+    # 2026-06-07: admit marginal LONGs on quant (session ghost +25% EV, n858 — strongest
+    # of the five). LONG-only: marginal SHORTs are -22% EV this session (codex review).
+    admit_marginal_on_quant_sides: long
     # Re-admitted 2026-06-03: the blanket 5m BUY_NO suppression assumed the
     # cross-asset anti-predictive pattern, but BNB's own suppressed-cell ghosts
     # (n=3528, WR 53.9%, avg realized +0.011) are breakeven-to-mildly-positive,
@@ -1623,14 +1680,14 @@ strategies:
             entry_window_max: 180.0
         1h:
           up:
-            min_edge: 0.0  # 2026-06-06: ->0.0; admit positive-edge 1h (ghost EV +22%); candidates sit at edge 0.00-0.03
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.0
+            min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0

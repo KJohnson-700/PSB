@@ -231,17 +231,27 @@ class ETHMacroStrategy(SolMacroStrategy):
         return float(self.eth_follow_15m_min_adj_long)
 
     def _admit_marginal_quant_short(self, edge, action, timing_open) -> bool:
-        """When the AI decision layer is OFF, admit sub-threshold marginal BUY_NO
-        candidates on quant terms instead of dying on the AI tiebreaker (no-op when
-        the layer is disabled) or the lane_min_edge gate. Default OFF, BUY_NO-only,
-        timing-open, edge above the marginal floor. Self-disables when the decision
-        layer is re-enabled."""
+        """When the AI decision layer is OFF, admit sub-threshold marginal candidates
+        on quant terms instead of dying on the AI tiebreaker (no-op when the layer is
+        enabled) or the lane_min_edge gate. Default OFF, timing-open, edge above the
+        marginal floor. Self-disables when the decision layer is re-enabled.
+
+        Side scope is configurable via `admit_marginal_on_quant_sides`
+        (SHORT | LONG | BOTH; default SHORT=BUY_NO-only = original behavior). Made
+        configurable 2026-06-07 to mirror the sol-family fix (the in-scan AI tiebreaker
+        was killing +EV marginal LONGs while the AI's own rec accuracy was 18%). ETH
+        is left at default (no config flag) pending its own ghost validation."""
         try:
+            if not bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False)):
+                return False
+            if self.ai_agent.decision_layer_enabled():
+                return False
+            scope = str(self.config.get("admit_marginal_on_quant_sides", "SHORT")).upper()
+            want = {"SHORT": "BUY_NO", "LONG": "BUY_YES"}
+            if scope != "BOTH" and str(action).upper() != want.get(scope, "BUY_NO"):
+                return False
             return (
-                bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False))
-                and not self.ai_agent.decision_layer_enabled()
-                and action == "BUY_NO"
-                and bool(timing_open)
+                bool(timing_open)
                 and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
             )
         except Exception:

@@ -435,17 +435,30 @@ class SolMacroStrategy:
         return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
 
     def _admit_marginal_quant_short(self, edge, allowed_side, timing_open) -> bool:
-        """When the AI decision layer is OFF, admit sub-threshold marginal SHORTs on
+        """When the AI decision layer is OFF, admit sub-threshold marginal candidates on
         quant terms instead of letting them die on the AI tiebreaker (no-op when the
-        layer is disabled) or the final lane_min_edge gate. Default OFF, SHORT-only,
-        timing-open, edge above the marginal floor. Self-disables when the decision
-        layer is re-enabled. Ghost-validated BEARISH×SHORT marginals (2026-06-02)."""
+        layer is enabled) or the final lane_min_edge gate. Default OFF, timing-open,
+        edge above the marginal floor. Self-disables when the decision layer is
+        re-enabled.
+
+        Side scope is configurable via `admit_marginal_on_quant_sides`
+        (SHORT | LONG | BOTH; default SHORT = original behavior). Originally
+        SHORT-only, ghost-validated BEARISH×SHORT marginals (2026-06-02). Extended to
+        a configurable scope 2026-06-07: session ghost showed the in-scan AI tiebreaker
+        was killing 1874 marginal LONGs at 62% would-win / +21% EV while the AI's own
+        recommendation accuracy was 18% (directional 47%, 57% HOLD) — the gate was
+        anti-selective on the long side. Set the side scope to BOTH/LONG to stop it."""
         try:
+            if not bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False)):
+                return False
+            if self.ai_agent.decision_layer_enabled():
+                return False
+            scope = str(self.config.get("admit_marginal_on_quant_sides", "SHORT")).upper()
+            side = str(allowed_side).upper()
+            if scope != "BOTH" and side != scope:
+                return False
             return (
-                bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False))
-                and not self.ai_agent.decision_layer_enabled()
-                and allowed_side == "SHORT"
-                and bool(timing_open)
+                bool(timing_open)
                 and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
             )
         except Exception:
@@ -696,16 +709,6 @@ class SolMacroStrategy:
         # for BTC-lag/catch-up thesis: direction comes from BTC HTF + edges, not alt 1H sync.
         self.enforce_alt_1h_alignment = bool(
             self.config.get("enforce_alt_1h_alignment", True)
-        )
-        # 2026-06-06: HARD block of alt 5m BUY_YES when the alt's own 1h is BEARISH
-        # (added in b93ad0e, AFTER the +$257 baseline test_20260604_234611 which ran
-        # on e8da113 without it and traded balanced 69 longs/75 shorts @52% WR). It
-        # fired 127×/day, starving alt longs — a new restrictive gate, against the
-        # calibration-phase "no new gates / increase frequency" rule. Default OFF =
-        # lifted; the soft `enforce_alt_1h_alignment` dampening (which WAS in baseline)
-        # is untouched. Set True to re-enable the hard block.
-        self.block_alt_5m_longs_vs_bearish_1h = bool(
-            self.config.get("block_alt_5m_longs_vs_bearish_1h", False)
         )
         # RSI gating policy:
         # - default soft penalty (preserve trend participation)
@@ -1801,13 +1804,8 @@ class SolMacroStrategy:
         window_size: str,
         alt_1h_trend: Optional[str],
     ) -> Optional[str]:
-        """Block fast entries that fight the alt's own 1h direction.
-
-        Hard block, default OFF (see ``block_alt_5m_longs_vs_bearish_1h`` in __init__).
-        The soft ``enforce_alt_1h_alignment`` dampening is applied elsewhere and is
-        independent of this gate.
-        """
-        if not self.block_alt_5m_longs_vs_bearish_1h:
+        """Block fast entries that fight the alt's own 1h direction."""
+        if not self.enforce_alt_1h_alignment:
             return None
         if str(window_size or "").lower() != "5m":
             return None
