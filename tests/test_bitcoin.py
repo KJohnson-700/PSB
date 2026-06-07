@@ -309,47 +309,6 @@ def test_bitcoin_bias_quant_disagree_override_keeps_5m_strict():
     assert allowed is False
 
 
-def test_bitcoin_bias_quant_disagree_override_admits_5m_high_gap_when_enabled():
-    # 2026-06-06: 5m disagreement admit, large-gap slice only (ghost 77% would-win).
-    cfg = _make_config()
-    cfg["strategies"]["bitcoin"].update(
-        {
-            "bias_quant_disagree_override_enabled": True,
-            "bias_quant_disagree_allow_5m": True,
-            "bias_quant_disagree_5m_min_gap": 0.15,
-        }
-    )
-    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
-
-    # gap = yes - raw = 0.65 - 0.45 = 0.20 >= 0.15 -> admitted
-    reason_parts = []
-    allowed_big = strat._maybe_bias_quant_disagree_override(
-        is_updown=True,
-        window_size="5m",
-        action="BUY_YES",
-        htf_bias="BULLISH",
-        yes_price=0.65,
-        raw_est_prob=0.45,
-        edge=-0.20,
-        reason_parts=reason_parts,
-    )
-    assert allowed_big is True
-    assert any("bias_quant_override_gap=" in p for p in reason_parts)
-
-    # gap = 0.58 - 0.50 = 0.08 < 0.15 -> still refused (the ~40% middle slice)
-    allowed_small = strat._maybe_bias_quant_disagree_override(
-        is_updown=True,
-        window_size="5m",
-        action="BUY_YES",
-        htf_bias="BULLISH",
-        yes_price=0.58,
-        raw_est_prob=0.50,
-        edge=-0.08,
-        reason_parts=[],
-    )
-    assert allowed_small is False
-
-
 def _make_ta(
     price=75000,
     sabre_trend=1,  # 1=bull, -1=bear

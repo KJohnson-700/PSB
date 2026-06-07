@@ -4,7 +4,21 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
-## 2026-06-06 — Un-starve ALL 1h lanes: lower 1h min_edge across every asset (ghost-validated)
+## 2026-06-06 (LATER) — EV-driven revert: WR ≠ EV. Reverted 5 of 6 levers from commit 15835f5; kept only the alt long-gate lift
+
+After a kimi + codex review, recomputed every lever on **realized return (avg `realized_pct`)** instead of would-win **rate**. The original batch (15835f5) had validated entries on ghost WR — but many "winners" are cheap-NO shorts (win often, tiny payout, −100% on the rare loss), so high WR hid **negative EV**. Reverted config + `bitcoin.py` + `test_bitcoin.py` to parent; kept `sol_macro.py` (lever 5).
+
+**EV evidence (avg realized_pct, settled since 06-01):**
+- **1h min_edge cuts (lever 1): INERT + −EV.** The rejects sit at edge <0.03 (sol 256, bnb 60, etc. in 0.00–0.03; most negative), below the new 0.04–0.05 thresholds → ~0 admitted. The cohort that *would* be admitted if cut deeper is sharply price-split: +EV only at mid/low price (sol .40–.50 **+69%**, xrp .40–.50 +49%, btc <.40 +46%) but the bulk is −EV (sol .50–.60 **−11%** n=204, bnb .40–.50 −57%). A blanket cut can't capture this. **Reverted.**
+- **bull_regime_late_short (lever 2): −EV.** Bulk is `<.40` cheap shorts — 90% WR but EV −2 to −3% (5m n=290, 15m n=185). **Reverted.**
+- **disagree gap 0.30→0.45 (lever 3): −EV** (.30–.45 slice −2 to −8%). **Reverted.**
+- **BTC 5m disagree gap≥.15 (lever 4): −EV** (−8.6% at <.40, −2.4% at ≥.60) despite 77% WR. **Reverted** (code + flag).
+- **BTC 1h hold-to-res + ETH 1h stop widen (lever 6):** both reviewers + regime mismatch (the recovery audit was a falling tape; tape now rising). **Reverted.**
+- **Alt 5m long-gate lift (lever 5): +EV across the board** — would-be-blocked longs settle eth **+53%** (n=34), xrp **+78%** (n=22), sol +3%, bnb +2%. **KEPT** (the only survivor).
+
+**Lesson (added to memory):** validate admission changes on **avg realized_pct (EV), not WR** — bucket by entry-price band; a high blended WR can be cheap-short noise. The real 1h opportunity is a **price-band-gated** admission (`.40–.50` is reliably +EV on sol/xrp/btc), not a blanket min_edge cut — logged as the follow-up.
+
+## 2026-06-06 — Un-starve ALL 1h lanes: lower 1h min_edge across every asset (ghost-validated) — REVERTED (see EV-driven revert above)
 
 - **What changed (config only, `config/settings.yaml`, `entry_policy.window_side_overrides.1h` per strategy):** lowered 1h `min_edge` (up/down): BTC 0.09→0.06; SOL 0.07→0.05; XRP 0.05/0.06→0.03/0.04; HYPE 0.06→0.04; DOGE 0.04/0.06→0.03/0.04; BNB 0.08→0.05. **ETH left at 0.09** (its 1h blocker is `eth_1h_weak_confirm`, not min_edge — see below). Edited via ruamel to preserve comments; verified diff is only the 10 min_edge lines.
 - **Why:** user reported all 1h lanes not firing. Live reject counts (today) confirmed `lane_min_edge` is the top 1h blocker on every alt (sol 355, bnb 156, xrp 152, doge 107, hype 97). **Ghost (`rejected_candidates_settled`, since 2026-06-01) shows these rejected 1h candidates settle as winners:** sol 69% (n=511), bnb 79% (n=268), xrp 87% (n=241), doge 88% (n=159), hype 90% (n=100), btc 92% (n=91). The 1h min-edge bar was set too high and was rejecting profitable trades. Cut deeper where ghost WR was highest.

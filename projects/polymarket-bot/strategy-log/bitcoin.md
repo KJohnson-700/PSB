@@ -17,7 +17,7 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
-### 2026-06-06 — Enable BTC 5m bias/quant-disagreement — HIGH-GAP slice only
+### 2026-06-06 — Enable BTC 5m bias/quant-disagreement — HIGH-GAP slice only — REVERTED (EV-negative: gap≥.15 avg realized_pct −8.6%/−2.4%; see changelog EV-driven revert)
 
 - **What changed:** `_maybe_bias_quant_disagree_override` ([bitcoin.py](src/strategies/bitcoin.py)) no longer hard-excludes 5m. New BTC config: `bias_quant_disagree_allow_5m: true`, `bias_quant_disagree_5m_min_gap: 0.15`. On 5m the override now admits a disagreement candidate (with the existing `bias_quant_disagree_size_multiplier: 0.33` haircut) **only when `|yes_price − raw_est| ≥ 0.15`**; smaller gaps still hard-reject. Two new `__init__` attrs; new test `test_bitcoin_bias_quant_disagree_override_admits_5m_high_gap_when_enabled`; existing `keeps_5m_strict` still passes (default-off + small-gap).
 - **Why:** The 5m exclusion was set on a 2026-05-27 prior that found 5m disagreement **realized-negative** — but that was the *whole* cohort. Fresh ghost (`rejected_candidates_settled`, n=558) splits sharply: `|yes−est|` gap **≥0.15 → 76.6% would-win (n=197)**, 0.10–0.15 → 62%, but the **<0.10 middle → ~40%** (the loser cohort the prior caught). Same split by price (yes≥0.60 → 77%, mid 0.45–0.60 → ~41%). So the lane isn't bad — only the low-conviction middle is. Admitting just the large-gap slice captures the winners and keeps excluding the 40% middle.
@@ -27,7 +27,7 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 - **Actual outcome:** `pending`
 - **Status:** `pending` — code+config+test, not committed, needs restart. Verify post-restart: admitted 5m disagreement fills are net-positive; if the realized WR underperforms the 77% scan number, raise `5m_min_gap` or flip the flag off.
 
-### 2026-06-06 — Un-starve BTC 5m/1h: loosen 3 winner-blocking gates (ghost-validated)
+### 2026-06-06 — Un-starve BTC 5m/1h: loosen 3 winner-blocking gates (ghost-validated) — REVERTED (inert + EV-negative; see changelog EV-driven revert)
 
 - **What changed (config only, `config/settings.yaml`, BTC block):** (1) `bull_regime_buy_no_min_mins_left` 2.0→0.5 and `_15m` 4.0→1.0 — the `bull_regime_late_short` gate. (2) `bias_quant_disagree_aligned_max_gap_non5m` 0.3→0.45 — admits more 15m/1h bias/quant-disagreement candidates via the existing size-haircut override. (3) BTC 1h `min_edge` (up+down) 0.09→0.06 in `entry_policy.window_side_overrides.1h`. 15m and 5m min_edge untouched.
 - **Why:** BTC stopped firing like the +$257 baseline (which traded 5m/15m/1h, 92% SHORT, in a *falling* tape). Tape reversed to rising (BULL), so BTC correctly flipped long (c711ad0 fresh-cross, working as intended) — but 5m/1h went silent. **Ghost (`rejected_candidates_settled`, since 2026-06-01) shows the gates eating the flow are blocking winners:** `bull_regime_late_short` rejects settle **82%** (5m, n=354) / **80%** (1h); `lane_min_edge_bias_quant_disagree` settle **56%** (5m, n=558) / **86%** (1h, n=72); plain `lane_min_edge` settle **58%** (5m) / **92%** (1h, n=91). The bull-regime late-short time gate and the high 1h min-edge bar were the biggest 1h winner-blockers. `bull_regime_expensive_short` left ON (ghost 28% — correctly blocks losers).
@@ -49,7 +49,7 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 - **Actual outcome:** n/a — reverted before any run.
 - **Status:** `REVERTED` (same day) — 1h-only test first; re-apply 15m if 1h forward-test is positive.
 
-### 2026-06-06 — 1h BUY_NO: hold to resolution (disable the % stop)
+### 2026-06-06 — 1h BUY_NO: hold to resolution (disable the % stop) — REVERTED (regime mismatch: recovery audit was falling tape, now rising; see changelog EV-driven revert)
 
 - **What changed:** Added `exit_rules.updown_overrides.bitcoin.window_lane_overrides.1h.down` in `config/settings.yaml`: `updown_hold_winners_to_resolution: true` + `updown_stop_loss_pct: 0.0`. Disables the early take-profit *and* the percentage stop for BTC 1h BUY_NO only; the late-window cents/time stop (`updown_stop_cents` / `updown_exit_window_mins`) stays as the loser floor near expiry. BTC 1h BUY_YES and all other windows untouched.
 - **Why:** Settled-exit audit (`data/calibration/trades_settled.jsonl`, n=22 BUY_NO, split by `exit_reason`): the `updown_stop_loss` leg (n=10) realized **−$23.47** but the same trades held to resolution net **+$2.02** — **4 of 10 stop-outs recover to a WIN by resolution**. The TP leg (n=12) realized +$53.94 vs held +$62.81. The global 20% stop (no BTC 1h override existed) was cutting trades a 1h market had time to recover. Triggered by a live BTC 1h BUY_NO stop-out (−$4.03 via `updown_stop_loss`, ~4 min after entry) on 2026-06-06.

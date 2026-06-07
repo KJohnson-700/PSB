@@ -12,7 +12,7 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
-### 2026-06-06 — 1h BUY_NO: widen the % stop 0.20→0.40
+### 2026-06-06 — 1h BUY_NO: widen the % stop 0.20→0.40 — REVERTED (n=3 anecdotal; see changelog EV-driven revert)
 
 - **What changed:** Added `down` under `exit_rules.updown_overrides.eth_macro.window_lane_overrides.1h` in `config/settings.yaml`: `updown_stop_loss_pct: 0.40` (up from the global 0.20). ETH 1h BUY_YES (`up`) lane unchanged.
 - **Why:** Settled-exit audit (`data/calibration/trades_settled.jsonl`, BUY_NO 1h): the `updown_stop_loss` leg (n=3) realized **−$8.44** but held to resolution **+$7.99**, with 2/3 recovering; TP leg (n=6) +$28.35 vs held +$40.78. Same pattern as BTC 1h BUY_NO — the 20% stop cuts recoverable 1h trades. But n=9 total is below the audit's min-apply (20), so this lane gets a *conservative widen* (keep a backstop) rather than the full hold-to-resolution applied to BTC.

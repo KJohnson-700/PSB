@@ -289,17 +289,6 @@ class BitcoinStrategy:
         self.bias_quant_disagree_size_multiplier = float(
             self.config.get("bias_quant_disagree_size_multiplier", 0.50) or 0.50
         )
-        # 2026-06-06: BTC 5m disagreement was hard-excluded. Ghost (n=558) splits:
-        # the high-conviction slice (|yes-est| gap >= ~0.15) settles ~77% would-win,
-        # while the small-gap middle (gap < 0.10) is ~40% — the cohort the 2026-05-27
-        # prior found realized-negative. Admit ONLY the large-gap 5m slice, opt-in,
-        # keeping the size haircut. Default OFF.
-        self.bias_quant_disagree_allow_5m = bool(
-            self.config.get("bias_quant_disagree_allow_5m", False)
-        )
-        self.bias_quant_disagree_5m_min_gap = float(
-            self.config.get("bias_quant_disagree_5m_min_gap", 0.15) or 0.15
-        )
         self.macro_event_guard_enabled = bool(self.config.get("macro_event_guard_enabled", False))
         self.macro_event_guard_before_min = int(self.config.get("macro_event_guard_before_min", 30))
         self.macro_event_guard_after_min = int(self.config.get("macro_event_guard_after_min", 30))
@@ -552,6 +541,7 @@ class BitcoinStrategy:
         if (
             not self.bias_quant_disagree_override_enabled
             or not is_updown
+            or window_size == "5m"
             or raw_est_prob is None
             or htf_bias not in {"BULLISH", "BEARISH"}
         ):
@@ -571,14 +561,7 @@ class BitcoinStrategy:
         )
         if gap < 0:
             return False
-        if window_size == "5m":
-            # 5m: admit only the high-conviction (large-gap) disagreement slice;
-            # the small-gap middle is a ~40% would-win loser (prior realized-neg).
-            if not self.bias_quant_disagree_allow_5m:
-                return False
-            if gap < self.bias_quant_disagree_5m_min_gap:
-                return False
-        else:
+        if window_size != "5m":
             if gap > self.bias_quant_disagree_aligned_max_gap_non5m:
                 return False
             if edge < self.bias_quant_disagree_aligned_min_edge_non5m:
