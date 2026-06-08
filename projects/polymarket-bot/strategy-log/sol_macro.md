@@ -13,6 +13,24 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-07 — 1h BUY_YES price-banded floor bump + 5m-up/15m-down hold+trail exits
+
+- **What changed:** (A) Added price-band guard to `_alt_buy_yes_bullish_floor_bump` (`sol_macro.py:2129`, `yes_price` param; 1h only fires inside `1h_buy_yes_floor_price_min/max`). SOL 1h: `1h_buy_yes_bullish_floor_bump: 0.30`, band **0.60–0.88**. (B) Exit: `sol_macro 5m up` and `15m down` now `updown_hold_winners_to_resolution: true` + trail 0.1/0.15.
+- **Why:** (A) 1h longs rejected by `lane_min_edge` not because the bar is high but because `est_prob_up ≈0.63 < yes_price` → negative model-edge, despite the lane settling **91% WR / +12–26% held EV** (ghost n=158). Band excludes <0.60 (−9.6% EV) and the 0.90+ cheap-money trap. (B) Refreshed exit settler (794 rows): 5m-up held 76%/+$106 vs realized 48%/−$15 (gap +$121); 15m-down held 60%/+$108 vs 45%/+$13 (gap +$95) — early stop cuts directionally-right trades.
+- **Hypothesis:** Lifting `est_prob_up` within the +EV band admits the starved 1h-long cohort; holding winners to resolution recovers the stop-cut edge.
+- **Expected outcome:** 1h SOL BUY_YES entries appear; 5m-up / 15m-down realized PnL converges toward held.
+- **Actual outcome:** `pending` (≥15 closed trades per lane post-restart). Ghost EV is hold-to-resolution = upper bound vs live stops; 1h longs have no taken history → forward-test only.
+- **Status:** `pending` — needs restart. codex independently re-derived the bands.
+
+### 2026-06-06 — Zero SOL BUY_YES bullish-floor bumps
+
+- **What changed:** `sol_macro.5m_buy_yes_bullish_floor_bump` and `sol_macro.15m_buy_yes_bullish_floor_bump` are now `0.0`.
+- **Why:** Operator rule: zero every non-winner long bump and keep only the two proven winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** SOL BUY_YES entries stop relying on straight probability inflation from the bullish floor and require real raw edge from the live signal path.
+- **Expected outcome:** SOL 5m/15m BUY_YES frequency drops where edge was created only by the bump.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected SOL trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block 5m BUY_YES against bearish alt 1h and require true 1h bull for floor
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), added an alt-native guard: 5m `BUY_YES` is blocked when the alt's own 1h trend is `BEARISH`. Also changed `*_buy_yes_bullish_floor_bump` to key off the actual alt 1h trend, not the derived `PRIMARY_ALT_HTF`.

@@ -12,6 +12,36 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-07 — 1h BUY_YES price-banded floor bump
+
+- **What changed:** DOGE 1h: `1h_buy_yes_bullish_floor_bump: 0.30`, band **0.58–0.88** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).
+- **Why:** DOGE 1h longs reject on `lane_min_edge` from negative model-edge (`est_prob_up ≈0.60 < yes_price`). +EV across 0.60–0.90 (+20–35% held EV, 93% WR, ghost n=125); weak at 0.50–0.58 (+2%), so band starts at 0.58. 0.90+ trap excluded. Pairs with the 1h liquidity floor 250→100 (ee926f2).
+- **Hypothesis:** Banded bump admits the 0.58–0.88 +EV 1h-long cohort.
+- **Expected outcome:** DOGE 1h BUY_YES entries appear.
+- **Actual outcome:** `pending` (≥15 closed). Hold-to-resolution caveat; forward-test only.
+- **Status:** `pending` — needs restart. codex re-derived the band.
+
+### 2026-06-07 — Oracle basis cap 18→25 / relax 22→40 (DOGE was tightest of 7 assets) — REVERTED SAME DAY
+
+> **STATUS: REVERTED to HEAD (oracle_max_basis_bps back to 18).** Bundled into a session the user reverted; oracle is only DOGE's 4th blocker (median basis 6.9 bps, 87% pass) so low priority. Re-propose standalone if desired. Analysis below retained for reference.
+
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), DOGE `oracle_max_basis_bps` 18.0→25.0 and `oracle_basis_relax_max_bps` 22.0→40.0 (`oracle_stale_basis_relax_max_bps` left at 75.0).
+- **Why:** DOGE had the single tightest oracle basis cap of all 7 assets (18) despite being the only penny-priced asset, which structurally runs the widest Binance/Chainlink basis. Peers: ETH 40/60, BNB 30/40, BTC 25/30. **Correction to the framing that prompted this:** oracle basis is NOT DOGE's main blocker. Real basis dist (today's bot log, n=4234): median 6.9, p90 19.7, p99 49.8 bps — 87.3% already pass the 18 cap. The "DOGE basis runs 28–51 bps" claim was from cherry-picked oracle IDs. DOGE's actual blocker hierarchy today: min_edge 34,741 (mostly too-early re-scan noise) > composite skip 3,049 (median 0.077 below the 0.660 floor) > liquidity 2,576 > **oracle_basis_block 2,172 (4th)**. This change only recovers the 22–40 bps band (~5% of scans) via the flagged `oracle_basis_relaxed` path; it does not on its own restore baseline DOGE frequency.
+- **Hypothesis:** Aligning DOGE's clean cap with BTC (25) and widening the relax band to cover p90 lets the ~5% of legitimately-tradeable DOGE candidates in the 22–40 bps band through without admitting the ugly 40–60 (2.4%) / >60 (0.4%) tail.
+- **Expected outcome:** Fewer `oracle_basis_block` DOGE rejects; some new DOGE fills tagged `oracle_basis_relaxed`. Not ghost-validatable — oracle-blocked rows carry no edge/outcome, so this is a forward-paper experiment only.
+- **Actual outcome:** `pending` (needs restart — bot loaded old modules; then watch `trades_settled` for DOGE `oracle_basis_relaxed` fills).
+- **Status:** `pending` — NOT committed, NOT live until restart.
+
+### 2026-06-06 — Zero DOGE BUY_YES bullish-floor bumps
+
+- **What changed:** `doge_macro.15m_buy_yes_bullish_floor_bump: 0.11 → 0.0`; the already-zeroed `doge_macro.5m_buy_yes_bullish_floor_bump` remains `0.0`.
+- **Why:** Operator rule: zero every non-winner long bump and keep only the two proven winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** DOGE 15m BUY_YES no longer gets admitted by fabricated edge from the bullish floor bump.
+- **Expected outcome:** DOGE 15m BUY_YES frequency drops where raw edge was insufficient without the bump.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected DOGE trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-06 — 1h liquidity floor 250→100 (the one EV-clean 1h un-starve)
 
 - **What changed:** `config/settings.yaml` doge_macro `min_liquidity_1h` (+ `_1h_buy_no`, `_1h_buy_yes`) 250→100.

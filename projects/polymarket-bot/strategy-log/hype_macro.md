@@ -13,6 +13,15 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-06 — Keep only 5m BUY_YES bullish-floor winner
+
+- **What changed:** `hype_macro.15m_buy_yes_bullish_floor_bump: 0.10 → 0.0`; `hype_macro.5m_buy_yes_bullish_floor_bump` kept at `0.18`.
+- **Why:** Operator rule: zero every non-winner long bump and keep only the two proven winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** HYPE 15m no longer admits fabricated-edge longs from the bullish floor, while the live-winning HYPE 5m bump remains active.
+- **Expected outcome:** HYPE 15m BUY_YES frequency drops where raw edge was created only by the bump; HYPE 5m BUY_YES remains unchanged.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected HYPE trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by HYPE, 5m `BUY_YES` is blocked when HYPE 1h is `BEARISH`, and the 5m bullish floor now requires the actual HYPE 1h trend to be `BULLISH`.

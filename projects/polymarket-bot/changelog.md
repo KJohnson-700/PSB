@@ -4,7 +4,72 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
-## 2026-06-06 (LATEST) — 1h min_edge → 0.0 for BTC/XRP/BNB only (admit positive-edge 1h; sol/doge/hype excluded as EV traps)
+## 2026-06-07 — Fix: bot unkillable after clean shutdown (asyncio.run teardown hang)
+
+**Symptom:** bot caught Ctrl-C, ran a full graceful shutdown (`runtime_status` = `shutdown_complete`, `clean_shutdown: true`, 0 open positions), then the **process refused to exit** and ignored further Ctrl-C. ~8 restarts on 2026-06-07 fighting this.
+
+**Root cause (SIGABRT faulthandler dump):** the hang is NOT in `bot.shutdown()` — that completes. It's in `asyncio.run(main())`'s own teardown ([main.py:4220](src/main.py:4220) → `runners.py close` → `shutdown_asyncgens` / `shutdown_default_executor` → `run_until_complete` → `select()` forever). On Python 3.11 those teardown calls have **no timeout**, so a lingering aiohttp/uvloop stream reader / `run_in_executor` thread that never unblocks pins the interpreter. The 8s force-exit only wrapped `bot.shutdown()` (already returned), and the repeat-Ctrl-C handler deliberately logged "waiting" and refused to force-kill → unkillable by signal.
+
+**Fix (`src/main.py`, mirrors the existing `_os._exit(0)` fast-path at line ~1612):**
+1. **Hard-exit after graceful shutdown** — `os._exit(0)` at the end of `main()`'s `finally` (trading path) and the `--dashboard-only` path, *after* the shutdown banner. State is already persisted by `bot.shutdown()`, so this just skips asyncio.run's hang-prone teardown. stdout/stderr flushed first.
+2. **2nd Ctrl-C now force-exits** — the repeated-signal handler escalates to `os._exit(1)` instead of logging "waiting" (operator escape hatch if `bot.shutdown()` itself ever wedges).
+
+**Verified:** syntax + 39 main/shutdown/signal tests pass; standalone repro (non-daemon thread blocked forever) exits in 0.12s/code 0 with the pattern vs hangs without. **Needs restart to take effect** (the dead process ran the old code). NOT committed.
+
+## 2026-06-07 — 1h-long un-starve via price-banded floor bump + exit refresh (codex-reviewed)
+
+Two tracks from a plan review. **No tightening** (frequency-priority phase). All forward-test, restart-gated, NOT committed.
+
+**Root cause (Track A — why 1h longs don't trade):** NOT `min_edge`. a9610d9 already 0'd 1h `min_edge` for btc/xrp/bnb, but rows generated *after* it still reject on `lane_min_edge` (sol_macro.py:4674) because the **edge itself is negative**: model `est_prob_up ≈ 0.63` sits below market `yes_price ≈ 0.83` → `edge ≈ −0.20`. The market prices the up-move at 83¢ and it resolves YES ~87% (+12–34% held EV, ghost `rejected_candidates_settled`), but the model under-shoots, so the gate correctly rejects on *its* edge. Lowering `min_edge` can't fix a negative edge — the fix is lifting `est_prob_up`.
+
+**Track A applied — price-banded 1h BUY_YES floor bump (extends the validated 5m/15m mechanism + BTC's existing 1h price-band pattern):**
+1. **New price-band guard in `_alt_buy_yes_bullish_floor_bump`** (`sol_macro.py:2129`): added `yes_price` param; for `window_size=="1h"` the bump only fires inside `{strategy}.1h_buy_yes_floor_price_min/max`. Mirrors `btc_1h_buy_yes_floor_price_min/max`. Behavior-neutral until 1h keys set. Both call sites (5m + window_label) pass `yes_price`. Unit-tested (in-band fires, 0.90+ trap suppressed, <min suppressed, BUY_NO/non-bullish suppressed).
+2. **Per-asset 1h config keys** (EV by price band, ghost since 2026-05-30, codex independently re-derived the same bands):
+   - **BNB** band 0.50–0.88, bump 0.30 — cleanest, whole band +EV (+22–56%, 87% WR, n=213).
+   - **SOL** band 0.60–0.88, bump 0.30 — <0.60 is −9.6% EV, excluded by band (+18–26%, n=158).
+   - **DOGE** band 0.58–0.88, bump 0.30 — skips weak 0.50–0.58 (+20–35%, n=125).
+   - **XRP** band 0.50–0.66, bump 0.10 — TIGHT: 0.70–0.90 is **−33% EV**; small bump admits only the 0.50–0.65 +EV cohort (+23–34%, n=146).
+   - **Excluded:** the 0.90+ band on every asset (cheap-money trap, ~+3% EV, −100% tail). XRP *short* (BUY_NO — floor bump is BUY_YES-only). ETH long (separate `eth_macro.py` scan loop; a9610d9 deliberately left it — needs its own port).
+   - Caveat (carried from a9610d9 reviewers): ghost EV is hold-to-resolution = upper bound vs live early stops. 1h longs have **no taken history**, so realized-exit survival is genuinely forward-test-only.
+
+**Track B — exit settler was 4 days stale; refreshed it, then applied the fresh drift:**
+3. **Re-ran `taken_exit_settler --since 2026-06-04`** — `trades_settled.jsonl` had stopped at 2026-06-04 (right when the per-lane exit overrides landed), so the overrides were unevaluated. Now 794 settled rows through 2026-06-08. Recomputed `lane_exit_policy.json` (recommend-only). The original "stops bleed −$456" read was *stale, pre-override* data.
+4. **Enabled hold+trail (loosening) on the 2 fresh drifts** where the early stop cuts directionally-right trades:
+   - **sol_macro 5m up (BUY_YES):** held 76% / +$106 vs realized 48% / −$15 (gap +$121).
+   - **sol_macro 15m down (BUY_NO):** held 60% / +$108 vs realized 45% / +$13 (gap +$95).
+   - Both `updown_hold_winners_to_resolution: true` + trail 0.1/0.15. The other 3 "A" lanes (eth 15m short, doge 5m long, xrp 15m short) already hold — no change.
+   - **Left as-is:** `bnb_macro|15m|BUY_NO` — fresh data mildly prefers tight TP/SL (gap only +$7, n=22 thin); reverting the 2026-06-04 hold would be marginal exit-tightening on negligible signal. Watching as n grows.
+
+**Verification:** 187 strategy/exit/buy_yes tests pass; full suite re-run; YAML loads; floor-bump guard unit-tested; sol drift cleared on policy recompute. **Needs restart** to load (long-running bot has stale modules).
+
+## 2026-06-07 — ETH/SOL/HYPE long un-starve (Plan B, ghost-validated + codex-reviewed)
+
+**Applied (forward-test, restart-gated, NOT committed):**
+1. **New surgical flag `alt_1h_hard_block_5m_longs`** (`sol_macro.py` `_alt_1h_alignment_blocks_entry`, code-default **True** = preserves all inheriting alts). Splits the HARD 5m-long veto from the soft `h1_dampen` est_prob nudges (which stay under `enforce_alt_1h_alignment`). Set **false for eth_macro + sol_macro** only. Ghost: `alt_1h_bearish_blocks_5m_buy_yes` blocked longs win **ETH 82% (+52.7% EV, n=34)** / SOL 62% (+3.3% EV, n=77) — the lagging 1h-bearish label was killing winning 5m longs. ETHMacroStrategy inherits SolMacroStrategy so one code change covers both.
+2. **ETH long marginal-admit enabled** (`admit_marginal_on_quant_when_ai_disabled: true`, `admit_marginal_on_quant_sides: long`; floor `ai_updown_marginal_min_edge` already 0.03). ETH was the ONLY alt missing this (SOL/DOGE/BNB had it). Un-starves broader ETH LONG cohort (ghost `lane_min_edge` n=3019 LONG +3% EV, median +0.87). Codex preferred this over raw min_edge cuts — it's explicit calibration mode and self-disables if the AI decision layer is re-enabled. SOL left as-is (already had long marginal-admit; lowering further = redundant per codex).
+3. **HYPE 5m-SHORT weak_5m_signal → soft penalty** (`weak_5m_signal_soft_penalty_short: true`, HYPE-only). Converts hard reject to the existing dip-path est_prob penalty template, SHORT-only. Ghost: HYPE weak_5m_signal (all SHORT) n=981 +6.5% EV / 56% win / median +0.08. HYPE 15m-up winner + longs + exits untouched.
+
+**Codex second-opinion (consulted before execution):** confirmed surgical-flag over `enforce_alt_1h_alignment=false` (the flag also gates useful soft dampening); confirmed ETH n=34 strong-enough to act since it only lifts a 5m-long hard veto; confirmed SOL needs no further min_edge cut; endorsed HYPE short-only soft-penalty. Excluded ETH/SOL `price_too_far` despite +EV (median −1.0, win <10% = fat-tail trap, NOT the WR-not-EV trap).
+
+**REVERTED this session (did NOT survive review):** the earlier BTC-regime-decouple re-application (`regime_action_gate_enabled→false`, soft-blend gating in `updown_composite_score.py`), DOGE oracle cap 18→25, and the BUY_YES floor-bump zeroing were all reverted to HEAD via `git checkout`. Reason: user clarified they had **deliberately reverted the 06-06 session because it hurt the bot / didn't beat baseline** — and audit showed those edits weren't even live in the underperforming test (it predated them). Config + scorer are back to the running state (BTC bumps on, `regime_action_gate_enabled: true`, oracle 18).
+
+**BTC audit verdict (A3 — leave BTC alone):** the +127 test's BTC weakness is market-driven (BTC fell during the 4h window; the 100%-long book stopped out; circuit breakers correctly limited damage), NOT a code regression. BTC's real WR is ~44–55% (the +187/70% baseline was a one-off up-session). **BTC shorts are EV-negative across every price band** (ghost n=952, hold-to-resolution) — the `bull_regime_late_short`/`expensive_short` gates are CORRECT. A naive "30% stop flips it positive" sim (kimi) is invalid: asymmetric loss-flooring, ignores winner stop-outs, fast-resolving markets won't fill, and ghosts can't validate exit/stop changes anyway. One thread to watch: `buy_yes_quant_and_momentum_short` is +3.3% EV even hold-to-resolution (n=20, momentum-confirmed shorts) — too thin to act.
+
+## 2026-06-07 — Disabled self-healing auto-apply and cold-lane Discord escalations
+
+Turned off `self_healing.enabled`, `self_healing.auto_apply.enabled`, and `self_healing.escalation.notify` in `config/settings.yaml`. Audit of `data/learning/self_healing_actions.jsonl` found 337 auto-heal rows but only four lane buckets, and no matching trades during their 12h TTL windows. Current supervisor output was `applied=0`, `escalations=8`, meaning the loop had become diagnostic/Discord noise rather than a useful control path. Re-enable only after adding outcome tracking proving a runtime loosen creates fills and improves realized PnL.
+
+Also closed the other active data loops for baseline recovery: `lane_calibration.enabled: false` with code guards so closed trades/ghost settling no longer update lane posteriors, `performance_feedback.enabled: false` (no runtime `_runtime_feedback` min-edge multipliers), `lane_calibration.per_lane_thresholds.enabled/recompute_on_settle: false` (no ghost-derived threshold hot-load/recompute), `lane_exit_policy.enabled/alert_discord: false` (no exit drift recompute alerts), and `learning_loop.enabled: false` (no proposal/vault generation). Passive journaling and ghost evidence files remain available for manual review.
+
+## 2026-06-06 (LATEST, 21:30) — Killed two things bleeding BTC/alt LONGS under a sustained bull: `btc_regime_action_block` gate + toxic BUY_YES floor bumps
+
+Diagnosing "BTC win rate is horrible since baseline." Two distinct culprits, both config-only, forward-test, **restart-gated**.
+
+**1. Disabled `btc_regime_action_block`** (`updown_composite.regime_action_gate_enabled: true → false`). This gate (shipped 2026-05-21, `0d7bec1`, default-on) *hard-rejected* any `BUY_YES` when **BTC** 1h regime = BULL and convergence < 0.55 — and the regime is classified from BTC TA then applied to xrp/hype/bnb/doge via sol_macro. That's a **BTC-deciding-alt admission gate** = violates the "alts not decided by BTC" rule; it survived the 2026-05-22 decouple because it lives in the shared composite scorer, not the strategy files. Dormant for ~2wk; activated once BTC HTF turned persistently bullish (BNB 16 / DOGE 7 / XRP 6 longs/scan killed) and silently cancelled the `a9610d9` 1h un-starve. **Not in the settled ghost log (0 rows)** → forward-test only. Follow-up if longs prove low-quality: rebuild it *alt-native* (gate each alt off its own 1h) + route rejections to the ghost settler.
+
+**2. Zeroed toxic/non-winner `*_buy_yes_bullish_floor_bump`** on BTC 5m+15m, sol 5m+15m, xrp 5m+15m, doge 5m+15m, hype 15m, and bnb 15m. These bumps (added 05-28/29, `7deed51`) were validated on **hold-to-resolution** ghost WR, but **realized taken-trade** WR with live exits, under sustained bull, shows them fabricating fake edge: the bump adds straight to est_prob (BTC 15m: raw 0.493 + 0.26 = 0.753 = logged `calibrated_est_prob`), so it manufactures the whole `stated_edge`; without it these longs have ~0 raw edge and wouldn't be admitted. Realized since 06-01 includes **BTC 15m 32.5%WR −$33, doge 5m 11.8%WR −$58, sol 5m 35.7%WR −$21, bnb 15m 21.4%WR −$19.** **KEPT (live winners only):** bnb 5m (54%WR +$52), hype 5m (58%WR +$37). **Lesson: ghost +EV (hold-to-resolution) ≠ realized +EV once exits/stops bite — the `realized_pct` upper-bound caveat is real.** These two pair up: disabling the gate lets more longs through, so removing fake-edge bumps matters more. Revert = restore the listed values + `regime_action_gate_enabled: true`.
+
+## 2026-06-06 (21:25) — 1h min_edge → 0.0 for BTC/XRP/BNB only (admit positive-edge 1h; sol/doge/hype excluded as EV traps)
 
 The real 1h starvation: `lane_min_edge` rejects sit at edge 0.00–0.03, below the old 0.06–0.09 bar, so they're gated. Setting 1h `min_edge=0.0` admits the **positive-edge** cohort (excludes negative-edge cheap shorts). EV-checked (avg realized_pct) and **double-reviewed by codex + kimi**, who agreed on per-asset:
 - **KEEP 0.0:** BTC (edge≥0 cohort EV +44.5%, n=13), XRP (+47%, dominant .50–.60 +57%, n=36), BNB (+22%, dominant .50–.60 +33%, n=60).

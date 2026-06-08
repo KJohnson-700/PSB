@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-06-06 — Zero BTC BUY_YES bullish-floor bumps
+
+- **What changed:** `bitcoin.btc_5m_buy_yes_bullish_floor_bump: 0.20 → 0.0` and `bitcoin.btc_15m_buy_yes_bullish_floor_bump: 0.26 → 0.0`.
+- **Why:** Live taken-trade evidence showed BTC long bumps fabricating edge under bullish bias; operator rule now keeps only the two proven long-bump winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** BTC BUY_YES entries stop relying on straight probability inflation from the bullish floor and require real raw edge from the signal path.
+- **Expected outcome:** BTC 5m/15m BUY_YES frequency drops where edge was created only by the bump; accepted longs should have cleaner stated-edge provenance.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected BTC trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-06 — Enable BTC 5m bias/quant-disagreement — HIGH-GAP slice only — REVERTED (EV-negative: gap≥.15 avg realized_pct −8.6%/−2.4%; see changelog EV-driven revert)
 
 - **What changed:** `_maybe_bias_quant_disagree_override` ([bitcoin.py](src/strategies/bitcoin.py)) no longer hard-excludes 5m. New BTC config: `bias_quant_disagree_allow_5m: true`, `bias_quant_disagree_5m_min_gap: 0.15`. On 5m the override now admits a disagreement candidate (with the existing `bias_quant_disagree_size_multiplier: 0.33` haircut) **only when `|yes_price − raw_est| ≥ 0.15`**; smaller gaps still hard-reject. Two new `__init__` attrs; new test `test_bitcoin_bias_quant_disagree_override_admits_5m_high_gap_when_enabled`; existing `keeps_5m_strict` still passes (default-off + small-gap).

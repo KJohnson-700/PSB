@@ -8,6 +8,28 @@
 
 ---
 
+## 2026-06-07 — Shutdown hang fix + 1h-long un-starve (floor bump) + sol exit hold/trail
+
+| File | Change | Why |
+|--------|--------|-----|
+| `src/main.py` | Hard-`os._exit(0)` after graceful shutdown (trading + dashboard-only paths); 2nd Ctrl-C now force-exits. | Bot caught Ctrl-C and logged `shutdown_complete` but `asyncio.run()` teardown (`shutdown_asyncgens`/`shutdown_default_executor`, no timeout on py3.11) hung on a lingering aiohttp/uvloop thread → process unkillable. |
+| `config/settings.yaml`, `src/strategies/sol_macro.py` | Price-banded 1h BUY_YES floor bump (new `yes_price` guard + per-asset 1h keys for sol/xrp/doge/bnb); sol 5m-up & 15m-down `hold_winners`+trail. | 1h longs rejected by negative *model*-edge (est_prob under-shoot), not min_edge — loosening, not tightening. Exit: settler-refreshed drift (held ≫ realized). See `projects/polymarket-bot/changelog.md` 2026-06-07. |
+
+## 2026-06-07 — Persistent deadzone evidence for Ghost Lab
+
+| File | Change | Why |
+|--------|--------|-----|
+| `src/execution/trade_journal.py` | Added durable append-only `data/calibration/deadzone_skips_settled.jsonl` rows and compact `deadzone_skips_rollup.json` updates when `DEAD_ZONE_SKIP` events resolve. | Deadzone heatmaps must accumulate across bot/paper sessions; session-local journal rows are not a reliable long-term evidence store. |
+| `src/dashboard/server.py` | Ghost Lab now loads durable deadzone rows and de-duplicates them against reconstructed paper-session rows; `/health` revision bumped. | Keep raw replay capped for latency while preserving full persistent deadzone evidence in aggregates. |
+| `tests/test_trade_journal_resumable.py`, `tests/test_dashboard_bundle.py` | Added coverage for durable deadzone writes, rollup updates, dashboard loading, and duplicate suppression. | Prevent regression to current-session-only deadzone heatmaps. |
+
+## 2026-06-06 — Ghost Lab dashboard payload controls
+
+| File | Change | Why |
+|--------|--------|-----|
+| `src/dashboard/index.html` | Added Ghost Lab replay row selector, lowered the default raw replay pull to 1k events, surfaced replay capped/total counts, and made Lane detail row truncation visible with a 50/100/200/500 row control. | Keep the dashboard responsive while preserving complete lane/hour aggregates for review. |
+| `src/dashboard/server.py` | Lowered `/api/ghosts/lab` default raw event cap to 1k and returned `raw_event_limit` / `events_truncated` metadata. | Make raw event payload limits explicit and aligned with the optimized UI default. |
+
 ## 2026-06-06 (later) — Baseline review vs +$257 session: untighten winners + instrument BTC guard
 
 New headline baseline recorded: `test_20260604_234611` (+$257.63, 143t, 52.4% WR; BTC short engine in a falling tape). See [`docs/PSB_BASELINE_SESSIONS.md`](docs/PSB_BASELINE_SESSIONS.md) Session E, last overnight follow-on Session F `test_20260606_013635` (+$99.91).

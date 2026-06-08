@@ -14,6 +14,24 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-07 — 1h BUY_YES price-banded floor bump (TIGHT band — XRP turns −EV above 0.66)
+
+- **What changed:** XRP 1h: `1h_buy_yes_bullish_floor_bump: 0.10`, band **0.50–0.66** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).
+- **Why:** XRP 1h longs reject on `lane_min_edge` from negative model-edge (`est_prob_up ≈0.62 < yes_price`). Unlike the other alts, XRP 1h long is +EV **only** in 0.50–0.65 (+23–34%) and goes **NEGATIVE at 0.70–0.90 (−33%)** — so the band is deliberately tight and the bump small (just enough to clear the 0.50–0.65 cohort). ghost n=146.
+- **Hypothesis:** Small banded bump admits the 0.50–0.65 +EV cohort without touching the −EV 0.70–0.90 zone.
+- **Expected outcome:** XRP 1h BUY_YES entries appear, concentrated below 0.66.
+- **Actual outcome:** `pending` (≥15 closed). Hold-to-resolution caveat applies; forward-test only.
+- **Status:** `pending` — needs restart. codex re-derived the band.
+
+### 2026-06-06 — Zero XRP BUY_YES bullish-floor bumps
+
+- **What changed:** `xrp_macro.5m_buy_yes_bullish_floor_bump: 0.22 → 0.0` and `xrp_macro.15m_buy_yes_bullish_floor_bump: 0.13 → 0.0`.
+- **Why:** Operator rule: zero every non-winner long bump and keep only the two proven winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** XRP BUY_YES entries stop relying on straight probability inflation from the bullish floor and require real raw edge from the live signal path.
+- **Expected outcome:** XRP 5m/15m BUY_YES frequency drops where edge was created only by the bump; accepted longs should have cleaner stated-edge provenance.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected XRP trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by XRP, 5m `BUY_YES` is blocked when XRP 1h is `BEARISH`, and the 5m bullish floor now requires the actual XRP 1h trend to be `BULLISH`.

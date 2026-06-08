@@ -710,6 +710,14 @@ class SolMacroStrategy:
         self.enforce_alt_1h_alignment = bool(
             self.config.get("enforce_alt_1h_alignment", True)
         )
+        # 2026-06-07: surgical split from enforce_alt_1h_alignment. This flag gates ONLY
+        # the HARD 5m-long veto (_alt_1h_alignment_blocks_entry); the soft h1_dampen
+        # est_prob nudges stay under enforce_alt_1h_alignment. Default True preserves
+        # behavior for all inheriting alts; set False per-asset (eth/sol) to un-starve
+        # 5m longs the lagging 1h-bearish label was killing (ghost: ETH +52.7% EV/82% win).
+        self.alt_1h_hard_block_5m_longs = bool(
+            self.config.get("alt_1h_hard_block_5m_longs", True)
+        )
         # RSI gating policy:
         # - default soft penalty (preserve trend participation)
         # - optional hard block fallback for emergency suppression
@@ -1807,6 +1815,8 @@ class SolMacroStrategy:
         """Block fast entries that fight the alt's own 1h direction."""
         if not self.enforce_alt_1h_alignment:
             return None
+        if not self.alt_1h_hard_block_5m_longs:
+            return None
         if str(window_size or "").lower() != "5m":
             return None
         alt_h1 = str(alt_1h_trend or "NEUTRAL").upper()
@@ -2122,6 +2132,7 @@ class SolMacroStrategy:
         window_size: str,
         action: str,
         htf_bias: str,
+        yes_price: Optional[float] = None,
     ) -> float:
         """Post-calibration BUY_YES floor bump — mirror of the BTC hook.
 
@@ -2132,14 +2143,30 @@ class SolMacroStrategy:
         config'd amount maps ~1:1 onto edge. Asymmetric — BUY_NO untouched. Per-asset
         per-window via `{strategy}.<tf>_buy_yes_bullish_floor_bump`; unset => 0.0 (off).
         SOL and DOGE/XRP 15m are intentionally left unset (ghost −EV).
+
+        1h is additionally PRICE-BAND gated (mirror of the BTC 1h hook,
+        bitcoin.py): the 1h +EV cohort is a mid yes-price band (per-asset ~0.50–0.88,
+        ghost 2026-06-07), while the 0.90+ band is the cheap-money trap (~+3% EV,
+        near-zero upside / −100% tail). A blanket 1h bump would admit that trap by
+        edge-rank, so the 1h bump only fires inside
+        `{strategy}.1h_buy_yes_floor_price_min/max`; outside the band => 0.0.
+        5m/15m keep the blanket bump (ghost-validated 2026-05-28).
         """
         if action != "BUY_YES" or htf_bias != "BULLISH":
             return 0.0
         if window_size not in ("5m", "15m", "1h"):
             return 0.0
-        return float(
+        bump = float(
             self.config.get(f"{window_size}_buy_yes_bullish_floor_bump", 0.0)
         )
+        if bump <= 0.0:
+            return 0.0
+        if window_size == "1h" and yes_price is not None:
+            fp_min = float(self.config.get("1h_buy_yes_floor_price_min", 0.50))
+            fp_max = float(self.config.get("1h_buy_yes_floor_price_max", 0.88))
+            if not (fp_min <= yes_price <= fp_max):
+                return 0.0
+        return bump
 
     def _strong_enough_5m_signal(self, m5_adj: float, action: str) -> bool:
         """Optional guard for weak 5m-only entries.
@@ -3492,14 +3519,23 @@ class SolMacroStrategy:
                         # confidence boost so we don't trade weak setups at
                         # full conviction.
                         _is_dip_path = str(side_source or "").startswith("bearish_dip")
-                        if _is_dip_path:
+                        # 2026-06-07: HYPE-only (config-gated, default off) soft-penalty
+                        # for 5m SHORT. Ghost: HYPE weak_5m_signal (all SHORT) n=981
+                        # +6.5% EV / 56% win / median +0.08 — a real, if thin, short edge
+                        # the hard reject was killing. Codex-reviewed: short-only, small,
+                        # exits/price-bounds unchanged. Same penalty template as dip path.
+                        _soft_short = (
+                            action == "BUY_NO"
+                            and bool(self.config.get("weak_5m_signal_soft_penalty_short", False))
+                        )
+                        if _is_dip_path or _soft_short:
                             _dip_penalty = 0.02  # est_prob shrink toward 0.5
                             if allowed_side == "LONG":
                                 est_prob_up -= _dip_penalty
                             else:
                                 est_prob_up += _dip_penalty
                             reason_parts.append(
-                                f"weak_5m_penalty_dip(m5_adj={m5_adj:+.2f})"
+                                f"weak_5m_penalty{'_dip' if _is_dip_path else '_short'}(m5_adj={m5_adj:+.2f})"
                             )
                             # fall through to the rest of scoring; do not reject
                         else:
@@ -3628,6 +3664,7 @@ class SolMacroStrategy:
 
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=mtt.h1_trend,
+                        yes_price=yes_price,
                     )
                     if _byn_floor_5m > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
@@ -3853,6 +3890,7 @@ class SolMacroStrategy:
 
                     _byn_floor = self._alt_buy_yes_bullish_floor_bump(
                         window_size=window_label, action=action, htf_bias=mtt.h1_trend,
+                        yes_price=yes_price,
                     )
                     if _byn_floor > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor)

@@ -12,6 +12,24 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-07 — 1h BUY_YES price-banded floor bump (cleanest of the 4 alts)
+
+- **What changed:** BNB 1h: `1h_buy_yes_bullish_floor_bump: 0.30`, band **0.50–0.88** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).
+- **Why:** BNB 1h longs reject on `lane_min_edge` from negative model-edge (`est_prob_up ≈0.63 < yes_price`) — `min_edge` already 0 (a9610d9), so the bar isn't the problem, the under-shooting model is. BNB is the cleanest case: +EV across the **whole** 0.50–0.90 band (+22–56% held EV, 87% WR, ghost n=213). Only the 0.90+ cheap-money trap excluded.
+- **Hypothesis:** Banded bump admits the 0.50–0.88 +EV 1h-long cohort.
+- **Expected outcome:** BNB 1h BUY_YES entries appear.
+- **Actual outcome:** `pending` (≥15 closed). Hold-to-resolution caveat; forward-test only.
+- **Status:** `pending` — needs restart. codex re-derived the band.
+
+### 2026-06-06 — Keep only 5m BUY_YES bullish-floor winner
+
+- **What changed:** `bnb_macro.15m_buy_yes_bullish_floor_bump: 0.19 → 0.0`; `bnb_macro.5m_buy_yes_bullish_floor_bump` kept at `0.19`.
+- **Why:** Operator rule: zero every non-winner long bump and keep only the two proven winners, HYPE 5m and BNB 5m.
+- **Hypothesis:** BNB 15m no longer admits fabricated-edge longs from the bullish floor, while the live-winning BNB 5m bump remains active.
+- **Expected outcome:** BNB 15m BUY_YES frequency drops where raw edge was created only by the bump; BNB 5m BUY_YES remains unchanged.
+- **Actual outcome:** `pending` — requires bot restart and at least 15 closed affected BNB trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-05 — Block weak 5m BUY_YES bounces against bearish/neutral 1h floor logic
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by BNB, 5m `BUY_YES` is blocked when BNB 1h is `BEARISH`, and the 5m bullish floor now requires the actual BNB 1h trend to be `BULLISH`.

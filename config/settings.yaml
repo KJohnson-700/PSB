@@ -128,6 +128,14 @@ trading:
       sol_macro:
         window_lane_overrides:
           5m:
+            up:
+              # 2026-06-07: hold+trail. Refreshed exit settler (n=21): held_wr 76%
+              # / held_pnl +$106 vs realized 48% / -$15 — the early stop murders a
+              # directionally-right long (gap +$121). lane_exit_policy.json drift.
+              # Forward-test only; needs restart.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -147,6 +155,13 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
+              # 2026-06-07: hold+trail. Refreshed exit settler (n=20): held_wr 60%
+              # / held_pnl +$108 vs realized 45% / +$13 — the early stop cuts a
+              # directionally-OK short (gap +$95). lane_exit_policy.json drift.
+              # Forward-test only; needs restart.
+              updown_hold_winners_to_resolution: true
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
       hype_macro:
         window_lane_overrides:
           5m:
@@ -598,6 +613,9 @@ strategies:
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: true
     enforce_alt_1h_alignment: true
+    # 2026-06-07: lift ONLY the hard 5m-long veto (keep soft h1_dampen). Ghost: SOL
+    # alt_1h_bearish_blocks_5m_buy_yes blocked longs win 62% (+3.3% EV). Forward-test.
+    alt_1h_hard_block_5m_longs: false
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
@@ -606,6 +624,16 @@ strategies:
     rsi_soft_penalty_buy_no: 0.0
     5m_buy_yes_bullish_floor_bump: 0.19
     15m_buy_yes_bullish_floor_bump: 0.21
+    # 2026-06-07: price-banded 1h BUY_YES floor bump. Root cause of 1h-long
+    # starvation is NOT min_edge (a9610d9 already 0'd it where applicable) but
+    # est_prob_up under-shoot: model ~0.63 vs price ~0.83 => negative model-edge =>
+    # lane_min_edge reject, despite the lane settling 91% WR / +12-26% held EV
+    # (ghost rejected_candidates_settled, n=158). Bump lifts est_prob within the
+    # +EV price band only; 0.90+ (cheap-money trap ~+3% EV) and <0.60 (-9.6% EV)
+    # excluded by band. Forward-test only; needs restart; bump=0 disables.
+    1h_buy_yes_bullish_floor_bump: 0.30
+    1h_buy_yes_floor_price_min: 0.60
+    1h_buy_yes_floor_price_max: 0.88
     require_btc_catalyst_5m: true
     low_corr_suppresses_entries: false
     skip_on_degraded_correlation: true
@@ -761,6 +789,15 @@ strategies:
     signal_4h_long_threshold: 0.7
     signal_4h_short_threshold: 0.3
     enforce_alt_1h_alignment: true
+    # 2026-06-07: lift ONLY the hard 5m-long veto (keep soft h1_dampen). Ghost: ETH
+    # alt_1h_bearish_blocks_5m_buy_yes blocked longs win 82% (+52.7% EV, n=34). Forward-test.
+    alt_1h_hard_block_5m_longs: false
+    # 2026-06-07: enable ETH long marginal-admit (ETH was the only alt missing it; SOL/
+    # DOGE/BNB already have it). Un-starves ETH longs (ghost lane_min_edge n=3019 LONG
+    # +3% EV median +0.87). Floor = ai_updown_marginal_min_edge 0.03. Self-disables if
+    # the AI decision layer is re-enabled. Forward-test, restart-gated.
+    admit_marginal_on_quant_when_ai_disabled: true
+    admit_marginal_on_quant_sides: long
     center_price_band: 0.02
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
@@ -942,6 +979,10 @@ strategies:
     # 2026-06-07: enable marginal quant-admit incl LONGs (session ghost +19% EV, n249).
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
+    # 2026-06-07: convert weak_5m_signal hard-reject -> soft est_prob penalty for 5m
+    # SHORT only. Ghost: HYPE weak_5m_signal (all SHORT) n=981 +6.5% EV / 56% win /
+    # median +0.08. HYPE-only flag; longs + 15m-up winner + exits untouched. Forward-test.
+    weak_5m_signal_soft_penalty_short: true
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
@@ -1239,6 +1280,14 @@ strategies:
     sell_5m_min_corr: 0.5
     5m_buy_yes_bullish_floor_bump: 0.22
     15m_buy_yes_bullish_floor_bump: 0.13
+    # 2026-06-07: price-banded 1h BUY_YES floor bump (see sol_macro block for
+    # rationale). XRP 1h long is +EV ONLY in 0.50-0.65 (+23-34%) and turns
+    # NEGATIVE at 0.70-0.90 (-33%), so the band is deliberately TIGHT and the bump
+    # SMALL (0.10) to admit just the 0.50-0.66 cohort. ghost n=146. Forward-test;
+    # needs restart; bump=0 disables.
+    1h_buy_yes_bullish_floor_bump: 0.10
+    1h_buy_yes_floor_price_min: 0.50
+    1h_buy_yes_floor_price_max: 0.66
     dynamic_beta_min: 0.6
     dynamic_beta_max: 2.5
     dynamic_beta_extreme_max: 3.5
@@ -1446,6 +1495,13 @@ strategies:
     iql_15m_enabled: false
     5m_buy_yes_bullish_floor_bump: 0.17
     15m_buy_yes_bullish_floor_bump: 0.11
+    # 2026-06-07: price-banded 1h BUY_YES floor bump (see sol_macro block for
+    # rationale). DOGE 1h long +EV across 0.60-0.90 (+20-35%); weak at 0.50-0.60
+    # (+2%) so band starts at 0.58. ghost n=125. Forward-test; needs restart;
+    # bump=0 disables.
+    1h_buy_yes_bullish_floor_bump: 0.30
+    1h_buy_yes_floor_price_min: 0.58
+    1h_buy_yes_floor_price_max: 0.88
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
     blocked_utc_hours_updown:
@@ -1623,6 +1679,13 @@ strategies:
     bnb_5m_native_buy_no_max_yes_price_bull_1h: 0.6
     5m_buy_yes_bullish_floor_bump: 0.19
     15m_buy_yes_bullish_floor_bump: 0.19
+    # 2026-06-07: price-banded 1h BUY_YES floor bump (see sol_macro block for
+    # rationale). BNB 1h long is the cleanest — +EV across the whole 0.50-0.90
+    # band (+22-56%), 87% WR, ghost n=213; min_edge already 0 (a9610d9). Forward-
+    # test; needs restart; bump=0 disables.
+    1h_buy_yes_bullish_floor_bump: 0.30
+    1h_buy_yes_floor_price_min: 0.50
+    1h_buy_yes_floor_price_max: 0.88
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45
