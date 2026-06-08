@@ -72,6 +72,17 @@ trading:
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
     updown_overrides:
+      bitcoin:
+        window_lane_overrides:
+          15m:
+            up:
+              # 2026-06-08: widen stop 0.20->0.28 (was global default — BTC had no
+              # lane override). Refreshed exit settler, current execution regime
+              # (06-02+ fast-exit-loop live, n=58): stop-leg held-WR 45% / held -$71
+              # vs realized -$243 — gap +$172, the stop cuts dip-then-recover longs.
+              # STOP-ONLY: deliberately NO hold_winners — the TP leg beats holding by
+              # +$172 (take-profit is the engine on this side). Forward-test; restart.
+              updown_stop_loss_pct: 0.28
       bnb_macro:
         window_lane_overrides:
           5m:
@@ -114,7 +125,12 @@ trading:
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
             down:
-              updown_stop_loss_pct: 0.16
+              # 2026-06-08: widen stop 0.16->0.24. Refreshed exit settler, current
+              # execution regime only (06-02+ fast-exit-loop live, n=151): stop-leg
+              # held-WR 46% / held +$188 vs realized -$6 — gap +$194. Lane already
+              # holds winners; the stop was cutting dip-then-recover shorts. Widen
+              # (not remove) keeps a tail guard. Forward-test only; needs restart.
+              updown_stop_loss_pct: 0.24
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.5
               updown_exit_window_max_fraction: 0.45
@@ -218,7 +234,12 @@ trading:
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
             down:
-              updown_stop_loss_pct: 0.17
+              # 2026-06-08: widen stop 0.17->0.24. Refreshed exit settler, current
+              # execution regime only (06-02+ fast-exit-loop live, n=28): stop-leg
+              # held-WR 50% / held +$59 vs realized -$20 — gap +$79. Same signature
+              # as eth 15m down; lane already holds winners. Thinner n; revisit.
+              # Forward-test only; needs restart.
+              updown_stop_loss_pct: 0.24
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
