@@ -4176,7 +4176,11 @@ async def main():
         await _graceful_shutdown_or_exit()
         if getattr(bot, "_terminal_shutdown_sig", None) is not None:
             print_shutdown_banner(bot._terminal_shutdown_sig)
-        return
+        # Hard-exit rather than returning into asyncio.run()'s hang-prone teardown
+        # (see the trading-path finally below for the full rationale).
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
     loop = asyncio.get_running_loop()
     main_task = asyncio.current_task()
@@ -4184,8 +4188,12 @@ async def main():
 
     def signal_handler(sig, frame):
         if shutdown_state["signal"] is not None:
-            logging.info("Received repeated shutdown signal %s; waiting for shutdown.", sig)
-            return
+            # Second Ctrl-C / SIGTERM: the first graceful pass is already running but
+            # something is wedged. Give the operator a hard escape hatch instead of the
+            # old behavior (log "waiting" and ignore — which left the process unkillable
+            # by Ctrl-C when asyncio teardown hung, observed 2026-06-07).
+            logging.warning("Received repeated shutdown signal %s; forcing immediate exit.", sig)
+            os._exit(1)
         shutdown_state["signal"] = sig
         bot._terminal_shutdown_sig = sig
         _write_runtime_status(
@@ -4214,6 +4222,16 @@ async def main():
             sig = getattr(bot, "_terminal_shutdown_sig", None)
             if sig is not None:
                 print_shutdown_banner(sig)
+            # Graceful shutdown is complete and all state is persisted (journal +
+            # runtime_status). Hard-exit now instead of returning up through
+            # asyncio.run()'s teardown: on Python 3.11 that teardown finalizes async
+            # generators + the default executor with NO timeout, and hangs forever when
+            # a lingering aiohttp/uvloop stream reader or run_in_executor call won't
+            # unblock (observed 2026-06-07: process stuck *after* "shutdown_complete",
+            # ignoring Ctrl-C). Mirrors the existing _os._exit(0) fast-path.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
 
 
 if __name__ == "__main__":
