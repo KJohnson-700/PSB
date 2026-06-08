@@ -88,6 +88,10 @@ trading:
           5m:
             down:
               updown_hold_winners_to_resolution: true
+            # 2026-06-08: REVERTED the 0.20->0.24 5m-long stop widen. bnb 5m longs won
+            # only 29% in test_20260608_025851 — that's an ENTRY-quality problem, and a
+            # wider loss stop just lets the majority losers bleed to -24% instead of
+            # -20%. Stop-widen is the wrong lever on a low-WR-entry lane. Back to global.
           15m:
             down:
               # 2026-06-04: hold+trail. Settled exit audit (lane_exit_policy.json,
@@ -552,11 +556,20 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
+    # Ghost (logged 15m RSI vs outcome) LONG-flip win% monotonic: sol 90% @55-60 (thin
+    # n=20). Faster 15m RSI beats reconstructed 1h RSI. eth/doge/btc left off.
+    rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
     # 2026-06-07: admit marginal LONGs on quant (session ghost +12% EV, n252). LONG-only:
     # marginal SHORTs are -9% EV this session (codex review), so don't re-admit them.
     admit_marginal_on_quant_sides: long
-    disable_buy_no_5m_native: true
+    # 2026-06-08: re-enable 5m-native BUY_NO (sol). 05-31 suppression cited held-to-
+    # resolution WR ~22%; current-era ghost (ts>=06-01, n=3816) shows recovery to
+    # 56% WR / slightly-positive proxy. Frequency/calibration play; un-suppressed
+    # candidates still pass the normal lane_min_edge/entry_window stack. Forward-test;
+    # revert if trades_settled 5m BUY_NO WR reverts toward 22%. Needs restart.
+    disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
     use_ai: true
@@ -997,6 +1010,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
+    # Ghost (logged 15m RSI): LONG-flip win% 62% @55-60, 68% @60+.
+    rsi_momentum_flip_1h: true
     # 2026-06-07: enable marginal quant-admit incl LONGs (session ghost +19% EV, n249).
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
@@ -1201,6 +1217,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
+    # Ghost (logged 15m RSI): LONG-flip win% 64% @55-60 (n=28).
+    rsi_momentum_flip_1h: true
     # 2026-06-07: marginal quant-admit DISABLED for xrp. Both sides are -EV this session
     # (LONG -5% n119, SHORT -9% n81; codex review), and the LONG side splits dangerously
     # by window (15m +16% vs 1h -80%). The xrp 15m long recovery needs a window-specific
@@ -1429,6 +1448,10 @@ strategies:
     # accuracy was 18%. LONG-only: marginal SHORTs are -13% EV now (codex review), so
     # the pre-existing short admit is dropped. Forward-test; needs restart.
     admit_marginal_on_quant_sides: long
+    # 2026-06-08: REVERTED 5m-native BUY_NO un-suppression. Briefly flipped false on
+    # ghost's 55% WR, but the first live trades in test_20260608_025851 came in 0/2
+    # (-$6.95) — siding with the taken-lane "entry-broken" 32% prior, not the ghost.
+    # Pre-registered tripwire fired; pulled. (sol kept on watch, was 1/1.) Back to true.
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -1608,6 +1631,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
+    # Ghost (logged 15m RSI): LONG-flip win% 70% @55-60, 86% @60+ (cleanest of all alts).
+    rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
     # 2026-06-07: admit marginal LONGs on quant (session ghost +25% EV, n858 — strongest
     # of the five). LONG-only: marginal SHORTs are -22% EV this session (codex review).

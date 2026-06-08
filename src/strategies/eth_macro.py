@@ -717,6 +717,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     btc_spot=getattr(corr, "btc_price", None),
                     rsi_14=getattr(eth, "rsi_14", None),
                     atr_14=getattr(eth, "atr_14", None),
+                    macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                    macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                    macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                    rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                    rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                    rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                 )
             )
             # Always stamp eval_mins_left so post-hoc analysis can distinguish
@@ -1340,6 +1346,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 btc_spot=corr.btc_price,
                                 rsi_14=eth.rsi_14,
                                 atr_14=eth.atr_14,
+                                macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                                macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                                macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                                rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                                rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                                rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                             ),
                         },
                     )
@@ -1364,6 +1376,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                 btc_spot=corr.btc_price,
                                 rsi_14=eth.rsi_14,
                                 atr_14=eth.atr_14,
+                                macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                                macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                                macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                                rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                                rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                                rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                             ),
                         },
                     )
@@ -1470,6 +1488,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                     btc_spot=corr.btc_price,
                                     rsi_14=eth.rsi_14,
                                     atr_14=eth.atr_14,
+                                    macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                                 ),
                             },
                         )
@@ -1570,6 +1594,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                                     btc_spot=corr.btc_price,
                                     rsi_14=eth.rsi_14,
                                     atr_14=eth.atr_14,
+                                    macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                                 ),
                             },
                             probe_variants=build_threshold_probe_variants(
@@ -1644,6 +1674,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 faster_tf_label=_eth_faster_tf,
                 strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                 logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                rsi_14=getattr(eth, "rsi_14", None), window=_updown_tf,
+                momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
             )
 
             est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -2153,6 +2185,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                             btc_spot=corr.btc_price,
                             rsi_14=eth.rsi_14,
                             atr_14=eth.atr_14,
+                            macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                            macd_hist_15m=getattr(getattr(eth, "macd_15m", None), "histogram", None),
+                            macd_hist_1h=getattr(getattr(eth, "macd_1h", None), "histogram", None),
+                            rsi_5m=getattr(getattr(eth, "tf_5m", None), "rsi_14", None),
+                            rsi_15m=getattr(getattr(eth, "tf_15m", None), "rsi_14", None),
+                            rsi_1h=getattr(getattr(eth, "tf_1h", None), "rsi_14", None),
                         ),
                     },
                     probe_variants=build_threshold_probe_variants(

@@ -390,6 +390,12 @@ def build_market_context(
     btc_spot: Optional[float] = None,
     rsi_14: Optional[float] = None,
     atr_14: Optional[float] = None,
+    macd_hist_5m: Optional[float] = None,
+    macd_hist_15m: Optional[float] = None,
+    macd_hist_1h: Optional[float] = None,
+    rsi_5m: Optional[float] = None,
+    rsi_15m: Optional[float] = None,
+    rsi_1h: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Standard market-condition fields for the rejection `context` dict.
 
@@ -397,6 +403,12 @@ def build_market_context(
     `log_rejected_candidate` so every record carries asset spot, BTC spot,
     RSI(14), and ATR(14) at the moment of rejection. Skips fields whose
     value is None or non-numeric; never raises.
+
+    2026-06-08: also logs MACD histogram per timeframe (5m/15m/1h) when supplied.
+    The fresh-cross / momentum side-flip fires on MACD state, but only RSI was
+    logged before — so the 5m/15m flip could not be ghost-validated (the proxy,
+    RSI, only cleared on the 1h tail). Logging the actual histogram lets the
+    5m/15m momentum-flip be validated on settled ghosts after ~a day of data.
     """
     out: Dict[str, Any] = {}
     for key, val in (
@@ -404,6 +416,12 @@ def build_market_context(
         ("btc_spot", btc_spot),
         ("rsi_14", rsi_14),
         ("atr_14", atr_14),
+        ("macd_hist_5m", macd_hist_5m),
+        ("macd_hist_15m", macd_hist_15m),
+        ("macd_hist_1h", macd_hist_1h),
+        ("rsi_5m", rsi_5m),
+        ("rsi_15m", rsi_15m),
+        ("rsi_1h", rsi_1h),
     ):
         if val is None:
             continue

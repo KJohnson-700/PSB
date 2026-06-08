@@ -2680,6 +2680,12 @@ class SolMacroStrategy:
                     btc_spot=getattr(corr, "btc_price", None),
                     rsi_14=getattr(sol, "rsi_14", None),
                     atr_14=getattr(sol, "atr_14", None),
+                    macd_hist_5m=getattr(getattr(sol, "macd_5m", None), "histogram", None),
+                    macd_hist_15m=getattr(getattr(sol, "macd_15m", None), "histogram", None),
+                    macd_hist_1h=getattr(getattr(sol, "macd_1h", None), "histogram", None),
+                    rsi_5m=getattr(getattr(sol, "tf_5m", None), "rsi_14", None),
+                    rsi_15m=getattr(getattr(sol, "tf_15m", None), "rsi_14", None),
+                    rsi_1h=getattr(getattr(sol, "tf_1h", None), "rsi_14", None),
                 )
             )
             # Always stamp eval_mins_left so post-hoc analysis can distinguish
@@ -3558,6 +3564,12 @@ class SolMacroStrategy:
                                         btc_spot=corr.btc_price,
                                         rsi_14=sol.rsi_14,
                                         atr_14=sol.atr_14,
+                                        macd_hist_5m=getattr(getattr(sol, "macd_5m", None), "histogram", None),
+                                        macd_hist_15m=getattr(getattr(sol, "macd_15m", None), "histogram", None),
+                                        macd_hist_1h=getattr(getattr(sol, "macd_1h", None), "histogram", None),
+                                        rsi_5m=getattr(getattr(sol, "tf_5m", None), "rsi_14", None),
+                                        rsi_15m=getattr(getattr(sol, "tf_15m", None), "rsi_14", None),
+                                        rsi_1h=getattr(getattr(sol, "tf_1h", None), "rsi_14", None),
                                     ),
                                 },
                             )
@@ -3625,6 +3637,8 @@ class SolMacroStrategy:
                         crossover=macd_5m.crossover, tf_label="5m",
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                        rsi_14=getattr(ta.sol, "rsi_14", None), window="5m",
+                        momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -3740,6 +3754,12 @@ class SolMacroStrategy:
                                     btc_spot=corr.btc_price,
                                     rsi_14=sol.rsi_14,
                                     atr_14=sol.atr_14,
+                                    macd_hist_5m=getattr(getattr(sol, "macd_5m", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(sol, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(sol, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(sol, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(sol, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(sol, "tf_1h", None), "rsi_14", None),
                                 ),
                             },
                         )
@@ -3871,6 +3891,8 @@ class SolMacroStrategy:
                         faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                        rsi_14=getattr(ta.sol, "rsi_14", None), window=window_label,
+                        momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -4722,6 +4744,12 @@ class SolMacroStrategy:
                             btc_spot=corr.btc_price,
                             rsi_14=sol.rsi_14,
                             atr_14=sol.atr_14,
+                            macd_hist_5m=getattr(getattr(sol, "macd_5m", None), "histogram", None),
+                            macd_hist_15m=getattr(getattr(sol, "macd_15m", None), "histogram", None),
+                            macd_hist_1h=getattr(getattr(sol, "macd_1h", None), "histogram", None),
+                            rsi_5m=getattr(getattr(sol, "tf_5m", None), "rsi_14", None),
+                            rsi_15m=getattr(getattr(sol, "tf_15m", None), "rsi_14", None),
+                            rsi_1h=getattr(getattr(sol, "tf_1h", None), "rsi_14", None),
                         ),
                     },
                     probe_variants=build_threshold_probe_variants(

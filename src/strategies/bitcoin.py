@@ -1974,6 +1974,12 @@ class BitcoinStrategy:
                                     btc_spot=ta.current_price,
                                     rsi_14=ta.rsi_14,
                                     atr_14=getattr(ta.trend_sabre, "atr", None),
+                                    macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                    macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                    macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                    rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                    rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                    rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                                 ),
                             },
                             probe_variants=build_threshold_probe_variants(
@@ -2178,6 +2184,12 @@ class BitcoinStrategy:
                                             btc_spot=ta.current_price,
                                             rsi_14=ta.rsi_14,
                                             atr_14=getattr(ta.trend_sabre, "atr", None),
+                                            macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                            macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                            macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                            rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                            rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                            rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                                         ),
                                     },
                                     probe_variants=build_threshold_probe_variants(
@@ -2314,6 +2326,8 @@ class BitcoinStrategy:
                         faster_tf_label=_btc_faster_tf,
                         strategy_name=self._signal_strategy_name, primary_htf_bias=htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                        rsi_14=getattr(ta, "rsi_14", None), window=_updown_tf,
+                        momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -3160,6 +3174,12 @@ class BitcoinStrategy:
                                 btc_spot=ta.current_price,
                                 rsi_14=ta.rsi_14,
                                 atr_14=getattr(ta.trend_sabre, "atr", None),
+                                macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                             ),
                         },
                         probe_variants=build_threshold_probe_variants(

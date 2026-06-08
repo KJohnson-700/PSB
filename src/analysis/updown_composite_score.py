@@ -204,6 +204,10 @@ def apply_fresh_cross_override(
     primary_htf_bias: str = "",
     logger=None,
     enabled: bool = True,
+    rsi_14: Optional[float] = None,
+    window: str = "",
+    momentum_flip_enabled: bool = False,
+    momentum_flip_min_rsi: float = 55.0,
 ):
     """Flip to the momentum side when a FRESH MACD cross contradicts the
     lagging-bias-chosen side.
@@ -223,6 +227,17 @@ def apply_fresh_cross_override(
     by minutes, so 15m markets read 5m and 1h markets read 15m — otherwise the
     slow windows stay short-jammed in a rising tape (1h produced 0 flips, ~all
     candidates SHORT). 5m markets pass no faster TF.
+
+    RSI MOMENTUM FLIP (2026-06-08, default-off via ``momentum_flip_enabled``):
+    a separate, standing flip for the case the fresh-cross path can't catch — a
+    SUSTAINED rising 1h tape where the cross already happened and the lagging
+    bias stays BEARISH-short (fresh cross fired 0/77k live). When enabled, a
+    BEARISH-bias SHORT on the ``window=="1h"`` market with ``rsi_14 >=
+    momentum_flip_min_rsi`` (default 55) flips to LONG. Ghost-validated 1h-only
+    (55-60 -> 63% UP, 60-65 -> 69%); asymmetric (SHORT->LONG only); never
+    overrides a genuine fresh bearish cross (guarded on ``flipped is None``).
+    NOTE: ``rsi_14`` is the caller's canonical RSI (15m for sol-family/eth, 4h for
+    BTC), NOT the 1h RSI — ``window`` gates the market horizon, not the RSI TF.
     """
     if not enabled:
         return est_prob_up, action, allowed_side, direction, side_source
@@ -259,6 +274,50 @@ def apply_fresh_cross_override(
                 "  %s FRESH %s CROSS FLIP -> %s (vs lagging bias %s)",
                 strategy_name, tf_label, action, primary_htf_bias,
             )
+
+    # Standing RSI momentum-disagree flip (2026-06-08, DEFAULT-OFF). The fresh-cross
+    # flip above only fires on a discrete cross event (measured 0/77k live) so it
+    # cannot rescue a SUSTAINED rising tape where the cross already happened and the
+    # lagging bias stays BEARISH-short. Ghost validation (rejected_candidates_settled,
+    # ts>=06-01): for BEARISH-bias SHORT candidates on the 1h MARKET window the
+    # LONG-flip win rate rises monotonically with RSI and only clears coin-flip in
+    # the disagreement tail — 55-60 -> 63% UP (n=328), 60-65 -> 69% (n=130). 5m/15m
+    # MARKET-window tails too thin to trust, so this gate is 1h-market-only.
+    #
+    # CAVEAT on the RSI timeframe: ``rsi_14`` passed by every caller is that asset's
+    # CANONICAL RSI on a FIXED timeframe — 15m for sol-family/eth, 4h for BTC — NOT
+    # the 1h RSI. ``window == "1h"`` gates the MARKET horizon, not the RSI's TF. So
+    # this is "1h-market candidate, gated on the asset's canonical (15m/4h) RSI", and
+    # the validation above pooled those two TFs under one column — a threshold of 55
+    # is not strictly comparable across alts (15m) vs BTC (4h). Per-window RSI
+    # (rsi_5m/rsi_15m/rsi_1h) is now logged on candidates so a TRUE own-window-RSI
+    # flip can be re-validated later and this gate re-pointed at tf_1h.rsi_14.
+    #
+    # Asymmetric (SHORT->LONG only); the down-side mirror is intentionally NOT
+    # included pending its own validation. Opt-in per strategy via
+    # `rsi_momentum_flip_1h`. Guard `flipped is None` so a genuine fresh bearish
+    # cross is never overridden by RSI.
+    if (
+        momentum_flip_enabled
+        and flipped is None
+        and allowed_side == "SHORT"
+        and str(window) == "1h"
+        and rsi_14 is not None
+        and float(rsi_14) >= momentum_flip_min_rsi
+        and "BEAR" in str(primary_htf_bias).upper()
+    ):
+        est_prob_up = max(est_prob_up, 0.55)
+        action = "BUY_YES"
+        direction = "UP"
+        allowed_side = "LONG"
+        side_source = f"{side_source or ''}+rsi_momentum_flip_1h"
+        reason_parts.append(f"rsi_momentum_flip_1h(rsi={float(rsi_14):.0f})->BUY_YES")
+        if logger is not None:
+            logger.info(
+                "  %s RSI MOMENTUM FLIP -> BUY_YES (rsi=%.0f, 1h, vs lagging bias %s)",
+                strategy_name, float(rsi_14), primary_htf_bias,
+            )
+
     return est_prob_up, action, allowed_side, direction, side_source
 
 
