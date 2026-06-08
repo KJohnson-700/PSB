@@ -442,6 +442,7 @@ class PolyBot:
         self.last_buy_no_skip_samples: Dict[str, Dict[str, Any]] = {}
         self.ghost_calibration_status: Dict[str, Any] = {}
         self._last_ghost_calibration_refresh_monotonic: float = 0.0
+        self._ghost_calibration_refresh_inflight = False
         # Exit-policy drift alerting: remember the last drift set we pinged so we
         # only re-alert when a new lane drifts or a recommendation flips.
         self._last_exit_drift_sig: frozenset = frozenset()
@@ -456,16 +457,20 @@ class PolyBot:
         if _forced_session and not _resume_session:
             # Explicit session name given — use it (e.g. PAPER_SESSION_ID=reset_20260416)
             self.journal = TradeJournal(session_id=_forced_session, resume_latest=False)
+            self._fresh_session_created = False
             logging.info(f"Forced session via PAPER_SESSION_ID={_forced_session}")
         elif _resume_session:
             # Opt-in to resume: PAPER_RESUME_SESSION=true + no session name
             self.journal = TradeJournal(resume_latest=True)
+            self._fresh_session_created = False
             logging.info(f"Resuming latest session: {self.journal.session_id}")
         else:
             # Default: fresh session every restart (process lifecycle = test cycle)
             new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
             self.journal = TradeJournal(session_id=new_id, resume_latest=False)
+            self._fresh_session_created = True
             self.bankroll = float(self.config.get("backtest", {}).get("initial_bankroll", 500.0))
+            self.bankroll_source = "config_initial"
             logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
         self._session_traded_market_ids: Set[str] = self._load_session_traded_market_ids()
 
@@ -623,25 +628,35 @@ class PolyBot:
         self._execution_lock = asyncio.Lock()
         self._dashboard_server = None
         _initial_bankroll = self.config.get("backtest", {}).get("initial_bankroll", 1000.0)
-        # Restore bankroll from last journal snapshot (or last entries line) so restarts
-        # don't reset to initial_bankroll when snapshots.jsonl is sparse.
-        _last_snap = self.journal.get_snapshots(limit=1)
-        if _last_snap and _last_snap[-1].get("bankroll") is not None:
-            self.bankroll = float(_last_snap[-1]["bankroll"])
-            logging.info(
-                f"Bankroll restored from last snapshot: ${self.bankroll:,.2f} "
-                f"(initial was ${_initial_bankroll:,.2f})"
-            )
+        # Restore bankroll only for explicit/resumed sessions. A fresh paper startup
+        # must stay at initial_bankroll even when older journals contain +PnL.
+        if getattr(self, "_fresh_session_created", False):
+            self.bankroll = float(_initial_bankroll)
+            self.bankroll_source = "config_initial"
+            logging.info("Fresh session bankroll set from config: $%s", f"{self.bankroll:,.2f}")
         else:
-            _from_log = self.journal.last_bankroll_from_entries_log()
-            if _from_log is not None:
-                self.bankroll = _from_log
+            # Restore bankroll from last journal snapshot (or last entries line) so
+            # explicit resumed sessions do not reset when snapshots.jsonl is sparse.
+            _last_snap = self.journal.get_snapshots(limit=1)
+            if _last_snap and _last_snap[-1].get("bankroll") is not None:
+                self.bankroll = float(_last_snap[-1]["bankroll"])
+                self.bankroll_source = "journal_snapshot"
                 logging.info(
-                    f"Bankroll restored from journal entries: ${self.bankroll:,.2f} "
+                    f"Bankroll restored from last snapshot: ${self.bankroll:,.2f} "
                     f"(initial was ${_initial_bankroll:,.2f})"
                 )
             else:
-                self.bankroll = _initial_bankroll
+                _from_log = self.journal.last_bankroll_from_entries_log()
+                if _from_log is not None:
+                    self.bankroll = _from_log
+                    self.bankroll_source = "journal_entries"
+                    logging.info(
+                        f"Bankroll restored from journal entries: ${self.bankroll:,.2f} "
+                        f"(initial was ${_initial_bankroll:,.2f})"
+                    )
+                else:
+                    self.bankroll = _initial_bankroll
+                    self.bankroll_source = "config_initial"
         _cint = self.config.get("trading", {}).get("cycle_interval_sec", 120)
         self.scan_interval = max(30, int(_cint))  # single unified loop: scan + crypto + exits
         self._unified_cycle_count = 0
@@ -691,7 +706,10 @@ class PolyBot:
             em0.max_consecutive_losses,
             em0.pause_cycles,
         )
-        self._refresh_ghost_calibration_state(force=True)
+        # Do not run ghost calibration synchronously in __init__: dashboard binds
+        # before PolyBot is attached, so this can leave /api/status at
+        # "Bot not running" for minutes on large calibration logs. start() launches
+        # the same refresh in a background thread before the trading loop.
 
     def _apply_exposure_env_overrides(self) -> None:
         """Apply exposure toggles from env before ExposureManager construction.
@@ -928,6 +946,27 @@ class PolyBot:
                 status.get("total_settled", 0),
                 settle_summary.get("ghost_beta_updates", 0),
             )
+
+    def _schedule_ghost_calibration_refresh(self, *, force: bool = False) -> None:
+        """Run ghost settlement off the trading hot path.
+
+        Settled/rejected ghost logs can be large, so scan cadence must not await
+        this work. Single-flight avoids piling up repeated settlement workers.
+        """
+        if self._ghost_calibration_refresh_inflight:
+            logging.debug("Ghost calibration refresh already running; skipping schedule.")
+            return
+        self._ghost_calibration_refresh_inflight = True
+
+        async def _runner() -> None:
+            try:
+                await asyncio.to_thread(self._refresh_ghost_calibration_state, force=force)
+            except Exception as e:
+                logging.warning("Rejected-candidate tracker refresh failed: %s", e)
+            finally:
+                self._ghost_calibration_refresh_inflight = False
+
+        self._spawn_bg(_runner(), name="ghost_calibration_refresh")
 
     def _maybe_alert_exit_policy_drift(self, settle_summary: Dict[str, Any]) -> None:
         """Recompute the exit-policy shadow recommendation; Discord-ping on drift.
@@ -1357,6 +1396,31 @@ class PolyBot:
                 "Polymarket private key (PRIVATE_KEY or POLYMARKET_PRIVATE_KEY) not found in .env / config/secrets.env."
             )
 
+    async def refresh_live_wallet_bankroll(self) -> bool:
+        """Use authenticated Polymarket wallet collateral as bankroll in live mode."""
+        if self.config.get("trading", {}).get("dry_run", True):
+            return False
+        try:
+            balance = await asyncio.wait_for(
+                self.clob_client.get_cash_balance(),
+                timeout=float(self.config.get("trading", {}).get("wallet_balance_timeout_sec", 10)),
+            )
+        except asyncio.TimeoutError:
+            logging.error("Timed out fetching Polymarket wallet bankroll.")
+            return False
+        if balance is None:
+            logging.error(
+                "Live bankroll could not be refreshed from Polymarket wallet; "
+                "bankroll_source remains %s.",
+                getattr(self, "bankroll_source", "unknown"),
+            )
+            return False
+        self.bankroll = float(balance)
+        self.bankroll_source = "live_wallet"
+        self.risk_manager.bankroll = self.bankroll
+        logging.info("Live bankroll refreshed from Polymarket wallet: $%s", f"{self.bankroll:,.2f}")
+        return True
+
     async def _run_startup_narrators(self) -> None:
         """Run AI narrators against the previous session and write each block
         as an ANNOTATION event into the *current* session's journal entries.jsonl.
@@ -1558,12 +1622,8 @@ class PolyBot:
         # Off the trading hot path; never awaited.
         self._spawn_bg(self._run_startup_narrators())
         # Ghost-settle reads the full (~GB) rejected/settled calibration logs.
-        # Do NOT block the trading loop or dashboard on it at boot: background it.
-        # It also runs every cycle (_unified_cycle) and self-heals, so a
-        # backgrounded first pass changes only timing, never settle correctness.
-        self._spawn_bg(
-            asyncio.to_thread(self._refresh_ghost_calibration_state, force=True)
-        )
+        # Never await it on startup or scan cycles.
+        self._schedule_ghost_calibration_refresh(force=True)
 
         # Start the async-decoupled AI decision broker. After this returns,
         # strategies can enqueue/lookup decisions via self.ai_broker.
@@ -2705,10 +2765,7 @@ class PolyBot:
         except Exception as e:
             logging.error(f"Resolution tracking error: {e}")
 
-        try:
-            await asyncio.to_thread(self._refresh_ghost_calibration_state)
-        except Exception as e:
-            logging.warning("Rejected-candidate tracker refresh failed: %s", e)
+        self._schedule_ghost_calibration_refresh()
 
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades
@@ -4062,8 +4119,15 @@ async def main():
             self.config = config
             self._dashboard_server = None
 
+    bootstrap_config = _bootstrap_config()
+    print_startup_banner(
+        config=bootstrap_config,
+        dry_run=bool(dry_run if dry_run is not None else True),
+        session_id="initializing",
+    )
+
     # Bind HTTP + /health before PolyBot() (journal replay can take minutes on large sessions).
-    _dash_holder = _DashboardConfigShim(_bootstrap_config())
+    _dash_holder = _DashboardConfigShim(bootstrap_config)
     start_dashboard(_dash_holder)
 
     # Now that environment is loaded, we can initialize the bot
@@ -4110,12 +4174,14 @@ async def main():
             )
 
     bot.set_api_keys(api_keys=api_keys)
-
-    print_startup_banner(
-        config=bot.config,
-        dry_run=bool(bot.config.get("trading", {}).get("dry_run", True)),
-        session_id=getattr(bot.journal, "session_id", None),
-    )
+    live_wallet_ok = await bot.refresh_live_wallet_bankroll()
+    if not bot.config.get("trading", {}).get("dry_run", True) and not live_wallet_ok:
+        logging.critical(
+            "Live trading requires a verified Polymarket wallet bankroll. "
+            "Refusing to start trading loop with bankroll_source=%s.",
+            getattr(bot, "bankroll_source", "unknown"),
+        )
+        sys.exit(1)
 
     from src.ai_status import compute_ai_status, format_ai_log_line
 

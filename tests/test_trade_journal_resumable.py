@@ -62,6 +62,31 @@ def test_summary_file_updates_immediately_on_entry(tmp_path: Path, monkeypatch) 
     assert summary["total_cost"] == 5.0
 
 
+def test_last_bankroll_ignores_annotation_zero_rows(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
+    journal = TradeJournal(session_id="20260607_bankroll_annotations", resume_latest=False)
+
+    journal.log_entry(
+        trade_id="t-open",
+        market_id="btc-updown",
+        market_question="Bitcoin Up or Down",
+        strategy="bitcoin",
+        action="BUY_YES",
+        side="BUY",
+        outcome="YES",
+        size=10.0,
+        entry_price=0.5,
+        bankroll=504.25,
+    )
+    journal.append_annotation(
+        trade_id="__scan_diagnostics__::1",
+        text="diagnostic row",
+        strategy="scan_diagnostics",
+    )
+
+    assert journal.last_bankroll_from_entries_log() == 504.25
+
+
 def test_bnb_and_doge_updown_entries_are_written_to_fill_log(
     tmp_path: Path, monkeypatch,
 ) -> None:

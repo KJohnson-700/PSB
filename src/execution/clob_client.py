@@ -8,13 +8,21 @@ import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 try:
     from py_clob_client.client import ClobClient as PyClobClient, ApiCreds
-    from py_clob_client.clob_types import OrderArgs, OrderType
+    from py_clob_client.clob_types import (
+        AssetType,
+        BalanceAllowanceParams,
+        OrderArgs,
+        OrderType,
+    )
 except ImportError:
     PyClobClient = None
     ApiCreds = None
+    AssetType = None
+    BalanceAllowanceParams = None
     OrderArgs = None
     OrderType = None
 
@@ -123,6 +131,56 @@ class CLOBClient:
         # Clear plaintext copies — PyClobClient holds its own internal copy
         del private_key
         self.private_key = None
+
+    @staticmethod
+    def _normalize_usdc_amount(raw: Any) -> Optional[float]:
+        """Normalize CLOB integer micro-USDC or decimal-string balances to dollars."""
+        if raw is None:
+            return None
+        try:
+            value = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if value < 0:
+            return None
+        # CLOB balance-allowance returns collateral in USDC base units on current
+        # py-clob-client builds. Small decimal strings are already human USDC.
+        if value == value.to_integral_value() and value >= Decimal("100000"):
+            value = value / Decimal("1000000")
+        return float(value)
+
+    @classmethod
+    def _extract_cash_balance(cls, payload: Any) -> Optional[float]:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("balance", "cash", "collateral", "collateral_balance"):
+            amount = cls._normalize_usdc_amount(payload.get(key))
+            if amount is not None:
+                return amount
+        return None
+
+    async def get_cash_balance(self) -> Optional[float]:
+        """Fetch authenticated Polymarket collateral balance in USDC."""
+        if not self.client:
+            logger.error("CLOB client not initialized — cannot fetch live wallet bankroll.")
+            return None
+        if BalanceAllowanceParams is None or AssetType is None:
+            logger.error("py-clob-client balance types unavailable — cannot fetch wallet bankroll.")
+            return None
+        try:
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            loop = asyncio.get_event_loop()
+            payload = await loop.run_in_executor(
+                None,
+                lambda: self.client.get_balance_allowance(params),
+            )
+        except Exception as exc:
+            logger.error("Error fetching Polymarket wallet bankroll: %s", exc)
+            return None
+        balance = self._extract_cash_balance(payload)
+        if balance is None:
+            logger.error("Could not parse Polymarket wallet bankroll payload: %s", payload)
+        return balance
 
     async def place_order(
         self,

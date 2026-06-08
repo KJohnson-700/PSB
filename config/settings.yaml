@@ -1288,6 +1288,9 @@ strategies:
     1h_buy_yes_bullish_floor_bump: 0.10
     1h_buy_yes_floor_price_min: 0.50
     1h_buy_yes_floor_price_max: 0.66
+    # 2026-06-08: lift the b93ad0e hard 5m-long block (matches sol/eth). Ghost:
+    # blocked alt 5m longs vs lagging-bearish-1h win 70% / +24% EV. Loosening.
+    alt_1h_hard_block_5m_longs: false
     dynamic_beta_min: 0.6
     dynamic_beta_max: 2.5
     dynamic_beta_extreme_max: 3.5
@@ -1502,6 +1505,8 @@ strategies:
     1h_buy_yes_bullish_floor_bump: 0.30
     1h_buy_yes_floor_price_min: 0.58
     1h_buy_yes_floor_price_max: 0.88
+    # 2026-06-08: lift the b93ad0e hard 5m-long block (matches sol/eth). Loosening.
+    alt_1h_hard_block_5m_longs: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
     blocked_utc_hours_updown:
@@ -1686,6 +1691,8 @@ strategies:
     1h_buy_yes_bullish_floor_bump: 0.30
     1h_buy_yes_floor_price_min: 0.50
     1h_buy_yes_floor_price_max: 0.88
+    # 2026-06-08: lift the b93ad0e hard 5m-long block (matches sol/eth). Loosening.
+    alt_1h_hard_block_5m_longs: false
     skip_on_degraded_correlation: true
     degraded_correlation_size_multiplier: 0.5
     degraded_bearish_est_up: 0.45
@@ -1774,7 +1781,7 @@ updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
   low_confidence_min_score: 0.66
-  regime_action_gate_enabled: true
+  regime_action_gate_enabled: false  # 2026-06-08: DISABLED. BTC-deciding-alt hard gate (updown_composite_score.py:331): BTC 1h=BULL + alt BUY_YES + convergence<0.55 -> hard reject. Violates no-tightening + alts-not-by-BTC; in a bull tape it kills the alt longs that would win and forces shorts. Re-enable to revert.
   regime_action_min_convergence: 0.55
 ai:
   prompt_version: lane-feedback-v2-decisive

@@ -5,6 +5,14 @@ import pytest
 from src.execution.clob_client import CLOBClient, Position, RiskManager
 
 
+def test_clob_cash_balance_normalizes_micro_usdc():
+    assert CLOBClient._extract_cash_balance({"balance": "504250000"}) == 504.25
+
+
+def test_clob_cash_balance_accepts_decimal_usdc():
+    assert CLOBClient._extract_cash_balance({"balance": "12.34"}) == 12.34
+
+
 @pytest.mark.asyncio
 async def test_can_sell_token_fails_closed_when_live_client_missing():
     client = CLOBClient({"trading": {"dry_run": False}, "polymarket": {}})

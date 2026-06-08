@@ -779,7 +779,7 @@ class TradeJournal:
         return snaps[-limit:]
 
     def last_bankroll_from_entries_log(self, tail_bytes: int = 2_000_000) -> Optional[float]:
-        """Last ``bankroll`` field in entries.jsonl (tail scan — ok for large logs)."""
+        """Last real trade ``bankroll`` field in entries.jsonl (tail scan for large logs)."""
         if not self._entries_file.exists():
             return None
         try:
@@ -798,6 +798,10 @@ class TradeJournal:
             try:
                 e = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            # Diagnostic annotations are logged with bankroll=0.0 by design. They are
+            # not portfolio snapshots and must not hide the last real trade bankroll.
+            if str(e.get("event") or "").upper() == "ANNOTATION":
                 continue
             b = e.get("bankroll")
             if b is None:

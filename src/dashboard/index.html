@@ -6028,7 +6028,7 @@ async function _seedCommandCenterPnlFromServer(sessionId) {
     if (!state || !sessionId || state.seededFor === sessionId) return;
     state.seededFor = sessionId; // prevent re-seeding even on failure
     try {
-        const r = await fetchT(`/api/session/equity_history?limit=600`, 8000);
+        const r = await fetchT(`/api/session/equity_history?limit=600&session_id=${encodeURIComponent(sessionId)}`, 8000);
         if (!r || !r.ok) return;
         const data = await r.json();
         const pts = Array.isArray(data?.points) ? data.points : [];
@@ -10365,7 +10365,9 @@ async function loadMacroAlignChart() {
             _maState.tradePoints = _exitHudTradePoints;
         } else {
             try {
-                const tr = await fetchT('/api/journal/trade-points?limit=500', 8000);
+                const sid = String(lastStatusData?.session_id || window._dashSessionId || '');
+                const url = '/api/journal/trade-points?limit=500' + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+                const tr = await fetchT(url, 8000);
                 if (tr && tr.ok) {
                     const tj = await tr.json();
                     _maState.tradePoints = (tj && tj.points) || [];
@@ -10430,7 +10432,7 @@ async function loadBTCChart() {
 
         const [ar, tr, wr] = await Promise.all([
             fetchT('/api/bitcoin/analysis'),
-            fetchT('/api/journal/trade-points?limit=500'),
+            fetchT('/api/journal/trade-points?limit=500' + (lastStatusData?.session_id ? '&session_id=' + encodeURIComponent(lastStatusData.session_id) : '')),
             fetchT('/api/strategy/watchlist?limit=80&include_general_markets=false', 8000),
         ]);
         const d = ar?.ok ? await ar.json().catch(() => ({})) : {};

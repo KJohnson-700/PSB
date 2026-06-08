@@ -967,6 +967,25 @@ def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _empty_session_summary(session_id: Optional[str]) -> Dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "total_entries": 0,
+        "total_exits": 0,
+        "open_positions": 0,
+        "total_cost": 0,
+        "session_staked_notional": 0.0,
+        "realized_pnl": 0,
+        "unrealized_pnl": 0,
+        "total_pnl": 0,
+        "win_rate": 0,
+        "wins": 0,
+        "losses": 0,
+        "strategy_stats": {},
+        "summary_source": "empty_startup_session",
+    }
+
+
 _KELLY_STRATEGY_KEYS = ACTIVE_STRATEGY_NAMES
 
 
@@ -1241,12 +1260,18 @@ async def sse_stream(request: Request):
                         session_id = sid
 
                 # Bot stopped: align SSE hero with /api/status (disk positions + journal).
+                empty_startup_dir = None
                 if not bot:
                     try:
                         js = _get_cached_journal_summary()
                     except Exception:
                         js = {}
+                    empty_startup_dir = _newer_empty_startup_session(js)
+                    if empty_startup_dir is not None:
+                        js = _empty_session_summary(empty_startup_dir.name)
                     disk_pos = _load_disk_positions_for_status()
+                    if empty_startup_dir is not None:
+                        disk_pos = []
                     disk_n = len(disk_pos)
                     if disk_n:
                         open_n = disk_n
@@ -1318,12 +1343,19 @@ async def sse_stream(request: Request):
                     bankroll_snap = round(float(bot.bankroll) + unrealized_pnl, 2)
                     bankroll_payload = {
                         "bankroll": bankroll_snap,
-                        "source": "bot_mark_to_market",
+                        "source": getattr(bot, "bankroll_source", "bot_mark_to_market"),
                     }
                 elif not bot:
-                    j_disk = _get_journal()
+                    empty_startup_dir = (
+                        empty_startup_dir
+                        or _empty_startup_session_dir_for_summary(js)
+                        or _newer_empty_startup_session(js)
+                    )
+                    j_disk = None if empty_startup_dir is not None else _get_journal()
                     session_dir_disk = (
-                        j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
+                        empty_startup_dir
+                        if empty_startup_dir is not None
+                        else (j_disk.session_dir if j_disk else _dashboard_journal_session_dir())
                     )
                     bankroll_journal: Optional[float] = None
                     if j_disk:
@@ -1363,7 +1395,7 @@ async def sse_stream(request: Request):
                     "session_open": session_open,
                     "bankroll": bankroll_snap,
                     "bankroll_source": (
-                        "bot_mark_to_market"
+                        getattr(bot, "bankroll_source", "bot_mark_to_market")
                         if bot and hasattr(bot, "bankroll")
                         else bankroll_payload.get("source", "unavailable")
                     ),
@@ -1442,6 +1474,39 @@ def _dashboard_journal_session_dir() -> Optional[Path]:
         return chosen
     subs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
     return subs[0] if subs else None
+
+
+def _latest_session_dir_by_name() -> Optional[Path]:
+    from src.execution.trade_journal import JOURNAL_DIR
+
+    if not JOURNAL_DIR.exists():
+        return None
+    subs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
+    return subs[0] if subs else None
+
+
+def _newer_empty_startup_session(summary: Optional[Dict[str, Any]]) -> Optional[Path]:
+    """Newest fresh-start directory that should own Command Center before first write."""
+    from src.execution.trade_journal import TradeJournal
+
+    latest = _latest_session_dir_by_name()
+    if latest is None or TradeJournal.session_dir_has_activity(latest):
+        return None
+    current_id = str((summary or {}).get("session_id") or "")
+    if current_id and latest.name <= current_id:
+        return None
+    return latest
+
+
+def _empty_startup_session_dir_for_summary(summary: Optional[Dict[str, Any]]) -> Optional[Path]:
+    """Return the empty startup dir already selected for a status/SSE summary."""
+    if not summary or summary.get("summary_source") != "empty_startup_session":
+        return None
+    sid = str(summary.get("session_id") or "")
+    latest = _latest_session_dir_by_name()
+    if latest is not None and latest.name == sid:
+        return latest
+    return None
 
 
 def _positions_list_from_positions_json(pos_file: Path) -> List[Dict]:
@@ -1713,7 +1778,7 @@ async def get_status():
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
             "bankroll": bankroll,
-            "bankroll_source": "bot_mark_to_market",
+            "bankroll_source": getattr(bot, "bankroll_source", "bot_mark_to_market"),
             "bankroll_warning": None,
             "portfolio": portfolio,
             "positions": positions,
@@ -1738,6 +1803,10 @@ async def get_status():
 
     # ── No bot_instance: read everything from disk ──
     summary = _get_cached_journal_summary()
+    empty_startup_dir = _newer_empty_startup_session(summary)
+    if empty_startup_dir is not None:
+        summary = _empty_session_summary(empty_startup_dir.name)
+        disk_positions = []
     session_cc = _command_center_session(summary)
 
     # Infer dry_run and AI status from config if available
@@ -1751,8 +1820,12 @@ async def get_status():
         except Exception:
             pass
 
-    j_disk = _get_journal()
-    session_dir_disk = j_disk.session_dir if j_disk else _dashboard_journal_session_dir()
+    j_disk = None if empty_startup_dir is not None else _get_journal()
+    session_dir_disk = (
+        empty_startup_dir
+        if empty_startup_dir is not None
+        else (j_disk.session_dir if j_disk else _dashboard_journal_session_dir())
+    )
     bankroll_journal: Optional[float] = None
     if j_disk:
         try:
@@ -4142,6 +4215,10 @@ async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] =
     Returns epoch `time` + entry/exit prices so frontend can render bubble/marker
     overlays without guessing field names.
     """
+    if not session_id:
+        empty_startup_dir = _newer_empty_startup_session(_get_cached_journal_summary())
+        if empty_startup_dir is not None:
+            return {"points": [], "session_id": empty_startup_dir.name}
     j = _journal_for_query(session_id) if session_id else _get_journal()
     if session_id and not j:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -4177,7 +4254,7 @@ async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] =
                 "exit_reason": t.get("exit_reason"),
             }
         )
-    return {"points": points}
+    return {"points": points, "session_id": getattr(j, "session_id", None) if j else session_id}
 
 
 @app.get("/api/session/equity_history")
@@ -4187,6 +4264,10 @@ async def get_session_equity_history(limit: int = 1000, session_id: Optional[str
     bankroll + realized_pnl + unrealized_pnl). Used to restore the Live P&L
     trace shape after a dashboard refresh.
     """
+    if not session_id:
+        empty_startup_dir = _newer_empty_startup_session(_get_cached_journal_summary())
+        if empty_startup_dir is not None:
+            return {"points": [], "session_id": empty_startup_dir.name}
     j = _journal_for_query(session_id) if session_id else _get_journal()
     if session_id and not j:
         raise HTTPException(status_code=404, detail="Session not found")

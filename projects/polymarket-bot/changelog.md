@@ -4,6 +4,17 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-08 — Revert two post-baseline long-suppressing tightenings (no-tightening rule)
+
+Audit (me + codex + kimi) found the bot had drifted from the +$257 baseline (`test_20260604_234611`, **balanced 69L/75S, 52% WR**) to short-heavy/bleeding (live `test_20260607_220219`: **94% short, −$9, 37% WR**, shorting a bull tape + tripping correlation-stop halts). Root cause = post-baseline gates that amputate the LONG side. My own changes were ruled out (floor-bump byte-identical for 5m/15m across a 192-case grid; can only add longs). Reverted the two live long-suppressors (config-only, loosening, reversible, restart-gated):
+
+1. **`regime_action_gate_enabled: true → false`** — BTC-deciding-alt hard gate (`updown_composite_score.py:331`): BTC 1h=BULL + alt BUY_YES + convergence<0.55 → hard reject. Double violation (tightening + alts-decided-by-BTC); in a bull tape it kills the alt longs that win. Added 0d7bec1 (May 21), dormant until BTC turned sustained-bull.
+2. **`alt_1h_hard_block_5m_longs: false` for xrp/doge/bnb** — lifts the b93ad0e (Jun 5) hard block of alt 5m longs vs a *lagging* bearish-1h label (now matches sol/eth/hype). Ghost: blocked cohort wins **70% / +24% EV** (n=127).
+
+Verified: `regime_action_gate_enabled=False`; 5m-long block now OFF for all 6 alts; 156 gate/composite/sol tests pass. Needs restart.
+
+**Still open (separate, NOT a tightening — deeper direction lever):** in a sustained bull tape the bot still picks BUY_NO on 15m (lagging-bias / est_prob jam). `fresh_cross_override` IS wired to 15m/1h (corrects an earlier 5m-only misread) but only flips on a *fresh* opposing MACD cross — which didn't fire this session (0 flips). Scoping the 15m short-into-bull direction fix next.
+
 ## 2026-06-07 — Fix: bot unkillable after clean shutdown (asyncio.run teardown hang)
 
 **Symptom:** bot caught Ctrl-C, ran a full graceful shutdown (`runtime_status` = `shutdown_complete`, `clean_shutdown: true`, 0 open positions), then the **process refused to exit** and ignored further Ctrl-C. ~8 restarts on 2026-06-07 fighting this.
