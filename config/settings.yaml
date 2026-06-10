@@ -306,7 +306,7 @@ strategies:
     expiration_window_hours: 48
   bitcoin:
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09
@@ -435,10 +435,6 @@ strategies:
     btc_1h_buy_yes_bullish_floor_bump: 0.3
     btc_1h_buy_yes_floor_price_min: 0.5
     btc_1h_buy_yes_floor_price_max: 0.6
-    # 2026-06-10: band the 5m/15m bullish BUY_YES floor bump too (was blanket). Ghost
-    # 06-03+ (n=9306): bullish long 0.43-0.49 = -0.04..-0.09 EV; 0.49+ = +EV. The
-    # blanket +0.20/+0.26 bump inflated est_prob in the cheap -EV band, manufacturing
-    # the losers. Floor at 0.49 (no upper cap). Forward-test; needs restart.
     btc_5m_buy_yes_floor_price_min: 0.49
     btc_15m_buy_yes_floor_price_min: 0.49
     quant_disagree_flip_thresh: 0.48
@@ -513,7 +509,7 @@ strategies:
     - 1h:LONG
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -704,7 +700,7 @@ strategies:
     - 15m:LONG
     disable_buy_no_5m_native: true
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     eth_momentum_confirm:
       buy_yes:
@@ -955,7 +951,7 @@ strategies:
     weak_5m_signal_soft_penalty_short: true
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     updown_5m_slower_tfs:
     - 1h
     use_ai: true
@@ -1156,7 +1152,7 @@ strategies:
     - 1h:SHORT
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1372,7 +1368,7 @@ strategies:
     - 1h:SHORT
     disable_buy_no_5m_native: true
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1556,7 +1552,7 @@ strategies:
     - 1h:LONG
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: true
+    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1581,8 +1577,14 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 10.0
       15m:
-        min_edge: 0.085
-        min_edge_buy_no: 0.05
+        # 2026-06-10: DROP bnb 15m (both sides). Ghost-validated BOTH eras: both
+        # sides -EV — 06-03+ up -0.014/down -0.009; post-flip (06-10 01:05+, ghost
+        # n~1000) up -0.060/down -0.031; taken both losing (BUY_YES -$12, BUY_NO
+        # -$10). Unlike eth (flip rescues) bnb has no profitable side, so flipping
+        # can't help. min_edge prohibitive (edge caps at max_edge_updown 0.15) = lane
+        # gated off both sides. Reversible: restore 0.085/0.05. Needs restart.
+        min_edge: 0.50
+        min_edge_buy_no: 0.50
         entry_window_min: 2.0
         entry_window_max: 150.0
       1h:

@@ -8,6 +8,12 @@
 
 ---
 
+## 2026-06-10 — Alt 15m ENTRY: drop bnb 15m (both sides -EV); eth flip already working
+
+**Method (per "look at last-session data"):** re-validated the 5 flagged entry lanes on POST-FLIP data (ts>=06-10 01:05 UTC, after the alt window-delta/macd flip restart) — NOT the 06-03 pool, which buried a week of pre-flip data and gave wrong signs (doge 15m up +0.021->-0.087, eth down +0.103->-0.017 once filtered). Findings: (1) **eth 15m flip is ALREADY working** — taken longs down to n=3 while flipped shorts n=12/+$36; no new action. (2) **bnb 15m both sides -EV** in BOTH eras (06-03 up -0.014/down -0.009; post-flip ghost n~1000 up -0.060/down -0.031; taken BUY_YES -$12 / BUY_NO -$10) — no profitable side, flip can't help. (3) doge 15m / eth 15m down are +EV or winning -> leave (their taken underperformance is selection/exit, not wrong side).
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) bnb_macro 15m:** `min_edge` + `min_edge_buy_no` 0.085/0.05 -> **0.50** (prohibitive; edge caps at max_edge_updown 0.15, so both sides gated off). Removes a both-sides -EV lane (endorsed). Reversible. Needs restart. yaml clean.
+
 ## 2026-06-10 — BTC bullish-long bleed: band the 5m/15m BUY_YES floor bump (close the −EV cheap cell)
 
 **Why:** BTC was net −$28/24h (40% WR) while alts were green. Split: NEUTRAL-routed trades (the recent async fix) were +$32 (45% WR) — NOT the bleed; the loss was the **non-NEUTRAL default lane** (−$63), concentrated in BULLISH-bias BUY_YES longs. Root-caused to the **5m/15m bullish floor bump being applied blanket with no price band** (bitcoin.py): a long at yes_price 0.47 with raw est_prob ~0.51 got +0.26 bumped to 0.77 → edge +0.30 → traded, but real WR 44% (−EV). The 1h bump was already band-gated (0.50–0.60, 06-07 finding); 5m/15m were left blanket and the "2026-05-28 blanket OK" validation went stale. Ghost-validated current era (06-03+, n=9306): bullish BUY_YES EV by yes_price — 0.43–0.46 **−0.035**, 0.46–0.49 **−0.089**, 0.49–0.52 **+0.026**. (Not a wiring bug — `decision_layer_lane_enforced` is correct; the default lane is just un-AI-gated because `decision_layer.enabled:false`, so the quant bump ran unguarded.)
