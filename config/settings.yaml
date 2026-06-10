@@ -1982,9 +1982,17 @@ ai:
   max_queue_depth: 6
   decision_broker:
     enabled: true
-    max_decision_age_sec: 120
-    max_pending_decisions: 24
-    price_drift_threshold: 0.03
+    # 2026-06-09: loosened so resolved BTC 15m/1h decisions actually get CONSUMED.
+    # First async session: 32 resolved -> only 4 consumed, 26 expired (12 price_drift
+    # @0.03, 14 age_sweep @120s) = 81% discarded before the strategy could use them.
+    # The 60-120s async round-trip routinely drifts a marginal yes_price >0.03 and
+    # the verdict ages out before the candidate is re-presented. These are
+    # below-threshold marginal/NEUTRAL trades where a small yes-price wiggle should
+    # NOT auto-kill the verdict. age 120->200 (≥2-3 cycles to consume), drift
+    # 0.03->0.08, pending cap 24->40 (BTC alone has ~16 open 15m/1h markets).
+    max_decision_age_sec: 200
+    max_pending_decisions: 40
+    price_drift_threshold: 0.08
     log_jsonl: true
   research_narrative:
     enabled: false
