@@ -8,6 +8,14 @@
 
 ---
 
+## 2026-06-10 — Alt 15m EXIT calibration: widen xrp stops further (stop still cutting recoverable dips)
+
+**Process:** re-ran `python -m src.analysis.taken_exit_settler --since 2026-06-02` (trades_settled was ~16h stale), then swept ALL alt 15m/1h lanes' **stop-leg** held-vs-realized (per the "sweep all lanes + split by exit_reason + filter ts≥06-02" rules). Only two lanes clear the ≥48%-held bar (genuine "stop cuts a recoverable trade", vs held<48% = entry problem where loosening just bleeds losers): **xrp 15m down** (full n=41: held 56% / +$117 recoverable; post-0.24 n=16: held 62% / +$35) and **xrp 15m up** (post-0.24 n=9: held 56% / +$31). Both were already widened 0.17→0.24 (06-08/09) but the split-by-date shows they STILL recover at 0.24 — the stop is still too tight. Notably the all-exits signal had flagged doge 15m down too, but the stop-leg split REVERSED it (held 29% / −$49 — stop is correctly cutting losers); not touched.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) `trading.exit_rules.updown_overrides.xrp_macro.window_lane_overrides.15m`:** `down.updown_stop_loss_pct 0.24→0.30` (strongest residual leak), `up.updown_stop_loss_pct 0.24→0.28` (thinner n, modest step). Both already carry `hold_winners_to_resolution` + trail. STOP-ONLY widen; forward-test (exits not ghost-validatable); **needs restart.** yaml parses.
+
+**NEXT (after these confirm): alt 15m/1h ENTRY fixes** — the held<47% lanes where the entry side is wrong, so a stop fix can't help; fix = window-delta flip or drop the lane (ghost-validatable, unlike exits). Targets: **eth 15m up** (held 43%, −$1.56/trade, worst), **bnb 15m down** (held 47%), **bnb 15m up** (held 32%), **eth 15m down** (n=174, held 45%), **doge 15m up** (held 44%). See memory `project_alt_1h_15m_scrutiny_queued_2026_06_09` + second-brain `projects/psb/logs/2026-06-09-alt-1h-15m-lane-scrutiny.md`.
+
 ## 2026-06-09 — BTC 15m/1h AI gate → async broker (kill the scan-cycle bloat)
 
 **Why:** the prior `ai_decision_timeout_sec: 40→90` (to give MiniMax room on 15m/1h) made the synchronous marginal/NEUTRAL gate block the scan loop — post-restart recheck (pid 35291) showed **12 cycle overruns up to 104.3s** against a 60s target, slowing every strategy's scan rate. The NEUTRAL routing itself worked (12 `BTC AI decision` lines, AI consulted, BTC ~74% NEUTRAL in the window), but the synchronous wait was the cost. Async decouples the AI call from the scan loop, which is the correct fix (operator-directed; drop-on-skip is a 5m-only artifact — 15m/1h eligibility bands are 16–58 min so a ~1-cycle resolve delay is harmless).

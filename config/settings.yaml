@@ -244,7 +244,10 @@ trading:
               # +$3.06/trade — the 0.17 stop cuts dip-then-recover longs. Mirrors the
               # down side (widened 06-08). Keep hold_winners+trail: the TP banking is
               # good here (realized 69% > held 54%). Forward-test only; thin n; restart.
-              updown_stop_loss_pct: 0.24
+              # 2026-06-10: widen 0.24->0.28. Re-ran settler; STILL recovering at 0.24
+              # post-widen (06-08+ stop-leg n=9: held 56% / +$31 recover) — 0.24 wasn't
+              # enough. Thin n; modest step. Forward-test; restart.
+              updown_stop_loss_pct: 0.28
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
@@ -254,7 +257,11 @@ trading:
               # held-WR 50% / held +$59 vs realized -$20 — gap +$79. Same signature
               # as eth 15m down; lane already holds winners. Thinner n; revisit.
               # Forward-test only; needs restart.
-              updown_stop_loss_pct: 0.24
+              # 2026-06-10: widen 0.24->0.30. Re-ran settler — STRONGEST residual exit
+              # leak: STILL recovering at 0.24 (06-08+ stop-leg n=16: held 62% / +$35
+              # recover; full 06-02+ n=41: held 56% / +$117). 0.24 cut it but didn't
+              # close it. hold_winners+trail already on. Forward-test; restart.
+              updown_stop_loss_pct: 0.30
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
