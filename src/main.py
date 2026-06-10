@@ -48,6 +48,7 @@ from src.execution.live_testing import (
     PositionExitManager,
     ExitDecision,
 )
+from src.execution.exit_excursion_shadow import ExitExcursionShadow
 from src.analysis.journal_learning import (
     learning_loop_enabled,
     run_learning_cycle,
@@ -533,6 +534,16 @@ class PolyBot:
 
         # Position exit manager — checks active positions for TP/SL/time exits
         self.exit_manager = PositionExitManager(self.config)
+        # Uncensored exit-excursion shadow logger (logging-only; see module docstring).
+        # Keeps sampling each market to window-close AFTER our exit so MFE/MAE aren't
+        # censored at the TP/stop — unlocks per-lane TP-raise + stop-width tuning.
+        try:
+            _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
+            self.exit_excursion = ExitExcursionShadow(
+                enabled=bool(_excfg.get("exit_excursion_shadow_enabled", True))
+            )
+        except Exception:
+            self.exit_excursion = ExitExcursionShadow(enabled=False)
 
         # Drift-driven runtime feedback cadence (see performance_feedback in settings.yaml)
         self._performance_feedback_cycle = 0
@@ -2023,6 +2034,28 @@ class PolyBot:
                 continue
             market_prices[mid] = yes_price
             market_token_ids[mid] = (yes_token, no_token)
+        # Also fetch markets we've exited but still shadow-watch for uncensored
+        # MFE/MAE (logging-only). Only adds markets not already fetched above.
+        try:
+            for s_mid, s_token in self.exit_excursion.watched_tokens().items():
+                if not s_mid or s_mid in seen or not s_token:
+                    continue
+                seen.add(s_mid)
+                book = await self.clob_client.fetch_order_book_snapshot(s_token)
+                if not book:
+                    continue
+                bids = book.get("bids") or []
+                asks = book.get("asks") or []
+                best_bid = max((b["price"] for b in bids), default=None)
+                best_ask = min((a["price"] for a in asks), default=None)
+                if best_bid is not None and best_ask is not None:
+                    market_prices[s_mid] = (best_bid + best_ask) / 2.0
+                elif best_bid is not None:
+                    market_prices[s_mid] = best_bid
+                elif best_ask is not None:
+                    market_prices[s_mid] = best_ask
+        except Exception as e:
+            logging.debug("[exit-excursion] shadow price fetch failed: %s", e)
         return market_prices, market_token_ids
 
     async def _fast_exit_loop(self) -> None:
@@ -2042,12 +2075,22 @@ class PolyBot:
         await asyncio.sleep(5)
         while self.running:
             try:
-                if self.risk_manager.active_positions:
+                # Run when we hold positions OR still shadow-watch exited markets
+                # for uncensored MFE/MAE (the fetch covers both sets).
+                if self.risk_manager.active_positions or self.exit_excursion.watched_market_ids():
                     market_prices, market_token_ids = await self._fetch_held_market_prices()
-                    if market_prices:
+                    if market_prices and self.risk_manager.active_positions:
                         n = await self._run_exit_checks(market_prices, market_token_ids)
                         if n:
                             logging.info("[fast-exit] handled %d exit(s)", n)
+                    # Update uncensored excursions, then flush any past window-close.
+                    try:
+                        self.exit_excursion.update(market_prices)
+                        flushed = self.exit_excursion.flush()
+                        if flushed:
+                            logging.info("[exit-excursion] logged %d uncensored row(s)", flushed)
+                    except Exception as e:
+                        logging.debug("[exit-excursion] update/flush failed: %s", e)
             except Exception as e:  # never let the monitor die
                 logging.error("[fast-exit] error: %s", e, exc_info=True)
             await asyncio.sleep(interval)
@@ -2110,6 +2153,27 @@ class PolyBot:
                         reason=exit_decision.reason,
                         action=breaker_action,
                     )
+                    # Shadow-watch this market to window-close for UNCENSORED MFE/MAE
+                    # (logging-only; pos still valid here, deleted just below).
+                    try:
+                        if pos is not None:
+                            self.exit_excursion.register(
+                                trade_id=str(exit_decision.position_id),
+                                market_id=exit_decision.market_id,
+                                entry_price=float(getattr(pos, "entry_price", 0) or 0),
+                                entry_leg=str(getattr(pos, "entry_leg", "YES") or "YES"),
+                                opened_at=getattr(pos, "opened_at", None),
+                                end_date=getattr(pos, "end_date", None),
+                                exit_mae=exit_decision.mae_pct,
+                                exit_mfe=exit_decision.mfe_pct,
+                                exit_pnl_pct=exit_decision.pnl_pct_at_exit,
+                                strategy=strat,
+                                window=str(window or ""),
+                                action=str(exit_decision.action or ""),
+                                yes_token=str(getattr(pos, "token_id_yes", "") or ""),
+                            )
+                    except Exception:
+                        pass
                     self._log_closed_trade_for_calibration(exit_decision.position_id)
                     if exit_decision.position_id in self.risk_manager.active_positions:
                         del self.risk_manager.active_positions[
