@@ -2884,12 +2884,35 @@ class BitcoinStrategy:
                     )
                     continue
 
+            # NEUTRAL is precisely the regime the AI exists to adjudicate: when the
+            # 4H is flat the HTF can't pick a side, so quant edge collapses below the
+            # lane bar and every 15m/1h setup gets edge-skipped BEFORE the AI ever
+            # sees it (2026-06-09: BTC NEUTRAL night, ai_calls~1, all candidates died
+            # at the lane_min_edge gate as updown_15m/1h_neutral). Delegate the
+            # direction to the AI for ALL below-threshold NEUTRAL 15m/1h candidates —
+            # not just the low-confidence ones and not gated on the 0.03 marginal
+            # floor — so a flat-4H regime keeps participating with the AI choosing the
+            # side. Opt-out: neutral_15m_routes_to_ai: false (reverts to the old
+            # low-confidence-only routing). Above-threshold NEUTRAL trades are
+            # untouched; this only rescues the ones that were being skipped.
+            _neutral_delegates_to_ai = (
+                is_updown
+                and _updown_tf != "5m"
+                and htf_bias == "NEUTRAL"
+                and edge < effective_min_edge
+                and bool(self.config.get("neutral_15m_routes_to_ai", True))
+            )
             _needs_ai_for_low_conf_neutral_15m = (
                 is_updown
                 and _updown_tf != "5m"
                 and htf_bias == "NEUTRAL"
-                and self.neutral_15m_min_quant_confidence > 0
-                and confidence < self.neutral_15m_min_quant_confidence
+                and (
+                    _neutral_delegates_to_ai
+                    or (
+                        self.neutral_15m_min_quant_confidence > 0
+                        and confidence < self.neutral_15m_min_quant_confidence
+                    )
+                )
             )
 
             # Updown AI assist: 5m is optional and disabled by default because LLM
@@ -2981,68 +3004,78 @@ class BitcoinStrategy:
 
                 if ai_decision is None:
                     _bump_skip("ai_decision_timeout")
-                    continue
+                    # 2026-06-09 ROBUSTNESS: an AI *timeout* must not silently DROP a
+                    # borderline candidate — that is the 06-01/02 starvation (400+ BTC
+                    # trades lost to AI timeouts). Fall through to the quant final-edge
+                    # gate instead, where it is evaluated on quant terms and LOGGED
+                    # (closes the silent-skip observability gap too). Opt-out:
+                    # btc_marginal_failopen_on_ai_timeout: false. The neutral_15m lane
+                    # genuinely needs the AI for direction, so it is still caught by the
+                    # neutral_15m_low_conf_no_ai guard further below.
+                    if not self.config.get("btc_marginal_failopen_on_ai_timeout", True):
+                        continue
 
-                if ai_decision.shadow_result is not None:
-                    shadow_pipeline_calls += 1
-                    if ai_decision.shadow_result.get("ok"):
-                        shadow_pipeline_ok += 1
+                if ai_decision is not None:
+                    if ai_decision.shadow_result is not None:
+                        shadow_pipeline_calls += 1
+                        if ai_decision.shadow_result.get("ok"):
+                            shadow_pipeline_ok += 1
 
-                if not ai_decision.approved:
-                    ai_decision_layer_skips += 1
-                    _bump_skip(f"ai_decision_{ai_decision.reason}")
-                    if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
-                        ai_holds += 1
-                        self._ai_hold_cache[market.id] = time.time()
-                    if "mismatch" in ai_decision.reason:
+                    if not ai_decision.approved:
+                        ai_decision_layer_skips += 1
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
+                            ai_holds += 1
+                            self._ai_hold_cache[market.id] = time.time()
+                        if "mismatch" in ai_decision.reason:
+                            ai_vetos += 1
+                        logger.info(
+                            f"  BTC AI decision skip '{market.question[:45]}' — "
+                            f"{ai_decision.reason} action={ai_decision.action} "
+                            f"conf={ai_decision.confidence:.2f}"
+                        )
+                        continue
+
+                    logger.info(
+                        f"  BTC AI decision [{ai_decision.action} conf={ai_decision.confidence:.2f} "
+                        f"edge={float(ai_decision.edge or 0.0):.4f}] "
+                        f"'{market.question[:45]}' | {ai_decision.reason}"
+                    )
+                    # veto-only marginal pass: central layer cleared this (no confident
+                    # opposition) — admit on quant terms, skip the redundant local re-gate.
+                    _mpass = ai_decision.reason == "direct_ai_marginal_pass"
+                    if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
                         ai_vetos += 1
-                    logger.info(
-                        f"  BTC AI decision skip '{market.question[:45]}' — "
-                        f"{ai_decision.reason} action={ai_decision.action} "
-                        f"conf={ai_decision.confidence:.2f}"
-                    )
-                    continue
+                        _bump_skip("ai_veto_marginal_updown")
+                        logger.info(
+                            f"  BTC AI veto '{market.question[:45]}' — rec={ai_decision.action} "
+                            f"conflicts with action={action}"
+                        )
+                        continue
+                    if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
+                        _bump_skip("ai_low_confidence_marginal_updown")
+                        logger.info(
+                            f"  BTC AI skip '{market.question[:45]}' — confidence "
+                            f"{ai_decision.confidence:.2f} < {self.ai_confidence_threshold:.2f}"
+                        )
+                        continue
 
-                logger.info(
-                    f"  BTC AI decision [{ai_decision.action} conf={ai_decision.confidence:.2f} "
-                    f"edge={float(ai_decision.edge or 0.0):.4f}] "
-                    f"'{market.question[:45]}' | {ai_decision.reason}"
-                )
-                # veto-only marginal pass: central layer cleared this (no confident
-                # opposition) — admit on quant terms, skip the redundant local re-gate.
-                _mpass = ai_decision.reason == "direct_ai_marginal_pass"
-                if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
-                    ai_vetos += 1
-                    _bump_skip("ai_veto_marginal_updown")
-                    logger.info(
-                        f"  BTC AI veto '{market.question[:45]}' — rec={ai_decision.action} "
-                        f"conflicts with action={action}"
-                    )
-                    continue
-                if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
-                    _bump_skip("ai_low_confidence_marginal_updown")
-                    logger.info(
-                        f"  BTC AI skip '{market.question[:45]}' — confidence "
-                        f"{ai_decision.confidence:.2f} < {self.ai_confidence_threshold:.2f}"
-                    )
-                    continue
+                    ai_edge = float(ai_decision.edge or 0.0)
+                    if not _mpass and ai_edge <= 0:
+                        _bump_skip("ai_nonpositive_edge_marginal_updown")
+                        logger.info(
+                            f"  BTC AI skip '{market.question[:45]}' — non-positive ai_edge={ai_edge:.4f}"
+                        )
+                        continue
 
-                ai_edge = float(ai_decision.edge or 0.0)
-                if not _mpass and ai_edge <= 0:
-                    _bump_skip("ai_nonpositive_edge_marginal_updown")
-                    logger.info(
-                        f"  BTC AI skip '{market.question[:45]}' — non-positive ai_edge={ai_edge:.4f}"
-                    )
-                    continue
-
-                edge = max(edge, ai_edge)
-                confidence = max(confidence, ai_decision.confidence)
-                ai_assists += 1
-                reason_parts.append(f"ai_decision={ai_decision.source}")
-                if _needs_ai_for_low_conf_neutral_15m:
-                    reason_parts.append(
-                        f"low_conf_ai_confirm={self.neutral_15m_min_quant_confidence:.2f}"
-                    )
+                    edge = max(edge, ai_edge)
+                    confidence = max(confidence, ai_decision.confidence)
+                    ai_assists += 1
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
+                    if _needs_ai_for_low_conf_neutral_15m:
+                        reason_parts.append(
+                            f"low_conf_ai_confirm={self.neutral_15m_min_quant_confidence:.2f}"
+                        )
             elif (
                 is_updown
                 and edge < effective_min_edge

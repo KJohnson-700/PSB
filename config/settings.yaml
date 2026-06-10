@@ -20,6 +20,12 @@ hyperliquid:
 trading:
   cycle_interval_sec: 60
   exit_check_interval_sec: 10
+  # 2026-06-09: order-book imbalance + trade-flow capture (Kimi-spec'd). DEFAULT-OFF
+  # + fail-safe — ships inert. Enable AFTER restarting & validating the current
+  # batch, then watch the first scans (adds ~1-2 public REST calls per up/down
+  # market). Logged on candidates only; NOT gated on until it proves it separates W/L.
+  microstructure_enrichment_enabled: false
+  microstructure_trade_flow_window_sec: 300
   crypto_hourly_scan_every_n_cycles: 3
   overrun_recovery_sleep_sec: 5
   dry_run: true
@@ -41,7 +47,7 @@ trading:
     btc_break_above_usd: 80000
     btc_break_below_usd: 75000
   market_regime_gate:
-    enabled: true
+    enabled: false  # 2026-06-09 disabled (deadzone gate ~3% fire, 0 logged rejects). PURGE both deadzone systems when convenient; keep update_resume_window feeder alive.
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
     deadzone_min_convergence: 0.55
@@ -233,7 +239,12 @@ trading:
               updown_hold_winners_to_resolution: true
           15m:
             up:
-              updown_stop_loss_pct: 0.17
+              # 2026-06-09: widen stop 0.17->0.24. Refreshed exit settler (06-02+
+              # fast-exit-loop, stopped-leg only n=18): held-WR 61% / holding recovers
+              # +$3.06/trade — the 0.17 stop cuts dip-then-recover longs. Mirrors the
+              # down side (widened 06-08). Keep hold_winners+trail: the TP banking is
+              # good here (realized 69% > held 54%). Forward-test only; thin n; restart.
+              updown_stop_loss_pct: 0.24
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
@@ -390,10 +401,27 @@ strategies:
     max_edge_updown_15m_short: 0.18
     max_edge_updown_1h_short: 0.23
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    # 2026-06-09: NEUTRAL is the regime the AI is meant to decide. Route ALL
+    # below-threshold NEUTRAL 15m/1h candidates to the AI (not just low-confidence
+    # ones) so a flat-4H night keeps trading with the AI choosing the side instead
+    # of starving at the lane_min_edge gate. Budget 3->5 so a NEUTRAL night with
+    # several open 15m/1h markets actually gets AI on each. 5m unchanged (no AI).
+    # Opt-out: neutral_15m_routes_to_ai: false.
+    neutral_15m_routes_to_ai: true
+    max_ai_calls_per_scan: 5
     ai_call_timeout_sec: 15
-    ai_decision_timeout_sec: 40
+    # 2026-06-09: decision-gate timeout 40->90s. The marginal/NEUTRAL gate is the
+    # ONLY place MiniMax fires for BTC, and only on 15m/1h windows that are
+    # minutes-long — give the call room to actually return a verdict instead of
+    # cancelling at 40s (MiniMax p50 ~18s but the tail runs longer). Still < the
+    # provider HTTP timeout (120s). btc_marginal_failopen_on_ai_timeout still
+    # catches a genuine timeout (quant decides, trade not dropped).
+    ai_decision_timeout_sec: 90
     use_ai_updown_5m: false
+    # 2026-06-09 ROBUSTNESS: on AI timeout for a borderline BTC marginal, fall
+    # through to the quant edge-gate instead of dropping the trade (the 06-01/02
+    # ~400-trade timeout-starvation fix). Quant still decides; set false to revert.
+    btc_marginal_failopen_on_ai_timeout: true
     use_ai_updown: true
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
@@ -556,6 +584,21 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (shorting into
+    # rising 5m momentum is the losing half: ghost 15m 58.4%->49.7% WR, 5m 56.4%->43.3%;
+    # 15m solid, 5m forward-test). Continuous version of the dead discrete fresh-cross.
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    # 2026-06-09: window-delta confirmation gate (model-independent direction check).
+    # Blocks entries whose side disagrees with this asset's OWN % move since the
+    # window opened — the "shorts a rising tape" fix. ON for alts (user directive
+    # 2026-06-09). margin=0 blocks only against-the-tape trades; >0 demands conviction.
+    window_delta_confirm_enabled: true
+    window_delta_confirm_margin: 0.10
     # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
     # Ghost (logged 15m RSI vs outcome) LONG-flip win% monotonic: sol 90% @55-60 (thin
     # n=20). Faster 15m RSI beats reconstructed 1h RSI. eth/doge/btc left off.
@@ -563,7 +606,11 @@ strategies:
     admit_marginal_on_quant_when_ai_disabled: true
     # 2026-06-07: admit marginal LONGs on quant (session ghost +12% EV, n252). LONG-only:
     # marginal SHORTs are -9% EV this session (codex review), so don't re-admit them.
-    admit_marginal_on_quant_sides: long
+    admit_marginal_on_quant_sides: both  # 2026-06-09: fail-open marginals on quant terms (AI gate removed — it starved 8.6k alt trades via ai_none/budget, 0 useful blocks)
+    # 2026-06-09: per-lane EV allowlist (settled ghost realized_pct, n>=60, EV>=+0.03).
+    # Replaces the anti-selective AI tiebreaker as the marginal-admission decider.
+    # sol: only 1h LONG is +EV (+0.054, n833); 15m LONG -0.169, both SHORTs flat-neg.
+    marginal_ev_admit_lanes: ["1h:LONG"]
     # 2026-06-08: re-enable 5m-native BUY_NO (sol). 05-31 suppression cited held-to-
     # resolution WR ~22%; current-era ghost (ts>=06-01, n=3816) shows recovery to
     # 56% WR / slightly-positive proxy. Frequency/calibration play; un-suppressed
@@ -621,7 +668,7 @@ strategies:
     buy_no_4h_hist_override_enabled: true
     buy_yes_4h_hist_override_enabled: true
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5  # 2026-06-09: 3->5 (bitcoin/sol/eth/xrp); hype/doge/bnb already 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     use_ai_updown: true
@@ -750,8 +797,6 @@ strategies:
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false
@@ -765,6 +810,19 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   eth_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (see sol_macro).
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    window_delta_confirm_enabled: true  # see sol_macro; model-independent direction gate, ON (alts)
+    window_delta_confirm_margin: 0.10
+    # 2026-06-09: low-ATR-only gate (Kimi signal-hunt + EV vet). eth 15m LONG bleeds
+    # in mid/high vol (-13% EV); only trade it when ATR < 0.5% of spot. Harm-reduction,
+    # not a profit signal — even low-ATR is ~breakeven. low_atr_gate_max_atr_pct def 0.005.
+    low_atr_only_lanes: ["15m:LONG"]
     disable_buy_no_5m_native: true
     enabled: true
     dead_zone_enabled: false
@@ -831,14 +889,14 @@ strategies:
     # +3% EV median +0.87). Floor = ai_updown_marginal_min_edge 0.03. Self-disables if
     # the AI decision layer is re-enabled. Forward-test, restart-gated.
     admit_marginal_on_quant_when_ai_disabled: true
-    admit_marginal_on_quant_sides: long
+    admit_marginal_on_quant_sides: both  # 2026-06-09: fail-open marginals on quant terms (AI gate removed — it starved 8.6k alt trades via ai_none/budget, 0 useful blocks)
     center_price_band: 0.02
     min_edge_when_centered: 0.12
     center_price_requires_catalyst: true
     require_btc_catalyst_15m_when_unconfirmed: true
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5  # 2026-06-09: 3->5 (bitcoin/sol/eth/xrp); hype/doge/bnb already 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     use_ai_updown: true
@@ -995,8 +1053,6 @@ strategies:
     flat_btc_only_blocks_when_alt_neutral: false
     min_btc_move_pct_5m_for_lag_entries: 0.15
     min_btc_move_pct_15m_for_lag_entries: 0.25
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false
@@ -1010,12 +1066,27 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (see sol_macro).
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    window_delta_confirm_enabled: true  # see sol_macro; model-independent direction gate, ON (alts)
+    window_delta_confirm_margin: 0.10
+    # 2026-06-09: low-ATR-only gate (Kimi + EV vet). hype 5m SHORT bleeds in
+    # mid/high vol; only trade when ATR < 0.5% of spot. Harm-reduction.
+    low_atr_only_lanes: ["5m:SHORT"]
     # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
     # Ghost (logged 15m RSI): LONG-flip win% 62% @55-60, 68% @60+.
     rsi_momentum_flip_1h: true
     # 2026-06-07: enable marginal quant-admit incl LONGs (session ghost +19% EV, n249).
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
+    # 2026-06-09: per-lane EV allowlist (settled ghost, n>=60, EV>=+0.03). hype +EV:
+    # 1h SHORT +0.226, 15m LONG +0.136, 15m SHORT +0.106. Excludes 1h LONG (-0.089).
+    marginal_ev_admit_lanes: ["1h:SHORT", "15m:LONG", "15m:SHORT"]
     # 2026-06-07: convert weak_5m_signal hard-reject -> soft est_prob penalty for 5m
     # SHORT only. Ghost: HYPE weak_5m_signal (all SHORT) n=981 +6.5% EV / 56% win /
     # median +0.08. HYPE-only flag; longs + 15m-up winner + exits untouched. Forward-test.
@@ -1202,8 +1273,6 @@ strategies:
     iql_15m_hist_floor: 0.06
     min_positive_m5_adj_5m_sell: 0.04
     sell_5m_min_corr: 0.4
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false
@@ -1217,6 +1286,15 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (see sol_macro).
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    window_delta_confirm_enabled: true  # see sol_macro; model-independent direction gate, ON (alts)
+    window_delta_confirm_margin: 0.10
     # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
     # Ghost (logged 15m RSI): LONG-flip win% 64% @55-60 (n=28).
     rsi_momentum_flip_1h: true
@@ -1224,8 +1302,12 @@ strategies:
     # (LONG -5% n119, SHORT -9% n81; codex review), and the LONG side splits dangerously
     # by window (15m +16% vs 1h -80%). The xrp 15m long recovery needs a window-specific
     # lane_min_edge loosen, not this all-window marginal bypass. Was true/short-only.
-    admit_marginal_on_quant_when_ai_disabled: false
-    admit_marginal_on_quant_sides: short
+    admit_marginal_on_quant_when_ai_disabled: true
+    admit_marginal_on_quant_sides: both  # 2026-06-09: fail-open marginals on quant terms (AI gate removed)
+    # 2026-06-09: per-lane EV allowlist (settled ghost, n>=60, EV>=+0.03). xrp is the
+    # most adverse-selected alt — ONLY 1h SHORT is +EV (+0.286, n83). Notably xrp 1h
+    # LONG is -0.80 EV (11% WR) and 15m both sides -EV, so they stay blocked.
+    marginal_ev_admit_lanes: ["1h:SHORT"]
     disable_buy_no_5m_native: false
     enabled: true
     dead_zone_enabled: false
@@ -1263,7 +1345,7 @@ strategies:
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
-    max_ai_calls_per_scan: 3
+    max_ai_calls_per_scan: 5  # 2026-06-09: 3->5 (bitcoin/sol/eth/xrp); hype/doge/bnb already 6
     ai_observer_timeout_sec: 60
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 300
@@ -1427,8 +1509,6 @@ strategies:
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false
@@ -1442,12 +1522,27 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (see sol_macro).
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    window_delta_confirm_enabled: true  # see sol_macro; model-independent direction gate, ON (alts)
+    window_delta_confirm_margin: 0.10
+    # 2026-06-09: low-ATR-only gate (Kimi + EV vet). doge 5m/15m LONG bleed in
+    # mid/high vol; only trade when ATR < 0.5% of spot. Harm-reduction.
+    low_atr_only_lanes: ["5m:LONG", "15m:LONG"]
     admit_marginal_on_quant_when_ai_disabled: true
     # 2026-06-07: admit marginal LONGs on quant terms (was SHORT-only). Session ghost:
     # in-scan AI gate killed marginal LONGs at 64% would-win/+26% EV while AI rec
     # accuracy was 18%. LONG-only: marginal SHORTs are -13% EV now (codex review), so
     # the pre-existing short admit is dropped. Forward-test; needs restart.
-    admit_marginal_on_quant_sides: long
+    admit_marginal_on_quant_sides: both  # 2026-06-09: fail-open marginals on quant terms (AI gate removed — it starved 8.6k alt trades via ai_none/budget, 0 useful blocks)
+    # 2026-06-09: per-lane EV allowlist (settled ghost, n>=60, EV>=+0.03). doge +EV:
+    # 15m LONG +0.267, 1h LONG +0.151, 1h SHORT +0.088. Excludes 15m SHORT (-0.171).
+    marginal_ev_admit_lanes: ["15m:LONG", "1h:LONG", "1h:SHORT"]
     # 2026-06-08: REVERTED 5m-native BUY_NO un-suppression. Briefly flipped false on
     # ghost's 55% WR, but the first live trades in test_20260608_025851 came in 0/2
     # (-$6.95) — siding with the taken-lane "entry-broken" 32% prior, not the ghost.
@@ -1616,8 +1711,6 @@ strategies:
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false
@@ -1631,13 +1724,29 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    # 2026-06-09: flip BEARISH 5m/15m SHORT->LONG when macd_hist_5m>0 (see sol_macro).
+    macd_momentum_flip_5m15m: true
+    # 2026-06-09: symmetric LONG->SHORT twin. Flip a BULLISH-bias LONG to a SHORT when
+    # 5m momentum (macd_hist_5m) has turned DOWN — trades the falling tape the bot was
+    # trying to buy (the dominant window-delta-disagree block). Recovers frequency in
+    # the right direction instead of just blocking. FORWARD-TEST (not yet ghost-validated).
+    macd_momentum_flip_long_to_short: false
+    window_delta_confirm_enabled: true  # see sol_macro; model-independent direction gate, ON (alts)
+    window_delta_confirm_margin: 0.10
+    # 2026-06-09: low-ATR-only gate (Kimi + EV vet). bnb 15m LONG bleeds in
+    # mid/high vol; only trade when ATR < 0.5% of spot. Harm-reduction.
+    low_atr_only_lanes: ["15m:LONG"]
     # 2026-06-08: 1h bearish-short->LONG momentum flip ON (rsi_14>=55, fn default).
     # Ghost (logged 15m RSI): LONG-flip win% 70% @55-60, 86% @60+ (cleanest of all alts).
     rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
     # 2026-06-07: admit marginal LONGs on quant (session ghost +25% EV, n858 — strongest
     # of the five). LONG-only: marginal SHORTs are -22% EV this session (codex review).
-    admit_marginal_on_quant_sides: long
+    admit_marginal_on_quant_sides: both  # 2026-06-09: fail-open marginals on quant terms (AI gate removed — it starved 8.6k alt trades via ai_none/budget, 0 useful blocks)
+    # 2026-06-09: per-lane EV allowlist (settled ghost, n>=60, EV>=+0.03). bnb +EV:
+    # 15m LONG +0.304 (strongest of all alts), 1h LONG +0.144. Excludes both SHORTs
+    # (15m -0.011, 1h -0.060).
+    marginal_ev_admit_lanes: ["15m:LONG", "1h:LONG"]
     # Re-admitted 2026-06-03: the blanket 5m BUY_NO suppression assumed the
     # cross-asset anti-predictive pattern, but BNB's own suppressed-cell ghosts
     # (n=3528, WR 53.9%, avg realized +0.011) are breakeven-to-mildly-positive,
@@ -1810,8 +1919,6 @@ strategies:
             entry_window_min: 0.0
             entry_window_max: 360.0
             size_multiplier: 0.3
-    btc_min_move_dollars_15m: 10.0
-    btc_min_move_dollars_5m: 3.0
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
       enabled: false

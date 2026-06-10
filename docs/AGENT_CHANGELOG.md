@@ -8,6 +8,42 @@
 
 ---
 
+## 2026-06-09 — BTC NEUTRAL routes to AI decider (un-starve flat-4H nights)
+
+**Problem:** BTC trade rate collapsed 3.3/hr→1.0/hr ~22:00 UTC (alts simultaneously doubled). Root cause: BTC 4H went flat (`hist=+1.6 < conviction 35`) → HTF pinned NEUTRAL → below-threshold NEUTRAL 15m/1h candidates were edge-skipped at the `lane_min_edge` gate **before the AI ever saw them** (`ai_calls~1`, dominant skip `updown_15m/1h_neutral`). The AI — which exists to adjudicate NEUTRAL — was never consulted because routing required `edge ≥ ai_updown_marginal_min_edge (0.03)` OR low quant-confidence, and the flat-tape candidates were neither. Not a MiniMax/latency issue (HTTP 200, ~18s) and not a global bleed (BTC-only).
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** New `_neutral_delegates_to_ai` — when `htf_bias == NEUTRAL` on a 15m/1h up/down market and `edge < effective_min_edge`, route to the AI as directional decider regardless of the 0.03 marginal floor or quant confidence. OR'd into `_needs_ai_for_low_conf_neutral_15m` so downstream keeps `veto_only=False` (AI supplies direction). Above-threshold NEUTRAL trades untouched. Opt-out: `neutral_15m_routes_to_ai: false`.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) (bitcoin):** `neutral_15m_routes_to_ai: true` (new); `max_ai_calls_per_scan: 3 → 5` (a NEUTRAL night needs AI on several open 15m/1h markets); `ai_decision_timeout_sec: 40 → 90` (the marginal/NEUTRAL gate is the only place MiniMax fires for BTC, on minutes-long 15m/1h windows — give the call room to return rather than cancel at 40s; still < the 120s provider HTTP timeout; `btc_marginal_failopen_on_ai_timeout: true` still catches a genuine timeout → quant decides, trade not dropped). 5m unchanged (no AI).
+
+**Context correction:** the in-scan AI gate is ON and helping BTC — BTC carried 06-05 +$187 / 06-07 +$64 / 06-09 +$93 with the AI deciding 15m/1h (30–118 calls/hr). The `project_ai_veto_net_harmful` finding is about the *enforced* `decision_layer.enabled` path (disabled 06-02), NOT this in-scan gate.
+
+**Verification:** `pytest tests/test_bitcoin.py tests/test_bitcoin_scenarios.py` → 72 passed, 2 skipped; `py_compile` clean; `settings.yaml` parses. Forward-test only; **needs bot restart**.
+
+**Deferred NEXT STEP (validated-next): async AI broker for BTC 15m/1h.** Decouple the AI call from the scan cycle — enqueue on cycle N via the existing `AIDecisionBroker` (`src/analysis/ai_decision_broker.py`, already wired as `_resolve_or_enqueue_ai` bitcoin.py:654), consume the verdict on cycle N+1, instead of the synchronous `_evaluate_trade_decision_with_timeout`. The old "broker silently dropped trades" caveat (bitcoin.py:3329) is a **5m artifact**: 5m entry-eligibility is ~5 min (0.5–5.5) so a 60s skip drops the candidate; 15m/1h bands are ~16 min (2–18) / ~58 min (1–59), so a 60s async round-trip is 2–6% of the band and the candidate stays valid. Gain: scan never blocks, AI gets unbounded time, no 90s ceiling/timeout/failopen. **Only do this if, after restart, the synchronous 5×≤90s calls bloat BTC's scan-cycle time** — watch cycle time first; don't stack on the unvalidated sync change. Second-brain detail: `projects/psb/logs/2026-06-09-btc-neutral-ai-routing.md`.
+
+## 2026-06-09 — Disable market_regime_gate (deadzone); flag both deadzone systems for purge
+
+| File | Change | Why |
+|--------|--------|-----|
+| `config/settings.yaml` | `trading.market_regime_gate.enabled: true → false`. | Live deadzone gate ([`market_regime_gate_decision`](src/main.py:109), caller [`_check_market_regime_execution`](src/main.py:3057)) was on but near-inert: regime snapshots are ~87% `active`, only ~3% `deadzone_confirmed`, and it only blocks when `combined.startswith("deadzone")` **and** convergence < 0.55 → 0 logged `market_deadzone_*` rejects. Zero frequency benefit to keeping it; calibration phase favors fewer blocks. Config-disable (not code removal) keeps the `update_resume_window(green_window=True)` feeder into the exposure-manager pause/resume gate alive — removing the caller would have severed the primary green-window feed ([exposure_manager.py:538](src/execution/exposure_manager.py:538)) and risked suppressing resume → *fewer* trades. Reversible, mirrors how `regime_action_gate_enabled` / `decision_layer.enabled` were retired. |
+
+**PURGE WHEN CONVENIENT (operator request, 2026-06-09):** delete BOTH deadzone systems outright in a dedicated cleanup commit when no parallel Claude/Cursor edits are in flight.
+- **System 1 (market_regime_gate):** `market_regime_gate_decision()` + `_check_market_regime_execution()` ([main.py:109,3057](src/main.py:109)), callers at [main.py:3205,3490](src/main.py:3205), dashboard `_gl_current_deadzone_status()` ([server.py:2252](src/dashboard/server.py:2252)). **Before deleting the caller, confirm the exposure-manager resume gate has a safe default for `_latest_green_window`/`_latest_in_deadzone` without the feeder.**
+- **System 2 (hourly UTC dead_zone):** already inert (callback only logs hypothetical trades when `dead_zone_enabled=False`, never blocks). Spans 7 strategy files + `_dead_zone_skip_callback`/`_wire_strategy_callbacks` ([main.py:419,477,1202](src/main.py:419)) + `trade_journal.py:602-658` + dashboard read. Merge-conflict-heavy; do it on a quiet branch.
+
+Config flip only — **needs restart** to take effect.
+
+## 2026-06-09 — Continuous 5m-momentum SHORT→LONG flip (5m/15m alt entry fix)
+
+| File | Change | Why |
+|--------|--------|-----|
+| `src/analysis/updown_composite_score.py` | New `macd_hist_5m` / `macd_flip_enabled` params + branch in `apply_fresh_cross_override`: BEARISH-bias SHORT on 5m/15m markets with `macd_hist_5m > 0` flips to LONG (pins est_prob≥0.55). Asymmetric, 1h excluded, guarded on `flipped is None`. | Live bleed = 38/42 losing taken shorts were `aligned`/BEARISH with `mfe≈0` (wrong from entry). The discrete `fresh_cross` fired 0/77k and the RSI flip is 1h-only, so nothing protected 5m/15m shorts. Ghost-validated (macd_hist_5m logged 06-08): short WR by hist sign — 15m 58.4%(hist≤0)→49.7%(hist>0) n≈3900 each; 5m 56.4%→43.3%. Continuous sign is the version that actually fires. |
+| `src/strategies/sol_macro.py` (×2 call sites), `src/strategies/eth_macro.py` | Pass `macd_hist_5m` (5m MACD histogram) + `macd_flip_enabled` from config to both alt scan paths + the ETH port. | Wire the flip through the SOL-family (sol/xrp/hype/bnb/doge) and the duplicated ETH scan loop. |
+| `config/settings.yaml` | `macd_momentum_flip_5m15m: true` on sol/eth/hype/xrp/doge/bnb (code default `False`). | Opt-in per strategy, mirrors how `rsi_momentum_flip_1h` was enabled. BTC out of scope (separate `bitcoin.py` path, `side_source=btc_htf_bias`). |
+
+Validation: 15m solid (huge n, gap holds in both time-halves); 5m directionally right but ~8h window → forward-test. 9/9 new unit asserts pass; 205 related tests pass (3 pre-existing eth shadow-observer failures unaffected). **Needs restart** to load. Forward-test only.
+
 ## 2026-06-07 — Shutdown hang fix + 1h-long un-starve (floor bump) + sol exit hold/trail
 
 | File | Change | Why |
