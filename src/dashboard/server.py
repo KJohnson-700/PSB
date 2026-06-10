@@ -796,7 +796,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-05-27-ghostlab-deadzone-status",
+        "dashboard_ui_rev": "2026-06-10-deadzone-purged",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -2004,16 +2004,15 @@ async def get_usage_records():
 # Ghost Lab — time-of-day counterfactual explorer
 # ---------------------------------------------------------------------------
 #
-# Merges three counterfactual / outcome sources into one response:
+# Merges two outcome sources into one response:
 #   1. data/calibration/rejected_candidates_settled.jsonl — settled "ghost"
 #      rejections (live scanner rejected, settled vs Polymarket outcome).
-#   2. data/paper_trades/test_*/entries.jsonl — DEAD_ZONE_SKIP and
-#      DEAD_ZONE_SKIP_RESOLVED events (per-hour deadzone counterfactual),
-#      plus EXIT events for actual live (paper) trades.
+#   2. data/paper_trades/test_*/entries.jsonl — EXIT events for actual
+#      live (paper) trades.
 #   3. data/calibration/lane_posteriors.json — Bayesian per-lane state
 #      joined onto each lane.
 #
-# All three sources share the canonical lane_id format from
+# All sources share the canonical lane_id format from
 # src/analysis/lane_identity.py:121 (strategy|window|side|regime|entry_family).
 
 
@@ -2110,23 +2109,12 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
 
 
 def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
-    """Scan all paper_trades/<session>/entries.jsonl for DEAD_ZONE_SKIP[_RESOLVED] and EXIT events."""
+    """Scan all paper_trades/<session>/entries.jsonl for live EXIT events."""
     base = DATA_ROOT / "paper_trades"
     out: List[Dict[str, Any]] = []
     if not base.exists():
         return out
 
-    def _hour_utc_from_extra(extra: Dict[str, Any], fallback: int) -> int:
-        raw = extra.get("hour_utc")
-        if raw is None:
-            return fallback
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return fallback
-
-    # Build a quick lookup of DEAD_ZONE_SKIP keys → resolved outcome so we can attach win/outcome.
-    skip_outcomes: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
     sessions = sorted(base.glob("test_*/entries.jsonl"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
     for path in sessions:
         try:
@@ -2147,91 +2135,36 @@ def _gl_load_paper(since: datetime) -> List[Dict[str, Any]]:
                     except Exception:
                         continue
                     event = str(rec.get("event") or "")
-                    if event not in ("DEAD_ZONE_SKIP", "DEAD_ZONE_SKIP_RESOLVED", "EXIT"):
+                    if event != "EXIT":
                         continue
                     ts = _gl_parse_ts(rec.get("timestamp"))
                     if ts is None or ts < since:
                         continue
                     extra = rec.get("extra") or {}
-                    hour_utc = _hour_utc_from_extra(extra, ts.hour)
-                    if event == "DEAD_ZONE_SKIP_RESOLVED":
-                        # Attach outcome to the corresponding earlier SKIP.
-                        key = (
-                            str(rec.get("market_id") or ""),
-                            str(rec.get("strategy") or ""),
-                            str(extra.get("lane_id") or ""),
-                            str(hour_utc),
-                        )
-                        skip_outcomes[key] = {
-                            "win": bool(extra.get("would_have_won")) if extra.get("would_have_won") is not None else None,
-                            "resolved_at": rec.get("timestamp"),
-                            "payout": extra.get("hypothetical_payout"),
-                        }
-                        continue
-                    if event == "DEAD_ZONE_SKIP":
-                        out.append({
-                            "ts": ts.isoformat(),
-                            "hour_utc": hour_utc,
-                            "dow": ts.weekday(),
-                            "lane_id": str(extra.get("lane_id") or ""),
-                            "strategy": rec.get("strategy") or "",
-                            "window": str(extra.get("lane_window") or ""),
-                            "side": str(extra.get("lane_side") or ""),
-                            "action": rec.get("action") or "",
-                            "source": "deadzone_skip",
-                            "reason": rec.get("reason") or "dead_zone_disabled_hypothetical",
-                            "win": None,  # filled in after the RESOLVED pass
-                            "yes_price": extra.get("yes_price"),
-                            "est_prob_up": extra.get("est_up") or extra.get("est_prob"),
-                            "htf_bias": extra.get("htf_bias"),
-                            "hypothetical_payout": None,
-                            "market_id": rec.get("market_id"),
-                            "price_regime": extra.get("price_regime"),
-                            "polymarket_regime": extra.get("polymarket_regime"),
-                            "combined_regime": extra.get("combined_regime"),
-                            "regime_source": extra.get("regime_source"),
-                            "_resolve_key": (
-                                str(rec.get("market_id") or ""),
-                                str(rec.get("strategy") or ""),
-                                str(extra.get("lane_id") or ""),
-                                str(hour_utc),
-                            ),
-                            "blocked_hours_config": extra.get("blocked_hours_config"),
-                        })
-                        continue
-                    if event == "EXIT":
-                        out.append({
-                            "ts": ts.isoformat(),
-                            "hour_utc": extra.get("hour_utc_entry") if extra.get("hour_utc_entry") is not None else ts.hour,
-                            "dow": ts.weekday(),
-                            "lane_id": str(extra.get("lane_id") or ""),
-                            "strategy": rec.get("strategy") or "",
-                            "window": str(extra.get("lane_window") or extra.get("window_size") or ""),
-                            "side": str(extra.get("lane_side") or extra.get("direction") or ""),
-                            "action": rec.get("action") or "",
-                            "source": "live",
-                            "reason": rec.get("reason") or "",
-                            "win": bool(extra.get("outcome_won")) if extra.get("outcome_won") is not None else (rec.get("pnl", 0) > 0),
-                            "yes_price": extra.get("yes_price") or rec.get("entry_price"),
-                            "est_prob_up": extra.get("est_prob") or extra.get("raw_est_prob"),
-                            "htf_bias": extra.get("htf_bias"),
-                            "hypothetical_payout": rec.get("pnl"),
-                            "market_id": rec.get("market_id"),
-                            "price_regime": extra.get("price_regime"),
-                            "polymarket_regime": extra.get("polymarket_regime"),
-                            "combined_regime": extra.get("combined_regime"),
-                            "regime_source": extra.get("regime_source"),
-                        })
+                    out.append({
+                        "ts": ts.isoformat(),
+                        "hour_utc": extra.get("hour_utc_entry") if extra.get("hour_utc_entry") is not None else ts.hour,
+                        "dow": ts.weekday(),
+                        "lane_id": str(extra.get("lane_id") or ""),
+                        "strategy": rec.get("strategy") or "",
+                        "window": str(extra.get("lane_window") or extra.get("window_size") or ""),
+                        "side": str(extra.get("lane_side") or extra.get("direction") or ""),
+                        "action": rec.get("action") or "",
+                        "source": "live",
+                        "reason": rec.get("reason") or "",
+                        "win": bool(extra.get("outcome_won")) if extra.get("outcome_won") is not None else (rec.get("pnl", 0) > 0),
+                        "yes_price": extra.get("yes_price") or rec.get("entry_price"),
+                        "est_prob_up": extra.get("est_prob") or extra.get("raw_est_prob"),
+                        "htf_bias": extra.get("htf_bias"),
+                        "hypothetical_payout": rec.get("pnl"),
+                        "market_id": rec.get("market_id"),
+                        "price_regime": extra.get("price_regime"),
+                        "polymarket_regime": extra.get("polymarket_regime"),
+                        "combined_regime": extra.get("combined_regime"),
+                        "regime_source": extra.get("regime_source"),
+                    })
         except Exception:
             continue
-    # Second pass: attach resolved outcomes to earlier SKIPs.
-    for ev in out:
-        if ev.get("source") != "deadzone_skip":
-            continue
-        key = ev.pop("_resolve_key", None)
-        if key and key in skip_outcomes:
-            ev["win"] = skip_outcomes[key]["win"]
-            ev["hypothetical_payout"] = skip_outcomes[key]["payout"]
     return out
 
 
@@ -2249,7 +2182,8 @@ def _gl_load_posteriors() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _gl_current_deadzone_status() -> Dict[str, Any]:
+def _gl_current_regime_status() -> Dict[str, Any]:
+    """Current market-regime feed health (written by the standalone price tracker)."""
     cfg = _load_yaml_config()
     gate_cfg = ((cfg.get("trading") or {}).get("market_regime_gate") or {})
     path = Path(gate_cfg.get("regime_log") or DEFAULT_MARKET_REGIME_LOG)
@@ -2286,34 +2220,14 @@ def _gl_current_deadzone_status() -> Dict[str, Any]:
 
     combined = str((latest or {}).get("combined_regime") or "")
     poly = str((latest or {}).get("polymarket_regime") or "")
-    strategy_status = {}
-    for name, strat_cfg in ((cfg.get("strategies") or {}).items()):
-        if not isinstance(strat_cfg, dict):
-            continue
-        if "dead_zone_enabled" not in strat_cfg and "blocked_utc_hours_updown" not in strat_cfg:
-            continue
-        hours = strat_cfg.get("blocked_utc_hours_updown") or []
-        try:
-            blocked_hours = [int(h) for h in hours]
-        except (TypeError, ValueError):
-            blocked_hours = []
-        strategy_status[name] = {
-            "dead_zone_enabled": bool(strat_cfg.get("dead_zone_enabled", True)),
-            "blocked_now_by_hour": now.hour in blocked_hours,
-            "blocked_hours_config": blocked_hours,
-        }
-
     return {
-        "enabled": bool(gate_cfg.get("enabled", False)),
         "fresh": bool(fresh),
         "age_sec": round(age_sec, 3) if age_sec is not None else None,
         "max_age_sec": max_age_sec,
         "hour_utc": now.hour,
-        "in_market_deadzone": bool(fresh and combined.startswith("deadzone")),
         "combined_regime": combined or None,
         "polymarket_regime": poly or None,
         "latest": latest,
-        "strategies": strategy_status,
     }
 
 
@@ -2334,8 +2248,6 @@ def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "side": ev.get("side"),
             "n_ghosts": 0, "ghost_wins": 0,
             "n_live": 0, "live_wins": 0,
-            "n_deadzone": 0, "n_deadzone_resolved": 0, "deadzone_wins": 0,
-            "blocked_hours_config": ev.get("blocked_hours_config") if ev.get("source") == "deadzone_skip" else None,
         })
         src = ev.get("source")
         win = ev.get("win")
@@ -2349,14 +2261,6 @@ def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             lane["n_live"] += 1
             if win is True:
                 lane["live_wins"] += 1
-        elif src == "deadzone_skip":
-            lane["n_deadzone"] += 1
-            if win is not None:
-                lane["n_deadzone_resolved"] += 1
-                if win is True:
-                    lane["deadzone_wins"] += 1
-            if lane["blocked_hours_config"] is None and ev.get("blocked_hours_config"):
-                lane["blocked_hours_config"] = ev.get("blocked_hours_config")
         if isinstance(h, int) and win is not None:
             cell = by_lane_hour[(lid, h)]
             cell["n"] += 1
@@ -2369,7 +2273,7 @@ def _gl_aggregate(events: List[Dict[str, Any]]) -> Dict[str, Any]:
                     cell2["wins"] += 1
     # Compute WRs + Wilson CIs per lane.
     for lane in by_lane.values():
-        for prefix, n_key in (("ghost", "n_ghosts"), ("live", "n_live"), ("deadzone", "n_deadzone_resolved")):
+        for prefix, n_key in (("ghost", "n_ghosts"), ("live", "n_live")):
             n = lane[n_key]
             w = lane[f"{prefix}_wins"]
             p, lo, hi = _gl_wilson_ci(w, n)
@@ -2454,175 +2358,11 @@ def _gl_float(value: Any) -> Optional[float]:
         return None
 
 
-def _gl_empty_counterfactual_bucket() -> Dict[str, Any]:
-    return {
-        "n": 0,
-        "wins": 0,
-        "pnl_sum": 0.0,
-        "pnl_n": 0,
-    }
-
-
-def _gl_counterfactual_metrics(stats: Dict[str, Any]) -> Dict[str, Any]:
-    n = int(stats.get("n") or 0)
-    wins = int(stats.get("wins") or 0)
-    p, lo, hi = _gl_wilson_ci(wins, n)
-    pnl_n = int(stats.get("pnl_n") or 0)
-    pnl_sum = float(stats.get("pnl_sum") or 0.0)
-    return {
-        "n": n,
-        "wins": wins,
-        "wr": round(p, 4),
-        "wr_lo": round(lo, 4),
-        "wr_hi": round(hi, 4),
-        "pnl_sum": round(pnl_sum, 4),
-        "avg_pnl": round(pnl_sum / pnl_n, 4) if pnl_n else None,
-    }
-
-
-def _gl_deadzone_theory(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Summarize whether deadzone skips look colder than live trades by hour/regime."""
-    by_hour_regime: Dict[Tuple[int, str], Dict[str, Any]] = defaultdict(
-        lambda: {
-            "deadzone_skip": _gl_empty_counterfactual_bucket(),
-            "live": _gl_empty_counterfactual_bucket(),
-            "ghost": _gl_empty_counterfactual_bucket(),
-            "lanes": set(),
-        }
-    )
-    by_lane_hour: Dict[Tuple[str, int, str], Dict[str, Any]] = defaultdict(
-        lambda: {
-            "deadzone_skip": _gl_empty_counterfactual_bucket(),
-            "live": _gl_empty_counterfactual_bucket(),
-            "ghost": _gl_empty_counterfactual_bucket(),
-        }
-    )
-
-    for ev in events:
-        if ev.get("win") is not True and ev.get("win") is not False:
-            continue
-        hour = ev.get("hour_utc")
-        if not isinstance(hour, int):
-            continue
-        src = str(ev.get("source") or "")
-        if src not in {"deadzone_skip", "live", "ghost"}:
-            continue
-        regime = str(ev.get("combined_regime") or "unknown")
-        lane_id = str(ev.get("lane_id") or "unknown")
-        payout = _gl_float(ev.get("hypothetical_payout"))
-
-        for bucket in (
-            by_hour_regime[(hour, regime)],
-            by_lane_hour[(lane_id, hour, regime)],
-        ):
-            stats = bucket[src]
-            stats["n"] += 1
-            if ev.get("win") is True:
-                stats["wins"] += 1
-            if payout is not None:
-                stats["pnl_sum"] += payout
-                stats["pnl_n"] += 1
-        by_hour_regime[(hour, regime)]["lanes"].add(lane_id)
-
-    def verdict(deadzone: Dict[str, Any], live: Dict[str, Any]) -> str:
-        dz_n = int(deadzone["n"])
-        live_n = int(live["n"])
-        if dz_n < 5:
-            return "collecting"
-        if deadzone["wr"] >= 0.55 and (live_n == 0 or deadzone["wr"] >= live["wr"]):
-            return "block_hurting"
-        if deadzone["wr"] <= 0.45:
-            return "block_helping"
-        return "mixed"
-
-    hour_rows: List[Dict[str, Any]] = []
-    for (hour, regime), bucket in by_hour_regime.items():
-        dz = _gl_counterfactual_metrics(bucket["deadzone_skip"])
-        live = _gl_counterfactual_metrics(bucket["live"])
-        ghost = _gl_counterfactual_metrics(bucket["ghost"])
-        hour_rows.append(
-            {
-                "hour_utc": hour,
-                "combined_regime": regime,
-                "lane_count": len(bucket["lanes"]),
-                "deadzone": dz,
-                "live": live,
-                "ghost": ghost,
-                "wr_delta_deadzone_vs_live": (
-                    round(dz["wr"] - live["wr"], 4)
-                    if dz["n"] and live["n"]
-                    else None
-                ),
-                "verdict": verdict(dz, live),
-            }
-        )
-
-    lane_rows: List[Dict[str, Any]] = []
-    for (lane_id, hour, regime), bucket in by_lane_hour.items():
-        dz = _gl_counterfactual_metrics(bucket["deadzone_skip"])
-        live = _gl_counterfactual_metrics(bucket["live"])
-        ghost = _gl_counterfactual_metrics(bucket["ghost"])
-        lane_rows.append(
-            {
-                "lane_id": lane_id,
-                "hour_utc": hour,
-                "combined_regime": regime,
-                "deadzone": dz,
-                "live": live,
-                "ghost": ghost,
-                "wr_delta_deadzone_vs_live": (
-                    round(dz["wr"] - live["wr"], 4)
-                    if dz["n"] and live["n"]
-                    else None
-                ),
-                "verdict": verdict(dz, live),
-            }
-        )
-
-    hour_rows.sort(
-        key=lambda row: (
-            int(row["deadzone"]["n"]),
-            abs(float(row["wr_delta_deadzone_vs_live"] or 0.0)),
-        ),
-        reverse=True,
-    )
-    lane_rows.sort(
-        key=lambda row: (
-            int(row["deadzone"]["n"]),
-            abs(float(row["wr_delta_deadzone_vs_live"] or 0.0)),
-        ),
-        reverse=True,
-    )
-    verdict_counts: Dict[str, int] = defaultdict(int)
-    for row in hour_rows:
-        verdict_counts[str(row["verdict"])] += 1
-
-    return {
-        "hours": hour_rows,
-        "lane_hours": lane_rows[:100],
-        "summary": {
-            "hour_regime_buckets": len(hour_rows),
-            "lane_hour_regime_buckets": len(lane_rows),
-            "verdict_counts": dict(verdict_counts),
-        },
-    }
-
-
 def _gl_build_decision_digest(since_dt: datetime, until_dt: Optional[datetime] = None) -> Dict[str, Any]:
     until_dt = until_dt or datetime.utcnow()
-    ghosts = [
-        row for row in _gl_load_ghosts(since_dt)
-        if (_gl_parse_ts(row.get("ts")) or datetime.min) <= until_dt
-    ]
-    paper = [
-        row for row in _gl_load_paper(since_dt)
-        if (_gl_parse_ts(row.get("ts")) or datetime.min) <= until_dt
-    ]
-    events = ghosts + paper
     digest: Dict[str, Any] = {
         "since": since_dt.isoformat(),
         "now": until_dt.isoformat(),
-        "deadzone_theory": _gl_deadzone_theory(events),
     }
 
     try:
@@ -2643,7 +2383,6 @@ def _gl_build_decision_digest(since_dt: datetime, until_dt: Optional[datetime] =
             "actionable_overtight_gates": ghost_report.get("actionable_overtight_gates", [])[:12],
             "top_missed_ev": ghost_report.get("top_missed_ev", [])[:12],
             "top_protected_loss": ghost_report.get("top_protected_loss", [])[:12],
-            "deadzone_gates": ghost_report.get("deadzone_gates", [])[:12],
             "regimes": ghost_report.get("regimes", [])[:12],
             "btc_regimes": ghost_report.get("btc_regimes", [])[:12],
             "convergence": ghost_report.get("convergence", [])[:12],
@@ -2741,7 +2480,6 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
     digest = _gl_build_decision_digest(since_dt, until_dt)
     ghost_gate = digest.get("ghost_gate") if isinstance(digest.get("ghost_gate"), dict) else {}
     calibration = digest.get("calibration") if isinstance(digest.get("calibration"), dict) else {}
-    deadzone = digest.get("deadzone_theory") if isinstance(digest.get("deadzone_theory"), dict) else {}
 
     standouts: List[Dict[str, Any]] = []
     adjustments: List[Dict[str, Any]] = []
@@ -2784,47 +2522,6 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
                 **({"lane_id": lane_id, "lane": _gl_lane_parts(lane_id)} if lane_id else {}),
             }
         )
-
-    for row in (deadzone.get("hours") or [])[:20]:
-        dz = row.get("deadzone") or {}
-        live = row.get("live") or {}
-        n = int(dz.get("n") or 0)
-        if n < 5:
-            continue
-        verdict = str(row.get("verdict") or "")
-        hour = row.get("hour_utc")
-        regime = row.get("combined_regime") or "unknown"
-        dz_wr = _gl_metric_pct(dz.get("wr"))
-        live_wr = _gl_metric_pct(live.get("wr")) if int(live.get("n") or 0) else None
-        evidence = f"{n} resolved deadzone skips at {hour:02d} UTC / {regime}; skipped WR {dz_wr}%"
-        if live_wr is not None:
-            evidence += f" vs live WR {live_wr}%"
-        if verdict == "block_hurting":
-            add_standout(
-                "deadzone",
-                f"Deadzone may be blocking winners at {hour:02d} UTC",
-                evidence,
-                "Review dead_zone_enabled or blocked-hour rules for the affected lanes before the next overnight run.",
-                n=n,
-                severity="warning",
-            )
-            adjustments.append(
-                {
-                    "setting": "strategies.*.dead_zone_enabled / blocked_utc_hours_updown",
-                    "recommendation": "consider loosening this hour/regime after lane-level confirmation",
-                    "evidence": evidence,
-                    "confidence": _gl_sample_grade(n),
-                }
-            )
-        elif verdict == "block_helping":
-            add_standout(
-                "deadzone",
-                f"Deadzone block looks protective at {hour:02d} UTC",
-                evidence,
-                "Keep this block active unless later samples reverse.",
-                n=n,
-                severity="positive",
-            )
 
     for row in (ghost_gate.get("actionable_overtight_gates") or [])[:8]:
         n = int(row.get("n") or 0)
@@ -2931,7 +2628,6 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
     counts = {
         "ghost_rows": int((ghost_gate.get("overall") or {}).get("n") or ghost_gate.get("rows") or 0),
         "calibration_records": int(calibration.get("n_records") or 0),
-        "deadzone_hour_buckets": int((deadzone.get("summary") or {}).get("hour_regime_buckets") or 0),
     }
     actionable_count = len(adjustments) + len([r for r in lane_calibrations if r.get("severity") in {"warning", "positive"}])
     data_loops = [
@@ -2944,11 +2640,6 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
             "loop": "closed trades -> lane calibration",
             "status": "closed" if counts["calibration_records"] > 0 else "waiting_for_closed_trades",
             "detail": f"{counts['calibration_records']} calibration trade records in window",
-        },
-        {
-            "loop": "deadzone skips -> resolved hour buckets",
-            "status": "closed" if counts["deadzone_hour_buckets"] > 0 else "waiting_for_resolved_deadzone_skips",
-            "detail": f"{counts['deadzone_hour_buckets']} hour/regime buckets in window",
         },
         {
             "loop": "evidence -> settings candidates",
@@ -3008,7 +2699,7 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
             else "collect_more_overnight_samples"
         ),
         "cycle": [
-            "collect live trades, rejected ghosts, and deadzone skips",
+            "collect live trades and rejected ghosts",
             "settle outcomes against real Polymarket results",
             "summarize standouts and lane calibration",
             "queue manual settings candidates",
@@ -3070,7 +2761,7 @@ async def get_ghost_lab(
     side: Optional[str] = None,
     limit: int = 5000,
 ):
-    """Ghost Lab — settled-ghost + deadzone-counterfactual + live-trade explorer with time-of-day buckets."""
+    """Ghost Lab — settled-ghost + live-trade explorer with time-of-day buckets."""
     # Default = last 30 days (time-of-day buckets need sample volume).
     if since:
         since_dt = _gl_parse_ts(since) or (datetime.utcnow() - timedelta(days=30))
@@ -3123,10 +2814,9 @@ async def get_ghost_lab(
 
     counts = {
         "ghost": sum(1 for e in events if e.get("source") == "ghost"),
-        "deadzone_skip": sum(1 for e in events if e.get("source") == "deadzone_skip"),
         "live": sum(1 for e in events if e.get("source") == "live"),
     }
-    current_deadzone = _gl_current_deadzone_status()
+    current_regime = _gl_current_regime_status()
     return JSONResponse(
         content={
             "events": capped,
@@ -3134,7 +2824,7 @@ async def get_ghost_lab(
             "buckets_hour": agg["buckets_hour"],
             "buckets_hour_dow": agg["buckets_hour_dow"],
             "reasons": reasons,
-            "current_deadzone": current_deadzone,
+            "current_regime": current_regime,
             "session": {
                 "since": since_dt.isoformat(),
                 "now": datetime.utcnow().isoformat(),
@@ -3169,7 +2859,7 @@ async def get_ghost_regime_breakdown(
 async def get_ghost_decision_digest(
     since: Optional[str] = Query(default=None, description="ISO timestamp or YYYY-MM-DD. Defaults to 30 days ago."),
 ):
-    """Return structured Ghost Gate, calibration, and deadzone-theory dashboard data."""
+    """Return structured Ghost Gate and calibration dashboard data."""
     since_dt = _gl_parse_ts(since) if since else None
     if since_dt is None:
         since_dt = datetime.utcnow() - timedelta(days=30)
@@ -5948,7 +5638,6 @@ class ConfigUpdates(BaseModel):
             allowed_strategy_fields = {
                 "enabled",
                 "use_ai",
-                "dead_zone_enabled",
                 "resolution_window_enabled",
                 "min_edge",
                 "entry_price_min",
@@ -5956,7 +5645,7 @@ class ConfigUpdates(BaseModel):
                 "kelly_fraction",
                 "ai_confidence_threshold",
             }
-            bool_fields = {"enabled", "use_ai", "dead_zone_enabled", "resolution_window_enabled"}
+            bool_fields = {"enabled", "use_ai", "resolution_window_enabled"}
             unit_fields = {
                 "min_edge",
                 "entry_price_min",

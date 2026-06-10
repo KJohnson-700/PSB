@@ -101,6 +101,10 @@ from src.analysis.rejected_candidate_log import (
     build_upper_cap_probe_variants,
     log_rejected_candidate,
 )
+from src.analysis.window_delta import (
+    delta_confirms_side,
+    evaluate_window_delta,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +370,6 @@ class SolMacroStrategy:
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
-        self.dead_zone_skip_callback = None
         self.buy_no_skip_callback = None
         self.lane_calibrator = None
         self._apply_strategy_config(rebuild_service=True)
@@ -434,21 +437,46 @@ class SolMacroStrategy:
     def _min_edge_for_window(self, window_size: str) -> float:
         return float(self._tf_cfg(window_size, "min_edge", self.min_edge))
 
-    def _admit_marginal_quant_short(self, edge, allowed_side, timing_open) -> bool:
+    def _marginal_ev_admit_ok(self, window, allowed_side) -> bool:
+        """2026-06-09: per-(window,side) EV allowlist for marginal admission, derived
+        from the settled ghost (realized_pct by lane). This REPLACES the in-scan AI
+        tiebreaker as the marginal-admission decider for lanes the ghost shows +EV —
+        the AI was anti-selective (HOLD machine, ~18% rec accuracy) and the gated
+        marginals would have won 54% / +0.068 EV overall, +0.122 on the long side.
+        We admit only the +EV (strategy,window,side) cells and keep blocking the −EV
+        ones (e.g. xrp 1h LONG −0.80). Config: `marginal_ev_admit_lanes` = list of
+        "<window>:<SIDE>" (e.g. "1h:LONG"). Self-disables if the AI decision layer is
+        re-enabled."""
+        try:
+            if self.ai_agent.decision_layer_enabled():
+                return False
+            lanes = self.config.get("marginal_ev_admit_lanes") or []
+            key = f"{str(window).strip()}:{str(allowed_side).strip()}".upper()
+            return key in {str(x).strip().upper() for x in lanes}
+        except Exception:
+            return False
+
+    def _admit_marginal_quant_short(self, edge, allowed_side, timing_open, window=None) -> bool:
         """When the AI decision layer is OFF, admit sub-threshold marginal candidates on
         quant terms instead of letting them die on the AI tiebreaker (no-op when the
         layer is enabled) or the final lane_min_edge gate. Default OFF, timing-open,
         edge above the marginal floor. Self-disables when the decision layer is
         re-enabled.
 
-        Side scope is configurable via `admit_marginal_on_quant_sides`
-        (SHORT | LONG | BOTH; default SHORT = original behavior). Originally
-        SHORT-only, ghost-validated BEARISH×SHORT marginals (2026-06-02). Extended to
-        a configurable scope 2026-06-07: session ghost showed the in-scan AI tiebreaker
-        was killing 1874 marginal LONGs at 62% would-win / +21% EV while the AI's own
-        recommendation accuracy was 18% (directional 47%, 57% HOLD) — the gate was
-        anti-selective on the long side. Set the side scope to BOTH/LONG to stop it."""
+        Two admit paths (both require timing-open + edge >= marginal floor):
+          1. EV allowlist (`marginal_ev_admit_lanes`, 2026-06-09) — per-(window,side)
+             ghost-validated +EV cells. The real decider; see _marginal_ev_admit_ok.
+          2. Legacy scope (`admit_marginal_on_quant_sides`: SHORT|LONG|BOTH) — broad
+             side-scoped admit kept for back-compat / lanes not in the EV allowlist."""
         try:
+            if not bool(timing_open):
+                return False
+            if float(edge) < float(self.config.get("ai_updown_marginal_min_edge", 0.03)):
+                return False
+            # Path 1: ghost-derived per-lane EV allowlist (preferred).
+            if window is not None and self._marginal_ev_admit_ok(window, allowed_side):
+                return True
+            # Path 2: legacy broad side-scope (only when AI layer is OFF).
             if not bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False)):
                 return False
             if self.ai_agent.decision_layer_enabled():
@@ -457,10 +485,7 @@ class SolMacroStrategy:
             side = str(allowed_side).upper()
             if scope != "BOTH" and side != scope:
                 return False
-            return (
-                bool(timing_open)
-                and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
-            )
+            return True
         except Exception:
             return False
 
@@ -1765,6 +1790,89 @@ class SolMacroStrategy:
         win_min, win_max = self._resolve_entry_timing_window_bounds(tf=tf)
         return win_min <= mins_left <= win_max
 
+    def _window_delta_disagrees(
+        self, asset_obj: Any, tf: str, mins_left: float, action: str
+    ):
+        """Window-delta confirmation (model-independent direction check).
+
+        Returns ``(move_pct, delta_prob, margin)`` when the asset's OWN % move
+        since the window opened DISAGREES with the chosen side — the direct fix
+        for "shorts a rising tape" (lagging htf_bias locks BUY_NO while price
+        actually rose this window). Returns ``None`` to PASS: gate disabled, or
+        the delta is unavailable (fail open — a missing signal must never block),
+        or the side agrees. Uses the asset's own price only; BTC is never
+        consulted. MUST be called after the side is final (post fresh-cross /
+        momentum flip), else it pre-empts that flip. Inherited by ETH.
+        """
+        if not bool(self.config.get("window_delta_confirm_enabled", False)):
+            return None
+        wd = evaluate_window_delta(asset_obj, tf, mins_left)
+        if wd is None:
+            return None
+        move, prob = wd
+        margin = float(self.config.get("window_delta_confirm_margin", 0.0) or 0.0)
+        if delta_confirms_side(prob, action, margin):
+            return None
+        return move, prob, margin
+
+    def _window_delta_flip(self, asset_obj: Any, tf: str, mins_left: float, action: str):
+        """When the window-delta (price since window-open) clearly OPPOSES the
+        chosen side, return the flipped ``(action, allowed_side, direction,
+        new_est_prob_up, prob)`` so the bot trades WITH the tape instead of being
+        blocked. This is the FREEZE FIX (2026-06-09): the block-only gate froze the
+        bot because most setups were longs into a falling tape; flipping them to
+        shorts recovers frequency in the correct direction. Keys on the SAME signal
+        that was blocking (window-delta), NOT macd — momentum lags price.
+
+        Returns None to leave the side unchanged: gate off, delta unavailable, tape
+        agrees, or tape too uncertain (within ``window_delta_flip_margin`` of 0.5 —
+        don't flip on near-coinflip noise). Uses the window-delta's own P(up) as the
+        new est_prob (model-independent override). Inherited by ETH.
+        """
+        if not bool(self.config.get("window_delta_confirm_enabled", False)):
+            return None
+        wd = evaluate_window_delta(asset_obj, tf, mins_left)
+        if wd is None:
+            return None
+        _move, prob = wd
+        fmargin = float(self.config.get("window_delta_flip_margin", 0.05) or 0.0)
+        if action == "BUY_YES" and prob < 0.5 - fmargin:
+            return "BUY_NO", "SHORT", "DOWN", prob, prob
+        if action == "BUY_NO" and prob > 0.5 + fmargin:
+            return "BUY_YES", "LONG", "UP", prob, prob
+        return None
+
+    def _low_atr_gate_blocks(self, asset_obj: Any, window: str, action: str):
+        """Lane-specific volatility gate (2026-06-09, Kimi signal-hunt + EV vet).
+
+        Configured losing lanes only trade in LOW volatility (ATR < 0.5% of spot).
+        On these (asset,window,side) cells the EV splits hard by ATR regime:
+        mid-ATR (0.5–1.5%) bleeds ~−13% EV / 19% WR (2/3 of the trades) while
+        low-ATR is ~breakeven (−1.6% EV / 43% WR). This gate skips the mid/high
+        regime where the loss lives — harm reduction, not a profit signal.
+
+        Returns ``(atr_pct, threshold)`` when BLOCKED, else None (gate off for the
+        lane, or ATR unavailable → fail open). Config (per strategy):
+        `low_atr_only_lanes` = ["<window>:<SIDE>"] ; `low_atr_gate_max_atr_pct`
+        (default 0.005 = the calibration_buckets low/mid boundary). Inherited by ETH.
+        """
+        lanes = self.config.get("low_atr_only_lanes") or []
+        if not lanes:
+            return None
+        side = "LONG" if action == "BUY_YES" else "SHORT"
+        key = f"{str(window).strip()}:{side}".upper()
+        if key not in {str(x).strip().upper() for x in lanes}:
+            return None
+        atr = float(getattr(asset_obj, "atr_14", 0.0) or 0.0)
+        px = float(getattr(asset_obj, "current_price", 0.0) or 0.0)
+        if atr <= 0.0 or px <= 0.0:
+            return None  # fail open — never block on a missing ATR
+        atr_pct = atr / px
+        thresh = float(self.config.get("low_atr_gate_max_atr_pct", 0.005) or 0.005)
+        if atr_pct >= thresh:
+            return atr_pct, thresh
+        return None
+
     def _apply_late_window_guard(
         self, *, mins_left: float, effective_min_edge: float, tf: str = "15m"
     ) -> tuple[bool, float, Optional[str]]:
@@ -2704,6 +2812,30 @@ class SolMacroStrategy:
                         )
                 except Exception:
                     pass
+            # Model-independent window-delta on EVERY reject (forward-validation of
+            # the confirmation gate). Don't overwrite values the gate block already
+            # stamped. alt-native price only; fails open if unavailable.
+            if "window_delta_prob" not in merged_context and window in ("5m", "15m", "1h"):
+                try:
+                    _wd_ml = merged_context.get("eval_mins_left")
+                    if _wd_ml is None:
+                        _wd_ml = merged_context.get("mins_left", 0.0)
+                    _wd = evaluate_window_delta(sol, window, float(_wd_ml or 0.0))
+                    if _wd is not None:
+                        merged_context["window_delta_pct"] = round(_wd[0], 6)
+                        merged_context["window_delta_prob"] = round(_wd[1], 6)
+                except Exception:
+                    pass
+            # Microstructure features (default-off enrichment; None when not enriched)
+            try:
+                _obi = getattr(market, "ob_imbalance", None)
+                _tfr = getattr(market, "trade_flow_ratio", None)
+                if _obi is not None:
+                    merged_context["ob_imbalance"] = round(float(_obi), 6)
+                if _tfr is not None:
+                    merged_context["trade_flow_ratio"] = round(float(_tfr), 6)
+            except Exception:
+                pass
             if btc_1h_regime is not None:
                 merged_context["btc_1h_regime"] = btc_1h_regime
             log_rejected_candidate(
@@ -3095,32 +3227,9 @@ class SolMacroStrategy:
                 reason_parts.append(
                     f"bias_penalty={resolution.confidence_penalty:.3f}:{','.join(resolution.penalty_reasons)}"
                 )
-            dead_zone_would_block = False
-            dead_zone_hour = None
-
             # ── UP/DOWN MARKETS (15m or 5m) ──
             if is_updown:
-                # ── High-volatility hour filter (UTC) ──
-                # Reads from blocked_utc_hours_updown in settings.yaml.
-                # Live data: H18=20% WR (current session), H22=17% WR, H00=33% WR
-                _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
-                _blocked_hours = self.config.get("blocked_utc_hours_updown", [0, 18, 22])
-                _now_utc_hour = datetime.now(timezone.utc).hour
-                dead_zone_hour = _now_utc_hour
-                dead_zone_would_block = _now_utc_hour in _blocked_hours
-                if _dead_zone_enabled:
-                    if dead_zone_would_block:
-                        _bump_skip("blocked_utc_hour")
-                        logger.info(
-                            f"  {_alt_label} skip updown at UTC hour {_now_utc_hour}:xx — "
-                            f"blocked dead zone (config: {_blocked_hours})"
-                        )
-                        continue
-                elif dead_zone_would_block:
-                    logger.info(
-                        f"  {_alt_label} dead_zone DISABLED — allowing UTC hour {_now_utc_hour:02d} "
-                        f"(would-be blocked_hours={_blocked_hours})"
-                    )
+                # Deadzone / blocked-UTC-hour gate purged 2026-06-10.
 
                 # ── Entry window guard ──
                 # Only enter within a tight window of the candle. If end_date is None
@@ -3141,22 +3250,16 @@ class SolMacroStrategy:
                     tf=_updown_tf,
                 )
 
-                # 2026-05-22: btc_min_move_dollars gate REMOVED. Previously skipped alt
-                # updown entries when BTC hadn't moved enough in dollars (BTC deciding
-                # alt admission, with a partial low-correlation bypass). Per "alts
-                # decided by alt-native indicators", BTC volatility must not gate alt
-                # entry. Diagnostic-only.
-                _btc_price = corr.btc_price or 0.0
-                _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
-                _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
-                if is_5m:
-                    _btc_min_move = float(self.config.get("btc_min_move_dollars_5m", 37.0))
-                    _btc_move = _btc_move_5m_dollars
-                else:
-                    _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
-                    _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
-                if _btc_price > 0 and _btc_move < _btc_min_move:
-                    pass
+                # NOTE: window-delta confirmation runs LATER, after the side is
+                # finalized by apply_fresh_cross_override (the momentum/fresh-cross
+                # flip). Checking here would pre-empt that flip and kill rising-tape
+                # shorts the flip would correctly convert to longs. See
+                # `_window_delta_disagrees` call sites below each override.
+
+                # 2026-05-22: btc_min_move_dollars gate REMOVED (BTC must not gate alt
+                # entry — "alts decided by alt-native indicators"). 2026-06-09: dropped
+                # the leftover dead diagnostic computation (it only fed `if ...: pass`,
+                # unused); config keys btc_min_move_dollars_5m/15m are now vestigial.
 
                 # Skip only when our entry-side price is in the unfavorable long
                 # tail (paying high premium against the market). The favorable
@@ -3637,12 +3740,38 @@ class SolMacroStrategy:
                         crossover=macd_5m.crossover, tf_label="5m",
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
-                        rsi_14=getattr(ta.sol, "rsi_14", None), window="5m",
+                        # 2026-06-08: 5m market -> 5m RSI (own-window/faster-lead), not
+                        # the 15m canonical. No-op today (flip is 1h-gated) but correct
+                        # for when the flip is extended to the 5m window.
+                        rsi_14=getattr(getattr(ta.sol, "tf_5m", None), "rsi_14", None), window="5m",
                         momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                        macd_hist_5m=getattr(macd_5m, "histogram", None),
+                        macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
+                    # Window-delta confirmation — side is FINAL here (post-flip).
+                    _wd_flip = self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    if _wd_flip is not None:
+                        action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
+                        raw_est_prob = est_prob_up
+                        side_source = f"{side_source or ''}+window_delta_flip"
+                        reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+                    # Low-ATR volatility gate — configured losing lanes only trade in
+                    # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
+                    _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)
+                    if _atr_block is not None:
+                        _atr_pct, _atr_thr = _atr_block
+                        _bump_skip("low_atr_gate_skip")
+                        _log_skip_reject(
+                            market=market, window=_updown_tf, side=allowed_side,
+                            action=action, reason="low_atr_gate_skip", yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={"atr_pct": round(_atr_pct, 6), "atr_threshold": _atr_thr},
+                        )
+                        continue
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -3891,12 +4020,36 @@ class SolMacroStrategy:
                         faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                         logger=logger, enabled=self.config.get("fresh_cross_override", True),
-                        rsi_14=getattr(ta.sol, "rsi_14", None), window=window_label,
+                        # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m->5m).
+                        rsi_14=getattr(getattr(ta.sol, "tf_15m" if window_label == "1h" else "tf_5m", None), "rsi_14", None), window=window_label,
                         momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                        macd_hist_5m=getattr(getattr(ta.sol, "macd_5m", None), "histogram", None),
+                        macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
+                    # Window-delta confirmation — side is FINAL here (post-flip).
+                    _wd_flip = self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    if _wd_flip is not None:
+                        action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
+                        raw_est_prob = est_prob_up
+                        side_source = f"{side_source or ''}+window_delta_flip"
+                        reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+                    # Low-ATR volatility gate — configured losing lanes only trade in
+                    # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
+                    _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)
+                    if _atr_block is not None:
+                        _atr_pct, _atr_thr = _atr_block
+                        _bump_skip("low_atr_gate_skip")
+                        _log_skip_reject(
+                            market=market, window=_updown_tf, side=allowed_side,
+                            action=action, reason="low_atr_gate_skip", yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={"atr_pct": round(_atr_pct, 6), "atr_threshold": _atr_thr},
+                        )
+                        continue
                     estimated_prob = self._calibrate_est_prob(
                         raw_est_prob,
                         action=action,
@@ -4123,7 +4276,10 @@ class SolMacroStrategy:
                     # don't burn AI budget on markets that aren't tradable yet
                     and _ai_in_entry_window
                     # decision layer off + flag on: skip AI, admit on quant terms downstream
-                    and not self._admit_marginal_quant_short(edge, allowed_side, _timing_window_open)
+                    and not self._admit_marginal_quant_short(
+                        edge, allowed_side, _timing_window_open,
+                        window=(_updown_tf if is_updown else "15m"),
+                    )
                 ):
                     def _log_ai_veto(_reason: str, **extra: Any) -> None:
                         _log_skip_reject(
@@ -4565,7 +4721,10 @@ class SolMacroStrategy:
                 and ai_calls < self.max_ai_calls_per_scan
                 # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                 and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
-                and not self._admit_marginal_quant_short(edge, allowed_side, _timing_window_open)
+                and not self._admit_marginal_quant_short(
+                    edge, allowed_side, _timing_window_open,
+                    window=(_updown_tf if is_updown else "15m"),
+                )
             ):
                 _win = _updown_tf if is_updown else "15m"
                 ai_context2 = (
@@ -4710,7 +4869,8 @@ class SolMacroStrategy:
             # the composite scorer is the quality gate instead of an auto lane_min_edge
             # reject. The two upstream AI tiebreaker blocks are also skipped for these.
             _admit_marginal_no_ai = self._admit_marginal_quant_short(
-                edge, allowed_side, _timing_window_open
+                edge, allowed_side, _timing_window_open,
+                window=(_updown_tf if is_updown else "15m"),
             )
             if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
@@ -5189,33 +5349,6 @@ class SolMacroStrategy:
                     entry_volatility=getattr(conditions, "volatility", 0.0),
                 ),
             )
-            if (
-                is_updown
-                and dead_zone_would_block
-                and not self.config.get("dead_zone_enabled", True)
-                and callable(self.dead_zone_skip_callback)
-            ):
-                self.dead_zone_skip_callback(
-                    strategy=self._signal_strategy_name,
-                    market=market,
-                    action=action,
-                    edge=float(edge),
-                    hour_utc=int(
-                        dead_zone_hour
-                        if dead_zone_hour is not None
-                        else datetime.now(timezone.utc).hour
-                    ),
-                    blocked_hours=list(self.config.get("blocked_utc_hours_updown", [])),
-                    bankroll=float(bankroll),
-                    metadata={
-                        "confidence": float(confidence),
-                        "yes_price": float(yes_price),
-                        "window_size": _updown_tf if is_updown else "15m",
-                        "htf_bias": primary_htf_bias,
-                        "alt_htf_bias": macro_trend,
-                        "reason": reason_str,
-                    },
-                )
             signals.append(signal)
 
             logger.info(

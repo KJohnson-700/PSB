@@ -63,7 +63,6 @@ from src.analysis.calibration_log import (
     build_record_from_closed_trade,
 )
 from src.analysis.ghost_calibration import (
-    DEFAULT_REGIME_LOG,
     build_ghost_calibration_status,
     settle_rejected_candidates,
 )
@@ -104,47 +103,6 @@ def _shutdown_timeout_seconds(default: float = 8.0) -> float:
             default,
         )
         return default
-
-
-def market_regime_gate_decision(
-    *,
-    gate_config: Dict[str, Any],
-    latest_regime: Optional[Dict[str, Any]],
-    convergence_score: Optional[float],
-) -> tuple[bool, str, Dict[str, Any]]:
-    """Block weak-convergence entries only when the tracker says deadzone."""
-    if not bool(gate_config.get("enabled", False)):
-        return True, "disabled", {}
-    if not latest_regime:
-        return True, "no_regime_snapshot", {}
-
-    combined = str(latest_regime.get("combined_regime") or "")
-    poly = str(latest_regime.get("polymarket_regime") or "")
-    price = str(latest_regime.get("price_regime") or "")
-    extra = {
-        "price_regime": price or None,
-        "polymarket_regime": poly or None,
-        "combined_regime": combined or None,
-        "regime_ts": latest_regime.get("ts"),
-        "regime_source": "market_regime",
-    }
-    if not combined.startswith("deadzone"):
-        return True, "not_deadzone", extra
-
-    threshold = float(gate_config.get("deadzone_min_convergence", 0.55) or 0.55)
-    block_missing = bool(gate_config.get("block_missing_convergence_in_deadzone", True))
-    try:
-        score = float(convergence_score) if convergence_score is not None else None
-    except (TypeError, ValueError):
-        score = None
-    extra["convergence_score"] = score
-    extra["deadzone_min_convergence"] = threshold
-
-    if score is None and block_missing:
-        return False, "market_deadzone_missing_convergence", extra
-    if score is not None and score < threshold:
-        return False, "market_deadzone_low_convergence", extra
-    return True, "deadzone_convergence_ok", extra
 
 
 def _init_fault_handler() -> None:
@@ -416,7 +374,6 @@ class PolyBot:
         # Keep a reference for resolution tracker settlements
         self.exposure_manager = self.btc_exposure_manager
 
-        self._dead_zone_skip_callback = None
         self._rebuild_runtime_config_dependents()
         self.clob_client = CLOBClient(self.config)
         self.risk_manager = RiskManager(self.config)
@@ -473,47 +430,6 @@ class PolyBot:
             self.bankroll_source = "config_initial"
             logging.info(f"Fresh session on restart: {new_id} @ ${self.bankroll:.2f}")
         self._session_traded_market_ids: Set[str] = self._load_session_traded_market_ids()
-
-        def _dead_zone_skip_callback(
-            *,
-            strategy: str,
-            market: Market,
-            action: str,
-            edge: float,
-            hour_utc: int,
-            blocked_hours: list,
-            bankroll: float,
-            metadata: Optional[Dict[str, Any]] = None,
-        ) -> None:
-            payload = dict(metadata or {})
-            payload.update(
-                build_lane_metadata(
-                    strategy=strategy,
-                    window_size=payload.get("window_size"),
-                    action=action,
-                    direction=payload.get("direction"),
-                    side_source=payload.get("side_source"),
-                    resolver_path=payload.get("resolver_path"),
-                    ai_used=bool(payload.get("ai_used", False)),
-                    reason=payload.get("reason"),
-                    signal_reason=payload.get("signal_reason"),
-                    htf_bias=payload.get("htf_bias"),
-                    primary_htf_bias=payload.get("primary_htf_bias"),
-                    alt_htf_bias=payload.get("alt_htf_bias"),
-                    btc_1h_regime=payload.get("btc_1h_regime"),
-                )
-            )
-            self.journal.log_dead_zone_skip(
-                market_id=market.id,
-                market_question=market.question,
-                strategy=strategy,
-                action=action,
-                hour_utc=hour_utc,
-                blocked_hours=blocked_hours,
-                bankroll=bankroll,
-                edge=edge,
-                extra=payload,
-            )
 
         def _buy_no_skip_callback(
             *,
@@ -584,7 +500,6 @@ class PolyBot:
                 except Exception as exc:  # noqa: BLE001 — telemetry must not block scan
                     logging.debug("buy_no ghost-log failed: %s", exc)
 
-        self._dead_zone_skip_callback = _dead_zone_skip_callback
         self._buy_no_skip_callback = _buy_no_skip_callback
         self._wire_strategy_callbacks()
 
@@ -1199,21 +1114,13 @@ class PolyBot:
         )
 
     def _wire_strategy_callbacks(self) -> None:
-        cb = getattr(self, "_dead_zone_skip_callback", None)
         buy_no_cb = getattr(self, "_buy_no_skip_callback", None)
-        self.bitcoin_strategy.dead_zone_skip_callback = cb
         self.bitcoin_strategy.buy_no_skip_callback = buy_no_cb
-        self.sol_macro_strategy.dead_zone_skip_callback = cb
         self.sol_macro_strategy.buy_no_skip_callback = buy_no_cb
-        self.eth_macro_strategy.dead_zone_skip_callback = cb
         self.eth_macro_strategy.buy_no_skip_callback = buy_no_cb
-        self.hype_macro_strategy.dead_zone_skip_callback = cb
         self.hype_macro_strategy.buy_no_skip_callback = buy_no_cb
-        self.xrp_macro_strategy.dead_zone_skip_callback = cb
         self.xrp_macro_strategy.buy_no_skip_callback = buy_no_cb
-        self.doge_macro_strategy.dead_zone_skip_callback = cb
         self.doge_macro_strategy.buy_no_skip_callback = buy_no_cb
-        self.bnb_macro_strategy.dead_zone_skip_callback = cb
         self.bnb_macro_strategy.buy_no_skip_callback = buy_no_cb
 
     def _default_config(self) -> Dict[str, Any]:
@@ -3013,47 +2920,6 @@ class PolyBot:
         )
         return False
 
-    def _load_latest_market_regime_snapshot(self) -> Optional[Dict[str, Any]]:
-        cfg = (
-            (self.config.get("trading") or {}).get("market_regime_gate")
-            if isinstance(self.config.get("trading"), dict)
-            else {}
-        ) or {}
-        path = Path(cfg.get("regime_log") or DEFAULT_REGIME_LOG)
-        if not path.exists():
-            return None
-        last: Optional[Dict[str, Any]] = None
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(obj, dict):
-                        last = obj
-        except OSError as exc:
-            logging.warning("market regime gate could not read %s: %s", path, exc)
-            return None
-        if not last:
-            return None
-
-        max_age_sec = float(cfg.get("max_snapshot_age_sec", 1800) or 1800)
-        try:
-            ts = datetime.fromisoformat(str(last.get("ts")).replace("Z", "+00:00"))
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            age = abs((datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds())
-        except (TypeError, ValueError):
-            return None
-        if age > max_age_sec:
-            return None
-        last["regime_match_age_sec"] = round(age, 3)
-        return last
-
     def _check_market_regime_execution(
         self,
         *,
@@ -3061,47 +2927,14 @@ class PolyBot:
         signal: Any,
         lane_meta: Dict[str, Any],
     ) -> bool:
-        gate_config = ((self.config.get("trading") or {}).get("market_regime_gate") or {})
-        latest = self._load_latest_market_regime_snapshot()
-        allowed, reason, regime_extra = market_regime_gate_decision(
-            gate_config=gate_config,
-            latest_regime=latest,
-            convergence_score=getattr(signal, "convergence_score", None),
-        )
-        if regime_extra:
-            lane_meta.update(regime_extra)
-        combined_regime = str(regime_extra.get("combined_regime") or "")
-        in_deadzone = combined_regime.startswith("deadzone") if combined_regime else None
+        # Deadzone / market-regime gate purged 2026-06-10. The gate no longer
+        # blocks any entry, but this remains the primary feeder of the
+        # exposure-manager resume window — keep it green so resumes are never
+        # suppressed (ripping the call out would suppress resume → fewer trades).
         em = self._get_exposure_manager_for(strategy)
         if em is not None and hasattr(em, "update_resume_window"):
-            em.update_resume_window(
-                green_window=bool(allowed),
-                in_deadzone=in_deadzone,
-            )
-        if allowed:
-            return True
-
-        self.journal.log_skip(
-            signal.market_id,
-            signal.market_question,
-            strategy,
-            reason,
-            self.bankroll,
-            extra=self._lane_skip_extra(
-                lane_meta=lane_meta,
-                signal_reason=getattr(signal, "reason", None),
-                skip_reason=reason,
-            ),
-        )
-        logging.warning(
-            "%s market-regime execution blocked: %s combined=%s convergence=%s threshold=%s",
-            strategy,
-            reason,
-            regime_extra.get("combined_regime"),
-            regime_extra.get("convergence_score"),
-            regime_extra.get("deadzone_min_convergence"),
-        )
-        return False
+            em.update_resume_window(green_window=True)
+        return True
 
     def _check_fresh_entry_window(
         self,

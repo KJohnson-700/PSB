@@ -94,8 +94,8 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert gl.status_code == 200
     assert "no-store" in (gl.headers.get("cache-control") or "").lower()
     gl_payload = gl.json()
-    assert "current_deadzone" in gl_payload
-    assert "in_market_deadzone" in gl_payload["current_deadzone"]
+    assert "current_regime" in gl_payload
+    assert "combined_regime" in gl_payload["current_regime"]
 
     gr = c.get("/api/ghosts/regime-breakdown?since=2026-05-01")
     assert gr.status_code == 200
@@ -106,7 +106,6 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert gd.status_code == 200
     assert "no-store" in (gd.headers.get("cache-control") or "").lower()
     gd_payload = gd.json()
-    assert "deadzone_theory" in gd_payload
     assert "ghost_gate" in gd_payload
     assert "calibration" in gd_payload
 
@@ -248,46 +247,6 @@ def test_ghost_lab_timestamp_parser_normalizes_to_utc():
     assert ts.isoformat() == "2026-06-05T02:00:00"
 
 
-def test_ghost_lab_deadzone_skip_preserves_midnight_utc_hour(tmp_path, monkeypatch):
-    from src.dashboard import server as dashboard_server
-
-    session_dir = tmp_path / "paper_trades" / "test_hour_zero"
-    session_dir.mkdir(parents=True)
-    base = {
-        "timestamp": "2026-06-05T00:15:00+00:00",
-        "market_id": "m1",
-        "strategy": "sol_macro",
-        "extra": {"lane_id": "sol_macro|15m|up", "hour_utc": 0},
-    }
-    records = [
-        {**base, "event": "DEAD_ZONE_SKIP", "reason": "dead_zone_disabled_hypothetical"},
-        {
-            **base,
-            "event": "DEAD_ZONE_SKIP_RESOLVED",
-            "extra": {
-                "lane_id": "sol_macro|15m|up",
-                "hour_utc": 0,
-                "would_have_won": True,
-                "hypothetical_payout": 7.5,
-            },
-        },
-    ]
-    (session_dir / "entries.jsonl").write_text(
-        "\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(dashboard_server, "DATA_ROOT", tmp_path)
-
-    events = dashboard_server._gl_load_paper(
-        dashboard_server._gl_parse_ts("2026-06-04T00:00:00+00:00")
-    )
-
-    assert len(events) == 1
-    assert events[0]["hour_utc"] == 0
-    assert events[0]["win"] is True
-    assert events[0]["hypothetical_payout"] == 7.5
-
-
 def test_command_center_includes_ai_pipeline_digest_stub():
     html = INDEX.read_text(encoding="utf-8")
     assert 'id="ops-ai-pipeline"' in html
@@ -413,14 +372,14 @@ def test_ai_summary_text_extractor_hides_thinking_blocks():
 def test_dashboard_contains_operator_toggle_buttons():
     html = INDEX.read_text(encoding="utf-8")
     assert "toggleLossKillSwitch()" in html
-    assert "toggleDeadZones()" in html
     assert "loss_kill_switch_enabled" in html
     assert "LOSS KILL ON" in html or "LOSS KILL OFF" in html
-    assert "DEAD ZONES ON" in html or "DEAD ZONES OFF" in html
     assert 'id="loss-kill-toggle-btn" disabled>Loss Kill: Loading</button>' in html
-    assert 'id="dead-zone-toggle-btn" disabled>Dead Zones: Loading</button>' in html
+    # Dead-zone toggle button + badge removed 2026-06-10 (deadzone feature purged).
+    assert "toggleDeadZones()" not in html
+    assert "DEAD ZONES ON" not in html and "DEAD ZONES OFF" not in html
     assert "lossBtn.textContent = lossKillSwitchEnabled ? 'Loss Kill: On' : 'Loss Kill: Off';" in html
-    assert "deadBtn.textContent = deadZoneEnabled ? 'Dead Zones: On' : 'Dead Zones: Off';" in html
+    assert "deadBtn.textContent" not in html
     assert "kill-trigger" in html
     assert "live-off" in html
 
@@ -646,7 +605,7 @@ def test_ghost_lab_tab_renders():
     assert 'id="view-ghosts"' in html
     assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
     assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
-    assert 'id="gl-deadzone-tbody"' in html
+    assert 'id="gl-digest-tbody"' in html
     assert 'id="gl-morning-summary"' in html
     assert 'id="gl-morning-loops"' in html
     assert 'id="gl-morning-next-edits"' in html
@@ -693,39 +652,6 @@ def test_ghost_lab_regime_breakdown_uses_embedded_ghost_regime_fields():
     assert report["rows"][0]["n"] == 2
     assert report["metadata"]["source"] == "rejected_candidates_settled.jsonl.embedded_regime_fields"
 
-
-def test_ghost_lab_deadzone_theory_compares_skip_and_live_buckets():
-    from src.dashboard.server import _gl_deadzone_theory
-
-    report = _gl_deadzone_theory(
-        [
-            {
-                "source": "deadzone_skip",
-                "hour_utc": 7,
-                "lane_id": "bitcoin|15m|up|neutral|standard",
-                "combined_regime": "deadzone_confirmed",
-                "win": True,
-            }
-            for _ in range(5)
-        ]
-        + [
-            {
-                "source": "live",
-                "hour_utc": 7,
-                "lane_id": "bitcoin|15m|up|neutral|standard",
-                "combined_regime": "deadzone_confirmed",
-                "win": False,
-            }
-            for _ in range(5)
-        ]
-    )
-
-    row = report["hours"][0]
-    assert row["hour_utc"] == 7
-    assert row["combined_regime"] == "deadzone_confirmed"
-    assert row["deadzone"]["n"] == 5
-    assert row["live"]["n"] == 5
-    assert row["verdict"] == "block_hurting"
 
 
 def test_dashboard_status_handles_bootstrap_shim(monkeypatch):

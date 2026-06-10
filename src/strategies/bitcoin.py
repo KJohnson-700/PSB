@@ -216,7 +216,6 @@ class BitcoinStrategy:
         self.btc_service = BTCPriceService()
         self.exposure_manager = exposure_manager or ExposureManager(config)
         self._signal_strategy_name = "bitcoin"
-        self.dead_zone_skip_callback = None
         self.buy_no_skip_callback = None
         self.lane_calibrator = None
         if self.exposure_manager:
@@ -1809,38 +1808,12 @@ class BitcoinStrategy:
                 reason_parts.append(f"{_updown_tf}_neutral")
             if resolution.confidence_penalty > 0:
                 reason_parts.append(f"bias_penalty={resolution.confidence_penalty:.3f}")
-            dead_zone_would_block = False
-            dead_zone_hour = None
-
                 # ── UP/DOWN MARKETS (5m / 15m / 1h) ──
             # YES = "Up" (price goes up), NO = "Down" (price goes down)
             # Our technical analysis determines direction directly
             if is_updown:
                 # is_5m was already detected above (True = 5m window, False = 15m window)
-
-                # ── UTC hour filter ──
-                # Loaded from config (strategies.bitcoin.blocked_utc_hours_updown).
-                # OVERFIT RISK: these hours were identified from the same live sessions
-                # they now gate. Only add an hour after it has ≥15 out-of-sample trades
-                # with WR<0.46 AND avg_pnl<-$2. See config comment for full criteria.
-                _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
-                _now_utc_hour = datetime.now(timezone.utc).hour
-                _blocked_hours = self.config.get("blocked_utc_hours_updown", [])
-                dead_zone_hour = _now_utc_hour
-                dead_zone_would_block = _now_utc_hour in _blocked_hours
-                if _dead_zone_enabled:
-                    if dead_zone_would_block:
-                        _bump_skip("blocked_utc_hour")
-                        logger.info(
-                            f"  BTC skip updown at UTC {_now_utc_hour:02d}:xx — "
-                            f"dead-zone hour ({_now_utc_hour}:00 UTC <35% WR in live data)"
-                        )
-                        continue
-                elif dead_zone_would_block:
-                    logger.info(
-                        f"  BTC dead_zone DISABLED — allowing UTC {_now_utc_hour:02d}:xx "
-                        f"(blocked_hours={_blocked_hours})"
-                    )
+                # Deadzone / blocked-UTC-hour gate purged 2026-06-10.
 
                 _event_name = self._active_macro_event_name(datetime.now(timezone.utc))
                 if _event_name:
@@ -3806,32 +3779,6 @@ class BitcoinStrategy:
                     "sabre_trend": int(ta.trend_sabre.trend or 0),
                 },
             )
-            if (
-                is_updown
-                and dead_zone_would_block
-                and not self.config.get("dead_zone_enabled", True)
-                and callable(self.dead_zone_skip_callback)
-            ):
-                self.dead_zone_skip_callback(
-                    strategy=self._signal_strategy_name,
-                    market=market,
-                    action=action,
-                    edge=float(edge),
-                    hour_utc=int(
-                        dead_zone_hour
-                        if dead_zone_hour is not None
-                        else datetime.now(timezone.utc).hour
-                    ),
-                    blocked_hours=list(self.config.get("blocked_utc_hours_updown", [])),
-                    bankroll=float(bankroll),
-                    metadata={
-                        "confidence": float(confidence),
-                        "yes_price": float(yes_price),
-                        "window_size": _updown_tf if is_updown else "15m",
-                        "htf_bias": htf_bias,
-                        "reason": reason,
-                    },
-                )
             signals.append(signal)
             logger.info(
                 f"BTC SIGNAL: {action} '{market.question[:50]}...' "

@@ -72,7 +72,6 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = object()
 
@@ -100,7 +99,6 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.kelly_sizer.get_asset_config("bitcoin").base_kelly_fraction == 0.20
     assert bot.bitcoin_strategy.enabled is False
     assert bot.eth_macro_strategy.enabled is True
-    assert callable(bot.bitcoin_strategy.dead_zone_skip_callback)
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.notifier.reloaded_with is bot.config
     assert bot.bitcoin_strategy.lane_calibrator is bot.lane_calibrator
@@ -139,7 +137,6 @@ def test_apply_config_updates_does_not_mutate_exposure_env_override(monkeypatch)
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = object()
     monkeypatch.setenv("EXPOSURE_LOSS_KILL_SWITCH_ENABLED", "true")
@@ -204,7 +201,6 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
     bot.xrp_exposure_manager = _FakeExposureManager()
     bot.doge_exposure_manager = _FakeExposureManager()
     bot.bnb_exposure_manager = _FakeExposureManager()
-    bot._dead_zone_skip_callback = lambda **kwargs: None
     bot.kelly_sizer = None
     bot.lane_calibrator = _FakeCalibrator()
 

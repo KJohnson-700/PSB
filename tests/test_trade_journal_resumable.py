@@ -126,37 +126,6 @@ def test_bnb_and_doge_updown_entries_are_written_to_fill_log(
     assert rows[1]["yes_price"] == 0.54
 
 
-def test_dead_zone_skip_records_and_resolves(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(trade_journal_module, "JOURNAL_DIR", tmp_path)
-    journal = TradeJournal(session_id="20260428_220000", resume_latest=False)
-    journal.log_dead_zone_skip(
-        market_id="btc-updown-1",
-        market_question="Bitcoin Up or Down - Apr 28, 10:00AM-10:15AM ET",
-        strategy="bitcoin",
-        action="BUY_YES",
-        hour_utc=18,
-        blocked_hours=[18, 22],
-        bankroll=1000.0,
-        edge=0.12,
-        extra={"confidence": 0.66, "window_size": "15m"},
-    )
-    journal.resolve_dead_zone_skips(
-        {
-            "btc-updown-1": {
-                "resolved": True,
-                "outcome_won": "YES",
-                "resolved_at": "2026-04-28T18:15:00+00:00",
-            }
-        }
-    )
-    entries = journal.get_all_entries(limit=10)
-    events = [entry["event"] for entry in entries]
-    assert "DEAD_ZONE_SKIP" in events
-    assert "DEAD_ZONE_SKIP_RESOLVED" in events
-    resolved = next(entry for entry in entries if entry["event"] == "DEAD_ZONE_SKIP_RESOLVED")
-    assert resolved["outcome"] == "YES"
-    assert resolved["extra"]["hypothetical_result"] == "WIN"
-    assert resolved["extra"]["hour_utc"] == 18
 
 
 def test_session_fill_count_matches_journal_not_phantom_filtered_subtotal(

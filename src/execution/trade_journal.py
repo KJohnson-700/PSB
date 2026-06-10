@@ -214,8 +214,6 @@ class TradeJournal:
         self._entries_file = self.session_dir / "entries.jsonl"
         self._snapshots_file = self.session_dir / "snapshots.jsonl"
         self._positions_file = self.session_dir / "positions.json"
-        self._dead_zone_skip_records: Dict[tuple, Dict[str, Any]] = {}
-        self._resolved_dead_zone_skip_keys: set = set()
         self._summary_file = self.session_dir / "summary.json"
 
         # In-memory state (rebuilt from disk on resume)
@@ -231,7 +229,6 @@ class TradeJournal:
 
         # Resume from existing session
         self._load_state()
-        self._load_dead_zone_skip_state()
         logger.info(
             f"TradeJournal session={self.session_id} | open={len(self.open_positions)} | closed={len(self.closed_trades)}"
         )
@@ -598,108 +595,6 @@ class TradeJournal:
             extra=payload,
         )
         self._append_entry(entry)
-
-    def log_dead_zone_skip(
-        self,
-        market_id: str,
-        market_question: str,
-        strategy: str,
-        action: str,
-        hour_utc: int,
-        blocked_hours: List[int],
-        bankroll: float,
-        edge: float = 0.0,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record a hypothetical trade that only exists because dead zone was disabled."""
-        key = (strategy, market_id, action)
-        if key in self._dead_zone_skip_records or key in self._resolved_dead_zone_skip_keys:
-            return
-        payload = dict(extra or {})
-        payload.update(
-            {
-                "edge": float(edge),
-                "hour_utc": int(hour_utc),
-                "blocked_hours_config": list(blocked_hours or []),
-            }
-        )
-        entry = JournalEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            event="DEAD_ZONE_SKIP",
-            trade_id="",
-            market_id=market_id,
-            market_question=market_question,
-            strategy=strategy,
-            action=action,
-            side="",
-            outcome="",
-            size=0,
-            entry_price=0,
-            current_price=0,
-            pnl=0,
-            bankroll=bankroll,
-            edge=edge,
-            confidence=float(payload.get("confidence", 0.0) or 0.0),
-            reason="dead_zone_disabled_hypothetical",
-            extra=payload,
-        )
-        self._append_entry(entry)
-        self._dead_zone_skip_records[key] = {
-            "market_question": market_question,
-            "hour_utc": int(hour_utc),
-            "blocked_hours_config": list(blocked_hours or []),
-            "extra": payload,
-        }
-
-    def resolve_dead_zone_skips(self, resolved_markets: Dict[str, Dict[str, Any]]) -> None:
-        """Append resolution outcomes for pending dead-zone hypothetical signals."""
-        if not resolved_markets or not self._dead_zone_skip_records:
-            return
-        for key, info in list(self._dead_zone_skip_records.items()):
-            strategy, market_id, action = key
-            resolution = resolved_markets.get(market_id)
-            if not resolution or not resolution.get("resolved"):
-                continue
-            outcome_won = str(resolution.get("outcome_won") or "").upper()
-            if outcome_won not in {"YES", "NO"}:
-                continue
-            result = "WIN" if (
-                (action == "BUY_YES" and outcome_won == "YES")
-                or (action in {"BUY_NO", "SELL_YES"} and outcome_won == "NO")
-            ) else "LOSS"
-            payload = dict(info.get("extra") or {})
-            payload.update(
-                {
-                    "hour_utc": info.get("hour_utc"),
-                    "blocked_hours_config": info.get("blocked_hours_config", []),
-                    "outcome_won": outcome_won,
-                    "resolved_at": resolution.get("resolved_at"),
-                    "hypothetical_result": result,
-                }
-            )
-            entry = JournalEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                event="DEAD_ZONE_SKIP_RESOLVED",
-                trade_id="",
-                market_id=market_id,
-                market_question=info.get("market_question", ""),
-                strategy=strategy,
-                action=action,
-                side="",
-                outcome=outcome_won,
-                size=0,
-                entry_price=0,
-                current_price=1.0 if outcome_won == "YES" else 0.0,
-                pnl=0,
-                bankroll=0,
-                edge=float(payload.get("edge", 0.0) or 0.0),
-                confidence=float(payload.get("confidence", 0.0) or 0.0),
-                reason=f"dead_zone_skip_resolved:{result}",
-                extra=payload,
-            )
-            self._append_entry(entry)
-            self._resolved_dead_zone_skip_keys.add(key)
-            del self._dead_zone_skip_records[key]
 
     # ── SNAPSHOTS ─────────────────────────────────────────────────
 
@@ -1287,38 +1182,3 @@ class TradeJournal:
         if self.total_entries > 0 or self.total_exits > 0 or self.open_positions:
             self._save_summary()
 
-    def _load_dead_zone_skip_state(self) -> None:
-        """Rebuild pending and resolved dead-zone hypothetical events from the journal."""
-        self._dead_zone_skip_records = {}
-        self._resolved_dead_zone_skip_keys = set()
-        if not self._entries_file.exists():
-            return
-        with open(self._entries_file, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                event = entry.get("event")
-                key = (
-                    entry.get("strategy", ""),
-                    entry.get("market_id", ""),
-                    entry.get("action", ""),
-                )
-                if not all(key):
-                    continue
-                if event == "DEAD_ZONE_SKIP":
-                    self._dead_zone_skip_records[key] = {
-                        "market_question": entry.get("market_question", ""),
-                        "hour_utc": (entry.get("extra") or {}).get("hour_utc"),
-                        "blocked_hours_config": (entry.get("extra") or {}).get(
-                            "blocked_hours_config", []
-                        ),
-                        "extra": entry.get("extra", {}),
-                    }
-                elif event == "DEAD_ZONE_SKIP_RESOLVED":
-                    self._resolved_dead_zone_skip_keys.add(key)
-                    self._dead_zone_skip_records.pop(key, None)

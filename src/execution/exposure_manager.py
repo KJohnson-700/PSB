@@ -60,7 +60,6 @@ class MarketConditions:
     trend_direction: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
     weekend_penalty: float = 1.0  # 1.0 = normal, 0.0 = full penalty (weekend/low-liquidity)
     green_window: Optional[bool] = None
-    in_deadzone: Optional[bool] = None
 
 
 class ExposureManager:
@@ -110,9 +109,6 @@ class ExposureManager:
         self.loss_pause_recovery_multiple = float(
             exposure_config.get("loss_pause_recovery_multiple", 0.0) or 0.0
         )
-        self.require_non_deadzone_for_resume = bool(
-            exposure_config.get("require_non_deadzone_for_resume", False)
-        )
         self.require_green_window_for_resume = bool(
             exposure_config.get("require_green_window_for_resume", False)
         )
@@ -145,7 +141,6 @@ class ExposureManager:
         self._pause_recovery_anchor_pnl: float = 0.0
         self._pause_recovery_target: float = 0.0
         self._latest_green_window: Optional[bool] = None
-        self._latest_in_deadzone: Optional[bool] = None
 
     def reload_from_config(self, exposure_config: Dict[str, Any]) -> None:
         """Refresh sizing, kill-switch, and condition thresholds from YAML/dashboard.
@@ -172,9 +167,6 @@ class ExposureManager:
         )
         self.loss_pause_recovery_multiple = float(
             exposure_config.get("loss_pause_recovery_multiple", 0.0) or 0.0
-        )
-        self.require_non_deadzone_for_resume = bool(
-            exposure_config.get("require_non_deadzone_for_resume", False)
         )
         self.require_green_window_for_resume = bool(
             exposure_config.get("require_green_window_for_resume", False)
@@ -332,8 +324,6 @@ class ExposureManager:
             return False
         if self.require_green_window_for_resume and not self._is_green_window(conditions):
             return False
-        if self.require_non_deadzone_for_resume and self._is_in_deadzone(conditions):
-            return False
         if self._pause_recovery_target > 0:
             recovered = max(0.0, self._portfolio_pnl - self._pause_recovery_anchor_pnl)
             if recovered < self._pause_recovery_target:
@@ -350,8 +340,6 @@ class ExposureManager:
             missing.append("volatility")
         if self.require_green_window_for_resume and not self._is_green_window(conditions):
             missing.append("green_window")
-        if self.require_non_deadzone_for_resume and self._is_in_deadzone(conditions):
-            missing.append("non_deadzone")
         if self._pause_recovery_target > 0:
             recovered = max(0.0, self._portfolio_pnl - self._pause_recovery_anchor_pnl)
             if recovered < self._pause_recovery_target:
@@ -528,7 +516,6 @@ class ExposureManager:
         self._pause_recovery_anchor_pnl = self._portfolio_pnl
         self._pause_recovery_target = 0.0
         self._latest_green_window = None
-        self._latest_in_deadzone = None
         self._last_loss_kill_trigger = None
 
     def update_portfolio_pnl(self, pnl: float) -> None:
@@ -539,13 +526,10 @@ class ExposureManager:
         self,
         *,
         green_window: Optional[bool] = None,
-        in_deadzone: Optional[bool] = None,
     ) -> None:
         """Push latest market-regime context into the pause/resume gate."""
         if green_window is not None:
             self._latest_green_window = bool(green_window)
-        if in_deadzone is not None:
-            self._latest_in_deadzone = bool(in_deadzone)
 
     def _is_green_window(self, conditions: MarketConditions) -> bool:
         if conditions.green_window is not None:
@@ -553,11 +537,6 @@ class ExposureManager:
         if self._latest_green_window is not None:
             return bool(self._latest_green_window)
         return self._should_resume_baseline(conditions)
-
-    def _is_in_deadzone(self, conditions: MarketConditions) -> bool:
-        if conditions.in_deadzone is not None:
-            return bool(conditions.in_deadzone)
-        return bool(self._latest_in_deadzone)
 
     def _should_resume_baseline(self, conditions: MarketConditions) -> bool:
         return (

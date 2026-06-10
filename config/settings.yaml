@@ -42,12 +42,12 @@ trading:
     enabled: false
     btc_break_above_usd: 80000
     btc_break_below_usd: 75000
+  # Regime-feed config only (deadzone/market-regime gate purged 2026-06-10).
+  # These two keys still locate the standalone price-tracker feed for the
+  # dashboard's regime-feed health badge — they no longer gate any entry.
   market_regime_gate:
-    enabled: false
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
-    deadzone_min_convergence: 0.55
-    block_missing_convergence_in_deadzone: true
   exit_rules:
     enabled: true
     take_profit_pct: 0.3
@@ -306,7 +306,6 @@ strategies:
     expiration_window_hours: 48
   bitcoin:
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     min_liquidity: 1000
     min_edge: 0.09
@@ -422,7 +421,6 @@ strategies:
     look_ahead_1h: 4
     prediction_window_bonus_15m: 0.0
     prediction_window_bonus_5m: 0.0
-    blocked_utc_hours_updown: []
     disable_buy_yes: false
     disable_buy_no_counter_trend: true
     btc_htf_boost_strong_1h: 0.18
@@ -508,7 +506,6 @@ strategies:
     - 1h:LONG
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     alt_momentum_confirm:
       buy_yes: []
@@ -613,7 +610,6 @@ strategies:
     iql_15m_hist_floor: 0.06
     iql_15m_hist_floor_aligned_short: 0.0
     sol_15m_buy_no_max_yes_price_bull_1h: 0.48
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -698,7 +694,6 @@ strategies:
     - 15m:LONG
     disable_buy_no_5m_native: true
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     eth_momentum_confirm:
       buy_yes:
@@ -840,7 +835,6 @@ strategies:
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -946,7 +940,6 @@ strategies:
     weak_5m_signal_soft_penalty_short: true
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: false
     updown_5m_slower_tfs:
     - 1h
     use_ai: true
@@ -1040,7 +1033,6 @@ strategies:
         oracle_basis_abs_bps_min: 25.0
         oracle_basis_min_edge_add: 0.01
     hype_15m_neutral_fallback_buy_no_max_yes_price_bull_1h: 0.45
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -1147,7 +1139,6 @@ strategies:
     - 1h:SHORT
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1274,7 +1265,6 @@ strategies:
         min_edge_add: 0.025
         oracle_basis_abs_bps_min: 15.0
         oracle_basis_min_edge_add: 0.01
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1361,7 +1351,6 @@ strategies:
     - 1h:SHORT
     disable_buy_no_5m_native: true
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1455,7 +1444,6 @@ strategies:
     alt_1h_hard_block_5m_longs: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1541,7 +1529,6 @@ strategies:
     - 1h:LONG
     disable_buy_no_5m_native: false
     enabled: true
-    dead_zone_enabled: false
     use_ai: true
     use_ai_updown: true
     alt_momentum_confirm:
@@ -1647,7 +1634,6 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2

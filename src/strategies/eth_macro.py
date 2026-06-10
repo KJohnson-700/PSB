@@ -47,6 +47,7 @@ from src.analysis.rejected_candidate_log import (
     build_upper_cap_probe_variants,
     log_rejected_candidate,
 )
+from src.analysis.window_delta import evaluate_window_delta
 
 logger = logging.getLogger(__name__)
 
@@ -230,18 +231,40 @@ class ETHMacroStrategy(SolMacroStrategy):
             return float(self.eth_follow_15m_min_adj_short)
         return float(self.eth_follow_15m_min_adj_long)
 
-    def _admit_marginal_quant_short(self, edge, action, timing_open) -> bool:
+    def _marginal_ev_admit_ok(self, window, action) -> bool:
+        """2026-06-09: per-(window,side) EV allowlist mirror of the sol-family fix.
+        Admits marginals on quant terms for ghost-validated +EV cells instead of the
+        anti-selective AI tiebreaker. Config: `marginal_ev_admit_lanes` = list of
+        "<window>:<SIDE>" (LONG|SHORT). ETH currently ships with no entries (no +EV
+        marginal lanes in the ghost) so this is a no-op until its own validation."""
+        try:
+            if self.ai_agent.decision_layer_enabled():
+                return False
+            lanes = self.config.get("marginal_ev_admit_lanes") or []
+            side = "LONG" if str(action).upper() == "BUY_YES" else "SHORT"
+            key = f"{str(window).strip()}:{side}".upper()
+            return key in {str(x).strip().upper() for x in lanes}
+        except Exception:
+            return False
+
+    def _admit_marginal_quant_short(self, edge, action, timing_open, window=None) -> bool:
         """When the AI decision layer is OFF, admit sub-threshold marginal candidates
         on quant terms instead of dying on the AI tiebreaker (no-op when the layer is
         enabled) or the lane_min_edge gate. Default OFF, timing-open, edge above the
         marginal floor. Self-disables when the decision layer is re-enabled.
 
-        Side scope is configurable via `admit_marginal_on_quant_sides`
-        (SHORT | LONG | BOTH; default SHORT=BUY_NO-only = original behavior). Made
-        configurable 2026-06-07 to mirror the sol-family fix (the in-scan AI tiebreaker
-        was killing +EV marginal LONGs while the AI's own rec accuracy was 18%). ETH
-        is left at default (no config flag) pending its own ghost validation."""
+        Two admit paths (both require timing-open + edge >= marginal floor):
+          1. EV allowlist (`marginal_ev_admit_lanes`, 2026-06-09) — ghost-validated
+             +EV (window,side) cells; see _marginal_ev_admit_ok.
+          2. Legacy scope (`admit_marginal_on_quant_sides`: SHORT|LONG|BOTH; default
+             SHORT=BUY_NO-only). ETH left at default pending its own ghost validation."""
         try:
+            if not bool(timing_open):
+                return False
+            if float(edge) < float(self.config.get("ai_updown_marginal_min_edge", 0.03)):
+                return False
+            if window is not None and self._marginal_ev_admit_ok(window, action):
+                return True
             if not bool(self.config.get("admit_marginal_on_quant_when_ai_disabled", False)):
                 return False
             if self.ai_agent.decision_layer_enabled():
@@ -250,10 +273,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             want = {"SHORT": "BUY_NO", "LONG": "BUY_YES"}
             if scope != "BOTH" and str(action).upper() != want.get(scope, "BUY_NO"):
                 return False
-            return (
-                bool(timing_open)
-                and float(edge) >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
-            )
+            return True
         except Exception:
             return False
 
@@ -739,6 +759,30 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                 except Exception:
                     pass
+            # Model-independent window-delta on EVERY reject (forward-validation of
+            # the confirmation gate). ETH-native price only; fails open. Don't
+            # overwrite values the gate block already stamped.
+            if "window_delta_prob" not in merged_context and window in ("5m", "15m", "1h"):
+                try:
+                    _wd_ml = merged_context.get("eval_mins_left")
+                    if _wd_ml is None:
+                        _wd_ml = merged_context.get("mins_left", 0.0)
+                    _wd = evaluate_window_delta(eth, window, float(_wd_ml or 0.0))
+                    if _wd is not None:
+                        merged_context["window_delta_pct"] = round(_wd[0], 6)
+                        merged_context["window_delta_prob"] = round(_wd[1], 6)
+                except Exception:
+                    pass
+            # Microstructure features (default-off enrichment; None when not enriched)
+            try:
+                _obi = getattr(market, "ob_imbalance", None)
+                _tfr = getattr(market, "trade_flow_ratio", None)
+                if _obi is not None:
+                    merged_context["ob_imbalance"] = round(float(_obi), 6)
+                if _tfr is not None:
+                    merged_context["trade_flow_ratio"] = round(float(_tfr), 6)
+            except Exception:
+                pass
             if "btc_1h_regime" in locals():
                 merged_context["btc_1h_regime"] = btc_1h_regime
             log_rejected_candidate(
@@ -1065,24 +1109,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 )
                 continue
 
-            # UTC dead-zone — same config keys as sol_macro / bitcoin updown.
-            _dead_zone_enabled = self.config.get("dead_zone_enabled", True)
-            _blocked_hours = self.config.get("blocked_utc_hours_updown", [0, 18, 22])
-            _now_utc_hour = datetime.now(timezone.utc).hour
-            dead_zone_would_block = _now_utc_hour in _blocked_hours
-            if _dead_zone_enabled:
-                if dead_zone_would_block:
-                    _bump_skip("blocked_utc_hour")
-                    logger.info(
-                        f"  ETH skip updown at UTC hour {_now_utc_hour}:xx — "
-                        f"blocked dead zone (config: {_blocked_hours})"
-                    )
-                    continue
-            elif dead_zone_would_block:
-                logger.info(
-                    f"  ETH dead_zone DISABLED — allowing UTC hour {_now_utc_hour:02d} "
-                    f"(would-be blocked_hours={_blocked_hours})"
-                )
+            # Deadzone / blocked-UTC-hour gate purged 2026-06-10.
 
             if not market.end_date:
                 _bump_skip("no_end_date")
@@ -1100,6 +1127,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 tf=_updown_tf,
             )
 
+            # NOTE: window-delta confirmation runs LATER, after the side is finalized
+            # by apply_fresh_cross_override + _resolve_eth_direction. See the
+            # `_window_delta_disagrees` call site below (post-override). Checking the
+            # stale pre-override side here would pre-empt the momentum flip.
+
             if getattr(corr, "degraded", False) and self.skip_on_degraded_correlation:
                 if self._btc_trade_inputs_enabled():
                     _bump_skip("degraded_correlation")
@@ -1109,22 +1141,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                     )
                     continue
 
-            # 2026-05-22: btc_min_move_dollars gate REMOVED. Previously skipped ETH
-            # entries when BTC hadn't moved enough in dollars (BTC deciding ETH
-            # admission, with a partial alt-aligned bypass). Per "alts decided by
-            # alt-native indicators", BTC volatility must not gate ETH entry.
-            # Diagnostic-only: log low-BTC-move context in reason_parts.
-            _btc_price = corr.btc_price or 0.0
-            _btc_move_5m_dollars = abs(corr.btc_move_5m_pct / 100.0 * _btc_price)
-            _btc_move_15m_dollars = abs(corr.btc_move_15m_pct / 100.0 * _btc_price)
-            if is_5m:
-                _btc_min_move = float(self.config.get("btc_min_move_dollars_5m", 37.0))
-                _btc_move = _btc_move_5m_dollars
-            else:
-                _btc_min_move = float(self.config.get("btc_min_move_dollars_15m", 70.0))
-                _btc_move = max(_btc_move_5m_dollars, _btc_move_15m_dollars)
-            if _btc_price > 0 and _btc_move < _btc_min_move:
-                pass
+            # 2026-05-22: btc_min_move_dollars gate REMOVED (BTC must not gate ETH
+            # entry — "alts decided by alt-native indicators"). 2026-06-09: dropped the
+            # leftover dead diagnostic computation (it only fed `if ...: pass` and never
+            # actually logged to reason_parts); config keys btc_min_move_dollars_* are
+            # now vestigial.
 
             # Skip only when our entry-side price is in the unfavorable long
             # tail. Favorable tail (our side >= 0.80) ghost-WR 87–97%; kept.
@@ -1674,8 +1695,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                 faster_tf_label=_eth_faster_tf,
                 strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
                 logger=logger, enabled=self.config.get("fresh_cross_override", True),
-                rsi_14=getattr(eth, "rsi_14", None), window=_updown_tf,
+                # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m/5m->5m).
+                rsi_14=getattr(getattr(eth, "tf_15m" if _updown_tf == "1h" else "tf_5m", None), "rsi_14", None), window=_updown_tf,
                 momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
+                macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
+                macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
             )
 
             est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -1688,6 +1713,27 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             action = direction_decision.action
             direction = direction_decision.direction
+            # Window-delta confirmation — side is FINAL here (post-flip + resolve).
+            # Inherited from SolMacroStrategy; ETH-native price only.
+            _wd_flip = self._window_delta_flip(eth, _updown_tf, _eval_left, action)
+            if _wd_flip is not None:
+                action, market_allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
+                raw_est_prob = est_prob_up
+                side_source = f"{side_source or ''}+window_delta_flip"
+                reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+            # Low-ATR volatility gate (inherited) — configured losing lanes only
+            # trade in low vol; mid/high-ATR is where they bleed. Side is final.
+            _atr_block = self._low_atr_gate_blocks(eth, _updown_tf, action)
+            if _atr_block is not None:
+                _atr_pct, _atr_thr = _atr_block
+                _bump_skip("low_atr_gate_skip")
+                _log_skip_reject(
+                    market=market, window=_updown_tf, side=market_allowed_side,
+                    action=action, reason="low_atr_gate_skip", yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"atr_pct": round(_atr_pct, 6), "atr_threshold": _atr_thr},
+                )
+                continue
             estimated_prob = self._calibrate_est_prob(
                 raw_est_prob,
                 action=action,
@@ -1943,7 +1989,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and ai_calls < self.max_ai_calls_per_scan
                 # 5m never calls AI — quant only. AI tiebreaker is 15m/1h.
                 and _updown_tf in self._DECISION_GATE_WINDOWS
-                and not self._admit_marginal_quant_short(edge, action, _timing_window_open)
+                and not self._admit_marginal_quant_short(
+                    edge, action, _timing_window_open, window=_updown_tf
+                )
             ):
                 _window = _updown_tf
                 if btc_ta:
@@ -2152,7 +2200,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             # AI decision layer is OFF (no-op tiebreaker can't rescue them). The upstream
             # AI block is also skipped for these so they reach here, not ai_none.
             _admit_marginal_no_ai = self._admit_marginal_quant_short(
-                edge, action, _timing_window_open
+                edge, action, _timing_window_open, window=_updown_tf
             )
             if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:

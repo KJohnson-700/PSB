@@ -68,9 +68,6 @@ class ResolutionTracker:
         if not resolved_markets:
             return []
 
-        if hasattr(journal, "resolve_dead_zone_skips"):
-            journal.resolve_dead_zone_skips(resolved_markets)
-
         settled = []
         for pos in open_positions:
             mid = pos.get("market_id", "")

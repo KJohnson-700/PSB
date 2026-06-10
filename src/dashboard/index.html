@@ -1869,7 +1869,6 @@
             <button class="abtn cmd-sync-shine" id="real-live-start-btn" onclick="startBotMode('live')">Start Live Bot</button>
             <button class="abtn cmd-sync-shine" id="live-stop-btn" onclick="stopLiveBot()" disabled>Pause Trading</button>
             <button class="abtn cmd-sync-shine" onclick="toggleLossKillSwitch()" id="loss-kill-toggle-btn" disabled>Loss Kill: Loading</button>
-            <button class="abtn ab cmd-sync-shine" onclick="toggleDeadZones()" id="dead-zone-toggle-btn" disabled>Dead Zones: Loading</button>
             <button class="abtn ac cmd-sync-shine" onclick="resetPaperSession()" title="Archive current session, start fresh paper round at initial bankroll, reload dashboard">New Round &amp; Restart</button>
         </div>
         <div id="process-status" style="font-size:0.7rem;margin-top:4px;color:var(--text-muted);"></div>
@@ -2640,17 +2639,14 @@
     <!-- ═══════════════════════════════════════════════════════
          GHOST LAB TAB — counterfactual + time-of-day explorer
          (replaces the deprecated backtest tab; reads /api/ghosts/lab
-         which merges settled ghosts + DEAD_ZONE_SKIP counterfactuals
-         + live EXIT events + lane posteriors)
+         which merges settled ghosts + live EXIT events + lane posteriors)
          ═══════════════════════════════════════════════════════ -->
     <div id="view-ghosts" style="display:none;">
 
     <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--td);line-height:1.55;padding:10px 14px;background:linear-gradient(135deg,rgba(176,96,255,.07),rgba(0,255,136,.04));border:1px solid rgba(176,96,255,.2);border-radius:6px;margin-bottom:14px;">
-        <strong style="color:var(--ye);">Ghost Lab</strong> — three data sources merged on canonical lane_id:
+        <strong style="color:var(--ye);">Ghost Lab</strong> — two data sources merged on canonical lane_id:
         <strong>ghosts</strong> (rejected by the scanner, settled vs real outcome),
-        <strong>deadzone skips</strong> (per-hour counterfactual: what would have been blocked if <code>dead_zone_enabled: true</code>),
         and <strong>live</strong> EXIT trades. The headline question: <em>are there hours of day this bot trades well vs poorly?</em>
-        <span style="color:var(--text-muted);">Existing BTC blocklist: hours <code>[0,1,2,7,11]</code> UTC — visualized below as gray slashes.</span>
     </div>
 
     <!-- Controls strip -->
@@ -2675,7 +2671,6 @@
             <div>
                 <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Sources</label>
                 <span class="gl-chip" data-src="ghost"        onclick="toggleGhostLabSource('ghost')">ghost</span>
-                <span class="gl-chip" data-src="deadzone_skip" onclick="toggleGhostLabSource('deadzone_skip')">deadzone</span>
                 <span class="gl-chip" data-src="live"         onclick="toggleGhostLabSource('live')">live</span>
             </div>
             <div style="margin-left:auto;font-size:.7rem;color:var(--text-muted);" id="gl-counts">—</div>
@@ -2717,31 +2712,14 @@
         </div>
     </div>
 
-    <!-- Decision digest — deadzone theory + gate/calibration rollup -->
+    <!-- Decision digest — gate/calibration rollup -->
     <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h3 style="margin:0;font-size:.95rem;">Deadzone theory</h3>
+            <h3 style="margin:0;font-size:.95rem;">Gate / calibration rollup</h3>
             <div id="gl-digest-status" style="font-size:.68rem;color:var(--text-muted);">waiting</div>
         </div>
         <div id="gl-digest-summary" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div style="display:grid;grid-template-columns:minmax(360px,1.2fr) minmax(320px,1fr);gap:12px;">
-            <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
-                    <thead>
-                        <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);text-align:left;">
-                            <th style="padding:5px 8px;">hour/regime</th>
-                            <th style="padding:5px 8px;text-align:right;">dz n</th>
-                            <th style="padding:5px 8px;text-align:right;">dz WR</th>
-                            <th style="padding:5px 8px;text-align:right;">live n</th>
-                            <th style="padding:5px 8px;text-align:right;">live WR</th>
-                            <th style="padding:5px 8px;">read</th>
-                        </tr>
-                    </thead>
-                    <tbody id="gl-deadzone-tbody">
-                        <tr><td colspan="6" style="padding:8px;color:var(--text-muted);">No digest loaded.</td></tr>
-                    </tbody>
-                </table>
-            </div>
+        <div style="display:grid;grid-template-columns:minmax(320px,1fr);gap:12px;">
             <div style="overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
                     <thead>
@@ -2768,7 +2746,7 @@
                     <button class="btn-sm" type="button" id="gl-play-btn" onclick="toggleGhostLabClock()">▶ Play</button>
                 </div>
             </div>
-            <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px;">Wedge color = WR (red&lt;0.40, amber 0.40-0.55, green&gt;0.55). Thickness = n. Gray slash = currently blocked hour. Hover for stats.</div>
+            <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px;">Wedge color = WR (red&lt;0.40, amber 0.40-0.55, green&gt;0.55). Thickness = n. Hover for stats.</div>
             <svg id="gl-clock" viewBox="-160 -160 320 320" style="width:100%;height:auto;max-height:340px;display:block;"></svg>
             <div id="gl-clock-stats" style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--text-muted);text-align:center;margin-top:4px;min-height:32px;">hover or play to inspect an hour</div>
         </div>
@@ -2800,7 +2778,6 @@
         <input type="range" id="gl-replay-scrub" min="0" max="1000" value="0" oninput="onGhostLabScrub()" style="width:100%;margin-top:6px;">
         <div style="font-size:.66rem;color:var(--text-muted);margin-top:4px;">
             Dots: <span style="color:#888;">●</span> ghost (rejected, settled) &nbsp;
-            <span style="color:#e0a64a;">●</span> deadzone-skip &nbsp;
             <span style="color:var(--gn);">●</span> live win &nbsp;
             <span style="color:var(--rd);">●</span> live loss &nbsp;|&nbsp; scrub to freeze the heatmap above to "data as of this moment".
         </div>
@@ -2821,7 +2798,7 @@
             </div>
         </div>
         <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px;">
-            Ghost win rate broken down by market regime — deadzone_confirmed (price flat + polymarket clustered), active (hot price or real polymarket signal), quiet (flat price, no signal), unknown (insufficient regime data).
+            Ghost win rate broken down by market regime — active (hot price or real polymarket signal), quiet (flat price, no signal), unknown (insufficient regime data).
         </div>
         <div id="gl-regime-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
         <div id="gl-regime-table-wrap" style="overflow-x:auto;">
@@ -2860,10 +2837,7 @@
                         <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('ghost_wr')">ghost WR</th>
                         <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_live')">live</th>
                         <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('live_wr')">live WR</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_deadzone')">dz skips</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('deadzone_wr')">dz WR (resolved)</th>
                         <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('posterior_mean')">posterior</th>
-                        <th style="padding:6px 8px;">blocked hours</th>
                     </tr>
                 </thead>
                 <tbody id="gl-lane-tbody"></tbody>
@@ -4352,16 +4326,6 @@ function updateStatusBadgesAndKill(d) {
             ? 'Loss kill switch is enabled. Click to disable.'
             : 'Loss kill switch is disabled. Click to enable.');
     const lossKillBadge = `<span class="bdg-mq ${lossKillCls}" title="${lossKillTitle}"><span class="mq-track"><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span><span>${lossKillLabel}</span></span></span>`;
-    const deadZonesOn = typeof operatorFlags.deadZoneEnabled === 'boolean'
-        ? !!operatorFlags.deadZoneEnabled
-        : ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
-            .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
-    const deadZonesLabel = deadZonesOn ? 'DEAD ZONES ON' : 'DEAD ZONES OFF';
-    const deadZonesCls = deadZonesOn ? 'dead-on' : 'dead-off';
-    const deadZonesTitle = deadZonesOn
-        ? 'Dead zones are enabled. Click to disable.'
-        : 'Dead zones are disabled. Click to enable.';
-    const deadZonesBadge = `<button type="button" class="bdg-mq ${deadZonesCls}" id="dead-zone-btn" onclick="toggleDeadZones()" title="${deadZonesTitle}"><span class="mq-track"><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span><span>${deadZonesLabel}</span></span></button>`;
     const cal = d.calibration || {};
     const calOn = !!cal.active;
     const calTip = (
@@ -4372,7 +4336,7 @@ function updateStatusBadgesAndKill(d) {
     const calBadge = calOn
         ? `<span class="badge badge-green" title="${calTip}">CALIBRATION ON</span>`
         : `<span class="badge badge-red" title="${calTip}">CALIBRATION OFF</span>`;
-    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${deadZonesBadge} ${calBadge}`;
+    const nextHtml = `${run} ${paperBadge} ${lossKillBadge} ${calBadge}`;
     if (badges.dataset.dashBadgesHtml === nextHtml) return;
     badges.dataset.dashBadgesHtml = nextHtml;
     badges.innerHTML = nextHtml;
@@ -6338,11 +6302,8 @@ async function loadConfig() {
 
 function updateOperatorToggleState(d) {
     const lossKillSwitchEnabled = Boolean(d?.exposure?.loss_kill_switch_enabled);
-    const deadZoneEnabled = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro']
-        .every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
     window._dashOperatorFlags = {
         lossKillSwitchEnabled,
-        deadZoneEnabled,
     };
     const lossBtn = document.getElementById('loss-kill-toggle-btn');
     if (lossBtn) {
@@ -6352,15 +6313,6 @@ function updateOperatorToggleState(d) {
             ? 'Persisted in config/settings.yaml. Click to turn off loss-streak lane pauses.'
             : 'Persisted in config/settings.yaml. Click to turn on loss-streak lane pauses.';
         lossBtn.classList.toggle('stop-resume', lossKillSwitchEnabled);
-    }
-    const deadBtn = document.getElementById('dead-zone-toggle-btn');
-    if (deadBtn) {
-        deadBtn.disabled = false;
-        deadBtn.textContent = deadZoneEnabled ? 'Dead Zones: On' : 'Dead Zones: Off';
-        deadBtn.title = deadZoneEnabled
-            ? 'Persisted in config/settings.yaml. Click to turn off dead-zone entry blocks.'
-            : 'Persisted in config/settings.yaml. Click to turn on dead-zone entry blocks.';
-        deadBtn.classList.toggle('stop-resume', deadZoneEnabled);
     }
     if (lastStatusData) updateStatusBadgesAndKill(lastStatusData);
 }
@@ -6399,30 +6351,6 @@ async function toggleLossKillSwitch() {
         }
     } catch (e) {
         alert('Loss kill switch toggle failed: ' + e);
-    }
-}
-
-async function toggleDeadZones() {
-    const status = document.getElementById('process-status');
-    try {
-        const r = await fetch('/api/config');
-        if (!r.ok) throw new Error('config load failed');
-        const d = await r.json();
-        const strategyKeys = ['bitcoin', 'sol_macro', 'eth_macro', 'hype_macro', 'xrp_macro', 'doge_macro', 'bnb_macro'];
-        const nextEnabled = !strategyKeys.every((key) => Boolean(d?.strategies?.[key]?.dead_zone_enabled));
-        const updates = { strategies: {} };
-        strategyKeys.forEach((key) => {
-            updates.strategies[key] = { dead_zone_enabled: nextEnabled };
-        });
-        await postConfigPatch(updates);
-        await loadConfig();
-        if (typeof fetchAll === 'function') await fetchAll();
-        if (status) {
-            status.textContent = `Dead zones ${nextEnabled ? 'enabled' : 'disabled'}`;
-            status.style.color = nextEnabled ? 'var(--yellow)' : 'var(--green)';
-        }
-    } catch (e) {
-        alert('Dead zone toggle failed: ' + e);
     }
 }
 
@@ -8187,13 +8115,9 @@ function _renderAISummaryStructured(s) {
 const _gl = {
     raw: null,                       // last full payload
     selectedLane: '',                // lane_id filter (empty = all)
-    selectedSources: new Set(['ghost', 'deadzone_skip', 'live']),
+    selectedSources: new Set(['ghost', 'live']),
     sortKey: 'n_ghosts',
     sortDir: -1,
-    blockedHoursByStrategy: {        // mirrors config/settings.yaml blocked_utc_hours_updown
-        bitcoin: [0,1,2,7,11],
-        eth_macro: [], sol_macro: [], xrp_macro: [], hype_macro: [], bnb_macro: [], doge_macro: [],
-    },
     clockAnim: { running:false, raf:null, hour:0, lastTick:0 },
     replay: { running:false, raf:null, t:0, speed:100, lastTick:0, scrubbing:false },
 };
@@ -8268,10 +8192,10 @@ function _glRenderControls() {
     const sel = document.getElementById('gl-lane');
     if (sel && _gl.raw) {
         const prev = sel.value;
-        const lanes = _gl.raw.lanes.slice().sort((a, b) => (b.n_ghosts + b.n_live + b.n_deadzone) - (a.n_ghosts + a.n_live + a.n_deadzone));
+        const lanes = _gl.raw.lanes.slice().sort((a, b) => (b.n_ghosts + b.n_live) - (a.n_ghosts + a.n_live));
         sel.innerHTML = '<option value="">(all lanes)</option>' +
             lanes.map(L => {
-                const n = (L.n_ghosts || 0) + (L.n_live || 0) + (L.n_deadzone || 0);
+                const n = (L.n_ghosts || 0) + (L.n_live || 0);
                 return `<option value="${L.lane_id}">${L.lane_id} (n=${n})</option>`;
             }).join('');
         sel.value = prev && lanes.some(L => L.lane_id === prev) ? prev : '';
@@ -8283,7 +8207,7 @@ function _glRenderControls() {
     });
 }
 
-// ── Decision digest: deadzone theory + ghost/calibration rollup ──────────
+// ── Decision digest: gate / calibration rollup ──────────
 async function loadGhostDecisionDigest() {
     const sinceRaw = document.getElementById('gl-since')?.value || 'all';
     const sinceISO = sinceRaw === 'all'
@@ -8299,18 +8223,9 @@ async function loadGhostDecisionDigest() {
         if (status) status.textContent = 'live';
     } catch (e) {
         if (status) status.textContent = `failed: ${e.message}`;
-        const dz = document.getElementById('gl-deadzone-tbody');
         const dg = document.getElementById('gl-digest-tbody');
-        if (dz) dz.innerHTML = `<tr><td colspan="6" style="padding:8px;color:var(--rd);">Digest load failed: ${e.message}</td></tr>`;
-        if (dg) dg.innerHTML = `<tr><td colspan="3" style="padding:8px;color:var(--rd);">Digest load failed.</td></tr>`;
+        if (dg) dg.innerHTML = `<tr><td colspan="3" style="padding:8px;color:var(--rd);">Digest load failed: ${e.message}</td></tr>`;
     }
-}
-
-function _glVerdictLabel(v) {
-    if (v === 'block_hurting') return '<span style="color:#ffcc66;">block likely hurting</span>';
-    if (v === 'block_helping') return '<span style="color:#88d8ff;">block likely helping</span>';
-    if (v === 'mixed') return '<span style="color:#aaa;">mixed</span>';
-    return '<span style="color:var(--text-muted);">collecting</span>';
 }
 
 function _glPct(v) {
@@ -8382,7 +8297,6 @@ function _glRenderMorningSummary(data) {
         const cards = [
             ['ghost rows', counts.ghost_rows || 0, '#00e5ff'],
             ['calibration records', counts.calibration_records || 0, '#88d8ff'],
-            ['deadzone buckets', counts.deadzone_hour_buckets || 0, '#b060ff'],
             ['learning step', learning.next_step || `${loopsClosed}/${loops.length || 0} loops`, '#00ff88'],
         ];
         summaryEl.innerHTML = cards.map(([label, value, color]) => `
@@ -8435,16 +8349,14 @@ function _glRenderMorningSummary(data) {
 
 function _glRenderDecisionDigest(data) {
     const summary = document.getElementById('gl-digest-summary');
-    const dzBody = document.getElementById('gl-deadzone-tbody');
     const digestBody = document.getElementById('gl-digest-tbody');
-    const dz = (data.deadzone_theory && data.deadzone_theory.summary) || {};
-    const counts = dz.verdict_counts || {};
+    const ghostGate = data.ghost_gate || {};
     if (summary) {
         const cards = [
-            ['hour buckets', dz.hour_regime_buckets || 0, '#00e5ff'],
-            ['block hurting', counts.block_hurting || 0, '#ffcc66'],
-            ['block helping', counts.block_helping || 0, '#88d8ff'],
-            ['collecting', counts.collecting || 0, '#888'],
+            ['overtight gates', (ghostGate.actionable_overtight_gates || []).length, '#ffcc66'],
+            ['missed EV', (ghostGate.top_missed_ev || []).length, '#88d8ff'],
+            ['protected loss', (ghostGate.top_protected_loss || []).length, '#00e5ff'],
+            ['calibration lanes', ((data.calibration && data.calibration.rows) || []).length, '#00ff88'],
         ];
         summary.innerHTML = cards.map(([label, value, color]) => `
             <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
@@ -8454,34 +8366,10 @@ function _glRenderDecisionDigest(data) {
         `).join('');
     }
 
-    const hourRows = ((data.deadzone_theory && data.deadzone_theory.hours) || [])
-        .filter(r => r.deadzone && r.deadzone.n)
-        .slice(0, 12);
-    if (dzBody) {
-        dzBody.innerHTML = hourRows.length ? hourRows.map(r => `
-            <tr style="border-bottom:1px solid rgba(255,255,255,.04);">
-                <td style="padding:4px 8px;">${String(r.hour_utc).padStart(2, '0')} UTC <span style="color:var(--text-muted);">${r.combined_regime || 'unknown'}</span></td>
-                <td style="padding:4px 8px;text-align:right;">${r.deadzone.n}</td>
-                <td style="padding:4px 8px;text-align:right;">${_glPct(r.deadzone.wr)}</td>
-                <td style="padding:4px 8px;text-align:right;">${r.live ? r.live.n : 0}</td>
-                <td style="padding:4px 8px;text-align:right;">${_glPct(r.live && r.live.n ? r.live.wr : null)}</td>
-                <td style="padding:4px 8px;">${_glVerdictLabel(r.verdict)}</td>
-            </tr>
-        `).join('') : '<tr><td colspan="6" style="padding:8px;color:var(--text-muted);">No resolved deadzone skips in this window.</td></tr>';
-    }
-
     const digestRows = [];
-    const ghostGate = data.ghost_gate || {};
     for (const row of (ghostGate.actionable_overtight_gates || []).slice(0, 4)) {
         digestRows.push({
             label: row.gate_key || row.reason || 'overtight gate',
-            n: row.n || 0,
-            metric: `WR ${_glPct(row.win_rate)} net ${Number(row.net_gate_value_pct || 0).toFixed(2)}`,
-        });
-    }
-    for (const row of (ghostGate.deadzone_gates || []).slice(0, 4)) {
-        digestRows.push({
-            label: row.regime_gate_key || row.reason || 'deadzone gate',
             n: row.n || 0,
             metric: `WR ${_glPct(row.win_rate)} net ${Number(row.net_gate_value_pct || 0).toFixed(2)}`,
         });
@@ -8610,15 +8498,13 @@ function _glRenderCounts() {
     const el = document.getElementById('gl-counts');
     if (!el || !_gl.raw) return;
     const c = _gl.raw.session.n_events_per_source || {};
-    const cur = _gl.raw.current_deadzone || {};
-    const active = cur.in_market_deadzone ? 'active' : 'clear';
-    const stale = cur.fresh === false ? ' stale' : '';
+    const cur = _gl.raw.current_regime || _gl.raw.current_deadzone || {};
     const regime = cur.combined_regime || 'unknown';
 
     // Regime-feed tracker health chip. The feed (market_regime.jsonl) is written
     // by the standalone tools/enhanced_price_tracker.py daemon (launchd:
     // com.psb.regime-tracker), NOT by the bot. fresh===false => tracker is down
-    // and the deadzone heatmap is frozen.
+    // and the regime heatmap is frozen.
     const ageSec = Number(cur.age_sec);
     let ageTxt = '?';
     if (isFinite(ageSec)) {
@@ -8632,14 +8518,12 @@ function _glRenderCounts() {
     const feedLabel = feedFresh ? 'REGIME FEED LIVE' : 'REGIME FEED STALE';
     const feedTip = feedFresh
         ? `Regime tracker running — last snapshot ${ageTxt} ago (max ${Math.round(Number(cur.max_age_sec || 1800) / 60)}m). Written by tools/enhanced_price_tracker.py (launchd: com.psb.regime-tracker).`
-        : `Regime tracker DOWN — last snapshot ${ageTxt} ago, deadzone heatmap is frozen. Restart: launchctl kickstart -k gui/$(id -u)/com.psb.regime-tracker`;
+        : `Regime tracker DOWN — last snapshot ${ageTxt} ago, regime heatmap is frozen. Restart: launchctl kickstart -k gui/$(id -u)/com.psb.regime-tracker`;
     const feedBadge = `<span title="${feedTip}" style="display:inline-block;padding:1px 7px;margin-right:8px;border:1px solid ${feedColor};border-radius:10px;color:${feedColor};font-weight:600;font-size:.72rem;letter-spacing:.3px;${feedFresh ? '' : 'animation:pulseOff 1.6s ease-in-out infinite;'}">● ${feedLabel} · ${ageTxt}</span>`;
 
     el.innerHTML = feedBadge +
                    `ghosts=<strong style="color:var(--text);">${c.ghost || 0}</strong> &middot; ` +
-                   `deadzone=<strong style="color:#e0a64a;">${c.deadzone_skip || 0}</strong> &middot; ` +
                    `live=<strong style="color:var(--gn);">${c.live || 0}</strong> &middot; ` +
-                   `now=<strong style="color:${cur.in_market_deadzone ? '#ffcc66' : 'var(--gn)'};">${active}${stale}</strong> ` +
                    `<span style="color:var(--text-muted);">${regime} @ ${String(cur.hour_utc ?? '--').padStart(2, '0')} UTC</span>`;
 }
 
@@ -8673,18 +8557,6 @@ function _glRenderClock() {
         b.n++; if (e.win) b.w++;
     }
     const maxN = Math.max(1, ...buckets.map(b => b.n));
-    // Figure out which hours are blocked (by selected lane's strategy, else union).
-    let blocked = new Set();
-    if (_gl.raw) {
-        if (_gl.selectedLane) {
-            const lane = _gl.raw.lanes.find(L => L.lane_id === _gl.selectedLane);
-            if (lane && Array.isArray(lane.blocked_hours_config)) lane.blocked_hours_config.forEach(h => blocked.add(h));
-            const strat = (lane && lane.strategy) || _gl.selectedLane.split('|')[0];
-            (_gl.blockedHoursByStrategy[strat] || []).forEach(h => blocked.add(h));
-        } else {
-            Object.values(_gl.blockedHoursByStrategy).forEach(arr => arr.forEach(h => blocked.add(h)));
-        }
-    }
     // Draw wedges.
     const R_OUT = 140, R_IN_MIN = 50, R_IN_MAX = 110;
     const segs = [];
@@ -8701,12 +8573,7 @@ function _glRenderClock() {
         const x1i = Math.cos(a1) * rIn,   y1i = Math.sin(a1) * rIn;
         const path = `M${x0o.toFixed(2)},${y0o.toFixed(2)} A${R_OUT},${R_OUT} 0 0,1 ${x1o.toFixed(2)},${y1o.toFixed(2)} L${x1i.toFixed(2)},${y1i.toFixed(2)} A${rIn},${rIn} 0 0,0 ${x0i.toFixed(2)},${y0i.toFixed(2)} Z`;
         const color = _glColorForWR(wr, b.n);
-        const isBlocked = blocked.has(h);
         segs.push(`<path class="gl-clock-wedge" data-hour="${h}" d="${path}" fill="${color}" stroke="rgba(0,0,0,.4)" stroke-width=".5" onmouseenter="_glClockHover(${h})"></path>`);
-        if (isBlocked) {
-            // gray slash overlay
-            segs.push(`<path d="${path}" fill="url(#gl-slash)" pointer-events="none"></path>`);
-        }
         // hour label
         const aMid = (a0 + a1) / 2;
         const lx = Math.cos(aMid) * 152, ly = Math.sin(aMid) * 152;
@@ -8719,11 +8586,6 @@ function _glRenderClock() {
         ? `<line x1="0" y1="0" x2="${hx.toFixed(2)}" y2="${hy.toFixed(2)}" stroke="var(--ye)" stroke-width="2" stroke-linecap="round" />`
         : '';
     svg.innerHTML = `
-        <defs>
-            <pattern id="gl-slash" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
-                <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,255,255,.25)" stroke-width="2"/>
-            </pattern>
-        </defs>
         ${segs.join('')}
         <circle cx="0" cy="0" r="42" fill="var(--bg)" stroke="var(--border)" stroke-width="1"/>
         <text x="0" y="-4" font-size="13" fill="var(--text)" text-anchor="middle" font-family="IBM Plex Mono,monospace" id="gl-clock-center-1">${(_glComputeOverallWR()*100).toFixed(0)}%</text>
@@ -8745,11 +8607,10 @@ function _glClockHover(h) {
     const wins = evs.filter(e => e.win === true).length;
     const n = evs.length;
     const wr = n ? wins / n : 0;
-    const bySource = { ghost: 0, deadzone_skip: 0, live: 0 };
+    const bySource = { ghost: 0, live: 0 };
     evs.forEach(e => { bySource[e.source] = (bySource[e.source] || 0) + 1; });
     stats.innerHTML = `<strong>hour ${String(h).padStart(2,'0')} UTC</strong> &middot; n=${n} &middot; WR=${(wr*100).toFixed(1)}% &middot; ` +
         `<span style="color:#888;">ghosts ${bySource.ghost}</span> / ` +
-        `<span style="color:#e0a64a;">dz ${bySource.deadzone_skip}</span> / ` +
         `<span style="color:var(--gn);">live ${bySource.live}</span>`;
 }
 function toggleGhostLabClock() {
@@ -8848,7 +8709,6 @@ function _glRenderReplay() {
         const x = ((t - t0) / span) * W;
         let y, color;
         if (e.source === 'ghost') { y = H * 0.25; color = 'rgba(180,180,200,.55)'; }
-        else if (e.source === 'deadzone_skip') { y = H * 0.55; color = 'rgba(224,166,74,.7)'; }
         else { y = H * 0.85; color = e.win ? 'rgba(0,255,136,.75)' : 'rgba(255,80,80,.75)'; }
         ctx.fillStyle = color;
         ctx.beginPath(); ctx.arc(x, y, 1.6, 0, 2 * Math.PI); ctx.fill();
@@ -8920,9 +8780,6 @@ function _glRenderTable() {
         const postCell = post && post.mean != null
             ? `<span title="α=${post.beta_a}, β=${post.beta_b}, n=${post.n}" style="color:${_glColorForWR(post.mean, post.n||0)};">${(post.mean*100).toFixed(0)}%</span>`
             : '<span style="color:var(--text-muted);">—</span>';
-        const blocked = Array.isArray(L.blocked_hours_config) && L.blocked_hours_config.length
-            ? L.blocked_hours_config.join(',')
-            : '<span style="color:var(--text-muted);">—</span>';
         const isActive = _gl.selectedLane === L.lane_id ? 'active' : '';
         return `<tr class="${isActive}" data-lane="${L.lane_id}" onclick="_glPickLane('${L.lane_id.replace(/'/g, "\\'")}')">
             <td>${L.lane_id}</td>
@@ -8930,10 +8787,7 @@ function _glRenderTable() {
             <td style="text-align:right;">${cellWR(L.ghost_wr, L.ghost_wr_lo, L.ghost_wr_hi, L.n_ghosts)}</td>
             <td style="text-align:right;">${L.n_live || 0}</td>
             <td style="text-align:right;">${cellWR(L.live_wr, L.live_wr_lo, L.live_wr_hi, L.n_live)}</td>
-            <td style="text-align:right;">${L.n_deadzone || 0}</td>
-            <td style="text-align:right;">${cellWR(L.deadzone_wr, L.deadzone_wr_lo, L.deadzone_wr_hi, L.n_deadzone_resolved)}</td>
             <td style="text-align:right;">${postCell}</td>
-            <td>${blocked}</td>
         </tr>`;
     }).join('');
 }
@@ -9202,6 +9056,28 @@ function _renderExitTimingHud() {
         }
     }
 
+    let inWindow = (points.length && from != null && to != null)
+        ? points.filter(p => {
+            const t = _hudExitTimeSec(p);
+            return t >= from && t <= to;
+        })
+        : [];
+
+    // The BTC candle feed's right edge often lags behind the most recent fills
+    // (stale/forming candle), and the user may have zoomed away — both leave the
+    // chart's visible range excluding every closed trade. Rather than dead-end
+    // the card with an empty state, fall back to the trade dataset's own range so
+    // recent exits always render.
+    if (!inWindow.length && points.length) {
+        const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
+        if (times.length) {
+            from = Math.min(...times);
+            to = Math.max(...times);
+            if (from === to) { from -= 60; to += 60; }
+            inWindow = points.slice();
+        }
+    }
+
     _exitHudWindow = { from, to };
 
     if (winEl) {
@@ -9210,17 +9086,8 @@ function _renderExitTimingHud() {
             : 'Window —';
     }
 
-    const inWindow = (points.length && from != null && to != null)
-        ? points.filter(p => {
-            const t = _hudExitTimeSec(p);
-            return t >= from && t <= to;
-        })
-        : [];
-
     if (!inWindow.length) {
-        body.innerHTML = points.length
-            ? '<div class="hud-empty">No closed trades in the visible BTC chart window — pan or zoom to trade history.</div>'
-            : '<div class="hud-empty">No closed trade points yet — awaiting /api/journal/trade-points</div>';
+        body.innerHTML = '<div class="hud-empty">No closed trade points yet — awaiting /api/journal/trade-points</div>';
         return;
     }
 

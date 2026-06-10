@@ -117,7 +117,7 @@ def test_loss_kill_trigger_records_latest_lane_context() -> None:
     assert "consecutive losses" in trigger["reason"]
 
 
-def test_pause_resume_requires_recovery_and_green_non_deadzone_window() -> None:
+def test_pause_resume_requires_recovery_and_green_window() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
@@ -126,7 +126,6 @@ def test_pause_resume_requires_recovery_and_green_non_deadzone_window() -> None:
             "max_pause_cycles": 5,
             "loss_pause_recovery_multiple": 2.0,
             "require_green_window_for_resume": True,
-            "require_non_deadzone_for_resume": True,
             "live_resume_mode": "auto",
             "low_volume_ratio": 0.7,
             "low_vol_pct": 0.005,
@@ -138,15 +137,11 @@ def test_pause_resume_requires_recovery_and_green_non_deadzone_window() -> None:
 
     ok = MarketConditions(volatility=0.02, volume_ratio=1.2, trend_strength=0.8)
 
-    mgr.update_resume_window(green_window=False, in_deadzone=False)
+    mgr.update_resume_window(green_window=False)
     t1, *_ = mgr.get_exposure(ok)
     assert t1 == ExposureTier.PAUSED
 
-    mgr.update_resume_window(green_window=True, in_deadzone=True)
-    t2, *_ = mgr.get_exposure(ok)
-    assert t2 == ExposureTier.PAUSED
-
-    mgr.update_resume_window(green_window=True, in_deadzone=False)
+    mgr.update_resume_window(green_window=True)
     mgr.update_portfolio_pnl(-5.0)  # recovered 5 < target 6
     t3, *_ = mgr.get_exposure(ok)
     assert t3 == ExposureTier.PAUSED
