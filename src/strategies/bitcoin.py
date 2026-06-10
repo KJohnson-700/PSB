@@ -91,6 +91,39 @@ from src.strategies.btc_updown_5m import (
 logger = logging.getLogger(__name__)
 
 
+def _btc_window_delta_ctx(ta: "TechnicalAnalysis", window: str, market) -> Dict[str, Any]:
+    """Model-independent window-delta fields for the BTC reject context.
+
+    Mirrors the alt instrumentation in sol_macro/eth_macro so BTC ghost rows
+    finally carry ``window_delta_pct``/``window_delta_prob`` and the tape-flip
+    can be ghost-validated on BTC (it could not before — bitcoin.py never logged
+    the signal). LOGGING ONLY: this never influences a BTC entry decision.
+
+    Derives mins_left from the market end_date (matching the alt eval path) and
+    reads window_open_<tf>/current_price/atr_14 off ``ta``. Fails open to {} so
+    it can never raise into the reject-logging path.
+    """
+    try:
+        from src.analysis.window_delta import evaluate_window_delta
+        if window not in ("5m", "15m", "1h"):
+            return {}
+        end = getattr(market, "end_date", None)
+        if end is None:
+            return {}
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        mins_left = max(0.0, (end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+        wd = evaluate_window_delta(ta, window, mins_left)
+        if wd is not None:
+            return {
+                "window_delta_pct": round(wd[0], 6),
+                "window_delta_prob": round(wd[1], 6),
+            }
+    except Exception:
+        pass
+    return {}
+
+
 @dataclass(frozen=True)
 class BTCDirectionDecision:
     """Canonical BTC side-resolution result for audit and lane metadata."""
@@ -1956,6 +1989,7 @@ class BitcoinStrategy:
                                     rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
                                     rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                                 ),
+                                **_btc_window_delta_ctx(ta, "5m", market),
                             },
                             probe_variants=build_threshold_probe_variants(
                                 metric_name="hist_support_count",
@@ -2166,6 +2200,7 @@ class BitcoinStrategy:
                                             rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
                                             rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                                         ),
+                                        **_btc_window_delta_ctx(ta, window_label, market),
                                     },
                                     probe_variants=build_threshold_probe_variants(
                                         metric_name="hist_support_count",
@@ -3230,6 +3265,7 @@ class BitcoinStrategy:
                                 rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
                                 rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
                             ),
+                            **_btc_window_delta_ctx(ta, _updown_tf if is_updown else "15m", market),
                         },
                         probe_variants=build_threshold_probe_variants(
                             metric_name="min_edge",

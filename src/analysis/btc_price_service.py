@@ -180,6 +180,14 @@ class TechnicalAnalysis:
     # 1H close vs SMA(20) — regime buckets for alt macro gates (see btc_1h_regime.py)
     sma_1h_20: float = 0.0
     btc_1h_close: float = 0.0  # last 1H candle close; mirrors current_price when TA is built from 1H
+    # Window-open prices per timeframe (open of the current bar) + ATR(14) in
+    # price units. Feed the model-independent window-delta instrument
+    # (src/analysis/window_delta.evaluate_window_delta), which reads these exact
+    # field names off the analysis object. Logging-only; never gates a BTC entry.
+    window_open_5m: float = 0.0
+    window_open_15m: float = 0.0
+    window_open_1h: float = 0.0
+    atr_14: float = 0.0  # mirrors trend_sabre.atr; named atr_14 for window_delta
     # Anchored Volume Profile
     volume_profile: AnchoredVolumeProfile = field(default_factory=AnchoredVolumeProfile)
     # Chainlink
@@ -1222,10 +1230,29 @@ class BTCPriceService:
         # --- Chainlink ---
         cl_price, cl_updated = self.get_chainlink_price()
 
+        # --- Window-open prices for the window-delta instrument (logging only) ---
+        # Open of the current bar per timeframe; Binance kline boundaries align
+        # to the up/down market windows. Fails open to 0.0 (instrument no-ops).
+        def _last_open(df) -> float:
+            try:
+                if df is None or df.empty:
+                    return 0.0
+                return float(df["open"].iloc[-1])
+            except Exception:
+                return 0.0
+
+        window_open_5m = _last_open(df_5m)
+        window_open_15m = _last_open(df_15m)
+        window_open_1h = _last_open(df_1h)
+
         analysis = TechnicalAnalysis(
             current_price=current_price,
             sma_1h_20=sma_1h_20,
             btc_1h_close=current_price,
+            window_open_5m=window_open_5m,
+            window_open_15m=window_open_15m,
+            window_open_1h=window_open_1h,
+            atr_14=float(getattr(sabre, "atr", 0.0) or 0.0),
             ema_9=ema_9,
             ema_21=ema_21,
             ema_50=ema_50,

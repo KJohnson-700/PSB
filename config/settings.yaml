@@ -1230,7 +1230,13 @@ strategies:
     sell_5m_min_corr: 0.5
     5m_buy_yes_bullish_floor_bump: 0.22
     15m_buy_yes_bullish_floor_bump: 0.13
-    1h_buy_yes_bullish_floor_bump: 0.1
+    # xrp 1h LONG floor bump DISABLED 2026-06-10: ghost recut (ts>=2026-06-02,
+    # n=240 BULL & in-band) shows the in-band cohort is -18.5% EV, yet the 0.10
+    # bump was flipping 93% of its lane_min_edge rejects to admit — i.e. it was
+    # admitting a losing lane. bnb/sol/doge 1h bumps stay ON (+16 to +28% EV).
+    # Band keys left in place (inert while bump=0.0) for easy re-enable if a
+    # later recut finds a +EV xrp 1h sub-band.
+    1h_buy_yes_bullish_floor_bump: 0.0
     1h_buy_yes_floor_price_min: 0.5
     1h_buy_yes_floor_price_max: 0.66
     alt_1h_hard_block_5m_longs: false
