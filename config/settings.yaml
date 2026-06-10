@@ -422,8 +422,7 @@ strategies:
     look_ahead_1h: 4
     prediction_window_bonus_15m: 0.0
     prediction_window_bonus_5m: 0.0
-    blocked_utc_hours_updown:
-    - 3
+    blocked_utc_hours_updown: []
     disable_buy_yes: false
     disable_buy_no_counter_trend: true
     btc_htf_boost_strong_1h: 0.18
@@ -614,8 +613,7 @@ strategies:
     iql_15m_hist_floor: 0.06
     iql_15m_hist_floor_aligned_short: 0.0
     sol_15m_buy_no_max_yes_price_bull_1h: 0.48
-    blocked_utc_hours_updown:
-    - 3
+    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -842,10 +840,7 @@ strategies:
     oracle_max_basis_bps: 20.0
     oracle_basis_relax_max_bps: 30.0
     min_lag_magnitude_pct: 0.3
-    blocked_utc_hours_updown:
-    - 3
-    - 11
-    - 18
+    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 3
@@ -1279,9 +1274,7 @@ strategies:
         min_edge_add: 0.025
         oracle_basis_abs_bps_min: 15.0
         oracle_basis_min_edge_add: 0.01
-    blocked_utc_hours_updown:
-    - 3
-    - 4
+    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1462,11 +1455,7 @@ strategies:
     alt_1h_hard_block_5m_longs: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown:
-    - 1
-    - 2
-    - 3
-    - 18
+    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
@@ -1658,8 +1647,7 @@ strategies:
     iql_15m_enabled: false
     low_corr_threshold_1h: 0.35
     low_corr_damping: 0.8
-    blocked_utc_hours_updown:
-    - 13
+    blocked_utc_hours_updown: []
     look_ahead_15m: 8
     look_ahead_5m: 1
     max_concurrent_positions: 2
