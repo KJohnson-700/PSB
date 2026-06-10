@@ -8,6 +8,16 @@
 
 ---
 
+## 2026-06-10 — BTC bullish-long bleed: band the 5m/15m BUY_YES floor bump (close the −EV cheap cell)
+
+**Why:** BTC was net −$28/24h (40% WR) while alts were green. Split: NEUTRAL-routed trades (the recent async fix) were +$32 (45% WR) — NOT the bleed; the loss was the **non-NEUTRAL default lane** (−$63), concentrated in BULLISH-bias BUY_YES longs. Root-caused to the **5m/15m bullish floor bump being applied blanket with no price band** (bitcoin.py): a long at yes_price 0.47 with raw est_prob ~0.51 got +0.26 bumped to 0.77 → edge +0.30 → traded, but real WR 44% (−EV). The 1h bump was already band-gated (0.50–0.60, 06-07 finding); 5m/15m were left blanket and the "2026-05-28 blanket OK" validation went stale. Ghost-validated current era (06-03+, n=9306): bullish BUY_YES EV by yes_price — 0.43–0.46 **−0.035**, 0.46–0.49 **−0.089**, 0.49–0.52 **+0.026**. (Not a wiring bug — `decision_layer_lane_enforced` is correct; the default lane is just un-AI-gated because `decision_layer.enabled:false`, so the quant bump ran unguarded.)
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** the bullish BUY_YES floor-bump price-band guard now applies to **all** windows (was 1h-only). Per-window `btc_<tf>_buy_yes_floor_price_min/max`; defaults 1h 0.50–0.60 (unchanged), 5m/15m **0.49** / no upper cap.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) (bitcoin):** `btc_5m_buy_yes_floor_price_min: 0.49`, `btc_15m_buy_yes_floor_price_min: 0.49`. Removes a −EV firing cell (endorsed, not tightening a starved lane).
+
+**Impact estimate (7d taken, 5m/15m bullish longs):** gated cheap band (entry<0.49) n=125 / 41% WR / **−$22.72**; unaffected (≥0.49) n=66 / 53% / +$83.09 → lane improves +$60 → ~+$83. **Verification:** 72 BTC tests pass; py_compile + yaml clean. Forward-test; **needs restart.**
+
 ## 2026-06-10 — Alt 15m EXIT calibration: widen xrp stops further (stop still cutting recoverable dips)
 
 **Process:** re-ran `python -m src.analysis.taken_exit_settler --since 2026-06-02` (trades_settled was ~16h stale), then swept ALL alt 15m/1h lanes' **stop-leg** held-vs-realized (per the "sweep all lanes + split by exit_reason + filter ts≥06-02" rules). Only two lanes clear the ≥48%-held bar (genuine "stop cuts a recoverable trade", vs held<48% = entry problem where loosening just bleeds losers): **xrp 15m down** (full n=41: held 56% / +$117 recoverable; post-0.24 n=16: held 62% / +$35) and **xrp 15m up** (post-0.24 n=9: held 56% / +$31). Both were already widened 0.17→0.24 (06-08/09) but the split-by-date shows they STILL recover at 0.24 — the stop is still too tight. Notably the all-exits signal had flagged doge 15m down too, but the stop-leg split REVERSED it (held 29% / −$49 — stop is correctly cutting losers); not touched.

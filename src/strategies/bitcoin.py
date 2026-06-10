@@ -2373,18 +2373,23 @@ class BitcoinStrategy:
                                 _bump_default,
                             )
                         )
-                        # 1h is PRICE-BAND gated: BTC 1h long model-edge is ANTI-predictive
-                        # (ghost 2026-06-07 — the highest model-edge longs lose; the +EV is
-                        # the 0.50-0.60 yes-price band at +19% EV / 60% WR, n197). A blanket
-                        # bump admits the cheap-band losers (<.40 = -48% EV) by edge-rank, so
-                        # the 1h bump is restricted to that band; 5m/15m keep the blanket
-                        # bump (ghost-validated 2026-05-28). Pairs w/ the 1h hist-gate
-                        # softening that lets these reach the bump at all.
-                        _in_floor_band = True
-                        if is_1h:
-                            _fp_min = float(self.config.get("btc_1h_buy_yes_floor_price_min", 0.50))
-                            _fp_max = float(self.config.get("btc_1h_buy_yes_floor_price_max", 0.60))
-                            _in_floor_band = _fp_min <= yes_price <= _fp_max
+                        # PRICE-BAND gated (all windows): bullish BUY_YES below ~0.49 is
+                        # -EV — the market prices the long under 50% (disagrees with the
+                        # bullish bias) and the blanket bump inflates est_prob (+0.26 on
+                        # 15m) past the edge gate, manufacturing the losers. Ghost (06-03+,
+                        # n=9306): yes_price 0.43-0.46 = -0.035 EV, 0.46-0.49 = -0.089,
+                        # 0.49-0.52 = +0.026. 1h was already banded (0.50-0.60, 06-07);
+                        # 2026-06-10 extended to 5m/15m (min 0.49, no upper cap) — the
+                        # prior "blanket OK 2026-05-28" went stale. Per-window config'd.
+                        _fp_min = float(self.config.get(
+                            f"btc_{_updown_tf}_buy_yes_floor_price_min",
+                            0.50 if is_1h else 0.49,
+                        ))
+                        _fp_max = float(self.config.get(
+                            f"btc_{_updown_tf}_buy_yes_floor_price_max",
+                            0.60 if is_1h else 1.01,
+                        ))
+                        _in_floor_band = _fp_min <= yes_price <= _fp_max
                         if _floor_bump > 0 and _in_floor_band:
                             estimated_prob = min(0.90, estimated_prob + _floor_bump)
                             reason_parts.append(
