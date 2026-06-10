@@ -665,6 +665,7 @@ class BitcoinStrategy:
         raw_est_prob,
         estimated_prob,
         require_shadow_portfolio: bool,
+        veto_only: bool = False,
         htf_bias=None,
         open_position_ids=None,
     ):
@@ -702,6 +703,7 @@ class BitcoinStrategy:
             raw_est_prob=(float(raw_est_prob) if raw_est_prob is not None else None),
             quant_threshold=float(quant_threshold),
             require_shadow_portfolio=bool(require_shadow_portfolio),
+            veto_only=bool(veto_only),
             htf_bias=htf_bias,
         )
         self.ai_broker.enqueue(snapshot)
@@ -2960,31 +2962,67 @@ class BitcoinStrategy:
                     if _needs_ai_for_low_conf_neutral_15m
                     else "btc_updown_marginal"
                 )
-                # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
-                # these are below-threshold extras that only trade WITH AI blessing,
-                # so skipping on AI-unavailable/timeout just returns to quant baseline.
                 _dl_lane = "neutral_15m" if _needs_ai_for_low_conf_neutral_15m else "marginal"
-                ai_decision = await self._evaluate_trade_decision_with_timeout(
-                    market_question=market.question,
-                    market_description=ai_context,
-                    current_yes_price=yes_price,
-                    market_id=market.id,
-                    strategy_hint="bitcoin",
-                    quant_action=action,
-                    quant_edge=edge,
-                    quant_confidence=confidence,
-                    quant_threshold=effective_min_edge,
-                    raw_probability=raw_est_prob,
-                    post_calibration_probability=estimated_prob,
-                    require_shadow_portfolio=(
-                        self._requires_shadow_for_lane("neutral_15m")
-                        if _needs_ai_for_low_conf_neutral_15m
-                        else self._requires_shadow_for_lane("marginal")
-                    ),
-                    # Veto-only for the marginal lane only; neutral_15m keeps the
-                    # strict contract (it needs the AI to supply a direction).
-                    veto_only=(not _needs_ai_for_low_conf_neutral_15m),
+                _require_shadow = (
+                    self._requires_shadow_for_lane("neutral_15m")
+                    if _needs_ai_for_low_conf_neutral_15m
+                    else self._requires_shadow_for_lane("marginal")
                 )
+                # Veto-only for the marginal lane only; neutral_15m keeps the strict
+                # contract (it needs the AI to supply a direction).
+                _veto_only = (not _needs_ai_for_low_conf_neutral_15m)
+                # 2026-06-09: async AI broker for 15m/1h. The synchronous call blocks
+                # the scan loop for up to ai_decision_timeout_sec (90s) — observed
+                # bloating the 60s cycle to 100s+. 15m/1h entry-eligibility bands are
+                # minutes-wide, so enqueue-now / resolve-off-thread / consume-next-cycle
+                # costs ~one 60s cycle (2-6% of the band) without blocking. On first
+                # touch the candidate is enqueued and skipped THIS cycle; it resolves in
+                # the background and is picked up next cycle (still in its window).
+                # veto_only + shadow are carried so the marginal contract is preserved.
+                # Opt-out: btc_ai_async_broker: false (reverts to the synchronous call).
+                _async_ok = (
+                    bool(self.config.get("btc_ai_async_broker", False))
+                    and self.ai_broker is not None
+                )
+                _broker_state = None
+                if _async_ok:
+                    _broker_state, ai_decision = self._resolve_or_enqueue_ai(
+                        lane_id=_broker_lane,
+                        market=market,
+                        ai_context=ai_context,
+                        yes_price=yes_price,
+                        edge=edge,
+                        confidence=confidence,
+                        action=action,
+                        quant_threshold=effective_min_edge,
+                        raw_est_prob=raw_est_prob,
+                        estimated_prob=estimated_prob,
+                        require_shadow_portfolio=_require_shadow,
+                        veto_only=_veto_only,
+                        htf_bias=htf_bias,
+                    )
+                    if _broker_state == "pending":
+                        _bump_skip("ai_pending_async")
+                        continue
+                if (not _async_ok) or _broker_state == "unavailable":
+                    # Synchronous fallback (flag off or broker not wired). FAIL-CLOSED:
+                    # below-threshold extras only trade WITH AI blessing, so skipping on
+                    # AI-unavailable/timeout just returns to quant baseline.
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint="bitcoin",
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=_require_shadow,
+                        veto_only=_veto_only,
+                    )
                 ai_calls += 1
                 ai_used = True
                 self._log_decision_layer(

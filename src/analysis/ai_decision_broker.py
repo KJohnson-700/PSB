@@ -70,6 +70,11 @@ class PendingDecision:
     quant_threshold: float
     require_shadow_portfolio: bool
 
+    # Marginal lane contract: when True the AI is veto-only (admit unless the AI
+    # confidently opposes) — MUST be carried so the async path matches the
+    # synchronous gate's veto_only=... and doesn't silently make the lane stricter.
+    veto_only: bool = False
+
     # Materialization context — strategy reads these post-resolve to build the
     # signal without recomputing indicators.
     htf_bias: Optional[str] = None
@@ -414,6 +419,7 @@ class AIDecisionBroker:
                 raw_probability=pd.raw_est_prob,
                 post_calibration_probability=pd.estimated_prob,
                 require_shadow_portfolio=pd.require_shadow_portfolio,
+                veto_only=pd.veto_only,
             )
             pd.ai_decision = ai_decision
             if ai_decision is None:

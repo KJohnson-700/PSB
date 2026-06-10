@@ -408,6 +408,13 @@ strategies:
     # several open 15m/1h markets actually gets AI on each. 5m unchanged (no AI).
     # Opt-out: neutral_15m_routes_to_ai: false.
     neutral_15m_routes_to_ai: true
+    # 2026-06-09: async AI broker for BTC 15m/1h. The synchronous gate blocked the
+    # scan loop up to ai_decision_timeout_sec (90s) and bloated the 60s cycle to
+    # 100s+. Async enqueues the AI call and resolves it off-thread, consuming the
+    # verdict next cycle — 15m/1h bands are minutes-wide so the ~1-cycle delay is
+    # harmless (the drop-on-skip risk is a 5m-only artifact). veto_only/shadow are
+    # preserved through the broker. Opt-out: btc_ai_async_broker: false.
+    btc_ai_async_broker: true
     max_ai_calls_per_scan: 5
     ai_call_timeout_sec: 15
     # 2026-06-09: decision-gate timeout 40->90s. The marginal/NEUTRAL gate is the

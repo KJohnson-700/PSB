@@ -8,6 +8,20 @@
 
 ---
 
+## 2026-06-09 — BTC 15m/1h AI gate → async broker (kill the scan-cycle bloat)
+
+**Why:** the prior `ai_decision_timeout_sec: 40→90` (to give MiniMax room on 15m/1h) made the synchronous marginal/NEUTRAL gate block the scan loop — post-restart recheck (pid 35291) showed **12 cycle overruns up to 104.3s** against a 60s target, slowing every strategy's scan rate. The NEUTRAL routing itself worked (12 `BTC AI decision` lines, AI consulted, BTC ~74% NEUTRAL in the window), but the synchronous wait was the cost. Async decouples the AI call from the scan loop, which is the correct fix (operator-directed; drop-on-skip is a 5m-only artifact — 15m/1h eligibility bands are 16–58 min so a ~1-cycle resolve delay is harmless).
+
+**[`src/analysis/ai_decision_broker.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_decision_broker.py):** `PendingDecision` gains `veto_only: bool = False`; `_process_one` now passes `veto_only=pd.veto_only` to `evaluate_trade_decision`. **Critical correctness fix:** the broker previously dropped `veto_only` (defaulted False), so migrating the marginal lane (which passes `veto_only=True`) would have silently flipped it from veto-only to full-gate = stricter = re-starve. Now carried.
+
+**[`src/strategies/bitcoin.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py):** `_resolve_or_enqueue_ai` gains a `veto_only` param (set on the enqueued snapshot). The marginal/NEUTRAL gate now calls `_resolve_or_enqueue_ai` when `btc_ai_async_broker` is on: `resolved`→use the AIDecision (existing approval logic unchanged), `pending`→`_bump_skip("ai_pending_async")` + skip this cycle (resolves off-thread, consumed next cycle), `unavailable`→synchronous fallback. `veto_only`/`require_shadow_portfolio` preserved across both paths.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) (bitcoin):** `btc_ai_async_broker: true` (opt-out → reverts to synchronous). Broker already instantiated/started in `main.py` (AIDecisionBroker, `ai_agent` resolver, `max_decision_age_sec=120`, `price_drift_threshold=0.03`, background `_worker_loop`).
+
+**Scope note:** only the marginal/NEUTRAL gate is migrated (the NEUTRAL-routing path + the main bloat source). Two other synchronous `_evaluate_trade_decision_with_timeout` sites (default-lane gates) remain — migrate those next if cycle bloat persists.
+
+**Verification:** `pytest tests/test_bitcoin.py tests/test_bitcoin_scenarios.py` → 72 passed; `tests/test_ai_broker_*` → 30 passed; `py_compile` + yaml clean. **Needs restart.** Watch after restart: cycle overruns drop to ~0, `ai_pending_async` skips appear then resolve next cycle, BTC keeps trading through NEUTRAL.
+
 ## 2026-06-09 — BTC NEUTRAL routes to AI decider (un-starve flat-4H nights)
 
 **Problem:** BTC trade rate collapsed 3.3/hr→1.0/hr ~22:00 UTC (alts simultaneously doubled). Root cause: BTC 4H went flat (`hist=+1.6 < conviction 35`) → HTF pinned NEUTRAL → below-threshold NEUTRAL 15m/1h candidates were edge-skipped at the `lane_min_edge` gate **before the AI ever saw them** (`ai_calls~1`, dominant skip `updown_15m/1h_neutral`). The AI — which exists to adjudicate NEUTRAL — was never consulted because routing required `edge ≥ ai_updown_marginal_min_edge (0.03)` OR low quant-confidence, and the flat-tape candidates were neither. Not a MiniMax/latency issue (HTTP 200, ~18s) and not a global bleed (BTC-only).
