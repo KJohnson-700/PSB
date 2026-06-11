@@ -409,6 +409,10 @@ def build_market_context(
     logged before — so the 5m/15m flip could not be ghost-validated (the proxy,
     RSI, only cleared on the 1h tail). Logging the actual histogram lets the
     5m/15m momentum-flip be validated on settled ghosts after ~a day of data.
+
+    NOTE: the window-delta signal (`window_delta_pct`/`window_delta_prob`) is
+    injected directly into the reject context by each strategy's
+    `_log_skip_reject` (it needs per-candidate mins_left), not via this helper.
     """
     out: Dict[str, Any] = {}
     for key, val in (

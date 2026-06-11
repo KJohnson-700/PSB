@@ -238,3 +238,36 @@ def test_btc_regime_action_gate_allows_strong_convergence_chase_entries() -> Non
     assert score.passed is True
     assert score.reason == "composite_ok"
     assert score.convergence_score >= 0.55
+
+
+def _flip(side, action, direction, hist, bias, *, l2s):
+    from src.analysis.updown_composite_score import apply_fresh_cross_override
+    return apply_fresh_cross_override(
+        est_prob_up=0.62, action=action, allowed_side=side, direction=direction,
+        side_source="native", reason_parts=[], crossover="NONE", tf_label="15m",
+        window="15m", primary_htf_bias=bias, macd_hist_5m=hist,
+        macd_flip_enabled=True, macd_flip_long_to_short_enabled=l2s,
+    )
+
+
+def test_macd_long_to_short_flip_fires():
+    est, action, side, direction, _ = _flip("LONG", "BUY_YES", "UP", -0.5, "BULLISH", l2s=True)
+    assert action == "BUY_NO" and side == "SHORT" and direction == "DOWN"
+    assert est <= 0.45  # capped so the flipped short has positive edge
+
+
+def test_macd_long_to_short_flip_off_by_default():
+    _, action, side, _, _ = _flip("LONG", "BUY_YES", "UP", -0.5, "BULLISH", l2s=False)
+    assert action == "BUY_YES" and side == "LONG"  # untouched when disabled
+
+
+def test_macd_long_to_short_no_flip_when_momentum_agrees():
+    # macd_hist_5m > 0 = up momentum agrees with the long -> no flip
+    _, action, side, _, _ = _flip("LONG", "BUY_YES", "UP", 0.5, "BULLISH", l2s=True)
+    assert action == "BUY_YES" and side == "LONG"
+
+
+def test_macd_long_to_short_only_on_bullish_bias():
+    # NEUTRAL bias -> not the lagging-bullish failure mode -> no flip
+    _, action, side, _, _ = _flip("LONG", "BUY_YES", "UP", -0.5, "NEUTRAL", l2s=True)
+    assert action == "BUY_YES" and side == "LONG"

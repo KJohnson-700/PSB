@@ -21,6 +21,7 @@ import requests
 from dataclasses import dataclass, field
 
 from src.utils.http_retry import requests_get_with_retries
+from src.market.microstructure import ob_imbalance, trade_flow_ratio
 
 logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
@@ -46,7 +47,14 @@ class Market:
     # hourly markets use the same question shape as old short-window markets, so
     # strategy buckets must not infer 5m/15m from asset name alone.
     window_minutes: Optional[int] = None
-    
+    # Microstructure features (2026-06-09) — populated by the optional
+    # MarketScanner.enrich_microstructure step (default-off). None = not enriched.
+    # The hunt for a signal the TA stack lacks: order-book imbalance (resting
+    # depth) + trade flow (executed taker pressure). Logged on candidates to
+    # forward-validate whether they separate winners from losers.
+    ob_imbalance: Optional[float] = None
+    trade_flow_ratio: Optional[float] = None
+
     @property
     def is_binary(self) -> bool:
         """Check if market is binary"""
@@ -734,7 +742,92 @@ class MarketScanner:
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")
             return {}
-    
+
+    _DATA_API = "https://data-api.polymarket.com"
+
+    async def enrich_microstructure(self, markets: List[Market]) -> List[Market]:
+        """Optional, DEFAULT-OFF: attach order-book imbalance + trade-flow to each
+        up/down market so they get logged on candidates for signal validation.
+
+        The hunt for a signal the TA stack lacks. Fully FAIL-SAFE: any fetch/parse
+        error leaves the field None and never interrupts the scan. Gated by
+        ``trading.microstructure_enrichment_enabled`` (default False) so it ships
+        inert. When on it adds ~1-2 public REST calls per up/down market.
+        """
+        if not markets:
+            return markets
+        cfg = (self.config.get("trading", {}) or {})
+        if not bool(cfg.get("microstructure_enrichment_enabled", False)):
+            return markets
+        session = await self._get_session()
+        sem = asyncio.Semaphore(self._PRICE_CONCURRENCY)
+        flow_window = int(cfg.get("microstructure_trade_flow_window_sec", 300) or 300)
+
+        async def _enrich_one(m: Market) -> None:
+            try:
+                async with sem:
+                    book = await self._fetch_order_book(session, m.token_id_yes)
+                if book is not None:
+                    m.ob_imbalance = ob_imbalance(book.get("bids"), book.get("asks"))
+                    cond = book.get("market") or ""
+                    if cond:
+                        m.condition_id = str(cond)
+                        async with sem:
+                            trades = await self._fetch_recent_trades(
+                                session, str(cond), flow_window
+                            )
+                        if trades is not None:
+                            m.trade_flow_ratio = trade_flow_ratio(trades)
+            except Exception:
+                return  # enrichment must NEVER break the scan
+
+        try:
+            await asyncio.gather(*[_enrich_one(m) for m in markets])
+        except Exception as e:
+            logger.debug("enrich_microstructure failed: %s", e)
+        return markets
+
+    async def _fetch_order_book(self, session, token_id: str):
+        """Public CLOB GET /book — fail-safe (returns None on any error)."""
+        if not token_id:
+            return None
+        try:
+            async with session.get(
+                f"{self._CLOB_API}/book",
+                params={"token_id": token_id},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                return {
+                    "bids": data.get("bids") or [],
+                    "asks": data.get("asks") or [],
+                    "market": data.get("market"),
+                }
+        except Exception:
+            return None
+
+    async def _fetch_recent_trades(self, session, condition_id: str, window_sec: int):
+        """Public Data-API GET /trades — fail-safe (returns None on any error)."""
+        if not condition_id:
+            return None
+        after = int(time.time()) - max(30, int(window_sec))
+        try:
+            async with session.get(
+                f"{self._DATA_API}/trades",
+                params={"market": condition_id, "after": after, "limit": 200},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                if isinstance(data, dict):
+                    data = data.get("data") or data.get("trades") or []
+                return data if isinstance(data, list) else None
+        except Exception:
+            return None
+
     def _parse_markets(self, markets_data: List[Dict]) -> List[Market]:
         """Parse raw market data into Market objects"""
         markets = []
@@ -1403,6 +1496,10 @@ class MarketScanner:
             _hydrate(updown_5m),
             _hydrate(updown_1h),
         )
+
+        # Optional microstructure enrichment (DEFAULT-OFF, fail-safe). Attaches
+        # order-book imbalance + trade-flow to up/down markets for signal hunting.
+        await self.enrich_microstructure([*updown, *updown_5m, *updown_1h])
 
         opportunities: Dict[str, Any] = {
             "high_liquidity": [],

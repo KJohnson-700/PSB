@@ -4,6 +4,25 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-10 — Calibration-instrumentation batch (gate-noise audit, window-delta shadow-logger, microstructure) — NEEDS RESTART, now committed
+
+Three forward-test / instrumentation tracks from the 06-09→06-10 sessions, committed together off branch `codex/recover-preclean-20260519`. All default-off or soft (no tightening), restart-gated. Detail per track lives in the auto-memory files (`project_gate_noise_audit_hist_gate_2026_06_10`, `project_window_delta_shadow_logger_2026_06_10`, `project_window_delta_flip_is_the_edge_2026_06_10`).
+
+**1. Gate-noise audit + BTC hist_gate LONG soft-penalty.**
+- New `scripts/gate_noise_audit.py` — ranks gates by **EV of the ghost-settled blocked pool**, not block-rate or WR (WR-by-price is a tautology; see `reference_ghost_yesprice_is_entry_rank_on_ev`). Plus `scripts/ghost_ev_vs_wr_recut.py`, `scripts/ghost_decision_tree.py`.
+- Finding: operator's "lane_min_edge is noise" hunch was **wrong** — lane_min_edge tested ~EV-neutral (−0.013). The real noise is the BTC **LONG** histogram guillotine: ghost-settled blocked pool was **+0.119 EV (1h) / +0.074 (5m) / +0.023 (15m, n=4401)** — it kills +EV longs.
+- Fix (`config/settings.yaml`): `hist_gate_15m_long_hard_reject: false` + `hist_gate_5m_long_hard_reject: false` (1h soft path already live at `bitcoin.py:2222`). Soft-penalty = mild est_prob dock instead of hard reject. Reversible → set back to `true`. `updown_composite_score.py` carries the soft-penalty branch + tests.
+- NOT built: codex's "budget fail-close NEUTRAL major" — real but not biting (decision_layer fail_open=0, 100% rubber-stamp approval).
+
+**2. Window-delta shadow-logger (testing wd-as-PRIMARY-trigger thesis).**
+- New `src/analysis/window_delta.py` (pure, time-aware normal-CDF: % move since window open → P(up)) + `scripts/window_delta_shadow_settle.py` settler + `_shadow_log_window_delta` hooks in `sol_macro.py`/`eth_macro.py`/`scanner.py`. **Log-only** — does not affect live decisions yet.
+- Motivation: overnight n=113 showed the window-delta flip is +EV on all 6 alts while native est_prob/htf_bias selection is −EV on all 7 (the "shorts a rising tape" disease). The shadow-logger forward-captures whether wd should be promoted from a flip-gate to the primary 5m/15m entry trigger. Offline t=60s reconstruction is impossible (no sub-15min spot history), hence forward-only.
+
+**3. Microstructure enrichment (default-off feature scaffold).**
+- New `src/market/microstructure.py` (`ob_imbalance`, `trade_flow_ratio`) + `MarketScanner.enrich_microstructure` (order-book imbalance / trade-flow ratio), gated behind `trading.microstructure_enrichment_enabled` (**default False**), fail-safe (`None` = not enriched). Ships dark; no behavior change until enabled. + `test_microstructure.py`.
+
+Supporting: `rejected_candidate_log.py` + `sol_btc_service.py` minor hooks, `POST_RESTART_RECHECK.md` (operator recheck list), `lane_ev_dashboard.html`. **Needs restart** for the hist_gate soft-penalty + shadow-logger to take effect (long-running process holds old modules).
+
 ## 2026-06-08 — Revert two post-baseline long-suppressing tightenings (no-tightening rule)
 
 Audit (me + codex + kimi) found the bot had drifted from the +$257 baseline (`test_20260604_234611`, **balanced 69L/75S, 52% WR**) to short-heavy/bleeding (live `test_20260607_220219`: **94% short, −$9, 37% WR**, shorting a bull tape + tripping correlation-stop halts). Root cause = post-baseline gates that amputate the LONG side. My own changes were ruled out (floor-bump byte-identical for 5m/15m across a 192-case grid; can only add longs). Reverted the two live long-suppressors (config-only, loosening, reversible, restart-gated):

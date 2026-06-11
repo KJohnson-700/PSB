@@ -208,6 +208,9 @@ def apply_fresh_cross_override(
     window: str = "",
     momentum_flip_enabled: bool = False,
     momentum_flip_min_rsi: float = 55.0,
+    macd_hist_5m: Optional[float] = None,
+    macd_flip_enabled: bool = False,
+    macd_flip_long_to_short_enabled: bool = False,
 ):
     """Flip to the momentum side when a FRESH MACD cross contradicts the
     lagging-bias-chosen side.
@@ -284,14 +287,13 @@ def apply_fresh_cross_override(
     # the disagreement tail — 55-60 -> 63% UP (n=328), 60-65 -> 69% (n=130). 5m/15m
     # MARKET-window tails too thin to trust, so this gate is 1h-market-only.
     #
-    # CAVEAT on the RSI timeframe: ``rsi_14`` passed by every caller is that asset's
-    # CANONICAL RSI on a FIXED timeframe — 15m for sol-family/eth, 4h for BTC — NOT
-    # the 1h RSI. ``window == "1h"`` gates the MARKET horizon, not the RSI's TF. So
-    # this is "1h-market candidate, gated on the asset's canonical (15m/4h) RSI", and
-    # the validation above pooled those two TFs under one column — a threshold of 55
-    # is not strictly comparable across alts (15m) vs BTC (4h). Per-window RSI
-    # (rsi_5m/rsi_15m/rsi_1h) is now logged on candidates so a TRUE own-window-RSI
-    # flip can be re-validated later and this gate re-pointed at tf_1h.rsi_14.
+    # RSI timeframe: callers now pass the 15m RSI (tf_15m.rsi_14) — the validated
+    # FASTER-LEAD for a 1h market — uniformly for ALL assets. (2026-06-08: BTC was
+    # fixed from its canonical 4h RSI, which is flat/useless on short windows, to the
+    # 15m; alts already used 15m as canonical so they are unchanged.) ``window ==
+    # "1h"`` gates the MARKET horizon, not the RSI TF. When the flip is extended to
+    # the 15m/5m windows, callers should pass the corresponding faster-lead RSI
+    # (15m->5m) — per-window rsi_5m/15m/1h is logged on candidates to validate that.
     #
     # Asymmetric (SHORT->LONG only); the down-side mirror is intentionally NOT
     # included pending its own validation. Opt-in per strategy via
@@ -316,6 +318,80 @@ def apply_fresh_cross_override(
             logger.info(
                 "  %s RSI MOMENTUM FLIP -> BUY_YES (rsi=%.0f, 1h, vs lagging bias %s)",
                 strategy_name, float(rsi_14), primary_htf_bias,
+            )
+
+    # Continuous 5m-momentum flip (2026-06-09, DEFAULT-OFF via ``macd_flip_enabled``).
+    # The fresh-cross flip above only fires on a DISCRETE cross event (measured
+    # 0/77k live) and the RSI flip is 1h-market-only, so neither protects 5m/15m
+    # SHORTs — which bleed when the lagging BEARISH bias shorts a tape whose 5m
+    # momentum has already turned up (observed live: 38/42 losing taken shorts were
+    # `aligned`/BEARISH with mfe~0, i.e. wrong from entry). Ghost validation
+    # (rejected_candidates_settled, macd_hist_5m logged from 06-08): the SIGN of
+    # macd_hist_5m splits BEARISH-bias SHORT win rate ~in half —
+    #   5m  market: hist<=0 -> 56.4% (n=951)  vs  hist>0 -> 43.3% (n=601)
+    #   15m market: hist<=0 -> 58.4% (n=3956) vs  hist>0 -> 49.7% (n=3788)
+    # gap holds in both time-halves (15m high-n, stable). So a SHORT into rising 5m
+    # momentum is the losing half; flip it to LONG (5m is +EV at P(up)=0.567; 15m is
+    # break-even — strictly better than the -EV short and keeps frequency). Uses the
+    # CONTINUOUS hist sign (so it actually fires, unlike the discrete cross).
+    # Asymmetric (SHORT->LONG only); 1h excluded (covered by the RSI flip). Opt-in
+    # per strategy via `macd_momentum_flip_5m15m`. Guard `flipped is None` so a
+    # genuine fresh bearish cross is never overridden. NOTE: ~8h validation window so
+    # far (macd_hist_5m newly logged) — 15m solid, 5m forward-test.
+    if (
+        macd_flip_enabled
+        and flipped is None
+        and allowed_side == "SHORT"
+        and str(window) in ("5m", "15m")
+        and macd_hist_5m is not None
+        and float(macd_hist_5m) > 0.0
+        and "BEAR" in str(primary_htf_bias).upper()
+    ):
+        est_prob_up = max(est_prob_up, 0.55)
+        action = "BUY_YES"
+        direction = "UP"
+        allowed_side = "LONG"
+        side_source = f"{side_source or ''}+macd5m_momentum_flip"
+        reason_parts.append(
+            f"macd5m_momentum_flip(hist={float(macd_hist_5m):.4f},{window})->BUY_YES"
+        )
+        if logger is not None:
+            logger.info(
+                "  %s MACD5m MOMENTUM FLIP -> BUY_YES (hist=%.4f, %s, vs lagging bias %s)",
+                strategy_name, float(macd_hist_5m), window, primary_htf_bias,
+            )
+
+    # Symmetric LONG->SHORT twin (2026-06-09). Mirror of the block above: a lagging
+    # BULLISH bias keeps the bot LONG into a tape whose 5m momentum has already
+    # turned DOWN (live: "longs into a falling tape" is the dominant
+    # window-delta-disagree block, and exactly the losing lanes from the lane audit
+    # — doge/eth/bnb 15m LONG). Instead of just BLOCKING that -EV long, flip it to a
+    # SHORT that trades the actual down-move — recovers frequency in the CORRECT
+    # direction. ``macd_hist_5m < 0`` is mutually exclusive with the SHORT->LONG
+    # trigger, so no double-flip. Opt-in via ``macd_momentum_flip_long_to_short``;
+    # same 5m/15m scope + flipped-None guard. FORWARD-TEST (not yet ghost-validated
+    # like the SHORT->LONG side — watch macd5m_momentum_flip->BUY_NO outcomes).
+    if (
+        macd_flip_long_to_short_enabled
+        and flipped is None
+        and allowed_side == "LONG"
+        and str(window) in ("5m", "15m")
+        and macd_hist_5m is not None
+        and float(macd_hist_5m) < 0.0
+        and "BULL" in str(primary_htf_bias).upper()
+    ):
+        est_prob_up = min(est_prob_up, 0.45)
+        action = "BUY_NO"
+        direction = "DOWN"
+        allowed_side = "SHORT"
+        side_source = f"{side_source or ''}+macd5m_momentum_flip_short"
+        reason_parts.append(
+            f"macd5m_momentum_flip(hist={float(macd_hist_5m):.4f},{window})->BUY_NO"
+        )
+        if logger is not None:
+            logger.info(
+                "  %s MACD5m MOMENTUM FLIP -> BUY_NO (hist=%.4f, %s, vs lagging bias %s)",
+                strategy_name, float(macd_hist_5m), window, primary_htf_bias,
             )
 
     return est_prob_up, action, allowed_side, direction, side_source

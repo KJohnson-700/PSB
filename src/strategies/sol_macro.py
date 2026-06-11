@@ -1842,6 +1842,58 @@ class SolMacroStrategy:
             return "BUY_YES", "LONG", "UP", prob, prob
         return None
 
+    def _shadow_log_window_delta(
+        self,
+        asset_obj: Any,
+        tf: str,
+        mins_left: float,
+        yes_price: float,
+        action: str,
+        side_source: Optional[str],
+        market: Any,
+    ) -> None:
+        """Forward shadow log (decision-NEUTRAL, log-only) of the window-delta
+        implied P(up) vs the market ``yes_price`` for EVERY up/down candidate at
+        decision time. Lets us settle the "window-delta as the PRIMARY 5m/15m
+        signal" thesis FORWARD: an offline reconstruction is impossible because no
+        sub-15-minute spot is retained (regime snapshots are ~15m apart and the
+        ohlcv cache is empty). Outcome is joined downstream by (market, ts) against
+        the resolution cache. Never raises into the scan loop. Gate:
+        ``window_delta_shadow_log`` (default on). Inherited by ETH and all alts.
+        """
+        if not bool(self.config.get("window_delta_shadow_log", True)):
+            return
+        try:
+            wd = evaluate_window_delta(asset_obj, tf, mins_left)
+            if wd is None:
+                return
+            move_pct, wd_prob = wd
+            import json as _json
+            from pathlib import Path as _Path
+
+            row = {
+                "ts": time.time(),
+                "strategy": getattr(
+                    self, "_signal_strategy_name", self.__class__.__name__
+                ),
+                "window": tf,
+                "action": action,
+                "flipped": "window_delta_flip" in (side_source or ""),
+                "yes_price": round(float(yes_price), 4),
+                "move_pct": round(float(move_pct), 5),
+                "wd_prob": round(float(wd_prob), 4),
+                "mins_left": round(float(mins_left), 3),
+                "market_slug": getattr(market, "slug", None),
+                "market_id": getattr(market, "condition_id", None)
+                or getattr(market, "id", None),
+            }
+            path = _Path("data/calibration/window_delta_shadow.jsonl")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a") as fh:
+                fh.write(_json.dumps(row) + "\n")
+        except Exception:
+            return
+
     def _low_atr_gate_blocks(self, asset_obj: Any, window: str, action: str):
         """Lane-specific volatility gate (2026-06-09, Kimi signal-hunt + EV vet).
 
@@ -3759,6 +3811,9 @@ class SolMacroStrategy:
                         raw_est_prob = est_prob_up
                         side_source = f"{side_source or ''}+window_delta_flip"
                         reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+                    self._shadow_log_window_delta(
+                        sol, _updown_tf, _eval_left, yes_price, action, side_source, market
+                    )
                     # Low-ATR volatility gate — configured losing lanes only trade in
                     # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
                     _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)
@@ -4037,6 +4092,9 @@ class SolMacroStrategy:
                         raw_est_prob = est_prob_up
                         side_source = f"{side_source or ''}+window_delta_flip"
                         reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+                    self._shadow_log_window_delta(
+                        sol, _updown_tf, _eval_left, yes_price, action, side_source, market
+                    )
                     # Low-ATR volatility gate — configured losing lanes only trade in
                     # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
                     _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)

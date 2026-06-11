@@ -1721,6 +1721,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 raw_est_prob = est_prob_up
                 side_source = f"{side_source or ''}+window_delta_flip"
                 reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
+            self._shadow_log_window_delta(
+                eth, _updown_tf, _eval_left, yes_price, action, side_source, market
+            )
             # Low-ATR volatility gate (inherited) — configured losing lanes only
             # trade in low vol; mid/high-ATR is where they bleed. Side is final.
             _atr_block = self._low_atr_gate_blocks(eth, _updown_tf, action)

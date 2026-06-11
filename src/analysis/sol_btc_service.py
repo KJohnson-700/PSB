@@ -141,6 +141,13 @@ class SOLAnalysis:
     macd_5m: MACDResult = field(default_factory=MACDResult)
     # ATR for volatility
     atr_14: float = 0.0
+    # In-progress candle OPEN per up/down window — the "window open" reference for
+    # the model-independent window-delta signal (% move since the window opened).
+    # 0.0 = unavailable. Derived from the same klines current_price comes from, so
+    # no extra fetch. Read by the window_delta confirmation gate in the scan loop.
+    window_open_5m: float = 0.0
+    window_open_15m: float = 0.0
+    window_open_1h: float = 0.0
     # Chainlink / oracle verification for the alt leg
     chainlink_price: Optional[float] = None
     chainlink_updated_at: Optional[datetime] = None
@@ -717,6 +724,21 @@ class SOLBTCService:
         current_price = float(df_15m["close"].iloc[-1])
         close_15m = df_15m["close"]
 
+        # In-progress candle open per window = "window open" for the delta signal.
+        # Binance returns the current (unclosed) candle as the last row, which is
+        # also where current_price comes from — so these are consistent and free.
+        def _last_open(df: pd.DataFrame) -> float:
+            if df is None or df.empty:
+                return 0.0
+            try:
+                return float(df["open"].iloc[-1])
+            except (KeyError, IndexError, ValueError, TypeError):
+                return 0.0
+
+        window_open_5m = _last_open(df_5m)
+        window_open_15m = _last_open(df_15m)
+        window_open_1h = _last_open(df_1h)
+
         # EMAs from 15m
         ema_9 = tf_15m.ema_9
         ema_21 = tf_15m.ema_21
@@ -782,6 +804,9 @@ class SOLBTCService:
             macd_15m=macd_15m,
             macd_5m=macd_5m,
             atr_14=atr_14,
+            window_open_5m=window_open_5m,
+            window_open_15m=window_open_15m,
+            window_open_1h=window_open_1h,
             chainlink_price=cl_price,
             chainlink_updated_at=cl_updated,
             chainlink_network=cl_network,
