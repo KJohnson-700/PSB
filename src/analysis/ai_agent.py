@@ -179,15 +179,18 @@ Instructions:
 
 OUTPUT (machine-parseable — follow exactly):
 - Return one JSON object only. No markdown code fences, no text before or after.
-- Use EXACTLY these four keys (spellings matter): "reasoning", "confidence_score", "estimated_probability", "recommendation"
-- "reasoning": a single string, 50–100 words
-- "confidence_score": a JSON number between 0 and 1 (e.g. 0.72). Never a string like "high" or "medium-high".
-- "estimated_probability": a JSON number between 0 and 1 — your estimate of P(YES resolves true). Required.
+- Use EXACTLY these four keys (spellings matter): "recommendation", "confidence_score", "estimated_probability", "reasoning"
+- Emit the keys IN THAT ORDER. Put the decision fields ("recommendation",
+  "confidence_score", "estimated_probability") FIRST and "reasoning" LAST, so the
+  decision is fully formed even if your response is cut short before the rationale.
 - "recommendation": exactly one of these three strings: "BUY_YES", "BUY_NO", "HOLD"
   (Do not use "YES", "NO", "Buy Yes", or other variants.)
+- "confidence_score": a JSON number between 0 and 1 (e.g. 0.72). Never a string like "high" or "medium-high".
+- "estimated_probability": a JSON number between 0 and 1 — your estimate of P(YES resolves true). Required.
+- "reasoning": a single string, 50–100 words. Keep it concise so it fits well within the response budget.
 
 Valid minimal example:
-{"reasoning":"Brief evidence-based rationale here.","confidence_score":0.68,"estimated_probability":0.57,"recommendation":"BUY_YES"}"""
+{"recommendation":"BUY_YES","confidence_score":0.68,"estimated_probability":0.57,"reasoning":"Brief evidence-based rationale here."}"""
 
     RESEARCH_SYSTEM_PROMPT = """You are a research manager for short-horizon prediction-market trading.
 Your job is to summarize the setup and assign a structured portfolio-style rating.
@@ -2672,7 +2675,7 @@ CURRENT MARKET PRICE: YES = ${current_yes_price:.2f} (implies {current_yes_price
 Based on your analysis, estimate the TRUE probability and recommend a trade.
 Remember: The market price may be wrong due to sentiment, bias, or incomplete information.
 
-Reply with only the JSON object required by the system message (four keys: reasoning, confidence_score, estimated_probability, recommendation)."""
+Reply with only the JSON object required by the system message — decision fields first, in this order: recommendation, confidence_score, estimated_probability, reasoning."""
         
         return prompt
 
@@ -3160,7 +3163,7 @@ Reply with only the JSON object required by the system message (four keys: reaso
             r'"(reasoning|confidence_score|estimated_probability|recommendation)"\s*:'
         )
         matches = list(key_pat.finditer(cleaned))
-        if len(matches) < 4:
+        if not matches:
             return None
 
         extracted: Dict[str, Any] = {}
@@ -3171,27 +3174,32 @@ Reply with only the JSON object required by the system message (four keys: reaso
             raw_value = cleaned[value_start:value_end].strip().rstrip(",").strip()
             extracted[key] = raw_value
 
-        if set(extracted) != {
-            "reasoning",
-            "confidence_score",
-            "estimated_probability",
-            "recommendation",
-        }:
+        # Decision-first salvage: the schema emits recommendation/confidence_score/
+        # estimated_probability BEFORE reasoning, so a response truncated mid-reasoning
+        # (the dominant max_tokens failure) still carries a complete, usable decision.
+        # reasoning is therefore OPTIONAL here — recover it if present, otherwise mark
+        # it truncated. The three decision fields are required.
+        decision_keys = ("recommendation", "confidence_score", "estimated_probability")
+        if not all(k in extracted for k in decision_keys):
             return None
 
-        reasoning = self._strip_wrapping_json_string(str(extracted["reasoning"]))
         recommendation = self._strip_wrapping_json_string(str(extracted["recommendation"]))
         conf_raw = self._strip_wrapping_json_string(str(extracted["confidence_score"]))
         prob_raw = self._strip_wrapping_json_string(str(extracted["estimated_probability"]))
+        reasoning = self._strip_wrapping_json_string(str(extracted.get("reasoning", "")))
+        if not reasoning:
+            reasoning = "[truncated: decision recovered from partial response]"
 
         conf = self._coerce_confidence_score(conf_raw)
         prob = self._parse_probability_scalar(prob_raw)
-        if not reasoning or prob is None:
+        if not recommendation or prob is None:
             return None
 
         logger.warning(
-            "Recovered malformed AI JSON for market %s via four-key salvage parser",
+            "Recovered AI decision for market %s via salvage parser (%d/4 keys, reasoning=%s)",
             market_id,
+            len(extracted),
+            "present" if extracted.get("reasoning") else "truncated",
         )
         return {
             "reasoning": reasoning,
@@ -3432,7 +3440,7 @@ async def run_minimax_live_probe(
     prompt = (
         "Diagnostic: hypothetical market — fair coin flip for heads. "
         "Current YES price 0.50. Output only the JSON object required by the system message "
-        "(reasoning, confidence_score, estimated_probability, recommendation)."
+        "(recommendation, confidence_score, estimated_probability, reasoning)."
     )
     t0 = time.time()
     try:
