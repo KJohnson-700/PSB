@@ -339,6 +339,11 @@ strategies:
     ai_confidence_threshold: 0.6
     neutral_15m_routes_to_ai: true
     btc_ai_async_broker: true
+    # Orphan fix: let a market with a live broker decision re-reach the consume
+    # point even after it leaves the borderline band / timing window, bypassing
+    # the per-scan AI-call budget (consume is free). Fixes ~81% age_sweep where
+    # resolved decisions were never re-claimed. Opt-out: set false.
+    btc_ai_claim_pending_decisions: true
     max_ai_calls_per_scan: 5
     ai_call_timeout_sec: 15
     ai_decision_timeout_sec: 90

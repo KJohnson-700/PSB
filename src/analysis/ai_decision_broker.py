@@ -298,6 +298,22 @@ class AIDecisionBroker:
         del self._decisions[key]
         return pd.ai_decision
 
+    def has_live_decision(self, strategy: str, market_id: str) -> bool:
+        """True if any PENDING/IN_FLIGHT/RESOLVED decision exists for this market
+        (any lane/action). Lets a strategy keep a candidate flowing back to the
+        consume point even after it drops out of the gate's eligibility band/timing
+        window — the dominant orphan cause (resolved decisions never re-claimed).
+        Does NOT trigger a new AI call; it only signals 'a decision is in flight or
+        ready for this market, route it to get_resolved instead of dropping it.'"""
+        mid = str(market_id)
+        strat = str(strategy)
+        for key, pd in self._decisions.items():
+            if pd.state in (STATE_PENDING, STATE_INFLIGHT, STATE_RESOLVED):
+                # key = (strategy, market_id, lane_id, action)
+                if str(key[0]) == strat and str(key[1]) == mid:
+                    return True
+        return False
+
     def sweep_expired(self, open_position_ids: Optional[set[str]] = None) -> None:
         """Once-per-cycle housekeeping. Removes EXPIRED entries (defensive — most
         are removed at get_resolved time), ages out stale RESOLVED entries, and

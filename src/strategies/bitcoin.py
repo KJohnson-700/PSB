@@ -2934,6 +2934,22 @@ class BitcoinStrategy:
             # latency can consume most of a 60s unified cycle. 15m keeps AI for
             # borderline edge or low-confidence neutral HTF setups.
             _ai_updown_5m = is_updown and is_5m and self.use_ai_updown_5m
+            # Orphan fix (2026-06-10): a market that already has a live broker
+            # decision (PENDING/IN_FLIGHT/RESOLVED) must keep flowing back to the
+            # consume point even after it drops out of the borderline band / timing
+            # window — else the ready decision ages out unconsumed (~81% age_sweep,
+            # only 19% of AI decisions were being used). Consuming is free (no new
+            # AI call) so it also bypasses the per-scan call budget. The decision
+            # itself is still validated for price_drift/edge_flip at get_resolved.
+            # Opt-out: btc_ai_claim_pending_decisions: false.
+            _broker_has_live = (
+                self.ai_broker is not None
+                and bool(self.config.get("btc_ai_async_broker", False))
+                and bool(self.config.get("btc_ai_claim_pending_decisions", True))
+                and is_updown
+                and _updown_tf != "5m"
+                and self.ai_broker.has_live_decision("bitcoin", str(market.id))
+            )
             _ai_updown_15m_borderline = (
                 is_updown
                 and _updown_tf != "5m"
@@ -2943,14 +2959,19 @@ class BitcoinStrategy:
                         and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                     )
                     or _needs_ai_for_low_conf_neutral_15m
+                    or _broker_has_live
                 )
             )
             if (
-                (_ai_updown_5m or (_ai_updown_15m_borderline and _timing_window_open))
+                (
+                    _ai_updown_5m
+                    or (_ai_updown_15m_borderline and _timing_window_open)
+                    or _broker_has_live
+                )
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
                 and self.ai_agent.is_available()
-                and ai_calls < self.max_ai_calls_per_scan
+                and (ai_calls < self.max_ai_calls_per_scan or _broker_has_live)
                 # 5m never calls AI — quant only. AI gate is 15m/1h.
                 and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
             ):
@@ -3036,7 +3057,11 @@ class BitcoinStrategy:
                         require_shadow_portfolio=_require_shadow,
                         veto_only=_veto_only,
                     )
-                ai_calls += 1
+                # Consuming a ready broker decision is free (no API call) — don't
+                # charge the per-scan AI-call budget for it, or large consume volume
+                # would starve NEW enqueues. Only real calls (sync) / first enqueues count.
+                if _broker_state != "resolved":
+                    ai_calls += 1
                 ai_used = True
                 self._log_decision_layer(
                     market=market, window=_window, quant_action=action,
