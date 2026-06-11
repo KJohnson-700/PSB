@@ -1730,9 +1730,16 @@ ai:
   provider_chain:
   - name: minimax
     type: minimax
-    model: MiniMax-M2.7-highspeed
+    model: MiniMax-M3-highspeed
     api_key_secret: MINIMAX_API_KEY
     json_mode: true
+    # M3-highspeed scoping (2026-06-10): per-provider output budget so the
+    # model's reasoning/thinking blocks can't exhaust the global 1500 cap
+    # before it emits the JSON answer (that truncation = silent parse-fail =
+    # lost AI decision). Set to 4500 (M3-highspeed confirmed 4000+ capacity;
+    # base M3 docs cite 16-32K, so headroom exists if the highspeed cap allows).
+    # Only overrides minimax; fallbacks keep 1500.
+    max_tokens: 4500
     timeout_seconds: 120
     cooldown_on_429_seconds: 60
   - name: ollama_local

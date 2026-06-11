@@ -3038,7 +3038,10 @@ Reply with only the JSON object required by the system message (four keys: reaso
                 response = await asyncio.wait_for(
                     client.messages.create(
                         model=model,
-                        max_tokens=self.max_tokens,
+                        # Per-provider output budget (config: provider_chain.minimax.max_tokens)
+                        # so M3's thinking blocks don't exhaust the global 1500 cap before
+                        # the JSON answer. Falls back to global when unset.
+                        max_tokens=self._provider_max_tokens(provider_config),
                         system=system_prompt or self.SYSTEM_PROMPT,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=self.temperature,
