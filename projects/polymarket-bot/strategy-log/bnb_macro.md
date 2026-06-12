@@ -12,6 +12,33 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-12 — REJECTED before rollout: 5m BUY_YES hold+trail
+
+- **What changed:** No live config change remains. A temporary `bnb_macro` 5m `up` / `BUY_YES` hold+trail override was considered, then removed before rollout.
+- **Why:** Operator is skeptical that hold behavior may have broken the bot, so this is deliberately narrow. Recent settled exit policy since `2026-06-11` showed `bnb_macro|5m|BUY_YES` as one of only two current drift lanes clearing the sample floor: `n=29`, held WR `59%`, realized WR `48%`, gap `+$27.8`.
+- **Hypothesis:** Rejected. The better next step is to inspect stop-cut recoverable winners vs true bad entries without reintroducing hold-to-resolution.
+- **Expected outcome:** No behavior change from this entry.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌` before rollout.
+
+### 2026-06-12 — Targeted 1h composite floor to relieve starvation
+
+- **What changed:** Added `updown_composite.strategy_window_min_scores.bnb_macro.1h: 0.56` and taught the shared scorer to apply strategy/window composite floor overrides.
+- **Why:** Overnight diagnostics showed BNB 1h candidates reaching the composite gate and skipping on `composite_score_below_floor`, while settled BNB 1h `lane_min_edge` ghosts were strongest on BUY_YES price bands. This does not reopen BNB 15m BUY_NO.
+- **Hypothesis:** BNB 1h candidates with mid/high composite scores can enter at tuning size without lowering global composite floors.
+- **Expected outcome:** BNB 1h starvation decreases; BNB 15m BUY_NO continues to skip on `lane_min_edge`.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed BNB 1h trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-12 — Controlled BNB 15m BUY_YES reopen, BUY_NO stays disabled
+
+- **What changed:** In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), reopened only BNB 15m `up`/`BUY_YES`: `by_tf.15m.min_edge 0.50 -> 0.09` and canonical `entry_policy.window_side_overrides.15m.up.min_edge 0.50 -> 0.09` with `size_multiplier: 0.3`. BNB 15m `down`/`BUY_NO` remains disabled at `min_edge: 0.50`.
+- **Why:** The prior both-side 15m drop was based on older settings and a mixed-side result. Post-new-settings settled ghosts showed `BUY_YES lane_min_edge` remained strong (`post 2026-06-11: n=767, WR 65.2%, positive counterfactual`), while `BUY_NO lane_min_edge` was weak/negative (`n=694, WR 50.9%, negative counterfactual`) and broad `BUY_YES ai_none_marginal_threshold` remained negative.
+- **Hypothesis:** A small-size BUY_YES-only forward test recovers the positive BNB 15m long cohort without reopening the weak short side.
+- **Expected outcome:** BNB 15m BUY_YES entries appear at tuning size; BNB 15m BUY_NO continues to skip on `lane_min_edge`.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed BNB 15m BUY_YES trades after rollout.
+- **Status:** `pending`; revert `15m.up.min_edge` to `0.50` if the post-change closed cohort is negative.
+
 ### 2026-06-12 — Enforce BNB per-strategy cap and active 15m drop
 
 - **What changed:** Fixed `RiskManager.can_trade(strategy=...)` to enforce `strategies.bnb_macro.max_concurrent_positions` before order placement. Also aligned `bnb_macro.entry_policy.window_side_overrides.15m` with the documented `by_tf.15m` DROP setting by setting both 15m `up` and `down` active min-edge to `0.50`. Added regression coverage in [tests/test_risk_manager_hardening.py](/Users/mainfolder/Documents/psb-main%201/tests/test_risk_manager_hardening.py) and [tests/test_lane_entry_policy.py](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_entry_policy.py).

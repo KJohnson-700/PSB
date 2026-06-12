@@ -8,6 +8,74 @@
 
 ---
 
+## 2026-06-12 — REVERTED Codex overnight guard/stop changes + per-lane-direction sit-outs
+
+**Operator review of overnight session.** The overnight session (`test_20260612_062417`) closed net **+$77.51** but regressed late; Codex attributed it to a "cascading stop loss" on correlated baskets and shipped (a) a new `correlation_entry_guard` pre-entry gate and (b) widened 15m/1h stops `0.15 -> 0.20`. Review disagreed with both.
+
+**Reverted — `correlation_entry_guard` (removed entirely):** `src/analysis/circuit_breakers.py`, `src/main.py`, `tests/test_circuit_breakers.py` restored to checkpoint `558ce28`; config block deleted. Reasons: (1) it is a new restrictive entry gate, against the calibration-phase rule (increase frequency, no new gates); (2) it caps the most profitable side — session BUY_YES was +$72.16 net (BUY_NO +$5.35); (3) it was reactive to a transient `-$6.15` mid-session snapshot of `test_20260612_123131`, which actually **closed +$32.22**.
+
+**Reverted — stop widening (`0.20 -> 0.15`, all 26 lanes):** excursion shadow (opened >= 06-11) shows the widening is near-no-op: of 484 positions dipping past -15%, only **10** sit in the (-20%,-15%] band where 20% changes the outcome; **474** dip past -20% anyway and **269 of those (57%) would recover to TP**. Stop *width* in 15-20% is not the lever; the tight stop cutting recoverable winners is — separate question, deferred. Checkpoint 15% stops restored.
+
+**Diagnosis correction:** loss driver is real (79 stops -$259 vs 59 TP +$340) but the cause is **per-(lane,window,side) wrong-direction admission**, not correlation clustering.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) — per-lane-direction sit-outs (06-12-only data, pre-flip stragglers excluded):**
+- **eth_macro 15m BUY_NO**: `entry_policy.window_side_overrides.15m.down.min_edge 0.1 -> 0.50` (sit out). Current-era n=23, 35% WR, -$12.60; eth 15m **BUY_YES** is +$21.72 @ 50% (left at 0.11).
+- **xrp_macro 15m BUY_NO**: `15m.down.min_edge 0.06 -> 0.50` + legacy `by_tf.15m.min_edge_buy_no 0.06 -> 0.50`. n=20, 30% WR, -$7.10; lane trades only NO and is -EV.
+
+**Already handled (no action):** eth/bnb 5m BUY_NO already flipped to long (`eth_5m_buy_no_flip_to_yes` / `buy_no_5m_flip_to_yes`); the 2-day "losses" there were pre-flip stragglers — flipped long lanes are +$32.82 / +$9.47 on 06-12.
+
+**Not touched (deliberate):** bitcoin 15m BUY_YES (-$10 on 06-12 but +$38.87 over 2 days, n=101, and standing don't-touch-BTC rule); sol 15m BUY_YES + eth 1h BUY_YES (n=4 each, too thin — watch).
+
+**Validation:** `resolve_lane_entry_policy` confirms eth/xrp 15m down -> 0.50 (disabled; max edge ~0.15) with winning sides unchanged. `pytest tests/test_circuit_breakers.py tests/test_sol_macro.py tests/test_lane_entry_policy.py` -> 119 passed. NEEDS RESTART; review eth/xrp 15m after 15+ closed post-change trades. Forward-test only (admission change → ghost-validatable).
+
+## 2026-06-12 — Correlated basket pre-entry guard after bad local session
+
+**Incident:** Local session `test_20260612_123131` started stacking correlated crypto up/down positions before the existing stop-cascade breaker had stop-loss evidence to react. At the time reviewed, the session showed `19` entries, `16` exits, `3` open positions, realized PnL about `-$6.15`, and stop exits were the loss driver. Journal annotations were already flagging correlated exposure, but annotations do not block execution.
+
+**Root issue:** `correlation_stop_halt` is reactive: it blocks future same-side entries after clustered stop exits. It did not prevent the initial same-side basket across overlapping short windows.
+
+**[`src/analysis/circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** added `correlation_entry_guard`, a pre-entry guard that blocks new same-side crypto up/down entries when open exposure is already concentrated: max `4` same-side crypto positions, max `3` same-side short-window positions, and max `2` same-side positions resolving at the same timestamp.
+
+**Why this fix:** this is a portfolio-risk control, not an exit-hold experiment and not a lane threshold guess. It targets the observed failure mode where multiple correlated positions are admitted before stop-loss circuit breakers can fire.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_circuit_breakers.py tests/test_strategy_execution_drivers.py tests/test_risk_manager_hardening.py` -> `48 passed`.
+
+## 2026-06-12 — REJECTED before rollout: BNB 5m BUY_YES + ETH 15m BUY_NO hold+trail
+
+**Operator concern:** hold-to-resolution may be what broke the bot. A temporary two-lane hold+trail test was considered, then rejected before rollout because it reintroduced the exact mechanism under suspicion.
+
+**Why:** Latest local session `test_20260612_062417` peaked at `+$112.93` and later drew down to `+$77.51`; the last 18 exits were `-$19.20`, with `updown_stop_loss` accounting for `13` exits / `-$31.72` while take-profit still added `+$12.51`. Recent settled exit policy since `2026-06-11` showed only two drift lanes clearing the sample floor: `bnb_macro|5m|BUY_YES` (`n=29`, gap `+$27.8`) and `eth_macro|15m|BUY_NO` (`n=23`, gap `+$20.6`).
+
+**Decision:** no hold/trail override was left enabled. `regime_conditioned_exits.enabled` remains `false`; all lanes remain no-hold.
+
+**Better next step:** use `trades_settled.jsonl` / `exit_excursion_shadow.jsonl` to separate stop-cut recoverable winners from true bad entries, then tune stop shape or entry admission by lane. Exits are not ghost-validatable.
+
+## 2026-06-12 — BNB/DOGE 1h composite starvation relief
+
+**Why:** Overnight session diagnostics showed BNB 1h and DOGE 1h candidates still reaching the composite gate and then skipping on `composite_score_below_floor`. This was separate from BNB 15m, where current starvation is mostly BUY_NO and intentionally blocked.
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):** Added `updown_composite.strategy_window_min_scores` support so selected strategy/window pairs can use a final composite floor without lowering global floors or changing other lanes.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Added targeted 1h floors: `bnb_macro.1h: 0.56`, `doge_macro.1h: 0.50`. BNB 15m BUY_NO remains disabled at `0.50`; hold-to-resolution remains off; `exposure.loss_kill_switch_enabled` remains `false`.
+
+**Validation target:** after restart, BNB/DOGE 1h should no longer starve purely on composite floor. Review after at least 15 closed affected 1h trades per lane; revert or retune if the opened cohort is negative.
+
+## 2026-06-12 — 15m/1h stop restored to 20%
+
+**Why:** New local session `test_20260612_062417` stayed net positive but regressed late: last 18 exits were about `-$19`, dominated by alt 15m/1h stop-loss churn. The current simplified exit pass had pushed nearly every alt 15m/1h lane to `updown_stop_loss_pct: 0.15`.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** widened 15m/1h stop overrides from `0.15 -> 0.20` for BTC BUY_YES plus alt `sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`, `doge_macro`, and `bnb_macro`; 5m lanes remain untouched. Hold-to-resolution remains off. `exposure.loss_kill_switch_enabled` remains `false`.
+
+**Validation target:** after restart, confirm no `updown_hold_winners_to_resolution: true` and 15m/1h stop resolves to 20%. Forward-test only; review after another 50-100 closed trades.
+
+## 2026-06-12 — DOGE 5m flip precedence + BNB 15m BUY_YES-only retest
+
+**[`src/strategies/sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py):** Added `_should_suppress_native_5m_buy_no()` so `disable_buy_no_5m_native` does not preempt an explicit `buy_no_5m_flip_to_yes` setting. This keeps native short suppression available for lanes that want to sit out, while allowing DOGE's intended 5m short-to-long inversion to reach the existing flip logic. Regression added in [`tests/test_sol_macro.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_sol_macro.py).
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** Reopened **BNB 15m BUY_YES only** at tuning size (`15m.up.min_edge 0.50 -> 0.09`, `size_multiplier: 0.3`) in both legacy `by_tf` and canonical `entry_policy`. BNB 15m BUY_NO remains disabled at `0.50`. Regression updated in [`tests/test_lane_entry_policy.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_entry_policy.py).
+
+**Strategy logs:** Added matching pending entries to [`projects/polymarket-bot/strategy-log/doge_macro.md`](/Users/mainfolder/Documents/psb-main%201/projects/polymarket-bot/strategy-log/doge_macro.md) and [`projects/polymarket-bot/strategy-log/bnb_macro.md`](/Users/mainfolder/Documents/psb-main%201/projects/polymarket-bot/strategy-log/bnb_macro.md). NEEDS RESTART; outcomes pending 15+ closed affected trades.
+
 ## 2026-06-12 — Alt 1h price-band entry lane + alt AI made calibration-only
 
 **Two operator-requested changes, then restart.**

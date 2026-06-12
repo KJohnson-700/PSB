@@ -215,9 +215,10 @@ def test_sol_legacy_policy_uses_by_tf_thresholds_and_windows():
     assert policy_15m_down["entry_window_max"] == 32.0
 
 
-def test_bnb_15m_drop_setting_is_active_in_canonical_entry_policy():
+def test_bnb_15m_buy_yes_reopen_keeps_buy_no_disabled_in_canonical_policy():
     cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
+    bnb_15m = cfg["strategies"]["bnb_macro"]["by_tf"]["15m"]
 
     up_policy = resolve_lane_entry_policy(
         strategy_name="bnb_macro",
@@ -234,5 +235,8 @@ def test_bnb_15m_drop_setting_is_active_in_canonical_entry_policy():
         legacy_policy={"min_edge": 0.0},
     )
 
-    assert up_policy.min_edge == 0.50
+    assert bnb_15m["min_edge"] == 0.09
+    assert bnb_15m["min_edge_buy_no"] == 0.50
+    assert up_policy.min_edge == 0.09
+    assert up_policy.size_multiplier == 0.3
     assert down_policy.min_edge == 0.50

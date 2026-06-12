@@ -2069,6 +2069,12 @@ class SolMacroStrategy:
             return True
         return False
 
+    def _should_suppress_native_5m_buy_no(self) -> bool:
+        """Honor 5m BUY_NO suppression only when the inversion flip is not enabled."""
+        return bool(self.config.get("disable_buy_no_5m_native", False)) and not bool(
+            self.config.get("buy_no_5m_flip_to_yes", False)
+        )
+
     def _alt_1h_alignment_blocks_entry(
         self,
         *,
@@ -2167,7 +2173,22 @@ class SolMacroStrategy:
             basis_relax_max_bps=basis_relax_max_bps,
         )
 
-    def _updown_composite_floor(self, *, lane: str, quant_confidence: Optional[float] = None) -> float:
+    def _updown_composite_floor(
+        self,
+        *,
+        lane: str,
+        window_size: Optional[str] = None,
+        quant_confidence: Optional[float] = None,
+    ) -> float:
+        window_overrides = self.updown_composite_cfg.get("strategy_window_min_scores", {})
+        strategy_overrides = {}
+        if isinstance(window_overrides, dict):
+            strategy_overrides = window_overrides.get(self._signal_strategy_name, {}) or {}
+        if isinstance(strategy_overrides, dict) and window_size:
+            override = strategy_overrides.get(str(window_size))
+            if override is not None:
+                return float(override)
+
         floor = self.default_min_composite_score
         if quant_confidence is not None and float(quant_confidence) < self.ai_confidence_threshold:
             floor = max(floor, self.low_confidence_min_composite_score)
@@ -2196,6 +2217,7 @@ class SolMacroStrategy:
         minutes_left: float,
         yes_price: float,
         lane: str,
+        window_size: Optional[str] = None,
         action: Optional[str] = None,
         btc_1h_regime: Optional[str] = None,
     ) -> CompositeScore:
@@ -2208,7 +2230,11 @@ class SolMacroStrategy:
             oracle=oracle,
             minutes_to_resolution=minutes_left,
             yes_price=yes_price,
-            floor=self._updown_composite_floor(lane=lane, quant_confidence=confidence),
+            floor=self._updown_composite_floor(
+                lane=lane,
+                window_size=window_size,
+                quant_confidence=confidence,
+            ),
             action=action,
             btc_1h_regime=btc_1h_regime,
             regime_action_gate_enabled=bool(
@@ -3202,7 +3228,7 @@ class SolMacroStrategy:
                 is_updown
                 and _updown_tf == "5m"
                 and action == "BUY_NO"
-                and bool(self.config.get("disable_buy_no_5m_native", False))
+                and self._should_suppress_native_5m_buy_no()
             ):
                 _bump_skip("buy_no_5m_native_suppressed")
                 _log_skip_reject(
@@ -5179,6 +5205,7 @@ class SolMacroStrategy:
                     minutes_left=_eval_left,
                     yes_price=yes_price,
                     lane=_updown_lane,
+                    window_size=_updown_tf,
                     action=action,
                     btc_1h_regime=btc_1h_regime,
                 )

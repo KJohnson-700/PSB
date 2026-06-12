@@ -6,6 +6,204 @@
 
 ## Open Queue
 
+### 2026-06-12T20:47:31+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T20:35:30+00:00 - Exit-policy drift
+
+- **Source:** `lane_exit_policy`
+- **Status:** `pending_review`
+
+⚠️ **Exit-policy drift** — live config disagrees with settled data:
+• `xrp_macro|15m|BUY_NO` (n=309): held 53% / realized 40%, gap +302.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_NO` (n=213): held 55% / realized 38%, gap +288.1 — **data wants hold+trail**, live is tight TP/SL
+• `bnb_macro|5m|BUY_YES` (n=327): held 53% / realized 44%, gap +270.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_NO` (n=467): held 46% / realized 39%, gap +209.1 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|5m|BUY_YES` (n=326): held 52% / realized 57%, gap +141.9 — **data wants hold+trail**, live is tight TP/SL
+• `doge_macro|5m|BUY_YES` (n=140): held 46% / realized 34%, gap +98.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_NO` (n=268): held 44% / realized 41%, gap +93.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_YES` (n=278): held 51% / realized 48%, gap +89.3 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|15m|BUY_YES` (n=254): held 54% / realized 68%, gap +54.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_YES` (n=40): held 62% / realized 48%, gap +48.5 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|1h|BUY_NO` (n=31): held 58% / realized 36%, gap +30.0 — **data wants hold+trail**, live is tight TP/SL
+• `hype_lag|15m|BUY_YES` (n=56): held 77% / realized 100%, gap +25.8 — **data wants hold+trail**, live is tight TP/SL
+• `hype_macro|15m|BUY_YES` (n=457): held 53% / realized 59%, gap +19.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|1h|BUY_YES` (n=24): held 54% / realized 42%, gap +16.3 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|1h|BUY_YES` (n=50): held 54% / realized 30%, gap +15.4 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_YES` (n=103): held 56% / realized 68%, gap +9.8 — **data wants hold+trail**, live is tight TP/SL
+• `eth_lag|15m|SELL_YES` (n=27): held 74% / realized 100%, gap +9.7 — **data wants hold+trail**, live is tight TP/SL
+_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._
+
+- **drift_lanes:** `17`
+- **artifact:** `data/calibration/lane_exit_policy.json`
+- **Links:** [[PSB Active Recommendations]], [[lane_exit_policy]]
+### 2026-06-12T20:33:48+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `2`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T19:38:51+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `2`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T19:32:19+00:00 - Exit-policy drift
+
+- **Source:** `lane_exit_policy`
+- **Status:** `pending_review`
+
+⚠️ **Exit-policy drift** — live config disagrees with settled data:
+• `xrp_macro|15m|BUY_NO` (n=309): held 53% / realized 40%, gap +302.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_NO` (n=213): held 55% / realized 38%, gap +288.1 — **data wants hold+trail**, live is tight TP/SL
+• `bnb_macro|5m|BUY_YES` (n=327): held 53% / realized 44%, gap +270.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_NO` (n=467): held 46% / realized 39%, gap +209.1 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|5m|BUY_YES` (n=326): held 52% / realized 57%, gap +141.9 — **data wants hold+trail**, live is tight TP/SL
+• `doge_macro|5m|BUY_YES` (n=140): held 46% / realized 34%, gap +98.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_NO` (n=268): held 44% / realized 41%, gap +93.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_YES` (n=278): held 51% / realized 48%, gap +89.3 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|15m|BUY_YES` (n=254): held 54% / realized 68%, gap +54.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_YES` (n=40): held 62% / realized 48%, gap +48.5 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|1h|BUY_NO` (n=31): held 58% / realized 36%, gap +30.0 — **data wants hold+trail**, live is tight TP/SL
+• `hype_lag|15m|BUY_YES` (n=56): held 77% / realized 100%, gap +25.8 — **data wants hold+trail**, live is tight TP/SL
+• `hype_macro|15m|BUY_YES` (n=457): held 53% / realized 59%, gap +19.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|1h|BUY_YES` (n=24): held 54% / realized 42%, gap +16.3 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|1h|BUY_YES` (n=50): held 54% / realized 30%, gap +15.4 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_YES` (n=103): held 56% / realized 68%, gap +9.8 — **data wants hold+trail**, live is tight TP/SL
+• `eth_lag|15m|SELL_YES` (n=27): held 74% / realized 100%, gap +9.7 — **data wants hold+trail**, live is tight TP/SL
+_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._
+
+- **drift_lanes:** `17`
+- **artifact:** `data/calibration/lane_exit_policy.json`
+- **Links:** [[PSB Active Recommendations]], [[lane_exit_policy]]
+### 2026-06-12T17:05:48+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T15:03:40+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T14:22:02+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `1`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T13:34:10+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+
+- **messages:** `2`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T13:33:23+00:00 - Exit-policy drift
+
+- **Source:** `lane_exit_policy`
+- **Status:** `pending_review`
+
+⚠️ **Exit-policy drift** — live config disagrees with settled data:
+• `xrp_macro|15m|BUY_NO` (n=309): held 53% / realized 40%, gap +302.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_NO` (n=213): held 55% / realized 38%, gap +288.1 — **data wants hold+trail**, live is tight TP/SL
+• `bnb_macro|5m|BUY_YES` (n=327): held 53% / realized 44%, gap +270.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_NO` (n=467): held 46% / realized 39%, gap +209.1 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|5m|BUY_YES` (n=326): held 52% / realized 57%, gap +141.9 — **data wants hold+trail**, live is tight TP/SL
+• `doge_macro|5m|BUY_YES` (n=140): held 46% / realized 34%, gap +98.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_NO` (n=268): held 44% / realized 41%, gap +93.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_YES` (n=278): held 51% / realized 48%, gap +89.3 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|15m|BUY_YES` (n=254): held 54% / realized 68%, gap +54.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_YES` (n=40): held 62% / realized 48%, gap +48.5 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|1h|BUY_NO` (n=31): held 58% / realized 36%, gap +30.0 — **data wants hold+trail**, live is tight TP/SL
+• `hype_lag|15m|BUY_YES` (n=56): held 77% / realized 100%, gap +25.8 — **data wants hold+trail**, live is tight TP/SL
+• `hype_macro|15m|BUY_YES` (n=457): held 53% / realized 59%, gap +19.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|1h|BUY_YES` (n=24): held 54% / realized 42%, gap +16.3 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|1h|BUY_YES` (n=50): held 54% / realized 30%, gap +15.4 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_YES` (n=103): held 56% / realized 68%, gap +9.8 — **data wants hold+trail**, live is tight TP/SL
+• `eth_lag|15m|SELL_YES` (n=27): held 74% / realized 100%, gap +9.7 — **data wants hold+trail**, live is tight TP/SL
+_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._
+
+- **drift_lanes:** `17`
+- **artifact:** `data/calibration/lane_exit_policy.json`
+- **Links:** [[PSB Active Recommendations]], [[lane_exit_policy]]
+### 2026-06-12T08:55:06+00:00 - Self-healing escalation
+
+- **Source:** `self_healing`
+- **Status:** `pending_review`
+
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+self-heal low strategy_diagnosis [cold_lane:structural] editor_action=inspect_rejection_distribution ghost_validatable=True: Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.
+...+1 more suppressed (max_notify_per_run=3)
+
+- **messages:** `4`
+- **queue_dir:** `data/learning/escalations`
+- **Links:** [[PSB Active Recommendations]], [[self_healing]]
+### 2026-06-12T08:47:40+00:00 - Exit-policy drift
+
+- **Source:** `lane_exit_policy`
+- **Status:** `pending_review`
+
+⚠️ **Exit-policy drift** — live config disagrees with settled data:
+• `xrp_macro|15m|BUY_NO` (n=309): held 53% / realized 40%, gap +302.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_NO` (n=213): held 55% / realized 38%, gap +288.1 — **data wants hold+trail**, live is tight TP/SL
+• `bnb_macro|5m|BUY_YES` (n=327): held 53% / realized 44%, gap +270.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_NO` (n=467): held 46% / realized 39%, gap +209.1 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|5m|BUY_YES` (n=326): held 52% / realized 57%, gap +141.9 — **data wants hold+trail**, live is tight TP/SL
+• `doge_macro|5m|BUY_YES` (n=140): held 46% / realized 34%, gap +98.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_NO` (n=268): held 44% / realized 41%, gap +93.2 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|15m|BUY_YES` (n=278): held 51% / realized 48%, gap +89.3 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|15m|BUY_YES` (n=254): held 54% / realized 68%, gap +54.3 — **data wants hold+trail**, live is tight TP/SL
+• `bitcoin|1h|BUY_YES` (n=40): held 62% / realized 48%, gap +48.5 — **data wants hold+trail**, live is tight TP/SL
+• `xrp_macro|1h|BUY_NO` (n=31): held 58% / realized 36%, gap +30.0 — **data wants hold+trail**, live is tight TP/SL
+• `hype_lag|15m|BUY_YES` (n=56): held 77% / realized 100%, gap +25.8 — **data wants hold+trail**, live is tight TP/SL
+• `hype_macro|15m|BUY_YES` (n=457): held 53% / realized 59%, gap +19.7 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|1h|BUY_YES` (n=24): held 54% / realized 42%, gap +16.3 — **data wants hold+trail**, live is tight TP/SL
+• `eth_macro|1h|BUY_YES` (n=50): held 54% / realized 30%, gap +15.4 — **data wants hold+trail**, live is tight TP/SL
+• `sol_macro|15m|BUY_YES` (n=103): held 56% / realized 68%, gap +9.8 — **data wants hold+trail**, live is tight TP/SL
+• `eth_lag|15m|SELL_YES` (n=27): held 74% / realized 100%, gap +9.7 — **data wants hold+trail**, live is tight TP/SL
+_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._
+
+- **drift_lanes:** `17`
+- **artifact:** `data/calibration/lane_exit_policy.json`
+- **Links:** [[PSB Active Recommendations]], [[lane_exit_policy]]
 ### 2026-06-12T07:58:38+00:00 - Self-healing escalation
 
 - **Source:** `self_healing`

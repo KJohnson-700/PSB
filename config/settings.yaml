@@ -111,17 +111,10 @@ trading:
     updown_stop_cents_high_entry: 0.02
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
-    # ── Regime-conditioned exits (DEFAULT OFF — forward-test only) ──
-    # Picks the hold/trail policy at exit time from (position side x BTC 1h regime).
-    # Rationale (trades_settled, recent era): on the directionally-correct buckets
-    # the tight exit captures only 8-18% of the available edge —
-    #   GREEN/LONG  held +$1050 vs realized +$85   (gave up ~92%)
-    #   RED/SHORT   held +$1394 vs realized +$255  (gave up ~82%)
-    # while FLAT/chop and counter-trend buckets do BETTER tight. So: hold+trail only
-    # when trend-side in a trending tape (LONG in BULL, SHORT in BEAR); force tight
-    # otherwise. Only the 3 hold/trail keys are touched; stops/TP/cents stay per-lane.
-    # EXIT change — ghost CANNOT validate. Flip enabled:true, then watch the
-    # GREEN/LONG + RED/SHORT held-vs-realized gap converge in trades_settled.
+    # ── Regime-conditioned exits (DISABLED) ──
+    # Historical experiment only. Operator direction as of 2026-06-12: do not
+    # reintroduce hold-to-resolution/hold+trail exits unless explicitly requested.
+    # Keep simple TP/stop behavior as the default exit model.
     regime_conditioned_exits:
       enabled: false
       trend_side_hold_winners: false
@@ -987,7 +980,11 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 120.0
           down:
-            min_edge: 0.1
+            # 2026-06-12: sit out eth 15m BUY_NO. Current-era (06-12 only, n=23)
+            # held 35% WR / -$12.60 while eth 15m BUY_YES is +$21.72 @ 50% WR.
+            # Wrong-direction lane-side; complement wins. min_edge 0.1 -> 0.50
+            # disables NO; revert to 0.1 if 15+ closed post-change YES-only trades regress.
+            min_edge: 0.50
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
@@ -1286,7 +1283,7 @@ strategies:
         entry_window_max: 4.5
       15m:
         min_edge: 0.085
-        min_edge_buy_no: 0.06
+        min_edge_buy_no: 0.50  # 2026-06-12: xrp 15m BUY_NO sat out (see entry_policy down)
         entry_window_min: 2.0
         entry_window_max: 32.0
       1h:
@@ -1438,7 +1435,10 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.06
+            # 2026-06-12: sit out xrp 15m BUY_NO. Current-era (06-12 only, n=20)
+            # held 30% WR / -$7.10; lane trades only the NO side and it is -EV.
+            # min_edge 0.06 -> 0.50 disables; revert if a +EV xrp 15m sub-band appears.
+            min_edge: 0.50
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
@@ -1697,13 +1697,12 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 10.0
       15m:
-        # 2026-06-10: DROP bnb 15m (both sides). Ghost-validated BOTH eras: both
-        # sides -EV — 06-03+ up -0.014/down -0.009; post-flip (06-10 01:05+, ghost
-        # n~1000) up -0.060/down -0.031; taken both losing (BUY_YES -$12, BUY_NO
-        # -$10). Unlike eth (flip rescues) bnb has no profitable side, so flipping
-        # can't help. min_edge prohibitive (edge caps at max_edge_updown 0.15) = lane
-        # gated off both sides. Reversible: restore 0.085/0.05. Needs restart.
-        min_edge: 0.50
+        # 2026-06-12: controlled reopen for BNB 15m BUY_YES only. The prior
+        # both-side drop was valid under older admission settings; post-change
+        # settled ghosts show BUY_YES lane_min_edge rejects positive while BUY_NO
+        # remains weak. Keep BUY_NO disabled at 0.50 and forward-test longs at
+        # tuning size; revert BUY_YES to 0.50 if 15+ closed post-change trades fail.
+        min_edge: 0.09
         min_edge_buy_no: 0.50
         entry_window_min: 2.0
         entry_window_max: 150.0
@@ -1815,13 +1814,13 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            # Keep canonical entry_policy aligned with by_tf.15m DROP setting above.
-            # Edge is capped by max_edge_updown=0.15, so 0.50 disables BNB 15m.
-            min_edge: 0.50
+            # Controlled BNB 15m BUY_YES reopen; down/BUY_NO remains disabled.
+            min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.57
             entry_window_min: 2.0
             entry_window_max: 150.0
+            size_multiplier: 0.3
           down:
             min_edge: 0.50
             entry_price_min: 0.42
@@ -1859,6 +1858,13 @@ updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
   low_confidence_min_score: 0.66
+  # Targeted starvation relief. Keep global composite floors unchanged; only
+  # reduce the final floor for these strategy/window pairs.
+  strategy_window_min_scores:
+    bnb_macro:
+      1h: 0.56
+    doge_macro:
+      1h: 0.50
   regime_action_gate_enabled: false
   regime_action_min_convergence: 0.55
 ai:

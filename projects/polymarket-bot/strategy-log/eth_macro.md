@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-12 — REJECTED before rollout: 15m BUY_NO hold+trail
+
+- **What changed:** No live config change remains. A temporary `eth_macro` 15m `down` / `BUY_NO` hold+trail override was considered, then removed before rollout.
+- **Why:** Operator is skeptical that hold behavior may have broken the bot, so this is deliberately narrow. Recent settled exit policy since `2026-06-11` showed `eth_macro|15m|BUY_NO` as one of only two current drift lanes clearing the sample floor: `n=23`, held WR `48%`, realized WR `39%`, gap `+$20.6`.
+- **Hypothesis:** Rejected. The better next step is to inspect stop-cut recoverable winners vs true bad entries without reintroducing hold-to-resolution.
+- **Expected outcome:** No behavior change from this entry.
+- **Actual outcome:** `pending`
+- **Status:** `reverted ❌` before rollout.
+
 ### 2026-06-12 — Remove residual live-entry AI blockers from alt 1h/15m quant path
 
 - **What changed:** In the shared alt macro base and [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), live-entry decision windows are empty for alts and ETH's remaining `ai_window_closed` marginal branch is guarded behind that set. ETH 1h/15m entries now proceed through quant gates only; AI remains for observer/tuning/self-healing surfaces.

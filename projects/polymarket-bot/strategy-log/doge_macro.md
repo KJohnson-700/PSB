@@ -12,6 +12,24 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-12 — Targeted 1h composite floor to relieve starvation
+
+- **What changed:** Added `updown_composite.strategy_window_min_scores.doge_macro.1h: 0.50` and taught the shared scorer to apply strategy/window composite floor overrides.
+- **Why:** Overnight diagnostics showed DOGE 1h candidates still reaching the composite gate and skipping on `composite_score_below_floor`. Settled DOGE 1h ghosts favored BUY_YES cohorts while BUY_NO buckets stayed weak/negative, so this targets 1h admission without reopening DOGE 1h shorts by side-specific gate.
+- **Hypothesis:** DOGE 1h long-side candidates can enter instead of starving on the global 0.62/0.66 composite floor.
+- **Expected outcome:** DOGE 1h starvation decreases; weak BUY_NO cohorts remain governed by existing edge/side gates.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed DOGE 1h trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-12 — Let 5m BUY_NO inversion flip run before suppression
+
+- **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), `disable_buy_no_5m_native` now suppresses native 5m `BUY_NO` only when `buy_no_5m_flip_to_yes` is false. DOGE keeps `disable_buy_no_5m_native: true` and `buy_no_5m_flip_to_yes: true`, so DOGE 5m native shorts can reach the intended inversion flip instead of being logged as `buy_no_5m_native_suppressed`.
+- **Why:** Current config intended to flip anti-selective DOGE 5m shorts to the long side, but suppression happened earlier in the shared scan path and prevented the rescue. Settled ghosts for `doge_macro|5m|buy_no_5m_native_suppressed` showed WR 55.2% on 6,988 rows with positive counterfactual value.
+- **Hypothesis:** DOGE 5m activity shifts from `buy_no_5m_native_suppressed` rejects toward flipped `BUY_YES` candidates without reopening native short exposure.
+- **Expected outcome:** DOGE 5m fills tagged with `buy_no_5m_to_yes_flip` appear; `buy_no_5m_native_suppressed` declines for DOGE while strategies without the flip can still suppress native shorts.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed DOGE 5m flipped trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-07 — 1h BUY_YES price-banded floor bump
 
 - **What changed:** DOGE 1h: `1h_buy_yes_bullish_floor_bump: 0.30`, band **0.58–0.88** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).

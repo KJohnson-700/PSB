@@ -698,6 +698,19 @@ def test_flat_btc_gate_bypass_legacy_mode_still_requires_alignment():
     assert strategy._flat_btc_gate_bypassed(action="BUY_YES", alt_1h_trend="BEARISH") is False
 
 
+def test_native_5m_buy_no_suppression_does_not_preempt_enabled_flip():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["disable_buy_no_5m_native"] = True
+    cfg["strategies"]["sol_macro"]["buy_no_5m_flip_to_yes"] = True
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._should_suppress_native_5m_buy_no() is False
+
+    cfg["strategies"]["sol_macro"]["buy_no_5m_flip_to_yes"] = False
+    strategy_without_flip = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy_without_flip._should_suppress_native_5m_buy_no() is True
+
+
 def test_alt_1h_bearish_blocks_5m_buy_yes():
     strategy = SolMacroStrategy(_make_config(), MagicMock(), MagicMock())
 
@@ -902,6 +915,31 @@ def test_updown_composite_floor_ignores_lane_and_bumps_low_confidence():
     assert strategy._updown_composite_floor(lane="default") == 0.62
     assert strategy._updown_composite_floor(lane="legacy_lane") == 0.62
     assert strategy._updown_composite_floor(lane="default", quant_confidence=0.55) == 0.66
+
+
+def test_updown_composite_floor_uses_strategy_window_override_without_low_conf_bump():
+    cfg = _make_config()
+    cfg["updown_composite"] = {
+        "default_min_score": 0.62,
+        "low_confidence_min_score": 0.66,
+        "strategy_window_min_scores": {
+            "sol_macro": {
+                "1h": 0.50,
+            },
+        },
+    }
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._updown_composite_floor(
+        lane="default",
+        window_size="1h",
+        quant_confidence=0.55,
+    ) == 0.50
+    assert strategy._updown_composite_floor(
+        lane="default",
+        window_size="15m",
+        quant_confidence=0.55,
+    ) == 0.66
 
 
 def test_sol_updown_oracle_block_is_logged_to_rejected_candidates():
