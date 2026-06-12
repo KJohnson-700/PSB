@@ -8,6 +8,88 @@
 
 ---
 
+## 2026-06-12 — Alt 1h price-band entry lane + alt AI made calibration-only
+
+**Two operator-requested changes, then restart.**
+
+**(1) Alt 1h price-band BUY_YES lane (`alt_1h_simple_long`)** — the BTC `bitcoin_1h_simple_long` pattern ported to `src/strategies/sol_macro.py` (base for sol/xrp/hype/bnb/doge). 4 touch points, default-off per alt: `__init__` flag read; force `allowed_side=LONG` on the yes_price band (~line 3150); guard the LTF skip (`and not _simple_band_long`); bypass the min_edge gate + size on flat edge, tag `alt_1h_simple_long` (~line 5070). **Enabled per ghost EV** (`rejected_candidates_settled`, 1h BUY_YES, binary payout, band 0.50-0.85): **bnb +$157/63%WR, doge +$109/60%, sol +$26/56% → ON**; **xrp −$31 (negative) + hype +$1.5 (flat) → OFF**; eth (separate file, +$10 flat) not built. 15m bleeds across alts → not built. Config: `strategies.<alt>.alt_1h_simple_long`. OFF = byte-identical. Same v1 caveat as BTC: only the big gates (1h bias/LTF/min_edge) are bypassed; momentum guards may still trim some admits.
+
+**(2) Alt AI → calibration-only (non-gating).** Operator: alt AI is for calibration, must not gate. Found two gating paths in `sol_macro.py`: the marginal AI tiebreaker (line ~4453) was **already** config-bypassed (`admit_marginal_on_quant_when_ai_disabled: true` + `decision_layer.enabled: false` → admits on quant); the **ai-hold veto** (line ~4409) was the only latent gate. Set `ai_hold_veto_ttl_sec: 300 → 0` on all 6 alts (BTC left at 300) so the veto can never fire while the AI still runs for calibration. (Correction to an earlier in-session claim that alts were actively gating — they were latent, not active.)
+
+**Validation:** `sol_macro.py` parses; `tests/test_sol_macro.py` +2 (default-off + config read); sol_macro + exit suites 129 passed; configs parse. **NEEDS RESTART.**
+
+## 2026-06-12 — Alt 1h/15m exits simplified to match BTC (stop 15%, no trail/hold)
+
+**Operator directive:** apply the BTC simplification to all alt 1h/15m lanes. **Changes (`config/settings.yaml`, `updown_overrides`):** every alt (sol/eth/xrp/hype/bnb/doge) 1h + 15m, up + down → `updown_stop_loss_pct: 0.15`; all `updown_trail_arm_pct`/`updown_trail_gap_pct` removed from those lanes; hold already false. Near-expiry mechanics (cents-stop, exit-window, in-profit tighten) preserved. **5m lanes and BTC down (0.20) untouched.** Verified: all 24 alt 1h/15m lanes resolve stop=0.15 / trail=0 / hold=False; tests 129 passed. NEEDS RESTART.
+
+**⚠️ Caveat (flagged to operator):** the 15% stop was derived from BTC excursion data (n=130) — NOT validated per-alt. XRP/HYPE/DOGE are more volatile than BTC (their prior stops were 0.17–0.32), so 15% may cut their winners harder. This is a reversible forward-test, not a proven per-asset number; re-cut each alt on `trades_settled` after a few days and widen any that bleed from premature stop-outs. Same revert contingency as BTC applies (AI back on if needed; never hold-to-resolution).
+
+## 2026-06-12 — BTC up-side stops → 15% + revert contingency
+
+**Change (`config/settings.yaml`, `trading.exit_rules.updown_overrides.bitcoin`):** BTC BUY_YES (up) stop set to **15%** for both 15m and 1h (15m was 0.28; 1h inherited the global 0.20). Down/BUY_NO side left at the global 0.20 (short-side dynamics not analyzed this round). TP stays 30%, no hold, no trail. NEEDS RESTART.
+
+**Data basis (exit-excursion sweep, `exit_excursion_shadow.jsonl`, BTC n=130 — thin, first cut):** widening the stop monotonically *hurt* avg PnL (−15%:+0.023 → −35%:−0.095) because these up/down positions are whippy — eventual winners dip a median −41% and ~quarter crater near −100% before recovering, so no stop cleanly separates winners from losers and a wider stop just books bigger losses. Tighter caps damage. Ghosts CANNOT validate this; forward-test on `trades_settled`.
+
+**⏪ REVERT CONTINGENCY (operator directive):** if this simplified config does NOT work for BTC 1h/15m, the agreed fallback is to **turn BTC 1h/15m AI assistance back ON** (revert `use_ai_updown: false → true`, `neutral_15m_routes_to_ai: false → true`, `neutral_15m_min_quant_confidence: 0.0 → 0.58`) — but **stay away from hold-to-resolution** (keep all `updown_hold_winners_to_resolution: false` and `regime_conditioned_exits.enabled: false`). I.e. AI-assisted entry is back on the table; hold-to-resolution is not.
+
+## 2026-06-12 — ALL hold-to-resolution OFF (simplify exits → entry/TP/stop only)
+
+**Operator directive:** kill all hold-to-resolution — it was over-complicating exits and overriding take-profit; get back to simple entry → exit/TP. Supersedes the regime-conditioned-exits work shipped earlier today.
+
+**Changes (`config/settings.yaml`):** all 17 per-lane `updown_hold_winners_to_resolution: true` → `false`; `regime_conditioned_exits.enabled: true → false` (+ `trend_side_hold_winners: false`). The regime-conditioned-exit *code* (`updown_exit_shared.py`) stays in place but is now inert (disabled). Verified: zero lanes hold to resolution across all assets × {5m,15m,1h} × {YES,NO} × {BULL,BEAR,RANGE,None}; every lane books at its TP (BTC 30%) or stop. NEEDS RESTART.
+
+**Exit-data note (TP/stop tuning is now the focus):** ghosts CANNOT validate exits — use `trades_settled.jsonl` + `exit_excursion_shadow.jsonl`. First cut from trades_settled (BTC, all-time): `take_profit` n=1345 +$6863 (+5.10/trade, 69% held-winners) is the engine; `updown_stop_loss` n=1571 −$6029 (−3.84/trade) is the bleeder and cut a held-winner 24% of the time (stop likely too tight — forward-test candidate). Structural ceiling: a BUY_YES at entry p gains at most (1−p)/p to resolution, so TP>30% is unreachable for entries above ~0.77; BTC BUY_YES entries are 86% below 0.50, so 30% TP is reachable ~100% — raising TP is not the lever, **stop width is**.
+
+## 2026-06-12 — BTC 1h simple-long AI clash review (config-only mitigation)
+
+**Decision:** CLASH. The new `bitcoin_1h_simple_long` lane reaches the min-edge bypass only after the in-scan BTC up/down AI routing block, so neutral/marginal 1h candidates can be AI-routed, vetoed, held, timed out, or left fail-closed before the lane tags `btc_1h_simple_long`. The later default `decision_layer` gate is not active because `ai.decision_layer.enabled: false`, but the neutral 15m/1h confirmation path remains a separate BTC AI interaction.
+
+**Config action for this test round:** BTC-only, reversible: `strategies.bitcoin.use_ai_updown: true → false`, `strategies.bitcoin.neutral_15m_routes_to_ai: true → false`, and `strategies.bitcoin.neutral_15m_min_quant_confidence: 0.58 → 0.0`. This disables the configurable BTC up/down AI decision path for 15m/1h without touching other assets or enabling 5m AI. **Residual:** code trace shows the hard-coded neutral confirmation block can still call AI for neutral non-5m candidates after the simple-lane min-edge bypass; fully isolating `bitcoin_1h_simple_long` from that path would require code, so this entry is a config-only mitigation, not a full code isolation.
+
+## 2026-06-12 — BTC 1h simple consensus-follow BUY_YES lane (DEFAULT OFF — forward-test)
+
+**Why:** Hermes/ghost review (`rejected_candidates_settled`, BTC 1h BUY_YES, binary payout, independently reconfirmed to the dollar): the lane is starved by gates, not by lack of edge. entry 0.50-0.85 = **732 trades, 65.8% WR, +$71.38**; current gated config = 130 trades, 76.9% WR, **−$1.02** (prettier, unprofitable); entry 0.15-0.50 = 29.4% WR, −$17.39 (excluded). Root cause: `est_prob` is stuck ~0.55 so the min_edge gate rejects on a broken signal, and the 4H bias resolver kills the upward lean. The +$71 comes from *following consensus price*, not the edge model.
+
+**Shipped (`src/strategies/bitcoin.py`, default-off):** new `bitcoin_1h_simple_long` lane. When enabled, BTC 1h BUY_YES with `yes_price ∈ [entry_min, entry_max]` is admitted on the band alone — forces `allowed_side=LONG` past the 4H/neutral resolver, skips the LTF late-entry gate, and bypasses the min_edge gate (sizes on a configured flat `sizing_edge`, a sizing policy NOT a fabricated est_prob — see `project_estprob_recalibration_disproven`). Macro-event + end-date safety guards still apply. Trades tagged `btc_1h_simple_long` for ghost/trade split. Four touch points: `__init__` flag read, `allowed_side` force, LTF-skip guard, min_edge bypass. **Default-off = byte-identical to today (every guard inert); NEEDS RESTART + flip `enabled: true` to forward-test.**
+
+**Honest correction to the source doc:** its "entry_price_min 0.15→0.50" change is ~a no-op live — BTC up/down markets already floor at the `entry_price_min_updown` band (0.45), not `self.entry_price_min` (0.10). The real levers were the 4H resolver + min_edge-on-broken-est_prob, which this lane bypasses.
+
+**Test plan:** flip `enabled: true`, paper ~1 week, compare live BUY_YES WR to ghost 66%. Within ~5pp → ship; way off → entry-price signal didn't replicate (ghosts are one May-2026 regime). Config: `strategies.bitcoin.bitcoin_1h_simple_long` (`config/settings.yaml`). Validation: `tests/test_bitcoin.py` +2 (default-off invariant + config read); BTC suite 85 passed, 0 regressions.
+
+## 2026-06-12 — Regime-conditioned exits (LIVE on restart) + entry-sizing fix queued NEXT
+
+**Diagnosis (trades_settled, recent era ≥06-03, classified by each asset's OWN 1h move):** the bot is now mostly on the right side of the tape, but the exits cut the winners. On the directionally-correct buckets the tight exit captured only ~15-25% of available edge — `UP/LONG` held +$870 vs realized +$150, `DOWN/SHORT` held +$1217 vs realized +$225. FLAT/chop and counter-trend buckets do *better* tight. So exit policy should be regime-conditioned, not uniformly tight or uniformly hold.
+
+**Shipped — regime-conditioned exits (was default-off; now `enabled: true`):** [`src/execution/updown_exit_shared.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/updown_exit_shared.py) picks the hold/trail dimension at exit-resolution time from `(position side × BTC 1h regime)`: hold+trail only when trend-side in a trending tape (`up`+BULL, `down`+BEAR); tight TP/SL forced otherwise. Only the 3 hold/trail keys are touched — stops/TP/cents stay per-lane. New `regime_conditioned_exits` block on `UpdownExitGlobals` + `_apply_regime_conditioned_exit`. [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py) passes the position's entry-time `btc_1h_regime` into the resolver. Config at `trading.exit_rules.regime_conditioned_exits` ([`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml)), `enabled: true`. **NEEDS RESTART to load.**
+
+**Forward-test (ghosts CANNOT validate exits):** after restart, re-cut `trades_settled.jsonl` by regime×side; success = `UP/LONG` + `DOWN/SHORT` held-vs-realized gap shrinks without FLAT/counter-trend degrading.
+
+**⏭️ NEXT — ENTRY fix (queued, do NOT lose scope):** counter-trend entries still bleed even held — `UP/SHORT` n=177 WR 31% held −$647, `DOWN/LONG` n=241 WR 37% held −$660, `FLAT/SHORT` n=208 WR 33% held −$322. Plan: **alt-native regime-conditioned SIZING penalty** (shrink, never gate) on counter-trend entries, keyed on each alt's OWN 1h trend (doctrine-clean — not BTC). Default-off, forward-test. **Sequence:** let the exit change run ~3-5 days FIRST (it already forces these tight, removing much of the held bleed), re-cut, then size. One variable at a time. See memory `project_regime_conditioned_exits_2026_06_12` + `project_counter_trend_entry_sizing_QUEUED_2026_06_12`. (Separately: Codex is investigating starved alt 1h lanes.)
+
+**Validation:** `tests/test_updown_exit_shared.py` +10 cases (6 regime×side, default-off byte-identity, unknown-regime→tight, off_trend_force_tight=false variant). Full affected suite: 62 passed.
+
+## 2026-06-12 — Self-healing scoped to active review lanes + generic Discord wake-up
+
+**Context:** Review of missed Discord recommendations showed useful `lane_exit_policy` and `self_healing` artifacts, but the old notification path either failed Discord posts or sent too much diagnostic content. Self-healing was also escalating DOGE/BNB and other broad experimental lanes, creating editor noise after the bot's active strategy surface changed.
+
+**Code changes:** [`src/analysis/self_healing.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/self_healing.py) now respects `self_healing.scope` (`strategies`, `windows`) when detecting cold lanes, AI vetoes, overtight relaxations, and WR collapses. [`src/analysis/lane_exit_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_policy.py) no longer defaults neutral positive-gap lanes to tight TP/SL; if holding beat realized exits by a meaningful dollar gap, the recommendation leans hold+trail unless the lane is classified entry-broken. [`src/notifications/notification_manager.py`](/Users/mainfolder/Documents/psb-main%201/src/notifications/notification_manager.py) adds a generic `notify_recommendations_available` method that says only that recommendations are available and points editors to [`docs/ACTIVE_RECOMMENDATIONS.md`](/Users/mainfolder/Documents/psb-main%201/docs/ACTIVE_RECOMMENDATIONS.md). [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py) calls that generic alert after self-healing writes the queue entry; it no longer sends the full recommendation body to Discord.
+
+**Self-healing triage upgrade:** [`src/analysis/self_healing.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/self_healing.py) now scopes by `triggers`, `sides`, and `families` in addition to strategy/window, and every escalation packet includes deterministic `action_class`, `severity`, `editor_action`, `next_steps`, and `auto_apply_allowed`. The only automatic action remains `auto_loosen_min_edge`; MiniMax/M3 may help upstream AI decisions, but it does not generate or approve self-healing changes.
+
+**Safety alert correction:** Manual stop and lane-paused notifications are status/safety alerts, not recommendation alerts. They now send for every stopped asset/lane when notifications are enabled, including non-trade-allowlisted assets such as DOGE/BNB.
+
+**Config:** [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) scopes self-healing to `bitcoin`, `sol_macro`, `eth_macro`, `hype_macro`, `xrp_macro`, and `xrp_dump_hedge` across `5m`, `15m`, and `1h`, both `up` and `down`, and the `cold_lane` / `wr_collapse` trigger families. This excludes DOGE/BNB recommendation noise unless explicitly re-added.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_notification_manager.py tests/test_self_healing.py tests/test_lane_exit_policy.py tests/test_active_recommendations.py tests/test_updown_exit_shared.py` → 53 passed. Runtime modules compile.
+
+## 2026-06-11 — Discord recommendation alerts redirected to editor-visible queue
+
+**Issue:** Kimi report flagged recommendation/diagnosis paths that could bypass the intended Discord policy. Confirmed in code: `lane_exit_policy` drift and `self_healing` escalations could post recommendation-style text through direct Discord/Telegram senders instead of leaving a durable editor handoff.
+
+**Fix:** Added [`docs/ACTIVE_RECOMMENDATIONS.md`](/Users/mainfolder/Documents/psb-main%201/docs/ACTIVE_RECOMMENDATIONS.md) as the repo-visible review queue and [`src/analysis/active_recommendations.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/active_recommendations.py) as the writer. `lane_exit_policy` drift and `self_healing` escalations now write pending review entries there; `lane_exit_policy.alert_discord` is false in config. Hardened kill notifications so non-allowlisted lanes such as DOGE/BNB cannot post Discord embeds through the lane pause path.
+
+**Policy after change:** Discord remains for allowlisted execution exits plus optional error/status messages. Strategy recommendations, drift, diagnosis, and opportunity-style actions go to the Markdown queue where Codex/Claude/Cursor editors can see them during sessions.
+
 ## 2026-06-11 — AI provider integration hardening: MiniMax wiring fixes + dead ollama fallback (loaded & verified)
 
 **Symptom:** log spammed `minimax=APITimeoutError`, `All AI providers failed`, and asyncio "Task exception was never retrieved" tracebacks. **Direct testing proved MiniMax itself is healthy** — `curl` to `https://api.minimax.io/anthropic/v1/messages` with the live `sk-cp-` key returned HTTP 200 in 2.1s and 4.7s. The failures were **our integration**, not the API.
@@ -237,7 +319,7 @@ All changes forward-test only; load on next bot restart. 85 BTC + 144 alt/decoup
 
 **[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`src/analysis/lane_exit_policy.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/lane_exit_policy.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):**
 
-- **Discord drift alerts (recommend-only):** the exit-policy recommender now runs on settle and pings Discord when live exit config disagrees with settled data. Wired into `_refresh_ghost_calibration_state` (runs in a worker thread, so a blocking `urllib` webhook POST is safe). Gated by new `lane_exit_policy` config (`enabled`, `alert_discord`, `recompute_min_new_settles: 25`, `min_lane_n`). De-dups on a drift signature so the same drift isn't re-pinged every cycle; only re-alerts when a new lane drifts or a recommendation flips. Helpers added to `lane_exit_policy.py`: `recompute`, `drift_signature`, `format_drift_message`, `post_discord_blocking`. **Never auto-applies** — operator reviews + edits config + restarts.
+- **Exit-policy drift alerts (recommend-only):** the exit-policy recommender runs on settle when live exit config disagrees with settled data. Wired into `_refresh_ghost_calibration_state` and gated by `lane_exit_policy` config (`enabled`, `recompute_min_new_settles: 25`, `min_lane_n`). De-dups on a drift signature so the same drift is not repeated every cycle; only re-emits when a new lane drifts or a recommendation flips. As of 2026-06-11, these recommendations write to [`docs/ACTIVE_RECOMMENDATIONS.md`](/Users/mainfolder/Documents/psb-main%201/docs/ACTIVE_RECOMMENDATIONS.md), not Discord. Helpers added to `lane_exit_policy.py`: `recompute`, `drift_signature`, `format_drift_message`. **Never auto-applies** — operator reviews + edits config + restarts.
 - **Reverted 5m hold+trail → plain +30% TP** on `eth/xrp/bnb 5m BUY_YES`. Diagnosis: the held→realized leak on these lanes is the STOP cutting winners (42–67% of held-winners stopped), which `hold_winners` doesn't touch (it only skips the take-profit). And the trailing floor, even at the live 10s fast-exit cadence, can't catch the worst 5m round-trips (observed bnb 5m: MFE +110% → realized −14% via stop). 5m lanes are coin-flip held-WR (46–48%) where this added variance with no upside. 15m/1h lanes kept on hold+trail.
 - **Correction to prior session note:** the fast-exit loop is NOT uncommitted — it's live at `exit_check_interval_sec: 10` and routes through `PositionExitManager` (the trailing-floor class). Earlier "exits at 60s / fast loop uncommitted" claim was wrong.
 - Tests: +4 (`test_lane_exit_policy.py`). Full suite 742 green.

@@ -122,6 +122,81 @@ def _key_from_trade(row: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     return _lane_key(parts[0], parts[1], parts[2])
 
 
+def _normalize_side(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"buy_yes", "yes", "long"}:
+        return "up"
+    if raw in {"buy_no", "no", "short"}:
+        return "down"
+    return raw
+
+
+def _scope_set(config: Dict[str, Any], key: str) -> Optional[set[str]]:
+    raw = (_cfg(config).get("scope") or {}).get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    vals = {
+        _normalize_side(v) if key == "sides" else str(v or "").strip().lower()
+        for v in raw
+    }
+    vals.discard("")
+    return vals or None
+
+
+def _scope_allows(
+    config: Dict[str, Any],
+    strategy: Any,
+    window: Any = None,
+    side: Any = None,
+    family: Any = None,
+    trigger: Any = None,
+) -> bool:
+    """True when a lane is inside the current self-healing review scope.
+
+    The bot now carries inactive/experimental macro families alongside the
+    operator-facing strategies. Scoping keeps the supervisor from creating noisy
+    editor escalations for lanes that are not part of the active review surface.
+    """
+
+    strategies = _scope_set(config, "strategies")
+    windows = _scope_set(config, "windows")
+    sides = _scope_set(config, "sides")
+    families = _scope_set(config, "families")
+    triggers = _scope_set(config, "triggers")
+    st = str(strategy or "").strip().lower()
+    win = str(window or "").strip().lower()
+    sd = _normalize_side(side)
+    fam = str(family or "").strip().lower()
+    trig = str(trigger or "").strip().lower()
+    if strategies is not None and st not in strategies:
+        return False
+    if windows is not None and win and win not in windows:
+        return False
+    if sides is not None and sd and sd not in sides:
+        return False
+    if families is not None and fam and fam not in families:
+        return False
+    if triggers is not None and trig and trig not in triggers:
+        return False
+    return True
+
+
+def _scope_allows_lane_id(
+    config: Dict[str, Any],
+    lane_id: Any,
+    *,
+    trigger: Any = None,
+) -> bool:
+    parts = str(lane_id or "").split("|")
+    strategy = parts[0] if len(parts) > 0 else ""
+    window = parts[1] if len(parts) > 1 else ""
+    side = parts[2] if len(parts) > 2 else ""
+    family = parts[4] if len(parts) > 4 else ""
+    return _scope_allows(config, strategy, window, side, family, trigger)
+
+
 def _side_from_action(action: str) -> str:
     a = str(action or "").strip().upper()
     if a == "BUY_YES":
@@ -142,7 +217,7 @@ def detect_cold_lanes(
     *,
     config: Dict[str, Any],
     now: datetime,
-    trades_path: Path = DEFAULT_TRADES_LOG,
+    trades_path: Optional[Path] = None,
     decision_log: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Lanes with no live entry for ``cold_hours``, each tagged with a cause.
@@ -157,6 +232,7 @@ def detect_cold_lanes(
     sc = _cfg(config).get("cold_lane") or {}
     if not bool(sc.get("enabled", True)):
         return []
+    trades_path = Path(trades_path) if trades_path is not None else DEFAULT_TRADES_LOG
     cold_hours = float(sc.get("cold_hours", 24) or 24)
     cutoff = now - timedelta(hours=cold_hours)
 
@@ -166,6 +242,8 @@ def detect_cold_lanes(
     for row in _iter_jsonl(trades_path):
         key = _key_from_trade(row)
         if key is None:
+            continue
+        if not _scope_allows_lane_id(config, row.get("lane_id"), trigger="cold_lane"):
             continue
         seen_keys.add(key)
         ts = _parse_ts(row.get("opened_at") or row.get("ts"))
@@ -184,6 +262,8 @@ def detect_cold_lanes(
             continue
         side = _side_from_action(row.get("quant_action"))
         key = _lane_key(row.get("strategy"), row.get("window"), side)
+        if not _scope_allows(config, key[0], key[1], key[2], trigger="cold_lane"):
+            continue
         approved = row.get("approved")
         if approved is True:
             continue  # lane is firing via AI; not the cause
@@ -197,6 +277,8 @@ def detect_cold_lanes(
     overtight_by_key: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
     for row in _relaxed_overtight(config):
         k = _lane_key(row.get("strategy"), row.get("window"), _overtight_side(row))
+        if not _scope_allows_lane_id(config, row.get("lane_id"), trigger="cold_lane"):
+            continue
         overtight_by_key.setdefault(k, []).append(row)
 
     cold: List[Dict[str, Any]] = []
@@ -238,7 +320,7 @@ def detect_cold_lanes(
 def detect_wr_collapse(
     *,
     config: Dict[str, Any],
-    trades_path: Path = DEFAULT_TRADES_LOG,
+    trades_path: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
     """Per-lane recent WR dropping below the lane's own prior baseline.
 
@@ -249,6 +331,7 @@ def detect_wr_collapse(
     wc = _cfg(config).get("wr_collapse") or {}
     if not bool(wc.get("enabled", True)):
         return []
+    trades_path = Path(trades_path) if trades_path is not None else DEFAULT_TRADES_LOG
     window_n = int(wc.get("window_n", 30) or 30)
     min_sample = int(wc.get("min_sample", 25) or 25)
     collapse_delta = float(wc.get("collapse_delta", 0.15) or 0.15)
@@ -261,6 +344,8 @@ def detect_wr_collapse(
             continue
         lane_id = str(row.get("lane_id") or "").strip()
         if not lane_id:
+            continue
+        if not _scope_allows_lane_id(config, lane_id, trigger="wr_collapse"):
             continue
         ts = _parse_ts(row.get("closed_at") or row.get("ts") or row.get("opened_at"))
         if ts is None:
@@ -397,6 +482,9 @@ def apply_auto_heal(
             action = {
                 "ts": now.isoformat(),
                 "action": "auto_loosen_min_edge",
+                "action_class": "auto_loosen",
+                "severity": "medium",
+                "editor_action": "monitor_runtime_override",
                 "lane_id": lane_id,
                 "min_edge_mult": mult,
                 "expires_at": expires_at,
@@ -418,6 +506,74 @@ def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
 
 # ── escalation ───────────────────────────────────────────────────────────────
 
+def _collapse_severity(lane: Dict[str, Any]) -> str:
+    drop = float(lane.get("drop") or 0.0)
+    recent_n = int(lane.get("recent_n") or 0)
+    if drop >= 0.30 and recent_n >= 30:
+        return "critical"
+    if drop >= 0.20:
+        return "high"
+    return "medium"
+
+
+def _triage_for_escalation(trigger: str, lane: Dict[str, Any]) -> Dict[str, Any]:
+    """Classify editor work deterministically before any LLM summarizes it."""
+
+    trigger = str(trigger or "").strip().lower()
+    if trigger == "cold_lane:ai_unavailable":
+        return {
+            "action_class": "ops_alert",
+            "severity": "high",
+            "editor_action": "check_ai_provider_health",
+            "auto_apply_allowed": False,
+            "next_steps": [
+                "Check /api/status AI fields and data/logs/ai_pipeline/decision_layer.jsonl for timeout/unavailable reasons.",
+                "Do not widen quant gates until provider health is separated from strategy quality.",
+            ],
+        }
+    if trigger == "cold_lane:ai_veto":
+        return {
+            "action_class": "ai_gate_review",
+            "severity": "medium",
+            "editor_action": "review_ai_veto_quality",
+            "auto_apply_allowed": False,
+            "next_steps": [
+                "Review recent AI verdicts for the lane and compare vetoed candidates against settled ghost outcomes.",
+                "If AI is opposing profitable ghosts, adjust AI gate/prompt behavior; do not tighten entry gates by default.",
+            ],
+        }
+    if trigger == "cold_lane:structural":
+        return {
+            "action_class": "strategy_diagnosis",
+            "severity": "low",
+            "editor_action": "inspect_rejection_distribution",
+            "auto_apply_allowed": False,
+            "next_steps": [
+                "Inspect rejected-candidate reasons for candidate starvation, window mismatch, oracle basis, and family gating.",
+                "Only make a persistent config change if Ghost Lab or live journal evidence identifies a specific blocker.",
+            ],
+        }
+    if trigger == "wr_collapse":
+        return {
+            "action_class": "performance_regression",
+            "severity": _collapse_severity(lane),
+            "editor_action": "compare_recent_vs_baseline_lane",
+            "auto_apply_allowed": False,
+            "next_steps": [
+                "Compare the collapse window against the prior baseline by family, hour, oracle basis, and recent code/config changes.",
+                "Let lane_thresholds handle chronic vetoes; use this alert to find the cause before disabling or tightening anything.",
+            ],
+        }
+    return {
+        "action_class": "manual_review",
+        "severity": "medium",
+        "editor_action": "review_packet",
+        "auto_apply_allowed": False,
+        "next_steps": [
+            "Review the packet and validate against the appropriate source of truth before changing config."
+        ],
+    }
+
 def build_escalation_packet(
     *,
     trigger: str,
@@ -427,13 +583,19 @@ def build_escalation_packet(
     diagnosis: str,
     proposed: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    triage = _triage_for_escalation(trigger, lane)
     return {
         "generated_at": now.isoformat(),
         "trigger": trigger,
+        **triage,
         "lane": lane,
         "diagnosis": diagnosis,
         "ghost_validatable": bool(ghost_validatable),
         "proposed_change": proposed or {},
+        "recommendation_contract": (
+            "Auto-apply is limited to ghost-backed min-edge loosening. This packet "
+            "is editor review unless action_class is auto_loosen in the actions log."
+        ),
         "guardrails": _GUARDRAILS,
         "notes": "Escalation only — requires human/Codex review. No auto-apply was performed for this item.",
     }
@@ -583,9 +745,12 @@ class SelfHealingSupervisor:
         result.escalations.append(packet)
         esc_cfg = _cfg(self.config).get("escalation") or {}
         if bool(esc_cfg.get("notify", True)):
+            steps = packet.get("next_steps") or []
+            first_step = steps[0] if steps else packet["diagnosis"]
             result.notify_messages.append(
-                f"🩺 self-heal escalation [{packet['trigger']}] "
-                f"(ghost_validatable={packet['ghost_validatable']}): {packet['diagnosis']}"
+                f"self-heal {packet['severity']} {packet['action_class']} "
+                f"[{packet['trigger']}] editor_action={packet['editor_action']} "
+                f"ghost_validatable={packet['ghost_validatable']}: {first_step}"
             )
         if bool(esc_cfg.get("codex_dispatch", False)) and packet.get("ghost_validatable"):
             self._maybe_dispatch_codex(packet)

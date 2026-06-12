@@ -346,3 +346,9 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 ## Lessons learned
 
 _(none yet — add only after data)_
+
+## 2026-06-11 — 5m BUY_NO inversion flip → +EV long (forward-test)
+- **Finding:** hype_macro **5m BUY_NO** is structurally inverted — held-to-resolution WR **33%** over n=57 (settled since ~05-20), **$-144** live PnL. On the *same* markets the YES side resolves ITM ~67%, so the short is anti-selective and the cheap long is +EV.
+- **Change:** flip BUY_NO→BUY_YES at the 5m edge stage via the shared sol loop (`buy_no_5m_flip_to_yes: true`). Uses the **complement** of the native est_prob (`max(1−est, 0.50)`) so the normal edge gate then admits only the *cheap* longs (low yes_price) — the +EV pocket. Candidate has already cleared all short-side gates; downstream directional guards inert (`_btc_trade_inputs_enabled()==False`). Default opt-out flag.
+- **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
+- **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~67% thesis.

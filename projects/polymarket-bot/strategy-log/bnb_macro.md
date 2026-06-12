@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-12 — Enforce BNB per-strategy cap and active 15m drop
+
+- **What changed:** Fixed `RiskManager.can_trade(strategy=...)` to enforce `strategies.bnb_macro.max_concurrent_positions` before order placement. Also aligned `bnb_macro.entry_policy.window_side_overrides.15m` with the documented `by_tf.15m` DROP setting by setting both 15m `up` and `down` active min-edge to `0.50`. Added regression coverage in [tests/test_risk_manager_hardening.py](/Users/mainfolder/Documents/psb-main%201/tests/test_risk_manager_hardening.py) and [tests/test_lane_entry_policy.py](/Users/mainfolder/Documents/psb-main%201/tests/test_lane_entry_policy.py).
+- **Why:** Local paper session `test_20260611_220323` opened 7 BNB 15m positions in one cycle despite `bnb_macro.max_concurrent_positions: 2`. The scanner was not skipping 5m/1h (`bnb_5m_native=342`, `bnb_1h_native=285` across the last 300 ops pulses); the visible issue was BNB 15m future-window signals passing through a dead per-strategy risk cap. A second config bug kept BNB 15m live because canonical `entry_policy` min-edges (`0.085/0.08`) overrode the legacy `by_tf.15m` drop (`0.50/0.50`).
+- **Hypothesis:** BNB can still scan far-ahead 15m windows for observability, but execution will not enter BNB 15m while the documented drop is active; any other BNB batch is capped by the per-strategy open-position limit.
+- **Expected outcome:** No more BNB-only 7-position ladder from one scan; BNB 15m candidates skip on `lane_min_edge`, and additional non-15m BNB signals skip with `Max concurrent positions reached for bnb_macro` once two BNB positions are open.
+- **Actual outcome:** `pending` — needs restart and at least 15 closed BNB trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-07 — 1h BUY_YES price-banded floor bump (cleanest of the 4 alts)
 
 - **What changed:** BNB 1h: `1h_buy_yes_bullish_floor_bump: 0.30`, band **0.50–0.88** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).
@@ -228,3 +237,9 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 ## Lessons learned
 
 - `pending`
+
+## 2026-06-11 — 5m BUY_NO inversion flip → +EV long (forward-test)
+- **Finding:** bnb_macro **5m BUY_NO** is structurally inverted — held-to-resolution WR **30%** over n=235 (settled since ~05-20), **$-267** live PnL. On the *same* markets the YES side resolves ITM ~70%, so the short is anti-selective and the cheap long is +EV.
+- **Change:** flip BUY_NO→BUY_YES at the 5m edge stage via the shared sol loop (`buy_no_5m_flip_to_yes: true`). Uses the **complement** of the native est_prob (`max(1−est, 0.50)`) so the normal edge gate then admits only the *cheap* longs (low yes_price) — the +EV pocket. Candidate has already cleared all short-side gates; downstream directional guards inert (`_btc_trade_inputs_enabled()==False`). Default opt-out flag.
+- **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
+- **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~70% thesis.

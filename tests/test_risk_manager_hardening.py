@@ -174,6 +174,35 @@ def test_all_active_positions_share_global_slot_limit():
     assert reason == "Max concurrent positions reached"
 
 
+def test_strategy_concurrent_position_limit_is_enforced_before_order():
+    rm = RiskManager(
+        {
+            "trading": {"dry_run": True},
+            "risk": {"max_concurrent_positions": 50, "max_trades_per_day": 50},
+            "strategies": {"bnb_macro": {"max_concurrent_positions": 2}},
+        }
+    )
+    for idx in range(2):
+        rm.active_positions[f"bnb_{idx}"] = Position(
+            position_id=f"bnb_{idx}",
+            market_id=f"m{idx}",
+            market_question="BNB Up or Down",
+            outcome="YES",
+            size=30.0,
+            entry_price=0.5,
+            current_price=0.5,
+            pnl=0.0,
+            opened_at=datetime.now(),
+            end_date=datetime.now() + timedelta(minutes=15),
+            strategy="bnb_macro",
+        )
+
+    can_trade, reason = rm.can_trade(strategy="bnb_macro")
+
+    assert can_trade is False
+    assert reason == "Max concurrent positions reached for bnb_macro"
+
+
 def test_paper_trading_uses_paper_daily_trade_limit():
     rm = RiskManager(
         {

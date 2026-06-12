@@ -32,6 +32,16 @@ STRATEGY_ALERT_TITLE = {
     "xrp_dump_hedge": "XRP dump hedge",
 }
 
+LANE_NAME_TO_STRATEGY = {
+    "BTC": "bitcoin",
+    "BITCOIN": "bitcoin",
+    "SOL": "sol_macro",
+    "ETH": "eth_macro",
+    "HYPE": "hype_macro",
+    "XRP": "xrp_macro",
+    "XRP_DUMP_HEDGE": "xrp_dump_hedge",
+}
+
 
 def _strategy_trade_title(strategy: Optional[str]) -> str:
     if not strategy:
@@ -53,6 +63,16 @@ def _polymarket_market_url_for_exit(exit_info: Dict[str, Any]) -> tuple[str, boo
 
 def _discord_trade_allowed(strategy: Optional[str]) -> bool:
     return bool(strategy and strategy in DISCORD_TRADE_STRATEGIES)
+
+
+def _normalize_discord_strategy(strategy_or_lane: Optional[str]) -> str:
+    raw = str(strategy_or_lane or "").strip()
+    if not raw:
+        return ""
+    if raw in DISCORD_TRADE_STRATEGIES:
+        return raw
+    upper = raw.upper()
+    return LANE_NAME_TO_STRATEGY.get(upper, raw.lower())
 
 
 def merge_discord_webhook_from_env(root_config: Dict[str, Any]) -> None:
@@ -267,7 +287,8 @@ class NotificationManager:
         """Notify when the manual global stop halts a strategy."""
         if not self.enabled or not self.discord_webhook:
             return False
-        st = _strategy_trade_title(strategy)
+        strategy_norm = _normalize_discord_strategy(strategy)
+        st = _strategy_trade_title(strategy_norm)
         embed = {
             "title": f"⛔ {st} — MANUAL STOP",
             "color": 16711680,
@@ -340,3 +361,35 @@ Status: {run}
 """
 
         return await self.notify(message)
+
+    async def notify_recommendations_available(
+        self,
+        *,
+        source: str,
+        count: int,
+        path: str = "docs/ACTIVE_RECOMMENDATIONS.md",
+    ) -> bool:
+        """Notify that editor-reviewed recommendations are available.
+
+        This intentionally avoids lane names, diagnoses, opportunities, or trade
+        recommendations. Discord is only a wake-up signal; the repo file is the
+        review surface.
+        """
+        if not self.enabled or not self.discord_webhook:
+            return False
+
+        safe_source = str(source or "recommendations")[:80]
+        safe_path = str(path or "docs/ACTIVE_RECOMMENDATIONS.md")[:160]
+        embed = {
+            "title": "PSB recommendations available",
+            "color": 3447003,
+            "fields": [
+                {"name": "Source", "value": safe_source, "inline": True},
+                {"name": "Items", "value": str(max(0, int(count or 0))), "inline": True},
+                {"name": "Review file", "value": safe_path, "inline": False},
+            ],
+            "footer": {
+                "text": f"Oracle AI • {datetime.now().strftime('%H:%M:%S')}"
+            },
+        }
+        return await self.send_discord(None, embed)

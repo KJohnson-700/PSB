@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from src.market.scanner import Market, MarketScanner
+from src.market.scanner import Market, MarketScanner, is_crypto_updown_market
 
 
 def _config() -> dict:
@@ -34,6 +34,32 @@ def test_iter_updown_1h_human_slugs_shape():
     assert "bnb-up-or-down-may-13-2026-5am-et" in slugs
     assert not any("hyperliquid" in s for s in slugs)
     assert not any(slug.startswith("doge-up-or-down-") for slug in slugs)
+
+
+def test_crypto_updown_detector_accepts_hourly_alt_human_slugs():
+    for slug, question in [
+        ("solana-up-or-down-may-13-2026-5am-et", "Solana Up or Down - May 13, 5AM ET"),
+        ("ethereum-up-or-down-may-13-2026-5am-et", "Ethereum Up or Down - May 13, 5AM ET"),
+        ("xrp-up-or-down-may-13-2026-5am-et", "XRP Up or Down - May 13, 5AM ET"),
+    ]:
+        market = Market(
+            id=slug,
+            question=question,
+            description="",
+            volume=1000,
+            liquidity=1000,
+            yes_price=0.5,
+            no_price=0.5,
+            spread=0.01,
+            end_date=datetime(2026, 5, 13, 10, tzinfo=timezone.utc),
+            token_id_yes="yes",
+            token_id_no="no",
+            group_item_title="",
+            slug=slug,
+            window_minutes=60,
+        )
+
+        assert is_crypto_updown_market(market) is True
 
 
 def test_resolve_updown_lookahead_includes_doge_and_bnb_configs():

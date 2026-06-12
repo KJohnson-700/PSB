@@ -319,6 +319,136 @@ def test_strategy_level_override_used_when_no_lane_specific_override():
     assert params.updown_stop_cents == pytest.approx(0.02)
 
 
+def _rce_globals(**rce):
+    base = {
+        "updown_stop_loss_pct": 0.20,
+        "take_profit_pct": 0.15,
+        # A lane statically set to tight (hold off) so we can prove the conditioner
+        # FLIPS it to hold when trend-side, and leaves it tight otherwise.
+        "updown_hold_winners_to_resolution": False,
+        "updown_trail_arm_pct": 0.0,
+        "updown_trail_gap_pct": 0.0,
+        "regime_conditioned_exits": {"enabled": True, **rce},
+    }
+    return parse_updown_exit_globals(base)
+
+
+def _resolve(g, *, lane_side, regime):
+    # lane_side: "up" -> LONG (YES/YES); "down" -> SHORT (NO/NO)
+    leg, out = ("YES", "YES") if lane_side == "up" else ("NO", "NO")
+    return resolve_updown_exit_params_for_position(
+        g, strategy_name="sol_macro", window_size="5m",
+        entry_leg=leg, outcome=out, btc_1h_regime=regime,
+    )
+
+
+def test_regime_conditioned_exits_default_off_is_byte_identical():
+    # No regime block at all -> conditioner must never touch hold/trail.
+    g = parse_updown_exit_globals(
+        {"updown_hold_winners_to_resolution": True,
+         "updown_trail_arm_pct": 0.1, "updown_trail_gap_pct": 0.15}
+    )
+    p = resolve_updown_exit_params_for_position(
+        g, strategy_name="sol_macro", window_size="5m",
+        entry_leg="YES", outcome="YES", btc_1h_regime="BEAR",  # counter-trend
+    )
+    # Static config wins because the feature is off.
+    assert p.updown_hold_winners_to_resolution is True
+    assert p.updown_trail_arm_pct == pytest.approx(0.1)
+
+
+def test_regime_conditioned_long_in_bull_holds_and_trails():
+    g = _rce_globals(trend_side_trail_arm_pct=0.10, trend_side_trail_gap_pct=0.15)
+    p = _resolve(g, lane_side="up", regime="BULL")  # GREEN/LONG
+    assert p.updown_hold_winners_to_resolution is True
+    assert p.updown_trail_arm_pct == pytest.approx(0.10)
+    assert p.updown_trail_gap_pct == pytest.approx(0.15)
+
+
+def test_regime_conditioned_short_in_bear_holds_and_trails():
+    g = _rce_globals()
+    p = _resolve(g, lane_side="down", regime="BEAR")  # RED/SHORT
+    assert p.updown_hold_winners_to_resolution is True
+    assert p.updown_trail_arm_pct == pytest.approx(0.10)
+
+
+@pytest.mark.parametrize(
+    "lane_side,regime",
+    [
+        ("up", "BEAR"),    # RED/LONG  — counter-trend
+        ("up", "RANGE"),   # FLAT/LONG — chop
+        ("down", "BULL"),  # GREEN/SHORT — counter-trend
+        ("down", "RANGE"), # FLAT/SHORT — chop
+        ("up", None),      # unknown regime -> off-trend
+        ("up", ""),        # empty regime -> off-trend
+    ],
+)
+def test_regime_conditioned_off_trend_forces_tight(lane_side, regime):
+    g = _rce_globals()
+    p = _resolve(g, lane_side=lane_side, regime=regime)
+    assert p.updown_hold_winners_to_resolution is False
+    assert p.updown_trail_arm_pct == pytest.approx(0.0)
+    assert p.updown_trail_gap_pct == pytest.approx(0.0)
+
+
+def test_regime_conditioned_off_trend_can_be_left_alone():
+    # off_trend_force_tight=False -> conditioner only adds hold on trend-side,
+    # never strips a statically-configured hold off-trend.
+    g = parse_updown_exit_globals(
+        {"updown_hold_winners_to_resolution": True,
+         "updown_trail_arm_pct": 0.1, "updown_trail_gap_pct": 0.15,
+         "regime_conditioned_exits": {"enabled": True, "off_trend_force_tight": False}}
+    )
+    p = resolve_updown_exit_params_for_position(
+        g, strategy_name="sol_macro", window_size="5m",
+        entry_leg="NO", outcome="NO", btc_1h_regime="BULL",  # counter-trend short
+    )
+    assert p.updown_hold_winners_to_resolution is True  # untouched
+    assert p.updown_trail_arm_pct == pytest.approx(0.1)
+
+
+def test_regime_conditioned_exclude_lane_keeps_take_profit():
+    # Excluded strategy must keep its static (tight/take-profit) config even in a
+    # trend-side regime that would otherwise force hold+trail.
+    base = {
+        "updown_hold_winners_to_resolution": False,
+        "updown_trail_arm_pct": 0.0,
+        "updown_trail_gap_pct": 0.0,
+        "regime_conditioned_exits": {"enabled": True, "exclude_lanes": ["bitcoin"]},
+    }
+    g = parse_updown_exit_globals(base)
+    # bitcoin LONG in BULL would be trend-side, but it's excluded -> stays tight.
+    p = resolve_updown_exit_params_for_position(
+        g, strategy_name="bitcoin", window_size="1h",
+        entry_leg="YES", outcome="YES", btc_1h_regime="BULL",
+    )
+    assert p.updown_hold_winners_to_resolution is False
+    assert p.updown_trail_arm_pct == 0.0
+    # A non-excluded strategy still gets the trend-side hold.
+    p2 = resolve_updown_exit_params_for_position(
+        g, strategy_name="sol_macro", window_size="1h",
+        entry_leg="YES", outcome="YES", btc_1h_regime="BULL",
+    )
+    assert p2.updown_hold_winners_to_resolution is True
+
+
+def test_regime_conditioned_exclude_supports_strategy_window():
+    g = parse_updown_exit_globals({
+        "regime_conditioned_exits": {"enabled": True, "exclude_lanes": ["bitcoin|1h"]},
+    })
+    # 1h excluded -> tight; 15m NOT excluded -> trend-side hold still applies.
+    p1h = resolve_updown_exit_params_for_position(
+        g, strategy_name="bitcoin", window_size="1h",
+        entry_leg="YES", outcome="YES", btc_1h_regime="BULL",
+    )
+    p15 = resolve_updown_exit_params_for_position(
+        g, strategy_name="bitcoin", window_size="15m",
+        entry_leg="YES", outcome="YES", btc_1h_regime="BULL",
+    )
+    assert p1h.updown_hold_winners_to_resolution is False
+    assert p15.updown_hold_winners_to_resolution is True
+
+
 def test_infer_window_size_from_runway_for_legacy_positions():
     from datetime import datetime, timedelta, timezone
 

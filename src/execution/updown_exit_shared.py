@@ -69,6 +69,23 @@ class UpdownExitGlobals:
     dynamic_stop_high_convergence_threshold: float
     updown_lane_overrides: Dict[str, Dict[str, float]]
     updown_overrides: Dict[str, Dict[str, float]]
+    # ── Regime-conditioned exits (default OFF) ──────────────────────────────
+    # When enabled, the hold/trail dimension is chosen at exit-resolution time
+    # from (position side x BTC 1h regime): hold+trail only when the position is
+    # trend-side in a trending tape (LONG in BULL, SHORT in BEAR); otherwise the
+    # tight global/lane TP/SL is forced. Everything except the three hold/trail
+    # keys is left to the existing lane resolution. See
+    # ``_apply_regime_conditioned_exit``. EXIT change — ghost log cannot validate;
+    # forward-test on trades_settled held-vs-realized gap convergence.
+    regime_conditioned_exits_enabled: bool = False
+    rce_trend_hold_winners: bool = True
+    rce_trend_trail_arm_pct: float = 0.10
+    rce_trend_trail_gap_pct: float = 0.15
+    rce_off_trend_force_tight: bool = True
+    # Lanes exempt from regime conditioning: each entry is "strategy" (all windows)
+    # or "strategy|window". Exempt lanes keep their static config (e.g. take-profit),
+    # never forced to hold. Used to keep BTC on pure take-profit while alts hold trend-side.
+    rce_exclude: FrozenSet[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -221,7 +238,62 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         ),
         updown_lane_overrides=lane_overrides,
         updown_overrides=_normalize_strategy_overrides(ec.get("updown_overrides") or {}),
+        **_parse_regime_conditioned_exits(ec.get("regime_conditioned_exits") or {}),
     )
+
+
+def _parse_regime_conditioned_exits(raw: Any) -> Dict[str, Any]:
+    """Parse the optional ``regime_conditioned_exits`` block (all default-off)."""
+    rc = raw if isinstance(raw, dict) else {}
+    excl_raw = rc.get("exclude_lanes") or []
+    exclude = frozenset(
+        str(x or "").strip().lower() for x in excl_raw if str(x or "").strip()
+    )
+    return {
+        "regime_conditioned_exits_enabled": bool(rc.get("enabled", False)),
+        "rce_trend_hold_winners": bool(rc.get("trend_side_hold_winners", True)),
+        "rce_trend_trail_arm_pct": float(rc.get("trend_side_trail_arm_pct", 0.10) or 0.0),
+        "rce_trend_trail_gap_pct": float(rc.get("trend_side_trail_gap_pct", 0.15) or 0.0),
+        "rce_off_trend_force_tight": bool(rc.get("off_trend_force_tight", True)),
+        "rce_exclude": exclude,
+    }
+
+
+def _apply_regime_conditioned_exit(
+    params: Dict[str, Any],
+    *,
+    lane: str,
+    btc_1h_regime: Optional[str],
+    g: UpdownExitGlobals,
+    strategy_name: Any = None,
+    window: Any = None,
+) -> None:
+    """Override only the hold/trail keys in ``params`` from (side x regime).
+
+    No-op unless ``regime_conditioned_exits_enabled``. Trend-side (LONG in BULL,
+    SHORT in BEAR) gets hold+trail; counter-trend or chop/unknown regime is forced
+    to tight TP/SL (when ``rce_off_trend_force_tight``). Lanes in ``rce_exclude``
+    (by "strategy" or "strategy|window") are skipped entirely so they keep their
+    static config (e.g. pure take-profit). Mutates ``params`` in place.
+    """
+    if not g.regime_conditioned_exits_enabled:
+        return
+    if g.rce_exclude:
+        strat = str(strategy_name or "").strip().lower()
+        win = str(window or "").strip().lower()
+        if strat and (strat in g.rce_exclude or f"{strat}|{win}" in g.rce_exclude):
+            return
+    regime = str(btc_1h_regime or "").strip().upper()
+    ln = str(lane or "").strip().lower()
+    trend_side = (ln == "up" and regime == "BULL") or (ln == "down" and regime == "BEAR")
+    if trend_side:
+        params["updown_hold_winners_to_resolution"] = bool(g.rce_trend_hold_winners)
+        params["updown_trail_arm_pct"] = float(g.rce_trend_trail_arm_pct)
+        params["updown_trail_gap_pct"] = float(g.rce_trend_trail_gap_pct)
+    elif g.rce_off_trend_force_tight:
+        params["updown_hold_winners_to_resolution"] = False
+        params["updown_trail_arm_pct"] = 0.0
+        params["updown_trail_gap_pct"] = 0.0
 
 
 def resolve_updown_exit_params(
@@ -284,6 +356,7 @@ def resolve_updown_exit_params_for_position(
     outcome: str,
     opened_at: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    btc_1h_regime: Optional[str] = None,
 ) -> UpdownResolvedExitParams:
     lane = resolve_updown_lane(entry_leg=entry_leg, outcome=outcome)
     resolved_window = infer_updown_window_size(window_size, opened_at=opened_at, end_date=end_date)
@@ -323,6 +396,11 @@ def resolve_updown_exit_params_for_position(
         window_cfg = strategy_window_lane.get(resolved_window, {})
         if isinstance(window_cfg, dict):
             params.update(window_cfg.get(lane, {}))
+    # Final word (when enabled): pick hold/trail from (side x BTC 1h regime).
+    _apply_regime_conditioned_exit(
+        params, lane=lane, btc_1h_regime=btc_1h_regime, g=g,
+        strategy_name=strategy_name, window=resolved_window,
+    )
     return UpdownResolvedExitParams(
         take_profit_pct=float(params["take_profit_pct"]),
         updown_hold_winners_to_resolution=bool(

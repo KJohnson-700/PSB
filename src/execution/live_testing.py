@@ -270,6 +270,7 @@ class PositionExitManager:
                     outcome=pos.outcome,
                     opened_at=pos.opened_at,
                     end_date=pos.end_date,
+                    btc_1h_regime=entry_signal.get("btc_1h_regime"),
                 )
 
                 up_stop_cents = cents_stop_for_entry_price(

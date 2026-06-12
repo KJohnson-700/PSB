@@ -298,6 +298,17 @@ class BitcoinStrategy:
         self.entry_price_min = self.config.get('entry_price_min', 0.15)
         self.entry_price_max = self.config.get('entry_price_max', 0.85)
         self.clear_distance_pct = self.config.get('clear_distance_pct', 0.15)
+        # ── [1h] Simple consensus-follow BUY_YES lane (DEFAULT OFF; forward-test) ──
+        # Ghost-validated (rejected_candidates_settled): BTC 1h BUY_YES at yes_price in
+        # [0.50,0.85] = 65.8% WR / +$71 over 732 settled, vs the gated lane's 130 / -$1.
+        # est_prob is stuck ~0.55 (useless edge signal) and the 4H resolver kills the
+        # upward lean, so this lane FOLLOWS PRICE: admit on band, skip the 4H/LTF/edge
+        # gates, size on a flat edge. OFF = byte-identical to today (every guard inert).
+        _b1hsl = self.config.get('bitcoin_1h_simple_long', {}) or {}
+        self._b1hsl_enabled = bool(_b1hsl.get('enabled', False))
+        self._b1hsl_entry_min = float(_b1hsl.get('entry_min', 0.50) or 0.50)
+        self._b1hsl_entry_max = float(_b1hsl.get('entry_max', 0.85) or 0.85)
+        self._b1hsl_sizing_edge = float(_b1hsl.get('sizing_edge', 0.06) or 0.06)
 
         # ── AI-hold soft veto ────────────────────────────────────────────────
         # When AI says HOLD on a market, cache that decision for ai_hold_veto_ttl_sec.
@@ -1794,6 +1805,15 @@ class BitcoinStrategy:
             is_1h = _updown_tf == "1h"
             resolution = self._resolve_bias_for_tf(ta, _updown_tf)
             allowed_side = resolution.allowed_side
+            # [1h] simple consensus-follow: admit BUY_YES on the price band regardless
+            # of the 4H/bias resolver. Default-off → always False, no behavior change.
+            _simple_1h_long = (
+                is_1h
+                and self._b1hsl_enabled
+                and self._b1hsl_entry_min <= yes_price <= self._b1hsl_entry_max
+            )
+            if _simple_1h_long:
+                allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
@@ -1814,7 +1834,7 @@ class BitcoinStrategy:
             if not is_5m:
                 ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
                 _sample("ltf_strength", ltf_strength)
-                if ltf_confirmed:
+                if ltf_confirmed and not _simple_1h_long:
                     _bump_skip("ltf_confirmed_late_entry")
                     logger.info(
                         "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
@@ -3183,6 +3203,14 @@ class BitcoinStrategy:
                 pass
             _sample("edge", edge)
             _bias_quant_size_multiplier = 1.0
+            if _simple_1h_long and action == "BUY_YES":
+                # Band-admitted consensus lane: the est_prob edge is unusable (~0.55),
+                # so don't gate on it — size on the configured flat edge instead (a
+                # sizing policy, not a fabricated probability). Tag for ghost/trade split.
+                effective_min_edge = 0.0
+                if edge < self._b1hsl_sizing_edge:
+                    edge = self._b1hsl_sizing_edge
+                reason_parts.append("btc_1h_simple_long")
             if edge < effective_min_edge:
                 # (3) Flag bias/quant directional disagreement so we can isolate this cohort
                 # in analysis. True when raw_est is on the opposite side of 0.50 from the

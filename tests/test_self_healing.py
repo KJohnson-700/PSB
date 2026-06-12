@@ -54,6 +54,76 @@ def test_cold_lane_recent_entry_not_flagged(tmp_path):
     assert cold == []
 
 
+def test_cold_lane_respects_strategy_scope(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    old = (NOW - timedelta(hours=40)).isoformat()
+    _write_jsonl(
+        trades,
+        [
+            _trade("doge_macro|15m|up|bullish|drift", old),
+            _trade("sol_macro|15m|up|bullish|drift", old),
+        ],
+    )
+    cfg = {
+        "self_healing": {
+            "scope": {"strategies": ["sol_macro"], "windows": ["15m"]},
+            "cold_lane": {"enabled": True, "cold_hours": 24},
+            "auto_apply": {"enabled": False},
+        }
+    }
+    cold = sh.detect_cold_lanes(
+        config=cfg,
+        now=NOW,
+        trades_path=trades,
+        decision_log=tmp_path / "nope.jsonl",
+    )
+    assert [row["strategy"] for row in cold] == ["sol_macro"]
+
+
+def test_cold_lane_respects_side_scope(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    old = (NOW - timedelta(hours=40)).isoformat()
+    _write_jsonl(
+        trades,
+        [
+            _trade("sol_macro|15m|up|bullish|drift", old),
+            _trade("sol_macro|15m|down|bearish|drift", old),
+        ],
+    )
+    cfg = {
+        "self_healing": {
+            "scope": {"strategies": ["sol_macro"], "windows": ["15m"], "sides": ["down"]},
+            "cold_lane": {"enabled": True, "cold_hours": 24},
+            "auto_apply": {"enabled": False},
+        }
+    }
+    cold = sh.detect_cold_lanes(
+        config=cfg,
+        now=NOW,
+        trades_path=trades,
+        decision_log=tmp_path / "nope.jsonl",
+    )
+    assert [(row["strategy"], row["side"]) for row in cold] == [("sol_macro", "down")]
+
+
+def test_wr_collapse_respects_trigger_scope(tmp_path):
+    trades = tmp_path / "trades.jsonl"
+    rows = []
+    base = NOW - timedelta(days=10)
+    for i in range(60):
+        rows.append(_trade("hype_macro|15m|up|bull|drift", (base + timedelta(minutes=i)).isoformat(), win=True))
+    for i in range(30):
+        rows.append(_trade("hype_macro|15m|up|bull|drift", (base + timedelta(hours=2, minutes=i)).isoformat(), win=False))
+    _write_jsonl(trades, rows)
+    cfg = {
+        "self_healing": {
+            "scope": {"triggers": ["cold_lane"]},
+            "wr_collapse": {"enabled": True, "window_n": 30, "min_sample": 25, "collapse_delta": 0.15},
+        }
+    }
+    assert sh.detect_wr_collapse(config=cfg, trades_path=trades) == []
+
+
 def test_cold_lane_ai_veto_attribution(tmp_path):
     trades = tmp_path / "trades.jsonl"
     old = (NOW - timedelta(hours=40)).isoformat()
@@ -131,6 +201,8 @@ def test_auto_apply_loosen_injects_runtime_feedback(tmp_path):
     row = cfg["_runtime_feedback"]["by_lane"]["hype_macro|15m|up|bullish"]
     assert row["source"] == "self_healing"
     assert row["min_edge_mult"] == pytest.approx(0.715)
+    assert applied[0]["action_class"] == "auto_loosen"
+    assert applied[0]["editor_action"] == "monitor_runtime_override"
 
 
 def test_auto_apply_never_tightens(tmp_path):
@@ -166,6 +238,22 @@ def test_reapply_after_clobber_and_ttl_prune(tmp_path):
 
 
 # ── escalation: dedupe ───────────────────────────────────────────────────────
+
+def test_escalation_packet_has_action_taxonomy():
+    packet = sh.build_escalation_packet(
+        trigger="cold_lane:ai_unavailable",
+        lane={"strategy": "sol_macro", "window": "1h", "side": "up"},
+        now=NOW,
+        ghost_validatable=False,
+        diagnosis="provider timeout",
+    )
+    assert packet["action_class"] == "ops_alert"
+    assert packet["severity"] == "high"
+    assert packet["editor_action"] == "check_ai_provider_health"
+    assert packet["auto_apply_allowed"] is False
+    assert "next_steps" in packet
+    assert "Auto-apply is limited" in packet["recommendation_contract"]
+
 
 def test_escalation_dedupe_same_day(tmp_path):
     trades = tmp_path / "trades.jsonl"

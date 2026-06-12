@@ -635,6 +635,27 @@ class RiskManager:
 
         if len(self.active_positions) >= self.max_concurrent_positions:
             return False, "Max concurrent positions reached"
+        if strategy:
+            strategy_cfg = (
+                (self.config.get("strategies", {}) or {}).get(strategy, {}) or {}
+            )
+            raw_strategy_limit = strategy_cfg.get("max_concurrent_positions")
+            if raw_strategy_limit is not None:
+                try:
+                    strategy_limit = int(raw_strategy_limit)
+                except (TypeError, ValueError):
+                    strategy_limit = 0
+                if strategy_limit > 0:
+                    strategy_positions = sum(
+                        1
+                        for p in self.active_positions.values()
+                        if getattr(p, "strategy", "") == strategy
+                    )
+                    if strategy_positions >= strategy_limit:
+                        return (
+                            False,
+                            f"Max concurrent positions reached for {strategy}",
+                        )
         return True, "OK"
 
     def _get_market_term(self, end_date: Optional[datetime]) -> tuple:

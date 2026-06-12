@@ -2235,6 +2235,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
+                and _updown_tf in self._DECISION_GATE_WINDOWS
                 and not _timing_window_open
             ):
                 _bump_skip("ai_window_closed")

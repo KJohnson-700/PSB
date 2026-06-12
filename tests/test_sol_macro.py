@@ -23,6 +23,7 @@ from src.strategies.sol_macro import (
     SolMacroSignal,
     build_alt_resolver_metadata,
 )
+from src.strategies.bitcoin import BitcoinStrategy
 from src.analysis.lane_calibration import LaneCalibrator
 from src.analysis.sol_btc_service import (
     SOLBTCService,
@@ -62,6 +63,26 @@ def _make_config():
     }
 
 
+def test_alt_1h_simple_long_defaults_off():
+    strategy = SolMacroStrategy(_make_config(), MagicMock(), MagicMock())
+    assert strategy._a1hsl_enabled is False
+    assert strategy._a1hsl_entry_min == 0.50
+    assert strategy._a1hsl_entry_max == 0.85
+    assert strategy._a1hsl_sizing_edge == 0.06
+
+
+def test_alt_1h_simple_long_reads_config_when_enabled():
+    cfg = _make_config()
+    cfg["strategies"]["sol_macro"]["alt_1h_simple_long"] = {
+        "enabled": True, "entry_min": 0.55, "entry_max": 0.80, "sizing_edge": 0.05,
+    }
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+    assert strategy._a1hsl_enabled is True
+    assert strategy._a1hsl_entry_min == 0.55
+    assert strategy._a1hsl_entry_max == 0.80
+    assert strategy._a1hsl_sizing_edge == 0.05
+
+
 def test_optional_rsi_buy_ceiling_soft_penalty_by_default():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"]["rsi_buy_block_above"] = 80.0
@@ -88,6 +109,14 @@ def test_sol_entry_policy_supports_hourly_by_tf_overrides():
 
     assert policy["min_edge"] == 0.11
     assert policy["entry_price_max"] == 0.60
+
+
+def test_alt_macro_has_no_live_entry_ai_windows():
+    cfg = _make_config()
+    strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+
+    assert strategy._DECISION_GATE_WINDOWS == frozenset()
+    assert BitcoinStrategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
 
 
 def test_sol_liquidity_floor_is_lane_aware_by_window_and_side():

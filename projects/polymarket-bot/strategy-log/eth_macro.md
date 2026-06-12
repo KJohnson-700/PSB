@@ -12,6 +12,24 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-12 — Remove residual live-entry AI blockers from alt 1h/15m quant path
+
+- **What changed:** In the shared alt macro base and [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py), live-entry decision windows are empty for alts and ETH's remaining `ai_window_closed` marginal branch is guarded behind that set. ETH 1h/15m entries now proceed through quant gates only; AI remains for observer/tuning/self-healing surfaces.
+- **Why:** Operator clarified that live-entry AI belongs to BTC 1h/15m only. ETH inherited/shared residual AI timing logic that could reject marginal candidates even when no live ETH AI should run.
+- **Hypothesis:** Valid ETH 1h quant candidates should no longer be blocked by AI availability, AI timing windows, or marginal AI gate wiring.
+- **Expected outcome:** ETH 1h candidates that pass native side, oracle, price, edge, composite, sizing, and risk gates can emit signals with `ai_used=false`.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-12 — Exit-policy classifier correction: keep ETH 15m BUY_NO hold+trail
+
+- **What changed:** Reverted the attempted tight-exit change before rollout. In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), `trading.exit_rules.updown_overrides.eth_macro.window_lane_overrides.15m.down` remains `updown_hold_winners_to_resolution: true` with trail arm/gap `0.10 / 0.15`. The exit-policy recommender now treats neutral positive-gap lanes as hold+trail instead of defaulting to tight TP/SL.
+- **Why:** `lane_exit_audit.py` defines `gap = held_pnl - actual_pnl`; positive gap means holding to resolution earned more dollars than the realized exit path. `eth_macro|15m|BUY_NO` has `n=467`, held WR `46.3%`, realized WR `38.8%`, held `$242.33`, realized `$33.28`, gap `+209.06`, so tightening would preserve the undercapturing exit behavior.
+- **Hypothesis:** Keeping hold+trail preserves the EV-favored exit path while the corrected recommender avoids future false "tight" drift from neutral positive-gap rows.
+- **Expected outcome:** ETH 15m BUY_NO realized dollars should move toward the held-counterfactual gap after at least 15 closed post-change trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only; exit changes are not ghost-validatable.
+
 ### 2026-06-06 — 1h BUY_NO: widen the % stop 0.20→0.40 — REVERTED (n=3 anecdotal; see changelog EV-driven revert)
 
 - **What changed:** Added `down` under `exit_rules.updown_overrides.eth_macro.window_lane_overrides.1h` in `config/settings.yaml`: `updown_stop_loss_pct: 0.40` (up from the global 0.20). ETH 1h BUY_YES (`up`) lane unchanged.
@@ -541,3 +559,10 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 ## Lessons learned
 
 _(none yet — add only after data)_
+
+## 2026-06-11 — 5m BUY_NO inversion flip → +EV long (forward-test)
+- **Finding:** eth_macro **5m BUY_NO** is structurally inverted — held-to-resolution WR **26%** over n=156 (settled since ~05-20), **$-442** live PnL. On the *same* markets the YES side resolves ITM ~74%, so the short is anti-selective and the cheap long is +EV.
+- **Change:** flip BUY_NO→BUY_YES at the 5m edge stage via the own duplicated loop (`eth_5m_buy_no_flip_to_yes: true`). Uses the **complement** of the native est_prob (`max(1−est, 0.50)`) so the normal edge gate then admits only the *cheap* longs (low yes_price) — the +EV pocket. Candidate has already cleared all short-side gates; downstream directional guards inert (`_btc_trade_inputs_enabled()==False`). Default opt-out flag.
+- **Also (exit-side, same batch):** 15m up stop 0.16→0.22 (held-WR 69%, +$105 left on table n=16); 15m down stop 0.24→0.28 (held-WR 50%, +$28 n=66). Forward-test only — ghost log can't validate stop changes; basis is the fresh taken-exit settler (`held_win`/`hold_minus_exit_pnl`).
+- **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
+- **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~74% thesis.

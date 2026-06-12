@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -64,8 +63,10 @@ def _find_exit_cfg(d: Any) -> Dict[str, Any] | None:
     return None
 
 
-def _recommended_params(policy: str) -> Dict[str, Any]:
+def _recommended_params(policy: str, *, gap: float = 0.0) -> Dict[str, Any]:
     if policy.startswith("A"):
+        return dict(A_PARAMS)
+    if policy.startswith("-") and gap > 5.0:
         return dict(A_PARAMS)
     # B and C: no hold/trail — keep the tight global TP/SL.
     return {"updown_hold_winners_to_resolution": False}
@@ -84,7 +85,7 @@ def build(rows: List[Dict[str, Any]], min_n: int) -> Dict[str, Any]:
             entry_leg=leg, outcome=("NO" if leg == "NO" else "YES"),
         )
         live_hold = bool(resolved.updown_hold_winners_to_resolution)
-        rec = _recommended_params(pol)
+        rec = _recommended_params(pol, gap=gap)
         rec_hold = bool(rec.get("updown_hold_winners_to_resolution"))
         # Drift only matters once we trust the sample, and only on the
         # hold/trail dimension this module governs.
@@ -158,24 +159,6 @@ def format_drift_message(drift_lanes: List[Dict[str, Any]]) -> str:
         )
     lines.append("_Review + apply by hand, then restart. Recommend-only; nothing auto-applied._")
     return "\n".join(lines)
-
-
-def post_discord_blocking(webhook: str, content: str, *, timeout: float = 8.0) -> bool:
-    """Blocking POST to a Discord webhook. For use from sync/worker-thread code.
-
-    Returns True on 2xx. Never raises — alerting must not break the settle loop.
-    """
-    if not webhook or not content:
-        return False
-    try:
-        data = json.dumps({"content": content[:1900]}).encode("utf-8")
-        req = urllib.request.Request(
-            webhook, data=data, headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
-    except Exception:
-        return False
 
 
 def main() -> None:

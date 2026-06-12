@@ -1,7 +1,7 @@
 from src.analysis.lane_exit_policy import (
     drift_signature,
     format_drift_message,
-    post_discord_blocking,
+    _recommended_params,
 )
 
 
@@ -25,6 +25,20 @@ def test_format_drift_message_renders_lane_and_direction():
     assert "live is hold+trail" in msg
 
 
+def test_neutral_positive_gap_recommends_hold_trail():
+    params = _recommended_params("- neutral / watch", gap=54.28)
+
+    assert params["updown_hold_winners_to_resolution"] is True
+    assert params["updown_trail_arm_pct"] == 0.10
+    assert params["updown_trail_gap_pct"] == 0.15
+
+
+def test_entry_broken_positive_gap_stays_tight():
+    params = _recommended_params("C entry-broken (not an exit fix)", gap=99.0)
+
+    assert params == {"updown_hold_winners_to_resolution": False}
+
+
 def test_drift_signature_dedup_and_flip():
     a = [_lane("L1", rec_hold=False, live_hold=True)]
     b = [_lane("L1", rec_hold=False, live_hold=True)]  # same -> same sig
@@ -35,8 +49,3 @@ def test_drift_signature_dedup_and_flip():
     # new lane entering drift -> signature changes
     d = a + [_lane("L2", rec_hold=False, live_hold=True)]
     assert drift_signature(a) != drift_signature(d)
-
-
-def test_post_discord_blocking_no_webhook_is_safe():
-    assert post_discord_blocking("", "hello") is False
-    assert post_discord_blocking("https://x", "") is False

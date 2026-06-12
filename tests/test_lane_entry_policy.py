@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
+
+import yaml
 
 from src.analysis.lane_entry_policy import resolve_entry_policy_side, resolve_lane_entry_policy
 from src.analysis.math_utils import PositionSizer
@@ -210,3 +213,26 @@ def test_sol_legacy_policy_uses_by_tf_thresholds_and_windows():
     assert policy_5m["entry_window_max"] == 3.5
     assert policy_15m_down["min_edge"] == 0.115
     assert policy_15m_down["entry_window_max"] == 32.0
+
+
+def test_bnb_15m_drop_setting_is_active_in_canonical_entry_policy():
+    cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+
+    up_policy = resolve_lane_entry_policy(
+        strategy_name="bnb_macro",
+        window_size="15m",
+        side="up",
+        full_config=cfg,
+        legacy_policy={"min_edge": 0.0},
+    )
+    down_policy = resolve_lane_entry_policy(
+        strategy_name="bnb_macro",
+        window_size="15m",
+        side="down",
+        full_config=cfg,
+        legacy_policy={"min_edge": 0.0},
+    )
+
+    assert up_policy.min_edge == 0.50
+    assert down_policy.min_edge == 0.50

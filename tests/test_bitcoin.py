@@ -94,6 +94,31 @@ def _make_btc_market(
     )
 
 
+def test_btc_1h_simple_long_defaults_off():
+    # The consensus-follow 1h lane must be inert unless explicitly enabled.
+    strat = BitcoinStrategy(_make_config(), MagicMock(), MagicMock())
+    assert strat._b1hsl_enabled is False
+    # Defaults still parse so the scan-loop guard has usable bounds.
+    assert strat._b1hsl_entry_min == 0.50
+    assert strat._b1hsl_entry_max == 0.85
+    assert strat._b1hsl_sizing_edge == 0.06
+
+
+def test_btc_1h_simple_long_reads_config_when_enabled():
+    cfg = _make_config()
+    cfg["strategies"]["bitcoin"]["bitcoin_1h_simple_long"] = {
+        "enabled": True,
+        "entry_min": 0.55,
+        "entry_max": 0.80,
+        "sizing_edge": 0.05,
+    }
+    strat = BitcoinStrategy(cfg, MagicMock(), MagicMock())
+    assert strat._b1hsl_enabled is True
+    assert strat._b1hsl_entry_min == 0.55
+    assert strat._b1hsl_entry_max == 0.80
+    assert strat._b1hsl_sizing_edge == 0.05
+
+
 def test_bitcoin_entry_policy_supports_hourly_by_tf_overrides():
     cfg = _make_config()
     cfg["strategies"]["bitcoin"]["by_tf"] = {"1h": {"min_edge": 0.12}}

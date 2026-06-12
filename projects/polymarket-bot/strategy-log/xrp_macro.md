@@ -14,6 +14,24 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-12 — Remove residual live-entry AI blockers from alt 1h/15m quant path
+
+- **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by XRP, set alt live-entry decision windows to empty and guarded the remaining `ai_window_closed_marginal_updown` branch behind that set. XRP 1h/15m entries now proceed through quant gates only; AI remains for observer/tuning/self-healing surfaces.
+- **Why:** Operator clarified that live-entry AI belongs to BTC 1h/15m only. The inherited XRP path still had residual AI timing logic that could reject marginal alt candidates even when no live XRP AI should run.
+- **Hypothesis:** Valid XRP 1h quant candidates should no longer be blocked by AI availability, AI timing windows, or marginal AI gate wiring.
+- **Expected outcome:** XRP 1h candidates that pass native side, oracle, price, edge, composite, sizing, and risk gates can emit signals with `ai_used=false`.
+- **Actual outcome:** `pending`
+- **Status:** `pending`
+
+### 2026-06-12 — Exit-policy classifier correction: keep XRP 15m BUY_YES hold+trail
+
+- **What changed:** Reverted the attempted tight-exit change before rollout. In [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), `trading.exit_rules.updown_overrides.xrp_macro.window_lane_overrides.15m.up` keeps `updown_stop_loss_pct: 0.32`, `updown_hold_winners_to_resolution: true`, and trail arm/gap `0.10 / 0.15`. The exit-policy recommender now treats neutral positive-gap lanes as hold+trail instead of defaulting to tight TP/SL.
+- **Why:** `lane_exit_audit.py` defines `gap = held_pnl - actual_pnl`; positive gap means holding to resolution earned more dollars than the realized exit path. `xrp_macro|15m|BUY_YES` has `n=254`, held WR `53.9%`, realized WR `67.7%`, held `$117.71`, realized `$63.42`, gap `+54.28`. Realized WR was higher, but EV dollars still favor holding.
+- **Hypothesis:** Keeping hold+trail plus the widened stop preserves the EV-favored exit path without reverting to the tight path that undercaptured dollars.
+- **Expected outcome:** XRP 15m BUY_YES realized dollars should move toward the held-counterfactual gap after at least 15 closed post-change trades.
+- **Actual outcome:** `pending`
+- **Status:** `pending` — forward-test only; exit changes are not ghost-validatable.
+
 ### 2026-06-07 — 1h BUY_YES price-banded floor bump (TIGHT band — XRP turns −EV above 0.66)
 
 - **What changed:** XRP 1h: `1h_buy_yes_bullish_floor_bump: 0.10`, band **0.50–0.66** (via the new shared `_alt_buy_yes_bullish_floor_bump` price-band guard, `sol_macro.py:2129`).
@@ -395,3 +413,10 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 ## Lessons learned
 
 _(none yet — add only after data)_
+
+## 2026-06-11 — 5m BUY_NO inversion flip → +EV long (forward-test)
+- **Finding:** xrp_macro **5m BUY_NO** is structurally inverted — held-to-resolution WR **33%** over n=159 (settled since ~05-20), **$-258** live PnL. On the *same* markets the YES side resolves ITM ~67%, so the short is anti-selective and the cheap long is +EV.
+- **Change:** flip BUY_NO→BUY_YES at the 5m edge stage via the shared sol loop (`buy_no_5m_flip_to_yes: true`). Uses the **complement** of the native est_prob (`max(1−est, 0.50)`) so the normal edge gate then admits only the *cheap* longs (low yes_price) — the +EV pocket. Candidate has already cleared all short-side gates; downstream directional guards inert (`_btc_trade_inputs_enabled()==False`). Default opt-out flag.
+- **Also (exit-side, same batch):** 15m up stop 0.28→0.32 (held-WR 53%, +$45 n=15). Forward-test only — ghost log can't validate stop changes; basis is the fresh taken-exit settler (`held_win`/`hold_minus_exit_pnl`).
+- **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
+- **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~67% thesis.

@@ -7,6 +7,7 @@ from src.notifications.notification_manager import (
     NotificationManager,
     DISCORD_TRADE_STRATEGIES,
     _discord_trade_allowed,
+    _normalize_discord_strategy,
     _polymarket_market_url_for_exit,
     merge_discord_webhook_from_env,
     format_discord_notifications_log_line,
@@ -43,6 +44,63 @@ def test_discord_trade_allowlist():
     assert _discord_trade_allowed("xrp_dump_hedge")
     assert not _discord_trade_allowed("legacy_label")
     assert not _discord_trade_allowed(None)
+
+
+def test_normalize_discord_strategy_aliases():
+    assert _normalize_discord_strategy("BTC") == "bitcoin"
+    assert _normalize_discord_strategy("SOL") == "sol_macro"
+    assert _normalize_discord_strategy("doge") == "doge"
+
+
+@pytest.mark.asyncio
+async def test_notify_kill_lane_allows_non_allowlisted_lane_as_status():
+    nm = NotificationManager(
+        {"notifications": {"enabled": True, "discord_webhook": "https://example.com/hook"}}
+    )
+    nm.send_discord = AsyncMock(return_value=True)
+    assert await nm.notify_kill_lane("DOGE", "loss streak", 3) is True
+    nm.send_discord.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notify_kill_lane_allows_allowlisted_lane_alias():
+    nm = NotificationManager(
+        {"notifications": {"enabled": True, "discord_webhook": "https://example.com/hook"}}
+    )
+    nm.send_discord = AsyncMock(return_value=True)
+    assert await nm.notify_kill_lane("SOL", "loss streak", 3) is True
+    nm.send_discord.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notify_kill_global_allows_non_allowlisted_strategy_as_status():
+    nm = NotificationManager(
+        {"notifications": {"enabled": True, "discord_webhook": "https://example.com/hook"}}
+    )
+    nm.send_discord = AsyncMock(return_value=True)
+    assert await nm.notify_kill_global("doge_macro", "manual stop") is True
+    nm.send_discord.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notify_recommendations_available_omits_recommendation_body():
+    nm = NotificationManager(
+        {"notifications": {"enabled": True, "discord_webhook": "https://example.com/hook"}}
+    )
+    nm.send_discord = AsyncMock(return_value=True)
+    assert await nm.notify_recommendations_available(
+        source="self_healing",
+        count=4,
+        path="docs/ACTIVE_RECOMMENDATIONS.md",
+    ) is True
+    nm.send_discord.assert_awaited_once()
+    embed = nm.send_discord.await_args.args[1]
+    rendered = str(embed)
+    assert "PSB recommendations available" in rendered
+    assert "docs/ACTIVE_RECOMMENDATIONS.md" in rendered
+    assert "BUY_YES" not in rendered
+    assert "data wants" not in rendered
+    assert "Lane " not in rendered
 
 
 def test_merge_discord_webhook_from_env(monkeypatch):

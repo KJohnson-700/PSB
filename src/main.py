@@ -64,6 +64,7 @@ from src.analysis.calibration_log import (
     append_calibration_record,
     build_record_from_closed_trade,
 )
+from src.analysis.active_recommendations import append_active_recommendation
 from src.analysis.ghost_calibration import (
     build_ghost_calibration_status,
     settle_rejected_candidates,
@@ -896,12 +897,13 @@ class PolyBot:
         self._spawn_bg(_runner(), name="ghost_calibration_refresh")
 
     def _maybe_alert_exit_policy_drift(self, settle_summary: Dict[str, Any]) -> None:
-        """Recompute the exit-policy shadow recommendation; Discord-ping on drift.
+        """Recompute the exit-policy shadow recommendation; queue drift for review.
 
         Gated by config ``lane_exit_policy``. Recommend-only: writes
-        ``lane_exit_policy.json`` and alerts when the live exit config disagrees
-        with the settled-data recommendation (a lane with n>=MIN_N_APPLY). Alerts
-        de-dup on the drift signature so the same drift isn't re-pinged every cycle.
+        ``lane_exit_policy.json`` and ``docs/ACTIVE_RECOMMENDATIONS.md`` when the
+        live exit config disagrees with the settled-data recommendation. Queue
+        entries de-dup on drift signature so the same drift is not repeated every
+        cycle.
         """
         cfg = (self.config.get("lane_exit_policy") or {})
         if not bool(cfg.get("enabled", True)):
@@ -913,7 +915,6 @@ class PolyBot:
             recompute,
             drift_signature,
             format_drift_message,
-            post_discord_blocking,
         )
         _payload, drift = recompute(min_n=int(cfg.get("min_lane_n", 5) or 5))
         sig = drift_signature(drift)
@@ -923,16 +924,17 @@ class PolyBot:
         if not drift:
             return
         logging.info("[exit-policy] drift detected on %d lane(s)", len(drift))
-        if not bool(cfg.get("alert_discord", True)):
-            return
-        notif = (self.config.get("notifications") or {})
-        webhook = str(notif.get("discord_webhook") or "").strip()
-        if not webhook:
-            return
-        if post_discord_blocking(webhook, format_drift_message(drift)):
-            logging.info("[exit-policy] drift alert sent to Discord (%d lanes)", len(drift))
-        else:
-            logging.warning("[exit-policy] drift Discord post failed")
+        rec_path = append_active_recommendation(
+            source="lane_exit_policy",
+            title="Exit-policy drift",
+            body=format_drift_message(drift),
+            details={
+                "drift_lanes": len(drift),
+                "artifact": "data/calibration/lane_exit_policy.json",
+            },
+            links=["[[PSB Active Recommendations]]", "[[lane_exit_policy]]"],
+        )
+        logging.info("[exit-policy] drift recommendation written to %s", rec_path)
 
     def _validate_lane_calibration_runtime(self) -> None:
         """Fail fast if calibration mode and strategy wiring disagree."""
@@ -2296,17 +2298,33 @@ class PolyBot:
                 _sh_result = SelfHealingSupervisor(self.config).run()
                 _sh_msgs = _sh_result.notify_messages
                 if _sh_msgs:
-                    # Batch into one Discord message to avoid rate-limit spam.
                     _max = int((self.config.get("self_healing") or {}).get("escalation", {}).get("max_notify_per_run", 5))
                     _shown = _sh_msgs[:_max]
                     _batched = "\n".join(_shown)
                     if len(_sh_msgs) > _max:
-                        _batched += f"\n…+{len(_sh_msgs) - _max} more suppressed (max_notify_per_run={_max})"
+                        _batched += f"\n...+{len(_sh_msgs) - _max} more suppressed (max_notify_per_run={_max})"
                     try:
-                        await self.notifier.send_discord(_batched)
-                        await self.notifier.send_telegram(_batched)
-                    except Exception as _ne:  # noqa: BLE001 — notify is best-effort
-                        logging.debug("self_healing notify failed: %s", _ne)
+                        rec_path = append_active_recommendation(
+                            source="self_healing",
+                            title="Self-healing escalation",
+                            body=_batched,
+                            details={
+                                "messages": len(_sh_msgs),
+                                "queue_dir": (self.config.get("self_healing") or {}).get("escalation", {}).get("queue_dir", "data/learning/escalations"),
+                            },
+                            links=["[[PSB Active Recommendations]]", "[[self_healing]]"],
+                        )
+                        logging.info("self_healing recommendation written to %s", rec_path)
+                        try:
+                            await self.notifier.notify_recommendations_available(
+                                source="self_healing",
+                                count=len(_sh_msgs),
+                                path=str(rec_path),
+                            )
+                        except Exception as _ae:  # noqa: BLE001 — alert is best-effort
+                            logging.debug("self_healing recommendation alert failed: %s", _ae)
+                    except Exception as _ne:  # noqa: BLE001 — recommendation logging is best-effort
+                        logging.debug("self_healing recommendation log failed: %s", _ne)
             except Exception as e:
                 logging.warning("self_healing run failed: %s", e, exc_info=True)
 

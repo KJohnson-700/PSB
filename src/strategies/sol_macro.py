@@ -606,7 +606,10 @@ class SolMacroStrategy:
     # Windows where the AI decision gate is allowed to run. 5m is excluded on
     # purpose: AI round-trip latency is large vs a 5m entry window and would drop
     # the trade. 15m/1h windows are minutes-to-hours, so the latency is negligible.
-    _DECISION_GATE_WINDOWS = frozenset({"15m", "1h"})
+    # Alt live-entry AI is intentionally disabled. BTC owns the 15m/1h
+    # evaluate_trade_decision path; alt AI is reserved for observer/tuning and
+    # self-healing surfaces.
+    _DECISION_GATE_WINDOWS = frozenset()
 
     def _log_decision_layer(
         self,
@@ -714,6 +717,17 @@ class SolMacroStrategy:
         # Default behavior keeps the historical anti-LTF gate (skip confirmed entries).
         self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
         self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
+        # ── [1h] simple consensus-follow BUY_YES lane (DEFAULT OFF; per-alt) ──
+        # Mirrors BTC's bitcoin_1h_simple_long. Ghost (rejected_candidates_settled,
+        # 1h BUY_YES, binary payout): edge is per-alt — bnb +$157/63%WR, doge +$109/60%,
+        # sol +$26/56% (enable these); xrp 1h is NEGATIVE and 15m mostly bleeds (leave off).
+        # When enabled, admit BUY_YES on yes_price band, bypass the 1h bias/LTF/min_edge
+        # gates, size on a flat edge. OFF = byte-identical (guard always False).
+        _a1hsl = self.config.get("alt_1h_simple_long", {}) or {}
+        self._a1hsl_enabled = bool(_a1hsl.get("enabled", False))
+        self._a1hsl_entry_min = float(_a1hsl.get("entry_min", 0.50) or 0.50)
+        self._a1hsl_entry_max = float(_a1hsl.get("entry_max", 0.85) or 0.85)
+        self._a1hsl_sizing_edge = float(_a1hsl.get("sizing_edge", 0.06) or 0.06)
         # 2026-05-30: opt-in (default OFF, so non-enabling alts are unchanged). When ON,
         # a BEARISH bias requires the responsive MACD vote — it will NOT short on lagging
         # EMA/RSI votes alone when MACD disagrees. Fixes eth's anti-predictive shorts:
@@ -3144,6 +3158,15 @@ class SolMacroStrategy:
             allowed_side = resolution.allowed_side
             side_source = resolution.side_source
             primary_htf_bias = resolution.primary_htf_bias
+            # [1h] simple consensus-follow: admit BUY_YES on the price band regardless
+            # of the 1h bias resolver. Default-off per alt → always False, no-op.
+            _simple_band_long = (
+                is_updown and _updown_tf == "1h"
+                and self._a1hsl_enabled
+                and self._a1hsl_entry_min <= float(market.yes_price or 0) <= self._a1hsl_entry_max
+            )
+            if _simple_band_long:
+                allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 self._shadow_log_neutral_sitout(
@@ -3357,7 +3380,7 @@ class SolMacroStrategy:
                 )
                 continue
             is_5m = _updown_tf == "5m"
-            if is_updown and _updown_tf != "5m" and skip_15m_reason:
+            if is_updown and _updown_tf != "5m" and skip_15m_reason and not _simple_band_long:
                 _bump_skip(skip_15m_reason)
                 logger.debug(
                     f"  {_brand} skip '{market.question[:40]}' — {skip_15m_reason}"
@@ -5028,6 +5051,7 @@ class SolMacroStrategy:
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
                 and self.config.get("use_ai", True)
                 and self.config.get("use_ai_updown", True)
+                and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
                 and not _timing_window_open
             ):
                 _bump_skip("ai_window_closed_marginal_updown")
@@ -5050,6 +5074,14 @@ class SolMacroStrategy:
                 edge, allowed_side, _timing_window_open,
                 window=(_updown_tf if is_updown else "15m"),
             )
+            if _simple_band_long and action == "BUY_YES":
+                # Band-admitted consensus lane: est_prob is unusable, so don't gate on
+                # it — size on the configured flat edge instead (sizing policy, not a
+                # fabricated probability). Tag for ghost/trade split.
+                effective_min_edge = 0.0
+                if edge < self._a1hsl_sizing_edge:
+                    edge = self._a1hsl_sizing_edge
+                reason_parts.append("alt_1h_simple_long")
             if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
