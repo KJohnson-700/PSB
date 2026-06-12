@@ -414,3 +414,25 @@ async def test_execute_xrp_macro_impl_buy_no():
     bot.clob_client.place_order.assert_called_once()
     _assert_buy_no_execution(bot, token_id_no=sig.token_id_no, strategy="xrp_macro")
 
+
+
+def test_resolve_execution_intent_maps_all_actions():
+    from types import SimpleNamespace
+
+    sig = SimpleNamespace(token_id_yes="yes-tok", token_id_no="no-tok")
+
+    sig.action = "BUY_YES"
+    assert PolyBot._resolve_execution_intent(sig, strategy="bitcoin") == ("yes-tok", "BUY")
+    sig.action = "BUY_NO"
+    assert PolyBot._resolve_execution_intent(sig, strategy="bitcoin") == ("no-tok", "BUY")
+    sig.action = "SELL_YES"
+    assert PolyBot._resolve_execution_intent(sig, strategy="bitcoin") == ("yes-tok", "SELL")
+
+
+def test_resolve_execution_intent_rejects_unexpected_action():
+    from types import SimpleNamespace
+
+    sig = SimpleNamespace(action="SELL_NO", token_id_yes="yes-tok", token_id_no="no-tok")
+    # Unsupported action must return None (caller short-circuits the entry) and never
+    # silently resolve a token/side.
+    assert PolyBot._resolve_execution_intent(sig, strategy="sol_macro") is None

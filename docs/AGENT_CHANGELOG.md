@@ -8,6 +8,59 @@
 
 ---
 
+## 2026-06-11 — AI provider integration hardening: MiniMax wiring fixes + dead ollama fallback (loaded & verified)
+
+**Symptom:** log spammed `minimax=APITimeoutError`, `All AI providers failed`, and asyncio "Task exception was never retrieved" tracebacks. **Direct testing proved MiniMax itself is healthy** — `curl` to `https://api.minimax.io/anthropic/v1/messages` with the live `sk-cp-` key returned HTTP 200 in 2.1s and 4.7s. The failures were **our integration**, not the API.
+
+**Root causes + fixes (all in [`src/analysis/ai_agent.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/ai_agent.py) unless noted):**
+- **Dead fallback** — `provider_chain.ollama_local.model` was `qwen2.5:14b` but only `qwen3:8b` is installed → every fallback 404'd, so a single MiniMax blip cascaded to "all providers failed". Fixed in [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml) (`qwen3:8b`).
+- **#1 Per-call client churn** — `_analyze_with_minimax` built+closed a fresh `anthropic.AsyncAnthropic` every call → new TLS handshake per call → connect-timeout storms under concurrent scans. Now one **persistent pooled keep-alive client** via new `_get_minimax_client` (keyed by api_key, rebuilt on rotation).
+- **#2 Timeout/cancellation** — client had no explicit timeout, and the inner 120s `wait_for` never governed because the strategy's outer `ai_*_timeout_sec` (15–60s) cancelled first; that cancellation surfaced as `APITimeoutError` and got logged as a MiniMax fault. Now sets explicit `httpx.Timeout(connect=10, read=≥60, pool=10)` and **propagates `asyncio.CancelledError` untouched** (our budget firing is no longer blamed on MiniMax).
+- **#3 No transient retry** — only HTTP 529 retried; a connect/read blip fell straight through to the slow local model. Now one fast retry (1.5s backoff) on transient (`APITimeout/APIConnection/Connect/Read/Pool/RemoteProtocol`); 429→cooldown unchanged.
+- **#4 Rate-limit charged to budget** — `_rate_limit()` is awaited *inside* `analyze_market`, i.e. inside the strategy timeout; `min_call_gap: 2.0` (≈12s worst-case at depth 6) ate the 15s BTC budget. Dropped to **0.5** in config (429 cooldown remains the real backstop).
+
+**Validation:** 56 AI tests pass; real two-call run through `_analyze_with_minimax` returned valid decisions in 6.0s then 3.4s with **client reuse confirmed** (same object id, 2nd call faster = warm connection). **Restarted + verified loaded** (PID started 18:11 > edits 17:18): post-restart **52 minimax OK, 0 "all providers failed", 0 ollama 404**, 2 transient blips that no longer cascaded. Reversible; no trading-logic touched.
+
+## 2026-06-11 — Live-execution-quality prep batch: pre-order slippage guard + BUY_YES bid-depth exit (both dark)
+
+**Context:** evaluating a Codex top-3 for getting the bot *out of* `dry_run`. Rejected #2 (composite-score reweight — invented weights, tunes BTC's `neutral_15m_min_composite_score` floor which is "leave alone"). Shipped #1 and #3 as **live-readiness** code: both are **no-ops until live**, default-safe, and need a process restart to load. Neither touches current paper calibration or the pending 6 alt 5m flips / 15m stop widenings.
+
+**#1 — Pre-order fresh-book slippage guard.** Between scan and `place_order` the CLOB book can move; the order was placed at `signal.price` (scan-time) with no fresh-book re-check. Added [`_fresh_book_slippage_ok`](/Users/mainfolder/Documents/psb-main%201/src/main.py) called right after the `can_sell_token` guard at **both** entry sites (BTC + SOL-family). Re-reads the live book via the existing `fetch_order_book_snapshot`, compares `best_ask` to `signal.price`. Config `trading.slippage_guard` (`enabled:true, mode:observe, max_slippage_cents:0.02`). **Live-only** (returns True in dry_run — never suppresses a paper/calibration trade), BUY-leg only, **fail-OPEN** on missing book/read error. `observe` logs `slip` without skipping; `enforce` skips with `buy_slippage_block`. Nuance: orders are `post_only=True`, so in enforce the guard's real job is "don't rest a price that won't fill"; it caps true slippage only if live switches to crossing LIMITs.
+
+**#3 — BUY_YES bid-depth deterioration exit.** Closes a long-YES position when sell-side support (YES bid depth) collapses while non-positive with real time left — "held too long into a thinning book" without WebSocket infra. **Plumbing:** [`_fetch_held_market_prices`](/Users/mainfolder/Documents/psb-main%201/src/main.py) now also returns a compact YES-book snapshot (`{best_bid,best_ask,spread,bids[top5]}`) built from the book the fast-exit loop *already* fetches (zero new calls); threaded through `_run_exit_checks` → `PositionExitManager.check_exits(..., market_liquidity=None)`. **Rule:** [`_maybe_bid_depth_exit`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py) injected as a **fallback before `if reason:`** so TP/SL/time-stop always win; scoped to long YES only (`entry_leg=YES, outcome=YES`); fires when top-N bid `depth_usd < floor` AND `pnl_pct<=0` AND `mins_remaining > min_mins_remaining` (so the time-stop owns end-of-life). Reason `buy_yes_bid_depth_drop`. Config `trading.exit_rules.bid_depth_exit` **default `enabled:false`, `mode:observe`** — this is an EXIT change the **ghost log cannot validate**, and an early close on a scratch position is the "stops cut winners" shape; observe logs would-fire vs outcome before any enforce. Fail-OPEN (missing snapshot never forces exit).
+
+**Validation:** `pytest tests/ -k "exit or strateg"` → **119 passed**; `pytest tests/test_live_testing.py tests/test_live_exit_overrides.py tests/test_updown_exit_shared.py` → **32 passed**. main.py + live_testing.py syntax OK, settings.yaml parses, all `_fetch_held_market_prices`/`check_exits` callers updated. **Honest validation for BOTH is the deferred $1–2 live smoke test** — thresholds (`max_slippage_cents`, `min_bid_depth_usd`) are placeholders until a real fill calibrates them. Reversible; all behavior behind config flags.
+
+## 2026-06-11 — Three-phase hard-task pass: execution contract, ETH observer, retired scan cleanup
+
+**Phase 1 — execution contract:** [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py) now routes BTC and SOL-family risk, term-risk, and unsellable-token skip logging through `DecisionSnapshot`, and uses a shared action-to-order intent helper. This keeps entry behavior unchanged while removing duplicated skip payload assembly and action parsing.
+
+**Phase 2 — ETH shadow observer:** [`src/strategies/eth_macro.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) now sends early `neutral_bias` structural rejects through the same shadow-observer budget/cooldown path as liquidity rejects. This fixed the ETH observer tests that previously missed candidates when neutral-bias gating fired before liquidity.
+
+**Phase 3 — retired scan artifacts:** [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py) removed the dead `/api/scans/*` endpoints. [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html) no longer carries the scan endpoint placeholder; the existing Scan Diagnostics panel now renders from `/api/strategy/metrics`.
+
+**Validation:** broad affected suite passed: `pytest tests/test_strategies.py tests/test_scanner_crypto_enhancements.py tests/test_dashboard_bundle.py tests/test_notification_manager.py tests/test_kelly_sizer.py tests/test_risk_manager_hardening.py tests/test_circuit_breakers.py tests/test_decision_snapshot.py tests/test_strategy_execution_drivers.py tests/test_bitcoin.py tests/test_sol_macro.py tests/test_eth_macro.py` → **315 passed**.
+
+## 2026-06-11 — Deadzone execution gates purged; regime feed kept as analytics-only
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** removed the no-op `_check_market_regime_execution` wrapper and replaced it with explicit `_mark_exposure_resume_window_green()` calls in BTC and SOL-family execution paths. This preserves the intended permissive exposure-manager resume behavior without carrying a deadzone-style entry gate.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py):** renamed the leftover `trading.market_regime_gate` dashboard feed config to `trading.regime_feed`. The standalone regime feed still supports Ghost Lab/dashboard health and historical segmentation, but it no longer implies an execution gate.
+
+**Tests:** removed stale `dead_zone_enabled: false` fixture keys from BTC/SOL/ETH tests. Validation: `pytest tests/test_strategy_execution_drivers.py tests/test_dashboard_bundle.py tests/test_bitcoin.py tests/test_sol_macro.py tests/test_eth_macro.py tests/test_decision_snapshot.py -k "not shadow_observer"` → **266 passed, 6 deselected**. Full unfiltered run still has the known ETH shadow-observer failures documented by prior repo history; not part of this deadzone purge.
+
+## 2026-06-11 — Crypto-only architecture cleanup: remove retired consensus path and bucketed risk
+
+**Scope:** backend cleanup only, with dashboard edits limited to retired scan-copy cleanup and restoring the existing exit-HUD test literal.
+
+**[`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py), [`src/analysis/circuit_breakers.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/circuit_breakers.py):** removed stale crypto/non-crypto bucket handling. All active positions now share the global concurrent-position limit, and term exposure is governed by `term_risk.caps.<TERM>` across the crypto-only bot.
+
+**[`src/strategies/consensus.py`](/Users/mainfolder/Documents/psb-main%201/src/strategies/consensus.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml), [`src/market/scanner.py`](/Users/mainfolder/Documents/psb-main%201/src/market/scanner.py):** deleted the retired `ConsensusStrategy`, removed its config block, and removed scanner buckets that only existed to feed retired general-market consensus opportunities.
+
+**[`src/analysis/decision_snapshot.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/decision_snapshot.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** added a small `DecisionSnapshot` contract for skip/entry metadata and wired BTC/SOL-family execution paths through it so lane metadata is not assembled by ad hoc dict merging in each entry path.
+
+**Validation:** `pytest tests/test_strategies.py tests/test_scanner_crypto_enhancements.py tests/test_dashboard_bundle.py tests/test_notification_manager.py tests/test_kelly_sizer.py tests/test_risk_manager_hardening.py tests/test_circuit_breakers.py tests/test_decision_snapshot.py tests/test_strategy_execution_drivers.py` → **132 passed**.
+
 ## 2026-06-10 — Alt 15m ENTRY: drop bnb 15m (both sides -EV); eth flip already working
 
 **Method (per "look at last-session data"):** re-validated the 5 flagged entry lanes on POST-FLIP data (ts>=06-10 01:05 UTC, after the alt window-delta/macd flip restart) — NOT the 06-03 pool, which buried a week of pre-flip data and gave wrong signs (doge 15m up +0.021->-0.087, eth down +0.103->-0.017 once filtered). Findings: (1) **eth 15m flip is ALREADY working** — taken longs down to n=3 while flipped shorts n=12/+$36; no new action. (2) **bnb 15m both sides -EV** in BOTH eras (06-03 up -0.014/down -0.009; post-flip ghost n~1000 up -0.060/down -0.031; taken BUY_YES -$12 / BUY_NO -$10) — no profitable side, flip can't help. (3) doge 15m / eth 15m down are +EV or winning -> leave (their taken underperformance is selection/exit, not wrong side).

@@ -10,7 +10,24 @@ from src.analysis.sol_btc_service import (
 )
 from src.market.scanner import Market
 from src.strategies.eth_macro import ETHMacroStrategy
+from src.strategies.sol_macro import BiasResolution
 from tests.async_helpers import run_async
+
+
+def _force_eth_side(strat, action="BUY_YES"):
+    """Pin a concrete usable bias so the scan passes the neutral_bias sit-out and
+    reaches the real structural rejects (liquidity / oracle / momentum). Synthetic
+    SOLTechnicalAnalysis fixtures otherwise resolve NEUTRAL and short-circuit."""
+    horizon_bias = "BEARISH" if action == "BUY_NO" else "BULLISH"
+    strat._resolve_alt_bias_for_tf = MagicMock(
+        return_value=BiasResolution(
+            allowed_side=action,
+            side_source="eth_15m_native",
+            horizon_tf="15m",
+            horizon_bias=horizon_bias,
+            primary_htf_bias=horizon_bias,
+        )
+    )
 
 
 def _config():
@@ -250,7 +267,6 @@ def test_eth_scan_buy_no_ltf_override_uses_eth_ta_without_name_error():
     cfg["strategies"]["eth_macro"].update(
         {
             "buy_no_ltf_override_enabled": True,
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
@@ -325,7 +341,6 @@ def test_eth_scan_eth_only_when_btc_full_analysis_unavailable():
     cfg["strategies"]["eth_macro"].update(
         {
             "buy_no_ltf_override_enabled": True,
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
@@ -389,7 +404,6 @@ def test_eth_oracle_basis_block_is_logged_to_rejected_candidates():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
@@ -472,7 +486,6 @@ def test_eth_scan_uses_relaxed_oracle_basis_policy():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
@@ -552,7 +565,6 @@ def test_eth_lane_entry_window_is_logged_to_rejected_candidates():
     cfg["strategies"]["eth_macro"].update(
         {
             "buy_no_ltf_override_enabled": True,
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "min_liquidity": 1,
@@ -631,7 +643,6 @@ def test_eth_liquidity_reject_can_feed_shadow_observer():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
@@ -646,6 +657,7 @@ def test_eth_liquidity_reject_can_feed_shadow_observer():
     ai.observe_rejected_candidate = AsyncMock(return_value={"ok": True})
     strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
     strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+    _force_eth_side(strat, "BUY_YES")
 
     eth_ta = SOLTechnicalAnalysis(
         sol=SOLAnalysis(
@@ -700,11 +712,97 @@ def test_eth_liquidity_reject_can_feed_shadow_observer():
     assert strat.last_scan_stats["shadow_observer_ok"] == 1
 
 
+def test_eth_neutral_bias_does_not_feed_shadow_observer():
+    # neutral_bias is a sit-out (no usable side / action=NONE), not a rejected
+    # *candidate*, so it must NOT spend the shared per-scan observer budget —
+    # matching the SolMacro parent. Regression guard against re-adding the observe
+    # call, which would starve real structural rejects (liquidity/oracle/momentum).
+    from src.strategies.sol_macro import BiasResolution
+
+    cfg = _config()
+    cfg["strategies"]["eth_macro"].update(
+        {
+            "use_ai": True,
+            "use_ai_updown": True,
+            "min_liquidity": 1,
+        }
+    )
+    ai = MagicMock()
+    ai.research_narrative_enabled.return_value = False
+    ai.research_narrative_max_calls_per_scan.return_value = 0
+    ai.research_narrative_min_confidence.return_value = 1.0
+    ai.shadow_observer_enabled.return_value = True
+    ai.shadow_observer_max_calls_per_scan.return_value = 1
+    ai.observe_rejected_candidate = AsyncMock(return_value={"ok": True})
+    strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
+    strat._get_btc_htf_bias = MagicMock(return_value="NEUTRAL")
+    # Force the structural neutral_bias early-out independent of TF internals.
+    strat._resolve_alt_bias_for_tf = MagicMock(
+        return_value=BiasResolution(
+            allowed_side=None,
+            side_source="eth_15m_neutral",
+            horizon_tf="15m",
+            horizon_bias="NEUTRAL",
+            primary_htf_bias="NEUTRAL",
+        )
+    )
+
+    eth_ta = SOLTechnicalAnalysis(
+        sol=SOLAnalysis(
+            current_price=3500.0,
+            rsi_14=50.0,
+            macd_15m=MACDResult(histogram=0.0, histogram_rising=False),
+            macd_5m=MACDResult(histogram=0.0, histogram_rising=False),
+        ),
+        correlation=BTCSOLCorrelation(
+            btc_price=100000.0,
+            btc_move_5m_pct=0.0,
+            btc_move_15m_pct=0.0,
+            correlation_1h=0.8,
+            sol_trend="NEUTRAL",
+        ),
+        multi_tf=MultiTimeframeTrend(h1_trend="NEUTRAL"),
+    )
+    btc_ta = TechnicalAnalysis(
+        current_price=100000.0,
+        macd_1h=MACDResult(histogram=0.0, histogram_rising=False),
+        macd_15m=MACDResult(histogram=0.0, histogram_rising=False),
+        candle_momentum=CandleMomentum(
+            m15_direction="FLAT",
+            m5_direction="FLAT",
+            m5_move_pct=0.0,
+        ),
+    )
+    strat.sol_service.get_full_analysis = MagicMock(return_value=eth_ta)
+    strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
+
+    market = Market(
+        id="eth15_neutral_observer",
+        question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
+        description="ETH 15m neutral_bias observer test",
+        volume=50000.0,
+        liquidity=50000.0,
+        yes_price=0.50,
+        no_price=0.50,
+        spread=0.02,
+        end_date=datetime.now(timezone.utc) + timedelta(minutes=14),
+        token_id_yes="yes",
+        token_id_no="no",
+        group_item_title="Ethereum Up or Down",
+        slug="eth-updown-15m-1770000099",
+    )
+
+    signals = run_async(strat.scan_and_analyze([market], bankroll=10000.0))
+
+    assert signals == []
+    ai.observe_rejected_candidate.assert_not_awaited()
+    assert strat.last_scan_stats["shadow_observer_calls"] == 0
+
+
 def test_eth_shadow_observer_timeout_consumes_scan_budget():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
@@ -720,6 +818,7 @@ def test_eth_shadow_observer_timeout_consumes_scan_budget():
     strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
     strat._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
     strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+    _force_eth_side(strat, "BUY_YES")
 
     eth_ta = SOLTechnicalAnalysis(
         sol=SOLAnalysis(
@@ -779,7 +878,6 @@ def test_eth_shadow_observer_skips_repeated_market_during_cooldown():
     cfg = _config()
     cfg["strategies"]["eth_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
@@ -796,6 +894,7 @@ def test_eth_shadow_observer_skips_repeated_market_during_cooldown():
     strat = ETHMacroStrategy(cfg, ai, MagicMock(), kelly_sizer=MagicMock())
     strat._observe_rejected_candidate_with_timeout = AsyncMock(return_value=None)
     strat._get_btc_htf_bias = MagicMock(return_value="BULLISH")
+    _force_eth_side(strat, "BUY_YES")
 
     eth_ta = SOLTechnicalAnalysis(
         sol=SOLAnalysis(

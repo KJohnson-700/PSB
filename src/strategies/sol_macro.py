@@ -388,6 +388,10 @@ class SolMacroStrategy:
         )
         self._shadow_observer_tasks: set[asyncio.Task] = set()
         self._shadow_observer_retry_after: Dict[str, float] = {}
+        # Per-(market_id, tf) cooldown so a persistently-NEUTRAL market logs its
+        # sit-out once per window instead of every scan-tick. See
+        # _shadow_log_neutral_sitout.
+        self._neutral_sitout_retry_after: Dict[str, float] = {}
         self._refresh_shadow_observer_controls()
         self.ai_hold_veto_ttl_sec = self.config.get("ai_hold_veto_ttl_sec", 300)
         self.min_edge_5m_ai_override = float(
@@ -1894,6 +1898,92 @@ class SolMacroStrategy:
         except Exception:
             return
 
+    def _shadow_log_neutral_sitout(
+        self,
+        asset_obj: Any,
+        tf: str,
+        market: Any,
+        *,
+        primary_htf_bias: Optional[str] = None,
+        alt_trends: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Forward shadow log (decision-NEUTRAL, log-only) of a NEUTRAL sit-out.
+
+        When a lane has no usable native bias it sits out (``allowed_side is
+        None``) BEFORE any reject is ghost-logged, so the sit-out is invisible to
+        every settled record. This records the market with a *notional* tape side
+        (the sign of the window-delta P(up)) so the counterfactual settles offline
+        against the real Polymarket outcome — answering "if I'd followed the tape
+        when my native bias was NEUTRAL, what's the EV?". Never raises into the
+        scan loop. Gate: ``neutral_sitout_shadow_log`` (default on). Inherited by
+        ETH and all alts; BTC has a separate NEUTRAL->AI path and is excluded.
+        """
+        if not bool(self.config.get("neutral_sitout_shadow_log", True)):
+            return
+        try:
+            end_date = getattr(market, "end_date", None)
+            if end_date is None:
+                return
+            _end_utc = (
+                end_date.replace(tzinfo=timezone.utc)
+                if end_date.tzinfo is None
+                else end_date
+            )
+            mins_left = (_end_utc - datetime.now(timezone.utc)).total_seconds() / 60.0
+            wd = evaluate_window_delta(asset_obj, tf, mins_left)
+            if wd is None:
+                return
+            move_pct, wd_prob = wd
+
+            market_id = (
+                getattr(market, "condition_id", None) or getattr(market, "id", None)
+            )
+            # Per-(market, tf) cooldown: a market that stays NEUTRAL must not flood
+            # the log every scan-tick. Default 300s (~one short window).
+            cooldown = float(self.config.get("neutral_sitout_cooldown_sec", 300.0) or 0.0)
+            now = time.monotonic()
+            key = f"{market_id}|{tf}"
+            if self._neutral_sitout_retry_after.get(key, 0.0) > now:
+                return
+            self._neutral_sitout_retry_after[key] = now + cooldown
+
+            # Notional side = the tape lean. wd_prob is P(up); >= 0.5 -> long.
+            action = "BUY_YES" if wd_prob >= 0.5 else "BUY_NO"
+            yes_price = float(getattr(market, "yes_price", 0.0) or 0.0)
+            no_price = float(
+                getattr(market, "no_price", 0.0) or ((1.0 - yes_price) if yes_price else 0.0)
+            )
+            trends = alt_trends or {}
+            import json as _json
+            from pathlib import Path as _Path
+
+            row = {
+                "ts": time.time(),
+                "strategy": getattr(
+                    self, "_signal_strategy_name", self.__class__.__name__
+                ),
+                "window": tf,
+                "action": action,
+                "reason": "neutral_sitout",
+                "yes_price": round(yes_price, 4),
+                "no_price": round(no_price, 4),
+                "wd_prob": round(float(wd_prob), 4),
+                "move_pct": round(float(move_pct), 5),
+                "mins_left": round(float(mins_left), 3),
+                "market_id": market_id,
+                "market_slug": getattr(market, "slug", None),
+                "primary_htf_bias": primary_htf_bias,
+                "alt_1h_trend": trends.get("alt_1h_trend"),
+                "alt_15m_trend": trends.get("alt_15m_trend"),
+                "alt_5m_trend": trends.get("alt_5m_trend"),
+            }
+            path = _Path("data/calibration/neutral_sitout_shadow.jsonl")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a") as fh:
+                fh.write(_json.dumps(row) + "\n")
+        except Exception:
+            return
+
     def _low_atr_gate_blocks(self, asset_obj: Any, window: str, action: str):
         """Lane-specific volatility gate (2026-06-09, Kimi signal-hunt + EV vet).
 
@@ -3056,6 +3146,17 @@ class SolMacroStrategy:
             primary_htf_bias = resolution.primary_htf_bias
             if allowed_side is None:
                 _bump_skip("neutral_bias")
+                self._shadow_log_neutral_sitout(
+                    ta.sol,
+                    _updown_tf,
+                    market,
+                    primary_htf_bias=primary_htf_bias,
+                    alt_trends={
+                        "alt_1h_trend": macro_trend,
+                        "alt_15m_trend": bias_15m,
+                        "alt_5m_trend": bias_5m,
+                    },
+                )
                 logger.info(
                     "%s skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
                     _brand,
@@ -3859,6 +3960,25 @@ class SolMacroStrategy:
                                 "  %s POSTERIOR FLIP -> %s (lane %s reliably lost)",
                                 self._signal_strategy_name, action, _flip_lid,
                             )
+
+                    # 5m BUY_NO inversion flip (forward-test 2026-06-11). The 5m
+                    # short side is anti-selective for this lane (held-to-resolution
+                    # WR ~30%); the cheap long is +EV on the same markets. The
+                    # candidate already cleared every short-side gate above, so we
+                    # redirect it to the long using the complement of the native
+                    # est_prob (which was built to justify the short). The edge gate
+                    # below then admits only the cheap longs. Opt-in per strategy via
+                    # buy_no_5m_flip_to_yes (enabled for hype only).
+                    if (
+                        bool(self.config.get("buy_no_5m_flip_to_yes", False))
+                        and action == "BUY_NO"
+                    ):
+                        estimated_prob = max(1.0 - float(estimated_prob), 0.50)
+                        action = "BUY_YES"
+                        direction = "UP"
+                        allowed_side = "LONG"
+                        side_source = f"{side_source or ''}+buy_no_5m_to_yes_flip"
+                        reason_parts.append("buy_no_5m_to_yes_flip")
 
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=mtt.h1_trend,

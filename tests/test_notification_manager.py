@@ -16,8 +16,8 @@ from src.notifications.notification_manager import (
 @pytest.mark.asyncio
 async def test_notify_trade_only_crypto_strategies():
     nm = NotificationManager({"enabled": True, "discord_webhook": "", "alert_on_trade": True})
-    # No webhook — send_discord short-circuits; we still verify gate returns early for non-crypto
-    assert await nm.notify_trade({"strategy": "consensus", "side": "BUY"}) is False
+    # No webhook — send_discord short-circuits; still verify unknown labels are denied.
+    assert await nm.notify_trade({"strategy": "legacy_label", "side": "BUY"}) is False
     assert await nm.notify_trade({"strategy": "bitcoin", "side": "BUY"}) is False  # no webhook
 
 
@@ -41,7 +41,7 @@ def test_discord_trade_allowlist():
     assert _discord_trade_allowed("bitcoin")
     assert _discord_trade_allowed("hype_macro")
     assert _discord_trade_allowed("xrp_dump_hedge")
-    assert not _discord_trade_allowed("consensus")
+    assert not _discord_trade_allowed("legacy_label")
     assert not _discord_trade_allowed(None)
 
 

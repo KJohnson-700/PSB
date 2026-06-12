@@ -136,6 +136,9 @@ class PositionExitManager:
         self.updown_high_entry_threshold = self._ude.updown_high_entry_threshold
         self.updown_in_profit_stop_trigger_pct = self._ude.updown_in_profit_stop_trigger_pct
         self.updown_in_profit_stop_tighten_to_pct = self._ude.updown_in_profit_stop_tighten_to_pct
+        # Optional BUY_YES bid-depth deterioration exit (default OFF). See settings.yaml
+        # trading.exit_rules.bid_depth_exit and _maybe_bid_depth_exit below.
+        self._bid_depth_exit = exit_cfg.get("bid_depth_exit", {}) or {}
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
@@ -146,6 +149,7 @@ class PositionExitManager:
         active_positions: Dict[str, Any],
         market_prices: Dict[str, float],
         market_token_ids: Optional[Dict[str, Tuple[str, str]]] = None,
+        market_liquidity: Optional[Dict[str, Any]] = None,
     ) -> List[ExitDecision]:
         """Check all active positions for exit conditions.
 
@@ -153,6 +157,9 @@ class PositionExitManager:
             active_positions: Dict of position_id -> Position objects
             market_prices: Dict of market_id -> current YES price
             market_token_ids: Optional dict of market_id -> (token_id_yes, token_id_no)
+            market_liquidity: Optional dict of market_id -> compact YES-book snapshot
+                ({best_bid, best_ask, spread, bids[]}); only consumed by the
+                default-off bid-depth exit. None elsewhere (e.g. the scan loop).
         """
         if not self.enabled:
             return []
@@ -367,6 +374,16 @@ class PositionExitManager:
                 elif hours_held >= self.max_hold_hours:
                     reason = "time_limit"
 
+            # Optional BUY_YES bid-depth deterioration exit — only as a fallback,
+            # never overriding TP/SL/time-stop reasons already set above.
+            if reason is None:
+                reason = self._maybe_bid_depth_exit(
+                    pos=pos,
+                    entry_leg=entry_leg,
+                    pnl_pct=pnl_pct,
+                    market_liquidity=market_liquidity,
+                )
+
             if reason:
                 token_yes, token_no = token_map.get(pos.market_id, ("", ""))
 
@@ -415,6 +432,68 @@ class PositionExitManager:
                 )
 
         return exits
+
+    def _maybe_bid_depth_exit(
+        self,
+        *,
+        pos: Any,
+        entry_leg: str,
+        pnl_pct: float,
+        market_liquidity: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Close a long-YES position when YES bid depth (sell-side support) collapses.
+
+        Default OFF. ``observe`` mode logs would-fire events without acting, so the
+        first runs build a record of how often this would trigger vs. real outcomes
+        — the ghost log cannot score exit changes, so this is the only honest way to
+        validate it. Only long YES (entry_leg=YES, outcome=YES) is in scope: that's
+        the leg whose YES book we snapshot. Fail-OPEN: a missing snapshot never
+        forces an exit.
+        """
+        cfg = self._bid_depth_exit
+        if not cfg.get("enabled", False):
+            return None
+        if not market_liquidity:
+            return None
+        if entry_leg != "YES" or getattr(pos, "outcome", "") != "YES":
+            return None
+        if cfg.get("only_when_losing", True) and pnl_pct > 0:
+            return None
+
+        liq = market_liquidity.get(getattr(pos, "market_id", "")) or {}
+        bids = liq.get("bids") or []
+        if not bids:
+            return None
+
+        # Time gate: only fire when MORE than min_mins_remaining is left, so the
+        # late-window time stop owns end-of-life exits and we don't double-fire.
+        min_mins = float(cfg.get("min_mins_remaining", 5.0))
+        end_date = getattr(pos, "end_date", None)
+        if end_date is not None:
+            _end = end_date if end_date.tzinfo else end_date.replace(tzinfo=timezone.utc)
+            mins_remaining = (_end - datetime.now(timezone.utc)).total_seconds() / 60.0
+            if mins_remaining <= min_mins:
+                return None
+
+        levels = int(cfg.get("depth_levels", 3))
+        depth_usd = sum(
+            float(b.get("price", 0)) * float(b.get("size", 0)) for b in bids[:levels]
+        )
+        floor = float(cfg.get("min_bid_depth_usd", 150.0))
+        if depth_usd >= floor:
+            return None
+
+        mode = str(cfg.get("mode", "observe")).strip().lower()
+        msg = (
+            f"bid-depth-exit {mode}: market={str(getattr(pos, 'market_id', ''))[:18]} "
+            f"depth_usd={depth_usd:.0f} floor={floor:.0f} "
+            f"pnl_pct={pnl_pct:+.3f} leg=YES"
+        )
+        if mode == "enforce":
+            logger.warning("%s — EXIT", msg)
+            return "buy_yes_bid_depth_drop"
+        logger.info("%s — observe (holding)", msg)
+        return None
 
 
 class PerformanceTracker:

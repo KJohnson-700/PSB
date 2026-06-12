@@ -24,9 +24,9 @@ Override per strategy with **`strategies.<name>.kelly_fraction`** when present.
 
 | Control | Default idea |
 |---------|----------------|
-| Crypto vs non-crypto pools | Separate concurrency and budget |
-| **`CRYPTO_MAX`** | Max concurrent crypto positions |
-| Short-term crypto budget | Fraction of bankroll vs open SHORT_TERM crypto cost |
+| Global position cap | `risk.max_concurrent_positions` applies to the whole active bot |
+| Term budget | `term_risk.caps.<TERM>` caps aggregate open notional for that market term |
+| Term budget | Open positions sharing a market term consume the configured cap, e.g. `SHORT_TERM` |
 
 ## Action
 

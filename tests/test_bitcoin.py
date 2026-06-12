@@ -877,7 +877,6 @@ class TestBitcoinSignalGating:
         cfg = _make_config()
         cfg["strategies"]["bitcoin"].update(
             {
-                "dead_zone_enabled": False,
                 "use_ai": False,
                 "use_ai_updown": False,
                 "min_liquidity": 1,

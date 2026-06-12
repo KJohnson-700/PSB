@@ -12,21 +12,12 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, Iterable, Optional, Tuple
 
+from src.execution.updown_exit_shared import CRYPTO_UPDOWN_STRATEGIES
+
 logger = logging.getLogger(__name__)
 
 STOP_EXIT_REASONS = frozenset({"updown_stop_loss", "stop_loss"})
 BUY_SIDES = frozenset({"BUY_YES", "BUY_NO"})
-CRYPTO_UPDOWN_STRATEGIES = frozenset(
-    {
-        "bitcoin",
-        "sol_macro",
-        "eth_macro",
-        "hype_macro",
-        "xrp_macro",
-        "doge_macro",
-        "bnb_macro",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -212,6 +203,8 @@ class CircuitBreakerManager:
         position_threshold = int(cfg.get("position_threshold", 5) or 5)
         counts = {"BUY_YES": 0, "BUY_NO": 0}
         for pos in active_positions:
+            # Only crypto up/down exposure feeds this breaker. A stale/unknown or
+            # non-crypto position label must never trip the crypto reversal halt.
             strategy = str(getattr(pos, "strategy", "") or "").lower().strip()
             if strategy and strategy not in CRYPTO_UPDOWN_STRATEGIES:
                 continue

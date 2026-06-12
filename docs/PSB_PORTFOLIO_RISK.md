@@ -4,13 +4,13 @@ Multiple strategies (SOL, ETH, HYPE, XRP) can fire on the **same BTC impulse** w
 
 ## Existing controls (`src/execution/clob_client.py` — `RiskManager`)
 
-- **Crypto bucket:** separate from non-crypto concurrent slots; **`CRYPTO_MAX`** concurrent crypto positions (default 12).
-- **Short-term crypto budget:** `evaluate_entry` caps aggregate **SHORT_TERM** crypto exposure vs bankroll (see `crypto_cap` logic).
+- **Global position cap:** all active PSB execution lanes are crypto up/down, so `max_concurrent_positions` applies to the whole bot.
+- **Term budget:** `evaluate_entry` caps aggregate exposure by market term using `term_risk.caps` from config. Short-window crypto markets normally consume the **SHORT_TERM** cap.
 
 ## Gaps (document / future code)
 
 - **Same resolution window stacking:** two macro legs on the same 5m candle move are still partially correlated — consider **second-leg haircut** or **per-window notional cap** after measuring overlaps from the journal.
-- **Explicit portfolio ceiling:** optional global max notional across all open crypto up/down positions.
+- **Explicit per-resolution ceiling:** optional max notional per exact expiry bucket, because all active lanes can stack into the same short-window resolution.
 
 ## Operator action
 

@@ -18,9 +18,9 @@ GET {{host}}/api/events
 ### Scalar API reference (only when SCALAR_ENABLED=1 on server)
 GET {{host}}/scalar
 
-### Strategy metrics + scans (heavy panels; polled less often than SSE heroes)
+### Strategy metrics (heavy panels; polled less often than SSE heroes)
+### Scan Diagnostics now render from /api/strategy/metrics — /api/scans/* retired.
 GET {{host}}/api/strategy/metrics
-GET {{host}}/api/scans/latest
 
 ### Journal + exposure
 GET {{host}}/api/journal/summary

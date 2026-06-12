@@ -51,6 +51,11 @@ try:
 except ImportError:
     anthropic = None
 
+try:
+    import httpx  # anthropic SDK's HTTP layer; used for explicit timeouts + pooling
+except ImportError:
+    httpx = None
+
 from src.analysis.usage_tracker import UsageTracker, usage_tracker as global_usage_tracker
 from src.analysis.calibration_buckets import build_bucket_tags
 from src.ai.render import (
@@ -3000,6 +3005,44 @@ Reply with only the JSON object required by the system message — decision fiel
         finally:
             await _close_async_client_quietly(client)
 
+    def _get_minimax_client(self, api_key: str, call_timeout: float):
+        """Return a *persistent* AsyncAnthropic client for MiniMax (fix #1/#2).
+
+        Creating a fresh client per call (the old behavior) opened a new connection
+        pool + TLS handshake every time; under concurrent scans that produced
+        connect-timeout storms that the SDK reported as 'minimax timed out'. We now
+        reuse one pooled, keep-alive client per api_key and give it an EXPLICIT
+        bounded httpx timeout (connect capped so a handshake hiccup fails fast and
+        retries, read generous so a real answer isn't cut). The caller's
+        asyncio.wait_for still owns the overall budget.
+        """
+        if anthropic is None:
+            raise ImportError("anthropic package is not installed")
+        key = (api_key, "https://api.minimax.io/anthropic")
+        existing = getattr(self, "_minimax_client", None)
+        if existing is not None and getattr(self, "_minimax_client_key", None) == key:
+            return existing
+        # Key changed (rotation) — drop the stale client; build a fresh one.
+        self._minimax_client = None
+        self._minimax_client_key = None
+        timeout: Any = call_timeout
+        if httpx is not None:
+            timeout = httpx.Timeout(
+                connect=10.0,
+                read=max(60.0, float(call_timeout)),
+                write=30.0,
+                pool=10.0,
+            )
+        client = anthropic.AsyncAnthropic(
+            api_key=api_key,
+            base_url="https://api.minimax.io/anthropic",
+            max_retries=0,  # we own retry/cooldown policy below
+            timeout=timeout,
+        )
+        self._minimax_client = client
+        self._minimax_client_key = key
+        return client
+
     async def _analyze_with_minimax(
         self,
         prompt: str,
@@ -3013,8 +3056,11 @@ Reply with only the JSON object required by the system message — decision fiel
     ) -> Optional[AIAnalysis]:
         """Analyzes market data using the MiniMax Anthropic-compatible API (Coding Plan).
 
-        Retries once on 529 OverloadedError (transient server overload) before raising,
-        so a momentary spike doesn't cascade to broken fallback providers.
+        Uses one persistent pooled client (see _get_minimax_client) and retries once
+        on a TRANSIENT connect/timeout before raising, so a single network blip
+        doesn't cascade to the (slow) local fallback. 429 → cooldown; 529 → retry.
+        asyncio.CancelledError (the caller's outer budget firing) is propagated
+        untouched — it is NOT a MiniMax fault and must never be logged as one.
         """
         max_attempts = 2
         call_timeout = self._provider_timeout(provider_config)
@@ -3023,20 +3069,25 @@ Reply with only the JSON object required by the system message — decision fiel
         ck = self._cooldown_key("minimax", model)
         if self._on_cooldown(ck):
             raise RuntimeError("minimax_cooldown")
+
+        def _is_transient(e: BaseException) -> bool:
+            # Connect/read/pool timeouts + dropped connections — retryable. Covers
+            # anthropic.APITimeoutError / APIConnectionError and the httpx layer.
+            names = (
+                "APITimeoutError",
+                "APIConnectionError",
+                "ConnectTimeout",
+                "ConnectError",
+                "ReadTimeout",
+                "PoolTimeout",
+                "RemoteProtocolError",
+            )
+            return type(e).__name__ in names or isinstance(e, asyncio.TimeoutError)
+
         for attempt in range(max_attempts):
             start_time = time.time()
-            client = None
             try:
-                if anthropic is None:
-                    raise ImportError("anthropic package is not installed")
-                # MiniMax Coding Plan uses Anthropic-compatible endpoint with sk-cp- keys.
-                # max_retries=0 disables the SDK's built-in 429/5xx retry loop so a
-                # rate-limited account doesn't burn ~3s of waits before we fall through.
-                client = anthropic.AsyncAnthropic(
-                    api_key=api_key,
-                    base_url="https://api.minimax.io/anthropic",
-                    max_retries=0,
-                )
+                client = self._get_minimax_client(api_key, call_timeout)
 
                 response = await asyncio.wait_for(
                     client.messages.create(
@@ -3072,10 +3123,9 @@ Reply with only the JSON object required by the system message — decision fiel
                 )
                 return parser(content, market_id, anchor_yes_price)
 
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"Minimax API timed out after {call_timeout}s for market {market_id}"
-                )
+            except asyncio.CancelledError:
+                # The caller's outer asyncio.wait_for budget fired and cancelled us.
+                # This is OUR timeout, not MiniMax's — propagate without blaming it.
                 raise
             except Exception as e:
                 err_msg = str(e)
@@ -3098,17 +3148,20 @@ Reply with only the JSON object required by the system message — decision fiel
                         cooldown_429,
                     )
                     raise
-                if is_overloaded and attempt < max_attempts - 1:
+                # Transient network blip (connect/read/pool) or 529 → one fast retry.
+                if (is_overloaded or _is_transient(e)) and attempt < max_attempts - 1:
                     logger.warning(
-                        f"MiniMax overloaded (529) — retrying in 5s for market {market_id} "
-                        f"(attempt {attempt + 1}/{max_attempts})"
+                        "MiniMax %s (%s) — fast-retry %d/%d for market %s",
+                        "overloaded" if is_overloaded else "transient",
+                        type(e).__name__,
+                        attempt + 2,
+                        max_attempts,
+                        market_id,
                     )
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(1.5)
                     continue
                 logger.warning(f"Minimax API error: {type(e).__name__}: {e}")
                 raise
-            finally:
-                await _close_async_client_quietly(client)
 
     def _extract_text_from_content(self, content_blocks) -> str:
         """Extract text from Anthropic-style content blocks (handles ThinkingBlock + TextBlock)."""

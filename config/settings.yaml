@@ -10,6 +10,17 @@ polymarket:
   fetch_hype_alt_markets: true
   gamma_http_max_retries: 3
   gamma_http_retry_backoff_base_sec: 0.5
+  # ── L2 credential lifecycle (live execution only; ignored while dry_run) ──
+  # Derived Polymarket L2 creds expire ~7 days after derivation, do not rotate,
+  # and fail SILENTLY with auth errors. See src/execution/clob_client.py.
+  creds_max_age_hours: 144          # treat creds older than 6d as stale (under 7d expiry)
+  auto_rederive_credentials: true   # self-heal: re-derive from L1 signer instead of refusing
+  # ON when live: force an idempotent L1 re-derive at every boot so the bot
+  # always starts with freshly minted creds (set_credentials only records when
+  # we LOADED the .env creds, not their true age). Only consulted in live mode —
+  # paper boot short-circuits before reading it. See second-brain changelog
+  # 2026-06-11 "L2 credential lifecycle hardening".
+  rederive_credentials_on_start: true
 hyperliquid:
   request_timeout_sec: 25
   range_request_timeout_sec: 30
@@ -25,6 +36,18 @@ trading:
   crypto_hourly_scan_every_n_cycles: 3
   overrun_recovery_sleep_sec: 5
   dry_run: true
+  # ── Pre-order fresh-book slippage guard (live execution only; no-op in dry_run) ──
+  # Between scan and place_order the CLOB book can move. Before placing a BUY
+  # (BUY_YES / BUY_NO) we re-read the live book for the token and compare best_ask
+  # to the price we're about to send (signal.price). Default mode is OBSERVE: log
+  # how far the ask moved without suppressing, so the first live run records real
+  # slippage before any threshold suppresses fills. Flip mode->enforce (and tune
+  # max_slippage_cents) once the live smoke test shows real numbers. Fail-OPEN on
+  # any missing book / read error. See src/main.py _fresh_book_slippage_ok.
+  slippage_guard:
+    enabled: true
+    mode: observe            # observe | enforce
+    max_slippage_cents: 0.02
   clob_ws:
     enabled: true
     book_channel: market
@@ -42,10 +65,9 @@ trading:
     enabled: false
     btc_break_above_usd: 80000
     btc_break_below_usd: 75000
-  # Regime-feed config only (deadzone/market-regime gate purged 2026-06-10).
-  # These two keys still locate the standalone price-tracker feed for the
-  # dashboard's regime-feed health badge — they no longer gate any entry.
-  market_regime_gate:
+  # Regime-feed config only. The standalone price-tracker feed supports
+  # dashboard health/segmentation and does not gate any entry.
+  regime_feed:
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
   exit_rules:
@@ -58,6 +80,22 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.2
     updown_hold_winners_to_resolution: false
+    # ── BUY_YES bid-depth deterioration exit (default OFF) ──
+    # Closes a long-YES position when sell-side support (YES bid depth) collapses
+    # while the position is non-positive and there is still real time left — fixes
+    # "held too long into a thinning book" WITHOUT WebSocket infra (reuses the book
+    # snapshot the fast-exit loop already fetches). DEFAULT OFF + mode=observe: this
+    # is an EXIT change, which the ghost log CANNOT validate, and an early close on a
+    # scratch position is the "stops cut winners" shape. Run observe first, read the
+    # logged would-fire rate against real outcomes, THEN consider enforce.
+    # See PositionExitManager.check_exits / main.py _fetch_held_market_prices.
+    bid_depth_exit:
+      enabled: false
+      mode: observe            # observe | enforce
+      min_bid_depth_usd: 150   # sum($ = price*size) over top N YES bids; below = collapsed
+      depth_levels: 3          # top-N bid levels to sum
+      only_when_losing: true   # require pnl_pct <= 0
+      min_mins_remaining: 5.0  # only fire when MORE than this remains (else time-stop owns it)
     dynamic_stop_enabled: true
     dynamic_stop_bull_mult: 0.95
     dynamic_stop_range_mult: 1.05
@@ -112,12 +150,12 @@ trading:
               updown_hold_winners_to_resolution: true
           15m:
             up:
-              updown_stop_loss_pct: 0.16
+              updown_stop_loss_pct: 0.22
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
             down:
-              updown_stop_loss_pct: 0.24
+              updown_stop_loss_pct: 0.28
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.5
               updown_exit_window_max_fraction: 0.45
@@ -146,7 +184,7 @@ trading:
               updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
             down:
-              updown_stop_loss_pct: 0.17
+              updown_stop_loss_pct: 0.22
               updown_stop_cents: 0.02
               updown_exit_window_mins: 2.25
               updown_exit_window_max_fraction: 0.45
@@ -208,7 +246,7 @@ trading:
               updown_hold_winners_to_resolution: true
           15m:
             up:
-              updown_stop_loss_pct: 0.28
+              updown_stop_loss_pct: 0.32
               updown_trail_arm_pct: 0.1
               updown_trail_gap_pct: 0.15
               updown_hold_winners_to_resolution: true
@@ -299,11 +337,6 @@ entry_policy:
     ai_override_min_edge: 0.0
     size_multiplier: 1.0
 strategies:
-  consensus:
-    enabled: false
-    threshold: 0.85
-    min_opposite_liquidity: 500
-    expiration_window_hours: 48
   bitcoin:
     enabled: true
     use_ai: true
@@ -508,6 +541,8 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    # 5m BUY_NO anti-selective (held-WR ~29% n=198, -$297 live); flip to +EV long. Forward-test 2026-06-11.
+    buy_no_5m_flip_to_yes: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -705,7 +740,14 @@ strategies:
     window_delta_confirm_margin: 0.1
     low_atr_only_lanes:
     - 15m:LONG
+    # NOTE: disable_buy_no_5m_native is honored only by the shared sol_macro loop;
+    # eth_macro overrides scan_and_analyze so it never fired here. eth 5m BUY_NO is
+    # now handled by eth_5m_buy_no_flip_to_yes below (flip the inverted short to the
+    # +EV long) rather than suppressed. Flag left as inert back-compat.
     disable_buy_no_5m_native: true
+    # eth 5m BUY_NO is structurally inverted (held-WR 26-33% n=133-259, -$375 live);
+    # flip it to the +EV long in-loop. Forward-test 2026-06-11. Set false to opt out.
+    eth_5m_buy_no_flip_to_yes: true
     enabled: true
     use_ai: true
     eth_momentum_confirm:
@@ -937,6 +979,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # hype 5m BUY_NO is anti-selective (held-WR ~33% n=57, -$144 live); flip the
+    # inverted short to the +EV long in the shared sol loop. Forward-test 2026-06-11.
+    buy_no_5m_flip_to_yes: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1141,6 +1186,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    # 5m BUY_NO anti-selective (held-WR ~33% n=159, -$258 live); flip to +EV long. Forward-test 2026-06-11.
+    buy_no_5m_flip_to_yes: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1355,6 +1402,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    # 5m BUY_NO anti-selective (held-WR ~31% n=212, -$227 live); flip to +EV long. Forward-test 2026-06-11.
+    buy_no_5m_flip_to_yes: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1534,6 +1583,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    # 5m BUY_NO anti-selective (held-WR ~30% n=235, -$267 live); flip to +EV long. Forward-test 2026-06-11.
+    buy_no_5m_flip_to_yes: true
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1759,8 +1810,11 @@ ai:
     type: openai
     base_url: http://localhost:11434/v1
     local: true
+    # Fallback only — minimax (primary) carries the load. Was qwen2.5:14b, which
+    # is NOT installed → every fallback 404'd, so a single minimax blip cascaded to
+    # "all providers failed". Point at the model actually present on this box.
     models:
-    - qwen2.5:14b
+    - qwen3:8b
     json_mode: true
     cooldown_on_429_seconds: 0
   timeout: 90
@@ -1770,7 +1824,12 @@ ai:
   cache_ttl: 600
   cache_ttl_15m: 180
   cache_ttl_5m: 60
-  min_call_gap: 2.0
+  # min_call_gap is awaited INSIDE analyze_market, i.e. inside the strategy's
+  # ai_*_timeout_sec budget — so a large gap made queued MiniMax calls time out on
+  # OUR clock, not MiniMax's. 2.0s (worst-case ~12s queue at depth 6) was eating
+  # the 15s BTC budget. Dropped to 0.5 (MiniMax handles the throughput; the 429
+  # cooldown is the real backstop if we ever overrun).
+  min_call_gap: 0.5
   max_queue_depth: 6
   decision_broker:
     enabled: true

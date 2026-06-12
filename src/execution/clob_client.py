@@ -108,6 +108,18 @@ class CLOBClient:
         self._max_order_history = 1000
         # Level-0 client for public `get_order_book` when no signer/trading keys set.
         self._readonly_py_client: Optional[Any] = None
+        # Derived L2 credentials expire ~7 days after creation; Polymarket does not
+        # rotate them and auth calls fail silently once stale. Track when they were
+        # set and refuse to trade past a configurable age so we fail loud, not silent.
+        self._creds_set_at: Optional[datetime] = None
+        self._creds_max_age = timedelta(
+            hours=float(self.config.get("creds_max_age_hours", 144))  # 6 days
+        )
+        # When creds go stale, re-derive L2 from the L1 signer the py-clob-client
+        # already holds (idempotent, no raw-key re-handling) instead of refusing.
+        self._auto_rederive_credentials = bool(
+            self.config.get("auto_rederive_credentials", True)
+        )
 
     def set_credentials(
         self,
@@ -131,6 +143,93 @@ class CLOBClient:
         # Clear plaintext copies — PyClobClient holds its own internal copy
         del private_key
         self.private_key = None
+        self._creds_set_at = datetime.now()
+
+    def credentials_age(self) -> Optional[timedelta]:
+        """Time since L2 credentials were set, or None if never set."""
+        if self._creds_set_at is None:
+            return None
+        return datetime.now() - self._creds_set_at
+
+    def credentials_expired(self) -> bool:
+        """
+        True when derived L2 creds are older than the configured max age.
+
+        Polymarket's L2 credentials expire ~7 days after derivation with no
+        rotation and no expiry signal — calls just start failing with auth
+        errors. We treat creds past `creds_max_age_hours` (default 6 days) as
+        expired so the failure is loud and pre-trade, not a silent mid-session
+        auth death on day ~8. If creds were never set we cannot judge age, so
+        this returns False and the existing `self.client` guards take over.
+        """
+        age = self.credentials_age()
+        if age is None:
+            return False
+        return age >= self._creds_max_age
+
+    async def _rederive_l2_credentials(self) -> bool:
+        """
+        Re-derive L2 API creds from the L1 signer the py-clob-client already holds.
+
+        `set_credentials` hands the L1 private key to `PyClobClient(key=...)` and
+        then deletes its own plaintext copy. The client keeps an internal signer,
+        so we can mint fresh L2 creds via an L1 signature without ever re-handling
+        the raw key. `create_or_derive_api_creds` is idempotent (create if absent,
+        derive if present) — the same restart-safe bootstrap pattern the D8-X SDK
+        documents. Returns True on success and resets the expiry clock.
+        """
+        if not self.client:
+            logger.error("Cannot re-derive credentials: CLOB client not initialized.")
+            return False
+        derive = getattr(self.client, "create_or_derive_api_creds", None)
+        set_creds = getattr(self.client, "set_api_creds", None)
+        if not callable(derive) or not callable(set_creds):
+            logger.error(
+                "Installed py-clob-client lacks create_or_derive_api_creds/"
+                "set_api_creds — cannot self-heal expired credentials. "
+                "Re-derive manually (L1 sign) before trading."
+            )
+            return False
+        try:
+            loop = asyncio.get_event_loop()
+            new_creds = await loop.run_in_executor(None, derive)
+            await loop.run_in_executor(None, lambda: set_creds(new_creds))
+        except Exception as exc:
+            logger.error("Failed to re-derive L2 credentials: %s", exc)
+            return False
+        self._creds_set_at = datetime.now()
+        logger.info("Re-derived L2 credentials from L1 signer; expiry clock reset.")
+        return True
+
+    async def ensure_fresh_credentials(self, force_rederive: bool = False) -> bool:
+        """
+        Guarantee usable L2 creds before a live action.
+
+        Returns True when creds are fresh, or when a stale set was successfully
+        re-derived. Returns False only when creds are stale and could not be
+        refreshed (auto-rederive disabled, no signer, or derive failed) — the
+        caller should then refuse to trade rather than fire a silent auth error.
+
+        `force_rederive=True` mints fresh creds unconditionally (idempotent
+        bootstrap pattern) regardless of the tracked age — used at startup, where
+        `_creds_set_at` only records when we *loaded* the .env creds, not when
+        they were actually derived, so they could already be near expiry.
+        """
+        if force_rederive and self.client:
+            if await self._rederive_l2_credentials():
+                return True
+            logger.warning(
+                "Forced credential re-derive failed; falling back to staleness check."
+            )
+        if not self.credentials_expired():
+            return True
+        if not self._auto_rederive_credentials:
+            logger.warning(
+                "L2 credentials are stale and auto-rederive is disabled; "
+                "refusing to use them."
+            )
+            return False
+        return await self._rederive_l2_credentials()
 
     @staticmethod
     def _normalize_usdc_amount(raw: Any) -> Optional[float]:
@@ -219,6 +318,18 @@ class CLOBClient:
         if not self.client:
             logger.error("CLOB client not initialized. Call set_credentials first.")
             return None
+        if not await self.ensure_fresh_credentials():
+            age = self.credentials_age()
+            age_h = age.total_seconds() / 3600 if age else 0
+            logger.error(
+                "Refusing live order: L2 credentials are %.1fh old (max %.1fh) "
+                "and could not be refreshed. Re-derive credentials (L1 sign) "
+                "before trading — Polymarket auth fails silently once creds "
+                "expire (~7 days).",
+                age_h,
+                self._creds_max_age.total_seconds() / 3600,
+            )
+            return None
         if OrderArgs is None or OrderType is None:
             logger.error("py-clob-client order types unavailable — cannot place live order")
             return None
@@ -285,16 +396,72 @@ class CLOBClient:
             order_data = await loop.run_in_executor(
                 None, lambda: self.client.get_order(order_id)
             )
-            # This is a simplified mapping. The actual API response may be more complex.
-            if order_data["status"] == "filled":
+            # /data/order/{id} only returns *active* orders. A filled or cancelled
+            # order comes back empty (or without a usable status) — the endpoint
+            # "lies by omission." Treating that empty response as PENDING would
+            # strand a position that already filled, so fall back to trade history.
+            status = order_data.get("status") if isinstance(order_data, dict) else None
+            if status == "filled":
                 return OrderStatus.FILLED
-            elif order_data["status"] == "cancelled":
+            if status == "cancelled":
                 return OrderStatus.CANCELLED
-            else:
+            if status:
                 return OrderStatus.PENDING
+            # Empty/omitted: reconcile against /data/trades by venue order id.
+            return await self._recover_status_from_trades(order_id)
         except Exception as e:
             logger.error(f"Error getting order status for {order_id}: {e}")
-            return None
+            # The order endpoint can also raise on an empty/filled order. Try the
+            # trade-history fallback before giving up.
+            try:
+                return await self._recover_status_from_trades(order_id)
+            except Exception as e2:
+                logger.error(f"Trade-history fallback failed for {order_id}: {e2}")
+                return None
+
+    async def _recover_status_from_trades(
+        self, order_id: str
+    ) -> Optional[OrderStatus]:
+        """
+        Recover an order's terminal status from /data/trades when the order
+        endpoint returns empty (filled/cancelled orders are dropped from it).
+
+        Returns FILLED if any trade references this order id, else PENDING
+        (resting/unmatched — not yet terminal). Never raises into the caller's
+        happy path; raising here is caught and logged by get_order_status.
+        """
+        loop = asyncio.get_event_loop()
+        trades = await loop.run_in_executor(
+            None, lambda: self.client.get_trades()
+        )
+        # Trade payloads vary by py-clob-client version; an order id can appear
+        # under several keys depending on whether we were maker or taker.
+        id_keys = ("order_id", "maker_order_id", "taker_order_id")
+        for trade in trades or []:
+            if not isinstance(trade, dict):
+                continue
+            for key in id_keys:
+                if trade.get(key) == order_id:
+                    logger.info(
+                        "Reconciled order %s as FILLED from trade history "
+                        "(order endpoint returned empty).",
+                        order_id,
+                    )
+                    return OrderStatus.FILLED
+            # Some builds nest the order ids inside maker/taker sub-objects.
+            for nested_key in ("maker_orders", "taker_order"):
+                nested = trade.get(nested_key)
+                entries = nested if isinstance(nested, list) else [nested]
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("order_id") == order_id:
+                        logger.info(
+                            "Reconciled order %s as FILLED from nested trade "
+                            "history (order endpoint returned empty).",
+                            order_id,
+                        )
+                        return OrderStatus.FILLED
+        # No matching trade — order is resting/unmatched, not yet terminal.
+        return OrderStatus.PENDING
 
     async def can_sell_token(self, token_id: str, market_id: str) -> bool:
         """
@@ -466,37 +633,7 @@ class RiskManager:
         if self.daily_trades >= self.effective_max_trades_per_day():
             return False, "Daily trade limit reached"
 
-        # Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own reserved slots
-        # so inactive or low-priority strategies cannot crowd them out.
-        CRYPTO_STRATEGIES = {
-            "bitcoin",
-            "sol_macro",
-            "eth_macro",
-            "hype_macro",
-            "xrp_macro",
-        }
-        CRYPTO_MAX = 12  # reserved slots for crypto strategies
-
-        if strategy in CRYPTO_STRATEGIES:
-            crypto_count = sum(
-                1
-                for p in self.active_positions.values()
-                if getattr(p, "strategy", "") in CRYPTO_STRATEGIES
-            )
-            if crypto_count >= CRYPTO_MAX:
-                return (
-                    False,
-                    f"Crypto position limit reached ({crypto_count}/{CRYPTO_MAX})",
-                )
-            return True, "OK"
-
-        # Non-crypto strategies share the global pool (minus crypto reserved)
-        non_crypto_count = sum(
-            1
-            for p in self.active_positions.values()
-            if getattr(p, "strategy", "") not in CRYPTO_STRATEGIES
-        )
-        if non_crypto_count >= self.max_concurrent_positions:
+        if len(self.active_positions) >= self.max_concurrent_positions:
             return False, "Max concurrent positions reached"
         return True, "OK"
 
@@ -525,18 +662,10 @@ class RiskManager:
         Final check before placing order.
         Returns (bool: can_trade, float: position_size, str: reason)
 
-        Crypto strategies (bitcoin, sol/eth/hype/xrp macro legs) have their own isolated budget
-        so event-market positions can't crowd them out.
+        PSB's active execution surface is crypto up/down. All positions share
+        the same term budget so new crypto assets cannot bypass or get stranded
+        in stale legacy buckets.
         """
-        CRYPTO_STRATEGIES = {
-            "bitcoin",
-            "sol_macro",
-            "eth_macro",
-            "hype_macro",
-            "xrp_macro",
-        }
-        is_crypto = strategy in CRYPTO_STRATEGIES
-
         term, _ = self._get_market_term(end_date)
         min_edge_map = self.term_risk_config.get("min_edge", {})
         caps_map = self.term_risk_config.get("caps", {})
@@ -552,26 +681,15 @@ class RiskManager:
         # 2. Check if we have budget left for this category
         current_exposure_dict = {t: 0.0 for t in caps_map.keys()}
         for pos in self.active_positions.values():
-            pos_strategy = getattr(pos, "strategy", "")
-            pos_is_crypto = pos_strategy in CRYPTO_STRATEGIES
-            if is_crypto != pos_is_crypto:
-                continue  # skip positions from the other pool
             pos_term, _ = self._get_market_term(pos.end_date)
             current_exposure_dict[pos_term] += self.position_entry_notional(pos)
 
         category_spent = current_exposure_dict.get(term, 0.0)
-
-        if is_crypto:
-            # Crypto gets 15% of bankroll for SHORT_TERM (they resolve in minutes)
-            crypto_cap = 0.15
-            available_budget = (bankroll * crypto_cap) - category_spent
-        else:
-            available_budget = (bankroll * caps_map.get(term, 0.0)) - category_spent
+        available_budget = (bankroll * caps_map.get(term, 0.0)) - category_spent
 
         if available_budget <= 0:
-            pool_label = "CRYPTO" if is_crypto else term
-            logger.warning(f"RISK ALERT: {pool_label} budget full. Saving liquidity.")
-            return False, 0.0, f"{pool_label} budget full"
+            logger.warning(f"RISK ALERT: {term} budget full. Saving liquidity.")
+            return False, 0.0, f"{term} budget full"
 
         # 3. Return Kelly-computed size, capped only by remaining budget.
         final_size = min(requested_size, available_budget) if requested_size > 0 else available_budget

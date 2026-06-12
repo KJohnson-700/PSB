@@ -2185,8 +2185,8 @@ def _gl_load_posteriors() -> Dict[str, Dict[str, Any]]:
 def _gl_current_regime_status() -> Dict[str, Any]:
     """Current market-regime feed health (written by the standalone price tracker)."""
     cfg = _load_yaml_config()
-    gate_cfg = ((cfg.get("trading") or {}).get("market_regime_gate") or {})
-    path = Path(gate_cfg.get("regime_log") or DEFAULT_MARKET_REGIME_LOG)
+    feed_cfg = ((cfg.get("trading") or {}).get("regime_feed") or {})
+    path = Path(feed_cfg.get("regime_log") or DEFAULT_MARKET_REGIME_LOG)
     latest: Optional[Dict[str, Any]] = None
     if path.exists():
         try:
@@ -2205,7 +2205,7 @@ def _gl_current_regime_status() -> Dict[str, Any]:
             latest = None
 
     now = datetime.now(timezone.utc)
-    max_age_sec = float(gate_cfg.get("max_snapshot_age_sec", 1800) or 1800)
+    max_age_sec = float(feed_cfg.get("max_snapshot_age_sec", 1800) or 1800)
     age_sec = None
     fresh = False
     if latest:
@@ -3172,34 +3172,6 @@ async def get_test_results():
         return {"status": "timeout", "tests": [], "summary": "Tests timed out (120s)"}
     except Exception as e:
         return {"status": "error", "tests": [], "summary": str(e)}
-
-
-# ─── LIVE SCAN RESULTS ────────────────────────────────────────────
-
-
-@app.get("/api/scans/latest")
-async def get_latest_scan():
-    """Legacy general-market live scan retired; crypto dashboards use live bot state instead."""
-    return {"scan": None, "available": 0}
-
-
-@app.get("/api/scans/history")
-async def get_scan_history():
-    """Legacy general-market live scan retired."""
-    return {"scans": []}
-
-
-@app.post("/api/scans/run")
-async def run_live_scan(request: Request):
-    """Trigger a live scan from the dashboard."""
-    _check_auth(request)
-    return {
-        "status": "error",
-        "output": (
-            "Legacy general-market live scan was removed with fade/arbitrage/neh. "
-            "Use the crypto strategy dashboard panels and watchlist instead."
-        ),
-    }
 
 
 @app.get("/api/strategy/watchlist")

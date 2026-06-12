@@ -112,8 +112,10 @@ def test_reversal_halt_requires_full_lookback_history():
 
 
 def test_reversal_halt_ignores_non_crypto_positions():
+    # A stale/unknown or non-crypto strategy label must not feed the crypto
+    # reversal-halt breaker — otherwise those positions could halt crypto entries.
     mgr = CircuitBreakerManager(_cfg())
-    positions = [FakePosition("NO", strategy="consensus") for _ in range(5)]
+    positions = [FakePosition("NO", strategy="legacy_label") for _ in range(5)]
     mgr.record_btc_price(100_000, now=1000)
 
     decision = mgr.can_enter(
@@ -124,3 +126,21 @@ def test_reversal_halt_ignores_non_crypto_positions():
     )
 
     assert decision.allowed is True
+
+
+def test_reversal_halt_counts_crypto_updown_positions():
+    # Crypto up/down labels DO feed the breaker: 5 same-side BTC positions trip it.
+    mgr = CircuitBreakerManager(_cfg())
+    positions = [FakePosition("NO", strategy="bitcoin") for _ in range(5)]
+    mgr.record_btc_price(100_000, now=1000)
+
+    decision = mgr.can_enter(
+        action="BUY_NO",
+        active_positions=positions,
+        btc_price=100_350,
+        now=1300,
+    )
+
+    assert decision.allowed is False
+    assert decision.side == "BUY_NO"
+    assert "reversal_halt" in decision.reason

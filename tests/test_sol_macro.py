@@ -880,7 +880,6 @@ def test_sol_updown_oracle_block_is_logged_to_rejected_candidates():
     cfg["strategies"]["sol_macro"].update(
         {
             "min_liquidity": 1,
-            "dead_zone_enabled": False,
             "use_ai": False,
             "use_ai_updown": False,
             "require_oracle_for_updown": True,
@@ -932,7 +931,6 @@ def test_sol_liquidity_reject_can_feed_shadow_observer():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
@@ -976,7 +974,6 @@ def test_sol_shadow_observer_timeout_consumes_scan_budget():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,
@@ -1022,7 +1019,6 @@ def test_sol_shadow_observer_skips_repeated_market_during_cooldown():
     cfg = _make_config()
     cfg["strategies"]["sol_macro"].update(
         {
-            "dead_zone_enabled": False,
             "use_ai": True,
             "use_ai_updown": True,
             "min_liquidity": 5000,

@@ -942,7 +942,26 @@ class ETHMacroStrategy(SolMacroStrategy):
             market_allowed_side = resolution.allowed_side
             side_source = resolution.side_source
             if market_allowed_side is None:
+                # No usable bias = the lane has no side, so there is no rejected
+                # *candidate* to counterfactually score (action would be NONE).
+                # Match the SolMacro parent: count the sit-out but do NOT spend
+                # shadow-observer budget on it — that budget is shared per-scan and
+                # should go to real structural rejects (liquidity / oracle /
+                # momentum) where a concrete side was rejected. The sit-out itself
+                # is recorded (log-only, tape-side notional) by the shared
+                # _shadow_log_neutral_sitout so its EV settles forward.
                 _bump_skip("neutral_bias")
+                self._shadow_log_neutral_sitout(
+                    eth_ta.sol,
+                    _updown_tf,
+                    market,
+                    primary_htf_bias=resolution.primary_htf_bias,
+                    alt_trends={
+                        "alt_1h_trend": alt_1h_trend,
+                        "alt_15m_trend": alt_15m_trend,
+                        "alt_5m_trend": alt_5m_trend,
+                    },
+                )
                 logger.info(
                     "ETH Macro skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
                     market.question[:40],
@@ -1749,6 +1768,30 @@ class ETHMacroStrategy(SolMacroStrategy):
                 alt_htf_bias=mtt.h1_trend,
                 btc_1h_regime=btc_1h_regime if btc_ta else None,
             )
+            # ── eth 5m BUY_NO inversion flip (forward-test 2026-06-11) ──────────
+            # eth 5m BUY_NO is a structurally inverted lane: held-to-resolution
+            # WR 26-33% over n=133-259 (since 2026-05-25), -$375 live PnL. On those
+            # SAME markets the YES side resolves in-the-money ~67%, so the short is
+            # anti-selective and the cheap long is +EV. The candidate has already
+            # cleared every short-side gate above (alt_1h, rsi, eth_5m_weak_confirm,
+            # momentum-confirm), so we redirect it to the long here rather than
+            # suppressing it. The native est_prob was built to JUSTIFY the short
+            # (dragged below 0.5 by bearish eth adjustments); its complement is the
+            # long's P(up). The normal edge gate below then admits only the cheap
+            # longs (low yes_price) — exactly the +EV pocket. All downstream
+            # directional guards are inert here (_btc_trade_inputs_enabled()==False).
+            # Default-on; opt-out via strategies.eth_macro.eth_5m_buy_no_flip_to_yes: false.
+            if (
+                bool(self.config.get("eth_5m_buy_no_flip_to_yes", True))
+                and _updown_tf == "5m"
+                and action == "BUY_NO"
+            ):
+                estimated_prob = max(1.0 - float(estimated_prob), 0.50)
+                action = "BUY_YES"
+                direction = "UP"
+                market_allowed_side = "LONG"
+                side_source = f"{side_source or ''}+eth_5m_no_to_yes_flip"
+                reason_parts.append("eth_5m_no_to_yes_flip")
             edge = estimated_prob - yes_price if action == "BUY_YES" else yes_price - estimated_prob
             if edge <= 0:
                 _bump_skip("nonpositive_edge")

@@ -54,6 +54,7 @@ from src.analysis.journal_learning import (
     run_learning_cycle,
     log_learning_summary_to_logger,
 )
+from src.analysis.decision_snapshot import DecisionSnapshot
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.rejected_candidate_log import log_rejected_candidate
 from src.analysis.lane_manager import LaneManager
@@ -1339,6 +1340,30 @@ class PolyBot:
         logging.info("Live bankroll refreshed from Polymarket wallet: $%s", f"{self.bankroll:,.2f}")
         return True
 
+    async def ensure_live_credentials_ready(self) -> bool:
+        """
+        Proactive startup credential check for live mode.
+
+        Polymarket L2 creds expire ~7 days after derivation, fail silently, and
+        `set_credentials` only records when we *loaded* the .env creds — not how
+        old they actually are. Run this before any authenticated call (bankroll
+        fetch, orders) so a stale set is caught at boot, not mid-session.
+
+        When `polymarket.rederive_credentials_on_start` is true, force an
+        idempotent L1 re-derive (restart-safe bootstrap) so the bot always boots
+        with freshly minted creds. Default off so explicitly-provisioned .env API
+        keys are not silently overridden. Returns True when creds are usable;
+        paper mode is always True.
+        """
+        if self.config.get("trading", {}).get("dry_run", True):
+            return True
+        force = bool(
+            (self.config.get("polymarket", {}) or {}).get(
+                "rederive_credentials_on_start", False
+            )
+        )
+        return await self.clob_client.ensure_fresh_credentials(force_rederive=force)
+
     async def _run_startup_narrators(self) -> None:
         """Run AI narrators against the previous session and write each block
         as an ANNOTATION event into the *current* session's journal entries.jsonl.
@@ -1980,6 +2005,7 @@ class PolyBot:
         self,
         market_prices: Dict[str, float],
         market_token_ids: Dict[str, Any],
+        market_liquidity: Optional[Dict[str, Any]] = None,
     ) -> int:
         """Evaluate + handle exits for held positions under the exit lock.
 
@@ -1992,7 +2018,10 @@ class PolyBot:
             self._exit_lock = asyncio.Lock()
         async with self._exit_lock:
             exits = self.exit_manager.check_exits(
-                self.risk_manager.active_positions, market_prices, market_token_ids
+                self.risk_manager.active_positions,
+                market_prices,
+                market_token_ids,
+                market_liquidity,
             )
             for exit_decision in exits:
                 await self._handle_exit_decision(exit_decision)
@@ -2007,6 +2036,7 @@ class PolyBot:
         """
         market_prices: Dict[str, float] = {}
         market_token_ids: Dict[str, Any] = {}
+        market_liquidity: Dict[str, Any] = {}
         seen: set = set()
         for pos in list(self.risk_manager.active_positions.values()):
             mid = getattr(pos, "market_id", "")
@@ -2034,6 +2064,24 @@ class PolyBot:
                 continue
             market_prices[mid] = yes_price
             market_token_ids[mid] = (yes_token, no_token)
+            # Compact YES-side liquidity snapshot for the (optional, default-off)
+            # bid-depth exit. Sell-side support = the top YES bids we'd exit into.
+            top_bids = sorted(
+                (
+                    (float(b.get("price", 0)), float(b.get("size", 0)))
+                    for b in bids
+                ),
+                key=lambda pb: pb[0],
+                reverse=True,
+            )[:5]
+            market_liquidity[mid] = {
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "spread": (best_ask - best_bid)
+                if (best_bid is not None and best_ask is not None)
+                else None,
+                "bids": [{"price": p, "size": s} for p, s in top_bids],
+            }
         # Also fetch markets we've exited but still shadow-watch for uncensored
         # MFE/MAE (logging-only). Only adds markets not already fetched above.
         try:
@@ -2056,7 +2104,7 @@ class PolyBot:
                     market_prices[s_mid] = best_ask
         except Exception as e:
             logging.debug("[exit-excursion] shadow price fetch failed: %s", e)
-        return market_prices, market_token_ids
+        return market_prices, market_token_ids, market_liquidity
 
     async def _fast_exit_loop(self) -> None:
         """Decoupled TP/SL monitor — see exit_check_interval in __init__.
@@ -2078,9 +2126,9 @@ class PolyBot:
                 # Run when we hold positions OR still shadow-watch exited markets
                 # for uncensored MFE/MAE (the fetch covers both sets).
                 if self.risk_manager.active_positions or self.exit_excursion.watched_market_ids():
-                    market_prices, market_token_ids = await self._fetch_held_market_prices()
+                    market_prices, market_token_ids, market_liquidity = await self._fetch_held_market_prices()
                     if market_prices and self.risk_manager.active_positions:
-                        n = await self._run_exit_checks(market_prices, market_token_ids)
+                        n = await self._run_exit_checks(market_prices, market_token_ids, market_liquidity)
                         if n:
                             logging.info("[fast-exit] handled %d exit(s)", n)
                     # Update uncensored excursions, then flush any past window-close.
@@ -2934,16 +2982,116 @@ class PolyBot:
         dry_run: Optional[bool] = None,
         matched_rule: Optional[str] = None,
     ) -> Dict[str, Any]:
-        payload = dict(lane_meta or {})
-        if signal_reason:
-            payload["signal_reason"] = signal_reason
-        if skip_reason:
-            payload["skip_reason"] = skip_reason
-        if dry_run is not None:
-            payload["dry_run"] = bool(dry_run)
-        if matched_rule:
-            payload["lane_rule_match"] = matched_rule
-        return payload
+        return DecisionSnapshot(
+            strategy="",
+            market_id="",
+            market_question="",
+            signal_reason=signal_reason,
+            lane_meta=lane_meta,
+        ).skip_extra(
+            skip_reason=skip_reason,
+            dry_run=dry_run,
+            matched_rule=matched_rule,
+        )
+
+    def _log_decision_skip(
+        self,
+        decision: DecisionSnapshot,
+        reason: str,
+        *,
+        log_reason: Optional[str] = None,
+    ) -> None:
+        self.journal.log_skip(
+            decision.market_id,
+            decision.market_question,
+            decision.strategy,
+            log_reason or reason,
+            self.bankroll,
+            extra=decision.skip_extra(skip_reason=reason),
+        )
+
+    @staticmethod
+    def _resolve_execution_intent(signal: Any, *, strategy: str) -> Optional[tuple[str, str]]:
+        if signal.action == "BUY_YES":
+            return signal.token_id_yes, "BUY"
+        if signal.action == "BUY_NO":
+            return signal.token_id_no, "BUY"
+        if signal.action == "SELL_YES":
+            return signal.token_id_yes, "SELL"
+        logging.error(
+            "%s skip: unexpected action %r (expected BUY_YES, BUY_NO, or SELL_YES)",
+            strategy,
+            signal.action,
+        )
+        return None
+
+    async def _fresh_book_slippage_ok(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        intended_price: float,
+        strategy: str,
+        decision: Any,
+        market_question: str,
+    ) -> bool:
+        """Live-only pre-order slippage guard.
+
+        Between scan and place_order the CLOB book can move. We re-read the live
+        book for the token we are about to BUY and compare best_ask to the price
+        we are about to send (signal.price). If the ask has moved more than
+        ``max_slippage_cents`` above our price, a post-only order would rest
+        without filling (or a crossing order would slip) — skip rather than place
+        a stale-priced order.
+
+        Returns True to proceed, False to skip. No-op while dry_run (paper fills
+        are priced by fiat — never suppress calibration trades) and for SELL legs.
+        Fail-OPEN: any missing book / read error proceeds, since we already passed
+        the can_sell_token bid check and a transient REST hiccup must not starve
+        live entries. Default mode is ``observe`` (log only); ``enforce`` skips.
+        """
+        cfg = (self.config.get("trading", {}) or {}).get("slippage_guard", {}) or {}
+        if not cfg.get("enabled", True):
+            return True
+        if self.config.get("trading", {}).get("dry_run", True):
+            return True
+        if side != "BUY":
+            return True
+        try:
+            tol = float(cfg.get("max_slippage_cents", 0.02))
+            mode = str(cfg.get("mode", "observe")).strip().lower()
+            book = await self.clob_client.fetch_order_book_snapshot(token_id)
+            asks = (book or {}).get("asks") or []
+            best_ask = min(
+                (float(a["price"]) for a in asks if float(a.get("price", 0)) > 0),
+                default=None,
+            )
+            if best_ask is None:
+                logging.warning(
+                    "%s slippage-guard: no live asks for token=%s — proceeding (fail-open)",
+                    strategy,
+                    token_id[:20],
+                )
+                return True
+            slip = best_ask - float(intended_price)
+            if slip <= tol:
+                return True
+            msg = (
+                f"{strategy} slippage-guard {mode}: best_ask={best_ask:.4f} "
+                f"intended={float(intended_price):.4f} slip={slip:+.4f} "
+                f"tol={tol:.4f} '{market_question[:40]}'"
+            )
+            if mode == "enforce":
+                logging.warning("%s — SKIP", msg)
+                self._log_decision_skip(decision, "buy_slippage_block")
+                return False
+            logging.info("%s — observe (proceeding)", msg)
+            return True
+        except Exception as e:
+            logging.warning(
+                "%s slippage-guard error (%s) — proceeding (fail-open)", strategy, e
+            )
+            return True
 
     def _check_lane_execution(
         self,
@@ -2984,21 +3132,11 @@ class PolyBot:
         )
         return False
 
-    def _check_market_regime_execution(
-        self,
-        *,
-        strategy: str,
-        signal: Any,
-        lane_meta: Dict[str, Any],
-    ) -> bool:
-        # Deadzone / market-regime gate purged 2026-06-10. The gate no longer
-        # blocks any entry, but this remains the primary feeder of the
-        # exposure-manager resume window — keep it green so resumes are never
-        # suppressed (ripping the call out would suppress resume → fewer trades).
+    def _mark_exposure_resume_window_green(self, strategy: str) -> None:
+        """Keep pause/resume state permissive now that regime gates are purged."""
         em = self._get_exposure_manager_for(strategy)
         if em is not None and hasattr(em, "update_resume_window"):
             em.update_resume_window(green_window=True)
-        return True
 
     def _check_fresh_entry_window(
         self,
@@ -3099,12 +3237,7 @@ class PolyBot:
             market_question=signal.market_question,
         ):
             return
-        if not self._check_market_regime_execution(
-            strategy="bitcoin",
-            signal=signal,
-            lane_meta=lane_meta,
-        ):
-            return
+        self._mark_exposure_resume_window_green("bitcoin")
         if not self._check_session_market_reentry(
             strategy="bitcoin",
             market_id=signal.market_id,
@@ -3129,24 +3262,19 @@ class PolyBot:
             lane_meta=lane_meta,
         ):
             return
+        decision = DecisionSnapshot.from_signal(
+            strategy="bitcoin",
+            signal=signal,
+            entry_leg=_entry_leg,
+            lane_meta=lane_meta,
+        )
         can_trade, reason = self.risk_manager.can_trade(strategy="bitcoin")
         if not can_trade:
             logging.warning(f"Bitcoin trade risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "bitcoin",
-                reason,
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=reason,
-                ),
-            )
+            self._log_decision_skip(decision, reason)
             return
 
-        # Term-based risk check (crypto-isolated budget)
+        # Term-based risk check across the active crypto-only bot.
         can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
@@ -3156,35 +3284,13 @@ class PolyBot:
         )
         if not can_trade:
             logging.warning(f"Bitcoin trade term risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "bitcoin",
-                f"term_risk: {reason}",
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=f"term_risk: {reason}",
-                ),
-            )
+            self._log_decision_skip(decision, f"term_risk: {reason}")
             return
 
-        if signal.action == "BUY_YES":
-            token_id = signal.token_id_yes
-            side = "BUY"
-        elif signal.action == "BUY_NO":
-            token_id = signal.token_id_no
-            side = "BUY"
-        elif signal.action == "SELL_YES":
-            token_id = signal.token_id_yes
-            side = "SELL"
-        else:
-            logging.error(
-                f"Bitcoin skip: unexpected action {signal.action!r} "
-                f"(expected BUY_YES, BUY_NO, or SELL_YES)"
-            )
+        intent = self._resolve_execution_intent(signal, strategy="bitcoin")
+        if intent is None:
             return
+        token_id, side = intent
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # Before placing any order, verify the position can be exited.
@@ -3195,18 +3301,18 @@ class PolyBot:
                 f"Bitcoin unsellable-token skip '{signal.market_question[:40]}' "
                 f"— token={token_to_test[:20]} has no bids"
             )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                "bitcoin",
-                "unsellable_token",
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason="unsellable_token",
-                ),
-            )
+            self._log_decision_skip(decision, "unsellable_token")
+            return
+
+        # ── Pre-order fresh-book slippage guard (live-only; observe by default) ──
+        if not await self._fresh_book_slippage_ok(
+            token_id=token_id,
+            side=side,
+            intended_price=signal.price,
+            strategy="bitcoin",
+            decision=decision,
+            market_question=signal.market_question,
+        ):
             return
 
         logging.info(
@@ -3249,7 +3355,7 @@ class PolyBot:
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 edge=float(signal.edge or 0.0),
                 confidence=float(signal.confidence or 0.0),
-                entry_signal={
+                entry_signal=decision.entry_signal({
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
                     "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
@@ -3261,8 +3367,7 @@ class PolyBot:
                     "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
-                    **lane_meta,
-                },
+                }),
             )
             self.risk_manager.add_position(position)
             self._remember_session_market_entry(signal.market_id)
@@ -3384,12 +3489,7 @@ class PolyBot:
             market_question=signal.market_question,
         ):
             return
-        if not self._check_market_regime_execution(
-            strategy=strat,
-            signal=signal,
-            lane_meta=lane_meta,
-        ):
-            return
+        self._mark_exposure_resume_window_green(strat)
         if not self._check_session_market_reentry(
             strategy=strat,
             market_id=signal.market_id,
@@ -3414,24 +3514,19 @@ class PolyBot:
             lane_meta=lane_meta,
         ):
             return
+        decision = DecisionSnapshot.from_signal(
+            strategy=strat,
+            signal=signal,
+            entry_leg=_entry_leg,
+            lane_meta=lane_meta,
+        )
         can_trade, reason = self.risk_manager.can_trade(strategy=strat)
         if not can_trade:
             logging.warning(f"{strat} trade risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                reason,
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=reason,
-                ),
-            )
+            self._log_decision_skip(decision, reason)
             return
 
-        # Term-based risk check (crypto-isolated budget)
+        # Term-based risk check across the active crypto-only bot.
         can_trade, final_size, reason = self.risk_manager.evaluate_entry(
             end_date=signal.end_date,
             current_edge=signal.edge,
@@ -3441,38 +3536,13 @@ class PolyBot:
         )
         if not can_trade:
             logging.warning(f"{strat} trade term risk check failed: {reason}")
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                f"term_risk: {reason}",
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason=f"term_risk: {reason}",
-                ),
-            )
+            self._log_decision_skip(decision, f"term_risk: {reason}")
             return
 
-        # Side / token_id MUST be set before any read of `side` (e.g. order_size).
-        # A later `side =` makes `side` a local for the whole function; placing
-        # `order_size = ... if side == "SELL"` above the assignment → UnboundLocalError.
-        if signal.action == "BUY_YES":
-            token_id = signal.token_id_yes
-            side = "BUY"
-        elif signal.action == "SELL_YES":
-            token_id = signal.token_id_yes
-            side = "SELL"
-        elif signal.action == "BUY_NO":
-            token_id = signal.token_id_no
-            side = "BUY"
-        else:
-            logging.error(
-                f"{strat} skip: unexpected action {signal.action!r} "
-                f"(expected BUY_YES, SELL_YES, or BUY_NO)"
-            )
+        intent = self._resolve_execution_intent(signal, strategy=strat)
+        if intent is None:
             return
+        token_id, side = intent
 
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # BUY_YES / SELL_YES / BUY_NO — test the token we hold after fill (YES for sell-yes, else buy leg).
@@ -3482,18 +3552,18 @@ class PolyBot:
                 f"{strat} unsellable-token skip '{signal.market_question[:40]}' "
                 f"— token={token_to_test[:20]} has no bids"
             )
-            self.journal.log_skip(
-                signal.market_id,
-                signal.market_question,
-                strat,
-                "unsellable_token",
-                self.bankroll,
-                extra=self._lane_skip_extra(
-                    lane_meta=lane_meta,
-                    signal_reason=signal.reason,
-                    skip_reason="unsellable_token",
-                ),
-            )
+            self._log_decision_skip(decision, "unsellable_token")
+            return
+
+        # ── Pre-order fresh-book slippage guard (live-only; observe by default) ──
+        if not await self._fresh_book_slippage_ok(
+            token_id=token_id,
+            side=side,
+            intended_price=signal.price,
+            strategy=strat,
+            decision=decision,
+            market_question=signal.market_question,
+        ):
             return
 
         logging.info(
@@ -3537,7 +3607,7 @@ class PolyBot:
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
                 edge=float(signal.edge or 0.0),
                 confidence=float(signal.confidence or 0.0),
-                entry_signal={
+                entry_signal=decision.entry_signal({
                     "window_size": signal.window_size,
                     "htf_bias": signal.htf_bias,
                     "primary_htf_bias": getattr(signal, "primary_htf_bias", None),
@@ -3552,8 +3622,7 @@ class PolyBot:
                     "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
-                    **lane_meta,
-                },
+                }),
             )
             self.risk_manager.add_position(position)
             self._remember_session_market_entry(signal.market_id)
@@ -4071,6 +4140,20 @@ async def main():
             )
 
     bot.set_api_keys(api_keys=api_keys)
+
+    # Proactively verify/refresh live L2 credentials before any authenticated
+    # call. Derived creds expire ~7 days with no rotation and fail silently;
+    # catch/heal it at boot rather than discovering it on the first live order
+    # (or a silently-failing bankroll fetch below).
+    creds_ready = await bot.ensure_live_credentials_ready()
+    if not _paper and not creds_ready:
+        logging.critical(
+            "Live trading requires usable Polymarket L2 credentials and they "
+            "could not be refreshed (L1 re-derive failed or unavailable). "
+            "Refusing to start trading loop."
+        )
+        sys.exit(1)
+
     live_wallet_ok = await bot.refresh_live_wallet_bankroll()
     if not bot.config.get("trading", {}).get("dry_run", True) and not live_wallet_ok:
         logging.critical(

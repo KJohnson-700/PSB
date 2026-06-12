@@ -61,16 +61,6 @@ class Market:
         return self.yes_price + self.no_price > 0.98
     
     @property
-    def is_consensus_yes(self) -> bool:
-        """Check if YES is at consensus level"""
-        return self.yes_price >= 0.85
-    
-    @property
-    def is_consensus_no(self) -> bool:
-        """Check if NO is at consensus level"""
-        return self.no_price >= 0.85  # no_price = 1 - yes_price
-    
-    @property
     def hours_to_expiration(self) -> Optional[float]:
         """Calculate hours until market expiration"""
         if not self.end_date:
@@ -610,8 +600,6 @@ class MarketScanner:
             meta["sync_phase_timeout"] = True
         return {
             "high_liquidity": [],
-            "consensus_yes": [],
-            "consensus_no": [],
             "low_spread": [],
             "near_expiration": [],
             "updown": [],
@@ -1503,8 +1491,6 @@ class MarketScanner:
 
         opportunities: Dict[str, Any] = {
             "high_liquidity": [],
-            "consensus_yes": [],
-            "consensus_no": [],
             "low_spread": [],
             "near_expiration": [],
         }
@@ -1512,10 +1498,6 @@ class MarketScanner:
         for market in markets:
             if market.liquidity >= self.min_liquidity or market.volume >= self.min_liquidity:
                 opportunities["high_liquidity"].append(market)
-            if market.is_consensus_yes:
-                opportunities["consensus_yes"].append(market)
-            if market.is_consensus_no:
-                opportunities["consensus_no"].append(market)
             if market.spread < 0.03:
                 opportunities["low_spread"].append(market)
             hours = market.hours_to_expiration
@@ -1567,17 +1549,6 @@ class MarketScanner:
             "updown_hype_alt_count": len(opportunities.get("updown_hype_alt", [])),
             "slug_fetch_stats": self._get_slug_fetch_stats_snapshot(),
         }
-
-        logger.info(
-            "Scanner: bulk Gamma feed has %d generic consensus YES markets "
-            "(not crypto up/down strategy buckets)",
-            len(opportunities["consensus_yes"]),
-        )
-        logger.info(
-            "Scanner: bulk Gamma feed has %d generic consensus NO markets "
-            "(not crypto up/down strategy buckets)",
-            len(opportunities["consensus_no"]),
-        )
 
         total_ms = int((time.perf_counter() - t_scan_start) * 1000)
         logger.info(

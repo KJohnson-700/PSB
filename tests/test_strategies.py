@@ -75,10 +75,10 @@ class TestNullAIAgent:
         assert result is None
 
 
-# ─── CONSENSUS vs CRYPTO UPDOWN ───────────────────────────────────
+# ─── CRYPTO UPDOWN CLASSIFICATION ─────────────────────────────────
 
-class TestConsensusSkipsCryptoUpdown:
-    """Consensus alerts must not fire on BTC/SOL/ETH short up-down windows (wrong label + wrong product)."""
+class TestCryptoUpdownClassification:
+    """Crypto up/down markets are routed to the live crypto strategies."""
 
     def test_is_crypto_updown_market_detects_btc_sol_eth(self):
         from src.market.scanner import is_crypto_updown_market
@@ -107,68 +107,3 @@ class TestConsensusSkipsCryptoUpdown:
             assert is_crypto_updown_market(m) is True
         generic = _make_market(0.90, end_date=end)
         assert is_crypto_updown_market(generic) is False
-
-    def test_consensus_scan_ignores_btc_updown_even_at_high_yes(self):
-        from src.strategies.consensus import ConsensusStrategy
-
-        cfg = {
-            "strategies": {
-                "consensus": {
-                    "enabled": True,
-                    "threshold": 0.85,
-                    "min_opposite_liquidity": 1,
-                    "expiration_window_hours": 48,
-                }
-            }
-        }
-        strat = ConsensusStrategy(cfg)
-        end = datetime.now() + timedelta(hours=10)
-        m = Market(
-            id="btc-updown-15m",
-            question="Bitcoin Up or Down - March 9, 2:15AM-2:30AM ET",
-            description="",
-            volume=100000,
-            liquidity=50000,
-            yes_price=0.92,
-            no_price=0.08,
-            spread=0.02,
-            end_date=end,
-            token_id_yes="y",
-            token_id_no="n",
-            group_item_title="",
-        )
-        assert strat.scan_for_consensus([m]) == []
-
-    def test_consensus_scan_still_emits_for_generic_market(self):
-        from src.strategies.consensus import ConsensusStrategy
-
-        cfg = {
-            "strategies": {
-                "consensus": {
-                    "enabled": True,
-                    "threshold": 0.85,
-                    "min_opposite_liquidity": 1,
-                    "expiration_window_hours": 48,
-                }
-            }
-        }
-        strat = ConsensusStrategy(cfg)
-        end = datetime.now() + timedelta(hours=10)
-        m = _make_market(0.92, end_date=end, liquidity=50000, market_id="gen-1")
-        m = Market(
-            id=m.id,
-            question="Will candidate X win the primary?",
-            description=m.description,
-            volume=m.volume,
-            liquidity=m.liquidity,
-            yes_price=m.yes_price,
-            no_price=m.no_price,
-            spread=m.spread,
-            end_date=m.end_date,
-            token_id_yes=m.token_id_yes,
-            token_id_no=m.token_id_no,
-            group_item_title=m.group_item_title,
-        )
-        alerts = strat.scan_for_consensus([m])
-        assert len(alerts) == 1
-        assert alerts[0].market_id == "gen-1"

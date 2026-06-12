@@ -4,6 +4,46 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-11 — L2 credential lifecycle hardening + order reconciliation fallback (live-execution prep)
+
+**Context.** PSB has never traded live. An external live-execution research addendum (D8-X Go SDK, Polymarket CLOB rate-limit docs, NautilusTrader adapter) flagged a checklist of landmines. We triaged it against our *actual* `src/execution/clob_client.py` rather than building all 10 items: most (heartbeat dead-man's-switch, sweep estimation, FOK/FAK delayed-state FSM) don't apply to our order flow (we post `LIMIT`/`POST_ONLY`, not marketable FOK/FAK, and don't rest GTC books through long pauses). Two were **real bugs in code we already had** and fixable blind (dry_run still on); one (fill/slippage reality vs. our fake-instant-fill paper layer) genuinely needs a live smoke test and is deferred.
+
+**What shipped (all in `src/execution/clob_client.py`, + boot wiring in `src/main.py`, + `config/settings.yaml`):**
+
+**1. L2 credential-expiry guard + self-heal (the addendum's single best catch).**
+- Polymarket's derived L2 creds (apiKey/secret/passphrase) expire **~7 days** after derivation, do **not** auto-rotate, and fail **silently** with auth errors. Classic "works for a week, dies on day 8."
+- `__init__` now tracks `_creds_set_at` + `_creds_max_age` (config `creds_max_age_hours`, default **144h / 6d**, deliberately under the 7d cliff). `set_credentials` stamps the load time.
+- New `credentials_age()` / `credentials_expired()` / `ensure_fresh_credentials(force_rederive=False)`.
+- **Self-heal via L1 re-derive:** `_rederive_l2_credentials()` mints fresh creds through the py-clob-client's own `create_or_derive_api_creds()` (idempotent bootstrap) using the **L1 signer the client already holds** — so NO raw private key is re-handled (preserves the existing "delete plaintext key after init" posture). Config `auto_rederive_credentials` (default **true**) toggles self-heal-vs-refuse.
+- `place_order` live path now routes through `ensure_fresh_credentials()` — self-heals, and only refuses (loud error, returns None) when refresh genuinely can't happen. **No behavior change while `dry_run: true`.**
+
+**2. Proactive startup credential check (wired into boot).**
+- New `PolyBot.ensure_live_credentials_ready()` ([main.py](../../src/main.py)) called in `main()` **before** `refresh_live_wallet_bankroll()` (the bankroll fetch is itself an authenticated call that'd silently fail on stale creds). On failure in live mode → `CRITICAL` log + `sys.exit(1)`, same refuse-to-start posture as the existing bankroll guard. Paper mode short-circuits to True.
+- **Important subtlety:** `set_credentials` stamps the age clock when we *load* the .env creds, NOT when they were derived — so a plain freshness check at boot is a no-op even if the .env creds are already 8d old. Hence the force option below.
+- Config `polymarket.rederive_credentials_on_start` forces an **idempotent L1 re-derive at every boot** (D8-X "Bootstrap() every restart" pattern) so the bot always starts with freshly minted creds regardless of .env age. **Set to `true`** per operator directive — it's only ever consulted in live mode (paper boot returns before reading it), so it's effectively "ON when live, no-op in paper." Tradeoff accepted: for a single-key wallet the re-derive is deterministic; the only downside (silently picking the canonical derived key over a hand-provisioned specific one among several) doesn't apply to us.
+
+**3. Order reconciliation fallback (NautilusTrader pattern).**
+- Polymarket's `/data/order/{id}` returns **empty** for filled/cancelled orders ("lies by omission"). Old `get_order_status` did `order_data["status"]` → would throw/misread a filled order as unknown and could strand a position.
+- Rewrote it to detect empty/omitted responses and fall back to `_recover_status_from_trades()`, which scans `/data/trades` for the venue order id across the key shapes different py-clob-client versions use (flat `order_id`/`maker_order_id`/`taker_order_id` + nested maker/taker objects). Returns FILLED on a match, else PENDING (resting/unmatched — not yet terminal). Exception from the order endpoint also routes through the fallback.
+
+**Config keys added (`config/settings.yaml`, under `polymarket:`):**
+| key | value | effect |
+|---|---|---|
+| `creds_max_age_hours` | 144 | staleness threshold (6d, under 7d expiry) |
+| `auto_rederive_credentials` | true | self-heal on stale instead of refusing |
+| `rederive_credentials_on_start` | **true** | force idempotent L1 re-derive at every live boot |
+
+**Tests.** New `tests/test_clob_client_hardening.py` — 17 cases: cred age/expiry/never-set, live-refuse-when-unrefreshable, self-heal re-derive resets the clock, auto-rederive disabled, missing-method degradation, force-rederive-even-when-fresh, and order reconciliation across active/empty-with-trade/empty-no-trade/endpoint-raises/nested-maker shapes. All green; existing `test_strategy_execution_drivers.py` (25) still green → 42 total.
+
+**NOT done / deferred (deliberately):**
+- **Fill/slippage reality** — our paper layer fakes instant full fills at the limit price, so every calibration number assumes perfect fills. This is the biggest live unknown and CANNOT be resolved without trading. Needs the deferred **$1–2 live smoke test** (place one min-size order on a real market, log every status transition + actual fill vs. requested, cancel/exit).
+- Heartbeat dead-man's-switch, EstimateSweep/VWAP slippage sizing, delayed-state polling FSM — not applicable to current order flow/sizes; revisit only if we start resting GTC books or sizing into book depth.
+- Self-heal is **lazy + one-shot** (fires on-demand in `place_order`, retries next call; no backoff/alert loop). No proactive mid-session refresh beyond boot.
+
+**State:** uncommitted, working tree, branch `codex/recover-preclean-20260519`. `dry_run: true` unchanged — none of this is active until live. **Needs restart** to load the new `clob_client`/`main` code.
+
+---
+
 ## 2026-06-10 — Calibration-instrumentation batch (gate-noise audit, window-delta shadow-logger, microstructure) — NEEDS RESTART, now committed
 
 Three forward-test / instrumentation tracks from the 06-09→06-10 sessions, committed together off branch `codex/recover-preclean-20260519`. All default-off or soft (no tightening), restart-gated. Detail per track lives in the auto-memory files (`project_gate_noise_audit_hist_gate_2026_06_10`, `project_window_delta_shadow_logger_2026_06_10`, `project_window_delta_flip_is_the_edge_2026_06_10`).

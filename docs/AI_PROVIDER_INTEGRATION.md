@@ -129,7 +129,7 @@ A strategy only calls `analyze_market` when all of the following hold:
 
 - **`ai.enabled`** is `true` (global “quant mode” when `false`: no LLM calls).
 - **`provider_chain`** is non-empty (`AIAgent.is_available()`).
-- **`strategies.<name>.use_ai`** is `true` where the strategy supports it (Fade ambiguous band; BTC/SOL marginal / no-threshold; Arbitrage blend / non-crypto path — see `settings.yaml`).
+- **`strategies.<name>.use_ai`** is `true` where the active crypto strategy supports it (BTC/SOL-style marginal / no-threshold paths — see `settings.yaml`).
 
 Optional **`strategies.<name>.enabled`** narrows which strategies run in the main loop (fewer strategies ⇒ fewer optional LLM call sites).
 

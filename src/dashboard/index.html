@@ -2865,7 +2865,7 @@
     </style>
 
 
-    <!-- Test Results + Live Scan -->
+    <!-- Test Results + Strategy Scan Diagnostics -->
     <div class="grid" style="margin-bottom:16px;">
         <div class="card bt-shell" data-aos="fade-up">
             <div class="bt-shell-head">
@@ -2892,15 +2892,14 @@
                 <div class="bt-shell-titlewrap">
                     <div class="bt-shell-kicker">Feed Health</div>
                     <h2 class="bt-shell-title">Scan Diagnostics</h2>
-                    <div class="bt-shell-sub">Latest distribution telemetry, strategy scan rows, and retired-feed fallback messaging.</div>
+                    <div class="bt-shell-sub">Crypto strategy scan status from live strategy metrics.</div>
                 </div>
                 <span class="bt-shell-pill">Scan</span>
             </div>
             <div class="bt-shell-toolbar" style="margin-bottom:12px;">
-                <button id="run-scan-btn" class="btn-sm btn-green" onclick="refreshDashboardData()" title="Same as header refresh — legacy /api/scans endpoints are retired">Refresh data</button>
+                <button id="run-scan-btn" class="btn-sm btn-green" onclick="refreshDashboardData()" title="Refresh strategy metrics">Refresh data</button>
                 <span id="scan-summary" style="font-size:0.85rem; color:var(--text-muted);">Strategy metrics load on each poll…</span>
             </div>
-            <div id="scan-distribution"></div>
             <div class="tabs" id="scan-tabs">
                 <div class="tab active" data-strat="all" onclick="switchScanTab('all')">All</div>
                 <div class="tab" data-strat="bitcoin" onclick="switchScanTab('bitcoin')">BTC</div>
@@ -3887,12 +3886,11 @@ async function fetchAll() {
         } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
     }
 
-    let statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
+    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
     try {
-        [statusR, metricsR, scanR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
+        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
-            Promise.resolve(null),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
             needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/trades')) : Promise.resolve(null),
@@ -3947,11 +3945,6 @@ async function fetchAll() {
         if (metricsR?.ok) updateMetrics(await metricsR.json());
         else updateMetrics(null);
     } catch (e) { console.error('[dashboard] metrics:', e); }
-
-    try {
-        if (scanR?.ok) updateScan(await scanR.json());
-        else updateScan(null);
-    } catch (e) { console.error('[dashboard] scan:', e); }
 
     try {
         if (backtestR?.ok) updateBacktest(await backtestR.json());
@@ -5025,6 +5018,7 @@ async function toggleKillSwitch() {
 
 function updateMetrics(d) {
     if (!d || typeof d !== 'object') return;
+    updateScanDiagnosticsFromMetrics(d);
     const tbody = document.querySelector('#strategy-table tbody');
     if (!tbody) return;
 
@@ -5064,37 +5058,35 @@ function updateMetrics(d) {
 }
 
 
-function updateScan(d) {
+function updateScanDiagnosticsFromMetrics(d) {
     const sumEl = document.getElementById('scan-summary');
     if (!sumEl) return;
-    if (!d || !d.scan) {
+    if (!d || typeof d !== 'object') {
         currentScanData = null;
-        sumEl.textContent = 'Legacy live scan feed retired — use strategy diagnostics.';
-        const distEl = document.getElementById('scan-distribution');
-        if (distEl) distEl.innerHTML = '';
+        sumEl.textContent = 'Strategy metrics unavailable.';
         const el = document.getElementById('scan-signals');
         if (el) {
-            el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">Scan cards are no longer powered by <code>/api/scans/latest</code>. Use the strategy diagnostics panel (from <code>/api/strategy/metrics</code>).</p>`;
+            el.innerHTML = `<p style="color:var(--text-muted);padding:12px;">Waiting for <code>/api/strategy/metrics</code>.</p>`;
         }
         return;
     }
-    currentScanData = d.scan;
-    const ts = d.scan.timestamp ? new Date(d.scan.timestamp).toLocaleString() : 'unknown';
-    sumEl.innerHTML = `${d.scan.signals?.length||0} signals from ${d.scan.markets_scanned||0} markets <span style="color:var(--text-muted);font-size:0.78rem;">(${ts})</span>`;
-
-    // Distribution bar
-    const dist = d.scan.distribution || {};
-    const total = Object.values(dist).reduce((a,b) => a+b, 0) || 1;
-    const distEl = document.getElementById('scan-distribution');
-    if (!distEl) { renderScanSignals(); return; }
-    distEl.innerHTML = `<div class="dist-bar">
-        <div style="width:${dist.consensus_yes/total*100}%;background:var(--yellow);" title="YES consensus">${dist.consensus_yes||0}</div>
-        <div style="width:${dist.low_yes/total*100}%;background:var(--accent);" title="Low YES (arb)">${dist.low_yes||0}</div>
-        <div style="width:${dist.mid_range/total*100}%;background:var(--text-muted);" title="Mid range">${dist.mid_range||0}</div>
-        <div style="width:${dist.low_no/total*100}%;background:var(--accent);" title="Low NO (arb)">${dist.low_no||0}</div>
-        <div style="width:${dist.consensus_no/total*100}%;background:var(--yellow);" title="NO consensus">${dist.consensus_no||0}</div>
-    </div>`;
-
+    const strats = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
+    currentScanData = {
+        signals: strats.map(s => {
+            const m = d[s] || {};
+            return {
+                strategy: s,
+                action: `${m.signals || 0} sig`,
+                market_question: m.last_cycle ? `last cycle ${new Date(m.last_cycle).toLocaleTimeString()}` : 'waiting for cycle',
+                price: Number(m.open_positions || 0),
+                size: Number(m.trades || 0),
+                edge: Number(m.pnl || 0),
+                total_signals: Number(m.total_signals || 0),
+            };
+        })
+    };
+    const active = currentScanData.signals.filter(s => s.total_signals > 0 || s.size > 0 || s.price > 0).length;
+    sumEl.innerHTML = `${active}/${strats.length} strategies have activity <span style="color:var(--text-muted);font-size:0.78rem;">from /api/strategy/metrics</span>`;
     renderScanSignals();
 }
 
@@ -5115,7 +5107,7 @@ function renderScanSignals() {
             <span class="badge" style="background:${hx}22;color:${hx};min-width:32px;text-align:center;">${badge}</span>
             <span class="signal-action" style="color:${actionColor}">${s.action||''}</span>
             <span class="signal-market" title="${(s.market_question||'').replace(/"/g,'&quot;')}">${(s.market_question||s.market_id||'').slice(0,55)}</span>
-            <span class="signal-meta">@${(s.price||0).toFixed(3)} $${(s.size||0).toFixed(0)} edge=${(s.edge||0).toFixed(2)}</span>
+            <span class="signal-meta">open=${(s.price||0).toFixed(0)} trades=${(s.size||0).toFixed(0)} pnl=$${(s.edge||0).toFixed(2)}</span>
         </div>`;
     }).join('') + (sigs.length > 50 ? `<p style="color:var(--text-muted);font-size:0.8rem;padding:4px;">...and ${sigs.length-50} more</p>` : '');
 }
@@ -8987,6 +8979,7 @@ let _exitHudRaf = null;
 let _exitHudCrosshairRaf = null;
 let _exitHudWindow = { from: null, to: null };
 let _exitHudClickBound = false;
+const EXIT_HUD_EMPTY_WINDOW_COPY = 'No closed trades in the visible BTC chart window';
 const _HUD_MUTE_KEY = 'psb_dashboard_hud_mute';
 
 function _hudLoadMuted() {

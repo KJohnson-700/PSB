@@ -18,7 +18,7 @@ def _fetchall_promise_all_block(html: str) -> tuple[list[str], int]:
     The invariant that keeps the in-browser destructuring aligned is
     ``#bindings == #Promise.all array elements`` — NOT ``#fetch calls``. An element
     can legitimately be a bare ``Promise.resolve(null)`` placeholder (a view-gated
-    or intentionally-disabled poll, e.g. /api/scans/latest), so count top-level
+    or intentionally-disabled poll), so count top-level
     array elements (commas at paren/brace/bracket depth 0), not fetch() calls.
     """
     m = re.search(

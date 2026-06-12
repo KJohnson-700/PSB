@@ -119,6 +119,61 @@ def test_crypto_sell_yes_position_counts_share_cost():
     assert reason == "OK"
 
 
+def test_bnb_counts_against_short_term_budget():
+    rm = _risk_manager()
+    rm.active_positions["bnb"] = Position(
+        position_id="bnb",
+        market_id="m1",
+        market_question="BNB Up or Down",
+        outcome="YES",
+        size=20.0,
+        entry_price=0.5,
+        current_price=0.5,
+        pnl=0.0,
+        opened_at=datetime.now(),
+        end_date=datetime.now() + timedelta(minutes=10),
+        strategy="bnb_macro",
+    )
+
+    can_trade, size, reason = rm.evaluate_entry(
+        end_date=datetime.now() + timedelta(minutes=10),
+        current_edge=0.1,
+        bankroll=100.0,
+        strategy="doge_macro",
+    )
+
+    assert can_trade is True
+    assert size == 5.0
+    assert reason == "OK"
+
+
+def test_all_active_positions_share_global_slot_limit():
+    rm = RiskManager(
+        {
+            "trading": {"dry_run": True},
+            "risk": {"max_concurrent_positions": 1, "max_trades_per_day": 50},
+        }
+    )
+    rm.active_positions["btc"] = Position(
+        position_id="btc",
+        market_id="m1",
+        market_question="Bitcoin Up or Down",
+        outcome="YES",
+        size=10.0,
+        entry_price=0.5,
+        current_price=0.5,
+        pnl=0.0,
+        opened_at=datetime.now(),
+        end_date=datetime.now() + timedelta(minutes=10),
+        strategy="bitcoin",
+    )
+
+    can_trade, reason = rm.can_trade(strategy="doge_macro")
+
+    assert can_trade is False
+    assert reason == "Max concurrent positions reached"
+
+
 def test_paper_trading_uses_paper_daily_trade_limit():
     rm = RiskManager(
         {
