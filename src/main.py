@@ -2156,6 +2156,10 @@ class PolyBot:
                     size=exit_decision.size,
                     market_id=exit_decision.market_id,
                     dry_run=self.config.get("trading", {}).get("dry_run", True),
+                    # Executable-price stop exits fill at the bid -> place FAK
+                    # (marketable) so they take that liquidity now instead of
+                    # resting as a GTC limit. Other exits keep the GTC default.
+                    order_type="FAK" if getattr(exit_decision, "marketable", False) else "GTC",
                 )
                 if order:
                     logging.info(

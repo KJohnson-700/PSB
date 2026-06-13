@@ -291,6 +291,7 @@ class CLOBClient:
         post_only: bool = False,
         dry_run: bool = True,
         order_outcome: Optional[str] = None,
+        order_type: str = "GTC",
     ) -> Optional[Order]:
         _outcome = (
             order_outcome
@@ -298,7 +299,9 @@ class CLOBClient:
             else ("YES" if side == "BUY" else "NO")
         )
         if dry_run:
-            logger.info(f"[DRY RUN] Would place order: {side} {size} @ {price}")
+            logger.info(
+                f"[DRY RUN] Would place order: {side} {size} @ {price} ({order_type})"
+            )
             order = Order(
                 order_id=f"dry_{datetime.now().timestamp()}",
                 market_id=market_id or "",
@@ -334,12 +337,18 @@ class CLOBClient:
             logger.error("py-clob-client order types unavailable — cannot place live order")
             return None
 
+        # py-clob-client takes the time-in-force on post_order (GTC/FAK/FOK/GTD), NOT
+        # on OrderArgs (which has no order_type/post_only fields — passing them there
+        # raises). GTC = resting limit (entries); FAK = fill-and-kill / marketable
+        # (take resting liquidity now, cancel the remainder) for stop/market exits so
+        # the close actually fills instead of resting at a stale bid and re-gapping.
+        _ot = getattr(OrderType, str(order_type).upper(), OrderType.GTC)
+
         order_args = OrderArgs(
             token_id=token_id,
             side=side,
             price=price,
             size=size,
-            order_type=OrderType.POST_ONLY if post_only else OrderType.LIMIT,
         )
 
         try:
@@ -348,7 +357,7 @@ class CLOBClient:
                 None, lambda: self.client.create_order(order_args)
             )
             resp = await loop.run_in_executor(
-                None, lambda: self.client.post_order(signed_order)
+                None, lambda: self.client.post_order(signed_order, _ot, post_only)
             )
 
             order = Order(

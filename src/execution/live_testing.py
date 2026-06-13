@@ -60,6 +60,10 @@ class ExitDecision:
     mfe_pct: Optional[float] = None
     pnl_pct_at_exit: Optional[float] = None
     effective_stop_loss_pct: Optional[float] = None
+    # True when exit_price was set to the executable bid (stop_use_executable_price):
+    # the close must be placed FAK/marketable so it actually takes that liquidity
+    # instead of resting at the bid and re-gapping. Default False (GTC limit).
+    marketable: bool = False
 
 
 @dataclass
@@ -441,9 +445,13 @@ class PositionExitManager:
                     exit_token_id = token_yes
 
                 # When the executable-price stop fired, realize at that exit-side price
-                # (same token space as exit_price above) so the fill matches the trigger.
+                # (same token space as exit_price above) so the fill matches the trigger,
+                # and mark the close marketable so it is placed FAK (takes the bid now)
+                # rather than resting as a limit that may not fill.
+                exit_marketable = False
                 if reason == "updown_stop_loss" and exec_exit_price is not None:
                     exit_price = exec_exit_price
+                    exit_marketable = True
 
                 exits.append(
                     ExitDecision(
@@ -465,6 +473,7 @@ class PositionExitManager:
                             if effective_stop_for_log is not None
                             else None
                         ),
+                        marketable=exit_marketable,
                     )
                 )
 
