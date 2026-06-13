@@ -135,6 +135,26 @@ def _rpf_mgr() -> PositionExitManager:
     )
 
 
+def _rpf_fee_mgr() -> PositionExitManager:
+    return PositionExitManager(
+        {
+            "trading": {
+                "exit_rules": {
+                    "enabled": True,
+                    "take_profit_pct": 0.30,
+                    "stop_loss_pct": 0.30,
+                    "updown_stop_loss_pct": 0.15,
+                    "realistic_paper_fills": True,
+                },
+                "execution_fees": {
+                    "enabled": True,
+                    "crypto_updown_15m_taker_fee_rate": 0.07,
+                },
+            }
+        }
+    )
+
+
 def test_realistic_fill_long_no_walks_mirrored_ask_ladder():
     # Long NO entered at 0.40. YES asks 0.33/0.35/0.37 -> NO bids 0.67/0.65/0.63;
     # selling 30 NO sweeps them -> VWAP 0.65. TP fires (NO price 0.65 vs entry 0.40).
@@ -174,17 +194,55 @@ def test_realistic_fill_short_yes_walks_ask_ladder():
     assert d.unrealized_pnl == pytest.approx(20 * (0.60 - 0.31))
 
 
-def test_place_order_routes_order_type_to_post_order():
+def test_15m_crypto_fee_is_subtracted_from_realistic_paper_exit():
+    pos = SimpleNamespace(
+        market_id="m1", market_question="Ethereum Up or Down - test",
+        outcome="YES", strategy="eth_macro", size=100.0, entry_price=0.50,
+        entry_leg="YES", opened_at=datetime.now() - timedelta(minutes=3),
+        end_date=None, window_size="15m",
+    )
+    liq = {"m1": {"bids": [{"price": 0.50, "size": 100.0}]}}
+
+    exits = _rpf_fee_mgr().check_exits({"p1": pos}, {"m1": 0.65}, _TOKENS, liq)
+
+    assert len(exits) == 1
+    d = exits[0]
+    assert d.exit_price == pytest.approx(0.50)
+    assert d.fill_fee_usdc == pytest.approx(1.75)
+    assert d.fill_fee_rate == pytest.approx(0.07)
+    assert d.unrealized_pnl == pytest.approx(-1.75)
+
+
+def test_live_fee_metadata_overrides_config_fallback():
+    pos = SimpleNamespace(
+        market_id="m1", market_question="Ethereum Up or Down - test",
+        outcome="YES", strategy="eth_macro", size=100.0, entry_price=0.50,
+        entry_leg="YES", opened_at=datetime.now() - timedelta(minutes=3),
+        end_date=None, window_size="15m",
+    )
+    liq = {"m1": {"bids": [{"price": 0.50, "size": 100.0}], "taker_fee_rate": 0.03}}
+
+    exits = _rpf_fee_mgr().check_exits({"p1": pos}, {"m1": 0.65}, _TOKENS, liq)
+
+    assert len(exits) == 1
+    d = exits[0]
+    assert d.fill_fee_usdc == pytest.approx(0.75)
+    assert d.fill_fee_rate == pytest.approx(0.03)
+    assert d.unrealized_pnl == pytest.approx(-0.75)
+
+
+def test_place_order_routes_order_type_to_post_order(monkeypatch):
     # Live-path bug fix: OrderArgs has no order_type field; the time-in-force goes to
     # post_order. FAK (marketable) for exits, post_only flag preserved.
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
 
-    from py_clob_client.clob_types import OrderType
+    from py_clob_client_v2 import OrderType
 
     from src.execution.clob_client import CLOBClient
 
     c = CLOBClient({})
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
     c.client = MagicMock()
     c.client.create_order.return_value = "SIGNED_ORDER"
     c.client.post_order.return_value = {"order_id": "oid1"}

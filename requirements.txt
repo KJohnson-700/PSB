@@ -24,9 +24,12 @@ python-dotenv>=0.20.0
 
 # Blockchain/Web3
 web3>=6.11.0
-# Pin to a recent line — review changelog before major bumps: https://github.com/Polymarket/py-clob-client
-# Requires Python >=3.9.10 (use 3.11+ recommended; see README).
-py-clob-client>=0.30.0
+# Polymarket cut production to CLOB V2 on 2026-04-28; the V1 `py-clob-client`
+# package no longer settles orders. Use the unified V2 SDK. Pinned to ==1.0.1
+# (latest stable as of 2026-06-13); review https://github.com/Polymarket/py-clob-client-v2
+# before bumping — note open issues #59 (float price precision) and #51 (raw-EOA
+# orders rejected; proxy/Safe accounts must set signature_type + funder).
+py-clob-client-v2==1.0.1
 
 # Backtesting (full local install; Docker/Railway uses requirements-railway.txt without Nautilus)
 nautilus_trader>=0.4.0

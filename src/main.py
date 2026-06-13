@@ -39,7 +39,7 @@ from src.strategies.hype_macro import HYPEMacroStrategy
 from src.strategies.xrp_macro import XRPMacroStrategy
 from src.strategies.doge_macro import DOGEMacroStrategy
 from src.strategies.bnb_macro import BNBMacroStrategy
-from src.execution.clob_client import CLOBClient, RiskManager, Position
+from src.execution.clob_client import CLOBClient, RiskManager, Position, OrderStatus
 from src.execution.trade_journal import TradeJournal, infer_entry_leg
 from src.execution.exposure_manager import ExposureManager
 from src.execution.resolution_tracker import ResolutionTracker
@@ -1223,7 +1223,7 @@ class PolyBot:
         Without this, a mid-day restart resets the daily loss limit check to zero,
         allowing the bot to keep trading after already breaching its loss limit.
         """
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         daily_pnl = 0.0
         daily_trades = 0
         _seen_exit_trade_ids: set[str] = set()
@@ -1233,10 +1233,13 @@ class PolyBot:
                 if not ts_str:
                     continue
                 try:
-                    ts = datetime.fromisoformat(ts_str).date()
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    ts_date = ts.astimezone(timezone.utc).date()
                 except (ValueError, TypeError):
                     continue
-                if ts != today:
+                if ts_date != today:
                     continue
                 if entry.get("event") == "EXIT":
                     pnl = entry.get("pnl", 0) or 0
@@ -1305,7 +1308,17 @@ class PolyBot:
         polymarket_key = api_keys.get("PRIVATE_KEY") or api_keys.get(
             "POLYMARKET_PRIVATE_KEY"
         )
-        if polymarket_key:
+        # In dry_run/paper mode we never place real orders, so skip live CLOB
+        # credential init entirely — read-only book reads use a key-less L0 client.
+        # (This also avoids needing the proxy funder/signature_type until live.)
+        dry_run = self.config.get("trading", {}).get("dry_run", True)
+        if dry_run:
+            logging.info(
+                "dry_run=true — skipping live CLOB credential init (paper mode "
+                "uses key-less read-only book access; set polymarket.signature_type "
+                "+ funder_address before going live on CLOB V2)."
+            )
+        elif polymarket_key:
             self.clob_client.set_credentials(
                 private_key=polymarket_key,
                 api_key=api_keys.get("POLYMARKET_API_KEY"),
@@ -2066,6 +2079,7 @@ class PolyBot:
                 continue
             market_prices[mid] = yes_price
             market_token_ids[mid] = (yes_token, no_token)
+            taker_fee_rate = await self.clob_client.fetch_taker_fee_rate(yes_token)
             # Compact YES-side liquidity snapshot for the (optional, default-off)
             # bid-depth exit. Sell-side support = the top YES bids we'd exit into.
             top_bids = sorted(
@@ -2092,6 +2106,7 @@ class PolyBot:
                 "spread": (best_ask - best_bid)
                 if (best_bid is not None and best_ask is not None)
                 else None,
+                "taker_fee_rate": taker_fee_rate,
                 "bids": [{"price": p, "size": s} for p, s in top_bids],
                 "asks": [{"price": p, "size": s} for p, s in top_asks],
             }
@@ -2160,25 +2175,77 @@ class PolyBot:
         """Exit order + journal + risk updates (serialized with other execution)."""
         async with self._execution_lock:
             try:
-                order = await self.clob_client.place_order(
-                    token_id=exit_decision.token_id,
-                    side=exit_decision.action,
-                    price=exit_decision.exit_price,
-                    size=exit_decision.size,
-                    market_id=exit_decision.market_id,
-                    dry_run=self.config.get("trading", {}).get("dry_run", True),
-                    # Executable-price stop exits fill at the bid -> place FAK
-                    # (marketable) so they take that liquidity now instead of
-                    # resting as a GTC limit. Other exits keep the GTC default.
-                    order_type="FAK" if getattr(exit_decision, "marketable", False) else "GTC",
+                pos = self.risk_manager.active_positions.get(
+                    exit_decision.position_id
                 )
+                if pos is None:
+                    logging.warning(
+                        "Exit skipped: position %s is no longer active",
+                        exit_decision.position_id,
+                    )
+                    return
+
+                dry_run = self.config.get("trading", {}).get("dry_run", True)
+                pending_exit_order_id = str(
+                    getattr(pos, "pending_exit_order_id", "") or ""
+                )
+                if pending_exit_order_id and not dry_run:
+                    status = await self.clob_client.get_order_status(
+                        pending_exit_order_id
+                    )
+                    if status == OrderStatus.FILLED:
+                        setattr(pos, "pending_exit_order_id", "")
+                        order = True
+                    elif status in (OrderStatus.CANCELLED, OrderStatus.FAILED, None):
+                        logging.warning(
+                            "Prior exit order %s for %s is %s; retrying close",
+                            pending_exit_order_id,
+                            exit_decision.position_id,
+                            status.value if isinstance(status, OrderStatus) else status,
+                        )
+                        setattr(pos, "pending_exit_order_id", "")
+                        order = None
+                    else:
+                        logging.warning(
+                            "Exit order still pending for %s: order_id=%s status=%s",
+                            exit_decision.position_id,
+                            pending_exit_order_id,
+                            status.value if isinstance(status, OrderStatus) else status,
+                        )
+                        return
+                else:
+                    order = None
+
+                if order is None:
+                    order = await self.clob_client.place_order(
+                        token_id=exit_decision.token_id,
+                        side=exit_decision.action,
+                        price=exit_decision.exit_price,
+                        size=exit_decision.size,
+                        market_id=exit_decision.market_id,
+                        dry_run=dry_run,
+                        # Executable-price stop exits fill at the bid -> place FAK
+                        # (marketable) so they take that liquidity now instead of
+                        # resting as a GTC limit. Other exits keep the GTC default.
+                        order_type="FAK" if getattr(exit_decision, "marketable", False) else "GTC",
+                    )
+                    if order and not dry_run:
+                        status = await self.clob_client.get_order_status(order.order_id)
+                        if status != OrderStatus.FILLED:
+                            setattr(pos, "pending_exit_order_id", order.order_id)
+                            logging.warning(
+                                "Exit order accepted but not filled; keeping position open: "
+                                "trade_id=%s order_id=%s status=%s",
+                                exit_decision.position_id,
+                                order.order_id,
+                                status.value if isinstance(status, OrderStatus) else status,
+                            )
+                            return
+
                 if order:
                     logging.info(
                         f"EXIT {exit_decision.reason}: {exit_decision.position_id[:12]} "
                         f"PnL=${exit_decision.unrealized_pnl:+.2f}"
-                    )
-                    pos = self.risk_manager.active_positions.get(
-                        exit_decision.position_id
                     )
                     strat = getattr(pos, "strategy", "unknown") if pos else "unknown"
                     mq = getattr(pos, "market_question", "N/A") if pos else "N/A"
@@ -2216,6 +2283,8 @@ class PolyBot:
                             # the exit would have booked at vs what the sweep cost.
                             "fill_mark_price": getattr(exit_decision, "fill_mark_price", None),
                             "fill_slippage_pct": getattr(exit_decision, "fill_slippage_pct", None),
+                            "fill_fee_usdc": getattr(exit_decision, "fill_fee_usdc", None),
+                            "fill_fee_rate": getattr(exit_decision, "fill_fee_rate", None),
                         },
                     )
                     self.circuit_breakers.record_exit(
@@ -2334,14 +2403,6 @@ class PolyBot:
                             links=["[[PSB Active Recommendations]]", "[[self_healing]]"],
                         )
                         logging.info("self_healing recommendation written to %s", rec_path)
-                        try:
-                            await self.notifier.notify_recommendations_available(
-                                source="self_healing",
-                                count=len(_sh_msgs),
-                                path=str(rec_path),
-                            )
-                        except Exception as _ae:  # noqa: BLE001 — alert is best-effort
-                            logging.debug("self_healing recommendation alert failed: %s", _ae)
                     except Exception as _ne:  # noqa: BLE001 — recommendation logging is best-effort
                         logging.debug("self_healing recommendation log failed: %s", _ne)
             except Exception as e:

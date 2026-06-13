@@ -24,7 +24,8 @@ python-dotenv>=0.20.0
 
 # Blockchain/Web3
 web3>=6.11.0
-py-clob-client>=0.30.0
+# CLOB V2 unified SDK (V1 retired 2026-04-28). See requirements.txt for caveats.
+py-clob-client-v2==1.0.1
 
 # Backtest helpers used by scripts/src.backtest (not Nautilus)
 pandas>=2.0.0

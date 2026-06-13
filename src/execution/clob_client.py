@@ -5,18 +5,31 @@ Order execution and risk management
 
 import asyncio
 import logging
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 try:
-    from py_clob_client.client import ClobClient as PyClobClient, ApiCreds
-    from py_clob_client.clob_types import (
+    from importlib.metadata import PackageNotFoundError, version as package_version
+except ImportError:  # pragma: no cover - Python 3.8 fallback if ever needed
+    PackageNotFoundError = Exception
+    package_version = None
+try:
+    # py-clob-client-v2: Polymarket's unified SDK. Production cut to CLOB V2 on
+    # 2026-04-28; the legacy V1 `py_clob_client` package no longer settles orders.
+    from py_clob_client_v2 import (
+        ClobClient as PyClobClient,
+        ApiCreds,
         AssetType,
         BalanceAllowanceParams,
         OrderArgs,
         OrderType,
+        OrderPayload,
+        Side,
+        PartialCreateOrderOptions,
+        SignatureTypeV2,
     )
 except ImportError:
     PyClobClient = None
@@ -25,8 +38,19 @@ except ImportError:
     BalanceAllowanceParams = None
     OrderArgs = None
     OrderType = None
+    OrderPayload = None
+    Side = None
+    PartialCreateOrderOptions = None
+    SignatureTypeV2 = None
 
 logger = logging.getLogger(__name__)
+
+LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON = (
+    "Live CLOB execution is blocked: this environment imports archived "
+    "py-clob-client V1. Polymarket docs now direct Python trading integrations "
+    "to py-clob-client-v2 / the unified SDK. Paper/read-only paths may run, but "
+    "real order placement must wait for the SDK migration."
+)
 
 
 class OrderStatus(Enum):
@@ -108,6 +132,8 @@ class CLOBClient:
         self._max_order_history = 1000
         # Level-0 client for public `get_order_book` when no signer/trading keys set.
         self._readonly_py_client: Optional[Any] = None
+        self._fee_rate_cache: Dict[str, float] = {}
+        self._tick_size_cache: Dict[str, str] = {}
         # Derived L2 credentials expire ~7 days after creation; Polymarket does not
         # rotate them and auth calls fail silently once stale. Track when they were
         # set and refuse to trade past a configurable age so we fail loud, not silent.
@@ -120,6 +146,63 @@ class CLOBClient:
         self._auto_rederive_credentials = bool(
             self.config.get("auto_rederive_credentials", True)
         )
+        # V2 proxy/Safe execution. Polymarket website accounts hold funds in a
+        # proxy / Gnosis-Safe wallet, NOT the signing EOA, and CLOB V2 rejects
+        # raw-EOA orders ("maker address not allowed", py-clob-client-v2 #51). So
+        # a live order must carry the account's signature type + funder (proxy)
+        # address. signature_type: 1=POLY_PROXY (email/Magic signup),
+        # 2=POLY_GNOSIS_SAFE (browser-wallet signup), 0=EOA (rejected by prod),
+        # 3=POLY_1271 (deposit wallet). Accepts an int or the enum name string.
+        self._signature_type = self._resolve_signature_type(
+            self.config.get("signature_type")
+        )
+        self._funder_address = (self.config.get("funder_address") or "").strip() or None
+
+    @staticmethod
+    def live_execution_supported() -> bool:
+        """True only when the V2 CLOB SDK is installed AND its order API imported.
+
+        Polymarket hard-cut production to CLOB V2 on 2026-04-28; the legacy V1
+        ``py-clob-client`` package no longer settles orders. This client is ported
+        to ``py-clob-client-v2``, so live execution requires that package to be
+        present and its order types to have imported cleanly. We check both the
+        installed-package metadata and the live import symbols so a partial/broken
+        install fails closed rather than placing orders that can't be signed.
+        See vault: projects/psb/research/2026-06-13-py-clob-client-v2-migration-spec-kimi.md
+        """
+        if PyClobClient is None or OrderArgs is None or OrderType is None:
+            return False
+        if package_version is None:
+            return True
+        try:
+            package_version("py-clob-client-v2")
+            return True
+        except PackageNotFoundError:
+            return False
+
+    @staticmethod
+    def _resolve_signature_type(raw: Any) -> Optional[int]:
+        """Map a config signature_type (int or enum-name string) to a V2 int.
+
+        Accepts ``1`` / ``"1"`` / ``"POLY_PROXY"`` etc. Returns None when unset so
+        the SDK falls back to its EOA default (which prod rejects — we warn at
+        client construction).
+        """
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            return int(raw)
+        name = str(raw).strip()
+        if name.isdigit():
+            return int(name)
+        if SignatureTypeV2 is not None:
+            member = getattr(SignatureTypeV2, name.upper(), None)
+            if member is not None:
+                return int(member)
+        logger.warning("Unrecognized polymarket.signature_type=%r; ignoring.", raw)
+        return None
 
     def set_credentials(
         self,
@@ -128,10 +211,24 @@ class CLOBClient:
         api_secret: str = None,
         api_passphrase: str = None,
     ):
+        if not self.live_execution_supported():
+            raise RuntimeError(LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON)
         if PyClobClient is None or ApiCreds is None:
             raise RuntimeError(
-                "py-clob-client is required for live CLOB execution. "
+                "py-clob-client-v2 is required for live CLOB execution. "
                 "Install project requirements before running with dry_run=false."
+            )
+        # CLOB V2 rejects raw-EOA orders (#51). Proxy/Safe accounts must supply a
+        # signature_type (1/2) and the funder (proxy) address, or live orders will
+        # be refused at match time with "maker address not allowed".
+        if self._signature_type in (None, 0) or not self._funder_address:
+            logger.warning(
+                "CLOB V2 live config incomplete: signature_type=%s funder=%s. "
+                "Polymarket V2 rejects raw-EOA orders — set polymarket.signature_type "
+                "(1=POLY_PROXY email/Magic, 2=POLY_GNOSIS_SAFE browser-wallet) and "
+                "polymarket.funder_address to your Polymarket proxy wallet address.",
+                self._signature_type,
+                self._funder_address,
             )
         creds = ApiCreds(api_key, api_secret, api_passphrase)
         self.client = PyClobClient(
@@ -139,6 +236,8 @@ class CLOBClient:
             chain_id=self.chain_id,
             key=private_key,
             creds=creds,
+            signature_type=self._signature_type,
+            funder=self._funder_address,
         )
         # Clear plaintext copies — PyClobClient holds its own internal copy
         del private_key
@@ -181,13 +280,17 @@ class CLOBClient:
         if not self.client:
             logger.error("Cannot re-derive credentials: CLOB client not initialized.")
             return False
-        derive = getattr(self.client, "create_or_derive_api_creds", None)
+        # V2 renamed create_or_derive_api_creds -> create_or_derive_api_key.
+        # Prefer the V2 name, fall back to the V1 name for forward/back safety.
+        derive = getattr(self.client, "create_or_derive_api_key", None) or getattr(
+            self.client, "create_or_derive_api_creds", None
+        )
         set_creds = getattr(self.client, "set_api_creds", None)
         if not callable(derive) or not callable(set_creds):
             logger.error(
-                "Installed py-clob-client lacks create_or_derive_api_creds/"
-                "set_api_creds — cannot self-heal expired credentials. "
-                "Re-derive manually (L1 sign) before trading."
+                "Installed CLOB SDK lacks create_or_derive_api_key/set_api_creds "
+                "— cannot self-heal expired credentials. Re-derive manually (L1 "
+                "sign) before trading."
             )
             return False
         try:
@@ -299,8 +402,18 @@ class CLOBClient:
             else ("YES" if side == "BUY" else "NO")
         )
         if dry_run:
+            # Keep paper as close to live as possible: quantize the paper fill price
+            # to the market's REAL tick size using the same rounding the live V2
+            # path applies, so paper entry prices match what the CLOB would actually
+            # fill at (no free fractional-cent edge). Fails soft to the raw price if
+            # the tick can't be read. Taker fees are modeled separately downstream.
+            tick_size = await self.fetch_tick_size(token_id)
+            fill_price = self._quantize_price_for_tick(
+                price, tick_size, side=side, order_type=order_type
+            )
             logger.info(
-                f"[DRY RUN] Would place order: {side} {size} @ {price} ({order_type})"
+                f"[DRY RUN] Would place order: {side} {size} @ {fill_price} "
+                f"({order_type}) [requested {price}, tick {tick_size}]"
             )
             order = Order(
                 order_id=f"dry_{datetime.now().timestamp()}",
@@ -308,7 +421,7 @@ class CLOBClient:
                 token_id=token_id,
                 side=side,
                 outcome=_outcome,
-                price=price,
+                price=fill_price,
                 size=size,
                 filled_size=size,
                 status=OrderStatus.FILLED,
@@ -320,6 +433,9 @@ class CLOBClient:
 
         if not self.client:
             logger.error("CLOB client not initialized. Call set_credentials first.")
+            return None
+        if not self.live_execution_supported():
+            logger.error(LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON)
             return None
         if not await self.ensure_fresh_credentials():
             age = self.credentials_age()
@@ -343,18 +459,44 @@ class CLOBClient:
         # (take resting liquidity now, cancel the remainder) for stop/market exits so
         # the close actually fills instead of resting at a stale bid and re-gapping.
         _ot = getattr(OrderType, str(order_type).upper(), OrderType.GTC)
+        tick_size = await self.fetch_tick_size(token_id)
+        order_price = self._quantize_price_for_tick(
+            price,
+            tick_size,
+            side=side,
+            order_type=order_type,
+        )
+        if abs(float(order_price) - float(price)) > 1e-12:
+            logger.info(
+                "Quantized CLOB order price for tick size: token=%s side=%s type=%s "
+                "raw=%.6f tick=%s quantized=%.6f",
+                token_id[:20],
+                side,
+                order_type,
+                float(price),
+                tick_size,
+                float(order_price),
+            )
 
         order_args = OrderArgs(
             token_id=token_id,
             side=side,
-            price=price,
+            price=order_price,
             size=size,
+        )
+        # V2 create_order takes a PartialCreateOrderOptions carrying tick_size /
+        # neg_risk. Pass the tick size we already fetched and quantized against so
+        # the SDK doesn't re-round; leave neg_risk=None so it resolves per-market.
+        create_opts = (
+            PartialCreateOrderOptions(tick_size=str(tick_size))
+            if (PartialCreateOrderOptions is not None and tick_size)
+            else None
         )
 
         try:
             loop = asyncio.get_event_loop()
             signed_order = await loop.run_in_executor(
-                None, lambda: self.client.create_order(order_args)
+                None, lambda: self.client.create_order(order_args, create_opts)
             )
             resp = await loop.run_in_executor(
                 None, lambda: self.client.post_order(signed_order, _ot, post_only)
@@ -366,7 +508,7 @@ class CLOBClient:
                 token_id=token_id,
                 side=side,
                 outcome=_outcome,
-                price=price,
+                price=order_price,
                 size=size,
                 status=OrderStatus.PENDING,
             )
@@ -377,6 +519,21 @@ class CLOBClient:
             return order
         except Exception as e:
             logger.error(f"Error placing order: {e}")
+            recovered = await self._recover_recent_trade_after_order_error(
+                token_id=token_id,
+                side=side,
+                size=size,
+                price=order_price,
+                market_id=market_id or "",
+                outcome=_outcome,
+            )
+            if recovered is not None:
+                logger.warning(
+                    "Recovered likely fill after post_order error: order_id=%s token=%s",
+                    recovered.order_id,
+                    token_id[:20],
+                )
+                return recovered
             return None
 
     async def cancel_order(self, order_id: str) -> bool:
@@ -386,7 +543,10 @@ class CLOBClient:
 
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: self.client.cancel(order_id))
+            # V2 renamed cancel(order_id) -> cancel_order(OrderPayload(orderID=...)).
+            await loop.run_in_executor(
+                None, lambda: self.client.cancel_order(OrderPayload(orderID=order_id))
+            )
             if order_id in self.pending_orders:
                 self.pending_orders[order_id].status = OrderStatus.CANCELLED
                 self.pending_orders[order_id].updated_at = datetime.now()
@@ -471,6 +631,86 @@ class CLOBClient:
                         return OrderStatus.FILLED
         # No matching trade — order is resting/unmatched, not yet terminal.
         return OrderStatus.PENDING
+
+    async def _recover_recent_trade_after_order_error(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        size: float,
+        price: float,
+        market_id: str,
+        outcome: str,
+    ) -> Optional[Order]:
+        """
+        Best-effort recovery for the Polymarket "POST errored but filled" shape.
+
+        If post_order raises after the venue accepted/matched the order, the bot
+        may not receive an order id. Query recent trades for the same asset token
+        before treating the attempt as no-fill. This is intentionally narrow and
+        only returns FILLED when the trade payload carries the same token id.
+        """
+        if not self.client:
+            return None
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _get_trades():
+                try:
+                    from py_clob_client_v2 import TradeParams
+
+                    return self.client.get_trades(TradeParams(asset_id=token_id))
+                except Exception:
+                    return self.client.get_trades()
+
+            trades = await loop.run_in_executor(None, _get_trades)
+        except Exception as exc:
+            logger.error("Post-order trade reconciliation failed: %s", exc)
+            return None
+
+        token_l = str(token_id or "").lower()
+        for trade in trades or []:
+            if not isinstance(trade, dict):
+                continue
+            asset_values = [
+                trade.get("asset_id"),
+                trade.get("token_id"),
+                trade.get("maker_asset_id"),
+                trade.get("taker_asset_id"),
+            ]
+            if not any(str(v or "").lower() == token_l for v in asset_values):
+                continue
+
+            order_id = (
+                trade.get("order_id")
+                or trade.get("taker_order_id")
+                or trade.get("maker_order_id")
+                or trade.get("id")
+                or f"recovered_{int(time.time() * 1000)}"
+            )
+            filled_size = (
+                trade.get("size")
+                or trade.get("matched_amount")
+                or trade.get("amount")
+                or size
+            )
+            trade_price = trade.get("price") or price
+            order = Order(
+                order_id=str(order_id),
+                market_id=market_id,
+                token_id=token_id,
+                side=side,
+                outcome=outcome,
+                price=float(trade_price),
+                size=float(size),
+                filled_size=float(filled_size),
+                status=OrderStatus.FILLED,
+            )
+            self.order_history.append(order)
+            if len(self.order_history) > self._max_order_history:
+                self.order_history = self.order_history[-self._max_order_history :]
+            return order
+        return None
 
     async def can_sell_token(self, token_id: str, market_id: str) -> bool:
         """
@@ -557,40 +797,99 @@ class CLOBClient:
             logger.warning("[fetch_order_book_snapshot] %s", e)
             return None
 
-    async def get_positions(self) -> List[Position]:
-        if not self.client:
-            logger.error("CLOB client not initialized.")
-            return []
+    async def fetch_taker_fee_rate(self, token_id: str) -> Optional[float]:
+        """Return market taker fee rate as a decimal, e.g. ``0.07``.
 
+        Uses py-clob-client's official fee endpoint wrapper
+        ``get_fee_rate_bps(token_id)`` and normalizes bps to the decimal fee
+        formula used by Polymarket: ``shares * fee_rate * p * (1 - p)``.
+        """
+        tid = str(token_id or "").strip()
+        if not tid:
+            return None
+        if tid in self._fee_rate_cache:
+            return self._fee_rate_cache[tid]
+        pc = self._py_client_for_public_reads()
+        if not pc:
+            return None
         try:
             loop = asyncio.get_event_loop()
-            positions_data = await loop.run_in_executor(None, self.client.get_positions)
-            # This is a simplified mapping. The actual API response may be more complex.
-            return [
-                Position(
-                    position_id=p["position_id"],
-                    market_id=p["market_id"],
-                    market_question=p.get("market_question", "N/A"),
-                    outcome=p["outcome"],
-                    size=p["size"],
-                    entry_price=p["entry_price"],
-                    current_price=p.get("current_price", p["entry_price"]),
-                    pnl=p.get("pnl", 0.0),
-                    opened_at=datetime.fromisoformat(p["opened_at"]),
-                    end_date=datetime.fromisoformat(p["end_date"])
-                    if p.get("end_date")
-                    else None,
-                    strategy=p.get("strategy", "unknown"),
-                    entry_leg=p.get("entry_leg", "YES"),
-                    window_size=str(p.get("window_size") or ""),
-                    token_id_yes=str(p.get("token_id_yes") or ""),
-                    token_id_no=str(p.get("token_id_no") or ""),
-                )
-                for p in positions_data
-            ]
+            fee_bps = await loop.run_in_executor(None, lambda: pc.get_fee_rate_bps(tid))
+            rate = max(0.0, float(fee_bps or 0) / 10_000.0)
+            self._fee_rate_cache[tid] = rate
+            return rate
         except Exception as e:
-            logger.error(f"Error getting positions: {e}")
-            return []
+            logger.warning("[fetch_taker_fee_rate] %s", e)
+            return None
+
+    async def fetch_tick_size(self, token_id: str) -> Optional[str]:
+        """Return CLOB minimum tick size for an outcome token."""
+        tid = str(token_id or "").strip()
+        if not tid:
+            return None
+        if tid in self._tick_size_cache:
+            return self._tick_size_cache[tid]
+        pc = self._py_client_for_public_reads()
+        if not pc:
+            return None
+        try:
+            loop = asyncio.get_event_loop()
+            tick = await loop.run_in_executor(None, lambda: pc.get_tick_size(tid))
+            tick_s = str(tick)
+            self._tick_size_cache[tid] = tick_s
+            return tick_s
+        except Exception as e:
+            logger.warning("[fetch_tick_size] %s", e)
+            return None
+
+    @staticmethod
+    def _quantize_price_for_tick(
+        price: float,
+        tick_size: Optional[str],
+        *,
+        side: str,
+        order_type: str,
+    ) -> float:
+        """Quantize an order price without rounding away from execution intent."""
+        if not tick_size:
+            return float(price)
+        try:
+            tick = Decimal(str(tick_size))
+            raw = Decimal(str(price))
+        except (InvalidOperation, TypeError, ValueError):
+            return float(price)
+        if tick <= 0:
+            return float(price)
+
+        marketable = str(order_type or "").upper() in {"FAK", "FOK"}
+        side_u = str(side or "").upper()
+        units = raw / tick
+        if side_u == "BUY":
+            rounded_units = units.to_integral_value(
+                rounding="ROUND_CEILING" if marketable else "ROUND_FLOOR"
+            )
+        else:
+            rounded_units = units.to_integral_value(
+                rounding="ROUND_FLOOR" if marketable else "ROUND_CEILING"
+            )
+        quantized = rounded_units * tick
+        quantized = max(tick, min(Decimal("1") - tick, quantized))
+        # Avoid float artifacts that can fail SDK price_valid string checks.
+        decimals = max(0, -tick.as_tuple().exponent)
+        return float(round(quantized, decimals))
+
+    async def get_positions(self) -> List[Position]:
+        """CLOB-side position read.
+
+        py-clob-client-v2 removed ``get_positions`` from the SDK — positions now
+        come from the Polymarket Data API
+        (``GET https://data-api.polymarket.com/positions?user=<funder>``). PSB
+        tracks open positions in its own journal/state and has no live caller for
+        this method, so we return an empty list rather than ship speculative,
+        untested Data-API parsing into the execution path. Wire the Data API here
+        only when a real consumer needs on-chain position reconciliation.
+        """
+        return []
 
 
 class RiskManager:
@@ -618,7 +917,7 @@ class RiskManager:
         self.daily_trades = 0
         self.daily_pnl = 0.0
         self.bankroll = 0.0
-        self.last_reset = datetime.now()
+        self.last_reset = datetime.now(timezone.utc)
         self.emergency_stopped = False
         self.active_positions: Dict[str, Position] = {}
 
@@ -786,12 +1085,15 @@ class RiskManager:
         self.emergency_stopped = False
 
     def _should_reset_daily(self) -> bool:
-        return (datetime.now() - self.last_reset).days >= 1
+        last_reset = self.last_reset
+        if last_reset.tzinfo is None:
+            last_reset = last_reset.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc).date() > last_reset.date()
 
     def _reset_daily(self):
         self.daily_trades = 0
         self.daily_pnl = 0.0
-        self.last_reset = datetime.now()
+        self.last_reset = datetime.now(timezone.utc)
 
     def get_portfolio_summary(self, total_bankroll: float) -> Dict[str, Any]:
         # Total cost (dollars) — entry-leg aware for BUY_NO vs SELL_YES

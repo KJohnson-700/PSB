@@ -21,6 +21,17 @@ polymarket:
   # paper boot short-circuits before reading it. See second-brain changelog
   # 2026-06-11 "L2 credential lifecycle hardening".
   rederive_credentials_on_start: true
+  # ── CLOB V2 proxy/Safe execution (live only; ignored while dry_run) ──
+  # Polymarket V2 (prod since 2026-04-28) REJECTS raw-EOA orders ("maker address
+  # not allowed", py-clob-client-v2 #51). Website accounts hold funds in a proxy
+  # wallet, so live orders must carry the account's signature type + funder.
+  #   signature_type: 1 = POLY_PROXY (email / Magic.link signup)
+  #                    2 = POLY_GNOSIS_SAFE (browser-wallet signup)
+  # funder_address: your Polymarket proxy/deposit wallet address (NOT the EOA the
+  #   private key derives) — find it on your Polymarket profile / deposit page.
+  # FILL THESE IN BEFORE THE LIVE SMOKE TEST. They are unused while dry_run=true.
+  signature_type: null            # set to 1 or 2 (user confirmed proxy/Safe account)
+  funder_address: null            # set to "0x..." proxy wallet address
 hyperliquid:
   request_timeout_sec: 25
   range_request_timeout_sec: 30
@@ -88,7 +99,7 @@ trading:
     # last 2 min to resolution). Marking the stop on the executable price fires it at
     # a true -15% and fills near there. EXIT change — not ghost-validatable; forward-
     # test on trades_settled + exit_excursion_shadow. Fail-safe to midpoint if no book.
-    stop_use_executable_price: false
+    stop_use_executable_price: true
     # ── Realistic paper fills (default OFF) ──
     # Paper/dry_run fills every order at the requested price (no spread, slippage,
     # or depth), so paper exit P&L is optimistic vs live. When on, exits are filled
@@ -332,6 +343,16 @@ trading:
               updown_hold_winners_to_resolution: false
             down:
               updown_stop_loss_pct: 0.15
+  execution_fees:
+    enabled: true
+    # Polymarket fee-enabled binary CLOB markets charge takers at match time:
+    # shares * fee_rate * price * (1 - price). This fallback is applied only
+    # to 15m crypto up/down paper exits when live market metadata is missing.
+    # 2026-06-13: corrected 0.07 -> 0.036. Polymarket Crypto taker fee is 1.80%
+    # effective (max, at price 0.50). Under this formula the effective rate at 0.50
+    # is fee_rate*0.5, so 0.036 -> 1.80%. The old 0.07 implied ~3.5% (~2x reality)
+    # and over-penalized paper exits. Verify against live get_fee_rate_bps when live.
+    crypto_updown_15m_taker_fee_rate: 0.036
 lane_management:
   enabled: true
   execution_enforcement_enabled: false

@@ -14,10 +14,15 @@ Tests for clob_client live-execution hardening:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.execution.clob_client import CLOBClient, OrderStatus
+from src.execution.clob_client import (
+    CLOBClient,
+    LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON,
+    OrderStatus,
+)
 
 
 def _client(creds_max_age_hours: float = 144) -> CLOBClient:
@@ -37,6 +42,33 @@ def test_credentials_age_none_before_set():
     assert c.credentials_age() is None
     # Never-set creds can't be judged stale; client guards take over instead.
     assert c.credentials_expired() is False
+
+
+def test_set_credentials_blocks_legacy_v1_without_v2(monkeypatch):
+    c = _client()
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: False))
+
+    assert LEGACY_CLOB_CLIENT_LIVE_BLOCK_REASON.startswith("Live CLOB execution is blocked")
+    with pytest.raises(RuntimeError, match="Live CLOB execution is blocked"):
+        c.set_credentials("private", "api", "secret", "passphrase")
+
+
+@pytest.mark.asyncio
+async def test_place_order_blocks_legacy_v1_without_v2(monkeypatch):
+    c = _client()
+    c.client = MagicMock()
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: False))
+
+    order = await c.place_order(
+        token_id="tok",
+        side="BUY",
+        price=0.5,
+        size=5,
+        dry_run=False,
+    )
+
+    assert order is None
+    c.client.create_order.assert_not_called()
 
 
 def test_credentials_fresh_after_set():
@@ -60,7 +92,8 @@ def test_credentials_not_expired_just_under_max_age():
 
 
 @pytest.mark.asyncio
-async def test_place_order_refuses_expired_credentials_when_cannot_refresh():
+async def test_place_order_refuses_expired_credentials_when_cannot_refresh(monkeypatch):
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
     c = _client(creds_max_age_hours=144)
     # py-clob client present but lacks re-derive methods → cannot self-heal.
     c.client = object()
@@ -160,7 +193,8 @@ async def test_rederive_missing_methods_returns_false():
 
 
 @pytest.mark.asyncio
-async def test_place_order_self_heals_then_proceeds_past_cred_guard():
+async def test_place_order_self_heals_then_proceeds_past_cred_guard(monkeypatch):
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
     # Expired creds + working re-derive → guard passes; order still returns None
     # here only because OrderArgs is unavailable in test env (py-clob not
     # installed), proving execution advanced *past* the credential check.
@@ -201,6 +235,47 @@ async def test_active_order_uses_order_endpoint():
     assert await c.get_order_status("o1") == OrderStatus.FILLED
 
 
+# ── Change 3: public execution metadata wrappers ─────────────────────────────
+
+
+class _FakePublicClient:
+    def __init__(self):
+        self.fee_calls = 0
+        self.tick_calls = 0
+
+    def get_fee_rate_bps(self, token_id):
+        self.fee_calls += 1
+        assert token_id == "tok"
+        return 700
+
+    def get_tick_size(self, token_id):
+        self.tick_calls += 1
+        assert token_id == "tok"
+        return "0.001"
+
+
+@pytest.mark.asyncio
+async def test_fetch_taker_fee_rate_normalizes_bps_and_caches():
+    c = _client()
+    fake = _FakePublicClient()
+    c._readonly_py_client = fake
+
+    assert await c.fetch_taker_fee_rate("tok") == pytest.approx(0.07)
+    assert await c.fetch_taker_fee_rate("tok") == pytest.approx(0.07)
+    assert fake.fee_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_tick_size_uses_public_client_and_caches():
+    c = _client()
+    fake = _FakePublicClient()
+    c._readonly_py_client = fake
+
+    assert await c.fetch_tick_size("tok") == "0.001"
+    assert await c.fetch_tick_size("tok") == "0.001"
+    assert fake.tick_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_empty_order_response_reconciles_fill_from_trades():
     c = _client()
@@ -231,3 +306,78 @@ async def test_nested_maker_orders_reconcile():
         {}, trades=[{"maker_orders": [{"order_id": "o1"}]}]
     )
     assert await c.get_order_status("o1") == OrderStatus.FILLED
+
+
+def test_quantize_price_for_tick_preserves_execution_intent():
+    q = CLOBClient._quantize_price_for_tick
+
+    assert q(0.421, "0.01", side="BUY", order_type="GTC") == pytest.approx(0.42)
+    assert q(0.421, "0.01", side="SELL", order_type="GTC") == pytest.approx(0.43)
+    assert q(0.421, "0.01", side="BUY", order_type="FAK") == pytest.approx(0.43)
+    assert q(0.421, "0.01", side="SELL", order_type="FAK") == pytest.approx(0.42)
+
+
+@pytest.mark.asyncio
+async def test_place_order_quantizes_price_before_signing(monkeypatch):
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
+    c = _client()
+    c.client = MagicMock()
+    c.client.create_order.return_value = "signed"
+    c.client.post_order.return_value = {"order_id": "oid_tick"}
+    c.ensure_fresh_credentials = AsyncMock(return_value=True)
+    c.fetch_tick_size = AsyncMock(return_value="0.01")
+
+    order = await c.place_order(
+        token_id="tok",
+        side="BUY",
+        price=0.421,
+        size=5,
+        dry_run=False,
+        order_type="GTC",
+    )
+
+    assert order is not None
+    order_args = c.client.create_order.call_args.args[0]
+    assert order_args.price == pytest.approx(0.42)
+    assert order.price == pytest.approx(0.42)
+
+
+class _PostErrorTradeClient:
+    def create_order(self, order_args):
+        return "signed"
+
+    def post_order(self, signed_order, order_type, post_only):
+        raise RuntimeError("400 Bad Request")
+
+    def get_trades(self, params=None):
+        return [
+            {
+                "asset_id": "tok",
+                "taker_order_id": "oid_recovered",
+                "price": 0.42,
+                "size": 5,
+            }
+        ]
+
+
+@pytest.mark.asyncio
+async def test_place_order_recovers_recent_trade_after_post_error(monkeypatch):
+    monkeypatch.setattr(CLOBClient, "live_execution_supported", staticmethod(lambda: True))
+    c = _client()
+    c.client = _PostErrorTradeClient()
+    c.ensure_fresh_credentials = AsyncMock(return_value=True)
+    c.fetch_tick_size = AsyncMock(return_value="0.01")
+
+    order = await c.place_order(
+        token_id="tok",
+        side="SELL",
+        price=0.421,
+        size=5,
+        dry_run=False,
+        order_type="FAK",
+    )
+
+    assert order is not None
+    assert order.order_id == "oid_recovered"
+    assert order.status == OrderStatus.FILLED
+    assert order.price == pytest.approx(0.42)
