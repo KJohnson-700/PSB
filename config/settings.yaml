@@ -999,11 +999,13 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 120.0
           down:
-            # 2026-06-12: sit out eth 15m BUY_NO. Current-era (06-12 only, n=23)
-            # held 35% WR / -$12.60 while eth 15m BUY_YES is +$21.72 @ 50% WR.
-            # Wrong-direction lane-side; complement wins. min_edge 0.1 -> 0.50
-            # disables NO; revert to 0.1 if 15+ closed post-change YES-only trades regress.
-            min_edge: 0.50
+            # 2026-06-13: RE-ENABLED. Ghost recut (rejected-candidate set, ts>=06-12,
+            # n=2528) shows eth 15m BUY_NO is +0.077 EV / 54% WR — i.e. we were
+            # rejecting WINNERS. The 06-12 sit-out mistook an exit/selection problem
+            # (taken trades held -$46.9 = anti-selective admission) for an entry
+            # problem. Restore min_edge 0.50 -> 0.1; forward-test realized w/ realistic
+            # fills+fees. Re-disable only if ghost EV flips negative on recut.
+            min_edge: 0.1
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
