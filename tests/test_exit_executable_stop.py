@@ -116,6 +116,61 @@ def test_realistic_paper_fill_uses_bid_ladder_vwap():
     assert d.unrealized_pnl == pytest.approx(3.0)  # 30 * (0.60 - 0.50), not 4.5
 
 
+def _rpf_mgr() -> PositionExitManager:
+    return PositionExitManager(
+        {
+            "trading": {
+                "exit_rules": {
+                    "enabled": True,
+                    "take_profit_pct": 0.30,
+                    "stop_loss_pct": 0.30,
+                    "updown_stop_loss_pct": 0.15,
+                    "realistic_paper_fills": True,
+                }
+            }
+        }
+    )
+
+
+def test_realistic_fill_long_no_walks_mirrored_ask_ladder():
+    # Long NO entered at 0.40. YES asks 0.33/0.35/0.37 -> NO bids 0.67/0.65/0.63;
+    # selling 30 NO sweeps them -> VWAP 0.65. TP fires (NO price 0.65 vs entry 0.40).
+    pos = SimpleNamespace(
+        market_id="m1", market_question="Ethereum Up or Down - test",
+        outcome="NO", strategy="eth_macro", size=30.0, entry_price=0.40,
+        entry_leg="NO", opened_at=datetime.now() - timedelta(minutes=3),
+        end_date=None, window_size="15m",
+    )
+    liq = {"m1": {"asks": [
+        {"price": 0.33, "size": 10.0},
+        {"price": 0.35, "size": 10.0},
+        {"price": 0.37, "size": 10.0},
+    ]}}
+    # YES mid 0.35 -> NO mid 0.65, a +0.25 gain on a 0.40 entry = well past TP.
+    exits = _rpf_mgr().check_exits({"p1": pos}, {"m1": 0.35}, _TOKENS, liq)
+    assert len(exits) == 1
+    d = exits[0]
+    assert d.exit_price == pytest.approx(0.65)  # NO-space VWAP (1 - 0.35)
+    assert d.unrealized_pnl == pytest.approx(30 * (0.65 - 0.40))
+
+
+def test_realistic_fill_short_yes_walks_ask_ladder():
+    # Short YES at 0.60 (outcome NO, not entry_leg NO): buy back YES by walking asks.
+    pos = SimpleNamespace(
+        market_id="m1", market_question="Ethereum Up or Down - test",
+        outcome="NO", strategy="eth_macro", size=20.0, entry_price=0.60,
+        entry_leg="YES", opened_at=datetime.now() - timedelta(minutes=3),
+        end_date=None, window_size="15m",
+    )
+    liq = {"m1": {"asks": [{"price": 0.30, "size": 10.0}, {"price": 0.32, "size": 10.0}]}}
+    # YES mid 0.31 -> short is deep in profit (entry 0.60) -> TP fires.
+    exits = _rpf_mgr().check_exits({"p1": pos}, {"m1": 0.31}, _TOKENS, liq)
+    assert len(exits) == 1
+    d = exits[0]
+    assert d.exit_price == pytest.approx(0.31)  # YES ask VWAP we buy back at
+    assert d.unrealized_pnl == pytest.approx(20 * (0.60 - 0.31))
+
+
 def test_place_order_routes_order_type_to_post_order():
     # Live-path bug fix: OrderArgs has no order_type field; the time-in-force goes to
     # post_order. FAK (marketable) for exits, post_only flag preserved.

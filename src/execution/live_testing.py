@@ -154,10 +154,10 @@ class PositionExitManager:
         )
         # Optional: realistic paper fills (default OFF). Paper/dry_run fills every
         # order at the requested price; this walks the book ladder so the recorded
-        # exit price + P&L reflect the slippage a real sweep would pay. v1 covers
-        # long-YES exits (the YES bid ladder is in the book snapshot); other legs
-        # fall back to single-level executable pricing until the ask ladder is
-        # captured too. See check_exits and src/execution/fill_sim.py.
+        # exit price + P&L reflect the slippage a real sweep would pay. Covers all
+        # exit legs (long-YES bids, long-NO = mirrored YES asks, short-YES asks)
+        # when the snapshot carries them; entries still fill at the mark. See
+        # check_exits and src/execution/fill_sim.py.
         self._realistic_paper_fills = bool(
             exit_cfg.get("realistic_paper_fills", False)
         )
@@ -465,20 +465,47 @@ class PositionExitManager:
 
                 # Realistic paper fill: replace the requested-price fill with a
                 # book-walked sweep so recorded paper P&L reflects slippage instead
-                # of filling at the mark. v1: long-YES exits walk the YES bid ladder
-                # (the snapshot's `bids`); size beyond captured depth pads at the
-                # deepest level (bounded-pessimistic). Other legs need the ask ladder
-                # (not yet captured) and keep their single-level/midpoint price.
-                if self._realistic_paper_fills and entry_leg != "NO" and pos.outcome == "YES":
-                    _bids = ((market_liquidity or {}).get(pos.market_id) or {}).get("bids") or []
-                    _levels = [(b.get("price"), b.get("size")) for b in _bids]
-                    _fill_px, _filled = simulate_book_fill(
-                        "SELL", pos.size, _levels, marketable=True,
-                        pad_remainder_at_worst=True,
-                    )
-                    if _filled > 0:
-                        exit_price = _fill_px
-                        unrealized_pnl = pos.size * (_fill_px - pos.entry_price)
+                # of filling at the mark. Walks the relevant ladder for the position
+                # leg; size beyond captured depth pads at the deepest level
+                # (bounded-pessimistic). exit_price stays in the same token space the
+                # leg's default branch above used (NO-space for long NO, YES-space
+                # otherwise). No-ops when the needed ladder is absent.
+                if self._realistic_paper_fills:
+                    _liq = (market_liquidity or {}).get(pos.market_id) or {}
+                    if entry_leg == "NO":
+                        # Long NO: sell NO. NO bids = YES asks mirrored (price 1-a).
+                        _levels = [
+                            (1.0 - a.get("price"), a.get("size"))
+                            for a in (_liq.get("asks") or [])
+                            if a.get("price") is not None
+                        ]
+                        _fill_px, _filled = simulate_book_fill(
+                            "SELL", pos.size, _levels, marketable=True,
+                            pad_remainder_at_worst=True,
+                        )
+                        if _filled > 0:
+                            exit_price = _fill_px
+                            unrealized_pnl = pos.size * (_fill_px - pos.entry_price)
+                    elif pos.outcome == "NO":
+                        # Short YES: buy back YES -> walk the YES ask ladder.
+                        _levels = [(a.get("price"), a.get("size")) for a in (_liq.get("asks") or [])]
+                        _fill_px, _filled = simulate_book_fill(
+                            "BUY", pos.size, _levels, marketable=True,
+                            pad_remainder_at_worst=True,
+                        )
+                        if _filled > 0:
+                            exit_price = _fill_px
+                            unrealized_pnl = pos.size * (pos.entry_price - _fill_px)
+                    else:
+                        # Long YES: sell YES -> walk the YES bid ladder.
+                        _levels = [(b.get("price"), b.get("size")) for b in (_liq.get("bids") or [])]
+                        _fill_px, _filled = simulate_book_fill(
+                            "SELL", pos.size, _levels, marketable=True,
+                            pad_remainder_at_worst=True,
+                        )
+                        if _filled > 0:
+                            exit_price = _fill_px
+                            unrealized_pnl = pos.size * (_fill_px - pos.entry_price)
 
                 exits.append(
                     ExitDecision(

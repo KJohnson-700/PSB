@@ -2076,6 +2076,16 @@ class PolyBot:
                 key=lambda pb: pb[0],
                 reverse=True,
             )[:5]
+            # Top YES asks (cheapest first) — the buy-side ladder. Lets realistic
+            # paper fills walk long-NO exits (NO bid = 1 - YES ask) and short-YES
+            # cover (buy back YES) instead of marking them at the midpoint.
+            top_asks = sorted(
+                (
+                    (float(a.get("price", 0)), float(a.get("size", 0)))
+                    for a in asks
+                ),
+                key=lambda pa: pa[0],
+            )[:5]
             market_liquidity[mid] = {
                 "best_bid": best_bid,
                 "best_ask": best_ask,
