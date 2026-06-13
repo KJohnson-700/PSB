@@ -80,6 +80,15 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.2
     updown_hold_winners_to_resolution: false
+    # ── Executable-price stop (default OFF) ──
+    # Evaluate the updown stop trigger on the exit-side price we'd actually realize
+    # (YES bid for long YES; 1-ask i.e. NO bid for long NO; YES ask for short YES)
+    # instead of the YES midpoint, and fill there. Measured ~$190/2d gap: the stop
+    # fires at mid -15% but the live fill gaps to the bid (-28% median, -45% in the
+    # last 2 min to resolution). Marking the stop on the executable price fires it at
+    # a true -15% and fills near there. EXIT change — not ghost-validatable; forward-
+    # test on trades_settled + exit_excursion_shadow. Fail-safe to midpoint if no book.
+    stop_use_executable_price: false
     # ── BUY_YES bid-depth deterioration exit (default OFF) ──
     # Closes a long-YES position when sell-side support (YES bid depth) collapses
     # while the position is non-positive and there is still real time left — fixes

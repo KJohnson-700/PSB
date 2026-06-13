@@ -139,6 +139,14 @@ class PositionExitManager:
         # Optional BUY_YES bid-depth deterioration exit (default OFF). See settings.yaml
         # trading.exit_rules.bid_depth_exit and _maybe_bid_depth_exit below.
         self._bid_depth_exit = exit_cfg.get("bid_depth_exit", {}) or {}
+        # Optional: evaluate the updown STOP trigger on the executable exit-side price
+        # (the bid we'd actually sell into) instead of the YES midpoint (default OFF).
+        # The midpoint mark fires the stop at mid -X% but the realized fill gaps to the
+        # bid (-25% to -45% near resolution); marking the stop on the executable price
+        # fires it at a true -X% and fills near there. See check_exits below.
+        self._stop_use_executable_price = bool(
+            exit_cfg.get("stop_use_executable_price", False)
+        )
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
@@ -251,6 +259,36 @@ class PositionExitManager:
             )
             entry_signal = dict(getattr(pos, "entry_signal", {}) or {})
 
+            # Executable exit-side mark for the STOP trigger (default off). `pnl_pct`
+            # above marks at the YES midpoint; a stop sells into the bid, so near
+            # resolution the realized fill gaps well past the trigger. When enabled and
+            # a book snapshot exists, evaluate the stop on the price we'd actually
+            # realize and fill there. Fail-safe to midpoint if the book is missing.
+            stop_pnl_pct = pnl_pct
+            exec_exit_price: Optional[float] = None
+            if self._stop_use_executable_price:
+                _liq = (market_liquidity or {}).get(pos.market_id) or {}
+                _best_bid = _liq.get("best_bid")
+                _best_ask = _liq.get("best_ask")
+                if _best_bid is not None and _best_ask is not None:
+                    if entry_leg == "NO":
+                        # Long NO: sell NO -> NO bid = 1 - YES ask
+                        _exec_no = 1.0 - float(_best_ask)
+                        stop_pnl_pct = (pos.size * (_exec_no - pos.entry_price)) / cost_basis
+                        exec_exit_price = _exec_no
+                    elif pos.outcome == "NO":
+                        # Short YES: buy back YES -> pay YES ask
+                        stop_pnl_pct = (
+                            pos.size * (pos.entry_price - float(_best_ask))
+                        ) / cost_basis
+                        exec_exit_price = float(_best_ask)
+                    else:
+                        # Long YES: sell YES -> YES bid
+                        stop_pnl_pct = (
+                            pos.size * (float(_best_bid) - pos.entry_price)
+                        ) / cost_basis
+                        exec_exit_price = float(_best_bid)
+
             # Check exit conditions
             reason = None
             # Stop threshold in force at exit (for overshoot telemetry); set in the
@@ -315,10 +353,11 @@ class PositionExitManager:
                     and pnl_pct >= resolved.take_profit_pct
                 ):
                     reason = "take_profit"
-                elif effective_stop_loss_pct != 0 and pnl_pct <= -effective_stop_loss_pct:
+                elif effective_stop_loss_pct != 0 and stop_pnl_pct <= -effective_stop_loss_pct:
                     # Same-position percentage stop: cuts adverse drift early instead of
                     # waiting for the late-window cents stop, which fires at whatever price
-                    # the position has already collapsed to.
+                    # the position has already collapsed to. stop_pnl_pct == pnl_pct unless
+                    # stop_use_executable_price is on (then it marks the exit-side bid).
                     reason = "updown_stop_loss"
                 else:
                     # Time-based stop: when near expiry and price has moved against us,
@@ -400,6 +439,11 @@ class PositionExitManager:
                     exit_price = current_yes_price
                     exit_action = "BUY"
                     exit_token_id = token_yes
+
+                # When the executable-price stop fired, realize at that exit-side price
+                # (same token space as exit_price above) so the fill matches the trigger.
+                if reason == "updown_stop_loss" and exec_exit_price is not None:
+                    exit_price = exec_exit_price
 
                 exits.append(
                     ExitDecision(
