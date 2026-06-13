@@ -1718,13 +1718,12 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 10.0
       15m:
-        # 2026-06-12: controlled reopen for BNB 15m BUY_YES only. The prior
-        # both-side drop was valid under older admission settings; post-change
-        # settled ghosts show BUY_YES lane_min_edge rejects positive while BUY_NO
-        # remains weak. Keep BUY_NO disabled at 0.50 and forward-test longs at
-        # tuning size; revert BUY_YES to 0.50 if 15+ closed post-change trades fail.
+        # 2026-06-12: controlled reopen for BNB 15m BUY_YES. 2026-06-13: BUY_NO
+        # also re-enabled — ghost recut (rejected set, n=2744) = +0.061 EV / 56% WR,
+        # the disable was rejecting winners. min_edge_buy_no 0.50 -> 0.06 (legacy
+        # path; entry_policy 15m.down also restored to 0.06, which wins).
         min_edge: 0.09
-        min_edge_buy_no: 0.50
+        min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 150.0
       1h:
@@ -1835,7 +1834,7 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            # Controlled BNB 15m BUY_YES reopen; down/BUY_NO remains disabled.
+            # Controlled BNB 15m BUY_YES reopen.
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.57
@@ -1843,7 +1842,16 @@ strategies:
             entry_window_max: 150.0
             size_multiplier: 0.3
           down:
-            min_edge: 0.50
+            # 2026-06-13: RE-ENABLED as SHADOW/forward-test (operator direction +
+            # lane_decision_sheet). The EXIT-ADJUSTED sheet rates BNB 15m BUY_NO
+            # SHADOW (shrunk EV +0.5, taken_n=12) — positive but too thin/unstable
+            # for a full GO (cf. eth 15m BUY_NO = GO, shrunk +4.0, n=53). So admit
+            # at min_edge 0.06 but throttle size_multiplier 0.3 to gather taken-trade
+            # exit data under realistic fills+fees. Promote to 1.0 if it earns a GO;
+            # re-disable if shrunk EV goes <= 0 on recut. Raw ghost alone (+0.061) is
+            # NOT sufficient — the exit layer governs live P&L.
+            min_edge: 0.06
+            size_multiplier: 0.3
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
