@@ -45,11 +45,17 @@ trading:
   # Execution provider for live orders. "clob" uses direct Polymarket CLOB V2;
   # "olympus" uses the Olympus Trading API adapter. Paper mode still stays local.
   execution_provider: clob
-  # Entry fill mode. true = marketable (taker/FAK): entries fill immediately like
-  # paper assumes, so calibration transfers to live and the frequency-based design
-  # actually trades — at the cost of the taker fee (charged round-trip in paper).
-  # false = maker (post_only/GTC): 0 fee but rarely fills in fast up/down markets.
-  entry_marketable: true
+  # Entry fill policy:
+  #   marketable = FAK taker: fills immediately like paper assumes; pays the taker
+  #     fee (charged round-trip in paper). Calibration transfers; bot always trades.
+  #   maker      = post_only GTC: 0 fee but rarely fills in fast up/down markets.
+  #   hybrid     = rest as maker for entry_maker_wait_sec, then cross the unfilled
+  #     remainder to a FAK taker. Only on entry_hybrid_windows; other windows fall
+  #     back to marketable. Paper models hybrid conservatively as taker (maker fee
+  #     savings are live-only), so live can only beat paper on fees, never worse.
+  entry_mode: hybrid
+  entry_maker_wait_sec: 8          # seconds to rest as maker before crossing to taker
+  entry_hybrid_windows: ["15m", "1h"]   # 5m stays marketable (too fast for resting)
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
   crypto_hourly_scan_every_n_cycles: 3

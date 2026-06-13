@@ -381,3 +381,122 @@ async def test_place_order_recovers_recent_trade_after_post_error(monkeypatch):
     assert order.order_id == "oid_recovered"
     assert order.status == OrderStatus.FILLED
     assert order.price == pytest.approx(0.42)
+
+
+# ── place_entry_order: maker/taker/hybrid policy ─────────────────────────────
+
+
+def _entry_client():
+    c = CLOBClient({"polymarket": {}})
+    return c
+
+
+def _fake_order(oid="oid", status=OrderStatus.PENDING, filled=0.0):
+    from src.execution.clob_client import Order
+    return Order(
+        order_id=oid, market_id="m", token_id="t", side="BUY", outcome="YES",
+        price=0.5, size=10.0, filled_size=filled, status=status,
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_dry_run_is_marketable_taker_regardless_of_mode():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=True, entry_mode="hybrid", maker_wait_sec=0,
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["dry_run"] is True and kw["order_type"] == "FAK" and kw["post_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_entry_marketable_live_uses_fak_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order())
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=False, entry_mode="marketable", maker_wait_sec=0,
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["order_type"] == "FAK" and kw["post_only"] is False
+    assert c.place_order.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_entry_maker_live_uses_post_only_gtc():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order())
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=False, entry_mode="maker", maker_wait_sec=0,
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["order_type"] == "GTC" and kw["post_only"] is True
+    assert c.place_order.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_entry_hybrid_5m_falls_back_to_marketable():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order())
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="5m",
+        dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
+        hybrid_windows=("15m", "1h"),
+    )
+    kw = c.place_order.call_args.kwargs
+    assert kw["order_type"] == "FAK" and kw["post_only"] is False
+    assert c.place_order.await_count == 1  # no maker leg on 5m
+
+
+@pytest.mark.asyncio
+async def test_entry_hybrid_15m_maker_fills_no_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
+    c.get_order_status = AsyncMock(return_value=OrderStatus.FILLED)
+    c.cancel_order = AsyncMock(return_value=True)
+    out = await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
+    )
+    # maker leg only; never cancelled, never crossed
+    assert c.place_order.await_count == 1
+    assert c.place_order.call_args.kwargs["post_only"] is True
+    c.cancel_order.assert_not_awaited()
+    assert out.order_id == "maker1"
+
+
+@pytest.mark.asyncio
+async def test_entry_hybrid_15m_unfilled_crosses_to_taker():
+    c = _entry_client()
+    c.place_order = AsyncMock(side_effect=[_fake_order(oid="maker1"), _fake_order(oid="taker1")])
+    c.get_order_status = AsyncMock(return_value=OrderStatus.PENDING)
+    c.cancel_order = AsyncMock(return_value=True)
+    out = await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="1h",
+        dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
+    )
+    assert c.place_order.await_count == 2
+    first, second = c.place_order.call_args_list
+    assert first.kwargs["post_only"] is True and first.kwargs["order_type"] == "GTC"
+    assert second.kwargs["post_only"] is False and second.kwargs["order_type"] == "FAK"
+    c.cancel_order.assert_awaited_once()
+    assert out.order_id == "taker1"
+
+
+@pytest.mark.asyncio
+async def test_entry_hybrid_partial_keeps_partial_no_double_fill():
+    c = _entry_client()
+    c.place_order = AsyncMock(return_value=_fake_order(oid="maker1"))
+    c.get_order_status = AsyncMock(return_value=OrderStatus.PARTIAL)
+    c.cancel_order = AsyncMock(return_value=True)
+    out = await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=False, entry_mode="hybrid", maker_wait_sec=0,
+    )
+    # cancelled the remainder but did NOT place a second (taker) order
+    assert c.place_order.await_count == 1
+    c.cancel_order.assert_awaited_once()
+    assert out.order_id == "maker1"

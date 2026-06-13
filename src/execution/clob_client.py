@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+from src.execution.olympus_client import OlympusClient
 try:
     from importlib.metadata import PackageNotFoundError, version as package_version
 except ImportError:  # pragma: no cover - Python 3.8 fallback if ever needed
@@ -111,6 +112,8 @@ class Position:
     edge: float = 0.0
     confidence: float = 0.0
     entry_signal: Dict[str, Any] = field(default_factory=dict)
+    condition_id: str = ""
+    market_slug: str = ""
 
 
 class CLOBClient:
@@ -157,6 +160,21 @@ class CLOBClient:
             self.config.get("signature_type")
         )
         self._funder_address = (self.config.get("funder_address") or "").strip() or None
+        self._execution_provider = str(
+            (self._root_config.get("trading") or {}).get("execution_provider") or "clob"
+        ).lower()
+        self.olympus_client = OlympusClient(self._root_config)
+
+    def using_olympus(self) -> bool:
+        return self._execution_provider == "olympus"
+
+    def olympus_configured(self) -> bool:
+        return self.olympus_client.configured()
+
+    def set_olympus_credentials(
+        self, api_key: Optional[str], base_url: Optional[str] = None
+    ) -> None:
+        self.olympus_client.set_api_key(api_key, base_url)
 
     @staticmethod
     def live_execution_supported() -> bool:
@@ -363,6 +381,16 @@ class CLOBClient:
 
     async def get_cash_balance(self) -> Optional[float]:
         """Fetch authenticated Polymarket collateral balance in USDC."""
+        if self.using_olympus():
+            try:
+                portfolio = await self.olympus_client.get_portfolio()
+            except Exception as exc:
+                logger.error("Error fetching Olympus wallet bankroll: %s", exc)
+                return None
+            balance = self.olympus_client.cash_balance_from_portfolio(portfolio)
+            if balance is None:
+                logger.error("Could not parse Olympus wallet bankroll payload: %s", portfolio)
+            return balance
         if not self.client:
             logger.error("CLOB client not initialized — cannot fetch live wallet bankroll.")
             return None
@@ -395,6 +423,10 @@ class CLOBClient:
         dry_run: bool = True,
         order_outcome: Optional[str] = None,
         order_type: str = "GTC",
+        market_title: Optional[str] = None,
+        market_slug: Optional[str] = None,
+        condition_id: Optional[str] = None,
+        outcome_label: Optional[str] = None,
     ) -> Optional[Order]:
         _outcome = (
             order_outcome
@@ -429,6 +461,49 @@ class CLOBClient:
             self.order_history.append(order)
             if len(self.order_history) > self._max_order_history:
                 self.order_history = self.order_history[-self._max_order_history :]
+            return order
+
+        if self.using_olympus():
+            olympus_outcome_label = (
+                outcome_label
+                or ("Yes" if _outcome == "YES" else "No" if _outcome == "NO" else None)
+            )
+            try:
+                payload = self.olympus_client.build_trade_payload(
+                    token_id=token_id,
+                    side=side,
+                    price=price,
+                    size=size,
+                    market_id=market_id,
+                    market_title=market_title,
+                    market_slug=market_slug,
+                    condition_id=condition_id,
+                    outcome_label=olympus_outcome_label,
+                )
+                response = await self.olympus_client.submit_trade(payload)
+            except Exception as exc:
+                logger.error("Olympus order blocked/failed: %s", exc)
+                return None
+            order = Order(
+                order_id=response.trade_id,
+                market_id=market_id or "",
+                token_id=token_id,
+                side=side,
+                outcome=_outcome,
+                price=price,
+                size=size,
+                status=OrderStatus.PENDING,
+            )
+            self.pending_orders[order.order_id] = order
+            self.order_history.append(order)
+            if len(self.order_history) > self._max_order_history:
+                self.order_history = self.order_history[-self._max_order_history :]
+            logger.info(
+                "Olympus trade queued: trade_id=%s side=%s token=%s",
+                response.trade_id,
+                side,
+                token_id[:20],
+            )
             return order
 
         if not self.client:
@@ -536,6 +611,113 @@ class CLOBClient:
                 return recovered
             return None
 
+    async def place_entry_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        window: Optional[str] = None,
+        market_id: str = None,
+        dry_run: bool = True,
+        order_outcome: Optional[str] = None,
+        entry_mode: str = "marketable",
+        maker_wait_sec: float = 8.0,
+        hybrid_windows: Any = ("15m", "1h"),
+        market_title: Optional[str] = None,
+        market_slug: Optional[str] = None,
+        condition_id: Optional[str] = None,
+        outcome_label: Optional[str] = None,
+    ) -> Optional[Order]:
+        """Place an ENTRY honoring the configured fill mode.
+
+        - ``marketable``: one FAK taker fill — guaranteed, pays the taker fee.
+        - ``maker``: one post_only GTC — zero fee, but may never fill.
+        - ``hybrid``: rest as post_only GTC for ``maker_wait_sec``; if not fully
+          filled, cancel and cross the remainder to a FAK taker. Only applies to
+          ``hybrid_windows`` (e.g. 15m/1h); other windows fall back to marketable
+          because resting orders rarely fill in fast markets and the latency hurts.
+
+        Paper/dry_run ALWAYS uses the conservative marketable path (instant taker
+        fill). Whether a maker leg would have filled in N seconds is pure live
+        microstructure and cannot be modeled offline, so paper assumes the worst
+        (taker fee) and live can only do better — never paper over-optimism.
+
+        Partial-fill safety: if the maker leg is PARTIAL we keep the partial and do
+        NOT cross the remainder, to guarantee we never double-fill.
+        """
+        meta = dict(
+            market_id=market_id,
+            order_outcome=order_outcome,
+            market_title=market_title,
+            market_slug=market_slug,
+            condition_id=condition_id,
+            outcome_label=outcome_label,
+        )
+        mode = str(entry_mode or "marketable").lower()
+        w = str(window or "").lower()
+        try:
+            _hybrid_ws = {str(x).lower() for x in (hybrid_windows or ())}
+        except TypeError:
+            _hybrid_ws = {"15m", "1h"}
+        if mode == "hybrid" and w not in _hybrid_ws:
+            mode = "marketable"
+
+        # Paper: conservative taker fill regardless of mode (maker savings live-only).
+        if dry_run:
+            return await self.place_order(
+                token_id=token_id, side=side, price=price, size=size,
+                post_only=False, order_type="FAK", dry_run=True, **meta,
+            )
+
+        if mode == "maker":
+            return await self.place_order(
+                token_id=token_id, side=side, price=price, size=size,
+                post_only=True, order_type="GTC", dry_run=False, **meta,
+            )
+        if mode != "hybrid":  # marketable (default)
+            return await self.place_order(
+                token_id=token_id, side=side, price=price, size=size,
+                post_only=False, order_type="FAK", dry_run=False, **meta,
+            )
+
+        # hybrid: maker leg first
+        maker = await self.place_order(
+            token_id=token_id, side=side, price=price, size=size,
+            post_only=True, order_type="GTC", dry_run=False, **meta,
+        )
+        if maker is None:
+            logger.info("[entry hybrid] maker post failed/rejected; crossing to taker.")
+            return await self.place_order(
+                token_id=token_id, side=side, price=price, size=size,
+                post_only=False, order_type="FAK", dry_run=False, **meta,
+            )
+        try:
+            await asyncio.sleep(max(0.0, float(maker_wait_sec)))
+        except Exception:
+            pass
+        status = await self.get_order_status(maker.order_id)
+        if status == OrderStatus.FILLED:
+            logger.info("[entry hybrid] filled as MAKER (no taker fee): %s", maker.order_id)
+            return maker
+        # Cancel whatever's resting; for PARTIAL keep the partial (never double-fill).
+        await self.cancel_order(maker.order_id)
+        if status == OrderStatus.PARTIAL:
+            logger.info(
+                "[entry hybrid] maker PARTIAL on %s; keeping partial, not crossing "
+                "remainder (double-fill safety).", maker.order_id,
+            )
+            return maker
+        logger.info(
+            "[entry hybrid] maker unfilled (status=%s) on %s; crossing full size to taker.",
+            status, maker.order_id,
+        )
+        return await self.place_order(
+            token_id=token_id, side=side, price=price, size=size,
+            post_only=False, order_type="FAK", dry_run=False, **meta,
+        )
+
     async def cancel_order(self, order_id: str) -> bool:
         if not self.client:
             logger.error("CLOB client not initialized.")
@@ -556,6 +738,21 @@ class CLOBClient:
             return False
 
     async def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        if self.using_olympus():
+            try:
+                data = await self.olympus_client.get_trade_status(order_id)
+            except Exception as exc:
+                logger.error("Error getting Olympus trade status for %s: %s", order_id, exc)
+                return None
+            status = str(data.get("status") or "").upper()
+            if status == "SUCCEEDED":
+                return OrderStatus.FILLED
+            if status == "FAILED":
+                return OrderStatus.FAILED
+            if status in {"QUEUED", "PROCESSING"}:
+                return OrderStatus.PENDING
+            logger.warning("Unknown Olympus trade status for %s: %s", order_id, data)
+            return None
         if not self.client:
             logger.error("CLOB client not initialized.")
             return None

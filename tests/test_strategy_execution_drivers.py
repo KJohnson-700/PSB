@@ -62,6 +62,17 @@ def _attach_mocks(bot: PolyBot) -> None:
     order = MagicMock()
     order.order_id = "ord_exec_driver_test"
     bot.clob_client.place_order = AsyncMock(return_value=order)
+
+    # Entries route through place_entry_order; in paper it forwards to place_order
+    # as a taker fill. Mirror that here so existing place_order assertions hold.
+    async def _delegate_entry(**kwargs):
+        for _k in ("window", "entry_mode", "maker_wait_sec", "hybrid_windows"):
+            kwargs.pop(_k, None)
+        kwargs.setdefault("post_only", False)
+        kwargs.setdefault("order_type", "FAK")
+        return await bot.clob_client.place_order(**kwargs)
+
+    bot.clob_client.place_entry_order = AsyncMock(side_effect=_delegate_entry)
     bot.lane_manager = MagicMock()
     bot.lane_manager.can_execute = MagicMock(
         side_effect=lambda lane_id, *, dry_run: (True, "", "active", lane_id)
@@ -229,7 +240,7 @@ async def test_execute_sol_macro_blocks_reentry_after_same_market_closed():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bnb_macro"])
+@pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro", "doge_macro", "bnb_macro"])
 async def test_sol_style_strategies_execute_buy_no_as_no_leg(strategy_name: str):
     bot = _bare_polybot()
     _attach_mocks(bot)
@@ -240,7 +251,7 @@ async def test_sol_style_strategies_execute_buy_no_as_no_leg(strategy_name: str)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro", "bnb_macro"])
+@pytest.mark.parametrize("strategy_name", ["sol_macro", "eth_macro", "hype_macro", "xrp_macro", "doge_macro", "bnb_macro"])
 async def test_sol_style_strategies_execute_buy_yes_as_yes_leg(strategy_name: str):
     bot = _bare_polybot()
     _attach_mocks(bot)

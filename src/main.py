@@ -658,16 +658,27 @@ class PolyBot:
     def _is_dry_run_mode(self) -> bool:
         return bool((self.config.get("trading") or {}).get("dry_run", True))
 
-    def _entry_marketable(self) -> bool:
-        """Whether live entries are placed marketable (taker/FAK) vs maker (post_only).
+    def _entry_exec_params(self) -> dict:
+        """Resolve the entry execution policy from config.
 
-        Default True: maker (post_only) entries rarely fill in fast 5m/15m up/down
-        markets, which starves the frequency-based design and breaks paper->live
-        transfer (paper assumes the entry filled). Marketable entries fill like paper
-        assumes, at the cost of the taker fee (modeled in paper exit accounting as a
-        round-trip). Set trading.entry_marketable=false to revert to maker.
+        trading.entry_mode: marketable | maker | hybrid (default marketable).
+        - marketable: FAK taker — fills like paper assumes, pays the fee.
+        - maker: post_only GTC — 0 fee but may not fill (starves fast markets).
+        - hybrid: maker-first then cross to taker after entry_maker_wait_sec, only on
+          entry_hybrid_windows (default 15m/1h); other windows fall back to marketable.
+        Back-compat: legacy trading.entry_marketable bool maps to marketable/maker.
         """
-        return bool((self.config.get("trading") or {}).get("entry_marketable", True))
+        t = self.config.get("trading") or {}
+        mode = str(t.get("entry_mode") or "").lower()
+        if not mode:
+            mode = "marketable" if t.get("entry_marketable", True) else "maker"
+        return {
+            "entry_mode": mode,
+            "maker_wait_sec": float(t.get("entry_maker_wait_sec", 8.0) or 8.0),
+            "hybrid_windows": tuple(
+                str(x).lower() for x in (t.get("entry_hybrid_windows") or ["15m", "1h"])
+            ),
+        }
 
     def _lane_calibration_shadow_mode(self) -> bool:
         """Resolve calibration mode from paper/live trading mode.
@@ -3452,17 +3463,13 @@ class PolyBot:
             order_size = final_size / max(0.01, 1.0 - signal.price)
         pos_size = order_size
 
-        order = await self.clob_client.place_order(
+        order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
             price=signal.price,
             size=order_size,
+            window=getattr(signal, "window_size", None),
             market_id=signal.market_id,
-            # Marketable (taker/FAK) entries by default so they actually fill live —
-            # see _entry_marketable(). post_only must be False for FAK (the V2 SDK
-            # rejects post_only+FAK). entry_marketable=false reverts to maker/GTC.
-            post_only=(not self._entry_marketable()),
-            order_type=("FAK" if self._entry_marketable() else "GTC"),
             dry_run=self.config.get("trading", {}).get("dry_run", True),
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
             market_title=signal.market_question,
@@ -3473,6 +3480,9 @@ class PolyBot:
                 if signal.action == "BUY_YES"
                 else getattr(signal, "outcome_label_no", None)
             ),
+            # Entry fill policy (marketable | maker | hybrid). Hybrid = maker-first
+            # then cross to taker; 5m falls back to marketable. See _entry_exec_params.
+            **self._entry_exec_params(),
         )
 
         if order and hasattr(order, "order_id"):
@@ -3719,17 +3729,13 @@ class PolyBot:
             order_size = final_size / max(0.01, 1.0 - signal.price)
         pos_size = order_size
 
-        order = await self.clob_client.place_order(
+        order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
             price=signal.price,
             size=order_size,
+            window=getattr(signal, "window_size", None),
             market_id=signal.market_id,
-            # Marketable (taker/FAK) entries by default so they actually fill live —
-            # see _entry_marketable(). post_only must be False for FAK (the V2 SDK
-            # rejects post_only+FAK). entry_marketable=false reverts to maker/GTC.
-            post_only=(not self._entry_marketable()),
-            order_type=("FAK" if self._entry_marketable() else "GTC"),
             dry_run=self.config.get("trading", {}).get("dry_run", True),
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
             market_title=signal.market_question,
@@ -3740,6 +3746,9 @@ class PolyBot:
                 if signal.action == "BUY_YES"
                 else getattr(signal, "outcome_label_no", None)
             ),
+            # Entry fill policy (marketable | maker | hybrid). Hybrid = maker-first
+            # then cross to taker; 5m falls back to marketable. See _entry_exec_params.
+            **self._entry_exec_params(),
         )
 
         if order and hasattr(order, "order_id"):

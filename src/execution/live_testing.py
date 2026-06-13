@@ -174,12 +174,18 @@ class PositionExitManager:
         self._crypto_updown_15m_taker_fee_rate = float(
             fee_cfg.get("crypto_updown_15m_taker_fee_rate", 0.0) or 0.0
         )
-        # When entries are marketable (taker), the position round-trips through TWO
-        # taker fills, so paper must charge the entry-side taker fee too (not just
-        # the exit) to match live. Mirrors trading.entry_marketable (default True).
-        self._entry_marketable = bool(
-            (config.get("trading", {}) or {}).get("entry_marketable", True)
-        )
+        # When entries are taker fills, the position round-trips through TWO taker
+        # fills, so paper must charge the entry-side taker fee too (not just the
+        # exit). Paper models BOTH marketable and hybrid entries as taker (the
+        # maker savings of hybrid are live-only and can't be modeled offline), so
+        # the entry fee applies unless entries are pure maker. Resolves
+        # trading.entry_mode (marketable|maker|hybrid), with the legacy
+        # trading.entry_marketable bool as fallback.
+        _t = config.get("trading", {}) or {}
+        _entry_mode = str(_t.get("entry_mode") or "").lower()
+        if not _entry_mode:
+            _entry_mode = "marketable" if _t.get("entry_marketable", True) else "maker"
+        self._entry_taker = _entry_mode != "maker"
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
@@ -564,7 +570,7 @@ class PositionExitManager:
                     # taker fee (priced at the entry fill) for the full round-trip cost.
                     _entry_fee = (
                         polymarket_taker_fee_usdc(pos.size, pos.entry_price, _fee_rate)
-                        if self._entry_marketable
+                        if self._entry_taker
                         else 0.0
                     )
                     _fee = _exit_fee + _entry_fee
