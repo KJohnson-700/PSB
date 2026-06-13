@@ -98,7 +98,7 @@ trading:
     # short-YES buys back the YES asks. Entries still fill at the mark (next
     # increment). Flip on to start collecting realistic paper data and measure the
     # paper->live fill haircut. See src/execution/fill_sim.py.
-    realistic_paper_fills: false
+    realistic_paper_fills: true
     # ── BUY_YES bid-depth deterioration exit (default OFF) ──
     # Closes a long-YES position when sell-side support (YES bid depth) collapses
     # while the position is non-positive and there is still real time left — fixes

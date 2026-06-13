@@ -2093,6 +2093,7 @@ class PolyBot:
                 if (best_bid is not None and best_ask is not None)
                 else None,
                 "bids": [{"price": p, "size": s} for p, s in top_bids],
+                "asks": [{"price": p, "size": s} for p, s in top_asks],
             }
         # Also fetch markets we've exited but still shadow-watch for uncensored
         # MFE/MAE (logging-only). Only adds markets not already fetched above.
@@ -2211,6 +2212,10 @@ class PolyBot:
                             "mfe_pct": exit_decision.mfe_pct,
                             "pnl_pct_at_exit": exit_decision.pnl_pct_at_exit,
                             "effective_stop_loss_pct": exit_decision.effective_stop_loss_pct,
+                            # Per-lane fill quality (realistic_paper_fills): the mark
+                            # the exit would have booked at vs what the sweep cost.
+                            "fill_mark_price": getattr(exit_decision, "fill_mark_price", None),
+                            "fill_slippage_pct": getattr(exit_decision, "fill_slippage_pct", None),
                         },
                     )
                     self.circuit_breakers.record_exit(

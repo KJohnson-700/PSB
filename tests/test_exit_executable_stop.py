@@ -114,6 +114,9 @@ def test_realistic_paper_fill_uses_bid_ladder_vwap():
     assert d.reason == "take_profit"
     assert d.exit_price == pytest.approx(0.60)  # bid-ladder VWAP, not the 0.65 mark
     assert d.unrealized_pnl == pytest.approx(3.0)  # 30 * (0.60 - 0.50), not 4.5
+    # Per-lane fill-quality telemetry: mark 0.65, slippage (3.0-4.5)/15 = -0.10.
+    assert d.fill_mark_price == pytest.approx(0.65)
+    assert d.fill_slippage_pct == pytest.approx(-0.10)
 
 
 def _rpf_mgr() -> PositionExitManager:

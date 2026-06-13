@@ -65,6 +65,12 @@ class ExitDecision:
     # the close must be placed FAK/marketable so it actually takes that liquidity
     # instead of resting at the bid and re-gapping. Default False (GTC limit).
     marketable: bool = False
+    # Fill-quality telemetry (set only when realistic_paper_fills walked the book):
+    # the pre-fill mark price and the slippage the sweep cost, as a fraction of cost
+    # basis (negative = the fill lost us money vs the mark). Lets per-lane fill bleed
+    # be measured so size/exit can be tuned per lane.
+    fill_mark_price: Optional[float] = None
+    fill_slippage_pct: Optional[float] = None
 
 
 @dataclass
@@ -470,7 +476,11 @@ class PositionExitManager:
                 # (bounded-pessimistic). exit_price stays in the same token space the
                 # leg's default branch above used (NO-space for long NO, YES-space
                 # otherwise). No-ops when the needed ladder is absent.
+                fill_mark_price = None
+                fill_slippage_pct = None
                 if self._realistic_paper_fills:
+                    _mark_price = exit_price
+                    _mark_pnl = unrealized_pnl
                     _liq = (market_liquidity or {}).get(pos.market_id) or {}
                     if entry_leg == "NO":
                         # Long NO: sell NO. NO bids = YES asks mirrored (price 1-a).
@@ -506,6 +516,13 @@ class PositionExitManager:
                         if _filled > 0:
                             exit_price = _fill_px
                             unrealized_pnl = pos.size * (_fill_px - pos.entry_price)
+                    # Record what the book walk cost vs the mark, normalized by cost
+                    # basis (negative = the sweep lost us money). Only when it moved.
+                    if exit_price != _mark_price and cost_basis > 0:
+                        fill_mark_price = round(_mark_price, 4)
+                        fill_slippage_pct = round(
+                            (unrealized_pnl - _mark_pnl) / cost_basis, 4
+                        )
 
                 exits.append(
                     ExitDecision(
@@ -528,6 +545,8 @@ class PositionExitManager:
                             else None
                         ),
                         marketable=exit_marketable,
+                        fill_mark_price=fill_mark_price,
+                        fill_slippage_pct=fill_slippage_pct,
                     )
                 )
 
