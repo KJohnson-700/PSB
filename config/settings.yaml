@@ -30,8 +30,8 @@ polymarket:
   # funder_address: your Polymarket proxy/deposit wallet address (NOT the EOA the
   #   private key derives) — find it on your Polymarket profile / deposit page.
   # FILL THESE IN BEFORE THE LIVE SMOKE TEST. They are unused while dry_run=true.
-  signature_type: null            # set to 1 or 2 (user confirmed proxy/Safe account)
-  funder_address: null            # set to "0x..." proxy wallet address
+  signature_type: 1               # POLY_PROXY — email/Magic.link account (confirmed 2026-06-13)
+  funder_address: "0x932845f226ffb93ec14d37add977446cf0d8a6eb"  # Polymarket proxy wallet (verified ≠ signer EOA 0x477B…3811)
 hyperliquid:
   request_timeout_sec: 25
   range_request_timeout_sec: 30
@@ -42,6 +42,9 @@ hyperliquid:
 trading:
   cycle_interval_sec: 60
   exit_check_interval_sec: 10
+  # Execution provider for live orders. "clob" uses direct Polymarket CLOB V2;
+  # "olympus" uses the Olympus Trading API adapter. Paper mode still stays local.
+  execution_provider: clob
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
   crypto_hourly_scan_every_n_cycles: 3
@@ -348,11 +351,26 @@ trading:
     # Polymarket fee-enabled binary CLOB markets charge takers at match time:
     # shares * fee_rate * price * (1 - price). This fallback is applied only
     # to 15m crypto up/down paper exits when live market metadata is missing.
-    # 2026-06-13: corrected 0.07 -> 0.036. Polymarket Crypto taker fee is 1.80%
-    # effective (max, at price 0.50). Under this formula the effective rate at 0.50
-    # is fee_rate*0.5, so 0.036 -> 1.80%. The old 0.07 implied ~3.5% (~2x reality)
-    # and over-penalized paper exits. Verify against live get_fee_rate_bps when live.
-    crypto_updown_15m_taker_fee_rate: 0.036
+    # 2026-06-13: reverted 0.036 -> 0.07. VERIFIED against the live Gamma API:
+    # crypto up/down markets return feeSchedule={rate:0.07, exponent:1, takerOnly:true,
+    # rebateRate:0.2}. So fee_rate IS 0.07. At price 0.50 that's $1.75 per 100 shares
+    # (1.75% of max payout / ~3.5% of a 50c cost basis) — matches fill_sim + its tests
+    # (polymarket_taker_fee_usdc(100,0.50,0.07)==1.75). The earlier 0.036 halved the
+    # real rate (bad "fee_rate*0.5=1.8%" reasoning) and UNDER-charged paper exits ~2x.
+    crypto_updown_15m_taker_fee_rate: 0.07
+olympus:
+  base_url: https://api.olympusx.app
+  timeout_sec: 20
+  # Live order submission is blocked unless this is true or env
+  # OLYMPUS_LIVE_ORDER_APPROVAL=APPROVE_OLYMPUS_LIVE_ORDERS.
+  live_order_approved: false
+  smoke_test:
+    enabled: false
+    max_order_usd: 5
+    max_orders_per_run: 1
+    require_market_slug: true
+    require_condition_id: true
+
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
