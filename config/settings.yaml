@@ -45,6 +45,11 @@ trading:
   # Execution provider for live orders. "clob" uses direct Polymarket CLOB V2;
   # "olympus" uses the Olympus Trading API adapter. Paper mode still stays local.
   execution_provider: clob
+  # Entry fill mode. true = marketable (taker/FAK): entries fill immediately like
+  # paper assumes, so calibration transfers to live and the frequency-based design
+  # actually trades — at the cost of the taker fee (charged round-trip in paper).
+  # false = maker (post_only/GTC): 0 fee but rarely fills in fast up/down markets.
+  entry_marketable: true
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
   crypto_hourly_scan_every_n_cycles: 3

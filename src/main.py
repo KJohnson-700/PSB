@@ -658,6 +658,17 @@ class PolyBot:
     def _is_dry_run_mode(self) -> bool:
         return bool((self.config.get("trading") or {}).get("dry_run", True))
 
+    def _entry_marketable(self) -> bool:
+        """Whether live entries are placed marketable (taker/FAK) vs maker (post_only).
+
+        Default True: maker (post_only) entries rarely fill in fast 5m/15m up/down
+        markets, which starves the frequency-based design and breaks paper->live
+        transfer (paper assumes the entry filled). Marketable entries fill like paper
+        assumes, at the cost of the taker fee (modeled in paper exit accounting as a
+        round-trip). Set trading.entry_marketable=false to revert to maker.
+        """
+        return bool((self.config.get("trading") or {}).get("entry_marketable", True))
+
     def _lane_calibration_shadow_mode(self) -> bool:
         """Resolve calibration mode from paper/live trading mode.
 
@@ -1204,6 +1215,8 @@ class PolyBot:
                     edge=float(pos_data.get("edge", 0.0) or 0.0),
                     confidence=float(pos_data.get("confidence", 0.0) or 0.0),
                     entry_signal=dict(pos_data.get("entry_signal") or {}),
+                    condition_id=str(pos_data.get("condition_id") or ""),
+                    market_slug=str(pos_data.get("market_slug") or ""),
                 )
                 # Add directly to dict — do NOT call add_position() as it increments daily_trades
                 self.risk_manager.active_positions[position.position_id] = position
@@ -1305,6 +1318,9 @@ class PolyBot:
         self.ai_agent.set_api_keys(api_keys)
 
         # Set credentials for the CLOB client (either key name — env loader may use either)
+        self.clob_client.set_olympus_credentials(
+            api_key=api_keys.get("OLYMPUS_API_KEY"),
+        )
         polymarket_key = api_keys.get("PRIVATE_KEY") or api_keys.get(
             "POLYMARKET_PRIVATE_KEY"
         )
@@ -1312,6 +1328,15 @@ class PolyBot:
         # credential init entirely — read-only book reads use a key-less L0 client.
         # (This also avoids needing the proxy funder/signature_type until live.)
         dry_run = self.config.get("trading", {}).get("dry_run", True)
+        if self.clob_client.using_olympus():
+            if not self.clob_client.olympus_configured():
+                logging.warning(
+                    "trading.execution_provider=olympus but OLYMPUS_API_KEY is not configured."
+                )
+            logging.info(
+                "trading.execution_provider=olympus — skipping direct CLOB credential init."
+            )
+            return
         if dry_run:
             logging.info(
                 "dry_run=true — skipping live CLOB credential init (paper mode "
@@ -1372,6 +1397,8 @@ class PolyBot:
         """
         if self.config.get("trading", {}).get("dry_run", True):
             return True
+        if self.clob_client.using_olympus():
+            return self.clob_client.olympus_configured()
         force = bool(
             (self.config.get("polymarket", {}) or {}).get(
                 "rederive_credentials_on_start", False
@@ -2228,6 +2255,9 @@ class PolyBot:
                         # (marketable) so they take that liquidity now instead of
                         # resting as a GTC limit. Other exits keep the GTC default.
                         order_type="FAK" if getattr(exit_decision, "marketable", False) else "GTC",
+            market_title=getattr(pos, "market_question", None),
+            market_slug=getattr(pos, "market_slug", None),
+            condition_id=getattr(pos, "condition_id", None),
                     )
                     if order and not dry_run:
                         status = await self.clob_client.get_order_status(order.order_id)
@@ -3428,9 +3458,21 @@ class PolyBot:
             price=signal.price,
             size=order_size,
             market_id=signal.market_id,
-            post_only=True,
+            # Marketable (taker/FAK) entries by default so they actually fill live —
+            # see _entry_marketable(). post_only must be False for FAK (the V2 SDK
+            # rejects post_only+FAK). entry_marketable=false reverts to maker/GTC.
+            post_only=(not self._entry_marketable()),
+            order_type=("FAK" if self._entry_marketable() else "GTC"),
             dry_run=self.config.get("trading", {}).get("dry_run", True),
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
+            market_title=signal.market_question,
+            market_slug=getattr(signal, "market_slug", None),
+            condition_id=getattr(signal, "condition_id", None),
+            outcome_label=(
+                getattr(signal, "outcome_label_yes", None)
+                if signal.action == "BUY_YES"
+                else getattr(signal, "outcome_label_no", None)
+            ),
         )
 
         if order and hasattr(order, "order_id"):
@@ -3466,6 +3508,8 @@ class PolyBot:
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
                 }),
+                condition_id=str(getattr(signal, "condition_id", "") or ""),
+                market_slug=str(getattr(signal, "market_slug", "") or ""),
             )
             self.risk_manager.add_position(position)
             self._remember_session_market_entry(signal.market_id)
@@ -3486,6 +3530,8 @@ class PolyBot:
                 reason=_entry_reason,
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
+                condition_id=str(getattr(signal, "condition_id", "") or ""),
+                market_slug=str(getattr(signal, "market_slug", "") or ""),
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
@@ -3679,9 +3725,21 @@ class PolyBot:
             price=signal.price,
             size=order_size,
             market_id=signal.market_id,
-            post_only=True,
+            # Marketable (taker/FAK) entries by default so they actually fill live —
+            # see _entry_marketable(). post_only must be False for FAK (the V2 SDK
+            # rejects post_only+FAK). entry_marketable=false reverts to maker/GTC.
+            post_only=(not self._entry_marketable()),
+            order_type=("FAK" if self._entry_marketable() else "GTC"),
             dry_run=self.config.get("trading", {}).get("dry_run", True),
             order_outcome=("YES" if signal.action == "BUY_YES" else "NO"),
+            market_title=signal.market_question,
+            market_slug=getattr(signal, "market_slug", None),
+            condition_id=getattr(signal, "condition_id", None),
+            outcome_label=(
+                getattr(signal, "outcome_label_yes", None)
+                if signal.action == "BUY_YES"
+                else getattr(signal, "outcome_label_no", None)
+            ),
         )
 
         if order and hasattr(order, "order_id"):
@@ -3721,6 +3779,8 @@ class PolyBot:
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
                 }),
+                condition_id=str(getattr(signal, "condition_id", "") or ""),
+                market_slug=str(getattr(signal, "market_slug", "") or ""),
             )
             self.risk_manager.add_position(position)
             self._remember_session_market_entry(signal.market_id)
@@ -3741,6 +3801,8 @@ class PolyBot:
                 reason=_entry_reason,
                 token_id_yes=str(getattr(signal, "token_id_yes", "") or ""),
                 token_id_no=str(getattr(signal, "token_id_no", "") or ""),
+                condition_id=str(getattr(signal, "condition_id", "") or ""),
+                market_slug=str(getattr(signal, "market_slug", "") or ""),
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
@@ -4223,11 +4285,15 @@ async def main():
         "GROQ_API_KEY": os.getenv("GROQ_API_KEY"),
         "GOOGLE_PROJECT_ID": os.getenv("GOOGLE_PROJECT_ID"),
         "GOOGLE_LOCATION": os.getenv("GOOGLE_LOCATION"),
+        "OLYMPUS_API_KEY": os.getenv("OLYMPUS_API_KEY"),
     }
     api_keys = {k: v for k, v in api_keys.items() if v is not None}
 
     _paper = bot.config.get("trading", {}).get("dry_run", True)
-    if not api_keys.get("PRIVATE_KEY"):
+    _provider = str(
+        (bot.config.get("trading", {}) or {}).get("execution_provider") or "clob"
+    ).lower()
+    if not api_keys.get("PRIVATE_KEY") and _provider != "olympus":
         if _paper:
             logging.info(
                 "Paper mode: PRIVATE_KEY / POLYMARKET_PRIVATE_KEY not set — OK until you enable live trading."

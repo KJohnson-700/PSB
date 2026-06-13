@@ -208,9 +208,11 @@ def test_15m_crypto_fee_is_subtracted_from_realistic_paper_exit():
     assert len(exits) == 1
     d = exits[0]
     assert d.exit_price == pytest.approx(0.50)
-    assert d.fill_fee_usdc == pytest.approx(1.75)
+    # Round-trip taker fee (marketable entries are taker too): entry + exit.
+    # 100 * 0.07 * 0.50 * 0.50 = 1.75 per leg -> 3.50 round-trip.
+    assert d.fill_fee_usdc == pytest.approx(3.50)
     assert d.fill_fee_rate == pytest.approx(0.07)
-    assert d.unrealized_pnl == pytest.approx(-1.75)
+    assert d.unrealized_pnl == pytest.approx(-3.50)
 
 
 def test_live_fee_metadata_overrides_config_fallback():
@@ -226,9 +228,10 @@ def test_live_fee_metadata_overrides_config_fallback():
 
     assert len(exits) == 1
     d = exits[0]
-    assert d.fill_fee_usdc == pytest.approx(0.75)
+    # Live fee metadata (0.03) overrides config fallback; round-trip = 0.75 * 2.
+    assert d.fill_fee_usdc == pytest.approx(1.50)
     assert d.fill_fee_rate == pytest.approx(0.03)
-    assert d.unrealized_pnl == pytest.approx(-0.75)
+    assert d.unrealized_pnl == pytest.approx(-1.50)
 
 
 def test_place_order_routes_order_type_to_post_order(monkeypatch):
