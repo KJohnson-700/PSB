@@ -89,6 +89,15 @@ trading:
     # a true -15% and fills near there. EXIT change — not ghost-validatable; forward-
     # test on trades_settled + exit_excursion_shadow. Fail-safe to midpoint if no book.
     stop_use_executable_price: false
+    # ── Realistic paper fills (default OFF) ──
+    # Paper/dry_run fills every order at the requested price (no spread, slippage,
+    # or depth), so paper exit P&L is optimistic vs live. When on, exits are filled
+    # by walking the YES bid ladder from the book snapshot (size-weighted, remainder
+    # padded at the deepest level) so recorded paper P&L reflects a real sweep. v1 =
+    # long-YES exits only; long-NO/short-YES need the ask ladder (not yet captured)
+    # and keep midpoint pricing. Flip on to start collecting realistic paper data
+    # and measure the paper->live fill haircut. See src/execution/fill_sim.py.
+    realistic_paper_fills: false
     # ── BUY_YES bid-depth deterioration exit (default OFF) ──
     # Closes a long-YES position when sell-side support (YES bid depth) collapses
     # while the position is non-positive and there is still real time left — fixes

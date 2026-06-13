@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from src.execution.live_testing import PositionExitManager
 
 
@@ -71,6 +73,47 @@ def test_missing_book_falls_back_to_midpoint_no_fire():
     # Flag on but no liquidity snapshot -> fail-safe to midpoint -> no stop at -10%.
     exits = _mgr(True).check_exits({"p1": _pos()}, _PRICES, _TOKENS, None)
     assert exits == []
+
+
+def test_realistic_paper_fill_uses_bid_ladder_vwap():
+    # Long-YES TP at midpoint 0.65 (+30%), but the bid ladder VWAP for size 30 is
+    # 0.60 -> recorded exit fills at 0.60, not the 0.65 mark.
+    mgr = PositionExitManager(
+        {
+            "trading": {
+                "exit_rules": {
+                    "enabled": True,
+                    "take_profit_pct": 0.30,
+                    "stop_loss_pct": 0.30,
+                    "updown_stop_loss_pct": 0.15,
+                    "realistic_paper_fills": True,
+                }
+            }
+        }
+    )
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Ethereum Up or Down - test",
+        outcome="YES",
+        strategy="eth_macro",
+        size=30.0,
+        entry_price=0.50,
+        entry_leg="YES",
+        opened_at=datetime.now() - timedelta(minutes=3),
+        end_date=None,
+        window_size="15m",
+    )
+    liq = {"m1": {"bids": [
+        {"price": 0.62, "size": 10.0},
+        {"price": 0.60, "size": 10.0},
+        {"price": 0.58, "size": 10.0},
+    ]}}
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.65}, _TOKENS, liq)
+    assert len(exits) == 1
+    d = exits[0]
+    assert d.reason == "take_profit"
+    assert d.exit_price == pytest.approx(0.60)  # bid-ladder VWAP, not the 0.65 mark
+    assert d.unrealized_pnl == pytest.approx(3.0)  # 30 * (0.60 - 0.50), not 4.5
 
 
 def test_place_order_routes_order_type_to_post_order():
