@@ -33,7 +33,7 @@ from src.execution.updown_exit_shared import (
     resolve_updown_exit_params_for_position,
     scaled_exit_window_mins,
 )
-from src.execution.fill_sim import simulate_book_fill
+from src.execution.fill_sim import polymarket_taker_fee_usdc, simulate_book_fill
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,8 @@ class ExitDecision:
     # be measured so size/exit can be tuned per lane.
     fill_mark_price: Optional[float] = None
     fill_slippage_pct: Optional[float] = None
+    fill_fee_usdc: Optional[float] = None
+    fill_fee_rate: Optional[float] = None
 
 
 @dataclass
@@ -166,6 +168,11 @@ class PositionExitManager:
         # check_exits and src/execution/fill_sim.py.
         self._realistic_paper_fills = bool(
             exit_cfg.get("realistic_paper_fills", False)
+        )
+        fee_cfg = (config.get("trading", {}) or {}).get("execution_fees", {}) or {}
+        self._execution_fees_enabled = bool(fee_cfg.get("enabled", False))
+        self._crypto_updown_15m_taker_fee_rate = float(
+            fee_cfg.get("crypto_updown_15m_taker_fee_rate", 0.0) or 0.0
         )
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
@@ -478,6 +485,8 @@ class PositionExitManager:
                 # otherwise). No-ops when the needed ladder is absent.
                 fill_mark_price = None
                 fill_slippage_pct = None
+                fill_fee_usdc = None
+                fill_fee_rate = None
                 if self._realistic_paper_fills:
                     _mark_price = exit_price
                     _mark_pnl = unrealized_pnl
@@ -524,6 +533,32 @@ class PositionExitManager:
                             (unrealized_pnl - _mark_pnl) / cost_basis, 4
                         )
 
+                # Fee-enabled Polymarket crypto up/down markets charge takers at
+                # match time. Paper exits are book-walked as taker fills, so model
+                # the fee here instead of letting historical ghosts overstate edge.
+                # Live charges the taker fee on ALL crypto up/down windows (5m/15m/1h
+                # all return feeSchedule rate 0.07, verified via Gamma 2026-06-13), so
+                # do not restrict the paper fee to 15m — that under-charged 5m/1h exits.
+                _window = str(getattr(pos, "window_size", "") or "").lower()
+                if (
+                    self._execution_fees_enabled
+                    and str(getattr(pos, "strategy", "") or "") in CRYPTO_UPDOWN_STRATEGIES
+                ):
+                    _liq = (market_liquidity or {}).get(pos.market_id) or {}
+                    _fee_rate = _liq.get("taker_fee_rate")
+                    if _fee_rate is None:
+                        _fee_rate = self._crypto_updown_15m_taker_fee_rate
+                    _fee_rate = float(_fee_rate or 0.0)
+                    _fee = polymarket_taker_fee_usdc(
+                        pos.size,
+                        exit_price,
+                        _fee_rate,
+                    )
+                    if _fee > 0:
+                        fill_fee_usdc = _fee
+                        fill_fee_rate = _fee_rate
+                        unrealized_pnl -= _fee
+
                 exits.append(
                     ExitDecision(
                         position_id=pos_id,
@@ -547,6 +582,8 @@ class PositionExitManager:
                         marketable=exit_marketable,
                         fill_mark_price=fill_mark_price,
                         fill_slippage_pct=fill_slippage_pct,
+                        fill_fee_usdc=fill_fee_usdc,
+                        fill_fee_rate=fill_fee_rate,
                     )
                 )
 
