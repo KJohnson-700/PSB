@@ -44,7 +44,7 @@ trading:
   exit_check_interval_sec: 10
   # Execution provider for live orders. "clob" uses direct Polymarket CLOB V2;
   # "olympus" uses the Olympus Trading API adapter. Paper mode still stays local.
-  execution_provider: clob
+  execution_provider: olympus   # LIVE Olympus run (2026-06-13); set back to clob for direct CLOB V2
   # Entry fill policy:
   #   marketable = FAK taker: fills immediately like paper assumes; pays the taker
   #     fee (charged round-trip in paper). Calibration transfers; bot always trades.
@@ -53,8 +53,8 @@ trading:
   #     remainder to a FAK taker. Only on entry_hybrid_windows; other windows fall
   #     back to marketable. Paper models hybrid conservatively as taker (maker fee
   #     savings are live-only), so live can only beat paper on fees, never worse.
-  entry_mode: hybrid
-  entry_maker_wait_sec: 8          # seconds to rest as maker before crossing to taker
+  entry_mode: marketable          # Olympus is a broker (no maker/taker control); use marketable. Set hybrid for direct CLOB.
+  entry_maker_wait_sec: 8          # seconds to rest as maker before crossing to taker (direct/hybrid only)
   entry_hybrid_windows: ["15m", "1h"]   # 5m stays marketable (too fast for resting)
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
@@ -78,11 +78,11 @@ trading:
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
-  default_position_size: 15
-  max_position_size: 25
+  default_position_size: 6        # ~$6/trade for the ~$88 live Olympus calibration run (2026-06-13)
+  max_position_size: 6
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
-  max_exposure_per_trade: 0.05
+  max_exposure_per_trade: 0.08    # allow $6 on an ~$88 bankroll (5% would clip to ~$4.40)
   max_topic_exposure: 0.2
   daily_loss_limit: 0.15
   kelly_fraction: 0.37
@@ -374,7 +374,7 @@ olympus:
   timeout_sec: 20
   # Live order submission is blocked unless this is true or env
   # OLYMPUS_LIVE_ORDER_APPROVAL=APPROVE_OLYMPUS_LIVE_ORDERS.
-  live_order_approved: false
+  live_order_approved: true       # ARMED for live Olympus orders (2026-06-13 ~$88 calibration run)
   smoke_test:
     enabled: false
     max_order_usd: 5
@@ -2098,14 +2098,16 @@ term_risk:
     MID_TERM: 0.02
     LONG_TERM: 0.02
 exposure:
-  full_size: 25.0
-  moderate_size: 15.0
-  minimal_size: 8.0
+  # Pinned to ~$6/trade across all tiers for the live Olympus calibration run
+  # (2026-06-13, ~$88 bankroll). Restore 25/15/8 + 15/15/5 floors for normal sizing.
+  full_size: 6.0
+  moderate_size: 6.0
+  minimal_size: 6.0
   min_trade_usd: 1.0
-  full_min_trade_usd: 15.0
-  moderate_min_trade_usd: 15.0
-  minimal_min_trade_usd: 5.0
-  loss_kill_switch_enabled: false
+  full_min_trade_usd: 6.0
+  moderate_min_trade_usd: 6.0
+  minimal_min_trade_usd: 6.0
+  loss_kill_switch_enabled: true   # halt a lane after a loss streak during the live run
   max_consecutive_losses: 3
   pause_cycles: 2
   max_pause_cycles: 4
