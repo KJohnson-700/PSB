@@ -132,6 +132,11 @@ def _read_runtime_status() -> Dict[str, Any]:
         return {}
 
 
+def _runtime_status_writes_enabled() -> bool:
+    """Only the trading process owns the split-mode runtime status file."""
+    return "--dashboard-only" not in sys.argv
+
+
 def _write_runtime_status(
     *,
     phase: str,
@@ -141,6 +146,8 @@ def _write_runtime_status(
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Best-effort runtime breadcrumb for external supervision and crash triage."""
+    if not _runtime_status_writes_enabled():
+        return
     try:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         payload = _read_runtime_status()
@@ -2024,23 +2031,13 @@ class PolyBot:
             updated_count = int(updated or 0)
         if updated_count:
             logging.info(f"{label} Updated prices on {updated_count} open positions")
-            if price_update_markets and self.risk_manager.active_positions:
-                token_ids = {
-                    pos.market_id: (
-                        getattr(pos, "token_id_yes", "") or "",
-                        getattr(pos, "token_id_no", "") or "",
-                    )
-                    for pos in self.risk_manager.active_positions.values()
-                    if getattr(pos, "market_id", "") in price_update_markets
-                }
-                if token_ids:
-                    exits = await self._run_exit_checks(price_update_markets, token_ids)
-                    if exits:
-                        logging.info(
-                            "%s Price-update exit check handled %d exit(s)",
-                            label,
-                            exits,
-                        )
+            # NOTE: do NOT run exit checks here. _run_exit_checks serializes on
+            # _exit_lock and is already driven by TWO callers (the 60s scan cycle +
+            # the 10s fast-exit loop, both on executable bid/ask prices w/ liquidity).
+            # A third caller on this price-update path (added 2026-06-14, reverted) made
+            # the cycle block on _exit_lock while the fast-exit loop held it mid-exit,
+            # hanging the whole trading loop after "Updated prices…". The marks logged
+            # above are enough; the fast-exit loop handles the actual exits.
 
         # Snapshot
         self.journal.take_snapshot(self.bankroll)
