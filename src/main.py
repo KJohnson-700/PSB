@@ -1398,8 +1398,50 @@ class PolyBot:
         self.bankroll = float(balance)
         self.bankroll_source = "live_wallet"
         self.risk_manager.bankroll = self.bankroll
-        logging.info("Live bankroll refreshed from Polymarket wallet: $%s", f"{self.bankroll:,.2f}")
+        # Anchor the live-run start equity (persisted) and push equity-based P&L into
+        # the journal so every display shows the REAL account change, not the journal's
+        # trade-only sum (which misses manual trades / on-chain resolutions / fees).
+        self._ensure_live_run_anchor(self.bankroll)
+        anchor = getattr(self, "_live_run_equity_anchor", None)
+        run_pnl = None
+        if anchor is not None:
+            run_pnl = round(float(self.bankroll) - float(anchor), 2)
+            try:
+                self.journal._live_pnl_override = run_pnl
+            except Exception:
+                pass
+        logging.info(
+            "Live bankroll refreshed from Olympus: $%s | run P&L $%s (anchor $%s)",
+            f"{self.bankroll:,.2f}",
+            f"{run_pnl:+,.2f}" if run_pnl is not None else "n/a",
+            f"{anchor:,.2f}" if anchor is not None else "n/a",
+        )
         return True
+
+    def _ensure_live_run_anchor(self, current_equity: float) -> None:
+        """Load (or initialize) the persisted live-run start-equity anchor used for
+        equity-based P&L. Persisted so it survives restarts; delete the file to reset
+        the run baseline. Falls back to current equity on first run."""
+        if getattr(self, "_live_run_equity_anchor", None) is not None:
+            return
+        path = Path("data/runtime/live_run_equity_anchor.json")
+        try:
+            if path.exists():
+                self._live_run_equity_anchor = float(json.loads(path.read_text())["start_equity"])
+                logging.info("Live-run P&L anchor loaded: $%.2f", self._live_run_equity_anchor)
+                return
+        except Exception as exc:
+            logging.warning("Could not read live-run anchor (%s); re-seeding.", exc)
+        self._live_run_equity_anchor = float(current_equity)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "start_equity": self._live_run_equity_anchor,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }))
+            logging.info("Live-run P&L anchor initialized: $%.2f", self._live_run_equity_anchor)
+        except Exception as exc:
+            logging.warning("Could not persist live-run anchor: %s", exc)
 
     async def reconcile_open_positions_with_venue(self) -> None:
         """Reconcile resumed journal positions against the live venue (Olympus).
@@ -1782,7 +1824,7 @@ class PolyBot:
                     break
                 logging.info("[coach] Running daily strategy analysis...")
                 proc = await asyncio.create_subprocess_exec(
-                    "python", "scripts/strategy_coach.py", "--days-back", "30",
+                    sys.executable, "scripts/strategy_coach.py", "--days-back", "30",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                 )
@@ -1973,10 +2015,32 @@ class PolyBot:
         # Update live prices on open positions
         updated = await asyncio.to_thread(
             self.resolution_tracker.check_price_updates,
-            self.journal, self.bankroll
+            self.journal, self.bankroll, True
         )
-        if updated:
-            logging.info(f"{label} Updated prices on {updated} open positions")
+        price_update_markets: Dict[str, float] = {}
+        if isinstance(updated, tuple):
+            updated_count, price_update_markets = updated
+        else:
+            updated_count = int(updated or 0)
+        if updated_count:
+            logging.info(f"{label} Updated prices on {updated_count} open positions")
+            if price_update_markets and self.risk_manager.active_positions:
+                token_ids = {
+                    pos.market_id: (
+                        getattr(pos, "token_id_yes", "") or "",
+                        getattr(pos, "token_id_no", "") or "",
+                    )
+                    for pos in self.risk_manager.active_positions.values()
+                    if getattr(pos, "market_id", "") in price_update_markets
+                }
+                if token_ids:
+                    exits = await self._run_exit_checks(price_update_markets, token_ids)
+                    if exits:
+                        logging.info(
+                            "%s Price-update exit check handled %d exit(s)",
+                            label,
+                            exits,
+                        )
 
         # Snapshot
         self.journal.take_snapshot(self.bankroll)
@@ -2473,6 +2537,15 @@ class PolyBot:
             self._notify_manual_global_stop_once()
             return
         self._manual_global_stop_alert_sent = False
+
+        # Live: re-sync bankroll + run-P&L to the real venue equity every cycle so the
+        # dashboard reflects the actual account (manual trades, on-chain resolutions,
+        # and hidden fees never show in the journal's trade-only P&L). No-op in paper.
+        if not self._is_dry_run_mode():
+            try:
+                await self.refresh_live_wallet_bankroll()
+            except Exception as exc:
+                logging.warning("Live bankroll re-sync failed this cycle: %s", exc)
 
         self._performance_feedback_cycle += 1
         _pf = self.config.get("performance_feedback") or {}
@@ -4113,7 +4186,7 @@ def start_dashboard(bot: Optional["PolyBot"]):
         host = os.environ.get("DASHBOARD_HOST", "0.0.0.0")
     else:
         host = dashboard_config.get("host", "127.0.0.1")
-        port = int(dashboard_config.get("dashboard_port", 8080))
+        port = int(os.environ.get("DASHBOARD_PORT") or dashboard_config.get("dashboard_port", 8080))
 
     if host not in ("127.0.0.1", "::1", "localhost") and not os.environ.get("DASHBOARD_API_KEY"):
         raise SystemExit(
@@ -4417,7 +4490,35 @@ async def main():
 
     # Bind HTTP + /health before PolyBot() (journal replay can take minutes on large sessions).
     _dash_holder = _DashboardConfigShim(bootstrap_config)
-    start_dashboard(_dash_holder)
+    if "--no-dashboard" not in sys.argv:
+        start_dashboard(_dash_holder)
+    else:
+        logging.info("--no-dashboard passed; dashboard server will not be started by this process.")
+
+    # Dashboard-only mode is intentionally lightweight for local split-process
+    # runs: serve FastAPI from its own process and read journal/runtime data from
+    # disk, while the trading bot runs separately with --no-dashboard.
+    if "--dashboard-only" in sys.argv:
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+        shutdown_signal = {"sig": signal.SIGINT}
+
+        def _dashboard_only_signal_handler(sig, frame):
+            shutdown_signal["sig"] = sig
+            srv = getattr(_dash_holder, "_dashboard_server", None)
+            if srv:
+                srv.should_exit = True
+            loop.call_soon_threadsafe(stop_event.set)
+
+        signal.signal(signal.SIGINT, _dashboard_only_signal_handler)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _dashboard_only_signal_handler)
+        logging.info("Dashboard-only mode — serving dashboard without trading bot initialization.")
+        await stop_event.wait()
+        print_shutdown_banner(shutdown_signal["sig"])
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
     # Now that environment is loaded, we can initialize the bot
     bot = PolyBot()
@@ -4537,28 +4638,6 @@ async def main():
                 timeout_sec,
             )
             os._exit(1)
-
-    # Dashboard-only mode: serve dashboard + backtests, no trading loop
-    if "--dashboard-only" in sys.argv:
-        logging.info("Dashboard-only mode — trading disabled. Run backtests from the dashboard.")
-        _write_runtime_status(
-            phase="dashboard_only_idle",
-            session_id=getattr(bot.journal, "session_id", None),
-            clean_shutdown=False,
-        )
-        try:
-            while True:
-                await asyncio.sleep(30)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            bot._terminal_shutdown_sig = signal.SIGINT
-        await _graceful_shutdown_or_exit()
-        if getattr(bot, "_terminal_shutdown_sig", None) is not None:
-            print_shutdown_banner(bot._terminal_shutdown_sig)
-        # Hard-exit rather than returning into asyncio.run()'s hang-prone teardown
-        # (see the trading-path finally below for the full rationale).
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
 
     loop = asyncio.get_running_loop()
     main_task = asyncio.current_task()

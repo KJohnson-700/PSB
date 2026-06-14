@@ -255,6 +255,8 @@ class TradeJournal:
         entry_leg: Optional[str] = None,
         token_id_yes: Optional[str] = None,
         token_id_no: Optional[str] = None,
+        condition_id: Optional[str] = None,
+        market_slug: Optional[str] = None,
     ):
         """Log a new trade entry."""
         if isinstance(entry_leg, str) and entry_leg.strip().upper() in ("YES", "NO"):
@@ -319,6 +321,12 @@ class TradeJournal:
             self.open_positions[trade_id]["token_id_yes"] = _ty
         if _tn:
             self.open_positions[trade_id]["token_id_no"] = _tn
+        _cid = (condition_id or "").strip()
+        _slug = (market_slug or "").strip()
+        if _cid:
+            self.open_positions[trade_id]["condition_id"] = _cid
+        if _slug:
+            self.open_positions[trade_id]["market_slug"] = _slug
         self.total_entries = len(self.open_positions) + len(self.closed_trades)
         self._summary_cache = None  # invalidate on new entry
         self._save_positions()
@@ -440,6 +448,16 @@ class TradeJournal:
                 f"PHANTOM EXIT blocked: {pos['strategy']} ep={_ep:.4f} exit={exit_price:.4f} pnl={pnl:+.2f} | {pos['market_question'][:50]}"
             )
             return
+
+        # Net out the taker fee so the journal's realized PnL matches the cash that
+        # actually hit the bankroll. main.py already debits the round-trip fee from
+        # bankroll (via ExitDecision.unrealized_pnl) and passes it here as
+        # fill_fee_usdc; recomputing pnl from prices alone is GROSS and overstates
+        # edge by the fee. Phantom guards above run on the gross price delta on
+        # purpose (they detect token-flip/oversized price bugs, not fee drift).
+        _fill_fee = (exit_telemetry or {}).get("fill_fee_usdc")
+        if isinstance(_fill_fee, (int, float)) and _fill_fee > 0:
+            pnl -= float(_fill_fee)
 
         # Build exit extra: carry entry signal context + append outcome analysis
         # so every closed trade (win or loss) has full context for pattern learning.
@@ -812,6 +830,20 @@ class TradeJournal:
             "losses": losses,
             "strategy_stats": closed["strategy_stats"],
         }
+        # Live runs: the journal only sees trades IT recorded — it misses manual
+        # trades, on-chain resolutions, and the broker's hidden fee — so journal P&L
+        # diverges from the real account. When the bot sets _live_pnl_override (=
+        # current venue equity − run-start anchor) it becomes the source of truth for
+        # P&L across every display (dashboard + ops pulse both read this summary).
+        ov = getattr(self, "_live_pnl_override", None)
+        if ov is not None:
+            try:
+                ov = round(float(ov), 2)
+                out["realized_pnl"] = ov
+                out["unrealized_pnl"] = 0.0
+                out["total_pnl"] = ov
+            except (TypeError, ValueError):
+                pass
         src = (
             "archived"
             if "paper_trades_archive" in str(self.session_dir.resolve())
@@ -1181,4 +1213,3 @@ class TradeJournal:
         # This suppresses empty stub sessions from being promoted into history.
         if self.total_entries > 0 or self.total_exits > 0 or self.open_positions:
             self._save_summary()
-
