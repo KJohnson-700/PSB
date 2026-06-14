@@ -561,6 +561,7 @@ def set_bot_instance(bot: "PolyBot"):
 
 logger = logging.getLogger(__name__)
 DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
+BOT_RUNTIME_STATUS_FILE = DATA_ROOT / "runtime" / "bot_runtime_status.json"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
@@ -1114,6 +1115,10 @@ def _parse_threshold(question: str, asset: str = "btc") -> Optional[float]:
                 return price
             if asset == "xrp" and 0.05 < price < 500:
                 return price
+            if asset == "doge" and 0.001 < price < 100:
+                return price
+            if asset == "bnb" and 10 < price < 100_000:
+                return price
             if asset == "btc" and 1000 < price < 1_000_000_000:
                 return price
         except Exception:
@@ -1194,12 +1199,20 @@ async def get_ops_summary():
     """Same structured snapshot as OPS_JSON log lines (for curl / monitoring without log drain)."""
     from src.ops_pulse import build_ops_snapshot
 
-    if not bot_instance:
+    bot = _full_bot_instance()
+    if bot is not None:
+        return build_ops_snapshot(bot, "http")
+    # Split / --dashboard-only mode: the trader runs in a SEPARATE process, so this
+    # process holds only a config shim (no .journal). Serve the latest session's
+    # journal summary from disk instead of 500-ing on the shim.
+    try:
+        js = _get_cached_journal_summary()
+        return {"source": "disk_journal_summary", "split_dashboard": True, **(js or {})}
+    except Exception as exc:
         return {
-            "error": "bot not running",
-            "hint": "Start the bot or use /api/journal/summary for the latest disk session.",
+            "error": "no in-process trading bot (dashboard-only); disk summary unavailable",
+            "detail": str(exc)[:200],
         }
-    return build_ops_snapshot(bot_instance, "http")
 
 
 # ─── SERVER-SENT EVENTS (live status push every 2s) ───────────────
@@ -1261,15 +1274,47 @@ async def sse_stream(request: Request):
 
                 # Bot stopped: align SSE hero with /api/status (disk positions + journal).
                 empty_startup_dir = None
+                runtime_status: Dict[str, Any] = {}
+                split_bot_running = False
+                runtime_session_id = ""
                 if not bot:
+                    try:
+                        runtime_status = json.loads(
+                            BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        runtime_status = {}
+                    runtime_pid = int(runtime_status.get("pid") or 0)
+                    runtime_session_id = str(runtime_status.get("session_id") or "").strip()
+                    if runtime_pid and runtime_pid != os.getpid():
+                        try:
+                            os.kill(runtime_pid, 0)
+                            split_bot_running = True
+                        except OSError:
+                            split_bot_running = False
                     try:
                         js = _get_cached_journal_summary()
                     except Exception:
                         js = {}
-                    empty_startup_dir = _newer_empty_startup_session(js)
+                    j_runtime = _journal_for_query(runtime_session_id) if runtime_session_id else None
+                    if j_runtime is not None:
+                        try:
+                            js = j_runtime.get_summary()
+                            js["summary_source"] = "runtime_journal"
+                        except Exception:
+                            pass
+                    empty_startup_dir = None if split_bot_running else _newer_empty_startup_session(js)
                     if empty_startup_dir is not None:
                         js = _empty_session_summary(empty_startup_dir.name)
-                    disk_pos = _load_disk_positions_for_status()
+                    if j_runtime is not None:
+                        try:
+                            disk_pos = j_runtime.get_open_positions()
+                        except Exception:
+                            disk_pos = []
+                    else:
+                        disk_pos = _load_disk_positions_for_status()
+                    if split_bot_running and int(runtime_status.get("open_positions") or 0) == 0:
+                        disk_pos = []
                     if empty_startup_dir is not None:
                         disk_pos = []
                     disk_n = len(disk_pos)
@@ -1282,7 +1327,7 @@ async def sse_stream(request: Request):
                         session_open = max(session_open, disk_n)
                     open_stake = round(float(js.get("total_cost", 0) or 0), 2)
                     if session_id is None:
-                        session_id = js.get("session_id")
+                        session_id = js.get("session_id") or runtime_session_id or None
 
                 cfg_disk: Dict[str, Any] = {}
                 if not bot and CONFIG_PATH.exists():
@@ -1323,7 +1368,14 @@ async def sse_stream(request: Request):
                         side_selection_payload = {}
                 else:
                     dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
-                    can_trade = False
+                    runtime_mode = str(runtime_status.get("mode") or "").lower()
+                    if split_bot_running and runtime_mode in {"paper", "live"}:
+                        dry_run = runtime_mode != "live"
+                    elif split_bot_running:
+                        argv = [str(x) for x in (runtime_status.get("argv") or [])]
+                        if "--live" in argv:
+                            dry_run = False
+                    can_trade = bool(split_bot_running and not kill_switch_active)
                     exposure_payload = _effective_exposure_section(cfg_disk)
                     loss_pause_payload = {"active": False, "lanes": [], "latest_trigger": None}
                     ai_payload = compute_ai_status(cfg_disk, None)
@@ -1347,11 +1399,20 @@ async def sse_stream(request: Request):
                     }
                 elif not bot:
                     empty_startup_dir = (
-                        empty_startup_dir
-                        or _empty_startup_session_dir_for_summary(js)
-                        or _newer_empty_startup_session(js)
+                        None
+                        if split_bot_running
+                        else (
+                            empty_startup_dir
+                            or _empty_startup_session_dir_for_summary(js)
+                            or _newer_empty_startup_session(js)
+                        )
                     )
-                    j_disk = None if empty_startup_dir is not None else _get_journal()
+                    j_runtime = _journal_for_query(runtime_session_id) if runtime_session_id else None
+                    j_disk = (
+                        j_runtime
+                        if j_runtime is not None
+                        else (None if empty_startup_dir is not None else _get_journal())
+                    )
                     session_dir_disk = (
                         empty_startup_dir
                         if empty_startup_dir is not None
@@ -1378,7 +1439,7 @@ async def sse_stream(request: Request):
                     bankroll_snap = bankroll_payload.get("bankroll")
 
                 snapshot = {
-                    "running": bot.running if bot else False,
+                    "running": bot.running if bot else split_bot_running,
                     "kill_switch_active": kill_switch_active,
                     "dry_run": dry_run,
                     "exposure": exposure_payload,
@@ -1801,11 +1862,43 @@ async def get_status():
             "ts": int(_time_mod.time()),
         }
 
-    # ── No bot_instance: read everything from disk ──
+    # ── No bot_instance: read everything from disk. In split-process mode the
+    # dashboard has no in-memory bot, so prefer the runtime file written by the
+    # trading child over the dashboard-only process' newest empty startup folder.
+    runtime_status: Dict[str, Any] = {}
+    try:
+        runtime_status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        runtime_status = {}
+    runtime_pid = int(runtime_status.get("pid") or 0)
+    split_bot_running = False
+    if runtime_pid and runtime_pid != os.getpid():
+        try:
+            os.kill(runtime_pid, 0)
+            split_bot_running = True
+        except OSError:
+            split_bot_running = False
+    runtime_session_id = str(runtime_status.get("session_id") or "").strip()
+
     summary = _get_cached_journal_summary()
-    empty_startup_dir = _newer_empty_startup_session(summary)
+    j_runtime = _journal_for_query(runtime_session_id) if runtime_session_id else None
+    if j_runtime is not None:
+        try:
+            summary = j_runtime.get_summary()
+            summary["summary_source"] = "runtime_journal"
+        except Exception:
+            pass
+
+    empty_startup_dir = None if split_bot_running else _newer_empty_startup_session(summary)
     if empty_startup_dir is not None:
         summary = _empty_session_summary(empty_startup_dir.name)
+        disk_positions = []
+    elif j_runtime is not None:
+        try:
+            disk_positions = j_runtime.get_open_positions()
+        except Exception:
+            disk_positions = []
+    if split_bot_running and int(runtime_status.get("open_positions") or 0) == 0:
         disk_positions = []
     session_cc = _command_center_session(summary)
 
@@ -1819,8 +1912,19 @@ async def get_status():
             dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
         except Exception:
             pass
+    runtime_mode = str(runtime_status.get("mode") or "").lower()
+    if split_bot_running and runtime_mode in {"paper", "live"}:
+        dry_run = runtime_mode != "live"
+    elif split_bot_running:
+        argv = [str(x) for x in (runtime_status.get("argv") or [])]
+        if "--live" in argv:
+            dry_run = False
 
-    j_disk = None if empty_startup_dir is not None else _get_journal()
+    j_disk = (
+        j_runtime
+        if j_runtime is not None
+        else (None if empty_startup_dir is not None else _get_journal())
+    )
     session_dir_disk = (
         empty_startup_dir
         if empty_startup_dir is not None
@@ -1864,7 +1968,7 @@ async def get_status():
         decision_gates_disk = None
 
     return {
-        "running": False,
+        "running": split_bot_running,
         "mode": "paper" if dry_run else "live",
         "dry_run": dry_run,
         "exposure": _effective_exposure_section(cfg_disk),
@@ -1874,8 +1978,14 @@ async def get_status():
         "loss_pause_count": 0,
         "loss_pause_lanes": [],
         "loss_pause_latest_trigger": None,
-        "can_trade": False,
-        "can_trade_reason": "Bot not running",
+        "can_trade": bool(split_bot_running and not kill_switch_active),
+        "can_trade_reason": (
+            "Split bot process running"
+            if split_bot_running and not kill_switch_active
+            else "Manual global stop active (data/KILL_SWITCH)"
+            if split_bot_running and kill_switch_active
+            else "Bot not running"
+        ),
         "bankroll": bankroll_payload.get("bankroll"),
         "bankroll_source": bankroll_payload.get("source"),
         "bankroll_warning": bankroll_payload.get("warning"),
@@ -1887,8 +1997,8 @@ async def get_status():
         "open_positions_count": summary.get("open_positions", 0),
         "session": session_cc,
         "ai": compute_ai_status(cfg_disk, None),
-        "strategy_state": _build_strategy_state(cfg_disk, False),
-        "session_id": summary.get("session_id"),
+        "strategy_state": _build_strategy_state(cfg_disk, split_bot_running),
+        "session_id": summary.get("session_id") or runtime_session_id or None,
         "scan_skip_digest": None,
         "decision_gates": decision_gates_disk,
         "buy_no_skip_diagnostics": None,
@@ -3054,6 +3164,26 @@ async def shutdown_live_bot(request: Request):
             "kill_switch_active": kill_switch_active,
         }
 
+    try:
+        runtime_status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        runtime_status = {}
+    runtime_pid = int(runtime_status.get("pid") or 0)
+    if runtime_pid and runtime_pid != os.getpid():
+        try:
+            os.kill(runtime_pid, signal.SIGINT)
+            return {
+                "status": "shutdown_signal_sent",
+                "target": "split_bot_process",
+                "pid": runtime_pid,
+                "phase": runtime_status.get("phase"),
+                "kill_switch_active": kill_switch_active,
+            }
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="No permission to signal bot process")
+
     if bot_instance is not None:
         pid = os.getpid()
 
@@ -3195,27 +3325,60 @@ async def get_strategy_watchlist(
     strategies_cfg = cfg.get("strategies", {})
     watchlist: List[Dict[str, Any]] = []
 
-    # ── Crypto updown watchlist (bitcoin / sol_macro / eth_macro / xrp_macro)
     try:
-        btc_cfg = strategies_cfg.get("bitcoin", {})
-        sol_cfg = strategies_cfg.get("sol_macro", {})
-        eth_cfg = strategies_cfg.get("eth_macro", {})
-        hype_cfg = strategies_cfg.get("hype_macro", {})
-        xrp_cfg = strategies_cfg.get("xrp_macro", {})
-        btc_e_min = float(btc_cfg.get("entry_price_min", 0.10))
-        btc_e_max = float(btc_cfg.get("entry_price_max", 0.90))
-        sol_e_min = float(sol_cfg.get("entry_price_min", 0.46))
-        sol_e_max = float(sol_cfg.get("entry_price_max", 0.54))
-        eth_e_min = float(eth_cfg.get("entry_price_min", 0.46))
-        eth_e_max = float(eth_cfg.get("entry_price_max", 0.54))
-        # XRP dump-hedge: display band for token price (signals are event-driven; wide band avoids false "blocked")
-        xrp_e_min = float(xrp_cfg.get("watchlist_entry_min", 0.02))
-        xrp_e_max = float(xrp_cfg.get("watchlist_entry_max", 0.98))
-
-        # Fetch all spot prices in parallel via threads — these are blocking
-        # network calls (Binance) and would otherwise pin the dashboard event
-        # loop, stalling every other endpoint that arrives during the wait.
         from src.analysis.sol_btc_service import SOLBTCService
+
+        asset_specs = {
+            "bitcoin": {
+                "asset": "btc",
+                "spot_symbol": None,
+                "cfg": strategies_cfg.get("bitcoin", {}),
+                "entry_min": float((strategies_cfg.get("bitcoin", {}) or {}).get("entry_price_min", 0.10)),
+                "entry_max": float((strategies_cfg.get("bitcoin", {}) or {}).get("entry_price_max", 0.90)),
+            },
+            "sol_macro": {
+                "asset": "sol",
+                "spot_symbol": "SOLUSDT",
+                "cfg": strategies_cfg.get("sol_macro", {}),
+                "entry_min": float((strategies_cfg.get("sol_macro", {}) or {}).get("entry_price_min", 0.46)),
+                "entry_max": float((strategies_cfg.get("sol_macro", {}) or {}).get("entry_price_max", 0.54)),
+            },
+            "eth_macro": {
+                "asset": "eth",
+                "spot_symbol": "ETHUSDT",
+                "cfg": strategies_cfg.get("eth_macro", {}),
+                "entry_min": float((strategies_cfg.get("eth_macro", {}) or {}).get("entry_price_min", 0.46)),
+                "entry_max": float((strategies_cfg.get("eth_macro", {}) or {}).get("entry_price_max", 0.54)),
+            },
+            "hype_macro": {
+                "asset": "hype",
+                "spot_symbol": None,
+                "cfg": strategies_cfg.get("hype_macro", {}),
+                "entry_min": float((strategies_cfg.get("hype_macro", {}) or {}).get("entry_price_min", 0.46)),
+                "entry_max": float((strategies_cfg.get("hype_macro", {}) or {}).get("entry_price_max", 0.54)),
+            },
+            "xrp_macro": {
+                "asset": "xrp",
+                "spot_symbol": "XRPUSDT",
+                "cfg": strategies_cfg.get("xrp_macro", {}),
+                "entry_min": float((strategies_cfg.get("xrp_macro", {}) or {}).get("watchlist_entry_min", 0.02)),
+                "entry_max": float((strategies_cfg.get("xrp_macro", {}) or {}).get("watchlist_entry_max", 0.98)),
+            },
+            "doge_macro": {
+                "asset": "doge",
+                "spot_symbol": "DOGEUSDT",
+                "cfg": strategies_cfg.get("doge_macro", {}),
+                "entry_min": float((strategies_cfg.get("doge_macro", {}) or {}).get("entry_price_min", 0.46)),
+                "entry_max": float((strategies_cfg.get("doge_macro", {}) or {}).get("entry_price_max", 0.54)),
+            },
+            "bnb_macro": {
+                "asset": "bnb",
+                "spot_symbol": "BNBUSDT",
+                "cfg": strategies_cfg.get("bnb_macro", {}),
+                "entry_min": float((strategies_cfg.get("bnb_macro", {}) or {}).get("entry_price_min", 0.46)),
+                "entry_max": float((strategies_cfg.get("bnb_macro", {}) or {}).get("entry_price_max", 0.54)),
+            },
+        }
 
         def _btc_spot_sync():
             try:
@@ -3227,36 +3390,40 @@ async def get_strategy_watchlist(
             except Exception:
                 return None
 
-        def _sol_spot_sync():
+        def _alt_spot_sync(symbol: str):
             try:
-                if bot_instance and hasattr(bot_instance, "sol_macro_strategy"):
-                    return bot_instance.sol_macro_strategy.sol_service.get_current_price("SOLUSDT")
-            except Exception:
-                pass
-            return None
-
-        def _eth_spot_sync():
-            try:
-                if bot_instance and getattr(bot_instance, "eth_macro_strategy", None):
-                    v = bot_instance.eth_macro_strategy.sol_service.get_current_price("ETHUSDT")
-                    if v is not None:
-                        return v
-                return SOLBTCService(alt_symbol="ETHUSDT").get_current_price("ETHUSDT")
-            except Exception:
-                return None
-
-        def _xrp_spot_sync():
-            try:
-                return SOLBTCService(alt_symbol="XRPUSDT").get_current_price("XRPUSDT")
+                strategy_attr = {
+                    "SOLUSDT": "sol_macro_strategy",
+                    "ETHUSDT": "eth_macro_strategy",
+                    "DOGEUSDT": "doge_macro_strategy",
+                    "BNBUSDT": "bnb_macro_strategy",
+                }.get(symbol)
+                if strategy_attr and bot_instance and getattr(bot_instance, strategy_attr, None):
+                    svc = getattr(getattr(bot_instance, strategy_attr), "sol_service", None)
+                    if svc:
+                        v = svc.get_current_price(symbol)
+                        if v is not None:
+                            return v
+                return SOLBTCService(alt_symbol=symbol).get_current_price(symbol)
             except Exception:
                 return None
 
-        btc_spot, sol_spot, eth_spot, xrp_spot_cached = await asyncio.gather(
+        spot_results = await asyncio.gather(
             asyncio.to_thread(_btc_spot_sync),
-            asyncio.to_thread(_sol_spot_sync),
-            asyncio.to_thread(_eth_spot_sync),
-            asyncio.to_thread(_xrp_spot_sync),
+            asyncio.to_thread(_alt_spot_sync, "SOLUSDT"),
+            asyncio.to_thread(_alt_spot_sync, "ETHUSDT"),
+            asyncio.to_thread(_alt_spot_sync, "XRPUSDT"),
+            asyncio.to_thread(_alt_spot_sync, "DOGEUSDT"),
+            asyncio.to_thread(_alt_spot_sync, "BNBUSDT"),
         )
+        spot_by_strategy = {
+            "bitcoin": spot_results[0],
+            "sol_macro": spot_results[1],
+            "eth_macro": spot_results[2],
+            "xrp_macro": spot_results[3],
+            "doge_macro": spot_results[4],
+            "bnb_macro": spot_results[5],
+        }
 
         scan_file_dir = DATA_ROOT / "live_scans"
         files = sorted(scan_file_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if scan_file_dir.exists() else []
@@ -3270,118 +3437,41 @@ async def get_strategy_watchlist(
 
         for s in signals:
             strat = s.get("strategy")
+            spec = asset_specs.get(strat)
+            if not spec:
+                continue
             q = s.get("market_question", "")
             price = float(s.get("price", 0) or 0)
-            if strat == "bitcoin":
-                threshold = _parse_threshold(q, asset="btc")
-                if threshold and btc_spot:
-                    dist_pct = abs(float(btc_spot) - threshold) / threshold * 100.0
-                else:
-                    dist_pct = None
-                trigger = btc_e_min if price < btc_e_min else btc_e_max if price > btc_e_max else price
-                watchlist.append(
-                    {
-                        "strategy": "bitcoin",
-                        "market_id": s.get("market_id"),
-                        "market_question": q,
-                        "action_hint": s.get("action", _parse_direction(q)),
-                        "current_price": price,
-                        "trigger_price": trigger,
-                        "distance": abs(price - trigger),
-                        "ready": btc_e_min <= price <= btc_e_max,
-                        "block_reason": "" if btc_e_min <= price <= btc_e_max else "outside_entry_zone",
-                        "spot_price": btc_spot,
-                        "threshold_price": threshold,
-                        "spot_distance_pct": dist_pct,
-                    }
-                )
-            elif strat == "sol_macro":
-                threshold = _parse_threshold(q, asset="sol")
-                if threshold and sol_spot:
-                    dist_pct = abs(float(sol_spot) - threshold) / threshold * 100.0
-                else:
-                    dist_pct = None
-                trigger = sol_e_min if price < sol_e_min else sol_e_max if price > sol_e_max else price
-                watchlist.append(
-                    {
-                        "strategy": "sol_macro",
-                        "market_id": s.get("market_id"),
-                        "market_question": q,
-                        "action_hint": s.get("action", _parse_direction(q)),
-                        "current_price": price,
-                        "trigger_price": trigger,
-                        "distance": abs(price - trigger),
-                        "ready": sol_e_min <= price <= sol_e_max,
-                        "block_reason": "" if sol_e_min <= price <= sol_e_max else "outside_entry_zone",
-                        "spot_price": sol_spot,
-                        "threshold_price": threshold,
-                        "spot_distance_pct": dist_pct,
-                    }
-                )
-            elif strat == "eth_macro":
-                threshold = _parse_threshold(q, asset="eth")
-                if threshold and eth_spot:
-                    dist_pct = abs(float(eth_spot) - threshold) / threshold * 100.0
-                else:
-                    dist_pct = None
-                trigger = eth_e_min if price < eth_e_min else eth_e_max if price > eth_e_max else price
-                watchlist.append(
-                    {
-                        "strategy": "eth_macro",
-                        "market_id": s.get("market_id"),
-                        "market_question": q,
-                        "action_hint": s.get("action", _parse_direction(q)),
-                        "current_price": price,
-                        "trigger_price": trigger,
-                        "distance": abs(price - trigger),
-                        "ready": eth_e_min <= price <= eth_e_max,
-                        "block_reason": "" if eth_e_min <= price <= eth_e_max else "outside_entry_zone",
-                        "spot_price": eth_spot,
-                        "threshold_price": threshold,
-                        "spot_distance_pct": dist_pct,
-                    }
-                )
-            elif strat == "hype_macro":
-                hype_e_min = float(hype_cfg.get("entry_price_min", 0.46))
-                hype_e_max = float(hype_cfg.get("entry_price_max", 0.54))
-                trigger = hype_e_min if price < hype_e_min else hype_e_max if price > hype_e_max else price
-                watchlist.append(
-                    {
-                        "strategy": "hype_macro",
-                        "market_id": s.get("market_id"),
-                        "market_question": q,
-                        "action_hint": s.get("action", _parse_direction(q)),
-                        "current_price": price,
-                        "trigger_price": trigger,
-                        "distance": abs(price - trigger),
-                        "ready": hype_e_min <= price <= hype_e_max,
-                        "block_reason": "" if hype_e_min <= price <= hype_e_max else "outside_entry_zone",
-                    }
-                )
-            elif strat == "xrp_macro":
-                threshold = _parse_threshold(q, asset="xrp")
-                xrp_spot = xrp_spot_cached
-                dist_pct = None
-                if threshold and xrp_spot:
-                    dist_pct = abs(float(xrp_spot) - threshold) / threshold * 100.0
-                trigger = xrp_e_min if price < xrp_e_min else xrp_e_max if price > xrp_e_max else price
-                in_band = xrp_e_min <= price <= xrp_e_max
-                watchlist.append(
-                    {
-                        "strategy": "xrp_macro",
-                        "market_id": s.get("market_id"),
-                        "market_question": q,
-                        "action_hint": s.get("action", _parse_direction(q)),
-                        "current_price": price,
-                        "trigger_price": trigger,
-                        "distance": abs(price - trigger),
-                        "ready": in_band,
-                        "block_reason": "" if in_band else "outside_entry_zone",
-                        "spot_price": xrp_spot,
-                        "threshold_price": threshold,
-                        "spot_distance_pct": dist_pct,
-                    }
-                )
+            entry_min = float(spec["entry_min"])
+            entry_max = float(spec["entry_max"])
+            spot = spot_by_strategy.get(strat)
+            if strat == "doge_macro":
+                threshold = _parse_threshold(q, asset="doge")
+            elif strat == "bnb_macro":
+                threshold = _parse_threshold(q, asset="bnb")
+            else:
+                threshold = _parse_threshold(q, asset=str(spec["asset"]))
+            dist_pct = None
+            if threshold and spot:
+                dist_pct = abs(float(spot) - threshold) / threshold * 100.0
+            trigger = entry_min if price < entry_min else entry_max if price > entry_max else price
+            in_band = entry_min <= price <= entry_max
+            watchlist.append(
+                {
+                    "strategy": strat,
+                    "market_id": s.get("market_id"),
+                    "market_question": q,
+                    "action_hint": s.get("action", _parse_direction(q)),
+                    "current_price": price,
+                    "trigger_price": trigger,
+                    "distance": abs(price - trigger),
+                    "ready": in_band,
+                    "block_reason": "" if in_band else "outside_entry_zone",
+                    "spot_price": spot,
+                    "threshold_price": threshold,
+                    "spot_distance_pct": dist_pct,
+                }
+            )
     except Exception as e:
         logger.warning(f"Watchlist crypto markets unavailable: {e}")
 
