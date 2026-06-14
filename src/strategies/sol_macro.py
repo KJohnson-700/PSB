@@ -248,6 +248,10 @@ class SolMacroSignal(BaseModel):
     edge: float = Field(..., description="Estimated edge")
     token_id_yes: str = Field(..., description="YES token ID")
     token_id_no: str = Field(..., description="NO token ID")
+    condition_id: Optional[str] = Field(None, description="Polymarket conditionId")
+    market_slug: Optional[str] = Field(None, description="Polymarket market slug")
+    outcome_label_yes: Optional[str] = Field(None, description="Label for the first CLOB outcome token")
+    outcome_label_no: Optional[str] = Field(None, description="Label for the second CLOB outcome token")
     end_date: Optional[datetime] = Field(None, description="Resolution date")
     direction: str = Field(..., description="UP or DOWN")
     sol_threshold: Optional[float] = Field(None, description="SOL price threshold")
@@ -3172,6 +3176,7 @@ class SolMacroStrategy:
                 if is_updown
                 else "15m"
             )
+            window_label = _updown_tf
             # Threshold-market-only locals. Up/down markets never assign these, but the
             # shared AI-tiebreaker context path below reads them. Bind safe defaults so
             # up/down candidates can't raise UnboundLocalError on the AI path (regression
@@ -3219,6 +3224,23 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
+            # 2026-06-14: per-asset BUY_YES sit-out. Data-driven lane cut — set
+            # `disable_buy_yes: true` for an asset whose UP-side calls bleed (e.g. bnb:
+            # 40% WR, -$67 over 113 taken-settled trades). Opt-in, default off, applies
+            # to all windows for that asset; ghost-logged so the counterfactual settles.
+            if is_updown and action == "BUY_YES" and bool(self.config.get("disable_buy_yes", False)):
+                _bump_skip("buy_yes_disabled_lane")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_yes_disabled_lane",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
             # 2026-05-31: 5m-native BUY_NO is anti-predictive — held-to-resolution WR
             # ~22% across eth/xrp/doge/sol vs 50-65% on 15m-native; MACD-confirmed 5m
             # shorts lose, so the signal (not the gate) is inverted. Opt-in sit-out,
@@ -5543,6 +5565,10 @@ class SolMacroStrategy:
                 edge=round(edge, 4),
                 token_id_yes=market.token_id_yes,
                 token_id_no=market.token_id_no,
+                condition_id=getattr(market, "condition_id", None),
+                market_slug=getattr(market, "slug", None),
+                outcome_label_yes=getattr(market, "outcome_label_yes", None),
+                outcome_label_no=getattr(market, "outcome_label_no", None),
                 end_date=market.end_date,
                 direction=direction,
                 sol_threshold=self._extract_price_threshold(market.question) if not is_updown else None,

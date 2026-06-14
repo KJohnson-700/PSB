@@ -10,28 +10,11 @@ polymarket:
   fetch_hype_alt_markets: true
   gamma_http_max_retries: 3
   gamma_http_retry_backoff_base_sec: 0.5
-  # ── L2 credential lifecycle (live execution only; ignored while dry_run) ──
-  # Derived Polymarket L2 creds expire ~7 days after derivation, do not rotate,
-  # and fail SILENTLY with auth errors. See src/execution/clob_client.py.
-  creds_max_age_hours: 144          # treat creds older than 6d as stale (under 7d expiry)
-  auto_rederive_credentials: true   # self-heal: re-derive from L1 signer instead of refusing
-  # ON when live: force an idempotent L1 re-derive at every boot so the bot
-  # always starts with freshly minted creds (set_credentials only records when
-  # we LOADED the .env creds, not their true age). Only consulted in live mode —
-  # paper boot short-circuits before reading it. See second-brain changelog
-  # 2026-06-11 "L2 credential lifecycle hardening".
+  creds_max_age_hours: 144
+  auto_rederive_credentials: true
   rederive_credentials_on_start: true
-  # ── CLOB V2 proxy/Safe execution (live only; ignored while dry_run) ──
-  # Polymarket V2 (prod since 2026-04-28) REJECTS raw-EOA orders ("maker address
-  # not allowed", py-clob-client-v2 #51). Website accounts hold funds in a proxy
-  # wallet, so live orders must carry the account's signature type + funder.
-  #   signature_type: 1 = POLY_PROXY (email / Magic.link signup)
-  #                    2 = POLY_GNOSIS_SAFE (browser-wallet signup)
-  # funder_address: your Polymarket proxy/deposit wallet address (NOT the EOA the
-  #   private key derives) — find it on your Polymarket profile / deposit page.
-  # FILL THESE IN BEFORE THE LIVE SMOKE TEST. They are unused while dry_run=true.
-  signature_type: 1               # POLY_PROXY — email/Magic.link account (confirmed 2026-06-13)
-  funder_address: "0x932845f226ffb93ec14d37add977446cf0d8a6eb"  # Polymarket proxy wallet (verified ≠ signer EOA 0x477B…3811)
+  signature_type: 1
+  funder_address: '0x932845f226ffb93ec14d37add977446cf0d8a6eb'
 hyperliquid:
   request_timeout_sec: 25
   range_request_timeout_sec: 30
@@ -42,47 +25,34 @@ hyperliquid:
 trading:
   cycle_interval_sec: 60
   exit_check_interval_sec: 10
-  # Execution provider for live orders. "clob" uses direct Polymarket CLOB V2;
-  # "olympus" uses the Olympus Trading API adapter. Paper mode still stays local.
-  execution_provider: olympus   # LIVE Olympus run (2026-06-13); set back to clob for direct CLOB V2
-  # Entry fill policy:
-  #   marketable = FAK taker: fills immediately like paper assumes; pays the taker
-  #     fee (charged round-trip in paper). Calibration transfers; bot always trades.
-  #   maker      = post_only GTC: 0 fee but rarely fills in fast up/down markets.
-  #   hybrid     = rest as maker for entry_maker_wait_sec, then cross the unfilled
-  #     remainder to a FAK taker. Only on entry_hybrid_windows; other windows fall
-  #     back to marketable. Paper models hybrid conservatively as taker (maker fee
-  #     savings are live-only), so live can only beat paper on fees, never worse.
-  entry_mode: marketable          # Olympus is a broker (no maker/taker control); use marketable. Set hybrid for direct CLOB.
-  entry_maker_wait_sec: 8          # seconds to rest as maker before crossing to taker (direct/hybrid only)
-  entry_hybrid_windows: ["15m", "1h"]   # 5m stays marketable (too fast for resting)
+  execution_provider: olympus
+  entry_mode: marketable
+  entry_maker_wait_sec: 8
+  entry_hybrid_windows:
+  - 15m
+  - 1h
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
   crypto_hourly_scan_every_n_cycles: 3
   overrun_recovery_sleep_sec: 5
   dry_run: true
-  # ── Pre-order fresh-book slippage guard (live execution only; no-op in dry_run) ──
-  # Between scan and place_order the CLOB book can move. Before placing a BUY
-  # (BUY_YES / BUY_NO) we re-read the live book for the token and compare best_ask
-  # to the price we're about to send (signal.price). Default mode is OBSERVE: log
-  # how far the ask moved without suppressing, so the first live run records real
-  # slippage before any threshold suppresses fills. Flip mode->enforce (and tune
-  # max_slippage_cents) once the live smoke test shows real numbers. Fail-OPEN on
-  # any missing book / read error. See src/main.py _fresh_book_slippage_ok.
   slippage_guard:
     enabled: true
-    mode: observe            # observe | enforce
+    mode: enforce
     max_slippage_cents: 0.02
+    max_spread_cents: 0.03
+    require_full_depth: true
+    depth_price_ceiling_cents: 0.0
   clob_ws:
     enabled: true
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
-  default_position_size: 6        # ~$6/trade for the ~$88 live Olympus calibration run (2026-06-13)
+  default_position_size: 6
   max_position_size: 6
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
-  max_exposure_per_trade: 0.08    # allow $6 on an ~$88 bankroll (5% would clip to ~$4.40)
+  max_exposure_per_trade: 0.08
   max_topic_exposure: 0.2
   daily_loss_limit: 0.15
   kelly_fraction: 0.37
@@ -90,8 +60,6 @@ trading:
     enabled: false
     btc_break_above_usd: 80000
     btc_break_below_usd: 75000
-  # Regime-feed config only. The standalone price-tracker feed supports
-  # dashboard health/segmentation and does not gate any entry.
   regime_feed:
     regime_log: data/calibration/market_regime.jsonl
     max_snapshot_age_sec: 1800
@@ -105,41 +73,15 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.2
     updown_hold_winners_to_resolution: false
-    # ── Executable-price stop (default OFF) ──
-    # Evaluate the updown stop trigger on the exit-side price we'd actually realize
-    # (YES bid for long YES; 1-ask i.e. NO bid for long NO; YES ask for short YES)
-    # instead of the YES midpoint, and fill there. Measured ~$190/2d gap: the stop
-    # fires at mid -15% but the live fill gaps to the bid (-28% median, -45% in the
-    # last 2 min to resolution). Marking the stop on the executable price fires it at
-    # a true -15% and fills near there. EXIT change — not ghost-validatable; forward-
-    # test on trades_settled + exit_excursion_shadow. Fail-safe to midpoint if no book.
-    stop_use_executable_price: true
-    # ── Realistic paper fills (default OFF) ──
-    # Paper/dry_run fills every order at the requested price (no spread, slippage,
-    # or depth), so paper exit P&L is optimistic vs live. When on, exits are filled
-    # by walking the order-book ladder from the snapshot (size-weighted, remainder
-    # padded at the deepest level) so recorded paper P&L reflects a real sweep:
-    # long-YES sells the YES bids, long-NO sells the NO bids (= YES asks mirrored),
-    # short-YES buys back the YES asks. Entries still fill at the mark (next
-    # increment). Flip on to start collecting realistic paper data and measure the
-    # paper->live fill haircut. See src/execution/fill_sim.py.
-    realistic_paper_fills: true
-    # ── BUY_YES bid-depth deterioration exit (default OFF) ──
-    # Closes a long-YES position when sell-side support (YES bid depth) collapses
-    # while the position is non-positive and there is still real time left — fixes
-    # "held too long into a thinning book" WITHOUT WebSocket infra (reuses the book
-    # snapshot the fast-exit loop already fetches). DEFAULT OFF + mode=observe: this
-    # is an EXIT change, which the ghost log CANNOT validate, and an early close on a
-    # scratch position is the "stops cut winners" shape. Run observe first, read the
-    # logged would-fire rate against real outcomes, THEN consider enforce.
-    # See PositionExitManager.check_exits / main.py _fetch_held_market_prices.
+    stop_use_executable_price: false
+    realistic_paper_fills: false
     bid_depth_exit:
       enabled: false
-      mode: observe            # observe | enforce
-      min_bid_depth_usd: 150   # sum($ = price*size) over top N YES bids; below = collapsed
-      depth_levels: 3          # top-N bid levels to sum
-      only_when_losing: true   # require pnl_pct <= 0
-      min_mins_remaining: 5.0  # only fire when MORE than this remains (else time-stop owns it)
+      mode: observe
+      min_bid_depth_usd: 150
+      depth_levels: 3
+      only_when_losing: true
+      min_mins_remaining: 5.0
     dynamic_stop_enabled: true
     dynamic_stop_bull_mult: 0.95
     dynamic_stop_range_mult: 1.05
@@ -155,21 +97,14 @@ trading:
     updown_stop_cents_high_entry: 0.02
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
-    # ── Regime-conditioned exits (DISABLED) ──
-    # Historical experiment only. Operator direction as of 2026-06-12: do not
-    # reintroduce hold-to-resolution/hold+trail exits unless explicitly requested.
-    # Keep simple TP/stop behavior as the default exit model.
     regime_conditioned_exits:
       enabled: false
       trend_side_hold_winners: false
-      trend_side_trail_arm_pct: 0.10
+      trend_side_trail_arm_pct: 0.1
       trend_side_trail_gap_pct: 0.15
       off_trend_force_tight: true
-      # BTC is exempt: it ALWAYS takes profit at its TP (never forced to hold).
-      # Regime-hold is for the alts, where held-vs-realized data supported riding
-      # the trend-side move. Entries are "strategy" (all windows) or "strategy|window".
       exclude_lanes:
-        - bitcoin
+      - bitcoin
     updown_overrides:
       bitcoin:
         window_lane_overrides:
@@ -359,29 +294,20 @@ trading:
               updown_stop_loss_pct: 0.15
   execution_fees:
     enabled: true
-    # Polymarket fee-enabled binary CLOB markets charge takers at match time:
-    # shares * fee_rate * price * (1 - price). This fallback is applied only
-    # to 15m crypto up/down paper exits when live market metadata is missing.
-    # 2026-06-13: reverted 0.036 -> 0.07. VERIFIED against the live Gamma API:
-    # crypto up/down markets return feeSchedule={rate:0.07, exponent:1, takerOnly:true,
-    # rebateRate:0.2}. So fee_rate IS 0.07. At price 0.50 that's $1.75 per 100 shares
-    # (1.75% of max payout / ~3.5% of a 50c cost basis) — matches fill_sim + its tests
-    # (polymarket_taker_fee_usdc(100,0.50,0.07)==1.75). The earlier 0.036 halved the
-    # real rate (bad "fee_rate*0.5=1.8%" reasoning) and UNDER-charged paper exits ~2x.
     crypto_updown_15m_taker_fee_rate: 0.07
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
-  # Live order submission is blocked unless this is true or env
-  # OLYMPUS_LIVE_ORDER_APPROVAL=APPROVE_OLYMPUS_LIVE_ORDERS.
-  live_order_approved: true       # ARMED for live Olympus orders (2026-06-13 ~$88 calibration run)
+  live_order_approved: true
+  await_fill_on_submit: true
+  fill_poll_attempts: 12
+  fill_poll_interval_sec: 1.0
   smoke_test:
-    enabled: false
-    max_order_usd: 5
-    max_orders_per_run: 1
+    enabled: true
+    max_order_usd: 6
+    max_orders_per_run: 40
     require_market_slug: true
     require_condition_id: true
-
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
@@ -472,10 +398,6 @@ strategies:
     ai_confidence_threshold: 0.6
     neutral_15m_routes_to_ai: false
     btc_ai_async_broker: true
-    # Orphan fix: let a market with a live broker decision re-reach the consume
-    # point even after it leaves the borderline band / timing window, bypassing
-    # the per-scan AI-call budget (consume is free). Fixes ~81% age_sweep where
-    # resolved decisions were never re-claimed. Opt-out: set false.
     btc_ai_claim_pending_decisions: true
     max_ai_calls_per_scan: 5
     ai_call_timeout_sec: 15
@@ -485,20 +407,9 @@ strategies:
     use_ai_updown: false
     ai_updown_marginal_min_edge: 0.03
     ai_hold_veto_ttl_sec: 300
-    # ── [1h] Simple consensus-follow BUY_YES lane (DEFAULT OFF — forward-test) ──
-    # Ghost evidence (rejected_candidates_settled, BTC 1h BUY_YES, binary payout):
-    #   entry 0.50-0.85 → 732 trades, 65.8% WR, +$71.38  (+$0.098/trade)
-    #   current gated   → 130 trades, 76.9% WR, -$1.02   (prettier, unprofitable)
-    #   entry 0.15-0.50 → 143 trades, 29.4% WR, -$17.39  (pure bleed — excluded)
-    # The lane is starved because est_prob is stuck ~0.55 (edge gate rejects on a
-    # broken signal) and the 4H resolver kills the upward lean. When enabled, BTC 1h
-    # BUY_YES is admitted on yes_price band alone, bypassing 4H/LTF/edge gates, sized
-    # on a flat edge. Macro-event + end-date safety guards still apply. ghosts CANNOT
-    # validate exits; this is admission, so flip enabled:true and paper-test ~1 week —
-    # live WR within ~5pp of 66% = ships. NEEDS RESTART.
     bitcoin_1h_simple_long:
       enabled: true
-      entry_min: 0.50
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
@@ -601,12 +512,6 @@ strategies:
     bias_quant_disagree_size_multiplier: 0.33
     hist_gate_5m_short_hard_reject: false
     hist_gate_1h_long_hard_reject: false
-    # 2026-06-10 gate-noise audit (scripts/gate_noise_audit.py): the LONG-side
-    # histogram guillotine blocks +EV trades, not noise — ghost-settled blocked
-    # pool was +0.119 EV (1h), +0.074 (5m), +0.023 (15m, n=4401). The 1h case was
-    # already softened above; extend the SAME soft-penalty fix to 15m and 5m so
-    # the +EV longs get a mild est_prob dock instead of a hard reject. Soft path
-    # (bitcoin.py:2222) is already live for 1h. Reversible: set back to true.
     hist_gate_15m_long_hard_reject: false
     hist_gate_5m_long_hard_reject: false
     min_edge_buy_no: 0.09
@@ -657,8 +562,7 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
-    # 5m BUY_NO anti-selective (held-WR ~29% n=198, -$297 live); flip to +EV long. Forward-test 2026-06-11.
-    buy_no_5m_flip_to_yes: true
+    buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -732,8 +636,8 @@ strategies:
     oracle_basis_relax_max_bps_15m_buy_yes: 40.0
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: true   # ghost 1h BUY_YES edge: strong (+EV)
-      entry_min: 0.50
+      enabled: true
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
@@ -861,14 +765,8 @@ strategies:
     window_delta_confirm_margin: 0.1
     low_atr_only_lanes:
     - 15m:LONG
-    # NOTE: disable_buy_no_5m_native is honored only by the shared sol_macro loop;
-    # eth_macro overrides scan_and_analyze so it never fired here. eth 5m BUY_NO is
-    # now handled by eth_5m_buy_no_flip_to_yes below (flip the inverted short to the
-    # +EV long) rather than suppressed. Flag left as inert back-compat.
     disable_buy_no_5m_native: true
-    # eth 5m BUY_NO is structurally inverted (held-WR 26-33% n=133-259, -$375 live);
-    # flip it to the +EV long in-loop. Forward-test 2026-06-11. Set false to opt out.
-    eth_5m_buy_no_flip_to_yes: true
+    eth_5m_buy_no_flip_to_yes: false
     enabled: true
     use_ai: true
     eth_momentum_confirm:
@@ -1049,12 +947,6 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 120.0
           down:
-            # 2026-06-13: RE-ENABLED. Ghost recut (rejected-candidate set, ts>=06-12,
-            # n=2528) shows eth 15m BUY_NO is +0.077 EV / 54% WR — i.e. we were
-            # rejecting WINNERS. The 06-12 sit-out mistook an exit/selection problem
-            # (taken trades held -$46.9 = anti-selective admission) for an entry
-            # problem. Restore min_edge 0.50 -> 0.1; forward-test realized w/ realistic
-            # fills+fees. Re-disable only if ghost EV flips negative on recut.
             min_edge: 0.1
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1106,9 +998,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
-    # hype 5m BUY_NO is anti-selective (held-WR ~33% n=57, -$144 live); flip the
-    # inverted short to the +EV long in the shared sol loop. Forward-test 2026-06-11.
-    buy_no_5m_flip_to_yes: true
+    buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1190,8 +1080,8 @@ strategies:
     oracle_stale_basis_relax_max_bps: 75.0
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: false   # ghost 1h BUY_YES edge: flat/negative - leave off
-      entry_min: 0.50
+      enabled: false
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     entry_timing_window_15m_min: 2.0
@@ -1318,8 +1208,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
-    # 5m BUY_NO anti-selective (held-WR ~33% n=159, -$258 live); flip to +EV long. Forward-test 2026-06-11.
-    buy_no_5m_flip_to_yes: true
+    buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1354,7 +1243,7 @@ strategies:
         entry_window_max: 4.5
       15m:
         min_edge: 0.085
-        min_edge_buy_no: 0.50  # 2026-06-12: xrp 15m BUY_NO sat out (see entry_policy down)
+        min_edge_buy_no: 0.5
         entry_window_min: 2.0
         entry_window_max: 32.0
       1h:
@@ -1370,8 +1259,8 @@ strategies:
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: false   # ghost 1h BUY_YES edge: flat/negative - leave off
-      entry_min: 0.50
+      enabled: false
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
@@ -1427,12 +1316,6 @@ strategies:
     sell_5m_min_corr: 0.5
     5m_buy_yes_bullish_floor_bump: 0.22
     15m_buy_yes_bullish_floor_bump: 0.13
-    # xrp 1h LONG floor bump DISABLED 2026-06-10: ghost recut (ts>=2026-06-02,
-    # n=240 BULL & in-band) shows the in-band cohort is -18.5% EV, yet the 0.10
-    # bump was flipping 93% of its lane_min_edge rejects to admit — i.e. it was
-    # admitting a losing lane. bnb/sol/doge 1h bumps stay ON (+16 to +28% EV).
-    # Band keys left in place (inert while bump=0.0) for easy re-enable if a
-    # later recut finds a +EV xrp 1h sub-band.
     1h_buy_yes_bullish_floor_bump: 0.0
     1h_buy_yes_floor_price_min: 0.5
     1h_buy_yes_floor_price_max: 0.66
@@ -1506,10 +1389,7 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 32.0
           down:
-            # 2026-06-12: sit out xrp 15m BUY_NO. Current-era (06-12 only, n=20)
-            # held 30% WR / -$7.10; lane trades only the NO side and it is -EV.
-            # min_edge 0.06 -> 0.50 disables; revert if a +EV xrp 15m sub-band appears.
-            min_edge: 0.50
+            min_edge: 0.5
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0
@@ -1542,8 +1422,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
-    # 5m BUY_NO anti-selective (held-WR ~31% n=212, -$227 live); flip to +EV long. Forward-test 2026-06-11.
-    buy_no_5m_flip_to_yes: true
+    buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1597,8 +1476,8 @@ strategies:
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: true   # ghost 1h BUY_YES edge: strong (+EV)
-      entry_min: 0.50
+      enabled: true
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
@@ -1728,8 +1607,11 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
-    # 5m BUY_NO anti-selective (held-WR ~30% n=235, -$267 live); flip to +EV long. Forward-test 2026-06-11.
-    buy_no_5m_flip_to_yes: true
+    # 2026-06-14: sit out BNB BUY_YES — confirmed bleeder, 40% WR / -$67 over 113
+    # taken-settled trades (trades_settled.jsonl). Cuts the worst lane; UP calls on
+    # BNB are wrong. Re-enable if ghost/taken WR recovers above ~50%.
+    disable_buy_yes: true
+    buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
@@ -1768,10 +1650,6 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 10.0
       15m:
-        # 2026-06-12: controlled reopen for BNB 15m BUY_YES. 2026-06-13: BUY_NO
-        # also re-enabled — ghost recut (rejected set, n=2744) = +0.061 EV / 56% WR,
-        # the disable was rejecting winners. min_edge_buy_no 0.50 -> 0.06 (legacy
-        # path; entry_policy 15m.down also restored to 0.06, which wins).
         min_edge: 0.09
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
@@ -1788,8 +1666,8 @@ strategies:
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: true   # ghost 1h BUY_YES edge: strong (+EV)
-      entry_min: 0.50
+      enabled: true
+      entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06
     ai_updown_marginal_min_edge: 0.03
@@ -1884,7 +1762,6 @@ strategies:
             size_multiplier: 0.3
         15m:
           up:
-            # Controlled BNB 15m BUY_YES reopen.
             min_edge: 0.09
             entry_price_min: 0.42
             entry_price_max: 0.57
@@ -1892,14 +1769,6 @@ strategies:
             entry_window_max: 150.0
             size_multiplier: 0.3
           down:
-            # 2026-06-13: RE-ENABLED as SHADOW/forward-test (operator direction +
-            # lane_decision_sheet). The EXIT-ADJUSTED sheet rates BNB 15m BUY_NO
-            # SHADOW (shrunk EV +0.5, taken_n=12) — positive but too thin/unstable
-            # for a full GO (cf. eth 15m BUY_NO = GO, shrunk +4.0, n=53). So admit
-            # at min_edge 0.06 but throttle size_multiplier 0.3 to gather taken-trade
-            # exit data under realistic fills+fees. Promote to 1.0 if it earns a GO;
-            # re-disable if shrunk EV goes <= 0 on recut. Raw ghost alone (+0.061) is
-            # NOT sufficient — the exit layer governs live P&L.
             min_edge: 0.06
             size_multiplier: 0.3
             entry_price_min: 0.42
@@ -1937,13 +1806,11 @@ updown_composite:
   default_min_score: 0.62
   btc_neutral_15m_min_score: 0.68
   low_confidence_min_score: 0.66
-  # Targeted starvation relief. Keep global composite floors unchanged; only
-  # reduce the final floor for these strategy/window pairs.
   strategy_window_min_scores:
     bnb_macro:
       1h: 0.56
     doge_macro:
-      1h: 0.50
+      1h: 0.5
   regime_action_gate_enabled: false
   regime_action_min_convergence: 0.55
 ai:
@@ -1963,12 +1830,6 @@ ai:
     model: MiniMax-M3-highspeed
     api_key_secret: MINIMAX_API_KEY
     json_mode: true
-    # M3-highspeed scoping (2026-06-10): per-provider output budget so the
-    # model's reasoning/thinking blocks can't exhaust the global 1500 cap
-    # before it emits the JSON answer (that truncation = silent parse-fail =
-    # lost AI decision). Set to 4500 (M3-highspeed confirmed 4000+ capacity;
-    # base M3 docs cite 16-32K, so headroom exists if the highspeed cap allows).
-    # Only overrides minimax; fallbacks keep 1500.
     max_tokens: 4500
     timeout_seconds: 120
     cooldown_on_429_seconds: 60
@@ -1976,9 +1837,6 @@ ai:
     type: openai
     base_url: http://localhost:11434/v1
     local: true
-    # Fallback only — minimax (primary) carries the load. Was qwen2.5:14b, which
-    # is NOT installed → every fallback 404'd, so a single minimax blip cascaded to
-    # "all providers failed". Point at the model actually present on this box.
     models:
     - qwen3:8b
     json_mode: true
@@ -1990,11 +1848,6 @@ ai:
   cache_ttl: 600
   cache_ttl_15m: 180
   cache_ttl_5m: 60
-  # min_call_gap is awaited INSIDE analyze_market, i.e. inside the strategy's
-  # ai_*_timeout_sec budget — so a large gap made queued MiniMax calls time out on
-  # OUR clock, not MiniMax's. 2.0s (worst-case ~12s queue at depth 6) was eating
-  # the 15s BTC budget. Dropped to 0.5 (MiniMax handles the throughput; the 429
-  # cooldown is the real backstop if we ever overrun).
   min_call_gap: 0.5
   max_queue_depth: 6
   decision_broker:
@@ -2098,8 +1951,6 @@ term_risk:
     MID_TERM: 0.02
     LONG_TERM: 0.02
 exposure:
-  # Pinned to ~$6/trade across all tiers for the live Olympus calibration run
-  # (2026-06-13, ~$88 bankroll). Restore 25/15/8 + 15/15/5 floors for normal sizing.
   full_size: 6.0
   moderate_size: 6.0
   minimal_size: 6.0
@@ -2107,7 +1958,7 @@ exposure:
   full_min_trade_usd: 6.0
   moderate_min_trade_usd: 6.0
   minimal_min_trade_usd: 6.0
-  loss_kill_switch_enabled: true   # halt a lane after a loss streak during the live run
+  loss_kill_switch_enabled: false
   max_consecutive_losses: 3
   pause_cycles: 2
   max_pause_cycles: 4
@@ -2231,7 +2082,7 @@ logging:
 dashboard:
   enabled: true
   host: 127.0.0.1
-  dashboard_port: 8081
+  dashboard_port: 8082
   auto_sol5_backtest_on_startup: false
   auto_sol5_backtest_on_reset: false
 lane_direction_fsm_active: false
