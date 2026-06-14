@@ -77,6 +77,7 @@ class Order:
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime = None
     updated_at: datetime = None
+    execution: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.created_at is None:
@@ -164,6 +165,22 @@ class CLOBClient:
             (self._root_config.get("trading") or {}).get("execution_provider") or "clob"
         ).lower()
         self.olympus_client = OlympusClient(self._root_config)
+        olympus_cfg = (self._root_config.get("olympus") or {}) if self._root_config else {}
+        olympus_smoke_cfg = (
+            (olympus_cfg.get("smoke_test") or {}) if isinstance(olympus_cfg, dict) else {}
+        )
+        self._olympus_await_fill_on_submit = bool(
+            olympus_cfg.get(
+                "await_fill_on_submit",
+                bool(olympus_smoke_cfg.get("enabled", False)),
+            )
+        )
+        self._olympus_fill_poll_attempts = int(
+            olympus_cfg.get("fill_poll_attempts", 12) or 12
+        )
+        self._olympus_fill_poll_interval_sec = float(
+            olympus_cfg.get("fill_poll_interval_sec", 1.0) or 1.0
+        )
 
     def using_olympus(self) -> bool:
         return self._execution_provider == "olympus"
@@ -175,6 +192,186 @@ class CLOBClient:
         self, api_key: Optional[str], base_url: Optional[str] = None
     ) -> None:
         self.olympus_client.set_api_key(api_key, base_url)
+
+    @staticmethod
+    def _olympus_execution_report(
+        payload: Optional[Dict[str, Any]],
+        *,
+        requested_price: Optional[float] = None,
+        requested_size: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Extract whitelisted fill-quality fields from an Olympus status payload.
+
+        The raw payload may include account identifiers or other broker metadata,
+        so only known execution fields are propagated into logs/journals.
+        """
+        if not isinstance(payload, dict):
+            return {}
+
+        def _first_float(*keys: str) -> Optional[float]:
+            for key in keys:
+                raw = payload.get(key)
+                if raw is None:
+                    continue
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    continue
+            return None
+
+        status = str(payload.get("status") or "").upper() or None
+        report: Dict[str, Any] = {
+            "execution_provider": "olympus",
+            "olympus_status": status,
+        }
+        filled_price = _first_float(
+            "filledPrice",
+            "averageFillPrice",
+            "avgFillPrice",
+            "avgPrice",
+            "price",
+        )
+        filled_size = _first_float(
+            "filledSharesNormalized",
+            "filledSize",
+            "sharesNormalized",
+            "size",
+        )
+        spent_usd = _first_float("spentUsd", "filledAmountUsd", "amountUsd")
+        requested_amount_usd = _first_float("requestedAmountUsd", "amountUsd")
+        fee_usdc = _first_float("feeUsd", "feesUsd", "totalFeeUsd", "fee")
+        for key, value in (
+            ("olympus_filled_price", filled_price),
+            ("olympus_filled_size", filled_size),
+            ("olympus_spent_usd", spent_usd),
+            ("olympus_requested_amount_usd", requested_amount_usd),
+            ("olympus_fee_usdc", fee_usdc),
+        ):
+            if value is not None:
+                report[key] = round(value, 8)
+        if requested_price is not None:
+            try:
+                report["olympus_requested_price"] = round(float(requested_price), 8)
+            except (TypeError, ValueError):
+                pass
+        if requested_size is not None:
+            try:
+                report["olympus_requested_size"] = round(float(requested_size), 8)
+            except (TypeError, ValueError):
+                pass
+        if filled_price is not None and requested_price not in (None, 0):
+            try:
+                report["olympus_price_delta"] = round(
+                    float(filled_price) - float(requested_price), 8
+                )
+            except (TypeError, ValueError):
+                pass
+        failure_report = CLOBClient._olympus_failure_report(payload)
+        if failure_report:
+            report.update(failure_report)
+        return {k: v for k, v in report.items() if v is not None}
+
+    @staticmethod
+    def _olympus_failure_report(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Extract bounded, redacted failure diagnostics from Olympus status payloads."""
+        if not isinstance(payload, dict):
+            return {}
+
+        def _find_value(*keys: str) -> Optional[Any]:
+            for key in keys:
+                if key in payload and payload.get(key) not in (None, ""):
+                    return payload.get(key)
+            nested = payload.get("error")
+            if isinstance(nested, dict):
+                for key in keys:
+                    if key in nested and nested.get(key) not in (None, ""):
+                        return nested.get(key)
+            return None
+
+        code = _find_value(
+            "errorCode",
+            "failureCode",
+            "rejectCode",
+            "reasonCode",
+            "code",
+        )
+        reason = _find_value(
+            "failureReason",
+            "rejectReason",
+            "statusReason",
+            "reason",
+            "message",
+            "detail",
+        )
+        report: Dict[str, Any] = {}
+        if code is not None:
+            report["olympus_failure_code"] = OlympusClient.redact_diagnostic_text(
+                code,
+                max_len=80,
+            )
+        if reason is not None:
+            report["olympus_failure_reason"] = OlympusClient.redact_diagnostic_text(
+                reason,
+                max_len=180,
+            )
+        return report
+
+    @staticmethod
+    def _format_olympus_failure_for_log(order: Order) -> str:
+        status = str(order.execution.get("olympus_status") or order.status.value).upper()
+        code = order.execution.get("olympus_failure_code") or "unknown"
+        reason = order.execution.get("olympus_failure_reason") or "unknown"
+        return f"status={status} code={code} reason={reason}"
+
+    def _update_olympus_order_execution(
+        self,
+        order_id: str,
+        status_payload: Dict[str, Any],
+    ) -> Optional[Order]:
+        order = self.pending_orders.get(order_id)
+        if order is None:
+            return None
+        order.execution.update(
+            self._olympus_execution_report(
+                status_payload,
+                requested_price=order.price,
+                requested_size=order.size,
+            )
+        )
+        if "olympus_status_history" not in order.execution:
+            order.execution["olympus_status_history"] = []
+        status = order.execution.get("olympus_status")
+        if status and status not in order.execution["olympus_status_history"]:
+            order.execution["olympus_status_history"].append(status)
+        filled_price = order.execution.get("olympus_filled_price")
+        filled_size = order.execution.get("olympus_filled_size")
+        if isinstance(filled_price, (int, float)):
+            order.price = float(filled_price)
+        if isinstance(filled_size, (int, float)) and filled_size > 0:
+            order.filled_size = float(filled_size)
+        order.updated_at = datetime.now()
+        return order
+
+    async def _await_olympus_terminal_order(self, order: Order) -> Order:
+        for _ in range(max(0, self._olympus_fill_poll_attempts)):
+            await asyncio.sleep(max(0.0, self._olympus_fill_poll_interval_sec))
+            try:
+                payload = await self.olympus_client.get_trade_status(order.order_id)
+            except Exception as exc:
+                logger.error(
+                    "Error polling Olympus trade status: %s",
+                    exc,
+                )
+                break
+            self._update_olympus_order_execution(order.order_id, payload)
+            status = str(payload.get("status") or "").upper()
+            if status == "SUCCEEDED":
+                order.status = OrderStatus.FILLED
+                return order
+            if status == "FAILED":
+                order.status = OrderStatus.FAILED
+                return order
+        return order
 
     @staticmethod
     def live_execution_supported() -> bool:
@@ -412,6 +609,38 @@ class CLOBClient:
             logger.error("Could not parse Polymarket wallet bankroll payload: %s", payload)
         return balance
 
+    async def get_account_value(self) -> Optional[float]:
+        """Total account value for the bankroll (cash + open-position value).
+
+        On Olympus this is the dashboard EQUITY figure, so the bot's bankroll
+        matches what the user sees and stays accurate when positions are open.
+        Direct CLOB has no single equity endpoint, so it falls back to cash.
+        """
+        if self.using_olympus():
+            try:
+                portfolio = await self.olympus_client.get_portfolio()
+            except Exception as exc:
+                logger.error("Error fetching Olympus account equity: %s", exc)
+                return None
+            equity = self.olympus_client.equity_from_portfolio(portfolio)
+            if equity is None:
+                logger.error("Could not parse Olympus equity payload: %s", portfolio)
+            return equity
+        return await self.get_cash_balance()
+
+    async def olympus_open_condition_ids(self) -> Optional[set]:
+        """conditionIds of positions currently OPEN on Olympus, for journal
+        reconciliation. Returns None on fetch failure so callers can fail SAFE
+        (keep positions) rather than wrongly dropping them."""
+        if not self.using_olympus():
+            return None
+        try:
+            portfolio = await self.olympus_client.get_portfolio()
+        except Exception as exc:
+            logger.error("Error fetching Olympus positions for reconcile: %s", exc)
+            return None
+        return self.olympus_client.open_condition_ids_from_portfolio(portfolio)
+
     async def place_order(
         self,
         token_id: str,
@@ -484,6 +713,12 @@ class CLOBClient:
             except Exception as exc:
                 logger.error("Olympus order blocked/failed: %s", exc)
                 return None
+            initial_execution = {
+                "execution_provider": "olympus",
+                "olympus_status": str(response.status or "").upper() or None,
+                "olympus_requested_price": round(float(price), 8),
+                "olympus_requested_size": round(float(size), 8),
+            }
             order = Order(
                 order_id=response.trade_id,
                 market_id=market_id or "",
@@ -493,16 +728,26 @@ class CLOBClient:
                 price=price,
                 size=size,
                 status=OrderStatus.PENDING,
+                execution={k: v for k, v in initial_execution.items() if v is not None},
             )
             self.pending_orders[order.order_id] = order
+            response_raw = getattr(response, "raw", None)
+            if isinstance(response_raw, dict):
+                self._update_olympus_order_execution(order.order_id, response_raw)
+            if self._olympus_await_fill_on_submit:
+                order = await self._await_olympus_terminal_order(order)
+                if order.status == OrderStatus.FAILED:
+                    logger.error(
+                        "Olympus trade failed before journaling: %s",
+                        self._format_olympus_failure_for_log(order),
+                    )
+                    return None
             self.order_history.append(order)
             if len(self.order_history) > self._max_order_history:
                 self.order_history = self.order_history[-self._max_order_history :]
             logger.info(
-                "Olympus trade queued: trade_id=%s side=%s token=%s",
-                response.trade_id,
+                "Olympus trade queued: side=%s provider=olympus",
                 side,
-                token_id[:20],
             )
             return order
 
@@ -742,16 +987,22 @@ class CLOBClient:
             try:
                 data = await self.olympus_client.get_trade_status(order_id)
             except Exception as exc:
-                logger.error("Error getting Olympus trade status for %s: %s", order_id, exc)
+                logger.error("Error getting Olympus trade status: %s", exc)
                 return None
             status = str(data.get("status") or "").upper()
             if status == "SUCCEEDED":
+                self._update_olympus_order_execution(order_id, data)
                 return OrderStatus.FILLED
             if status == "FAILED":
+                self._update_olympus_order_execution(order_id, data)
                 return OrderStatus.FAILED
             if status in {"QUEUED", "PROCESSING"}:
+                self._update_olympus_order_execution(order_id, data)
                 return OrderStatus.PENDING
-            logger.warning("Unknown Olympus trade status for %s: %s", order_id, data)
+            logger.warning(
+                "Unknown Olympus trade status: %s",
+                self._olympus_failure_report(data) or {"status": data.get("status")},
+            )
             return None
         if not self.client:
             logger.error("CLOB client not initialized.")
@@ -929,19 +1180,32 @@ class CLOBClient:
         if dry_run := self._root_config.get("trading", {}).get("dry_run", True):
             return True
 
-        if not self.client:
-            logger.error("[can_sell_token] CLOB client not initialized — refusing live trade")
+        pc = self._py_client_for_public_reads()
+        if not pc:
+            logger.error("[can_sell_token] CLOB public-read client unavailable — refusing live trade")
             return False
 
         try:
             loop = asyncio.get_event_loop()
             book = await loop.run_in_executor(
-                None, lambda: self.client.get_order_book(token_id)
+                None, lambda: pc.get_order_book(token_id)
             )
             bids = book.get("bids", []) or []
             asks = book.get("asks", []) or []
-            bid_count = sum(1 for b in bids if isinstance(b, dict) and b.get("price", 0) > 0)
-            ask_count = sum(1 for a in asks if isinstance(a, dict) and a.get("price", 0) > 0)
+            def _positive_price_count(levels: Any) -> int:
+                count = 0
+                for level in levels:
+                    if not isinstance(level, dict):
+                        continue
+                    try:
+                        if float(level.get("price", 0) or 0) > 0:
+                            count += 1
+                    except (TypeError, ValueError):
+                        continue
+                return count
+
+            bid_count = _positive_price_count(bids)
+            ask_count = _positive_price_count(asks)
             logger.debug(
                 f"[can_sell_token] {market_id[:20]} token={token_id[:20]} "
                 f"bids={bid_count} asks={ask_count}"
@@ -974,19 +1238,34 @@ class CLOBClient:
             summary = await loop.run_in_executor(
                 None, lambda: pc.get_order_book(token_id)
             )
-            bids = [
-                {"price": float(o.price), "size": float(o.size)}
-                for o in (summary.bids or [])
-            ]
-            asks = [
-                {"price": float(o.price), "size": float(o.size)}
-                for o in (summary.asks or [])
-            ]
+
+            # py-clob-client v2 returns a dict; v1 returned a BookSummary object.
+            # Normalize both shapes so order-book-dependent UI doesn't break.
+            if isinstance(summary, dict):
+                raw_bids = summary.get("bids") or []
+                raw_asks = summary.get("asks") or []
+                asset_id = summary.get("asset_id")
+                market = summary.get("market")
+                timestamp = summary.get("timestamp")
+            else:
+                raw_bids = getattr(summary, "bids", None) or []
+                raw_asks = getattr(summary, "asks", None) or []
+                asset_id = getattr(summary, "asset_id", None)
+                market = getattr(summary, "market", None)
+                timestamp = getattr(summary, "timestamp", None)
+
+            def _normalize_order(o):
+                if isinstance(o, dict):
+                    return {"price": float(o.get("price", 0)), "size": float(o.get("size", 0))}
+                return {"price": float(getattr(o, "price", 0)), "size": float(getattr(o, "size", 0))}
+
+            bids = [_normalize_order(o) for o in raw_bids]
+            asks = [_normalize_order(o) for o in raw_asks]
             return {
                 "token_id": token_id,
-                "asset_id": getattr(summary, "asset_id", None),
-                "market": getattr(summary, "market", None),
-                "timestamp": getattr(summary, "timestamp", None),
+                "asset_id": asset_id,
+                "market": market,
+                "timestamp": timestamp,
                 "bids": bids,
                 "asks": asks,
             }

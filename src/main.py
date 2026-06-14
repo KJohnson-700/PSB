@@ -414,16 +414,24 @@ class PolyBot:
         # Resume only if PAPER_SESSION_ID is explicitly set to an existing session name.
         _forced_session = os.environ.get("PAPER_SESSION_ID")
         _resume_session = os.environ.get("PAPER_RESUME_SESSION", "false").lower() in ("1", "true", "yes")
+        # LIVE mode resumes the latest session so a restart never ORPHANS open
+        # positions (they're reconciled against the venue right after startup). dry_run
+        # isn't applied to config until after __init__, so detect live via argv here.
+        _live_mode = "--live" in sys.argv
         if _forced_session and not _resume_session:
             # Explicit session name given — use it (e.g. PAPER_SESSION_ID=reset_20260416)
             self.journal = TradeJournal(session_id=_forced_session, resume_latest=False)
             self._fresh_session_created = False
             logging.info(f"Forced session via PAPER_SESSION_ID={_forced_session}")
-        elif _resume_session:
-            # Opt-in to resume: PAPER_RESUME_SESSION=true + no session name
+        elif _resume_session or _live_mode:
+            # Resume latest: PAPER_RESUME_SESSION=true, or any live run (no orphans).
             self.journal = TradeJournal(resume_latest=True)
             self._fresh_session_created = False
-            logging.info(f"Resuming latest session: {self.journal.session_id}")
+            logging.info(
+                "Resuming latest session (%s mode): %s",
+                "live" if _live_mode else "resume-opt-in",
+                self.journal.session_id,
+            )
         else:
             # Default: fresh session every restart (process lifecycle = test cycle)
             new_id = datetime.now().strftime("test_%Y%m%d_%H%M%S")
@@ -1371,8 +1379,10 @@ class PolyBot:
         if self.config.get("trading", {}).get("dry_run", True):
             return False
         try:
+            # Use total account VALUE (cash + open positions = Olympus EQUITY) so the
+            # bankroll matches what's actually in the account, not just free cash.
             balance = await asyncio.wait_for(
-                self.clob_client.get_cash_balance(),
+                self.clob_client.get_account_value(),
                 timeout=float(self.config.get("trading", {}).get("wallet_balance_timeout_sec", 10)),
             )
         except asyncio.TimeoutError:
@@ -1390,6 +1400,63 @@ class PolyBot:
         self.risk_manager.bankroll = self.bankroll
         logging.info("Live bankroll refreshed from Polymarket wallet: $%s", f"{self.bankroll:,.2f}")
         return True
+
+    async def reconcile_open_positions_with_venue(self) -> None:
+        """Reconcile resumed journal positions against the live venue (Olympus).
+
+        On a live restart the journal is resumed with its open positions; this drops
+        any that are no longer open on the venue (resolved or manually closed) so the
+        bot never tries to sell shares it doesn't hold, and keeps the ones still open
+        (the bot manages their exits). Fail-SAFE: if the venue fetch fails we change
+        nothing — a harmless rejected sell beats wrongly abandoning a real position.
+        """
+        if self.config.get("trading", {}).get("dry_run", True):
+            return
+        if not self.clob_client.using_olympus():
+            return
+        live_cids = await self.clob_client.olympus_open_condition_ids()
+        if live_cids is None:
+            logging.warning(
+                "Position reconcile skipped: could not fetch Olympus portfolio "
+                "(keeping all journal positions)."
+            )
+            return
+
+        def _cid(pos: dict) -> str:
+            return str(
+                pos.get("condition_id")
+                or (pos.get("entry_signal") or {}).get("condition_id")
+                or ""
+            ).lower()
+
+        kept = dropped = 0
+        for pos in list(self.journal.get_open_positions()):
+            tid = pos.get("trade_id")
+            if _cid(pos) and _cid(pos) in live_cids:
+                kept += 1
+                continue
+            dropped += 1
+            self.journal.open_positions.pop(tid, None)
+            try:
+                self.risk_manager.active_positions.pop(tid, None)
+            except Exception:
+                pass
+            logging.info(
+                "Reconcile: dropped phantom position %s (%s) — not open on Olympus.",
+                tid, str(pos.get("market_question"))[:40],
+            )
+        journal_cids = {_cid(p) for p in self.journal.get_open_positions()}
+        unmanaged = [c for c in live_cids if c not in journal_cids]
+        logging.info(
+            "Olympus position reconcile: kept=%d dropped_phantom=%d olympus_unmanaged=%d",
+            kept, dropped, len(unmanaged),
+        )
+        if unmanaged:
+            logging.warning(
+                "Olympus has %d open position(s) the bot is NOT tracking "
+                "(manual/pre-restart) — manage these yourself: %s",
+                len(unmanaged), [c[:14] for c in unmanaged],
+            )
 
     async def ensure_live_credentials_ready(self) -> bool:
         """
@@ -4422,6 +4489,11 @@ async def main():
             getattr(bot, "bankroll_source", "unknown"),
         )
         sys.exit(1)
+
+    # Live restart: reconcile resumed journal positions against the venue so we
+    # never orphan a real position or chase a phantom one (and the bot's view
+    # matches the Olympus account that set the bankroll above).
+    await bot.reconcile_open_positions_with_venue()
 
     from src.ai_status import compute_ai_status, format_ai_log_line
 
