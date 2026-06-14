@@ -2284,6 +2284,11 @@ class PolyBot:
                             return
 
                 if order:
+                    order_execution = (
+                        dict(getattr(order, "execution", {}) or {})
+                        if not isinstance(order, bool)
+                        else {}
+                    )
                     logging.info(
                         f"EXIT {exit_decision.reason}: {exit_decision.position_id[:12]} "
                         f"PnL=${exit_decision.unrealized_pnl:+.2f}"
@@ -2326,6 +2331,7 @@ class PolyBot:
                             "fill_slippage_pct": getattr(exit_decision, "fill_slippage_pct", None),
                             "fill_fee_usdc": getattr(exit_decision, "fill_fee_usdc", None),
                             "fill_fee_rate": getattr(exit_decision, "fill_fee_rate", None),
+                            **order_execution,
                         },
                     )
                     self.circuit_breakers.record_exit(
@@ -3170,6 +3176,7 @@ class PolyBot:
         token_id: str,
         side: str,
         intended_price: float,
+        requested_size: Optional[float] = None,
         strategy: str,
         decision: Any,
         market_question: str,
@@ -3179,9 +3186,9 @@ class PolyBot:
         Between scan and place_order the CLOB book can move. We re-read the live
         book for the token we are about to BUY and compare best_ask to the price
         we are about to send (signal.price). If the ask has moved more than
-        ``max_slippage_cents`` above our price, a post-only order would rest
-        without filling (or a crossing order would slip) — skip rather than place
-        a stale-priced order.
+        ``max_slippage_cents`` above our price, or the spread/depth are too weak
+        for the configured smoke-test constraints, skip rather than place a stale
+        or thin-book order.
 
         Returns True to proceed, False to skip. No-op while dry_run (paper fills
         are priced by fiat — never suppress calibration trades) and for SELL legs.
@@ -3199,8 +3206,29 @@ class PolyBot:
         try:
             tol = float(cfg.get("max_slippage_cents", 0.02))
             mode = str(cfg.get("mode", "observe")).strip().lower()
+            max_spread = float(cfg.get("max_spread_cents", 0.03))
+            require_full_depth = bool(cfg.get("require_full_depth", True))
+            depth_ceiling = float(cfg.get("depth_price_ceiling_cents", 0.0))
             book = await self.clob_client.fetch_order_book_snapshot(token_id)
+            bids = (book or {}).get("bids") or []
             asks = (book or {}).get("asks") or []
+            bid_levels = sorted(
+                (
+                    (float(b["price"]), float(b.get("size", 0)))
+                    for b in bids
+                    if float(b.get("price", 0)) > 0 and float(b.get("size", 0)) > 0
+                ),
+                key=lambda lvl: lvl[0],
+                reverse=True,
+            )
+            ask_levels = sorted(
+                (
+                    (float(a["price"]), float(a.get("size", 0)))
+                    for a in asks
+                    if float(a.get("price", 0)) > 0 and float(a.get("size", 0)) > 0
+                ),
+                key=lambda lvl: lvl[0],
+            )
             best_ask = min(
                 (float(a["price"]) for a in asks if float(a.get("price", 0)) > 0),
                 default=None,
@@ -3212,17 +3240,44 @@ class PolyBot:
                     token_id[:20],
                 )
                 return True
+            best_bid = bid_levels[0][0] if bid_levels else None
             slip = best_ask - float(intended_price)
-            if slip <= tol:
+            spread = None if best_bid is None else best_ask - best_bid
+            depth_limit = float(intended_price) + depth_ceiling
+            depth_at_limit = sum(size for price, size in ask_levels if price <= depth_limit)
+
+            block_reason = None
+            block_detail = ""
+            if slip > tol:
+                block_reason = "buy_slippage_block"
+                block_detail = f"slip={slip:+.4f} tol={tol:.4f}"
+            elif spread is not None and spread > max_spread:
+                block_reason = "buy_spread_block"
+                block_detail = f"spread={spread:.4f} max_spread={max_spread:.4f}"
+            elif (
+                require_full_depth
+                and requested_size is not None
+                and float(requested_size) > 0
+                and depth_at_limit + 1e-9 < float(requested_size)
+            ):
+                block_reason = "buy_depth_block"
+                block_detail = (
+                    f"depth_at_limit={depth_at_limit:.4f} requested={float(requested_size):.4f} "
+                    f"limit={depth_limit:.4f}"
+                )
+
+            if block_reason is None:
                 return True
-            msg = (
-                f"{strategy} slippage-guard {mode}: best_ask={best_ask:.4f} "
-                f"intended={float(intended_price):.4f} slip={slip:+.4f} "
-                f"tol={tol:.4f} '{market_question[:40]}'"
+
+            best_bid_msg = f"{best_bid:.4f}" if best_bid is not None else "NA"
+            msg = f"{strategy} slippage-guard {mode}: best_bid={best_bid_msg}"
+            msg += (
+                f" best_ask={best_ask:.4f} intended={float(intended_price):.4f} "
+                f"{block_detail} '{market_question[:40]}'"
             )
             if mode == "enforce":
                 logging.warning("%s — SKIP", msg)
-                self._log_decision_skip(decision, "buy_slippage_block")
+                self._log_decision_skip(decision, block_reason)
                 return False
             logging.info("%s — observe (proceeding)", msg)
             return True
@@ -3431,6 +3486,12 @@ class PolyBot:
             return
         token_id, side = intent
 
+        if side == "BUY":
+            order_size = final_size / max(0.01, signal.price)
+        else:
+            order_size = final_size / max(0.01, 1.0 - signal.price)
+        pos_size = order_size
+
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # Before placing any order, verify the position can be exited.
         # BUY_YES / BUY_NO: test the token we are acquiring; SELL_YES tests YES.
@@ -3448,6 +3509,7 @@ class PolyBot:
             token_id=token_id,
             side=side,
             intended_price=signal.price,
+            requested_size=order_size,
             strategy="bitcoin",
             decision=decision,
             market_question=signal.market_question,
@@ -3457,12 +3519,6 @@ class PolyBot:
         logging.info(
             f"Executing BITCOIN trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
         )
-        if side == "BUY":
-            order_size = final_size / max(0.01, signal.price)
-        else:
-            order_size = final_size / max(0.01, 1.0 - signal.price)
-        pos_size = order_size
-
         order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
@@ -3486,15 +3542,28 @@ class PolyBot:
         )
 
         if order and hasattr(order, "order_id"):
+            # Record the ACTUAL filled share count, not the requested size. Olympus
+            # (and marketable CLOB) can fill at a better price -> more shares; using
+            # the requested size left an unsold residual on every exit (the bot's
+            # sell closed fewer shares than it held, orphaning the remainder).
+            # order.filled_size is the real position quantity after the fill.
+            try:
+                _filled_sz = float(getattr(order, "filled_size", 0) or 0)
+            except (TypeError, ValueError):
+                _filled_sz = 0.0
+            if _filled_sz > 0:
+                pos_size = _filled_sz
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
+            entry_fill_price = float(getattr(order, "price", signal.price) or signal.price)
+            order_execution = dict(getattr(order, "execution", {}) or {})
             position = Position(
                 position_id=order.order_id,
                 market_id=signal.market_id,
                 market_question=signal.market_question,
                 outcome=outcome,
                 size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
+                entry_price=entry_fill_price,
+                current_price=entry_fill_price,
                 pnl=0.0,
                 opened_at=datetime.now(),
                 end_date=signal.end_date,
@@ -3517,6 +3586,7 @@ class PolyBot:
                     "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
+                    **order_execution,
                 }),
                 condition_id=str(getattr(signal, "condition_id", "") or ""),
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
@@ -3533,7 +3603,7 @@ class PolyBot:
                 side=side,
                 outcome=outcome,
                 size=pos_size,
-                entry_price=signal.price,
+                entry_price=entry_fill_price,
                 bankroll=self.bankroll,
                 edge=signal.edge,
                 confidence=signal.confidence,
@@ -3579,6 +3649,7 @@ class PolyBot:
                     "direction": signal.direction,
                     "btc_threshold": signal.btc_threshold,
                     "signal_reason": signal.reason,
+                    **order_execution,
                     **lane_meta,
                 },
                 market_end_at=signal.end_date,
@@ -3698,6 +3769,12 @@ class PolyBot:
             return
         token_id, side = intent
 
+        if side == "BUY":
+            order_size = final_size / max(0.01, signal.price)
+        else:
+            order_size = final_size / max(0.01, 1.0 - signal.price)
+        pos_size = order_size
+
         # ── T1-1: Unsellable token guard ─────────────────────────────────────
         # BUY_YES / SELL_YES / BUY_NO — test the token we hold after fill (YES for sell-yes, else buy leg).
         token_to_test = token_id
@@ -3714,6 +3791,7 @@ class PolyBot:
             token_id=token_id,
             side=side,
             intended_price=signal.price,
+            requested_size=order_size,
             strategy=strat,
             decision=decision,
             market_question=signal.market_question,
@@ -3723,12 +3801,6 @@ class PolyBot:
         logging.info(
             f"Executing {strat} trade: {signal.action} {final_size:.2f} @ {signal.price} ({signal.direction})"
         )
-        if side == "BUY":
-            order_size = final_size / max(0.01, signal.price)
-        else:
-            order_size = final_size / max(0.01, 1.0 - signal.price)
-        pos_size = order_size
-
         order = await self.clob_client.place_entry_order(
             token_id=token_id,
             side=side,
@@ -3752,7 +3824,20 @@ class PolyBot:
         )
 
         if order and hasattr(order, "order_id"):
+            # Record the ACTUAL filled share count, not the requested size. Olympus
+            # (and marketable CLOB) can fill at a better price -> more shares; using
+            # the requested size left an unsold residual on every exit (the bot's
+            # sell closed fewer shares than it held, orphaning the remainder).
+            # order.filled_size is the real position quantity after the fill.
+            try:
+                _filled_sz = float(getattr(order, "filled_size", 0) or 0)
+            except (TypeError, ValueError):
+                _filled_sz = 0.0
+            if _filled_sz > 0:
+                pos_size = _filled_sz
             outcome = "YES" if signal.action == "BUY_YES" else "NO"
+            entry_fill_price = float(getattr(order, "price", signal.price) or signal.price)
+            order_execution = dict(getattr(order, "execution", {}) or {})
             _entry_reason = f"{_entry_reason} | {signal.reason[:120]}"
             position = Position(
                 position_id=order.order_id,
@@ -3760,8 +3845,8 @@ class PolyBot:
                 market_question=signal.market_question,
                 outcome=outcome,
                 size=pos_size,
-                entry_price=signal.price,
-                current_price=signal.price,
+                entry_price=entry_fill_price,
+                current_price=entry_fill_price,
                 pnl=0.0,
                 opened_at=datetime.now(),
                 end_date=signal.end_date,
@@ -3787,6 +3872,7 @@ class PolyBot:
                     "momentum_side": getattr(signal, "momentum_side", None),
                     "convergence_score": getattr(signal, "convergence_score", None),
                     "entry_volatility": getattr(signal, "entry_volatility", None),
+                    **order_execution,
                 }),
                 condition_id=str(getattr(signal, "condition_id", "") or ""),
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
@@ -3803,7 +3889,7 @@ class PolyBot:
                 side=side,
                 outcome=outcome,
                 size=pos_size,
-                entry_price=signal.price,
+                entry_price=entry_fill_price,
                 bankroll=self.bankroll,
                 edge=signal.edge,
                 confidence=signal.confidence,
@@ -3851,6 +3937,7 @@ class PolyBot:
                     # Learning context: direction and full signal reason
                     "direction": signal.direction,
                     "signal_reason": signal.reason,
+                    **order_execution,
                     **lane_meta,
                 },
                 market_end_at=signal.end_date,
