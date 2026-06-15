@@ -50,7 +50,41 @@ class OlympusClient:
         self.smoke_max_orders_per_run = int(smoke_cfg.get("max_orders_per_run", 1) or 1)
         self.smoke_require_market_slug = bool(smoke_cfg.get("require_market_slug", True))
         self.smoke_require_condition_id = bool(smoke_cfg.get("require_condition_id", True))
+        # Live-order sizing profile (smoke band). Paper sizing is decided upstream by
+        # Kelly and is NOT touched here — only the live BUY notional submitted to Olympus
+        # gets proportionally shrunk into the smoke band so it clears the cap while still
+        # scaling with conviction (a bigger true-Kelly stake → bigger live order, capped).
+        trading_cfg = (config.get("trading") or {}) if config else {}
+        self.smoke_scale_live_sizing = bool(smoke_cfg.get("scale_live_sizing", True))
+        self.smoke_scale_floor_usd = float(smoke_cfg.get("scale_floor_usd", 1.0) or 1.0)
+        self.smoke_true_max_usd = float(trading_cfg.get("max_position_size", 0.0) or 0.0)
+        # Defense-in-depth: the smoke cap is a LIVE-only broker safety. CLOBClient
+        # short-circuits paper (dry_run) before reaching Olympus, so this guard
+        # should never fire in paper — but we keep it explicit so any future path
+        # that routes paper through submit_trade fails loud instead of silently
+        # capping a paper fill. Defaults to True (paper) to match src/main.py.
+        self._is_dry_run = bool(trading_cfg.get("dry_run", True))
         self._submitted_orders_this_run = 0
+
+    def _smoke_scaled_buy_notional(self, notional: float) -> float:
+        """Shrink a live BUY's dollar notional into the smoke band, preserving
+        relative conviction.
+
+        Maps the true-Kelly notional range [0, max_position_size] onto
+        [0, smoke_max_order_usd] by a flat factor, then floors at scale_floor_usd
+        and hard-clamps at the cap. Returns the notional unchanged when scaling is
+        off or inputs are degenerate. No-op outside smoke mode (so full live runs
+        submit true Kelly).
+        """
+        if not (self.smoke_test_enabled and self.smoke_scale_live_sizing):
+            return notional
+        if notional <= 0 or self.smoke_true_max_usd <= 0:
+            return notional
+        factor = self.smoke_max_order_usd / self.smoke_true_max_usd
+        scaled = notional * factor
+        scaled = max(scaled, min(self.smoke_scale_floor_usd, self.smoke_max_order_usd))
+        scaled = min(scaled, self.smoke_max_order_usd)
+        return scaled
 
     @staticmethod
     def enabled(config: dict[str, Any]) -> bool:
@@ -73,6 +107,15 @@ class OlympusClient:
     def _enforce_smoke_limits(self, payload: dict[str, Any]) -> None:
         if not self.smoke_test_enabled:
             return
+        # Must come AFTER the enabled-check: a paper call with smoke disabled is a
+        # no-op, not a routing bug. If we reach here in dry_run, paper was routed
+        # through live submission — fail loud rather than cap a paper fill.
+        if self._is_dry_run:
+            raise RuntimeError(
+                "Olympus smoke-test guard called in dry_run (paper) mode — this is "
+                "a routing bug. CLOBClient.place_order must not call submit_trade "
+                "in paper mode."
+            )
         if self._submitted_orders_this_run >= self.smoke_max_orders_per_run:
             raise RuntimeError(
                 "Olympus smoke-test order limit reached: "
@@ -266,6 +309,13 @@ class OlympusClient:
                 "Olympus live order blocked: set olympus.live_order_approved=true "
                 f"or OLYMPUS_LIVE_ORDER_APPROVAL={self.approval_phrase}."
             )
+        # Smoke-band sizing: shrink only the LIVE BUY notional into the configured
+        # band (paper sizing upstream is untouched). No-op when scaling/smoke off.
+        if str(payload.get("side") or "").upper() == "BUY":
+            raw_notional = float(payload.get("amountUsd") or 0.0)
+            scaled = self._smoke_scaled_buy_notional(raw_notional)
+            if scaled != raw_notional:
+                payload["amountUsd"] = round(scaled, 6)
         self._enforce_smoke_limits(payload)
         loop = asyncio.get_event_loop()
         data = await loop.run_in_executor(

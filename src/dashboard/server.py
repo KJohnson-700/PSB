@@ -3081,12 +3081,47 @@ async def get_live_drift():
 _bot_process: Optional[subprocess.Popen] = None
 
 
+def _running_bot_pid() -> Optional[int]:
+    """Return the PID of a live bot if one is running, else None.
+
+    Reconciles the two ways a bot can exist so the dashboard never goes blind to
+    a bot it did not personally spawn (supervisor / split-process mode) and never
+    double-spawns onto the same account:
+      1) the in-memory Popen handle from /api/live/start, and
+      2) the cross-process runtime-status PID file the bot writes itself.
+    """
+    proc = _bot_process
+    if proc is not None and proc.poll() is None:
+        return proc.pid
+    try:
+        runtime_status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    pid = int(runtime_status.get("pid") or 0)
+    if not pid:
+        return None
+    # A cleanly shut-down bot leaves its PID in the file; don't report it as live
+    # (also guards against the PID being reused by an unrelated process).
+    if runtime_status.get("clean_shutdown") and runtime_status.get("phase") == "shutdown_complete":
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return pid  # exists, owned by another user — still alive
+    except Exception:
+        return None
+    return pid
+
+
 @app.get("/api/live/status")
 async def get_bot_status():
-    """Check if the live bot subprocess is running."""
+    """Check if a live bot is running (own subprocess or split-mode bot)."""
+    pid = _running_bot_pid()
     return {
-        "running": _bot_process is not None and _bot_process.poll() is None,
-        "pid": _bot_process.pid if _bot_process else None,
+        "running": pid is not None,
+        "pid": pid,
     }
 
 
@@ -3096,14 +3131,20 @@ async def start_live_bot(request: Request, mode: str = "paper"):
     global _bot_process
     _check_auth(request)
 
-    if _bot_process is not None and _bot_process.poll() is None:
-        return {"status": "already_running", "pid": _bot_process.pid}
+    # Reconcile against the runtime-status PID too, so we don't spawn a second bot
+    # alongside a supervisor-owned (split-mode) bot already trading this account.
+    existing_pid = _running_bot_pid()
+    if existing_pid is not None:
+        return {"status": "already_running", "pid": existing_pid}
 
     mode_norm = str(mode or "paper").strip().lower()
     if mode_norm not in {"paper", "live"}:
         return {"status": "error", "message": f"Unsupported mode: {mode}"}
 
-    args = [sys.executable, str(PROJECT_ROOT / "src" / "main.py")]
+    # --no-dashboard: this dashboard process already serves the UI on its own port,
+    # so the spawned bot must NOT auto-start a second dashboard (which would collide
+    # on the dashboard port). The bot publishes state via the runtime-status file.
+    args = [sys.executable, str(PROJECT_ROOT / "src" / "main.py"), "--no-dashboard"]
     if mode_norm == "live":
         args.extend(["--live", "--confirm-live"])
     else:
@@ -4851,7 +4892,19 @@ async def get_exposure_status():
  always labels ETH/XRP correctly; also emits manager_0..N for compatibility."""
     bot = _full_bot_instance()
     if not bot:
-        return {"error": "No bot instance"}
+        try:
+            runtime_status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            runtime_status = {}
+        runtime_exposure = runtime_status.get("exposure_managers")
+        if isinstance(runtime_exposure, dict) and runtime_exposure:
+            out = dict(runtime_exposure)
+            out["_source"] = out.get("_source") or "runtime_status"
+            out["_runtime_phase"] = runtime_status.get("phase")
+            out["_runtime_pid"] = runtime_status.get("pid")
+            out["_runtime_ts"] = runtime_status.get("ts")
+            return out
+        return {"error": "No bot instance or runtime exposure snapshot"}
     key_attrs = (
         ("btc", "btc_exposure_manager"),
         ("sol", "sol_exposure_manager"),

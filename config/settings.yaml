@@ -49,7 +49,7 @@ trading:
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
   default_position_size: 6
-  max_position_size: 6
+  max_position_size: 25
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
@@ -304,10 +304,16 @@ olympus:
   fill_poll_interval_sec: 1.0
   smoke_test:
     enabled: true
-    max_order_usd: 6
+    max_order_usd: 15         # hard ceiling; orders over this hard-fail at submit
     max_orders_per_run: 40
     require_market_slug: true
     require_condition_id: true
+    # Live-order sizing only. Paper trades keep full Kelly (trading.max_position_size).
+    # When on, live BUYs are proportionally shrunk from [0, max_position_size] into
+    # [scale_floor_usd, max_order_usd] so they still scale with conviction but clear
+    # the cap. Live band here = $5 floor .. $15 ceiling.
+    scale_live_sizing: true
+    scale_floor_usd: 5.0
 lane_management:
   enabled: true
   execution_enforcement_enabled: false
@@ -1951,13 +1957,15 @@ term_risk:
     MID_TERM: 0.02
     LONG_TERM: 0.02
 exposure:
-  full_size: 6.0
-  moderate_size: 6.0
-  minimal_size: 6.0
+  # Restored Kelly-scaled tiers for paper trading; $6 live smoke-test cap remains
+  # the hard ceiling in src/main.py / Olympus execution.
+  full_size: 25.0
+  moderate_size: 15.0
+  minimal_size: 8.0
   min_trade_usd: 1.0
-  full_min_trade_usd: 6.0
-  moderate_min_trade_usd: 6.0
-  minimal_min_trade_usd: 6.0
+  full_min_trade_usd: 15.0
+  moderate_min_trade_usd: 15.0
+  minimal_min_trade_usd: 5.0
   loss_kill_switch_enabled: false
   max_consecutive_losses: 3
   pause_cycles: 2

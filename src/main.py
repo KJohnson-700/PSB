@@ -570,6 +570,9 @@ class PolyBot:
         # Serialize order placement, exits, resolution settlement — one trading loop, same lock.
         self._execution_lock = asyncio.Lock()
         self._dashboard_server = None
+        # Handle to the daily coach child process so shutdown can reap it instead
+        # of orphaning it past os._exit(0). None when no coach run is in flight.
+        self._coach_proc = None
         _initial_bankroll = self.config.get("backtest", {}).get("initial_bankroll", 1000.0)
         # Restore bankroll only for explicit/resumed sessions. A fresh paper startup
         # must stay at initial_bankroll even when older journals contain +PnL.
@@ -1721,7 +1724,10 @@ class PolyBot:
             phase="bot_start",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
-            extra={"mode": "paper" if self.config.get("trading", {}).get("dry_run", True) else "live"},
+            extra={
+                "mode": "paper" if self.config.get("trading", {}).get("dry_run", True) else "live",
+                "exposure_managers": self._exposure_status_payload(),
+            },
         )
         logging.info("=" * 50)
         logging.info("PolyBot AI Starting...")
@@ -1762,6 +1768,7 @@ class PolyBot:
             phase="loops_running",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
+            extra={"exposure_managers": self._exposure_status_payload()},
         )
         # Create the exit lock on the running loop, then start the fast exit
         # monitor alongside the scan loop (no-op if exit_check_interval_sec<=0).
@@ -1835,13 +1842,32 @@ class PolyBot:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                 )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
-                output = stdout.decode(errors="replace") if stdout else ""
-                logging.info(f"[coach] Analysis complete:\n{output[-2000:]}")
-            except asyncio.TimeoutError:
-                logging.warning("[coach] Daily analysis timed out after 5 minutes")
+                self._coach_proc = proc
+                try:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+                    output = stdout.decode(errors="replace") if stdout else ""
+                    logging.info(f"[coach] Analysis complete:\n{output[-2000:]}")
+                except asyncio.TimeoutError:
+                    # wait_for cancels communicate() but leaves the child alive — kill it
+                    # so a hung coach run does not linger past this loop or shutdown.
+                    logging.warning("[coach] Daily analysis timed out after 5 minutes; killing coach process")
+                    self._terminate_coach_proc()
+                finally:
+                    self._coach_proc = None
             except Exception as e:
                 logging.error(f"[coach] Daily analysis error: {e}", exc_info=True)
+
+    def _terminate_coach_proc(self) -> None:
+        """Best-effort terminate/kill of an in-flight daily coach child process."""
+        proc = self._coach_proc
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logging.exception("[coach] failed to kill coach process")
 
     def _get_exposure_manager_for(self, strategy: str):
         """Return the correct exposure manager for a given strategy."""
@@ -1931,6 +1957,32 @@ class PolyBot:
             mgr = getattr(self, name, None)
             if mgr is not None:
                 out.append(mgr)
+        return out
+
+    def _exposure_status_payload(self) -> Dict[str, Any]:
+        """Serializable exposure-manager snapshot for split dashboard mode."""
+        out: Dict[str, Any] = {
+            "_source": "trading_runtime",
+            "_ts": datetime.now(timezone.utc).isoformat(),
+        }
+        for key, attr in (
+            ("btc", "btc_exposure_manager"),
+            ("sol", "sol_exposure_manager"),
+            ("eth", "eth_exposure_manager"),
+            ("hype", "hype_exposure_manager"),
+            ("xrp", "xrp_exposure_manager"),
+            ("doge", "doge_exposure_manager"),
+            ("bnb", "bnb_exposure_manager"),
+        ):
+            mgr = getattr(self, attr, None)
+            if mgr is None:
+                continue
+            try:
+                status = dict(mgr.get_status())
+            except Exception as exc:  # noqa: BLE001 - runtime status must not break trading
+                status = {"error": str(exc)}
+            status["key"] = key
+            out[key] = status
         return out
 
     def _sync_exposure_managers_portfolio_pnl(self) -> None:
@@ -2521,7 +2573,10 @@ class PolyBot:
             phase="cycle_start",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
-            extra={"cycle_count": int(self._unified_cycle_count or 0)},
+            extra={
+                "cycle_count": int(self._unified_cycle_count or 0),
+                "exposure_managers": self._exposure_status_payload(),
+            },
         )
 
         from src.ops_pulse import _scan_skip_digest, _side_selection_digest, log_ops_pulse
@@ -2596,6 +2651,7 @@ class PolyBot:
             phase="scanner_sync",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
+            extra={"exposure_managers": self._exposure_status_payload()},
         )
         opportunities = await self.market_scanner.scan_for_opportunities()
         high_liquidity = opportunities.get("high_liquidity", [])
@@ -4126,6 +4182,9 @@ class PolyBot:
                 await self.ai_broker.stop()
             except Exception:
                 logging.exception("ai_broker stop failed")
+
+        # Reap the daily coach child so it does not survive os._exit(0) as an orphan.
+        self._terminate_coach_proc()
 
         # Stop dashboard server
         if self._dashboard_server:
