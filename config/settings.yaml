@@ -1018,8 +1018,13 @@ strategies:
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
-    low_atr_only_lanes:
-    - 5m:SHORT
+    # 2026-06-15: removed 5m:SHORT. The low_atr gate (added 06-09 as harm
+    # reduction) was blocking mid/high-ATR HYPE 5m shorts that the ghost log
+    # shows are net +EV: rejected low_atr_gate_skip BUY_NO n=1570, 60.4% WR,
+    # median realized +17.6%, net +4.2% (since 06-12). Edge is best when 1h is
+    # BULLISH (5m fades the HTF bias). Day-volatile (06-14 was -18%), so the
+    # narrowed lane_stop_halt cooldown stays as a backstop. Forward-test.
+    low_atr_only_lanes: []
     rsi_momentum_flip_1h: true
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
@@ -2127,21 +2132,16 @@ correlation_stop_halt:
 lane_stop_halt:
   enabled: true
   pause_minutes: 10
+  # Narrowed 2026-06-15 from codex's 7-lane list to the one lane the data
+  # actually supports. Post-stop conditional test (trades.jsonl, 10-min window):
+  # hype_macro|5m|BUY_YES post-stop n=46 WR=34.8% avg=-$1.92 vs clean n=69
+  # WR=56.5% avg=+$1.98 (real adverse moves, mae median -0.37, not phantom-stop).
+  # The other 6 lanes had 0-2 post-stop samples = no basis; bnb/doge/eth 1h
+  # lose on the clean cohort too (entry/side problem, not cooldown-addressable),
+  # and bnb 1h is a top lane that was just re-enabled.
   lanes:
   - lane: hype_macro|5m|BUY_YES
     pause_minutes: 10
-  - lane: bnb_macro|1h|BUY_YES
-    pause_minutes: 15
-  - lane: doge_macro|5m|BUY_YES
-    pause_minutes: 10
-  - lane: doge_macro|15m|BUY_YES
-    pause_minutes: 10
-  - lane: doge_macro|1h|BUY_YES
-    pause_minutes: 15
-  - lane: sol_macro|5m|BUY_YES
-    pause_minutes: 10
-  - lane: eth_macro|1h|BUY_YES
-    pause_minutes: 15
 reversal_halt:
   enabled: true
   btc_pct_threshold: 0.003
