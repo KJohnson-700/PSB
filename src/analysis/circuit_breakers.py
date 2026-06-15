@@ -34,6 +34,7 @@ class CircuitBreakerManager:
     def __init__(self, config: Dict[str, Any]):
         self.config = config or {}
         self.correlation_cfg = self.config.get("correlation_stop_halt") or {}
+        self.lane_cfg = self.config.get("lane_stop_halt") or {}
         self.reversal_cfg = self.config.get("reversal_halt") or {}
         self._stop_events: Deque[Tuple[float, str]] = deque()
         self._btc_prices: Deque[Tuple[float, float]] = deque()
@@ -85,6 +86,8 @@ class CircuitBreakerManager:
         *,
         reason: str,
         action: str,
+        strategy: str = "",
+        window: str = "",
         now: Optional[float] = None,
     ) -> Optional[BreakerDecision]:
         """Record a stop-loss exit and trigger same-side halts when thresholds hit."""
@@ -93,11 +96,19 @@ class CircuitBreakerManager:
         side = self.normalize_action(action)
         if side not in BUY_SIDES:
             return None
-        cfg = self.correlation_cfg
-        if not bool(cfg.get("enabled", False)):
-            return None
 
         ts = float(now if now is not None else time.time())
+        lane_decision = self._record_lane_stop(
+            strategy=strategy,
+            window=window,
+            side=side,
+            ts=ts,
+        )
+
+        cfg = self.correlation_cfg
+        if not bool(cfg.get("enabled", False)):
+            return lane_decision
+
         self._stop_events.append((ts, side))
         fast_window = float(cfg.get("window_sec", 60) or 60)
         slow_window = float(cfg.get("slow_window_sec", 900) or 900)
@@ -111,29 +122,33 @@ class CircuitBreakerManager:
 
         fast_count = self._count_stops(side, ts, fast_window)
         if fast_count >= fast_threshold:
-            return self._halt(
+            correlation_decision = self._halt(
                 side,
                 pause_minutes,
                 f"correlation_stop_halt: {fast_count} {side} stops in {int(fast_window)}s",
                 ts,
             )
+            return lane_decision or correlation_decision
 
         if bool(cfg.get("slow_mode_enabled", True)):
             slow_count = self._count_stops(side, ts, slow_window)
             if slow_count >= slow_threshold:
-                return self._halt(
+                correlation_decision = self._halt(
                     side,
                     pause_minutes,
                     f"correlation_stop_slow_halt: {slow_count} {side} stops in {int(slow_window)}s",
                     ts,
                 )
-        return None
+                return lane_decision or correlation_decision
+        return lane_decision
 
     def can_enter(
         self,
         *,
         action: str,
         active_positions: Iterable[Any],
+        strategy: str = "",
+        window: str = "",
         btc_price: Optional[float] = None,
         now: Optional[float] = None,
     ) -> BreakerDecision:
@@ -143,6 +158,15 @@ class CircuitBreakerManager:
             return BreakerDecision(True)
         ts = float(now if now is not None else time.time())
         self.record_btc_price(btc_price, now=ts)
+
+        lane_halt = self._active_lane_halt(
+            strategy=strategy,
+            window=window,
+            side=side,
+            ts=ts,
+        )
+        if lane_halt is not None:
+            return lane_halt
 
         halt = self._active_halt(side, ts)
         if halt is not None:
@@ -163,6 +187,81 @@ class CircuitBreakerManager:
             if until > ts
         }
         return {"active_halts": active, "stop_events": len(self._stop_events), "btc_prices": len(self._btc_prices)}
+
+    @staticmethod
+    def _lane_key(strategy: str, window: str, side: str) -> str:
+        return "|".join(
+            [
+                str(strategy or "").strip().lower(),
+                str(window or "").strip().lower(),
+                str(side or "").strip().upper(),
+            ]
+        )
+
+    def _lane_rule(self, strategy: str, window: str, side: str) -> Optional[Dict[str, Any]]:
+        if not bool(self.lane_cfg.get("enabled", False)):
+            return None
+        lane_key = self._lane_key(strategy, window, side)
+        for raw in self.lane_cfg.get("lanes") or []:
+            if not isinstance(raw, dict):
+                continue
+            raw_key = str(raw.get("lane") or "").strip()
+            if not raw_key:
+                raw_key = self._lane_key(
+                    str(raw.get("strategy") or ""),
+                    str(raw.get("window") or ""),
+                    str(raw.get("action") or raw.get("side") or ""),
+                )
+            if raw_key.lower() == lane_key.lower():
+                return raw
+        return None
+
+    def _active_lane_halt(
+        self,
+        *,
+        strategy: str,
+        window: str,
+        side: str,
+        ts: float,
+    ) -> Optional[BreakerDecision]:
+        lane_key = self._lane_key(strategy, window, side)
+        halt = self._halts.get(f"lane:{lane_key}")
+        if halt is None:
+            return None
+        until, reason = halt
+        if until <= ts:
+            del self._halts[f"lane:{lane_key}"]
+            return None
+        return BreakerDecision(False, reason, side, until)
+
+    def _record_lane_stop(
+        self,
+        *,
+        strategy: str,
+        window: str,
+        side: str,
+        ts: float,
+    ) -> Optional[BreakerDecision]:
+        rule = self._lane_rule(strategy, window, side)
+        if rule is None:
+            return None
+        pause_minutes = float(rule.get("pause_minutes", self.lane_cfg.get("pause_minutes", 10)) or 10)
+        lane_key = self._lane_key(strategy, window, side)
+        halt_key = f"lane:{lane_key}"
+        reason = f"lane_stop_halt: {lane_key} stop cooldown"
+        until = ts + pause_minutes * 60.0
+        old_until, _ = self._halts.get(halt_key, (0.0, ""))
+        if old_until > until:
+            until = old_until
+        self._halts[halt_key] = (until, reason)
+        logger.warning(
+            "CIRCUIT_BREAKER lane=%s side=%s reason=%s pause_minutes=%.1f",
+            lane_key,
+            side,
+            reason,
+            pause_minutes,
+        )
+        return BreakerDecision(False, reason, side, until)
 
     def _count_stops(self, side: str, ts: float, window_sec: float) -> int:
         same_side_only = bool(self.correlation_cfg.get("same_side_only", True))

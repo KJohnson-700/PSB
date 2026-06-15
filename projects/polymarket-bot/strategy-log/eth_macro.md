@@ -12,6 +12,25 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-15 — Add lane-local stop cooldown for ETH 1h BUY_YES bleed
+
+- **What changed:** Added `lane_stop_halt` config support and enabled `eth_macro|1h|BUY_YES` with a 15-minute cooldown after an `updown_stop_loss`.
+- **Why:** Running session `test_20260615_031614` showed ETH 1h BUY_YES at `0%` WR and `-$9.49` across 2 exits. Sample is thin, so the change is a short cooldown rather than a model/gate rewrite.
+- **Hypothesis:** ETH 1h long entries should pause after a stop to avoid immediate re-entry into the same failed continuation state, while ETH 5m/15m and BUY_NO lanes remain untouched.
+- **Expected outcome:** Fewer repeated ETH 1h BUY_YES stop-outs without reducing unrelated ETH lanes.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed ETH 1h BUY_YES trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-15 — eth 5m BUY_YES min_edge 0.10 → 0.085 (ghost-backed long loosen)
+
+- **What changed:** `entry_policy.window_side_overrides.5m.up.min_edge` 0.10 → 0.085 (config/settings.yaml:935). `5m.down` left at 0.12 (untouched). Live path is entry_policy; legacy `by_tf.5m.min_edge: 0.1` left as-is.
+- **Why:** Kimi flagged eth 5m min_edge as "too high vs other alts (0.085)" — first-principles, so I ghost-validated. Cut of `rejected_candidates_settled.jsonl` (eth_macro 5m, ts≥06-08) by model-edge band:
+  - BUY_YES 0.085–0.10 band: **n=284, 54.2% WR, +0.126 EV/$** ✅
+  - BUY_NO 0.085–0.10 band: n=157, 46.5% WR, −0.045 EV/$ ❌
+- **Hypothesis:** The 0.10 long floor was clipping a genuinely +EV 5m BUY_YES cohort in the current bull tape. Lowering to 0.085 admits it; keeping down at 0.12 keeps the negative short band out.
+- **Expected outcome:** More eth 5m BUY_YES fills, +EV. NEEDS RESTART to load. Forward-test on settled trades.
+- **Rejected in same review:** `direction_source: btc` = dead config key (0 code refs, no effect on ETH direction). No change.
+
 ### 2026-06-12 — REJECTED before rollout: 15m BUY_NO hold+trail
 
 - **What changed:** No live config change remains. A temporary `eth_macro` 15m `down` / `BUY_NO` hold+trail override was considered, then removed before rollout.

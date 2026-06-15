@@ -12,6 +12,15 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-15 — Add lane-local stop cooldown for BNB 1h BUY_YES bleed
+
+- **What changed:** Added `lane_stop_halt` config support and enabled `bnb_macro|1h|BUY_YES` with a 15-minute cooldown after an `updown_stop_loss`.
+- **Why:** Running session `test_20260615_031614` showed BNB 1h BUY_YES at `0%` WR and `-$21.72` across 5 exits. Replay of the current session snapshot showed the new cooldown would have blocked 2 exited BNB 1h BUY_YES entries with `-$5.52` realized PnL.
+- **Hypothesis:** The BNB 1h bullish-floor lane should stop re-entering immediately after a failed long while preserving BNB 5m BUY_YES, which was positive in the same session snapshot.
+- **Expected outcome:** Reduced BNB 1h BUY_YES stop-loss repetition without disabling BNB 5m or BUY_NO lanes.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed BNB 1h BUY_YES trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-12 — REJECTED before rollout: 5m BUY_YES hold+trail
 
 - **What changed:** No live config change remains. A temporary `bnb_macro` 5m `up` / `BUY_YES` hold+trail override was considered, then removed before rollout.

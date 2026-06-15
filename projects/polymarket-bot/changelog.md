@@ -4,6 +4,107 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-15 — Lane-local stop cooldowns for losing paper lanes
+
+**Context.** Running paper session `test_20260615_031614` began giving back profits mid-session. Loss attribution was concentrated in a small set of BUY_YES lanes, led by `hype_macro|5m|BUY_YES`; profitable lanes such as XRP, BTC, HYPE BUY_NO, and SOL BUY_NO were not the target.
+
+**What changed.**
+- Added configurable `lane_stop_halt` support to `CircuitBreakerManager`.
+- Threaded `strategy` and `window` through entry breaker checks and exit stop recording so cooldowns can key on `strategy|window|action`.
+- Enabled short stop-loss cooldowns only for the losing lanes: `hype_macro|5m|BUY_YES`, `bnb_macro|1h|BUY_YES`, `doge_macro|5m|BUY_YES`, `doge_macro|15m|BUY_YES`, `doge_macro|1h|BUY_YES`, `sol_macro|5m|BUY_YES`, and `eth_macro|1h|BUY_YES`.
+- Existing side-wide correlation and reversal breakers remain active; lane-local stops still feed the side-wide stop history.
+
+**Evidence.** Replay against the current `test_20260615_031614` snapshot estimated the new lane cooldown would have blocked 20 already-exited entries totaling `-$68.73`, mostly HYPE 5m BUY_YES (`17` entries, `-$60.27`). This is a loss-lane brake, not a global threshold tighten.
+
+**Validation.** `.venv/bin/python -m pytest tests/test_circuit_breakers.py tests/test_live_config_apply.py` -> `18 passed`; `.venv/bin/python -m py_compile src/analysis/circuit_breakers.py src/main.py` passed.
+
+**Ops.** Stopped old local paper supervisor and started new paper session `test_20260615_131152` at `2026-06-15T20:11:58Z`. Elevated restart was required because sandboxed startup blocked local bind / DNS. The new run connected to Polymarket WebSocket and fetched BTC/Chainlink data; local dashboard listener is on `127.0.0.1:8082`.
+
+## 2026-06-13 — Olympus v2 execution adapter mapping + approval gate
+
+**Context.** After the read-only Olympus portfolio smoke test confirmed a funded linked wallet, operator asked to build adapter mapping and live-order approval so PSB can use Olympus as a v2 live-execution candidate.
+
+**What changed.**
+- Added `src/execution/olympus_client.py`, a broker-style Olympus adapter that builds Olympus `BUY` and `SELL` payloads from PSB order intent.
+- `CLOBClient` now routes live order submission, order-status polling, and live bankroll reads to Olympus when `trading.execution_provider: olympus`; default remains direct `clob`.
+- Added explicit live-order approval: Olympus `POST /v1/trade` is blocked unless `olympus.live_order_approved: true` or `OLYMPUS_LIVE_ORDER_APPROVAL=APPROVE_OLYMPUS_LIVE_ORDERS`.
+- Added `condition_id` and `market_slug` propagation from scanner markets into BTC/SOL/ETH shared signals, live `place_order()` calls, `Position`, and `TradeJournal.open_positions` so Olympus buys and restart-safe sells have the required metadata.
+- Added config defaults: `trading.execution_provider: clob`, `olympus.base_url`, `olympus.timeout_sec`, and `olympus.live_order_approved: false`.
+- Added `tests/test_olympus_client.py` for BUY_YES, BUY_NO, SELL payload mapping, approval blocking, Olympus live routing, and status mapping.
+
+**Scope note.** No live Olympus `POST /v1/trade` was made. This is adapter construction and approval gating only.
+
+**Validation.** `.venv/bin/python -m pytest tests/test_olympus_client.py tests/test_clob_client_hardening.py tests/test_strategy_execution_drivers.py tests/test_live_config_apply.py` -> `67 passed`. Python compile and `config/settings.yaml` YAML parse passed.
+
+## 2026-06-13 — Olympus API reference captured for v2 live-execution adapter
+
+**Context.** Operator provided Olympus Trading API docs as a possible path around the direct Polymarket CLOB V2 live-order migration. Olympus exposes a broker-style API for a linked wallet: portfolio read, queued buy/sell, and trade-status polling.
+
+**What changed.**
+- Added [[olympus-api-reference]] with base URL, auth, rate limits, Polymarket field mapping, portfolio command, buy/sell commands, buy/sell field tables, trade-status flow, error codes, and PSB adapter requirements.
+- Added `scripts/olympus_portfolio_smoke.py` as a read-only smoke test that loads `.env`, calls `GET /v1/portfolio`, and prints only non-secret summary fields.
+- Ran the smoke test against the local Olympus key. Olympus saw wallet `<redacted_wallet>`, `<redacted_cash>` pUSD cash, `<redacted_positions_value>` USD positions value, `<redacted_equity>` USD equity, and `1` open position.
+
+**Scope note.** No `POST /v1/trade` call was made. Olympus is a v2 execution-adapter candidate, not a direct replacement for the current `CLOBClient` until payload-only tests, status polling, and portfolio reconciliation are wired.
+
+## 2026-06-13 — Live CLOB execution hard-blocked pending V2 SDK migration
+
+**Context.** A follow-up execution-layer audit found that PSB still imports the archived V1 Python CLOB client. The local `.venv` has `py-clob-client==0.34.6` and no `py-clob-client-v2`, so Phase 1/2 should be treated as paper/read-only hardening until the SDK migration is done.
+
+**What changed.**
+- `CLOBClient.set_credentials()` now raises before live setup when `py-clob-client-v2` is not installed.
+- `CLOBClient.place_order(..., dry_run=False)` now refuses live order placement under the same condition, even if a test/fake client object is present.
+- Paper mode and public/read-only metadata paths remain available; no bot restart was performed for this change.
+
+**Remaining live migration work.** Port the order flow from `py_clob_client` V1 to `py-clob-client-v2` / unified SDK, then re-verify fee source-of-truth, dynamic tick-size handling, pending taker-delay states, deposit-wallet balance reconciliation after rejected orders, and HTTP 425/restart behavior against the V2 API surface.
+
+**Validation.** `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_fill_sim.py tests/test_exit_executable_stop.py` -> `42 passed`.
+
+## 2026-06-13 — Execution-layer recovery Phase 1: fee accounting + DOGE/BNB parity
+
+**Context.** Polymarket execution-layer research flagged taker fees on fee-enabled crypto up/down markets and several live-readiness risks. The immediate local issue is paper/journal accounting and parity, not entry tightening. DOGE and BNB remain in scope.
+
+**What changed.**
+- Added a configurable Polymarket taker-fee model for 15m crypto up/down paper exits: `shares * fee_rate * price * (1 - price)`, with `trading.execution_fees.crypto_updown_15m_taker_fee_rate: 0.07`.
+- Added async `CLOBClient` wrappers for the installed SDK's public `get_fee_rate_bps(token_id)` and `get_tick_size(token_id)` methods. Fee bps are normalized to decimal rates before exit accounting.
+- Fast-exit book snapshots now fetch live taker-fee metadata for the YES token and pass it into exit accounting; config remains the fallback when live metadata is unavailable.
+- Exit decisions now carry `fill_fee_usdc` / `fill_fee_rate` telemetry into the journal so fee bleed is visible separately from book-walk slippage.
+- Added DOGE/BNB to the learning-loop strategy config set so they are not excluded from the same proposal/config surface as BTC/SOL/ETH/HYPE/XRP.
+- Added DOGE/BNB to the dashboard watchlist spot/threshold layer and threshold parser ranges, matching the other crypto macro lanes.
+- Added DOGE/BNB to scanner per-asset fetch summaries for 5m, 15m, and 1h up/down buckets.
+- Added DOGE to the shared SOL-style execution-driver test matrix; BNB was already covered.
+
+**Phase 1 scope.** Accounting + parity only. No crons, no DOGE/BNB removal, no entry min-edge increases, no `_fresh_book_slippage_ok` enforce flip in paper.
+
+**Phase 2 backlog.** Use the fetched tick size to quantize outgoing order prices; add on-chain/token balance reconciliation after live `post_order` 4xx; handle taker-delay pending states and market resolution events; optionally reconcile SDK token-level fee fetch against `get_market(condition_id)`/`getClobMarketInfo(conditionID).fd` for audit visibility.
+
+## 2026-06-13 — Execution-layer recovery Phase 2: tick quantization + post-error trade recovery
+
+**Context.** Phase 1 added live fee/tick metadata wrappers but still left outgoing prices vulnerable to per-market tick-size rejects and still treated a `post_order` exception as no-fill unless an order id existed.
+
+**What changed.**
+- `CLOBClient.place_order()` now fetches the market tick size and quantizes price before signing. Passive `BUY` floors; passive `SELL` ceils; marketable `BUY` ceils; marketable `SELL` floors. This preserves execution intent instead of rounding away from liquidity.
+- On `post_order` exception, `CLOBClient` now does a conservative recent-trade recovery pass for the same asset token before returning `None`. If a matching trade is found, it returns a filled recovered `Order` so the caller does not lose track of a likely venue fill.
+- Added tests for tick-size intent rounding, pre-signing price quantization, post-error trade recovery, fee metadata wrappers, and fee accounting.
+
+**Remaining live-only gap.** True on-chain conditional-token balance reconciliation after 4xx still needs a Polygon CTF balance read. The shipped recovery is SDK/trade-history based and covers the highest-risk “POST errored but trade exists” path without adding chain RPC dependency.
+
+**Validation.** `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_fill_sim.py tests/test_exit_executable_stop.py tests/test_strategy_execution_drivers.py tests/test_dashboard_bundle.py tests/test_journal_learning_strategy_keys.py tests/test_live_config_apply.py tests/test_risk_manager_hardening.py` -> `154 passed`.
+
+## 2026-06-13 — Exit recovery brake + live close confirmation
+
+**Context.** After reviewing the latest local paper session (`test_20260612_215219`) following the Polymarket exit-function edits, the immediate risk was not a failing test suite; it was runtime accounting: the bot could treat an accepted close order as a closed position before the venue confirmed a fill.
+
+**What changed.**
+- Briefly added `data/KILL_SWITCH` as an operator brake during recovery triage, then removed it immediately after operator correction. There is **no active brake** from this recovery note.
+- Set `trading.exit_rules.stop_use_executable_price: true` so up/down stop triggers use the executable exit-side price rather than the midpoint when a book snapshot is available.
+- Updated `PolyBot._handle_exit_decision` so live exits only journal PnL, update Kelly/exposure, notify exits, and remove the active position after `CLOBClient.get_order_status()` confirms `OrderStatus.FILLED`. Accepted-but-pending exits now leave the position open and attach `pending_exit_order_id` for follow-up reconciliation.
+- Added tests for the live close path: pending exits keep the position open; filled exits close and journal.
+
+**Scope note.** DOGE and BNB remain enabled per operator direction; this recovery does not remove them from execution scope and does not tighten entry.
+
+**Validation.** `.venv/bin/python -m pytest tests/test_live_config_apply.py tests/test_exit_executable_stop.py tests/test_fill_sim.py tests/test_live_testing.py tests/test_trade_journal_resumable.py tests/test_risk_manager_hardening.py` -> `49 passed`.
+
 ## 2026-06-11 — L2 credential lifecycle hardening + order reconciliation fallback (live-execution prep)
 
 **Context.** PSB has never traded live. An external live-execution research addendum (D8-X Go SDK, Polymarket CLOB rate-limit docs, NautilusTrader adapter) flagged a checklist of landmines. We triaged it against our *actual* `src/execution/clob_client.py` rather than building all 10 items: most (heartbeat dead-man's-switch, sweep estimation, FOK/FAK delayed-state FSM) don't apply to our order flow (we post `LIMIT`/`POST_ONLY`, not marketable FOK/FAK, and don't rest GTC books through long pauses). Two were **real bugs in code we already had** and fixable blind (dry_run still on); one (fill/slippage reality vs. our fake-instant-fill paper layer) genuinely needs a live smoke test and is deferred.

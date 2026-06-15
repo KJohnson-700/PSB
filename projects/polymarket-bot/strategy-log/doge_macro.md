@@ -12,6 +12,15 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-15 — Add lane-local stop cooldowns for DOGE BUY_YES bleed
+
+- **What changed:** Added `lane_stop_halt` config support and enabled `doge_macro|5m|BUY_YES`, `doge_macro|15m|BUY_YES`, and `doge_macro|1h|BUY_YES` with 10-15 minute cooldowns after `updown_stop_loss`.
+- **Why:** Running session `test_20260615_031614` showed DOGE BUY_YES at `14.3%` WR and `-$29.12` across 7 exits. Replay of the current session snapshot showed the new cooldown would have blocked 1 exited DOGE 5m BUY_YES entry with `-$2.94` realized PnL; the other DOGE lanes are included because their current closed sample was also negative and stop-led.
+- **Hypothesis:** DOGE long lanes should pause briefly after a stop to avoid repeated bullish continuation entries during a failed DOGE micro-regime, while DOGE BUY_NO remains untouched.
+- **Expected outcome:** Fewer repeated DOGE BUY_YES stop-losses; no change to DOGE BUY_NO admission.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed DOGE BUY_YES trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-12 — Targeted 1h composite floor to relieve starvation
 
 - **What changed:** Added `updown_composite.strategy_window_min_scores.doge_macro.1h: 0.50` and taught the shared scorer to apply strategy/window composite floor overrides.

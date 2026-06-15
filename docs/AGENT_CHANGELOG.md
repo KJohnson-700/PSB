@@ -8,6 +8,224 @@
 
 ---
 
+## 2026-06-15 — Lane-local stop cooldowns for current losing lanes
+
+**Context:** Current local paper session `test_20260615_031614` started bleeding back profit mid-session. The loss was concentrated in a few BUY_YES lanes rather than a broad model failure.
+
+**What changed:** Added configurable `lane_stop_halt` support in `src/analysis/circuit_breakers.py`, threaded lane identity through `src/main.py`, and enabled cooldowns only for the current losing lanes in `config/settings.yaml`: `hype_macro|5m|BUY_YES`, `bnb_macro|1h|BUY_YES`, DOGE BUY_YES windows, `sol_macro|5m|BUY_YES`, and `eth_macro|1h|BUY_YES`. Strategy logs were updated with pending entries for the affected strategies.
+
+**Evidence:** Replay against the current session snapshot estimated the cooldown would have blocked 20 exited entries totaling `-$68.73`, led by HYPE 5m BUY_YES (`17` entries, `-$60.27`). Profitable lanes were intentionally left untouched.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_circuit_breakers.py tests/test_live_config_apply.py` -> `18 passed`; Python compile passed for touched modules. Old local supervisor was stopped and a new elevated paper session started: `test_20260615_131152`.
+
+## 2026-06-15 — Paper full-Kelly sizing for $500 bankroll; live smoke band decoupled
+
+**Context:** Operator wanted paper sessions to trade max Kelly on a $500 bankroll while keeping the live config in its current adjusted state for the next Olympus smoke test.
+
+**What changed:** Paper per-trade cap raised to the bankroll's natural 8% ceiling — `trading.max_position_size` 25 → 40 and `exposure.full_size` 25.0 → 40.0 (= `max_exposure_per_trade` 0.08 × $500 `backtest.initial_bankroll`). Paper bankroll was already $500 on fresh session (`src/main.py:447`). To keep live smoke order sizes byte-identical, decoupled the live smoke-band denominator from `max_position_size`: `OlympusClient._smoke_scaled_buy_notional` now reads `olympus.smoke_test.true_max_usd` (new key, pinned at 25) with fallback to `max_position_size` (`src/execution/olympus_client.py:60`). Live band stays [$5, $15]; scale factor stays 15/25 = 0.6 (would otherwise have drifted to 0.375). `moderate_size`/`minimal_size` de-risking tiers left unchanged.
+
+**Validation:** `yaml.safe_load` OK; `py_compile src/execution/olympus_client.py` OK; `pytest tests/test_olympus_client.py` → 12 passed. Restarted paper session `test_20260615_031614` (dry_run) with loaded values confirmed: max_position_size=40, full_size=40, initial_bankroll=500, smoke true_max_usd=25, smoke max_order_usd=15.
+
+## 2026-06-15 — Ghost Lab hour clock + lane-hour heatmap repair
+
+**Context:** Operator reported the Ghost Lab hour-of-day clock and lane/hour heatmap looked empty or disconnected, and that only 23 time buckets appeared.
+
+**What changed:** The Ghost Lab tab now defaults to the last 30 days and renders both the 24-hour clock and lane×hour heatmap from the backend `buckets_hour` aggregate instead of the capped raw replay-event payload. The lane/hour heatmap now reads the backend's actual `buckets_hour` field and renders all 24 UTC hour columns (`00` through `23`). The `/api/ghosts/lab` route builds the heavy ghost aggregate in a worker thread so the FastAPI event loop is not pinned during the read.
+
+**Validation:** Focused Ghost Lab dashboard tests passed. Live local endpoint check on `http://127.0.0.1:8082/api/ghosts/lab` returned 352,585 last-30-day events, 863 lanes, 6,826 lane-hour buckets, and all 24 hours `[0..23]` in 5.42s.
+
+## 2026-06-15 — Dashboard bankroll equity + trade bubble/HUD repair
+
+**Context:** Operator reported the dashboard bankroll was not moving with live PnL and the live chart bubbles / Exit Timing HUD looked broken after paper restarts.
+
+**What changed:** Dashboard split-mode bankroll now uses live session equity (`initial_bankroll + total_pnl`) while the bot is running instead of stopping at the journal's last realized bankroll. The live chart/HUD trade-point poll now runs independently from `LightweightCharts`, uses an explicit `include_recent=true` fallback when a fresh restart session has no closed trades yet, and merges native chart trade markers with Sabre markers instead of replacing them.
+
+**Validation:** `.venv/bin/python -m py_compile src/dashboard/server.py`; focused dashboard tests passed. Local browser verification on `http://127.0.0.1:8082` showed bankroll moving with PnL, Exit Timing HUD rows/ticks rendering, and BTC chart overlay bubble rendering after candle data loaded.
+
+## 2026-06-15 — Targeted exit hold+trail fixes + cycle timing telemetry
+
+**Context:** Operator asked to execute the cycle-overrun and exit-damage fixes after restoring smoke-test calibration. Latest `data/calibration/lane_exit_policy.json` marked four lanes as `A hold+trail (exit kills edge)`.
+
+**What changed:** Restored targeted hold+trail behavior for `bnb_macro|5m|BUY_YES`, `eth_macro|15m|BUY_NO`, `sol_macro|5m|BUY_YES`, and `xrp_macro|15m|BUY_NO` under `trading.exit_rules.updown_overrides`. Added `cycle_timings_ms` to runtime status for scanner, cycle exit check, strategy scans by name, resolution, calibration scheduling, total elapsed, and overrun.
+
+**Validation:** YAML parse confirmed the four overrides; `.venv/bin/python -m py_compile src/main.py start.py`; `.venv/bin/python -m pytest tests/test_live_testing.py tests/test_updown_exit_shared.py tests/test_start_supervisor.py -q` -> `37 passed`. Forward-test required; exit changes are based on settled taken-trade counterfactuals, not ghost-validatable entry data.
+
+## 2026-06-14 — Split local dashboard/bot supervisor + Olympus 40-smoke prep
+
+**Context:** Operator wanted dashboard cleanup preserved, Ghost Lab data collection retained, the dashboard and bot split so dashboard lag does not destabilize trading, and a 40-trade Olympus smoke profile prepared.
+
+**What changed:** `start.py --paper` and `start.py --live --confirm-live` now supervise two local children: a lightweight dashboard child (`src/main.py --dashboard-only`) and a trading child with `--no-dashboard`. `src/main.py --dashboard-only` now serves the dashboard without initializing `PolyBot`; the dashboard shutdown endpoint can signal the split bot process via `data/runtime/bot_runtime_status.json`. Updated local run docs for the split process model. Prepared Olympus smoke settings with `smoke_test.enabled: true`, `max_order_usd: 6`, `max_orders_per_run: 40`, while keeping `trading.slippage_guard.mode: enforce`.
+
+**Validation:** `.venv/bin/python -m py_compile start.py src/main.py src/dashboard/server.py tests/test_start_supervisor.py tests/test_dashboard_bundle.py tests/test_live_config_apply.py` passed; `.venv/bin/python -m pytest tests/test_start_supervisor.py tests/test_dashboard_bundle.py tests/test_live_config_apply.py -q` -> `77 passed`.
+
+## 2026-06-14 — Live smoke slippage telemetry + depth pre-flight
+
+**Context:** Operator asked whether the funded Olympus smoke should run with the existing slippage setup. Local review found the guard was observe-only, paper mode had collected no live `slippage_guard` events, and live entries lacked spread/depth pre-flight telemetry.
+
+**What changed:** Added config-backed entry checks: `max_spread_cents: 0.03`, `require_full_depth: true`, and `depth_price_ceiling_cents: 0.0`. Extended `_fresh_book_slippage_ok()` so it can block live BUY entries when top ask drift exceeds tolerance, spread is wider than the cap, or full requested share depth is unavailable at the Olympus `maxPrice` cap. BTC and SOL-style execution paths now pass computed entry share size into the guard before submitting an order. After the one-attempt diagnostic smoke below, flipped `trading.slippage_guard.mode` to `enforce` and reduced `olympus.smoke_test.max_orders_per_run` to `1` until Olympus fills cleanly.
+
+**Smoke result:** Restarted live smoke session `test_20260613_213621` and stopped it after enough data: 9 live Olympus submission attempts, 9 failed-before-journaling outcomes, 0 nonzero journaled entries, and 0 Olympus metadata entries. Added redacted Olympus failure diagnostics, then ran one capped diagnostic session `test_20260613_214458`: 1 broker submission, terminal failure code `ORDER_EXECUTION_FAILED`, 0 nonzero journaled entries. The submitted ETH entry had fresh ask 8.5c above the intended/max price before submission, so enforce mode would have blocked it locally instead of sending an unfillable broker order. The rest of the cycle hit the local `1/1` smoke cap before broker submission.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_strategy_execution_drivers.py` -> `33 passed`; `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_olympus_client.py` -> `43 passed`; `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_risk_manager_hardening.py tests/test_sol_macro.py tests/test_strategy_execution_drivers.py` -> `180 passed`; `.venv/bin/python -m py_compile src/main.py src/execution/clob_client.py src/execution/olympus_client.py tests/test_strategy_execution_drivers.py tests/test_olympus_client.py` passed.
+
+## 2026-06-13 — Olympus smoke profile: pause unstable 5m flip-to-YES lanes
+
+**Context:** Operator correctly flagged that the current paper win-rate collapse was not slippage-only. Actual journal comparison showed `buy_no_5m_to_yes_flip` lanes went from `3/5`, `+$12.70` in the good session to `0/6`, `-$19.50` in the bad/current session.
+
+**What changed:** For the funded Olympus smoke profile, disabled 5m BUY_NO-to-YES flip admission across `sol_macro`, `hype_macro`, `xrp_macro`, `doge_macro`, `bnb_macro`, and disabled `eth_macro.eth_5m_buy_no_flip_to_yes`. Reduced Olympus smoke `max_orders_per_run` from `20` to `12`. BTC and ordinary non-flip lanes remain available; this is a smoke-test risk rollback to validate Olympus fills without the unstable lane family dominating results.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_live_config_apply.py tests/test_olympus_client.py tests/test_sol_macro.py tests/test_eth_macro.py tests/test_strategy_execution_drivers.py -q` -> `185 passed`; `.venv/bin/python -m py_compile src/main.py src/strategies/sol_macro.py src/strategies/eth_macro.py src/execution/clob_client.py` passed.
+
+## 2026-06-13 — Olympus long-smoke fill-quality prep
+
+**Context:** Operator asked whether the new paper slippage estimate is trustworthy for crypto up/down markets and whether a longer Olympus smoke test would validate it.
+
+**What changed:** Added Olympus execution telemetry to the live order object and journal plumbing. The adapter now extracts only whitelisted execution fields from Olympus status payloads (`status`, filled price/size, spent USD, fee, requested price/size, price delta) so raw broker/account metadata is not journaled. In smoke mode, the Olympus path can wait for terminal status before returning an order; failed smoke orders return `None` before a bot position is opened. BTC and macro entry paths now use the returned fill price when available and carry Olympus execution fields into ENTRY rows; EXIT rows carry the same fields when live close status reconciliation provides them.
+
+**Config:** Olympus smoke safety is armed with `await_fill_on_submit: true`, 12 one-second fill polls, `$6` max order size, and 20 max Olympus orders per bot run.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_olympus_client.py tests/test_live_config_apply.py tests/test_fill_sim.py tests/test_exit_executable_stop.py -q` -> `36 passed`; `.venv/bin/python -m py_compile src/main.py src/execution/clob_client.py src/execution/olympus_client.py` passed.
+
+## 2026-06-13 — Dashboard chart/HUD sync and Performance freshness
+
+**Context:** Operator reported fragile BTC live-chart trade bubbles, unreliable Exit Timing HUD behavior, and Performance tab values lagging behind Live page data.
+
+**What changed:** Synced BTC chart trade points through one frontend path so Exit Timing and Macro Align bubbles update together; made BTC overlay bubbles redraw across both logical-range and visible-time changes with a second RAF pass after chart coordinate updates; allowed closed-trade markers/HUD rows to fall back to the entry timestamp when `closed_at` is absent. Added a lightweight Performance core refresh that polls only `/api/live/performance` and `/api/journal/summary` every 6s while leaving heavier Performance widgets on the slower existing cadence. Moved the heavy journal reads behind `/api/live/performance`, `/api/journal/summary`, and `/api/journal/trade-points` into worker threads so dashboard requests do not pin the FastAPI event loop. Bumped `dashboard_ui_rev` to `2026-06-13-chart-hud-performance-sync`.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_dashboard_bundle.py -q` -> `64 passed`; `.venv/bin/python -m pytest tests/test_dashboard_status_startup_session.py -q` -> `1 passed`; `.venv/bin/python -m py_compile src/dashboard/server.py` passed.
+
+## 2026-06-13 — Olympus live smoke buy/sell succeeded
+
+**Context:** Operator approved exactly one current-window BTC 5m Olympus BUY_YES smoke for `$1` max and then approved exactly one SELL close for that successful smoke trade only. Existing sportsbook position was explicitly not to be touched.
+
+**What happened:** First stale-slug BUY smoke queued and failed with `NO_ORDERBOOK_LIQUIDITY`, proving queue/status failure handling but not fills. Tooling was updated to select the current BTC 5m window and verify BUY_YES ask liquidity immediately before POST. The current-window `$1` BUY then succeeded on `btc-updown-5m-1781388900`; filled price was approximately `0.29`, spent approximately `$1`. The approved SELL close for that saved smoke trade succeeded. Redacted portfolio check afterward still showed `positionCount: 1`, consistent with the pre-existing sports position remaining untouched.
+
+**Safety:** No raw API key, wallet address, token id, or full trade id was printed. Full smoke ids are stored only under ignored `data/runtime/` for local reconciliation.
+
+**Validation:** `tests/test_olympus_client.py` passed before live actions. Current-window payload selection and live close scripts compiled before use.
+
+## 2026-06-13 — Olympus smoke enforcement + redacted security sweeps
+
+**Context:** Before first Olympus `POST /v1/trade`, operator requested smoke-test enforcement, security sweeps, payload-only live-market validation, and redacted read-only checks.
+
+**What changed:** Added `olympus.smoke_test` config and enforcement in `OlympusClient`: max order USD, max orders per run, required `conditionId`, required `marketSlug`, mandatory `maxPrice` on buys, and mandatory `minPrice` on sells. Added `scripts/olympus_payload_only_market.py`, which fetches public Gamma market metadata and builds BUY_YES/BUY_NO Olympus payloads without loading `.env` or submitting. Updated `scripts/olympus_portfolio_smoke.py` so wallet and balance fields are redacted/boolean by default. Added `scripts/tracked_secret_sweep.py`, which scans only tracked files and reports finding type without values.
+
+**Security status:** `git check-ignore -v .env .env.local config/secrets.env secrets.env private.key wallet.pem id_rsa id_ed25519` confirms ignore coverage. `scripts/tracked_secret_sweep.py` -> `tracked_secret_sweep_findings=0`. Direct `scripts/run_security_suite.py --skip-audit` still reports pre-existing SHA1 ID-hash findings (`B324`) outside the Olympus work; a Bandit pass excluding that known pre-existing class plus existing local-bind skips reported no medium/high issues.
+
+**Payload-only status:** `.venv/bin/python scripts/olympus_payload_only_market.py --amount-usd 1 --max-price 0.99` succeeded against public Gamma and built BUY_YES/BUY_NO payloads. No Olympus key was used and no trade was submitted.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_olympus_client.py` -> `8 passed`; Python compile passed for Olympus scripts/client; YAML parse passed.
+
+## 2026-06-13 — Secret ignore hardening + fixed Olympus credential location
+
+**Context:** Operator requested stronger secret ignore rules and a fixed Olympus API location/key path so agents do not search local env files again.
+
+**What changed:** Expanded `.gitignore` for `.env`, `.env.*`, nested `.env` files, `config/secrets.env.*`, `secrets.env*`, and common private key file extensions. Updated `AGENTS.md` to state the fixed Olympus credential location: repo-root `.env`, variable `OLYMPUS_API_KEY`, with no shell discovery. Hardcoded Olympus production API host in the smoke script and adapter path instead of reading `OLYMPUS_BASE_URL` from env.
+
+**Validation:** `git check-ignore -v .env config/secrets.env secrets.env .env.local` confirms ignore coverage. `.venv/bin/python -m pytest tests/test_olympus_client.py` -> `6 passed`. Python compile passed for `scripts/olympus_portfolio_smoke.py`, `src/execution/olympus_client.py`, and `src/main.py`.
+
+## 2026-06-13 — Olympus v2 execution adapter mapping + approval gate
+
+**Context:** Olympus portfolio smoke test confirmed the local API key sees a funded linked wallet. Operator asked to build the adapter mapping and live-order approval path so PSB can use Olympus as a v2 execution candidate.
+
+**What changed:** Added `src/execution/olympus_client.py` for Olympus payload construction, live-order submission gating, portfolio reads, and trade-status reads. `CLOBClient` now routes live order placement/status/bankroll to Olympus when `trading.execution_provider: olympus`; default remains `clob`. Entry/exit paths now preserve `condition_id` and `market_slug` through scanner markets, strategy signals, positions, and journal open positions so Olympus buys and restart-safe sells have the required metadata.
+
+**Live-order approval:** `POST /v1/trade` remains blocked unless `olympus.live_order_approved: true` or `OLYMPUS_LIVE_ORDER_APPROVAL=APPROVE_OLYMPUS_LIVE_ORDERS` is set. No live order was submitted during this build.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_olympus_client.py tests/test_clob_client_hardening.py tests/test_strategy_execution_drivers.py tests/test_live_config_apply.py` -> `67 passed`; Python compile and `config/settings.yaml` YAML parse passed.
+
+## 2026-06-13 — Live CLOB execution hard-blocked pending V2 SDK migration
+
+**Correction to Phase 1/2 scope:** the local execution-layer hardening remains useful for paper accounting, exit bookkeeping, tick quantization tests, and DOGE/BNB parity, but it does **not** make PSB live-ready.
+
+**Finding verified locally:** the repo still depends on `py-clob-client>=0.30.0`, and the active `.venv` has `py-clob-client==0.34.6` with **no** `py-clob-client-v2` installed. Polymarket's legacy Python CLOB client is archived/deprecated; live order flow needs migration to `py-clob-client-v2` / the unified SDK before `dry_run=false`.
+
+**What changed:** [`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py) now refuses live credential setup and live order placement unless `py-clob-client-v2` is installed. Paper/read-only paths are still allowed, so the local paper bot can continue running without a restart.
+
+**Remaining live migration work:** replace V1 imports/API calls (`py_clob_client.client`, `create_or_derive_api_creds`, `create_order`, `post_order`) with the V2 SDK flow; then re-port fee/tick metadata, pending-order handling, deposit-wallet balance reconciliation, HTTP 425 handling, and dynamic tick-size updates against V2 types.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_fill_sim.py tests/test_exit_executable_stop.py` -> `42 passed`.
+
+## 2026-06-13 — Execution-layer recovery Phase 1: fee accounting + DOGE/BNB parity
+
+**[`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py), [`src/execution/fill_sim.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/fill_sim.py), [`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py), [`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** added taker-fee-aware 15m crypto up/down paper exit accounting using the documented binary CLOB formula `shares * fee_rate * price * (1 - price)`. `CLOBClient` now wraps the installed SDK's public `get_fee_rate_bps(token_id)` and `get_tick_size(token_id)` methods, normalizes fee bps to decimal rates, and the fast-exit path passes live fee metadata into exit accounting with config fallback. The fee is journaled as `fill_fee_usdc` / `fill_fee_rate` so it stays separate from book-walk slippage.
+
+**DOGE/BNB parity:** [`src/analysis/journal_learning.py`](/Users/mainfolder/Documents/psb-main%201/src/analysis/journal_learning.py) now includes `doge_macro` and `bnb_macro` in the learning-loop strategy config set. [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py) now includes DOGE/BNB in the crypto watchlist spot/threshold data layer and threshold parser ranges. [`src/market/scanner.py`](/Users/mainfolder/Documents/psb-main%201/src/market/scanner.py) now prints DOGE/BNB counts in 5m, 15m, and 1h scanner summaries. [`tests/test_strategy_execution_drivers.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_strategy_execution_drivers.py) adds DOGE to the shared SOL-style execution matrix; BNB was already present.
+
+**Phase boundary:** Phase 1 is accounting + parity only. No crons, no DOGE/BNB removal, no entry tightening, and no paper-mode slippage-guard enforcement flip. Phase 2 backlog is using fetched tick sizes to quantize outgoing order prices, on-chain/token balance reconciliation after live `post_order` 4xx, taker-delay pending states, resolution-event handling, and optional audit reconciliation against `get_market(condition_id)` / `getClobMarketInfo(conditionID).fd`.
+
+## 2026-06-13 — Execution-layer recovery Phase 2: tick quantization + post-error trade recovery
+
+**[`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py):** live `place_order()` now fetches tick size and quantizes prices before signing. Rounding preserves intent: passive `BUY` floors, passive `SELL` ceils, marketable `BUY` ceils, marketable `SELL` floors. This prevents per-market tick-size rejects without rounding FAK exits away from liquidity.
+
+**Post-error reconciliation:** when `post_order` raises, the client now performs a conservative same-token recent-trade recovery pass before returning `None`. If the venue trade is visible, it returns a filled recovered `Order` so the bot does not assume no fill just because POST errored.
+
+**Tests:** [`tests/test_clob_client_hardening.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_clob_client_hardening.py) adds coverage for tick rounding, pre-signing quantization, and post-error trade recovery.
+
+**Remaining live-only gap:** true on-chain conditional-token balance reconciliation after 4xx still requires a Polygon CTF balance read. This phase covers the SDK/trade-history recovery path without adding chain RPC dependency.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_clob_client_hardening.py tests/test_fill_sim.py tests/test_exit_executable_stop.py tests/test_strategy_execution_drivers.py tests/test_dashboard_bundle.py tests/test_journal_learning_strategy_keys.py tests/test_live_config_apply.py tests/test_risk_manager_hardening.py` -> `154 passed`.
+
+## 2026-06-13 — Exit recovery brake + live close confirmation
+
+**`data/KILL_SWITCH`:** briefly created as a manual brake during recovery triage, then removed immediately after operator correction. There is **no active brake** from this recovery note.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** enabled `trading.exit_rules.stop_use_executable_price` so stop triggers use executable exit-side prices when book snapshots are available. DOGE and BNB remain enabled per operator direction; no entry tightening/removal.
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** live exit handling now requires venue fill confirmation before journaling a close, updating bankroll/Kelly/exposure, sending an exit notification, or deleting the active position. Accepted-but-unfilled live close orders keep the position open and store `pending_exit_order_id`.
+
+**[`tests/test_live_config_apply.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_live_config_apply.py):** added regression coverage for pending-vs-filled live exits.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_live_config_apply.py tests/test_exit_executable_stop.py tests/test_fill_sim.py tests/test_live_testing.py tests/test_trade_journal_resumable.py tests/test_risk_manager_hardening.py` -> `49 passed`.
+
+## 2026-06-12 — Executable-price stop trigger (default-off) — closes the stop fill-gap
+
+**Why:** The stop question resolved against width. Held-to-resolution settler (715 trades) showed stops are ~EV-neutral vs holding (34.8% held-win), so a global/per-lane *width* change is not the lever. The real defect is **execution**: the fast-exit monitor marks positions at the YES midpoint, but a stop sells into the bid — so the stop fires at mid −15% while the realized fill gaps to a **−28% median** (−45% in the last 2 min to resolution). Filling at the first observed −15% crossing instead of the live delayed fill would have saved **~$190 over 2 days** (5m +$93 / 15m +$71 / 1h +$28), lane-agnostic.
+
+**[`src/execution/live_testing.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/live_testing.py) `PositionExitManager.check_exits`:** new default-off flag `trading.exit_rules.stop_use_executable_price`. When on, the updown stop trigger is evaluated on the **executable exit-side price** (YES bid for long YES; `1−ask` i.e. NO bid for long NO; YES ask for short YES) via the `market_liquidity` book snapshot already fetched by the fast-exit loop, and the stop fills there. TP / trailing / peak / time-stops / journaled `pnl_pct` stay on the midpoint. Fail-safe to midpoint when the book is missing. Live behavior byte-identical until the flag is set true.
+
+**[`config/settings.yaml`](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml):** `trading.exit_rules.stop_use_executable_price: false`.
+
+**Test:** [`tests/test_exit_executable_stop.py`](/Users/mainfolder/Documents/psb-main%201/tests/test_exit_executable_stop.py) — midpoint −10% (no fire) vs executable bid −16% (fires, fills at bid) with flag on; flag off and missing-book both no-fire. 47 exit tests pass.
+
+**Validation:** EXIT change — not ghost-validatable. Flip flag true, restart, forward-test on `trades_settled.jsonl` (re-run `taken_exit_settler` first — it goes stale) + `exit_excursion_shadow.jsonl`; compare stop fill distribution vs the −28% median baseline. Per-lane stop widths deferred until this lands (the optimal width depends on the new fill behavior).
+
+## 2026-06-13 — Live dashboard polling trimmed
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** reduced Live-tab polling pressure after the Ghost Lab caps. BTC candle chart refresh is now `60s` instead of `20s`; Macro Align refresh is now `90s` instead of `20s`; strategy watchlist payload is `40` instead of `80`; journal raw log fetch is `50` instead of `200`; Performance trade journey fetch is `12` instead of `24`.
+
+**Dashboard surface:** moved `/api/journal/updown_breakdown` out of Live-tab polling so it only runs for the Performance tab, hid the visible AI Pipeline Counters mini-card while keeping backend `ops_pulse` / `/api/ops/summary` telemetry intact, and added a lightweight Live core refresh for Active Positions + Exposure Manager. Exit Timing keeps the full `trade-points?limit=500` feed and has its own `60s` refresh.
+
+**Validation:** inline dashboard script parse passed; `.venv/bin/python -m pytest tests/test_dashboard_bundle.py` -> `62 passed`.
+
+## 2026-06-13 — Ghost Lab render caps for dashboard latency
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** reduced Ghost Lab raw event payload defaults (`5000 -> 1200`, hard cap `20000 -> 3000`), capped lane dropdown options to the top `80`, capped the lane-detail table to `60` rows, capped regime table rows to `80`, and sampled replay dots to `700`. The UI now shows a small “showing top X of Y” row when a table is intentionally truncated.
+
+**Animation latency:** throttled Ghost Lab clock SVG rebuilds and replay canvas redraws so they no longer rerender every animation frame.
+
+**Validation:** inline dashboard script parse passed; `.venv/bin/python -m py_compile src/dashboard/server.py` passed; `.venv/bin/python -m pytest tests/test_dashboard_bundle.py` -> `62 passed`.
+
+## 2026-06-13 — UTC daily counters + dashboard provenance + alt momentum HUD
+
+**[`src/execution/clob_client.py`](/Users/mainfolder/Documents/psb-main%201/src/execution/clob_client.py), [`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** daily risk-manager reset and restart restore now use the UTC calendar date. This aligns the `Trades today (UTC)` dashboard label with the actual reset boundary instead of local machine time.
+
+**[`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py), [`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html):** `/api/status` now exposes `summary_source` at top level and inside the Command Center session payload, and the Live tab renders a compact journal-source chip. Added a reusable alt momentum HUD for SOL/ETH/HYPE/XRP/DOGE/BNB backed by existing alt trend/MACD analysis fields, while BTC keeps its CandleMomentum HUD.
+
+**[`src/main.py`](/Users/mainfolder/Documents/psb-main%201/src/main.py):** removed the self-healing recommendation Discord/Telegram wake-up call; recommendations still write to `docs/ACTIVE_RECOMMENDATIONS.md` for local review.
+
+**Validation:** `.venv/bin/python -m py_compile src/execution/clob_client.py src/main.py src/dashboard/server.py`; inline dashboard script parse via `node`; `.venv/bin/python -m pytest tests/test_risk_manager_hardening.py tests/test_risk_manager_notional.py tests/test_dashboard_status_startup_session.py tests/test_dashboard_bundle.py` -> `78 passed`.
+
+## 2026-06-12 — Dashboard BTC momentum HUD + Ghost Lab polish
+
+**[`src/dashboard/index.html`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/index.html), [`src/dashboard/server.py`](/Users/mainfolder/Documents/psb-main%201/src/dashboard/server.py):** added a BTC-only CandleMomentum HUD under the Live tab Signal Gates: true `momentum_signal` / signed `momentum_strength` gauge, 5m-vs-15m alignment chips, 15m/5m freshness dots, and a client-side 60m momentum sparkline. This deliberately does **not** synthesize alt momentum from MACD; SOL/ETH/HYPE/XRP/DOGE/BNB keep their existing MACD/lag panels until backend CandleMomentum parity is added.
+
+**Dashboard motion / UX:** existing crypto hero values now flash only on actual displayed-value changes, so the Live tab feels more animated without strobing every poll. Ghost Lab lane selection now updates the counts strip and scrolls the selected table row into view; replay no longer redraws the heatmap every animation frame because the heatmap does not depend on replay cursor position.
+
+**Revision / validation:** bumped `dashboard_ui_rev` to `2026-06-12-btc-momentum-hud`. Validation: inline JS parse check passed; `pytest tests/test_dashboard_bundle.py -q` passed locally.
+
+---
+
 ## 2026-06-12 — REVERTED Codex overnight guard/stop changes + per-lane-direction sit-outs
 
 **Operator review of overnight session.** The overnight session (`test_20260612_062417`) closed net **+$77.51** but regressed late; Codex attributed it to a "cascading stop loss" on correlated baskets and shipped (a) a new `correlation_entry_guard` pre-entry gate and (b) widened 15m/1h stops `0.15 -> 0.20`. Review disagreed with both.

@@ -13,6 +13,21 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-15 — Add lane-local stop cooldown for HYPE 5m BUY_YES bleed
+
+- **What changed:** Added `lane_stop_halt` config support and enabled `hype_macro|5m|BUY_YES` with a 10-minute cooldown after an `updown_stop_loss`.
+- **Why:** Running session `test_20260615_031614` showed HYPE 5m BUY_YES as the main loss lane. Replay of the current session snapshot showed the new cooldown would have blocked 17 exited HYPE 5m BUY_YES entries with `-$60.27` realized PnL.
+- **Hypothesis:** After a HYPE 5m long stop, a short lane-local pause prevents repeated continuation entries during the same failed micro-regime without blocking HYPE BUY_NO, HYPE 15m, XRP, BTC, or other profitable lanes.
+- **Expected outcome:** Fewer clustered HYPE 5m BUY_YES stop-loss cascades; HYPE strategy-level PnL drawdowns should shrink while non-listed lanes continue trading normally.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed HYPE 5m BUY_YES trades after rollout.
+- **Status:** `pending`
+
+### 2026-06-15 — REVIEW (no change): rejected Kimi's hype min_liquidity raise + alt_1h_simple_long enable
+
+- **Context:** Kimi proposed (a) `min_liquidity` 100 → 750 / `min_liquidity_1h` 100 → 400, and (b) enabling `alt_1h_simple_long`.
+- **min_liquidity — REJECTED:** Raising it is *tightening* on the bot's strongest alt (HYPE 5m up ≈ 85% WR held-to-resolution in ghost). Has been 100 since 2026-05-27 with no live evidence of bad fills. Cutting frequency on a winner violates the calibration directive ("increase frequency / don't tighten / don't tune winners"). Kimi's "thin markets" rationale is first-principles, no fill data.
+- **alt_1h_simple_long — REJECTED:** Deliberately OFF. Parked 2026-06-12 — sol/bnb/doge 1h enabled but **hype excluded because its 1h tape was flat** (xrp excluded for negative). Not an oversight.
+
 ### 2026-06-06 — Keep only 5m BUY_YES bullish-floor winner
 
 - **What changed:** `hype_macro.15m_buy_yes_bullish_floor_bump: 0.10 → 0.0`; `hype_macro.5m_buy_yes_bullish_floor_bump` kept at `0.18`.

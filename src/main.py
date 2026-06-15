@@ -2206,9 +2206,17 @@ class PolyBot:
     ) -> bool:
         if not hasattr(self, "circuit_breakers"):
             self.circuit_breakers = CircuitBreakerManager(self.config)
+        window = str(
+            lane_meta.get("lane_window")
+            or lane_meta.get("window_size")
+            or lane_meta.get("window")
+            or ""
+        )
         decision = self.circuit_breakers.can_enter(
             action=action,
             active_positions=self.risk_manager.active_positions.values(),
+            strategy=strategy,
+            window=window,
             btc_price=btc_price,
         )
         if decision.allowed:
@@ -2517,6 +2525,8 @@ class PolyBot:
                     self.circuit_breakers.record_exit(
                         reason=exit_decision.reason,
                         action=breaker_action,
+                        strategy=strat,
+                        window=window,
                     )
                     # Shadow-watch this market to window-close for UNCENSORED MFE/MAE
                     # (logging-only; pos still valid here, deleted just below).
@@ -2568,6 +2578,8 @@ class PolyBot:
 
         No separate fast loop — `trading.cycle_interval_sec` controls cadence (default 120s).
         """
+        cycle_wall_start = time.perf_counter()
+        cycle_timings_ms: Dict[str, Any] = {}
         logging.info("Starting trading cycle...")
         _write_runtime_status(
             phase="cycle_start",
@@ -2653,7 +2665,11 @@ class PolyBot:
             clean_shutdown=False,
             extra={"exposure_managers": self._exposure_status_payload()},
         )
+        scanner_started = time.perf_counter()
         opportunities = await self.market_scanner.scan_for_opportunities()
+        cycle_timings_ms["scanner_sync_ms"] = int(
+            (time.perf_counter() - scanner_started) * 1000
+        )
         high_liquidity = opportunities.get("high_liquidity", [])
         scanner_meta = opportunities.get("scanner_meta", {})
         if scanner_meta:
@@ -2683,12 +2699,17 @@ class PolyBot:
 
         # Check active positions for exit conditions (TP/SL/time)
         try:
+            exit_started = time.perf_counter()
             market_prices = {m.id: m.yes_price for m in high_liquidity}
             market_token_ids = {
                 m.id: (m.token_id_yes, m.token_id_no) for m in high_liquidity
             }
             await self._run_exit_checks(market_prices, market_token_ids)
+            cycle_timings_ms["cycle_exit_check_ms"] = int(
+                (time.perf_counter() - exit_started) * 1000
+            )
         except Exception as e:
+            cycle_timings_ms["cycle_exit_check_error"] = type(e).__name__
             logging.error(f"Exit check error: {e}")
 
         available_markets = [m for m in high_liquidity if m.id not in held_market_ids]
@@ -2811,6 +2832,9 @@ class PolyBot:
             *strategy_tasks,
             return_exceptions=True,
         )
+        cycle_timings_ms["strategy_scan_total_ms"] = int(
+            (time.perf_counter() - scan_started) * 1000
+        )
         strategy_signals: dict[str, Any] = {}
         strategy_scan_timings_ms: dict[str, int] = {}
         strategy_errors: dict[str, Exception] = {}
@@ -2831,6 +2855,7 @@ class PolyBot:
             len(strategy_tasks),
             strategy_scan_timings_ms,
         )
+        cycle_timings_ms["strategy_scan_by_name_ms"] = dict(strategy_scan_timings_ms)
         if strategy_errors:
             logging.warning(
                 "[TRADING] Strategy scan task errors encountered: %s",
@@ -3115,18 +3140,36 @@ class PolyBot:
             phase="resolution_and_calibration",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
+            extra={"cycle_timings_ms": cycle_timings_ms},
         )
         try:
+            resolution_started = time.perf_counter()
             async with self._execution_lock:
                 await self._run_resolution_check(label="[TRADING]")
+            cycle_timings_ms["resolution_check_ms"] = int(
+                (time.perf_counter() - resolution_started) * 1000
+            )
         except Exception as e:
+            cycle_timings_ms["resolution_check_error"] = type(e).__name__
             logging.error(f"Resolution tracking error: {e}")
 
+        calibration_started = time.perf_counter()
         self._schedule_ghost_calibration_refresh()
+        cycle_timings_ms["calibration_schedule_ms"] = int(
+            (time.perf_counter() - calibration_started) * 1000
+        )
 
         positions = len(self.risk_manager.active_positions)
         daily = self.risk_manager.daily_trades
         trade_limit = self.risk_manager.effective_max_trades_per_day()
+        cycle_timings_ms["cycle_elapsed_ms"] = int(
+            (time.perf_counter() - cycle_wall_start) * 1000
+        )
+        cycle_timings_ms["cycle_interval_ms"] = int(float(self.scan_interval) * 1000)
+        cycle_timings_ms["cycle_overrun_ms"] = max(
+            0,
+            cycle_timings_ms["cycle_elapsed_ms"] - cycle_timings_ms["cycle_interval_ms"],
+        )
         logging.info(
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{trade_limit}"
         )
@@ -3134,7 +3177,11 @@ class PolyBot:
             phase="cycle_complete",
             session_id=getattr(self.journal, "session_id", None),
             clean_shutdown=False,
-            extra={"open_positions": positions, "daily_trades": daily},
+            extra={
+                "open_positions": positions,
+                "daily_trades": daily,
+                "cycle_timings_ms": cycle_timings_ms,
+            },
         )
         self._append_scan_diagnostics_annotation(
             scan_skip_digest=_scan_skip_digest(self.last_ai_scan_stats),

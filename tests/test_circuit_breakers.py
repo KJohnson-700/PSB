@@ -64,6 +64,91 @@ def test_slow_correlation_stop_catches_bleed_without_fast_cluster():
     assert "correlation_stop_slow_halt" in triggered.reason
 
 
+def test_lane_stop_halt_blocks_only_configured_lane():
+    cfg = _cfg()
+    cfg["lane_stop_halt"] = {
+        "enabled": True,
+        "pause_minutes": 10,
+        "lanes": [{"lane": "hype_macro|5m|BUY_YES"}],
+    }
+    mgr = CircuitBreakerManager(cfg)
+
+    triggered = mgr.record_exit(
+        reason="updown_stop_loss",
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="5m",
+        now=1000,
+    )
+
+    assert triggered is not None
+    assert triggered.allowed is False
+    assert triggered.side == "BUY_YES"
+    assert "lane_stop_halt" in triggered.reason
+
+    blocked = mgr.can_enter(
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="5m",
+        active_positions=[],
+        now=1001,
+    )
+    assert blocked.allowed is False
+
+    other_window = mgr.can_enter(
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="15m",
+        active_positions=[],
+        now=1001,
+    )
+    assert other_window.allowed is True
+
+    other_strategy = mgr.can_enter(
+        action="BUY_YES",
+        strategy="xrp_macro",
+        window="5m",
+        active_positions=[],
+        now=1001,
+    )
+    assert other_strategy.allowed is True
+
+
+def test_lane_stop_halt_expires():
+    cfg = _cfg()
+    cfg["lane_stop_halt"] = {
+        "enabled": True,
+        "pause_minutes": 10,
+        "lanes": [{"lane": "hype_macro|5m|BUY_YES", "pause_minutes": 2}],
+    }
+    mgr = CircuitBreakerManager(cfg)
+    mgr.record_exit(
+        reason="updown_stop_loss",
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="5m",
+        now=1000,
+    )
+
+    blocked = mgr.can_enter(
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="5m",
+        active_positions=[],
+        now=1119,
+    )
+    assert blocked.allowed is False
+
+    allowed = mgr.can_enter(
+        action="BUY_YES",
+        strategy="hype_macro",
+        window="5m",
+        active_positions=[],
+        now=1121,
+    )
+    assert allowed.allowed is True
+
+
 def test_reversal_halt_blocks_dominant_buy_no_after_btc_rally():
     mgr = CircuitBreakerManager(_cfg())
     positions = [FakePosition("NO") for _ in range(5)]

@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-06-15 — Add lane-local stop cooldown for SOL 5m BUY_YES bleed
+
+- **What changed:** Added `lane_stop_halt` config support and enabled `sol_macro|5m|BUY_YES` with a 10-minute cooldown after an `updown_stop_loss`.
+- **Why:** Running session `test_20260615_031614` showed SOL 5m BUY_YES negative in the current snapshot (`-$11.21` across 5 exits) despite the broader SOL strategy remaining profitable. The change targets only the losing 5m long lane.
+- **Hypothesis:** A short pause after a SOL 5m long stop reduces repeated failed continuation entries while preserving SOL BUY_NO and other SOL windows.
+- **Expected outcome:** Fewer SOL 5m BUY_YES stop-loss cascades; no change to SOL BUY_NO lanes.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed SOL 5m BUY_YES trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-12 — Remove residual live-entry AI blockers from alt 1h/15m quant path
 
 - **What changed:** In [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), set the shared alt macro `_DECISION_GATE_WINDOWS` to empty and guarded the remaining `ai_window_closed_marginal_updown` branch behind that set. SOL 1h/15m entries now proceed through quant gates only; AI remains for observer/tuning/self-healing surfaces.
