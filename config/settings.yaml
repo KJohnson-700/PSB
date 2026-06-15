@@ -331,7 +331,7 @@ lane_management:
     min_pause_gap: 0.08
     auto_pause_confirmation_trades: 3
 lane_calibration:
-  enabled: true
+  enabled: false   # 2026-06-14: restored to documented 06-06 baseline-recovery OFF state (changelog.md:217); ghost-derived lane vetoes were blocking longs in a bull tape
   shadow_mode: false
   paper_shadow_mode: false
   live_shadow_mode: false
@@ -345,8 +345,8 @@ lane_calibration:
   beta_blend_w_max: 0.6
   beta_blend_min_bias: 0.05
   per_lane_thresholds:
-    enabled: true
-    recompute_on_settle: true
+    enabled: false   # 2026-06-14: off per 06-06 baseline (no ghost-derived UP-lane hard vetoes)
+    recompute_on_settle: false   # 2026-06-14: no live recompute of lane_thresholds.json
     recompute_min_new_settles: 25
     min_bucket_n: 50
     wr_veto_threshold: 0.4
@@ -358,7 +358,7 @@ lane_calibration:
   directional_flip:
     enabled: false
 lane_exit_policy:
-  enabled: true
+  enabled: false   # 2026-06-14: off per 06-06 baseline (no exit-drift recompute)
   alert_discord: false
   recompute_min_new_settles: 25
   min_lane_n: 5
@@ -1613,10 +1613,13 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
-    # 2026-06-14: sit out BNB BUY_YES — confirmed bleeder, 40% WR / -$67 over 113
-    # taken-settled trades (trades_settled.jsonl). Cuts the worst lane; UP calls on
-    # BNB are wrong. Re-enable if ghost/taken WR recovers above ~50%.
-    disable_buy_yes: true
+    # 2026-06-14: BNB longs RE-ENABLED. The -$67/113 sit-out (529cb7e) was an
+    # all-windows aggregate that masked the per-window split: BNB 1h LONG is the
+    # bot's TOP lane (63.3% WR, +$157, +$0.098/trade per alt_gate_removal_analysis)
+    # while only 15m LONG bleeds (-$354). Blanket disable killed the best lane in a
+    # bull tape. Operator directive: BNB longs on. If 15m proves a bleeder, suppress
+    # 15m specifically rather than blanket-disabling all UP windows.
+    disable_buy_yes: false
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -2004,7 +2007,7 @@ backtest:
   min_edge_hype_15m: 0.09
   min_edge_hype_5m: 0.07
 learning_loop:
-  enabled: true
+  enabled: false   # 2026-06-14: off per 06-06 baseline (no proposal/vault generation)
   min_trades_for_rules: 15
   min_trades_per_segment: 15
   include_archive: true
@@ -2021,7 +2024,7 @@ learning_loop:
   kelly_rule_max_ai_trades: 50
   backtest_expectations: {}
 performance_feedback:
-  enabled: true
+  enabled: false   # 2026-06-14: off per 06-06 baseline (no runtime min-edge multipliers)
   refresh_every_n_cycles: 6
   min_live_sample: 15
   min_min_edge_mult: 0.7
