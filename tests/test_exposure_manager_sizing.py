@@ -13,6 +13,45 @@ def _manager() -> ExposureManager:
     return ExposureManager(cfg)
 
 
+def test_loss_streak_pause_is_live_only_inert_in_paper() -> None:
+    """The loss-streak lane pause is a live-trading safety. A paper session must
+    keep trading a losing lane (calibration), not pause it — even with the switch
+    enabled. Live sessions still pause."""
+    cfg = {"exposure": {"loss_kill_switch_enabled": True, "max_consecutive_losses": 3}}
+
+    paper = ExposureManager(cfg, is_paper=True, lane_name="HYPE")
+    assert paper.loss_kill_active is False
+    for _ in range(4):
+        paper.record_trade(pnl=-1.0)
+    assert paper.get_status()["paused"] is False
+
+    live = ExposureManager(cfg, is_paper=False, lane_name="HYPE")
+    assert live.loss_kill_active is True
+    for _ in range(3):
+        live.record_trade(pnl=-1.0)
+    assert live.get_status()["paused"] is True
+
+
+def test_partial_reload_does_not_reenable_loss_kill_switch() -> None:
+    """A partial (key-missing) reload must preserve an explicitly-disabled kill
+    switch — regression for the config `false` silently flipping to `true` and
+    lighting the dashboard LOSS KILL badge after a sizing-only config update."""
+    mgr = ExposureManager(
+        {"exposure": {"loss_kill_switch_enabled": False}},
+        is_paper=True,
+        lane_name="TEST",
+    )
+    assert mgr.loss_kill_switch_enabled is False
+    # sizing-only update, no loss_kill key present
+    mgr.reload_from_config({"full_size": 40.0})
+    assert mgr.loss_kill_switch_enabled is False
+    # explicit values still take effect
+    mgr.reload_from_config({"loss_kill_switch_enabled": True})
+    assert mgr.loss_kill_switch_enabled is True
+    mgr.reload_from_config({"loss_kill_switch_enabled": False})
+    assert mgr.loss_kill_switch_enabled is False
+
+
 def test_minimal_tier_uses_scaled_floor_not_full_floor() -> None:
     mgr = _manager()
     mgr._current_tier = ExposureTier.MINIMAL
@@ -61,6 +100,7 @@ def test_auto_pause_force_resumes_after_max_pause_cycles() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
+            "loss_kill_apply_in_paper": True,  # these tests exercise the paper pause
             "max_consecutive_losses": 1,
             "pause_cycles": 1,
             "max_pause_cycles": 2,
@@ -84,6 +124,7 @@ def test_loss_pause_auto_resumes_by_default_in_paper() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
+            "loss_kill_apply_in_paper": True,  # these tests exercise the paper pause
             "max_consecutive_losses": 1,
             "pause_cycles": 1,
             "max_pause_cycles": 1,
@@ -101,6 +142,7 @@ def test_loss_kill_trigger_records_latest_lane_context() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
+            "loss_kill_apply_in_paper": True,  # these tests exercise the paper pause
             "max_consecutive_losses": 1,
             "pause_cycles": 2,
         }
@@ -121,6 +163,7 @@ def test_pause_resume_requires_recovery_and_green_window() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
+            "loss_kill_apply_in_paper": True,  # these tests exercise the paper pause
             "max_consecutive_losses": 1,
             "pause_cycles": 1,
             "max_pause_cycles": 5,
@@ -155,6 +198,7 @@ def test_pause_recovery_anchor_uses_post_loss_portfolio_pnl() -> None:
     cfg = {
         "exposure": {
             "loss_kill_switch_enabled": True,
+            "loss_kill_apply_in_paper": True,  # these tests exercise the paper pause
             "max_consecutive_losses": 1,
             "pause_cycles": 1,
             "loss_pause_recovery_multiple": 2.0,

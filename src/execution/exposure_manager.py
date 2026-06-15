@@ -101,6 +101,12 @@ class ExposureManager:
 
         # --- Loss-streak lane pause config ---
         self.loss_kill_switch_enabled = exposure_config.get('loss_kill_switch_enabled', True)
+        # The loss-streak lane pause is a LIVE-trading safety. In paper it is inert
+        # by default (paper sessions are for calibration/data — they must keep
+        # trading the losing lanes, not pause them). Opt in via this flag (tests do).
+        self.loss_kill_apply_in_paper = bool(
+            exposure_config.get('loss_kill_apply_in_paper', False)
+        )
         self.max_consecutive_losses = exposure_config.get('max_consecutive_losses', 3)
         self.pause_cycles = exposure_config.get('pause_cycles', 2)  # Test mode: pause N cycles
         self.max_pause_cycles = int(
@@ -157,9 +163,19 @@ class ExposureManager:
         }
         self.min_trade_usd = float(exposure_config.get("min_trade_usd", 0.0) or 0.0)
         self.tier_floors = self._resolve_tier_floors(exposure_config)
-        self.loss_kill_switch_enabled = exposure_config.get(
-            "loss_kill_switch_enabled", True
-        )
+        # Preserve the explicitly-configured value on partial reloads. A sizing-only
+        # (or any key-missing) update must NOT silently re-enable the loss-streak
+        # kill switch — that was flipping config `false` back to `true` at runtime
+        # and lighting the dashboard LOSS KILL badge. Only override when the key is
+        # actually present in the incoming dict.
+        if "loss_kill_switch_enabled" in exposure_config:
+            self.loss_kill_switch_enabled = bool(
+                exposure_config["loss_kill_switch_enabled"]
+            )
+        if "loss_kill_apply_in_paper" in exposure_config:
+            self.loss_kill_apply_in_paper = bool(
+                exposure_config["loss_kill_apply_in_paper"]
+            )
         self.max_consecutive_losses = exposure_config.get("max_consecutive_losses", 3)
         self.pause_cycles = exposure_config.get("pause_cycles", 2)
         self.max_pause_cycles = int(
@@ -366,6 +382,20 @@ class ExposureManager:
             parts.append(f"{self._consecutive_losses}_losses")
         return " ".join(parts) if parts else "normal"
 
+    @property
+    def loss_kill_active(self) -> bool:
+        """Effective state of the loss-streak lane pause.
+
+        Off if disabled; off in paper sessions unless ``loss_kill_apply_in_paper``
+        is set. This is the value that should gate pause behavior and drive the
+        dashboard LOSS KILL badge, so paper sessions never show/trigger it.
+        """
+        if not self.loss_kill_switch_enabled:
+            return False
+        if self.is_paper and not self.loss_kill_apply_in_paper:
+            return False
+        return True
+
     # ──────────────────────────────────────────────────────────────
     # Trade Result Tracking
     # ──────────────────────────────────────────────────────────────
@@ -397,13 +427,14 @@ class ExposureManager:
             self._streak_loss_abs_total += abs(float(pnl))
             logger.info(f"Exposure: Loss recorded ({pnl:+.2f}), streak={self._consecutive_losses}")
 
-            if self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
+            if self.loss_kill_active and self._consecutive_losses >= self.max_consecutive_losses:
                 self._trigger_pause(
                     f"{self._consecutive_losses} consecutive losses",
                     window_size=str(window_size or ""),
                 )
-            elif not self.loss_kill_switch_enabled and self._consecutive_losses >= self.max_consecutive_losses:
-                logger.info(f"Exposure: Loss-streak lane pause disabled — would pause at {self._consecutive_losses} losses")
+            elif not self.loss_kill_active and self._consecutive_losses >= self.max_consecutive_losses:
+                _why = "disabled" if not self.loss_kill_switch_enabled else "paper session (live-only)"
+                logger.info(f"Exposure: Loss-streak lane pause inert ({_why}) — would pause at {self._consecutive_losses} losses")
         else:
             if self._consecutive_losses > 0:
                 logger.info(f"Exposure: Win recorded ({pnl:+.2f}), resetting loss streak")
