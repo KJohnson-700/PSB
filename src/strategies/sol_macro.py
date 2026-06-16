@@ -696,6 +696,35 @@ class SolMacroStrategy:
         self.ai_confidence_threshold = self.config.get("ai_confidence_threshold", 0.60)
         self.max_ai_calls_per_scan = int(self.config.get("max_ai_calls_per_scan", 12))
         self.kelly_fraction = self.config.get("kelly_fraction", 0.15)
+        # ── Per-asset edge-math constants (2026-06-15) ─────────────────────
+        # These RSI/ATR bands and confirmation cutoffs were historically bare
+        # literals in shared base methods (_estimate_probability, _vote_rsi_bias,
+        # _check_macd_confirmation), so every alt (sol/xrp/hype/bnb/doge) used
+        # SOL-tuned values regardless of its own RSI/ATR scale. Exposed per-asset
+        # here; defaults == legacy SOL values, so omitting the keys is a no-op.
+        # Calibrate from the settled ghost log per asset — do not guess.
+        ep = self.config.get("est_prob")
+        ep = ep if isinstance(ep, dict) else {}
+        self.ep_rsi_ob_strong = float(ep.get("rsi_overbought_strong", 75.0))   # UP: strong overbought headwind
+        self.ep_rsi_ob_mild = float(ep.get("rsi_overbought_mild", 65.0))       # UP: mild overbought headwind
+        self.ep_rsi_os_bounce = float(ep.get("rsi_oversold_bounce", 30.0))     # UP: oversold-bounce tailwind
+        self.ep_rsi_os_strong = float(ep.get("rsi_oversold_strong", 25.0))     # DOWN: strong oversold headwind
+        self.ep_rsi_os_mild = float(ep.get("rsi_oversold_mild", 35.0))         # DOWN: mild oversold headwind
+        self.ep_rsi_ob_crash = float(ep.get("rsi_overbought_crash", 70.0))     # DOWN: overbought-crash tailwind
+        self.ep_atr_high_pct = float(ep.get("atr_high_pct", 0.03))             # ATR% above = "high vol"
+        self.ep_atr_low_pct = float(ep.get("atr_low_pct", 0.01))               # ATR% below = "low vol"
+        # UP-side RSI adjustment magnitudes (probability points). Default = mean-revert
+        # (overbought penalty / oversold boost). Momentum assets invert: ghost P(up)
+        # RISES with RSI (HYPE: >75 P(up)=0.56-0.64, <30 P(up)=0.46). Per-asset; fit
+        # from settled ghost log (scripts/fit_hype_rsi_momentum.py) — do not guess.
+        self.ep_rsi_adj_up_ob_strong = float(ep.get("rsi_adj_up_overbought_strong", -0.06))
+        self.ep_rsi_adj_up_ob_mild = float(ep.get("rsi_adj_up_overbought_mild", -0.02))
+        self.ep_rsi_adj_up_os_bounce = float(ep.get("rsi_adj_up_oversold_bounce", 0.04))
+        # RSI→bias vote cutoffs (was hardcoded 55/45, shared across all alts).
+        self.bias_rsi_bull = float(self.config.get("bias_rsi_bull", 55.0))
+        self.bias_rsi_bear = float(self.config.get("bias_rsi_bear", 45.0))
+        # LTF MACD confirmation strength gate (was hardcoded 0.50, SOL-tuned).
+        self.ltf_confirm_strength_min = float(self.config.get("ltf_confirm_strength_min", 0.50))
         self.entry_price_min = self.config.get("entry_price_min", 0.46)
         self.entry_price_max = self.config.get("entry_price_max", 0.54)
         self.min_positive_m5_adj_5m = float(self.config.get("min_positive_m5_adj_5m", 0.0))
@@ -1425,11 +1454,10 @@ class SolMacroStrategy:
             return "BEARISH"
         return "NEUTRAL"
 
-    @staticmethod
-    def _vote_rsi_bias(rsi: float) -> str:
-        if rsi >= 55.0:
+    def _vote_rsi_bias(self, rsi: float) -> str:
+        if rsi >= self.bias_rsi_bull:
             return "BULLISH"
-        if rsi <= 45.0:
+        if rsi <= self.bias_rsi_bear:
             return "BEARISH"
         return "NEUTRAL"
 
@@ -2632,9 +2660,10 @@ class SolMacroStrategy:
                 strength += 0.10
                 reasons.append(f"{label} MACD below signal")
 
-        # Keep at 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35
-        # on WR and net PnL, and this gate treats confirmed LTF as late-entry risk.
-        confirmed = strength >= 0.50
+        # Default 0.50: cached SOL 15m Jan20-Apr20 comparison beat 0.35 on WR and
+        # net PnL, and this gate treats confirmed LTF as late-entry risk. Now
+        # per-asset via ltf_confirm_strength_min (default == legacy SOL value).
+        confirmed = strength >= self.ltf_confirm_strength_min
         return confirmed, strength, reasons
 
     # ──────────────────────────────────────────────────────────────
@@ -2738,14 +2767,14 @@ class SolMacroStrategy:
         rsi = ta.sol.rsi_14
         rsi_adj = 0.0
         if direction == "UP":
-            if rsi > 75:   rsi_adj = -0.06   # Overbought — strongly against UP
-            elif rsi > 65: rsi_adj = -0.02   # Elevated — mild headwind for UP
-            elif rsi < 30: rsi_adj =  0.04   # Oversold bounce
+            if rsi > self.ep_rsi_ob_strong:   rsi_adj = self.ep_rsi_adj_up_ob_strong   # overbought (mean-revert: penalty; momentum: boost)
+            elif rsi > self.ep_rsi_ob_mild:   rsi_adj = self.ep_rsi_adj_up_ob_mild     # elevated
+            elif rsi < self.ep_rsi_os_bounce: rsi_adj = self.ep_rsi_adj_up_os_bounce   # oversold (mean-revert: boost; momentum: penalty)
             # Removed: 50<rsi<65 = +0.02 bonus. Live data: 14.3% WR -$14.68 in that bucket (worst of all)
         else:
-            if rsi < 25:   rsi_adj = -0.06   # Oversold — strongly against DOWN
-            elif rsi < 35: rsi_adj = -0.02   # Low RSI — mild headwind for DOWN
-            elif rsi > 70: rsi_adj =  0.04   # Overbought crash potential
+            if rsi < self.ep_rsi_os_strong:   rsi_adj = -0.06   # Oversold — strongly against DOWN
+            elif rsi < self.ep_rsi_os_mild:   rsi_adj = -0.02   # Low RSI — mild headwind for DOWN
+            elif rsi > self.ep_rsi_ob_crash:  rsi_adj =  0.04   # Overbought crash potential
             # Removed: mirror of removed UP bonus
 
         # BTC-alt lag — REMOVED from alt est_prob calculation 2026-05-22.
@@ -2759,9 +2788,9 @@ class SolMacroStrategy:
         # ATR-based volatility context
         vol_adj = 0.0
         atr_pct = ta.sol.atr_14 / sol_price if sol_price > 0 else 0
-        if atr_pct > 0.03:  # High vol SOL
+        if atr_pct > self.ep_atr_high_pct:  # High vol for this asset
             vol_adj = 0.02 if direction == "UP" else 0.02  # More room to move
-        elif atr_pct < 0.01:
+        elif atr_pct < self.ep_atr_low_pct:
             vol_adj = -0.03  # Low vol, harder to reach threshold
 
         # Time decay
@@ -3024,6 +3053,24 @@ class SolMacroStrategy:
                 pass
             if btc_1h_regime is not None:
                 merged_context["btc_1h_regime"] = btc_1h_regime
+            # Attribute the reject to its resolved lane instead of the catch-all
+            # pre_resolver_reject bucket. The bias resolver runs at the TOP of each
+            # candidate iteration (before any skip fires), so side_source /
+            # resolver_path are already set for EVERY skip in this loop — they were
+            # just never forwarded, collapsing ~81% of settled rejects into
+            # pre_resolver_reject and blinding per-lane (LONG vs SHORT) calibration.
+            # Capture from the loop scope; fail open to None so any genuinely
+            # pre-resolver path stays correctly unbucketed.
+            _reject_side_source = None
+            _reject_resolver_path = None
+            try:
+                _reject_side_source = side_source  # closure var, set per-candidate
+            except NameError:
+                _reject_side_source = None
+            try:
+                _reject_resolver_path = getattr(resolution, "resolver_path", None)
+            except NameError:
+                _reject_resolver_path = None
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -3039,6 +3086,8 @@ class SolMacroStrategy:
                 policy_version=policy_version,
                 stage=stage,
                 btc_1h_regime=btc_1h_regime,
+                side_source=_reject_side_source,
+                resolver_path=_reject_resolver_path,
             )
 
         observer_tasks: List[asyncio.Task] = []
@@ -3236,6 +3285,29 @@ class SolMacroStrategy:
                     side=allowed_side,
                     action=action,
                     reason="buy_yes_disabled_lane",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
+            # 2026-06-15: per-asset 1h BUY_NO (SHORT) sit-out. Data-driven lane cut —
+            # set `disable_buy_no_1h: true` for an asset whose 1h short-side is -EV
+            # (doge: ghost avgEV -0.118, 52% WR over 1393 settled; LONG side is +0.066
+            # EV / 62% WR and untouched). Opt-in, default off; ghost-logged so the
+            # counterfactual keeps settling and we can re-admit if the edge returns.
+            if (
+                is_updown
+                and _updown_tf == "1h"
+                and action == "BUY_NO"
+                and bool(self.config.get("disable_buy_no_1h", False))
+            ):
+                _bump_skip("buy_no_1h_disabled_lane")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_no_1h_disabled_lane",
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
                     context={"side_source": side_source},

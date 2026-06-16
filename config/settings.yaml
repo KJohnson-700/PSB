@@ -33,7 +33,7 @@ trading:
   - 1h
   microstructure_enrichment_enabled: false
   microstructure_trade_flow_window_sec: 300
-  crypto_hourly_scan_every_n_cycles: 3
+  crypto_hourly_scan_every_n_cycles: 1   # 2026-06-15: un-throttle — 1h windows closing before scanner looks (architecture, not edge)
   overrun_recovery_sleep_sec: 5
   dry_run: true
   slippage_guard:
@@ -577,6 +577,13 @@ strategies:
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
+    # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75 from settled ghost log).
+    # Legacy 0.01/0.03 was SOL-scale AND mis-scaled — low-vol penalty fired on ~98% of
+    # trades, wrongly suppressing the best mid-vol longs (Q3 +0.080). RSI bands left at
+    # shared default: per-asset RSI distributions are identical (p90≈75 for all).
+    est_prob:
+      atr_low_pct: 0.0040
+      atr_high_pct: 0.0064
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1013,6 +1020,17 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). HYPE runs ~2x SOL's vol
+    # (median 0.90% vs 0.53%), so SOL's 0.01/0.03 was doubly wrong here. RSI shared default.
+    est_prob:
+      atr_low_pct: 0.0076
+      atr_high_pct: 0.0105
+      # 2026-06-15: HYPE is momentum, not mean-reverting (ghost fit, n=64199, stable
+      # all-time vs recent). P(up) RISES with RSI: >75 boost, <30 penalty, 65-75 neutral.
+      # Reverses the default mean-revert UP-side RSI nudge. scripts/fit_hype_rsi_momentum.py
+      rsi_adj_up_overbought_strong: 0.05
+      rsi_adj_up_overbought_mild: 0.0
+      rsi_adj_up_oversold_bounce: -0.05
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1228,6 +1246,10 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
+    est_prob:
+      atr_low_pct: 0.0035
+      atr_high_pct: 0.0059
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1442,6 +1464,11 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
+    est_prob:
+      atr_low_pct: 0.0035
+      atr_high_pct: 0.0053
+    disable_buy_no_1h: true   # 2026-06-15: sit out doge 1h SHORT — ghost avgEV -0.118, 52% WR (n=1393); LONG side +0.066 EV / 62% WR kept. Ghost-logged; re-admit if edge returns.
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1627,6 +1654,11 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). BNB is the calmest alt
+    # (median 0.32%), so SOL's bands were the most wrong here. RSI shared default.
+    est_prob:
+      atr_low_pct: 0.0026
+      atr_high_pct: 0.0038
     # 2026-06-14: BNB longs RE-ENABLED. The -$67/113 sit-out (529cb7e) was an
     # all-windows aggregate that masked the per-window split: BNB 1h LONG is the
     # bot's TOP lane (63.3% WR, +$157, +$0.098/trade per alt_gate_removal_analysis)
