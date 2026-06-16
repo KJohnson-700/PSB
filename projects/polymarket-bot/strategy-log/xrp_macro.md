@@ -14,6 +14,23 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-06-15 — DIAGNOSIS (decision OPEN): xrp is -EV on EVERY lane, both sides
+
+- **Finding:** Net-of-fee ghost EV by (window, side), all-time / recent:
+  - `1h BUY_NO` −0.160 / −0.160 · `1h BUY_YES` −0.101 / −0.128
+  - `5m BUY_NO` −0.091 / −0.071 · `5m BUY_YES` −0.036 / −0.082
+  - `15m BUY_NO` −0.073 / −0.062 · `15m BUY_YES` −0.043 / −0.077
+- **Read:** xrp is structurally negative everywhere — there is no +EV lane to protect. Unlike DOGE (short-side bleed, long kept) or BNB (long-side bleed, shorts kept), xrp has no clean side to keep. Sitting out the clear bleeders (1h both sides, 5m NO, 15m NO) is most of xrp's volume — effectively disabling the asset.
+- **Decision:** **OPEN — no change applied.** This is a near-full-asset sit-out, which is a bigger call than a single lane and was left to the operator. Options: (a) cut the 4 worst lanes (`1h` both, `5m BUY_NO`, `15m BUY_NO`), (b) full xrp sit-out, (c) hold and keep gathering calibration data.
+- **Status:** `decision pending` (no code/config change)
+
+### 2026-06-15 — REVIEW (no value change): xrp 15m BUY_NO `min_edge` 0.5 is an intentional sit-out
+
+- **Context:** Kimi flagged `by_tf.15m.min_edge_buy_no: 0.5` as "almost certainly a typo."
+- **Finding:** NOT a typo. Git blame → added 2026-06-12 (`a016562`, "sit out eth/xrp 15m BUY_NO") for a confirmed 30% WR bleeder. The clarifying comment was accidentally stripped on 06-14 when the value was normalized `0.50`→`0.5`. Kimi's claim that entry_policy "overrides it to 0.06" is false — `entry_policy.15m.down.min_edge` is **also** `0.5` (config:1398). Sit-out is intentional and effective in both places.
+- **Action:** Restored explanatory comments on both lines (config:1252, 1398). No threshold change. Do not lower without ghost evidence the lane has turned.
+- **Also rejected:** xrp 5m double size-throttle (`calibration_size_multiplier_5m: 0.3` + entry_policy `size_multiplier: 0.3`) — both apply in code but are inert under the $15 Kelly floor; sizing change deferred per exit/sizing-data rule.
+
 ### 2026-06-12 — Remove residual live-entry AI blockers from alt 1h/15m quant path
 
 - **What changed:** In the shared [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py) path inherited by XRP, set alt live-entry decision windows to empty and guarded the remaining `ai_window_closed_marginal_updown` branch behind that set. XRP 1h/15m entries now proceed through quant gates only; AI remains for observer/tuning/self-healing surfaces.

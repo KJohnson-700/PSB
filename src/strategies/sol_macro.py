@@ -3290,24 +3290,45 @@ class SolMacroStrategy:
                     context={"side_source": side_source},
                 )
                 continue
-            # 2026-06-15: per-asset 1h BUY_NO (SHORT) sit-out. Data-driven lane cut —
-            # set `disable_buy_no_1h: true` for an asset whose 1h short-side is -EV
-            # (doge: ghost avgEV -0.118, 52% WR over 1393 settled; LONG side is +0.066
-            # EV / 62% WR and untouched). Opt-in, default off; ghost-logged so the
-            # counterfactual keeps settling and we can re-admit if the edge returns.
+            # 2026-06-15: per-asset, PER-WINDOW BUY_NO (SHORT) sit-out. Set
+            # `disable_buy_no_<window>: true` (disable_buy_no_5m / _15m / _1h) for an
+            # asset whose short-side on that window is -EV by ghost net-of-fee EV
+            # (doge 1h -0.166, doge 15m -0.10/-0.15 over n=16k). Opt-in, default off;
+            # ghost-logged so the counterfactual keeps settling and we can re-admit.
             if (
                 is_updown
-                and _updown_tf == "1h"
                 and action == "BUY_NO"
-                and bool(self.config.get("disable_buy_no_1h", False))
+                and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False))
             ):
-                _bump_skip("buy_no_1h_disabled_lane")
+                _bump_skip(f"buy_no_{_updown_tf}_disabled_lane")
                 _log_skip_reject(
                     market=market,
                     window=_updown_tf,
                     side=allowed_side,
                     action=action,
-                    reason="buy_no_1h_disabled_lane",
+                    reason=f"buy_no_{_updown_tf}_disabled_lane",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
+            # 2026-06-15: per-asset, PER-WINDOW BUY_YES (LONG) sit-out. Set
+            # `disable_buy_yes_<window>: true` (e.g. disable_buy_yes_15m) for an asset
+            # whose long-side on that window is -EV (bnb 15m -0.048/-0.080 over n=16k)
+            # while its OTHER windows stay +EV (bnb 1h/5m long). Narrower than the
+            # all-window `disable_buy_yes` above. Opt-in, default off; ghost-logged.
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False))
+            ):
+                _bump_skip(f"buy_yes_{_updown_tf}_disabled_lane")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason=f"buy_yes_{_updown_tf}_disabled_lane",
                     yes_price=yes_price,
                     htf_bias=primary_htf_bias,
                     context={"side_source": side_source},

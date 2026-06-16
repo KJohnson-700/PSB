@@ -13,6 +13,16 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 
 ## Change Log
 
+### 2026-06-15 — HYPE is momentum, not mean-reverting: per-asset UP-side RSI nudge
+
+- **What changed:** Set `strategies.hype_macro.est_prob.rsi_adj_up_overbought_strong: 0.05`, `rsi_adj_up_overbought_mild: 0.0`, `rsi_adj_up_oversold_bounce: -0.05` (newly per-asset keys; default for all other alts is the mean-revert `-0.06/-0.02/+0.04`). This **reverses** the UP-side RSI adjustment in `_estimate_probability` for HYPE only — overbought longs now get a boost, oversold a penalty, mid neutral. Also applied per-asset ATR% bands `atr_low_pct: 0.0076 / atr_high_pct: 0.0105` (HYPE's own p25/p75; ~2× SOL's scale).
+- **Why:** Shared base used SOL-tuned overbought = penalty for longs. Ghost fit (`scripts/fit_hype_rsi_momentum.py`, n=64,199) shows HYPE's P(up) **rises** with RSI: `>75` P(up)≈0.56–0.64 vs baseline 0.52, `<30` P(up)≈0.46. The legacy `-0.06` penalty was suppressing a real +EV pocket (`>75` UP realized EV +0.067, n=5,195).
+- **Stability gate:** `>75` adj +0.047 (all-time) → +0.059 (recent ≥06-08), `<30` −0.047 → −0.062 — both sign-stable and *strengthening*; recent `75–85` realized EV still positive (+0.066). `65–75` zone left at 0 (±0.006, sign-unstable noise) — a generic "momentum profile" would have wrongly boosted it.
+- **Hypothesis:** Trading HYPE's RSI as continuation (not mean-reversion) admits the overbought-long pocket the SOL-tuned penalty was vetoing, without touching the DOWN side (noisy) or the other alts.
+- **Expected outcome:** More HYPE UP entries in the 55–85 RSI band; est_prob no longer marks overbought HYPE longs down.
+- **Actual outcome:** `pending` — live since session `test_20260615_211313`; needs settled HYPE longs in the `>75` band to confirm.
+- **Status:** `pending`
+
 ### 2026-06-15 — Add lane-local stop cooldown for HYPE 5m BUY_YES bleed
 
 - **What changed:** Added `lane_stop_halt` config support and enabled `hype_macro|5m|BUY_YES` with a 10-minute cooldown after an `updown_stop_loss`.
@@ -361,6 +371,12 @@ HYPE **Up or Down** — inherits shared `SolMacroStrategy` signal path with Hype
 ## Lessons learned
 
 _(none yet — add only after data)_
+
+## 2026-06-15 — Lane-stop cooldown narrowed to HYPE 5m + 5m shorts opened (forward-test)
+- **Cooldown:** Codex added a stop-cooldown across 7 BUY_YES lanes to stop the $30 bleed. Conditional test (trades.jsonl since 06-12, WR of next entry given a same-lane stop in prior N min): the toxic clustering is real only at **10 min** and concentrated in **HYPE 5m BUY_YES** — post-stop n=46 WR **34.8%** avg **−$1.92** vs clean n=69 WR **56.5%** avg **+$1.98**. Confirmed not the 06-14 phantom-stop artifact (losers' mae median −0.37, none ≈0). Other 6 lanes had 0–2 post-stop samples → no basis. `lane_stop_halt` narrowed to just `hype_macro|5m|BUY_YES` @ 10 min.
+- **Diagnosis (ghost, since 06-12, n=2994):** HYPE 5m **fades the HTF bias** (contrarian at 5m). htf_bias BULLISH → LONG rp −2.4% / SHORT **+8.5%**; BEARISH → LONG +5.3% / SHORT −0.4%. Rejected longs (`lane_entry_window` n=871) are correctly −2.7% EV — the long bleed can't be fixed by admitting more longs. The +EV is the SHORT side, blocked by `low_atr_gate_skip` (BUY_NO n=1570, **60.4% WR, median realized +17.6%**, net +4.2%; trimmed-5% +1.4%). **Day-volatile** (06-13 +16.7%, 06-15 +10.6%, **06-14 −18.4%**).
+- **Change:** removed `5m:SHORT` from `low_atr_only_lanes` (now `[]` → gate off for HYPE). Verified flip-safe: `buy_no_5m_flip_to_yes: false`, low_atr gate fires before the flip block — candidates trade as real BUY_NO shorts. Narrowed cooldown stays as backstop for the bleed days.
+- **Status:** config-only, **NEEDS RESTART**. Watch: HYPE 5m shorts convert to fills + hold the +EV; bleed-day exposure.
 
 ## 2026-06-11 — 5m BUY_NO inversion flip → +EV long (forward-test)
 - **Finding:** hype_macro **5m BUY_NO** is structurally inverted — held-to-resolution WR **33%** over n=57 (settled since ~05-20), **$-144** live PnL. On the *same* markets the YES side resolves ITM ~67%, so the short is anti-selective and the cheap long is +EV.

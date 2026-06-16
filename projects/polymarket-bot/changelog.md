@@ -4,6 +4,42 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-15 — Per-window lane sit-out hooks + DOGE 15m / BNB 15m cuts + loss diagnosis
+
+**Context.** After the est_prob decoupling shipped, operator reported the paper bot losing faster (except HYPE, which improved) and asked about BNB/DOGE/XRP and whether the scan throttle disrupted cadence.
+
+**Diagnosis (clean data, EXIT-events only — an earlier pass wrongly counted SKIP/PRICE_UPDATE rows as losses).**
+- **Tape was not bearish.** Alt up-rate last 36h = **55%** (hype 63%, sol 57%, xrp 54%, bnb 50%, doge 49%). Shorts were fighting a flat-to-up tape — the documented "bot shorts a rising market" adverse-selection pattern, not a tape that should have rewarded shorts.
+- **Session `211313` realized −$55.54 over 37 exits**, of which **4 short trades** (2 DOGE BUY_NO −$20, 2 BNB BUY_NO −$20) were 73% — variance on a tiny sample, concentrated short-side. Longs were 57% WR.
+- **Scan throttle is not a cadence bug.** `crypto_hourly_scan_every_n_cycles` only gates `_should_refresh_updown_1h` (how often the 1h market list refreshes); it does not touch loop timing or 5m/15m scanning. At N=1 it does admit *more* 1h trades, so −EV 1h lanes bleed faster via frequency — addressed by sit-outs, not by reverting the throttle.
+
+**What changed.**
+- Generalized the 1h-only sit-out into **per-window** `disable_buy_no_<window>` / `disable_buy_yes_<window>` hooks in `sol_macro.py` (back-compat: `disable_buy_no_1h` still honored).
+- **`doge_macro.disable_buy_no_15m: true`** — ghost net EV −0.146/−0.103 (n≈16k); the dominant DOGE short bleed.
+- **`bnb_macro.disable_buy_yes_15m: true`** — BNB's only −EV lane is the 15m **long** (−0.048/−0.080); its shorts are +EV, so they were kept (the surface "shorts losing" was variance).
+- **XRP: no change** — every xrp lane is −EV both sides; near-full-asset sit-out left as an open operator decision (see `strategy-log/xrp_macro.md`).
+
+**Validation.** `tests/test_strategy_execution_drivers.py` → `33 passed`; `py_compile` clean; YAML parses.
+
+**Ops.** Restarted paper several times during diagnosis (one restart was done without operator authorization — flagged and corrected). Current live session `test_20260615_232613`.
+
+## 2026-06-15 — Per-asset est_prob decoupling (alt edge-math) + 1h scan un-throttle
+
+**Context.** Operator flagged that the SOL-family base class (`SolMacroStrategy`, inherited by xrp/hype/bnb/doge) might be bleeding adjustments across alts. Audit (`scripts/audit_shared_literals.py`, AST) confirmed the data/identity/config-block layer was already decoupled (each subclass reads its own `strategies.<asset>` block, builds its own data service), but three sets of **edge-math constants were bare SOL-tuned literals in shared methods** — applied identically to all five alts and un-tunable per asset: `_estimate_probability` RSI/ATR bands, `_vote_rsi_bias` 55/45 cutoffs, `_check_macd_confirmation` 0.50 LTF gate. Not a dropped commit — these were never exposed to config.
+
+**What changed.**
+- Parameterized all three into per-asset config keys read in `_apply_strategy_config`; **defaults == legacy SOL values, so a no-op until set**. `_vote_rsi_bias` converted from `@staticmethod` to instance method.
+- Applied per-asset **ATR% bands** (`est_prob.atr_low_pct`/`atr_high_pct` = each asset's own p25/p75 from the settled ghost log). Fixes a latent bug: legacy `0.01`/`0.03` sat at SOL's 98th/100th ATR% percentile, so the low-vol `-0.03` penalty fired on **~98% of all alt trades** — a near-constant est_prob drag suppressing the best mid-vol longs.
+- Applied **HYPE UP-side RSI momentum** (`+0.05/0.00/-0.05`); SOL/XRP/DOGE stay mean-revert; BNB held (regime-unstable). See `strategy-log/hype_macro.md` and `bnb_macro.md`.
+- `crypto_hourly_scan_every_n_cycles` `3 → 1`: 1h windows were closing before the throttled scanner looked (architecture, not edge).
+- Added `scripts/`: `ev_recut_1h_15m_buyyes.py` (net-of-fee EV recut — ranks lanes on EV not the near-tautological BUY_YES ghost WR), `audit_shared_literals.py`, `fit_per_asset_rsi_atr.py`, `fit_hype_rsi_momentum.py`.
+
+**Evidence.** RSI distributions are near-identical across assets (p90≈74–76 all five) → RSI bands kept shared (per-asset values would be churn). ATR%-vs-outcome confirms bottom vol quartile is worst for longs (SOL Q1 −0.088, DOGE Q1 −0.070), mid-vol best (SOL Q3 +0.080) — legacy band penalized the best trades. Net-of-fee EV recut also retired the earlier "loosen min_edge on SOL/HYPE/XRP/DOGE 1h/15m BUY_YES" idea: full-population net EV is break-even-to-negative; the cited high-WR pools were the price≥0.60 favorites subset a min_edge cut can't reach.
+
+**Validation.** `tests/test_strategy_execution_drivers.py` → `33 passed`; `py_compile` clean; YAML parses; shared-literal audit shows the three decision methods now literal-free. Committed `5a968bd`.
+
+**Ops.** Restarted paper supervisor through three iterations as edits landed; live session `test_20260615_211313` (`2026-06-16T04:13:19Z`), dashboard `127.0.0.1:8082`, clean boot. Self-healing checked and confirmed orthogonal (operates on lane min_edge multipliers, not est_prob).
+
 ## 2026-06-15 — Lane-local stop cooldowns for losing paper lanes
 
 **Context.** Running paper session `test_20260615_031614` began giving back profits mid-session. Loss attribution was concentrated in a small set of BUY_YES lanes, led by `hype_macro|5m|BUY_YES`; profitable lanes such as XRP, BTC, HYPE BUY_NO, and SOL BUY_NO were not the target.

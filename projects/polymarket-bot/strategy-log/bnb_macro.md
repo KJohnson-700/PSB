@@ -12,6 +12,24 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-15 — Sit out BNB 15m BUY_YES (long) — BNB's only -EV lane (NOT the shorts)
+
+- **What changed:** Set `strategies.bnb_macro.disable_buy_yes_15m: true` (new per-window long sit-out hook; narrower than the all-window `disable_buy_yes`).
+- **Why — and why it's the long side, counterintuitively:** When BNB looked like it was "losing on shorts" live (−$20 BUY_NO in `211313`), the net-of-fee ghost EV by lane said the **opposite** — BNB shorts are +EV (`1h BUY_NO` +0.094, `5m BUY_NO` +0.087, `15m BUY_NO` ≈0.00), and its **only** −EV lane is `15m BUY_YES` = **−0.048 all / −0.080 recent (n≈16k)**. The live short −$20 was 2 unlucky trades; BNB BUY_NO was +$53 / 67% WR the prior session (`150855`). So cutting BNB shorts would have thrown away an edge — cut the 15m long instead.
+- **Lesson:** Diagnose the lane from ghost net-EV, not from the surface "which side lost money this session." Surface pattern said shorts; the data said longs.
+- **Expected outcome:** Removes BNB's structurally −EV 15m long; keeps 1h/5m longs and all short windows (+EV).
+- **Actual outcome:** `pending` — live since `test_20260615_232613`.
+- **Status:** `pending`
+
+### 2026-06-15 — REVIEW (no change): BNB UP-side RSI momentum HELD as regime-unstable
+
+- **Context:** While shipping HYPE's UP-side RSI momentum nudge, BNB looked like a candidate — its all-time RSI×outcome curve also has positive long EV at high RSI (`>75` +0.073). Considered setting `est_prob.rsi_adj_up_*` to a momentum profile for BNB too.
+- **HELD — not for lack of data (n=37,694), but regime instability.** Stability gate (`scripts/fit_hype_rsi_momentum.py bnb_macro`): 2 of 3 zones **sign-flip** all-time↔recent (`<30` −0.026→+0.000, `65–75` +0.004→−0.001). The one sign-stable zone (`>75`) has realized EV that **flipped negative recently**: `75–85` +0.075 (all-time, n=3,202) → **−0.115** (recent ≥06-08, n=1,304), with volume more than halved.
+- **Contrast with HYPE (which shipped):** HYPE's zones were sign-stable *and strengthening*, recent realized EV still positive. BNB's pocket is decaying/negative in current tape — setting it would be overfitting to stale all-time data.
+- **Applied anyway (uniform, safe):** per-asset ATR% bands `atr_low_pct: 0.0026 / atr_high_pct: 0.0038` (BNB's own p25/p75 — it's the calmest alt, median ATR% 0.32%, so SOL's `0.01/0.03` was most wrong here). UP-side RSI nudge left at mean-revert default.
+- **Re-open trigger:** re-run the fit; if recent `>75` realized EV turns positive and zones stabilize, revisit.
+- **Status:** `no change` (RSI), `applied` (ATR bands)
+
 ### 2026-06-15 — Add lane-local stop cooldown for BNB 1h BUY_YES bleed
 
 - **What changed:** Added `lane_stop_halt` config support and enabled `bnb_macro|1h|BUY_YES` with a 15-minute cooldown after an `updown_stop_loss`.

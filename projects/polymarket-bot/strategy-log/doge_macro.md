@@ -12,6 +12,15 @@ DOGE **Up or Down** — inherits shared `SolMacroStrategy` signal path with DOGE
 
 ## Change Log
 
+### 2026-06-15 — Sit out DOGE 15m BUY_NO (short) — confirmed ghost bleed
+
+- **What changed:** Set `strategies.doge_macro.disable_buy_no_15m: true`. Generalized the existing 1h-only sit-out into per-window `disable_buy_no_<window>` / `disable_buy_yes_<window>` hooks in `sol_macro.py` so this cuts exactly the 15m short and nothing else.
+- **Why:** Net-of-fee ghost EV `doge 15m BUY_NO` = **−0.146 all-time / −0.103 recent (n≈16k)** — the dominant DOGE short lane and the biggest live short bleed. Live confirmation: DOGE BUY_NO booked 0% WR in two consecutive sessions (−$38 in `150855`, −$20 in `211313`). DOGE 1h BUY_NO already sat out (−0.166); 15m is the same pathology one window down.
+- **Context:** Tape was ~49–55% UP over the window, so DOGE shorts were fighting a flat-to-up tape (adverse selection), consistent with the −EV ghost. LONG side kept (`doge 15m BUY_YES` −0.014, marginal but not cut).
+- **Expected outcome:** Removes the recurring DOGE 15m short losses; DOGE keeps trading longs + 5m. Ghost keeps settling the counterfactual so we can re-admit if short edge returns.
+- **Actual outcome:** `pending` — live since session `test_20260615_232613`.
+- **Status:** `pending`
+
 ### 2026-06-15 — Add lane-local stop cooldowns for DOGE BUY_YES bleed
 
 - **What changed:** Added `lane_stop_halt` config support and enabled `doge_macro|5m|BUY_YES`, `doge_macro|15m|BUY_YES`, and `doge_macro|1h|BUY_YES` with 10-15 minute cooldowns after `updown_stop_loss`.
