@@ -1788,6 +1788,20 @@ class ETHMacroStrategy(SolMacroStrategy):
             self._shadow_log_window_delta(
                 eth, _updown_tf, _eval_left, yes_price, action, side_source, market
             )
+            # Re-apply per-window sit-out post-flip (inherited helper): window_delta_flip
+            # can turn a native long into a BUY_NO (or vice-versa), bypassing the pre-flip
+            # disable_buy_no_<tf> / disable_buy_yes_<tf> gate. (2026-06-16 fix, ETH parity.)
+            _postflip_reason = self._post_flip_disabled_side(
+                action, _updown_tf, side_source
+            )
+            if _postflip_reason:
+                _bump_skip(_postflip_reason)
+                _log_skip_reject(
+                    market=market, window=_updown_tf, side=market_allowed_side,
+                    action=action, reason=_postflip_reason, yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                )
+                continue
             # Low-ATR volatility gate (inherited) — configured losing lanes only
             # trade in low vol; mid/high-ATR is where they bleed. Side is final.
             _atr_block = self._low_atr_gate_blocks(eth, _updown_tf, action)

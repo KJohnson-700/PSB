@@ -1940,6 +1940,31 @@ class BitcoinStrategy:
                     )
                     continue
 
+                # ── [15m] bearish-htf SHORT sit-out ──
+                # Ghost (>=06-08): btc 15m SHORT @ htf=BEARISH n=176, 45% WR, mean
+                # realized -0.398. BULLISH-htf 15m shorts are +EV (n=1519) so this is
+                # bias-conditioned, not a blanket disable. Ghost-logged for re-admit.
+                if (
+                    action == "BUY_NO"
+                    and _updown_tf == "15m"
+                    and htf_bias == "BEARISH"
+                    and bool(self.config.get("disable_buy_no_15m_when_bearish", True))
+                ):
+                    _bump_skip("buy_no_15m_bearish_disabled")
+                    log_rejected_candidate(
+                        strategy="bitcoin", window="15m", side="SHORT", action=action,
+                        reason="buy_no_15m_bearish_disabled", market=market,
+                        yes_price=yes_price, est_prob_up=locals().get("est_prob_up"),
+                        htf_bias=htf_bias, btc_1h_regime=btc_1h_regime if ta else None,
+                        side_source=locals().get("side_source"),
+                        resolver_path=locals().get("resolver_path"),
+                    )
+                    logger.info(
+                        f"  BTC [15m] skip BUY_NO on '{market.question[:40]}' — "
+                        f"bearish-htf short sit-out (ghost 45% WR / -0.398 realized, n=176)"
+                    )
+                    continue
+
                 if is_5m:
                     # ── [5m] FIVE-MINUTE UP/DOWN MARKET PATH ──
                     # Still requires HTF bias (4H) — the macro law applies

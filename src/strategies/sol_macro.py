@@ -1892,6 +1892,23 @@ class SolMacroStrategy:
             return "BUY_YES", "LONG", "UP", prob, prob
         return None
 
+    def _post_flip_disabled_side(
+        self, action: str, tf: str, side_source: Optional[str]
+    ) -> Optional[str]:
+        """Re-apply the per-window sit-out (disable_buy_no_<tf> / disable_buy_yes_<tf>)
+        AFTER window_delta_flip. The pre-flip gate runs on the NATIVE side, so a flip
+        to the opposite side would otherwise bypass the sit-out (2026-06-16: doge 1h
+        SHORT was disabled but window_delta_flip re-introduced 100% of the live shorts).
+        Returns a skip reason if the post-flip side is disabled, else None.
+        """
+        if not (side_source and "window_delta_flip" in side_source):
+            return None
+        if action == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{tf}", False)):
+            return f"buy_no_{tf}_disabled_lane_postflip"
+        if action == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{tf}", False)):
+            return f"buy_yes_{tf}_disabled_lane_postflip"
+        return None
+
     def _shadow_log_window_delta(
         self,
         asset_obj: Any,
@@ -3334,6 +3351,30 @@ class SolMacroStrategy:
                     context={"side_source": side_source},
                 )
                 continue
+            # 2026-06-16: per-window BUY_YES BULLISH-htf sit-out. Set
+            # `disable_buy_yes_<window>_when_bullish: true` for a lane whose long-side
+            # is -EV only when chasing an already-bullish tape, while NEUTRAL/BEARISH
+            # longs stay +EV. DOGE 1h: ghost recent BULLISH n=119 -0.318 vs NEUTRAL
+            # +0.350 / BEARISH +0.086. Bias-conditioned, NOT a blanket disable_buy_yes.
+            # Opt-in, default off; ghost-logged so the counterfactual keeps settling.
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and str(primary_htf_bias or "").upper() == "BULLISH"
+                and bool(self.config.get(f"disable_buy_yes_{_updown_tf}_when_bullish", False))
+            ):
+                _bump_skip(f"buy_yes_{_updown_tf}_bullish_disabled_lane")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason=f"buy_yes_{_updown_tf}_bullish_disabled_lane",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
             # 2026-06-16: per-window BUY_YES POCKET restriction. For a lane whose BUY_YES
             # is ~break-even in aggregate but +EV only when oversold or counter-bias, admit
             # the long ONLY when alt RSI < `buy_yes_<window>_pocket_rsi_max` OR htf_bias is
@@ -4128,6 +4169,22 @@ class SolMacroStrategy:
                     self._shadow_log_window_delta(
                         sol, _updown_tf, _eval_left, yes_price, action, side_source, market
                     )
+                    # Re-apply per-window sit-out post-flip: window_delta_flip can turn a
+                    # native long into a BUY_NO (or vice-versa), bypassing the pre-flip
+                    # disable_buy_no_<tf> / disable_buy_yes_<tf> gate. (2026-06-16 fix.)
+                    if is_updown:
+                        _postflip_reason = self._post_flip_disabled_side(
+                            action, _updown_tf, side_source
+                        )
+                        if _postflip_reason:
+                            _bump_skip(_postflip_reason)
+                            _log_skip_reject(
+                                market=market, window=_updown_tf, side=allowed_side,
+                                action=action, reason=_postflip_reason, yes_price=yes_price,
+                                htf_bias=primary_htf_bias,
+                                context={"side_source": side_source},
+                            )
+                            continue
                     # Low-ATR volatility gate — configured losing lanes only trade in
                     # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
                     _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)
@@ -4428,6 +4485,22 @@ class SolMacroStrategy:
                     self._shadow_log_window_delta(
                         sol, _updown_tf, _eval_left, yes_price, action, side_source, market
                     )
+                    # Re-apply per-window sit-out post-flip: window_delta_flip can turn a
+                    # native long into a BUY_NO (or vice-versa), bypassing the pre-flip
+                    # disable_buy_no_<tf> / disable_buy_yes_<tf> gate. (2026-06-16 fix.)
+                    if is_updown:
+                        _postflip_reason = self._post_flip_disabled_side(
+                            action, _updown_tf, side_source
+                        )
+                        if _postflip_reason:
+                            _bump_skip(_postflip_reason)
+                            _log_skip_reject(
+                                market=market, window=_updown_tf, side=allowed_side,
+                                action=action, reason=_postflip_reason, yes_price=yes_price,
+                                htf_bias=primary_htf_bias,
+                                context={"side_source": side_source},
+                            )
+                            continue
                     # Low-ATR volatility gate — configured losing lanes only trade in
                     # low vol; mid/high-ATR is where they bleed (-13% EV). Side final.
                     _atr_block = self._low_atr_gate_blocks(sol, _updown_tf, action)

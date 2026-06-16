@@ -503,6 +503,11 @@ strategies:
     prediction_window_bonus_5m: 0.0
     disable_buy_yes: false
     disable_buy_no_counter_trend: true
+    # 2026-06-16: bias-conditioned sit-out of btc 15m SHORT when htf=BEARISH.
+    # Ghost (>=06-08): n=176, 45% WR, mean realized -0.398 (deeply -EV). BULLISH-htf
+    # 15m shorts are +EV (n=1519, mean +0.009) and NEUTRAL mildly -EV, so this is
+    # bias-conditioned, NOT a blanket disable_buy_no_15m. Ghost-logged; re-admit if edge returns.
+    disable_buy_no_15m_when_bearish: true
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -1481,6 +1486,7 @@ strategies:
       atr_high_pct: 0.0053
     disable_buy_no_1h: true   # 2026-06-15: sit out doge 1h SHORT — ghost avgEV -0.118, 52% WR (n=1393); LONG side +0.066 EV / 62% WR kept. Ghost-logged; re-admit if edge returns.
     disable_buy_no_15m: true  # 2026-06-15: sit out doge 15m SHORT — ghost net-of-fee EV -0.146 all / -0.103 recent (n=16k); dominant live short bleed. LONG side kept. Ghost-logged.
+    disable_buy_yes_1h_when_bullish: true  # 2026-06-16: sit out doge 1h LONG only when htf=BULLISH — ghost recent BULLISH n=119 -0.318 (chasing extended tape); NEUTRAL +0.350 / BEARISH +0.086 kept. Bias-conditioned. Ghost-logged.
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
