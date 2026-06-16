@@ -785,6 +785,20 @@ class ETHMacroStrategy(SolMacroStrategy):
                 pass
             if "btc_1h_regime" in locals():
                 merged_context["btc_1h_regime"] = btc_1h_regime
+            # Forward the resolved lane so rejects bucket by side instead of the
+            # catch-all pre_resolver_reject. The resolver runs at the top of each
+            # eth candidate iteration (side_source set before any skip), so this is
+            # known for every skip here. Mirrors the sol_macro fix. Fail open.
+            _reject_side_source = None
+            _reject_resolver_path = None
+            try:
+                _reject_side_source = side_source  # closure var, set per-candidate
+            except NameError:
+                _reject_side_source = None
+            try:
+                _reject_resolver_path = getattr(resolution, "resolver_path", None)
+            except NameError:
+                _reject_resolver_path = None
             log_rejected_candidate(
                 strategy=self._signal_strategy_name,
                 window=window,
@@ -800,6 +814,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 policy_version=policy_version,
                 stage=stage,
                 btc_1h_regime=btc_1h_regime if "btc_1h_regime" in locals() else None,
+                side_source=_reject_side_source,
+                resolver_path=_reject_resolver_path,
             )
 
         observer_tasks: List[asyncio.Task] = []
@@ -1275,6 +1291,35 @@ class ETHMacroStrategy(SolMacroStrategy):
                         f"  ETH allow BUY_YES on '{market.question[:40]}' — "
                         f"ETH 1H BEARISH retained as diagnostic only"
                     )
+            # 2026-06-16: ETH pocket-only selection (ghost-validated, scripts pocket-hunt).
+            # ETH est_prob is ~0.50 AUC (no model to "fix"); its edge is pure SELECTION.
+            # The ONLY +EV ETH pocket is BUY_NO (short) at elevated RSI: 15m/1h BUY_NO
+            # RSI>=55 = +0.10 to +0.26 net-of-fee EV (n=2.0k/0.35k, stable recent). ALL
+            # ETH longs are -EV (-0.09 to -0.17) and 5m is dead both sides. Admit only the
+            # pocket; ghost-log the rest so the counterfactual keeps settling. Opt-in
+            # (eth_pocket_only), default off = no-op.
+            if _updown_tf in ("5m", "15m", "1h") and bool(self.config.get("eth_pocket_only", False)):
+                _pocket_skip = None
+                if action == "BUY_YES":
+                    _pocket_skip = "eth_pocket_buy_yes_off"
+                elif _updown_tf == "5m":
+                    _pocket_skip = "eth_pocket_5m_off"
+                elif eth.rsi_14 < float(self.config.get("eth_buy_no_rsi_min", 55.0)):
+                    _pocket_skip = "eth_pocket_low_rsi_off"
+                if _pocket_skip:
+                    _bump_skip(_pocket_skip)
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name, window=_updown_tf,
+                        side=market_allowed_side, action=action,
+                        reason=_pocket_skip, market=market,
+                        yes_price=yes_price, est_prob_up=0.50,
+                        htf_bias=primary_htf_bias, stage="eth_pocket",
+                        context=build_market_context(
+                            asset_spot=eth.current_price, btc_spot=corr.btc_price,
+                            rsi_14=eth.rsi_14, atr_14=eth.atr_14,
+                        ),
+                    )
+                    continue
             _rsi_hard_block, rsi_soft_delta = self._resolve_rsi_gate(action, eth.rsi_14)
             if _rsi_hard_block:
                 _bump_skip("rsi_hard_blocked")
@@ -2598,6 +2643,10 @@ class ETHMacroStrategy(SolMacroStrategy):
                 edge=round(edge, 4),
                 token_id_yes=market.token_id_yes,
                 token_id_no=market.token_id_no,
+                condition_id=getattr(market, "condition_id", None),
+                market_slug=getattr(market, "slug", None),
+                outcome_label_yes=getattr(market, "outcome_label_yes", None),
+                outcome_label_no=getattr(market, "outcome_label_no", None),
                 end_date=market.end_date,
                 direction=direction,
                 sol_threshold=None,

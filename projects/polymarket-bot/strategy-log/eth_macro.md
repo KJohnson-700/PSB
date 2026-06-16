@@ -12,6 +12,19 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-06-16 — ETH pocket-only: est_prob is unfixable noise, edge is SELECTION
+
+- **Root cause (operator red flag: all 6 ETH lanes -EV).** ETH's est_prob_up is built inline in its duplicated scan loop (eth_macro.py ~1366: base 0.50 + small htf/btc/macd/RSI nudges), NOT via the SOL family path. Calibration check: ETH est_prob AUC ≈ **0.49** (its 0.85-confidence bucket resolves UP only ~45%); SOL ≈ 0.52. BUT — investigated "route ETH through `_estimate_probability`" and REJECTED it: that method is for traditional strike markets (`ETH above $X`), needs a price threshold the Up/Down questions don't have. There is **no separate calibrated up/down path** — both SOL and ETH hand-build est_prob, both ~0.50 AUC. Matches `calibration_not_viable_signal_floor`: est_prob is ~coin-flip across all assets; **the edge is admission SELECTION, not signal.** So there is no est_prob "model" to fix.
+- **The pocket hunt (ghost sweep window×side×timing×RSI×bias) found ETH's real edge — the SHORT side at elevated RSI:**
+  - `15m BUY_NO RSI 55-65`: **+0.103 all / +0.151 recent** (n=2028)
+  - `1h BUY_NO RSI >65`: **+0.256 / +0.256** (n=321)
+  - `1h BUY_NO RSI 55-65`: +0.147 / +0.204 (n=350)
+  - `1h BUY_NO BULLISH`: +0.120 / +0.172 (n=1400); `15m BUY_NO BULLISH`: +0.045 / +0.070 (n=4193)
+  - ALL ETH BUY_YES (longs) -EV (-0.087 to -0.168); ETH 5m dead both sides. Baseline looked -EV everywhere because it averaged the +EV high-RSI shorts with the junk.
+- **What changed:** added `eth_pocket_only` gate to eth_macro.py (its own loop doesn't honor the sol_macro disable hooks). When on, ETH admits ONLY `BUY_NO` at `rsi_14 >= eth_buy_no_rsi_min` (55) on 15m/1h; blocks all ETH longs + all ETH 5m; ghost-logs the rest. Config: `eth_pocket_only: true`, `eth_buy_no_rsi_min: 55.0`. Default off = no-op.
+- **Interpretation:** ETH's edge is contrarian — fade overbought/bullish ETH with shorts. Same shape as the per-lane selection fixes (not a model fix). Forward-test: ghost can't validate a new admission gate; watch live.
+- **Status:** `pending` — live as the last paper before the next live smoke test.
+
 ### 2026-06-15 — Add lane-local stop cooldown for ETH 1h BUY_YES bleed
 
 - **What changed:** Added `lane_stop_halt` config support and enabled `eth_macro|1h|BUY_YES` with a 15-minute cooldown after an `updown_stop_loss`.

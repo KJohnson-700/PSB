@@ -4,6 +4,22 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-16 — ETH pocket-only + SOL 5m / hype 1h / extra -EV sit-outs (pre-smoke-test paper)
+
+**Context.** Last paper run before the next live smoke test. Operator flagged all 6 ETH lanes starved/-EV and asked: extra indicator? architecture gap from the split? data loop unfinished? Also: audit the bleeding lanes (hype 15m, sol 5m) and the starved 1h lanes (hype/sol/xrp), and have Kimi opine on the -EV lanes.
+
+**Key finding — ETH is selection, not a broken model.** ETH's est_prob AUC ≈ 0.49 vs SOL 0.52 — but neither is calibrated; there is no separate "calibrated" up/down est_prob path to route ETH through (`_estimate_probability` is for strike markets, which Up/Down isn't). Per the existing `calibration_not_viable` finding, est_prob is ~coin-flip across all assets and the edge is admission SELECTION. A ghost pocket-hunt found ETH's real edge: `BUY_NO` at RSI≥55 on 15m/1h (+0.10 to +0.26 net EV). Detail in `strategy-log/eth_macro.md`.
+
+**What changed (all ghost-backed, behind opt-in flags).**
+- `eth_macro.py`: added `eth_pocket_only` gate (ETH duplicates the loop, doesn't honor the sol_macro disable hooks). Admits only ETH BUY_NO RSI≥55 on 15m/1h; blocks ETH longs + ETH 5m. Config `eth_pocket_only: true`, `eth_buy_no_rsi_min: 55`.
+- SOL 5m sit-out both sides (-0.065/-0.115); hype 1h BUY_NO entry window 240→360 (timing-EV +0.065 recent at 240-300).
+- Kimi-flagged extra -EV cuts: SOL 15m BUY_NO (-0.186, worst lane), SOL 1h BUY_NO (-0.150), DOGE 5m BUY_YES (-0.084).
+- Diagnoses logged: hype 15m / sol 5m losses were overbought longs gapped through the stop near expiry (real, not phantom); hype/sol/xrp 1h starvation — only hype 1h BUY_NO was a true +EV clip (fixed), sol/xrp 1h correctly starved (-EV). XRP -EV everywhere (AUC 0.51) → cut candidate, not yet applied.
+
+**Validation.** `tests/test_strategy_execution_drivers.py` → `33 passed`; py_compile clean (eth_macro.py, sol_macro.py); YAML parses.
+
+**Ops.** Committed; restarted as the final paper before the next live smoke test.
+
 ## 2026-06-15 — Per-window lane sit-out hooks + DOGE 15m / BNB 15m cuts + loss diagnosis
 
 **Context.** After the est_prob decoupling shipped, operator reported the paper bot losing faster (except HYPE, which improved) and asked about BNB/DOGE/XRP and whether the scan throttle disrupted cadence.
