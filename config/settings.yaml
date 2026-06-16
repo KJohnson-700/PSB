@@ -1474,6 +1474,7 @@ strategies:
         BEAR: 0.5
   doge_macro:
     disable_buy_yes_5m: true  # 2026-06-16: sit out DOGE 5m LONG — ghost net-of-fee EV -0.084; Kimi-flagged. Ghost-logged.
+    buy_yes_15m_pocket_rsi_max: 35.0  # 2026-06-16: DOGE 15m LONG pocket-restrict — aggregate -0.017 but +EV only oversold/bearish (RSI<35 +0.196 n=2090; BEARISH +0.073 n=6181). Admit 15m BUY_YES only when RSI<35 OR htf bearish. Ghost-logged.
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
     est_prob:
       atr_low_pct: 0.0035

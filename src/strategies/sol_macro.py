@@ -3334,6 +3334,31 @@ class SolMacroStrategy:
                     context={"side_source": side_source},
                 )
                 continue
+            # 2026-06-16: per-window BUY_YES POCKET restriction. For a lane whose BUY_YES
+            # is ~break-even in aggregate but +EV only when oversold or counter-bias, admit
+            # the long ONLY when alt RSI < `buy_yes_<window>_pocket_rsi_max` OR htf_bias is
+            # BEARISH (contrarian-long pocket). DOGE 15m: aggregate -0.017 but RSI<35 +0.196,
+            # BEARISH +0.073. Opt-in (key unset = off); ghost-logs the rejected rest.
+            _by_pocket_rsi_max = self.config.get(f"buy_yes_{_updown_tf}_pocket_rsi_max")
+            if is_updown and action == "BUY_YES" and _by_pocket_rsi_max is not None:
+                _alt_rsi = getattr(sol, "rsi_14", None)
+                _is_bearish = str(primary_htf_bias or "").upper() == "BEARISH"
+                _in_pocket = _is_bearish or (
+                    _alt_rsi is not None and float(_alt_rsi) < float(_by_pocket_rsi_max)
+                )
+                if not _in_pocket:
+                    _bump_skip(f"buy_yes_{_updown_tf}_pocket_off")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason=f"buy_yes_{_updown_tf}_pocket_off",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": side_source, "rsi_14": _alt_rsi},
+                    )
+                    continue
             # 2026-05-31: 5m-native BUY_NO is anti-predictive — held-to-resolution WR
             # ~22% across eth/xrp/doge/sol vs 50-65% on 15m-native; MACD-confirmed 5m
             # shorts lose, so the signal (not the gate) is inverted. Opt-in sit-out,
