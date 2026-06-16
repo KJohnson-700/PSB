@@ -1666,7 +1666,16 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
-    disable_buy_yes_15m: true  # 2026-06-15: sit out BNB 15m LONG — ghost net-of-fee EV -0.048 all / -0.080 recent (n=16k). BNB's only -EV lane; 1h/5m long + all short windows kept (+EV). Ghost-logged.
+    # 2026-06-16: BNB 15m LONG reclaimed from blanket sit-out -> pocket-restrict. Aggregate
+    # -0.068 but RSI<35 sub-pocket is +0.065 (n1838). bearish arm OFF: BNB bearish&RSI>=35
+    # longs are -0.040 (unlike DOGE). Admit 15m BUY_YES only when RSI<35.
+    buy_yes_15m_pocket_rsi_max: 35.0
+    buy_yes_15m_pocket_include_bearish: false
+    # 2026-06-16: BNB short pocket RSI floors. 1h BUY_NO -EV at RSI<45 (the live -$12 RSI-37
+    # loser) but +0.408 at 45-55; 15m BUY_NO -0.098 at RSI<35 but +EV >=35. Admit shorts
+    # only at/above the floor. 5m BUY_NO left as-is (+EV in aggregate; extremes-shaped).
+    buy_no_1h_pocket_rsi_min: 45.0
+    buy_no_15m_pocket_rsi_min: 35.0
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). BNB is the calmest alt
     # (median 0.32%), so SOL's bands were the most wrong here. RSI shared default.
     est_prob:

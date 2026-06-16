@@ -12,6 +12,17 @@ BNB **Up or Down** — inherits shared `SolMacroStrategy` signal path with BNB m
 
 ## Change Log
 
+### 2026-06-16 — BNB pocket refinements: short RSI floors + 15m-long reclaim
+
+- **Context.** Pocket-hunt (queued task) re-verified on settled ghost. BNB est_prob is the best-calibrated alt, so its lanes have real edge concentrated in RSI slices. Live session `test_20260616_030355` also showed a −$12 stop on `1h BUY_NO` at RSI 37 — outside the +EV pocket.
+- **Short RSI floors (new `buy_no_<window>_pocket_rsi_min` gate):**
+  - `1h BUY_NO`: RSI<45 is −EV (−0.04 to −0.16; the live RSI-37 loser), RSI 45-55 = **+0.408** (n329). Set `buy_no_1h_pocket_rsi_min: 45`.
+  - `15m BUY_NO`: RSI<35 = −0.098 (n3328), RSI≥35 +EV → lane flips positive. Set `buy_no_15m_pocket_rsi_min: 35`.
+  - `5m BUY_NO`: left as-is — +EV in aggregate (+0.087), pocket is "extremes" (<35 +0.237 / >65 +0.216) which a min-floor can't express; candidate for a size bump instead.
+- **15m BUY_YES reclaimed from blanket sit-out → pocket-restrict.** Aggregate −0.068 but RSI<35 = **+0.065** (n1838). Replaced `disable_buy_yes_15m` with `buy_yes_15m_pocket_rsi_max: 35`. **Bearish arm OFF** (`buy_yes_15m_pocket_include_bearish: false`): verified BNB bearish & RSI≥35 longs are −0.040 (unlike DOGE, where bearish longs are +0.073) — so the gate's bearish-OR clause is now per-lane configurable.
+- **Validation.** 33 strategy-driver tests pass; py_compile clean; YAML parses.
+- **Status:** `pending` — committed, NOT restarted (awaiting operator).
+
 ### 2026-06-15 — Sit out BNB 15m BUY_YES (long) — BNB's only -EV lane (NOT the shorts)
 
 - **What changed:** Set `strategies.bnb_macro.disable_buy_yes_15m: true` (new per-window long sit-out hook; narrower than the all-window `disable_buy_yes`).

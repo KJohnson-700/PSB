@@ -4,6 +4,20 @@ Strategy tuning and per-strategy results live in `strategy-log/*.md`, not here.
 
 ---
 
+## 2026-06-16 — BNB pocket refinements (queued task): short RSI floors + 15m-long reclaim
+
+**Context.** Executed the queued BNB/DOGE pocket-refinement task. Re-verified pockets on the settled ghost log (no backtester).
+
+**What changed (sol_macro.py gates, BNB inherits the loop).**
+- New `buy_no_<window>_pocket_rsi_min` gate (admit BUY_NO only when alt RSI >= floor). BNB `buy_no_1h_pocket_rsi_min: 45` (RSI<45 −EV incl. the live −$12 RSI-37 stop; 45-55 = +0.408) and `buy_no_15m_pocket_rsi_min: 35` (RSI<35 −0.098, ≥35 +EV).
+- BNB 15m BUY_YES reclaimed from `disable_buy_yes_15m` → `buy_yes_15m_pocket_rsi_max: 35` (RSI<35 sub-pocket +0.065). Made the BUY_YES gate's bearish-OR clause per-lane (`buy_yes_<window>_pocket_include_bearish`, default true); set **false** for BNB (bearish&RSI≥35 longs −0.040; DOGE keeps it true at +0.073).
+- BNB 5m BUY_NO left live (+EV aggregate; extremes-shaped pocket).
+- DOGE refinement shipped previously (`buy_yes_15m_pocket_rsi_max: 35`).
+
+**Validation.** `tests/test_strategy_execution_drivers.py` → `33 passed`; py_compile clean; YAML parses.
+
+**Ops.** Committed; **NOT restarted** — awaiting operator approval per the task. Running session `test_20260616_030355` does not yet have these.
+
 ## 2026-06-16 — ETH pocket-only + SOL 5m / hype 1h / extra -EV sit-outs (pre-smoke-test paper)
 
 **Context.** Last paper run before the next live smoke test. Operator flagged all 6 ETH lanes starved/-EV and asked: extra indicator? architecture gap from the split? data loop unfinished? Also: audit the bleeding lanes (hype 15m, sol 5m) and the starved 1h lanes (hype/sol/xrp), and have Kimi opine on the -EV lanes.

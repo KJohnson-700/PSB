@@ -3342,7 +3342,10 @@ class SolMacroStrategy:
             _by_pocket_rsi_max = self.config.get(f"buy_yes_{_updown_tf}_pocket_rsi_max")
             if is_updown and action == "BUY_YES" and _by_pocket_rsi_max is not None:
                 _alt_rsi = getattr(sol, "rsi_14", None)
-                _is_bearish = str(primary_htf_bias or "").upper() == "BEARISH"
+                # Bearish arm is per-lane: DOGE 15m bearish longs are +EV (+0.073) so it
+                # helps; BNB 15m bearish&RSI>=35 longs are -EV (-0.040) so it must be OFF.
+                _incl_bear = bool(self.config.get(f"buy_yes_{_updown_tf}_pocket_include_bearish", True))
+                _is_bearish = _incl_bear and str(primary_htf_bias or "").upper() == "BEARISH"
                 _in_pocket = _is_bearish or (
                     _alt_rsi is not None and float(_alt_rsi) < float(_by_pocket_rsi_max)
                 )
@@ -3354,6 +3357,27 @@ class SolMacroStrategy:
                         side=allowed_side,
                         action=action,
                         reason=f"buy_yes_{_updown_tf}_pocket_off",
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={"side_source": side_source, "rsi_14": _alt_rsi},
+                    )
+                    continue
+            # 2026-06-16: per-window BUY_NO POCKET restriction (RSI floor). For a short lane
+            # whose low-RSI shorts are -EV (chasing oversold dips that bounce) while RSI>=min
+            # is +EV: admit BUY_NO only when alt RSI >= `buy_no_<window>_pocket_rsi_min`.
+            # BNB 1h: RSI<45 -EV, 45-55 +0.408 -> min 45. BNB 15m: RSI<35 -0.098, >=35 +EV
+            # -> min 35. Opt-in (key unset = off); ghost-logs the rejected rest.
+            _bn_pocket_rsi_min = self.config.get(f"buy_no_{_updown_tf}_pocket_rsi_min")
+            if is_updown and action == "BUY_NO" and _bn_pocket_rsi_min is not None:
+                _alt_rsi = getattr(sol, "rsi_14", None)
+                if _alt_rsi is not None and float(_alt_rsi) < float(_bn_pocket_rsi_min):
+                    _bump_skip(f"buy_no_{_updown_tf}_pocket_off")
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason=f"buy_no_{_updown_tf}_pocket_off",
                         yes_price=yes_price,
                         htf_bias=primary_htf_bias,
                         context={"side_source": side_source, "rsi_14": _alt_rsi},
