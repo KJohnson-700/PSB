@@ -88,6 +88,10 @@ def load_all_trades(days_back: int = 30) -> list[dict]:
 
                 elif event == "EXIT":
                     pnl = e.get("pnl", 0) or 0
+                    # entry price from the matching ENTRY event; exit price from this EXIT event
+                    _entry_evt = open_entries.get(tid, {})
+                    ep = e.get("entry_price") or _entry_evt.get("entry_price") or 0
+                    cp = e.get("current_price") or e.get("exit_price") or 0
                     # Skip legacy phantom exits without dropping valid BUY_NO exits.
                     if is_phantom_exit_row(e):
                         continue
