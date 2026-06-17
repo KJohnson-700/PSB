@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from src.analysis.ai_agent import AIAgent
 from src.analysis.btc_price_service import CandleMomentum, MACDResult, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
+from src.strategies._scan_timeout import analysis_with_timeout
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager, ExposureTier
 from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
@@ -592,8 +593,20 @@ class ETHMacroStrategy(SolMacroStrategy):
             self._record_eth_abort("no_eth_markets")
             return []
 
-        eth_ta = self.sol_service.get_full_analysis()
-        btc_ta = self.btc_service.get_full_analysis()
+        # Off-loop with a hard timeout so a slow data fetch can't wedge the cycle.
+        _scan_to = float(self.config.get("scan_analysis_timeout_sec", 15.0) or 15.0)
+        eth_ta = await analysis_with_timeout(
+            self.sol_service.get_full_analysis, lane="eth_macro", timeout_sec=_scan_to
+        )
+        # BTC analysis is diagnostic-only here. Prefer the once-per-cycle value
+        # injected by main.py; only fetch our own if none was injected (e.g. tests).
+        if self._btc_ta_inject_set:
+            btc_ta = self._injected_btc_ta
+            self._btc_ta_inject_set = False  # consume; main re-sets each cycle
+        else:
+            btc_ta = await analysis_with_timeout(
+                self.btc_service.get_full_analysis, lane="eth_macro:btc", timeout_sec=_scan_to
+            )
         if not eth_ta:
             logger.warning("ETH Macro strategy: ETH analysis unavailable")
             self._record_eth_abort(
@@ -2647,6 +2660,11 @@ class ETHMacroStrategy(SolMacroStrategy):
                 "quant_side": direction_decision.quant_side,
                 "momentum_side": direction_decision.momentum_side,
             }
+            # eth_macro does not compute a composite/convergence object (unlike
+            # sol_macro); define these so the telemetry fields are honestly None
+            # instead of an F821 landmine guarded by a fragile `in locals()` check.
+            entry_convergence_score = None
+            entry_composite_score = None
             signal = SolMacroSignal(
                 market_id=market.id,
                 market_question=market.question,
@@ -2687,7 +2705,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 **resolver_meta,
                 convergence_score=(
                     round(float(entry_convergence_score), 4)
-                    if "entry_convergence_score" in locals() and entry_convergence_score is not None
+                    if entry_convergence_score is not None
                     else None
                 ),
                 entry_volatility=round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
@@ -2699,12 +2717,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                 indicator_snapshot={
                     "composite_score": (
                         round(float(entry_composite_score), 4)
-                        if "entry_composite_score" in locals() and entry_composite_score is not None
+                        if entry_composite_score is not None
                         else None
                     ),
                     "convergence_score": (
                         round(float(entry_convergence_score), 4)
-                        if "entry_convergence_score" in locals() and entry_convergence_score is not None
+                        if entry_convergence_score is not None
                         else None
                     ),
                     "entry_volatility": round(float(getattr(conditions, "volatility", 0.0) or 0.0), 6),
@@ -2732,16 +2750,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                     **self._build_alt_indicator_snapshot(
                         eth,
                         correlation=corr,
-                        composite_score=(
-                            entry_composite_score
-                            if "entry_composite_score" in locals()
-                            else None
-                        ),
-                        convergence_score=(
-                            entry_convergence_score
-                            if "entry_convergence_score" in locals()
-                            else None
-                        ),
+                        composite_score=entry_composite_score,
+                        convergence_score=entry_convergence_score,
                         entry_volatility=getattr(conditions, "volatility", 0.0),
                     ),
                     "btc_1h_histogram": round(float(btc_ta.macd_1h.histogram or 0.0), 4)

@@ -39,6 +39,7 @@ from src.strategies.hype_macro import HYPEMacroStrategy
 from src.strategies.xrp_macro import XRPMacroStrategy
 from src.strategies.doge_macro import DOGEMacroStrategy
 from src.strategies.bnb_macro import BNBMacroStrategy
+from src.strategies._scan_timeout import analysis_with_timeout
 from src.execution.clob_client import CLOBClient, RiskManager, Position, OrderStatus
 from src.execution.trade_journal import TradeJournal, infer_entry_leg
 from src.execution.exposure_manager import ExposureManager
@@ -410,6 +411,12 @@ class PolyBot:
         self.ghost_calibration_status: Dict[str, Any] = {}
         self._last_ghost_calibration_refresh_monotonic: float = 0.0
         self._ghost_calibration_refresh_inflight = False
+        # Taken-EXIT settler throttle. Refreshes trades_settled.jsonl in-process so
+        # the exit-policy drift recompute (SL/TP/hold lever) reads fresh ground
+        # truth instead of going stale (it had no scheduler and went 2d stale,
+        # silently breaking the exit-side calibration loop). Heavier than the ghost
+        # settle (Gamma API), and resolutions land hourly, so it runs less often.
+        self._last_exit_settle_monotonic: float = 0.0
         # Exit-policy drift alerting: remember the last drift set we pinged so we
         # only re-alert when a new lane drifts or a recommendation flips.
         self._last_exit_drift_sig: frozenset = frozenset()
@@ -892,6 +899,23 @@ class PolyBot:
                     )
             except Exception as _te:  # noqa: BLE001 — telemetry only
                 logging.warning("lane_thresholds recompute skipped: %s", _te)
+        # Refresh the taken-EXIT settler so trades_settled.jsonl is current before
+        # the exit-policy drift recompute reads it. Closes the exit-side loop
+        # (entries.jsonl -> trades_settled -> lane_exit_policy.recompute -> SL/TP/
+        # hold drift recommendation). Own throttle (default 600s) since it hits the
+        # Gamma API and resolutions arrive hourly; cached outcomes make re-runs
+        # cheap. Runs in this worker thread so the blocking fetch is safe.
+        exit_settle_summary: Dict[str, Any] = {}
+        try:
+            exit_cfg = (self.config.get("lane_exit_policy") or {})
+            interval = float(exit_cfg.get("settle_interval_sec", 600) or 600)
+            if force or (now_mono - self._last_exit_settle_monotonic) >= interval:
+                from src.analysis.taken_exit_settler import settle as _settle_exits
+                since = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+                exit_settle_summary = _settle_exits(since=since) or {}
+                self._last_exit_settle_monotonic = now_mono
+        except Exception as _xe:  # noqa: BLE001 — calibration refresh must never break trading
+            logging.warning("taken-exit settle refresh skipped: %s", _xe)
         # Per-lane EXIT-policy drift: recompute the shadow recommendation from
         # settled trades and Discord-ping when live config disagrees with the
         # data. Recommend-only — never mutates exits. Runs in this worker thread
@@ -2295,8 +2319,31 @@ class PolyBot:
             asks = book.get("asks") or []
             best_bid = max((b["price"] for b in bids), default=None)
             best_ask = min((a["price"] for a in asks), default=None)
+            # Phantom-stop guard. Thin up/down binaries near expiry often show a
+            # ONE-SIDED book — a lone resting bid (e.g. 0.145) became the "price" and
+            # fired a phantom stop while the true price was ~0.505 (2026-06-14
+            # incident). Require a two-sided book + sane spread before trusting the
+            # mid for an EXIT decision; otherwise skip this market this tick (the scan
+            # loop's Gamma price and the next healthy book tick re-evaluate it).
+            _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
+            _require_two_sided = bool(_excfg.get("exit_require_two_sided_book", True))
             if best_bid is not None and best_ask is not None:
+                if _require_two_sided:
+                    _spread = best_ask - best_bid
+                    _max_spread = float(_excfg.get("exit_max_book_spread", 0.30) or 0.30)
+                    if _spread > _max_spread:
+                        logging.debug(
+                            "exit price guard: spread %.3f > %.3f for %s — skip exit eval this tick",
+                            _spread, _max_spread, mid,
+                        )
+                        continue
                 yes_price = (best_bid + best_ask) / 2.0
+            elif _require_two_sided:
+                logging.debug(
+                    "exit price guard: one-sided book for %s (bid=%s ask=%s) — skip exit eval this tick",
+                    mid, best_bid, best_ask,
+                )
+                continue
             elif best_bid is not None:
                 yes_price = best_bid
             elif best_ask is not None:
@@ -2738,6 +2785,35 @@ class PolyBot:
         open_positions_snapshot = list(self.risk_manager.active_positions.values())
         self.bitcoin_strategy._open_positions_snapshot = open_positions_snapshot
         self.sol_macro_strategy._open_positions_snapshot = open_positions_snapshot
+
+        # Compute BTC analysis ONCE per cycle and inject into the alt/eth lanes as
+        # read-only DIAGNOSTIC context. Alts are decided by alt-native indicators
+        # (_btc_trade_inputs_enabled() == False); btc_ta only feeds their logs +
+        # signal metadata. Previously each of the 6 alt/eth lanes ran a full BTC
+        # get_full_analysis every cycle purely to log it (~5x redundant). Using the
+        # bitcoin strategy's service warms its 60s kline cache, so bitcoin's own
+        # in-lane recompute is cheap. Off-loop + timeout-guarded like the lanes.
+        _btc_diag_to = float(
+            (self.config.get("strategies", {}).get("bitcoin", {}) or {}).get(
+                "scan_analysis_timeout_sec", 15.0
+            ) or 15.0
+        )
+        shared_btc_ta = await analysis_with_timeout(
+            self.bitcoin_strategy.btc_service.get_full_analysis,
+            lane="shared_btc_diag",
+            timeout_sec=_btc_diag_to,
+        )
+        for _alt_strat in (
+            self.sol_macro_strategy,
+            getattr(self, "eth_macro_strategy", None),
+            getattr(self, "xrp_macro_strategy", None),
+            getattr(self, "hype_macro_strategy", None),
+            getattr(self, "doge_macro_strategy", None),
+            getattr(self, "bnb_macro_strategy", None),
+        ):
+            if _alt_strat is not None:
+                _alt_strat._injected_btc_ta = shared_btc_ta
+                _alt_strat._btc_ta_inject_set = True
 
         strategy_tasks: list[Any] = [
             _time_strategy_scan(
