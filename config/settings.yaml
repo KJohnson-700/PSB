@@ -16,15 +16,20 @@ polymarket:
   signature_type: 1
   funder_address: '0x932845f226ffb93ec14d37add977446cf0d8a6eb'
 hyperliquid:
-  request_timeout_sec: 25
-  range_request_timeout_sec: 30
-  connect_timeout_sec: 5
-  max_retries: 4
+  # 2026-06-16: fail-fast to stale cache. Was 25s read x 4 retries = ~100s worst case
+  # for ONE timeframe; get_full_analysis fetches ~7, which (run inline on the loop)
+  # produced the 43s hype scan that wedged the cycle to 92s and starved exits/dashboard.
+  # Now a slow timeframe costs seconds and falls to stale cache (<=180s old), all under
+  # the 15s per-lane scan guard (strategies.*.scan_analysis_timeout_sec).
+  request_timeout_sec: 8
+  range_request_timeout_sec: 12
+  connect_timeout_sec: 3
+  max_retries: 2
   retry_backoff_base_sec: 0.5
   stale_on_error_max_age_sec: 180
 trading:
   cycle_interval_sec: 60
-  exit_check_interval_sec: 10
+  exit_check_interval_sec: 3  # 10->3: cut stop-detection latency on fast 5m binaries (late-stop overshoot -15% intended vs -39% realized). Pure cadence; no gate/width change.
   execution_provider: olympus
   entry_mode: marketable
   entry_maker_wait_sec: 8
@@ -49,7 +54,7 @@ trading:
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
   default_position_size: 6
-  max_position_size: 40   # 2026-06-15: paper full-Kelly cap for $500 bankroll (= 8% max_exposure_per_trade x $500). Live smoke sizing pinned separately via olympus.smoke_test.true_max_usd.
+  max_position_size: 25   # 2026-06-16 revert-to-0613: undo 1.6x paper ladder (was 40)
   max_days_to_resolution: 365
   min_hours_to_resolution: 1
   max_exposure_per_trade: 0.08
@@ -71,10 +76,17 @@ trading:
     updown_stop_cents: 0.03
     updown_exit_window_mins: 2.25
     updown_max_hold_mins: 18.0
-    updown_stop_loss_pct: 0.2
+    updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
     updown_hold_winners_to_resolution: false
     stop_use_executable_price: false
     realistic_paper_fills: false
+    # 2026-06-16 phantom-stop guard: the fast exit loop prices held positions off
+    # the CLOB YES book mid. On thin up/down binaries near expiry a ONE-SIDED book
+    # (lone bid e.g. 0.145 vs true ~0.505) fired phantom stops. Require a two-sided
+    # book + sane spread before trusting the mid for an EXIT; else skip that market
+    # this tick (scan-loop Gamma price + next healthy book tick re-evaluate it).
+    exit_require_two_sided_book: true
+    exit_max_book_spread: 0.30
     bid_depth_exit:
       enabled: false
       mode: observe
@@ -110,7 +122,7 @@ trading:
         window_lane_overrides:
           15m:
             up:
-              updown_stop_loss_pct: 0.15
+              updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
           1h:
             up:
               updown_stop_loss_pct: 0.15
@@ -118,9 +130,7 @@ trading:
         window_lane_overrides:
           5m:
             up:
-              updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: false
             down:
               updown_hold_winners_to_resolution: false
           15m:
@@ -168,16 +178,12 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-              updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: false
       sol_macro:
         window_lane_overrides:
           5m:
             up:
-              updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: false
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -275,9 +281,7 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-              updown_hold_winners_to_resolution: true
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
+              updown_hold_winners_to_resolution: false
       doge_macro:
         window_lane_overrides:
           5m:
@@ -285,9 +289,7 @@ trading:
               updown_hold_winners_to_resolution: false
             up:
               updown_hold_winners_to_resolution: false
-              updown_trail_arm_pct: 0.1
-              updown_trail_gap_pct: 0.15
-              updown_stop_loss_pct: 0.3
+              updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
           15m:
             up:
               updown_stop_loss_pct: 0.15
@@ -302,7 +304,15 @@ trading:
               updown_stop_loss_pct: 0.15
   execution_fees:
     enabled: true
-    crypto_updown_15m_taker_fee_rate: 0.07
+    # 2026-06-17: live get_fee_rate_bps returned a bogus 0.10 that overrode this
+    # and flipped a +$96 gross session to -$24 net. Authoritative rate from the
+    # vault deep-pass (projects/psb/research/2026-06-13-polymarket-execution-layer-
+    # deep-pass-kimi): crypto category feeRate = 0.072 -> peak 1.80% at 50c under
+    # fee = shares*rate*p*(1-p). (Retires the older "~1.56%" blended figure.)
+    # Makers pay zero. Olympus is a 3rd-party Polymarket interface; if it adds a
+    # surcharge, bump this once measured — do not guess. live_testing.py clamps
+    # any fetched rate to this ceiling so a bad get_fee_rate_bps can't override.
+    crypto_updown_15m_taker_fee_rate: 0.072
 olympus:
   base_url: https://api.olympusx.app
   timeout_sec: 20
@@ -508,6 +518,18 @@ strategies:
     # 15m shorts are +EV (n=1519, mean +0.009) and NEUTRAL mildly -EV, so this is
     # bias-conditioned, NOT a blanket disable_buy_no_15m. Ghost-logged; re-admit if edge returns.
     disable_buy_no_15m_when_bearish: true
+    # 2026-06-17: window-delta tape flip for BTC 5m/15m (parity with all 6 alts,
+    # which already had it). BTC's side was decided purely by the lagging 4H
+    # htf_bias + a stuck (~0.55) quant est_prob, with NO tape-truth override —
+    # so when 4H stayed BULLISH while the intraday tape fell, BTC went long-only
+    # into the drop (06-17: 5m/15m −$150, long-only, mfe≈0 on every stopped
+    # loser). The flip redirects an htf-driven side to the tape side when BTC's
+    # OWN % move since window-open clearly opposes it (REDIRECT, not block —
+    # block-mode froze the bot historically). Caller restricts it to 5m/15m;
+    # 1h is left bias-driven (it was +EV long-only, 50% WR). TODO(1h): if BTC 1h
+    # WR/PnL degrades, extend the flip to 1h — see _btc_window_delta_flip caller.
+    window_delta_confirm_enabled: true
+    window_delta_flip_margin: 0.05
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -1034,6 +1056,11 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    # 2026-06-16: HYPE 15m BUY_YES timing dead-zone. Ghost timing split: <5min +0.36,
+    # >=15min +0.02 (both +EV) but 5-12min -0.18 to -0.35 — mid-window overbought longs
+    # get stopped near expiry (the live -$30 15m bleed). Skip 15m longs at 5<=mins_left<12.
+    buy_yes_15m_skip_mins_lo: 5.0
+    buy_yes_15m_skip_mins_hi: 12.0
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). HYPE runs ~2x SOL's vol
     # (median 0.90% vs 0.53%), so SOL's 0.01/0.03 was doubly wrong here. RSI shared default.
     est_prob:
@@ -1693,7 +1720,11 @@ strategies:
     # while only 15m LONG bleeds (-$354). Blanket disable killed the best lane in a
     # bull tape. Operator directive: BNB longs on. If 15m proves a bleeder, suppress
     # 15m specifically rather than blanket-disabling all UP windows.
-    disable_buy_yes: false
+    # 2026-06-17: RE-SIT-OUT. The "+$157 1h TOP lane" above did not survive the
+    # fee correction (live 0.10 -> real 0.0312). Ghost net-of-correct-fee since
+    # 06-12: 15m -0.014 (n=10k), 5m -0.013, 1h -0.070 (n=442, worst); taken
+    # trades -$19 this session. -EV all windows. Operator directive: sit out.
+    disable_buy_yes: true
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -2037,13 +2068,13 @@ exposure:
   # Kelly-scaled tiers for paper trading. Live smoke-test order ceiling ($15) is
   # enforced separately via olympus.smoke_test.max_order_usd / true_max_usd.
   # 2026-06-15: whole tier ladder scaled 1.6x (full 25->40) for $500 paper bankroll, full-Kelly.
-  full_size: 40.0       # 8% x $500
-  moderate_size: 24.0   # 15 x 1.6
-  minimal_size: 12.8    # 8 x 1.6
-  min_trade_usd: 1.6    # 1 x 1.6 (legacy base floor; inert when per-tier floors set)
-  full_min_trade_usd: 24.0      # 15 x 1.6
-  moderate_min_trade_usd: 24.0  # 15 x 1.6
-  minimal_min_trade_usd: 8.0    # 5 x 1.6
+  full_size: 25.0  # 2026-06-16 revert-to-0613 (was 40.0)
+  moderate_size: 15.0  # 2026-06-16 revert-to-0613 (was 24.0)
+  minimal_size: 8.0  # 2026-06-16 revert-to-0613 (was 12.8)
+  min_trade_usd: 1.0  # 2026-06-16 revert-to-0613 (was 1.6)
+  full_min_trade_usd: 15.0  # 2026-06-16 revert-to-0613 (was 24.0)
+  moderate_min_trade_usd: 15.0  # 2026-06-16 revert-to-0613 (was 24.0)
+  minimal_min_trade_usd: 5.0  # 2026-06-16 revert-to-0613 (was 8.0)
   loss_kill_switch_enabled: false
   max_consecutive_losses: 3
   pause_cycles: 2

@@ -131,6 +131,13 @@ class ExposureManager:
         self.low_volume_ratio = exposure_config.get('low_volume_ratio', 0.7)
 
         # --- State ---
+        # TODO(go-live): this state is in-memory only — there is a `to_dict` but no
+        # `from_dict`/load, so every restart resets to tier=FULL with zero loss
+        # streak (overnight 2026-06-17 "Bug #19": bot re-took a known -EV BNB pattern
+        # at full size right after a restart). Intentional during smoke/paper testing
+        # (restart == fresh $500 session). Before LIVE, add persist-on-update +
+        # load-on-start (consecutive_losses, _portfolio_pnl, _recent_trades) so the
+        # loss-streak brake survives a crash-restart within the same trading intent.
         self._recent_trades: List[TradeResult] = []
         self._consecutive_losses: int = 0
         self._paused: bool = False

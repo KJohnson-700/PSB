@@ -212,11 +212,13 @@ class PositionExitManager:
             return []
 
         exits = []
-        now = datetime.now()
         token_map = market_token_ids or {}
 
         for pos_id, pos in active_positions.items():
-            hours_held = (now - pos.opened_at).total_seconds() / 3600.0
+            opened_at = pos.opened_at
+            tzinfo = getattr(opened_at, "tzinfo", None)
+            now = datetime.now(tzinfo) if tzinfo is not None else datetime.now()
+            hours_held = (now - opened_at).total_seconds() / 3600.0
             strategy_name = getattr(pos, "strategy", "") or ""
 
             # Get current market price
@@ -561,6 +563,17 @@ class PositionExitManager:
                     if _fee_rate is None:
                         _fee_rate = self._crypto_updown_15m_taker_fee_rate
                     _fee_rate = float(_fee_rate or 0.0)
+                    # The live get_fee_rate_bps endpoint has been returning an
+                    # implausible 1000 bps (0.10) on crypto up/down markets — ~10%
+                    # round-trip on a $0.50 binary, far above the real venue fee.
+                    # That bogus rate alone flipped a +$96 gross session to -$24 net
+                    # (and is the entire "R:R inversion" artifact). Treat the
+                    # configured crypto taker rate as the authoritative ceiling so a
+                    # bad live value can't dominate paper P&L; a genuinely lower
+                    # market fee still passes through via min().
+                    _cfg_rate = float(self._crypto_updown_15m_taker_fee_rate or 0.0)
+                    if _cfg_rate > 0:
+                        _fee_rate = min(_fee_rate, _cfg_rate)
                     _exit_fee = polymarket_taker_fee_usdc(
                         pos.size,
                         exit_price,
