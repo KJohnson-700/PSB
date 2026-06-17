@@ -540,14 +540,44 @@ def log_ops_startup(bot: Any) -> None:
         logging.warning("ops_start failed: %s", e)
 
 
+def _maybe_rotate_ops_file(cap_mb: float) -> None:
+    """Gzip-rotate the ops-pulse file when it exceeds cap_mb, then start fresh.
+
+    The bot reopens this file on every append (no long-lived handle), so rotating
+    here is safe: we gzip the full file into data/logs/archive/ and unlink the
+    original; the next append recreates it. Reads are tail-bounded
+    (_iter_recent_ops_pulses), so only recent rows matter live — older rows live
+    in the compressed archive for offline inspection / the data lifecycle job.
+    """
+    try:
+        if not OPS_PULSE_FILE.exists():
+            return
+        if OPS_PULSE_FILE.stat().st_size < cap_mb * 1024 * 1024:
+            return
+        import gzip
+        import shutil
+
+        archive_dir = OPS_PULSE_FILE.parent / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        dest = archive_dir / f"ops_pulse.{stamp}.jsonl.gz"
+        with OPS_PULSE_FILE.open("rb") as src, gzip.open(dest, "wb") as gz:
+            shutil.copyfileobj(src, gz)
+        OPS_PULSE_FILE.unlink()
+    except Exception as e:
+        logging.warning("ops_pulse rotation failed: %s", e)
+
+
 def _append_ops_file(bot: Any, line: str) -> None:
     """Persist OPS_JSON lines to a dedicated JSONL file for offline inspection."""
     if not getattr(bot, "config", None):
         return
-    if not bot.config.get("logging", {}).get("ops_pulse_file", True):
+    log_cfg = bot.config.get("logging", {})
+    if not log_cfg.get("ops_pulse_file", True):
         return
     try:
         OPS_PULSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _maybe_rotate_ops_file(float(log_cfg.get("ops_pulse_max_mb", 100) or 100))
         with OPS_PULSE_FILE.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception as e:
