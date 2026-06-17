@@ -119,8 +119,25 @@ def _shutdown_timeout_seconds(default: float = 8.0) -> float:
         return default
 
 
+def _self_rss_mb() -> Optional[float]:
+    """Best-effort resident-set size of this process, in MB (stdlib only).
+
+    ru_maxrss is bytes on macOS, kilobytes on Linux — normalize both.
+    Tracking this on the heartbeat makes a memory leak / OOM-Jetsam kill
+    (the leading suspect for the recurring deaths) visible as a trend.
+    """
+    try:
+        import resource
+
+        ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+        return round(ru / divisor, 1)
+    except Exception:
+        return None
+
+
 def _write_heartbeat(phase: str) -> None:
-    """Stamp a tiny liveness file every runtime-status tick (hang detector)."""
+    """Stamp a tiny liveness file every runtime-status tick (hang/OOM detector)."""
     try:
         RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
         HEARTBEAT_FILE.write_text(
@@ -130,6 +147,7 @@ def _write_heartbeat(phase: str) -> None:
                     "monotonic": time.monotonic(),
                     "pid": os.getpid(),
                     "phase": phase,
+                    "rss_mb": _self_rss_mb(),
                 },
                 sort_keys=True,
             ),
