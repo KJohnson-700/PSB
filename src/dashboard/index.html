@@ -28,7 +28,7 @@
         .grid-3cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
         .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
         .full{grid-column:1/-1}
-        .crypto-grid{display:grid;grid-template-columns:1fr;gap:20px;margin-bottom:20px;align-items:stretch}
+        .crypto-grid{display:none!important;grid-template-columns:1fr;gap:20px;margin-bottom:20px;align-items:stretch}
         .crypto-grid.two,.crypto-grid.three{grid-template-columns:1fr}
         .crypto-grid>.card{height:auto;display:flex;flex-direction:column;min-width:0;overflow:hidden;padding:20px 22px}
         .equal-card-grid{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:16px;align-items:stretch;grid-auto-rows:auto}
@@ -87,15 +87,38 @@
         #status-hero{gap:10px;margin:10px 0 8px}
         .hero-item{
             background:rgba(0,0,0,.62);backdrop-filter:blur(12px);border:1px solid var(--border);
-            border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;
+            border-radius:4px;padding:14px 16px;transition:border-color .18s,box-shadow .18s;min-width:0;overflow:hidden;position:relative;
             box-shadow:0 0 22px rgba(0,0,0,.35),0 0 18px rgba(0,229,255,.05);
         }
+        .hero-item.pnl-bucket-loss-1{background:linear-gradient(155deg,rgba(255,68,102,.06),rgba(0,0,0,.62) 70%)}
+        .hero-item.pnl-bucket-loss-2{background:linear-gradient(155deg,rgba(255,68,102,.12),rgba(0,0,0,.62) 70%)}
+        .hero-item.pnl-bucket-loss-3{background:linear-gradient(155deg,rgba(255,68,102,.20),rgba(0,0,0,.62) 70%)}
+        .hero-item.pnl-bucket-win-1{background:linear-gradient(155deg,rgba(0,255,136,.06),rgba(0,0,0,.62) 70%)}
+        .hero-item.pnl-bucket-win-2{background:linear-gradient(155deg,rgba(0,255,136,.12),rgba(0,0,0,.62) 70%)}
+        .hero-item.pnl-bucket-win-3{background:linear-gradient(155deg,rgba(0,255,136,.20),rgba(0,0,0,.62) 70%)}
+        .hero-item.hero-pulse-loss{animation:heroPulseLoss 1.4s ease-out 1}
+        .hero-item.hero-pulse-win{animation:heroPulseWin 1.4s ease-out 1}
+        @keyframes heroPulseLoss{0%{box-shadow:0 0 0 0 rgba(255,68,102,.34)}55%{box-shadow:0 0 0 16px rgba(255,68,102,0)}100%{box-shadow:0 0 0 0 rgba(255,68,102,0)}}
+        @keyframes heroPulseWin{0%{box-shadow:0 0 0 0 rgba(0,255,136,.30)}55%{box-shadow:0 0 0 16px rgba(0,255,136,0)}100%{box-shadow:0 0 0 0 rgba(0,255,136,0)}}
         .hero-item:hover{border-color:rgba(0,229,255,.32);box-shadow:0 0 24px rgba(0,229,255,.2),0 0 48px rgba(176,96,255,.12),0 0 56px rgba(0,255,136,.08)}
         .hero-item .hero-val{font-family:'IBM Plex Mono',monospace;font-size:clamp(16px,1.6vw,22px);font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:block;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .hero-item .hero-sub{font-size:10px;color:var(--td);margin-top:2px;min-width:0;overflow:hidden;text-overflow:ellipsis}
         .hero-item .hero-lbl{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--td);margin-top:5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .hero-trend{display:inline-flex;align-items:center;gap:3px;margin-left:6px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.04em}
+        .hero-trend.up{color:var(--gr)}.hero-trend.down{color:var(--re)}.hero-trend.flat{color:var(--td)}
+        .hero-spark{position:absolute;right:10px;bottom:7px;width:112px;height:32px;opacity:.82;pointer-events:none}
+        .hero-item.has-spark{padding-right:128px;min-height:98px}
         #status-hero .hero-item{padding:14px 16px;min-height:98px}
-        #status-hero .hero-item .hero-val{font-size:clamp(26px,2.6vw,42px);line-height:1.04}
+        #status-hero .hero-item.has-spark{padding-right:128px}
+        #status-hero .hero-item .hero-val{font-size:clamp(26px,2.6vw,42px);line-height:1.04;letter-spacing:0;overflow:visible;text-overflow:clip}
+        @media (max-width:1280px){
+            #status-hero .hero-item.has-spark{padding-right:76px}
+            #status-hero .hero-spark{width:60px;opacity:.58}
+        }
+        @media (max-width:1040px){
+            #status-hero .hero-item.has-spark{padding-right:16px}
+            #status-hero .hero-spark{display:none}
+        }
         .crypto-hero-six{grid-template-columns:repeat(6,minmax(0,1fr))}
         .crypto-hero-seven{grid-template-columns:repeat(7,minmax(0,1fr))}
         .crypto-meta-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
@@ -229,6 +252,21 @@
         .action-lane-action{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase}
         .action-lane-main{font-family:'IBM Plex Mono',monospace;font-size:0.82rem;font-weight:600;line-height:1.2}
         .action-lane-sub{font-size:0.68rem;color:var(--td);line-height:1.35}
+
+        /* ── Lane Gates (config-driven lane open/closed tracker) ── */
+        .lane-gates-table{width:100%;border-collapse:collapse;font-size:0.75rem;font-family:'IBM Plex Mono',monospace}
+        .lane-gates-table th,.lane-gates-table td{padding:5px 4px;text-align:center;border-bottom:1px solid rgba(255,255,255,.05)}
+        .lane-gates-table th{color:var(--td);font-size:0.65rem;letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+        .lane-gates-table td:first-child,.lane-gates-table th:first-child{text-align:left;padding-left:2px}
+        .lane-gates-table tr:last-child td{border-bottom:none}
+        .lane-gate-cell{display:inline-flex;gap:4px;align-items:center;justify-content:center}
+        .lane-gate-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:3px;border:1px solid transparent;font-size:0.65rem;letter-spacing:.04em;cursor:help;white-space:nowrap}
+        .lane-gate-pill--open{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.25);color:var(--gr)}
+        .lane-gate-pill--closed{background:rgba(255,68,102,.08);border-color:rgba(255,68,102,.35);color:var(--re)}
+        .lane-gate-pill--conditional{background:rgba(255,215,0,.08);border-color:rgba(255,215,0,.35);color:var(--ye)}
+        .lane-gate-dot{width:6px;height:6px;border-radius:50%;display:inline-block;box-shadow:0 0 6px currentColor}
+        .lane-gate-legend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:8px;font-size:0.65rem;color:var(--td)}
+        .lane-gate-legend span{display:inline-flex;align-items:center;gap:4px}
 
         /* ── Badges ── */
         .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
@@ -1168,6 +1206,11 @@
 
         /* ── Live: master list under Active Positions + detail panel + metric deck ── */
         .pos-master-list-wrap{margin-bottom:10px}
+        .pos-master-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+        .pos-chip-group{display:flex;gap:5px;flex-wrap:wrap}
+        .pos-chip{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:3px;border:1px solid var(--border);background:rgba(255,255,255,.03);color:var(--td);cursor:pointer}
+        .pos-chip:hover{border-color:rgba(0,229,255,.35);color:var(--tx)}
+        .pos-chip.active{border-color:rgba(0,229,255,.55);background:rgba(0,229,255,.10);color:var(--cy)}
         .active-positions-title{
             font-size:1rem;
             line-height:1.2;
@@ -1178,16 +1221,37 @@
             font-size:0.65rem!important;
             vertical-align:middle;
         }
-        .pos-master{border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.28);min-height:72px;max-height:min(28vh,280px);overflow:auto;min-width:0}
-        .pos-master-row{display:flex;align-items:center;gap:8px;padding:10px 11px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.06);transition:background .15s,border-color .18s;min-width:0}
+        .pos-master{border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.28);min-height:72px;max-height:min(52vh,520px);overflow:auto;min-width:0}
+        .pos-master-row{display:block;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.06);transition:background .15s,border-color .18s;min-width:0}
         .pos-master-row:last-child{border-bottom:none}
         .pos-master-row:hover{background:rgba(0,229,255,.06)}
         .pos-master-row.selected{background:rgba(0,229,255,.10);border-left:3px solid var(--cy);padding-left:8px}
+        .pos-row-summary{display:grid;grid-template-columns:auto auto minmax(160px,1fr) 92px 54px 18px;align-items:center;gap:8px;padding:10px 11px;min-width:0}
+        .pos-row-toggle{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--td);transition:transform .16s;text-align:right}
+        .pos-master-row.selected .pos-row-toggle{transform:rotate(90deg);color:var(--cy)}
+        .pos-row-detail{display:none;padding:12px 14px 14px;background:rgba(0,0,0,.30);border-top:1px solid rgba(255,255,255,.07);grid-template-columns:2fr 1fr;gap:14px}
+        .pos-master-row.selected .pos-row-detail{display:grid}
+        .pos-row-fullq{font-size:0.8rem;color:var(--tx);line-height:1.45;margin-bottom:10px}
+        .pos-row-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+        .pos-row-meta .k{font-family:'IBM Plex Mono',monospace;font-size:0.58rem;letter-spacing:.08em;text-transform:uppercase;color:var(--td);margin-bottom:2px}
+        .pos-row-meta .v{font-family:'IBM Plex Mono',monospace;font-size:0.72rem;color:var(--tx);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .pos-row-spark{border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.38);padding:8px;min-width:0}
+        .pos-row-spark-label{display:flex;justify-content:space-between;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:0.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--td);margin-bottom:6px}
+        .pos-row-spark svg{width:100%;height:54px;display:block}
         .pos-master-row.pos-row-enter{animation:posRowIn .38s ease-out both}
         .pos-master-flash-exit{animation:posMasterExitFlash .45s ease-out}
         .pos-master-snippet{font-size:0.72rem;color:var(--td);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .pos-master-meta{font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--tm);white-space:nowrap}
-        .pos-unified-panel{margin-top:0;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.32);overflow:hidden;min-width:0}
+        .pos-master-side{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;min-width:38px;text-align:center;padding:2px 6px;border-radius:3px;border:1px solid rgba(255,255,255,.12);color:var(--td)}
+        .pos-master-side.yes{border-color:rgba(0,255,136,.35);background:rgba(0,255,136,.08);color:var(--gr)}
+        .pos-master-side.no{border-color:rgba(255,68,102,.35);background:rgba(255,68,102,.08);color:var(--re)}
+        .pos-master-pnlbar{position:relative;width:82px;height:24px;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.35);overflow:hidden;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:22px;text-align:center;flex:0 0 auto}
+        .pos-master-pnlbar::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:var(--w,0%);transform:translateX(var(--tx,0));background:var(--c,var(--td));opacity:.25;transition:width .45s ease}
+        .pos-master-pnlbar span{position:relative;z-index:1}
+        .pos-master-pnlbar.pnl-pos{--c:var(--gr);color:var(--gr);--tx:-100%}
+        .pos-master-pnlbar.pnl-neg{--c:var(--re);color:var(--re);--tx:0}
+        .pos-master-age{font-family:'IBM Plex Mono',monospace;font-size:0.62rem;color:var(--td);white-space:nowrap;min-width:42px;text-align:right}
+        .pos-unified-panel{display:none;margin-top:0;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,.32);overflow:hidden;min-width:0}
         .pos-unified-panel .pos-detail{padding:14px 16px;min-height:140px;min-width:0;border:none;border-radius:0;background:rgba(0,0,0,.12);transition:opacity .2s}
         .ops-metric-deck-chip .chip-b .deck-side-long{color:var(--gr);font-weight:600}
         .ops-metric-deck-chip .chip-b .deck-side-short{color:var(--re);font-weight:600}
@@ -1213,6 +1277,7 @@
         .pos-ob-muted{color:var(--td);font-size:0.75rem;padding:8px 0}
         .pos-deck-filter-hint{font-size:0.68rem;color:rgba(255,255,255,.55);margin-bottom:6px;display:none}
         .pos-deck-filter-hint.on{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        @media (max-width:900px){.hero-item.has-spark,#status-hero .hero-item.has-spark{padding-right:16px}.hero-spark{display:none}.pos-row-summary{grid-template-columns:auto auto 1fr 86px}.pos-master-age,.pos-row-toggle{display:none}.pos-row-detail{grid-template-columns:1fr}.pos-row-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
         /* Ops digest ticker — status fields only; marquee when overflow */
         .ops-digest-ticker{display:none;margin:0 0 10px;border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.2);position:relative}
         .ops-digest-ticker-viewport{overflow:hidden;padding:7px 12px;min-height:30px}
@@ -1571,14 +1636,18 @@
         .tr-pnl.pos{color:var(--gr)}.tr-pnl.neg{color:var(--re)}
 
         /* Exposure tile classes (design's .exp-grid / .exp) */
-        .exp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:7px;margin:6px 0}
-        .exp{padding:11px 13px;border-radius:4px;background:rgba(0,0,0,.62);border:1px solid var(--border);transition:border-color .18s;animation:fadeUp .4s ease both}
+        .exp-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;color:var(--td);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.04em;text-transform:uppercase}
+        .exp-summary .ok{color:var(--gr)}.exp-summary .warn{color:var(--ye)}.exp-summary .bad{color:var(--re)}
+        .exp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(188px,1fr));gap:8px;margin:6px 0 10px}
+        .exp{padding:11px 13px;border-radius:4px;background:rgba(0,0,0,.62);border:1px solid var(--border);transition:border-color .18s;animation:fadeUp .4s ease both;min-width:0}
         .exp:hover{border-color:var(--bx)}
-        .exp-nm{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;margin-bottom:5px;color:var(--tx)}
+        .exp-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+        .exp-nm{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--tx)}
         .exp-tier{font-size:9px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px}
         .t-min{color:var(--cy)}.t-mod{color:var(--ye)}.t-full{color:var(--gr)}
-        .exp-mul{font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;margin-bottom:5px}
-        .exp-info{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--td);line-height:1.8}
+        .exp-mul{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;margin-bottom:5px}
+        .exp-info{display:grid;grid-template-columns:1fr 1fr;gap:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--td);line-height:1.35}
+        .exp-info b{display:block;color:var(--tx);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .exp-info .lv{color:var(--re)}
         .exp-btns{display:flex;gap:4px;margin-top:8px}
         .ebtn{font-family:'IBM Plex Mono',monospace;font-size:9px;padding:3px 7px;border-radius:2px;border:1px solid;cursor:pointer;transition:transform .1s,filter .1s;background:transparent}
@@ -1854,14 +1923,14 @@
             <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
-            <div class="hero-item" title="Current paper equity">
-                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll</div></div>
-            <div class="hero-item" title="Realized PnL this session">
-                <div class="hero-val" id="hero-pnl">-</div><div class="hero-lbl">Session P&L</div></div>
-            <div class="hero-item" title="Currently open positions">
-                <div class="hero-val" id="hero-positions">-</div><div class="hero-lbl">Open positions</div></div>
-            <div class="hero-item" title="Trades counted by the risk manager for the current UTC day">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-lbl">Trades today (UTC)</div></div>
+            <div class="hero-item has-spark" id="hero-card-bankroll" title="Current paper equity">
+                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll <span class="hero-trend flat" id="hero-bankroll-trend">—</span></div><svg class="hero-spark" id="hero-spark-bankroll" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
+            <div class="hero-item has-spark" id="hero-card-pnl" title="Realized PnL this session">
+                <div class="hero-val" id="hero-pnl">-</div><div class="hero-sub" id="hero-pnl-sub"></div><div class="hero-lbl">Session P&L <span class="hero-trend flat" id="hero-pnl-trend">—</span></div><svg class="hero-spark" id="hero-spark-pnl" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
+            <div class="hero-item has-spark" id="hero-card-positions" title="Currently open positions">
+                <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions <span class="hero-trend flat" id="hero-positions-trend">—</span></div><svg class="hero-spark" id="hero-spark-positions" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
+            <div class="hero-item has-spark" id="hero-card-trades" title="ENTRY events logged in the current session">
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills <span class="hero-trend flat" id="hero-trades-trend">—</span></div><svg class="hero-spark" id="hero-spark-trades" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
@@ -1900,6 +1969,18 @@
                 <span id="positions-toggle" style="color:var(--text-muted);font-size:0.8rem;user-select:none;">&#9654;</span>
             </div>
             <div id="positions-body-wrap" style="margin-top:6px;display:none;">
+                <div class="pos-master-toolbar">
+                    <div class="pos-chip-group" id="pos-sort-chips">
+                        <button type="button" class="pos-chip" data-sort="pnl">Sort P&amp;L</button>
+                        <button type="button" class="pos-chip" data-sort="age">Sort Age</button>
+                        <button type="button" class="pos-chip" data-sort="size">Sort Size</button>
+                    </div>
+                    <div class="pos-chip-group" id="pos-side-chips">
+                        <button type="button" class="pos-chip active" data-side="all">All</button>
+                        <button type="button" class="pos-chip" data-side="yes">YES</button>
+                        <button type="button" class="pos-chip" data-side="no">NO</button>
+                    </div>
+                </div>
                 <div class="pos-master-list-wrap">
                     <div class="pos-master" id="positions-master"></div>
                 </div>
@@ -2354,6 +2435,7 @@
     <!-- Exposure Manager (live tab) -->
     <div class="card" data-aos="fade-up" data-aos-delay="720" id="exposure-panel" style="margin-bottom:16px;">
         <h2>Exposure Manager</h2>
+        <div id="exposure-summary" class="exp-summary"></div>
         <div id="exposure-managers" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:6px;">
             <button class="btn-sm btn-red" onclick="pauseExposure()">Pause</button>
@@ -2409,8 +2491,12 @@
                     <div id="updown-new" style="font-size:0.82rem;line-height:1.8;"></div>
                 </div>
                 <div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;">OLD CODE (pre-restart)</div>
-                    <div id="updown-old" style="font-size:0.82rem;line-height:1.8;"></div>
+                    <div style="font-size:0.7rem;color:var(--cy);margin-bottom:6px;font-weight:600;">LANE GATES</div>
+                    <div id="lane-gates-panel">
+                        <div id="lane-gates-loading" style="font-size:0.78rem;color:var(--text-muted);padding:8px 0;">Loading lane gates…</div>
+                        <div id="lane-gates-grid"></div>
+                        <div id="lane-gates-updated" style="font-size:0.65rem;color:var(--td);margin-top:8px;text-align:right;">-</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2435,28 +2521,18 @@
             </div>
         </div>
 
-        <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-                <span style="font-weight:600;font-size:0.88rem;">Trade journey</span>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <label style="font-size:0.72rem;color:var(--text-muted);">Filter</label>
-                    <select id="trade-journey-strategy" onchange="fetchTradeJourney()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:0.72rem;">
-                        <option value="">All crypto</option>
-                        <option value="bitcoin">bitcoin</option>
-                        <option value="sol_macro">sol_macro</option>
-                        <option value="eth_macro">eth_macro</option>
-                        <option value="hype_macro">hype_macro</option>
-                        <option value="xrp_macro">xrp_macro</option>
-                        <option value="doge_macro">doge_macro</option>
-                        <option value="bnb_macro">bnb_macro</option>
-                    </select>
-                    <span id="trade-journey-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
-                </div>
-            </div>
-            <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
-                Recent <strong style="color:var(--text);">closed</strong> trades (newest first): bucket, PnL, exit reason. Uses the same journal as chart markers.
-            </p>
-            <div id="trade-journey-rows" class="scrollbox" style="max-height:200px;font-size:0.78rem;line-height:1.55;">Loading…</div>
+        <!-- Trade journey removed (decluttered + drops a heavy per-poll fetch); strategy charts lifted up below. -->
+    </div>
+
+    <!-- Strategy Allocation + PnL Breakdown — moved up from the bottom for visibility -->
+    <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
+        <div class="card" data-aos="fade-up">
+            <h2 style="margin-bottom:8px;">Strategy Allocation</h2>
+            <canvas id="allocation-chart" height="220" style="width:100%;"></canvas>
+        </div>
+        <div class="card" data-aos="fade-up">
+            <h2 style="margin-bottom:8px;">Strategy PnL Breakdown</h2>
+            <canvas id="strategy-pnl-chart" height="220" style="width:100%;"></canvas>
         </div>
     </div>
 
@@ -2490,18 +2566,6 @@
             <thead><tr><th>Strategy</th><th>Signals</th><th>Session Trades</th><th>Session PnL</th><th>Open</th><th>Break-even</th></tr></thead>
             <tbody></tbody>
         </table>
-    </div>
-
-    <!-- Analytics Charts -->
-    <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
-        <div class="card" data-aos="fade-up">
-            <h2 style="margin-bottom:8px;">Strategy Allocation</h2>
-            <canvas id="allocation-chart" height="220" style="width:100%;"></canvas>
-        </div>
-        <div class="card" data-aos="fade-up">
-            <h2 style="margin-bottom:8px;">Strategy PnL Breakdown</h2>
-            <canvas id="strategy-pnl-chart" height="220" style="width:100%;"></canvas>
-        </div>
     </div>
 
     </div><!-- /view-performance -->
@@ -2655,10 +2719,10 @@
             <div>
                 <label style="font-size:.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">Window</label>
                 <select id="gl-since" onchange="loadGhostLab()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.78rem;">
-                    <option value="all" selected>all-time</option>
+                    <option value="all">all-time</option>
                     <option value="7">last 7d</option>
                     <option value="14">last 14d</option>
-                    <option value="30">last 30d</option>
+                    <option value="30" selected>last 30d</option>
                     <option value="60">last 60d</option>
                 </select>
             </div>
@@ -2678,170 +2742,23 @@
         </div>
     </div>
 
-    <!-- Morning summary — overnight evidence + lane calibration actions -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:8px;">
-            <div>
-                <h3 style="margin:0;font-size:.95rem;">Morning summary</h3>
-                <div id="gl-morning-window" style="font-size:.68rem;color:var(--text-muted);margin-top:2px;">overnight window loading</div>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <div id="gl-morning-status" style="font-size:.68rem;color:var(--text-muted);">waiting</div>
-                <button class="btn-sm" type="button" onclick="loadGhostMorningSummary()">Refresh</button>
-            </div>
-        </div>
-        <div id="gl-morning-summary" style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div id="gl-morning-loops" style="display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div style="display:grid;grid-template-columns:repeat(4,minmax(280px,1fr));gap:12px;">
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
-                <div id="gl-morning-standouts" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Settings adjustments</h4>
-                <div id="gl-morning-adjustments" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Lane calibration</h4>
-                <div id="gl-morning-calibration" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Next edit queue</h4>
-                <div id="gl-morning-next-edits" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Decision digest — gate/calibration rollup -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h3 style="margin:0;font-size:.95rem;">Gate / calibration rollup</h3>
-            <div id="gl-digest-status" style="font-size:.68rem;color:var(--text-muted);">waiting</div>
-        </div>
-        <div id="gl-digest-summary" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div style="display:grid;grid-template-columns:minmax(320px,1fr);gap:12px;">
-            <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
-                    <thead>
-                        <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);text-align:left;">
-                            <th style="padding:5px 8px;">gate / calibration signal</th>
-                            <th style="padding:5px 8px;text-align:right;">n</th>
-                            <th style="padding:5px 8px;text-align:right;">metric</th>
-                        </tr>
-                    </thead>
-                    <tbody id="gl-digest-tbody">
-                        <tr><td colspan="3" style="padding:8px;color:var(--text-muted);">No digest loaded.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <!-- Panel 1 — 24h clock ring (animated) + Panel 2 — 7x24 heatmap, side by side -->
-    <div class="grid" style="grid-template-columns: minmax(320px, 1fr) minmax(380px, 1.4fr); gap:14px; margin-bottom:14px;">
-        <div class="card" data-aos="fade-up" style="padding:12px 14px;">
+    <!-- Ghost Lab — time visual + lane×hour heatmap only -->
+    <div class="grid" style="grid-template-columns:minmax(320px,1fr) minmax(380px,1.4fr);gap:14px;margin-bottom:14px;">
+        <div class="card gl-clock-card" data-aos="fade-up" style="padding:12px 14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <h3 style="margin:0;font-size:.95rem;">Hour-of-day clock</h3>
-                <div>
-                    <button class="btn-sm" type="button" id="gl-play-btn" onclick="toggleGhostLabClock()">▶ Play</button>
-                </div>
+                <button class="btn-sm" type="button" id="gl-play-btn" onclick="toggleGhostLabClock()">▶ Play</button>
             </div>
             <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:6px;">Wedge color = WR (red&lt;0.40, amber 0.40-0.55, green&gt;0.55). Thickness = n. Hover for stats.</div>
-            <svg id="gl-clock" viewBox="-160 -160 320 320" style="width:100%;height:auto;max-height:340px;display:block;"></svg>
+            <svg id="gl-clock" viewBox="-160 -160 320 320"></svg>
             <div id="gl-clock-stats" style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:var(--text-muted);text-align:center;margin-top:4px;min-height:32px;">hover or play to inspect an hour</div>
         </div>
         <div class="card" data-aos="fade-up" style="padding:12px 14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <h3 style="margin:0;font-size:.95rem;">Day × hour heatmap</h3>
+                <h3 style="margin:0;font-size:.95rem;">Lane × hour heatmap</h3>
                 <div style="font-size:.7rem;color:var(--text-muted);">cell size ∝ n &middot; color = WR &middot; CI on hover</div>
             </div>
-            <div id="gl-heatmap"></div>
-        </div>
-    </div>
-
-    <!-- Panel 3 — Replay scrubber -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h3 style="margin:0;font-size:.95rem;">Animated replay</h3>
-            <div style="display:flex;gap:6px;align-items:center;">
-                <button class="btn-sm" type="button" id="gl-replay-btn" onclick="toggleGhostLabReplay()">▶ Play</button>
-                <select id="gl-replay-speed" onchange="setGhostLabReplaySpeed()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 5px;font-size:.7rem;">
-                    <option value="1">1×</option>
-                    <option value="10">10×</option>
-                    <option value="100" selected>100×</option>
-                    <option value="1000">1000×</option>
-                </select>
-                <span id="gl-replay-time" style="font-family:'IBM Plex Mono',monospace;font-size:.7rem;color:var(--text-muted);min-width:140px;text-align:right;">—</span>
-            </div>
-        </div>
-        <canvas id="gl-replay" style="width:100%;height:80px;display:block;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></canvas>
-        <input type="range" id="gl-replay-scrub" min="0" max="1000" value="0" oninput="onGhostLabScrub()" style="width:100%;margin-top:6px;">
-        <div style="font-size:.66rem;color:var(--text-muted);margin-top:4px;">
-            Dots: <span style="color:#888;">●</span> ghost (rejected, settled) &nbsp;
-            <span style="color:var(--gn);">●</span> live win &nbsp;
-            <span style="color:var(--rd);">●</span> live loss &nbsp;|&nbsp; scrub to freeze the heatmap above to "data as of this moment".
-        </div>
-    </div>
-
-    <!-- Panel 4 — Regime × Ghost breakdown -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:14px;padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h3 style="margin:0;font-size:.95rem;">Regime × Ghost</h3>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <select id="gl-regime-since" onchange="loadGhostLabRegime()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:.72rem;">
-                    <option value="1">today</option>
-                    <option value="2">last 2d</option>
-                    <option value="7" selected>last 7d</option>
-                    <option value="30">last 30d</option>
-                </select>
-                <button class="btn-sm" type="button" onclick="loadGhostLabRegime()">Refresh</button>
-            </div>
-        </div>
-        <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px;">
-            Ghost win rate broken down by market regime — active (hot price or real polymarket signal), quiet (flat price, no signal), unknown (insufficient regime data).
-        </div>
-        <div id="gl-regime-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;"></div>
-        <div id="gl-regime-table-wrap" style="overflow-x:auto;">
-            <table id="gl-regime-table" style="width:100%;border-collapse:collapse;font-size:.72rem;font-family:'IBM Plex Mono',monospace;">
-                <thead>
-                    <tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--text-muted);">
-                        <th style="padding:5px 8px;">regime</th>
-                        <th style="padding:5px 8px;">gate</th>
-                        <th style="padding:5px 8px;text-align:right;">ghosts</th>
-                        <th style="padding:5px 8px;text-align:right;">WR</th>
-                        <th style="padding:5px 8px;text-align:right;">ci lo</th>
-                        <th style="padding:5px 8px;text-align:right;">ci hi</th>
-                        <th style="padding:5px 8px;">read</th>
-                    </tr>
-                </thead>
-                <tbody id="gl-regime-tbody"></tbody>
-            </table>
-        </div>
-        <div id="gl-regime-empty" style="display:none;font-size:.75rem;color:var(--text-muted);padding:12px;text-align:center;">
-            No regime data yet — <code>enhanced_price_tracker.py</code> needs to run for 24h+ first to collect regime labels.
-        </div>
-    </div>
-
-    <!-- Panel 5 — Lane × source table -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;padding:12px 14px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <h3 style="margin:0;font-size:.95rem;">Lane detail</h3>
-            <div style="font-size:.7rem;color:var(--text-muted);">click a row to filter all panels above</div>
-        </div>
-        <div style="overflow-x:auto;">
-            <table id="gl-lane-table" style="width:100%;border-collapse:collapse;font-size:.75rem;font-family:'IBM Plex Mono',monospace;">
-                <thead>
-                    <tr style="border-bottom:1px solid var(--border);text-align:left;color:var(--text-muted);">
-                        <th style="padding:6px 8px;cursor:pointer;" onclick="sortGhostLabTable('lane_id')">lane_id</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_ghosts')">ghosts</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('ghost_wr')">ghost WR</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('n_live')">live</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('live_wr')">live WR</th>
-                        <th style="padding:6px 8px;cursor:pointer;text-align:right;" onclick="sortGhostLabTable('posterior_mean')">posterior</th>
-                    </tr>
-                </thead>
-                <tbody id="gl-lane-tbody"></tbody>
-            </table>
+            <div id="gl-lh-heatmap"></div>
         </div>
     </div>
 
@@ -2858,10 +2775,8 @@
     .gl-clock-wedge { transition:opacity .15s; cursor:pointer; }
     .gl-clock-wedge:hover { opacity:.85; }
     .gl-clock-wedge.active { filter:drop-shadow(0 0 6px rgba(255,255,255,.5)); }
-    #gl-lane-tbody tr { border-bottom:1px solid rgba(255,255,255,.04); cursor:pointer; }
-    #gl-lane-tbody tr:hover { background:rgba(255,255,255,.03); }
-    #gl-lane-tbody tr.active { background:rgba(176,96,255,.12); }
-    #gl-lane-tbody td { padding:5px 8px; }
+    #gl-clock { width:100%;height:auto;max-height:340px;display:block;margin:0 auto; }
+    html.dashboard-fullscreen #gl-clock { max-height:min(68vh, 720px); }
     </style>
 
 
@@ -3636,13 +3551,8 @@ function switchMainView(which, opts) {
             fetchAll();
         }
         if (which === 'performance') {
-            fetchAll();
-            loadActionBreakdown();
+            _perfForceHeavy = true;  // fetch the heavy analytics tier immediately on tab-open
             loadLivePerformance();
-            setTimeout(function() {
-                if (typeof loadAllocationChart === 'function') loadAllocationChart();
-                if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
-            }, 80);
         }
         if (which === 'ghosts') {
             if (typeof loadGhostLab === 'function') loadGhostLab();
@@ -3727,6 +3637,7 @@ let currentScanFilter = 'all';
 let currentJournalTab = 'positions';
 let positionsCollapsed = true;
 let lastStatusData = null;
+let lastMetricsData = null;
 window._dashSessionId = null; // tracks active session; chart reset fires when this changes
 window._journalViewSessionId = null; // when set, journal API calls scope to this session id
 
@@ -3860,15 +3771,30 @@ function _safeUpdateLiveAsset(key, payload, updateFn, missLimit = 3) {
     updateFn({ error: true });
 }
 
+// Two-tier Performance cadence. Under uvicorn HTTP/1.1 the browser caps ~6
+// connections/host, so firing all ~12 Performance endpoints every 14s makes the
+// slow analytics (usage/records, trade_journey, reason-buckets, lane_gates)
+// head-of-line-block the headline numbers. Critical KPIs stay every-poll; the
+// slow-changing analytics refresh every 3rd poll (~42s) or immediately on tab-open.
+let _perfPollCount = 0;
+let _perfForceHeavy = true;  // first Performance render fetches the heavy tier
+
 async function fetchAll() {
     const currentView = _currentMainView();
     const needLive = currentView === 'live';
+    const needLiveAssetCards = false;
     const needPerformance = currentView === 'performance';
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
     const needUpdownWr = needLive || needPerformance;
     /** Journal + Performance both show session rollup; summary must be fetched for either. */
     const needJournalSummary = needJournal || needPerformance;
+
+    // Heavy-tier gate: slow-changing Performance analytics. True on tab-open and
+    // every 3rd poll thereafter; keeps per-poll concurrency under the connection cap.
+    _perfPollCount++;
+    const _perfHeavy = needPerformance && (_perfForceHeavy || (_perfPollCount % 3 === 0));
+    if (needPerformance) _perfForceHeavy = false;
 
     // ── Performance hero first, decoupled from the heavy batch ──────────────
     // /api/live/performance shares its source (journal summary) with the SSE-fed
@@ -3886,30 +3812,31 @@ async function fetchAll() {
         } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
     }
 
-    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
+    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR, laneGatesR;
     try {
-        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
+        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR, laneGatesR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
             needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/trades')) : Promise.resolve(null),
             fetchT('/api/exposure'),
-            needLive ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('sol_macro') ? fetchT('/api/sol/analysis', 14000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('eth_macro') ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('hype_macro') ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('xrp_macro') ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('doge_macro') ? fetchT('/api/doge/analysis', 14000) : Promise.resolve(null),
-            needLive && _liveAssetPollEnabled('bnb_macro') ? fetchT('/api/bnb/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards ? fetchT('/api/bitcoin/analysis', 9000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('sol_macro') ? fetchT('/api/sol/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('eth_macro') ? fetchT('/api/eth/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('hype_macro') ? fetchT('/api/hype/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('xrp_macro') ? fetchT('/api/xrp/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('doge_macro') ? fetchT('/api/doge/analysis', 14000) : Promise.resolve(null),
+            needLiveAssetCards && _liveAssetPollEnabled('bnb_macro') ? fetchT('/api/bnb/analysis', 14000) : Promise.resolve(null),
             (needPerformance && !_perfPrefetched) ? fetchT('/api/live/performance') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/usage/summary') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/usage/records') : Promise.resolve(null),
+            _perfHeavy ? fetchT('/api/usage/summary') : Promise.resolve(null),
+            _perfHeavy ? fetchT('/api/usage/records') : Promise.resolve(null),
             needUpdownWr ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/journal/trade_journey?limit=24') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
-            needPerformance ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),
+            _perfHeavy ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
+            Promise.resolve(null),  // trade journey removed from UI — no fetch
+            _perfHeavy ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
+            _perfHeavy ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),
+            _perfHeavy ? fetchT('/api/lane_gates', 5000) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
             needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
@@ -3937,6 +3864,12 @@ async function fetchAll() {
                 clearCommandCenterPnlChart();
                 const stratCanvas = document.getElementById('strategy-pnl-chart');
                 if (stratCanvas) { const c = stratCanvas.getContext('2d'); c.clearRect(0, 0, stratCanvas.width, stratCanvas.height); }
+                try { _exitHudTradePoints = []; } catch (_) {}
+                try { if (typeof _maState !== 'undefined') _maState.tradePoints = []; } catch (_) {}
+                try { _btcTradeOverlayPoints = []; } catch (_) {}
+                try { if (_btcCandleSeries) _btcCandleSeries.setMarkers(Array.isArray(_btcLastSabreMarkers) ? _btcLastSabreMarkers : []); } catch (_) {}
+                try { if (typeof _queueBTCTradeOverlayDraw === 'function') _queueBTCTradeOverlayDraw(); } catch (_) {}
+                try { if (typeof _maRenderBubbles === 'function') _maRenderBubbles(); } catch (_) {}
             }
         }
     } catch (e) { console.error('[dashboard] status:', e); }
@@ -4002,7 +3935,7 @@ async function fetchAll() {
     } catch (e) { console.error('[dashboard] analysis JSON:', e); }
 
     try {
-        if (needLive) {
+        if (needLiveAssetCards) {
             _safeUpdateLiveAsset('btc', btcData, updateBTCAnalysis, 2);
             _safeUpdateLiveAsset('sol', solData, updateSOLAnalysis, 3);
             _safeUpdateLiveAsset('eth', ethData, updateETHAnalysis, 3);
@@ -4046,7 +3979,18 @@ async function fetchAll() {
     }
 
     try {
-        updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, dogeData, bnbData, updownData);
+        if (laneGatesR?.ok) {
+            updateLaneGates(await laneGatesR.json());
+        } else {
+            updateLaneGates(null);
+        }
+    } catch (e) {
+        console.error('[dashboard] lane gates:', e);
+        updateLaneGates(null);
+    }
+
+    try {
+        if (needLiveAssetCards) updateCryptoSignalStatus(btcData, solData, ethData, hypeData, xrpData, dogeData, bnbData, updownData);
     } catch (e) { console.error('[dashboard] crypto signal status:', e); }
 
     try {
@@ -4190,6 +4134,91 @@ function updateCommandCenterDigests(d) {
 }
 
 /** Command Center hero numbers — shared by /api/status (updateStatus) and /api/events (SSE). */
+function dashPushHeroSeries(key, value, maxLen) {
+    if (!Number.isFinite(value)) return [];
+    window._dashHeroSeries = window._dashHeroSeries || {};
+    const arr = window._dashHeroSeries[key] || [];
+    const last = arr.length ? arr[arr.length - 1] : null;
+    if (last === null || Math.abs(last - value) > 0.000001) arr.push(value);
+    while (arr.length > (maxLen || 30)) arr.shift();
+    window._dashHeroSeries[key] = arr;
+    return arr;
+}
+
+function dashDrawHeroSpark(svgId, data, color) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    const vals = (data || []).filter(Number.isFinite);
+    if (vals.length < 2) {
+        svg.innerHTML = '';
+        return;
+    }
+    const W = 112, H = 32, P = 2;
+    const min = Math.min.apply(null, vals);
+    const max = Math.max.apply(null, vals);
+    const range = max - min || 1;
+    const step = (W - P * 2) / Math.max(1, vals.length - 1);
+    const pts = vals.map(function(v, i) {
+        const x = P + i * step;
+        const y = P + (H - P * 2) * (1 - (v - min) / range);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    const last = pts[pts.length - 1].split(',');
+    svg.innerHTML =
+        '<path d="M' + P + ',' + (H - P) + ' L' + pts.join(' L') + ' L' + (W - P) + ',' + (H - P) + ' Z" fill="' + color + '" opacity="0.10"></path>' +
+        '<path d="M' + pts.join(' L') + '" fill="none" stroke="' + color + '" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"></path>' +
+        '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="1.9" fill="' + color + '"></circle>';
+}
+
+function dashSetHeroTrend(id, series, formatter) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const vals = (series || []).filter(Number.isFinite);
+    if (vals.length < 2) {
+        el.textContent = '—';
+        el.className = 'hero-trend flat';
+        return;
+    }
+    const delta = vals[vals.length - 1] - vals[Math.max(0, vals.length - 6)];
+    const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+    const sym = delta > 0 ? '▲' : delta < 0 ? '▼' : '—';
+    el.className = 'hero-trend ' + cls;
+    el.textContent = sym + (formatter ? ' ' + formatter(delta) : '');
+}
+
+function dashUpdateHeroVisuals(values) {
+    const bankSeries = dashPushHeroSeries('bankroll', values.bankroll, 48);
+    const pnlSeries = dashPushHeroSeries('pnl', values.pnl, 48);
+    const posSeries = dashPushHeroSeries('positions', values.positions, 48);
+    const tradeSeries = dashPushHeroSeries('trades', values.trades, 48);
+
+    dashDrawHeroSpark('hero-spark-bankroll', bankSeries, 'var(--cy)');
+    dashDrawHeroSpark('hero-spark-pnl', pnlSeries, values.pnl < 0 ? 'var(--re)' : 'var(--gr)');
+    dashDrawHeroSpark('hero-spark-positions', posSeries, 'var(--pu)');
+    dashDrawHeroSpark('hero-spark-trades', tradeSeries, 'var(--ye)');
+
+    dashSetHeroTrend('hero-bankroll-trend', bankSeries, function(v) { return '$' + Math.abs(v).toFixed(0); });
+    dashSetHeroTrend('hero-pnl-trend', pnlSeries, function(v) { return '$' + Math.abs(v).toFixed(2); });
+    dashSetHeroTrend('hero-positions-trend', posSeries, function(v) { return Math.abs(v).toFixed(0); });
+    dashSetHeroTrend('hero-trades-trend', tradeSeries, function(v) { return Math.abs(v).toFixed(0); });
+
+    const pnlCard = document.getElementById('hero-card-pnl');
+    if (pnlCard && Number.isFinite(values.pnl)) {
+        pnlCard.classList.remove('pnl-bucket-loss-1','pnl-bucket-loss-2','pnl-bucket-loss-3','pnl-bucket-win-1','pnl-bucket-win-2','pnl-bucket-win-3');
+        const denom = Math.max(10, Number(values.bankroll || 0) * 0.05);
+        const ratio = Math.min(1, Math.abs(values.pnl) / denom);
+        const bucket = ratio < 0.34 ? 1 : ratio < 0.67 ? 2 : 3;
+        pnlCard.classList.add((values.pnl < 0 ? 'pnl-bucket-loss-' : 'pnl-bucket-win-') + bucket);
+        const lastPulse = Number(pnlCard.dataset.lastPulseValue || 'NaN');
+        if (ratio >= 0.5 && (!Number.isFinite(lastPulse) || Math.abs(lastPulse - values.pnl) > 0.01)) {
+            pnlCard.dataset.lastPulseValue = String(values.pnl);
+            pnlCard.classList.remove('hero-pulse-loss','hero-pulse-win');
+            void pnlCard.offsetWidth;
+            pnlCard.classList.add(values.pnl < 0 ? 'hero-pulse-loss' : 'hero-pulse-win');
+        }
+    }
+}
+
 function applyHeroMetrics(d) {
     if (!d || typeof d !== 'object') return;
     const p = d.portfolio || {};
@@ -4243,7 +4272,7 @@ function applyHeroMetrics(d) {
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
         if (Number.isFinite(sessionPnlRaw)) {
-            pnlEl.textContent = (sessionPnlRaw >= 0 ? '+' : '-') + '$' + Math.abs(sessionPnlRaw).toFixed(2);
+            pnlEl.textContent = '$' + Math.abs(sessionPnlRaw).toFixed(2);
             pnlEl.style.color = sessionPnlRaw > 0 ? 'var(--green)' : sessionPnlRaw < 0 ? 'var(--red)' : 'var(--text)';
         } else {
             pnlEl.textContent = '-';
@@ -4271,8 +4300,38 @@ function applyHeroMetrics(d) {
     if (posEl) posEl.textContent = openCount;
 
     const dailyTrades = Number(p.daily_trades || 0);
+    const sessionFillsRaw = s && s.fills != null ? Number(s.fills) : NaN;
+    const sessionFills = Number.isFinite(sessionFillsRaw) ? sessionFillsRaw : dailyTrades;
     const tradesEl = document.getElementById('hero-trades');
-    if (tradesEl) tradesEl.textContent = dailyTrades;
+    if (tradesEl) tradesEl.textContent = sessionFills;
+
+    const pnlSub = document.getElementById('hero-pnl-sub');
+    if (pnlSub && Number.isFinite(sessionPnlRaw) && Number.isFinite(bankroll) && bankroll > 0) {
+        pnlSub.textContent = ((sessionPnlRaw / bankroll) * 100).toFixed(2) + '% of bankroll';
+    } else if (pnlSub) {
+        pnlSub.textContent = '';
+    }
+    const posSub = document.getElementById('hero-positions-sub');
+    if (posSub) {
+        const byStrat = {};
+        if (Array.isArray(d.positions)) {
+            d.positions.forEach(function(pos) {
+                const key = String(pos.strategy || 'unknown').replace('_macro', '');
+                byStrat[key] = (byStrat[key] || 0) + 1;
+            });
+        }
+        const parts = Object.entries(byStrat).slice(0, 3).map(function(kv) { return kv[1] + ' ' + kv[0]; });
+        posSub.textContent = parts.join(' · ');
+    }
+    const tradesSub = document.getElementById('hero-trades-sub');
+    if (tradesSub) {
+        tradesSub.textContent = (
+            Number.isFinite(dailyTrades) && dailyTrades !== sessionFills
+                ? 'UTC trades ' + dailyTrades
+                : ''
+        );
+    }
+    dashUpdateHeroVisuals({ bankroll: bankroll, pnl: sessionPnlRaw, positions: Number(openCount || 0), trades: sessionFills });
 
     _sampleCommandCenterPnl(d);
 
@@ -4467,12 +4526,36 @@ function dashInitLivePositionsDeck() {
     sec.addEventListener('click', function(ev) {
         const row = ev.target.closest('.pos-master-row');
         if (!row || !row.dataset.positionId) return;
-        window._dashSelectedPositionId = row.dataset.positionId;
-        sec.querySelectorAll('.pos-master-row').forEach(function(r) {
-            r.classList.toggle('selected', r.dataset.positionId === window._dashSelectedPositionId);
-        });
-        dashRenderPositionDetailPane(window._dashLastPositionsArr || []);
+        window._dashSelectedPositionId = window._dashSelectedPositionId === row.dataset.positionId ? null : row.dataset.positionId;
+        dashRenderPositionsMasterDetail(window._dashLastPositionsArr || [], window._dashPrevPositionIds || new Set());
     });
+    const sortChips = document.getElementById('pos-sort-chips');
+    if (sortChips && !sortChips.dataset.bound) {
+        sortChips.dataset.bound = '1';
+        sortChips.addEventListener('click', function(ev) {
+            const chip = ev.target.closest('.pos-chip[data-sort]');
+            if (!chip) return;
+            const next = chip.dataset.sort;
+            window._dashPositionSort = window._dashPositionSort === next ? null : next;
+            sortChips.querySelectorAll('.pos-chip').forEach(function(c) {
+                c.classList.toggle('active', !!window._dashPositionSort && c.dataset.sort === window._dashPositionSort);
+            });
+            dashRenderPositionsMasterDetail(window._dashLastPositionsArr || [], window._dashPrevPositionIds || new Set());
+        });
+    }
+    const sideChips = document.getElementById('pos-side-chips');
+    if (sideChips && !sideChips.dataset.bound) {
+        sideChips.dataset.bound = '1';
+        sideChips.addEventListener('click', function(ev) {
+            const chip = ev.target.closest('.pos-chip[data-side]');
+            if (!chip) return;
+            window._dashPositionSide = chip.dataset.side || 'all';
+            sideChips.querySelectorAll('.pos-chip').forEach(function(c) {
+                c.classList.toggle('active', c.dataset.side === window._dashPositionSide);
+            });
+            dashRenderPositionsMasterDetail(window._dashLastPositionsArr || [], window._dashPrevPositionIds || new Set());
+        });
+    }
 }
 
 function _deckChipsFromSkips(d) {
@@ -4643,7 +4726,7 @@ function updateMetricDeck(d) {
             sessionPnlRaw = Number(p.daily_pnl);
         }
         const pnlTxt = Number.isFinite(sessionPnlRaw)
-            ? ((sessionPnlRaw >= 0 ? '+' : '-') + '$' + Math.abs(sessionPnlRaw).toFixed(2))
+            ? ('$' + Math.abs(sessionPnlRaw).toFixed(2))
             : '—';
         const pnlCls = Number.isFinite(sessionPnlRaw) ? (sessionPnlRaw > 0 ? 'pnl-pos' : sessionPnlRaw < 0 ? 'pnl-neg' : '') : '';
         tailEl.innerHTML = '<span class="deck-tail-k">Open</span><span class="deck-tail-v">' + openN + '</span>'
@@ -4660,6 +4743,68 @@ function _posCountdownHtml(iso) {
     const h = Math.floor(ms / 3600000);
     const m = Math.floor((ms % 3600000) / 60000);
     return '<dt>Time to end</dt><dd>' + h + 'h ' + m + 'm</dd>';
+}
+
+function dashPositionAgeMs(pos) {
+    const raw = pos && (pos.opened_at || pos.entry_time || pos.created_at || pos.ts);
+    const t = raw ? new Date(raw).getTime() : NaN;
+    return Number.isFinite(t) ? Math.max(0, Date.now() - t) : 0;
+}
+
+function dashPositionAgeLabel(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return sec + 's';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return min + 'm';
+    const hr = Math.floor(min / 60);
+    const rem = min % 60;
+    return hr + 'h ' + rem + 'm';
+}
+
+function dashPositionSide(pos) {
+    return String(pos && (pos.entry_leg || pos.outcome || pos.side || '') || '').toUpperCase().indexOf('NO') >= 0 ? 'no' : 'yes';
+}
+
+function dashPositionPnlWidth(pos, list) {
+    const maxAbs = Math.max(1, ...((list || []).map(function(p) { return Math.abs(Number(p.pnl || 0)); })));
+    return Math.min(50, Math.abs(Number(pos.pnl || 0)) / maxAbs * 50).toFixed(1) + '%';
+}
+
+function dashPositionMiniSpark(pos) {
+    const entry = Number(pos.entry_price);
+    const mark = Number(pos.current_price);
+    const vals = [entry, entry, Number.isFinite(mark) ? mark : entry].filter(Number.isFinite);
+    if (vals.length < 2) return '';
+    const W = 200, H = 54, P = 3;
+    const min = Math.min.apply(null, vals);
+    const max = Math.max.apply(null, vals);
+    const range = max - min || 1;
+    const step = (W - P * 2) / Math.max(1, vals.length - 1);
+    const pts = vals.map(function(v, i) {
+        const x = P + i * step;
+        const y = P + (H - P * 2) * (1 - (v - min) / range);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    const color = mark > entry ? 'var(--gr)' : mark < entry ? 'var(--re)' : 'var(--td)';
+    const last = pts[pts.length - 1].split(',');
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">'
+        + '<line x1="0" y1="' + (H / 2) + '" x2="' + W + '" y2="' + (H / 2) + '" stroke="rgba(255,255,255,.12)" stroke-dasharray="2,3" stroke-width=".7"></line>'
+        + '<path d="M' + P + ',' + (H - P) + ' L' + pts.join(' L') + ' L' + (W - P) + ',' + (H - P) + ' Z" fill="' + color + '" opacity=".14"></path>'
+        + '<path d="M' + pts.join(' L') + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>'
+        + '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="2.4" fill="' + color + '"></circle>'
+        + '</svg>';
+}
+
+function dashPositionLaneId(pos) {
+    const sig = pos.entry_signal || {};
+    return sig.lane_id || pos.lane_id || [
+        pos.strategy || 'unknown',
+        sig.lane_window || pos.lane_window || '',
+        sig.lane_side || pos.lane_side || pos.entry_leg || '',
+        sig.lane_regime || pos.lane_regime || '',
+        sig.entry_family || pos.entry_family || ''
+    ].filter(Boolean).join('|');
 }
 
 function dashAbbrevClobToken(id) {
@@ -4922,6 +5067,19 @@ function dashRenderPositionsMasterDetail(positions, prevIdSet) {
     if (filt) {
         list = list.filter(function(p) { return (p.strategy || '') === filt || (p.strategy || '').indexOf(filt) !== -1; });
     }
+    const sideFilt = window._dashPositionSide || 'all';
+    if (sideFilt !== 'all') {
+        list = list.filter(function(p) { return dashPositionSide(p) === sideFilt; });
+    }
+    const sortKey = window._dashPositionSort || null;
+    if (sortKey) {
+        list = list.slice().sort(function(a, b) {
+            if (sortKey === 'pnl') return Number(b.pnl || 0) - Number(a.pnl || 0);
+            if (sortKey === 'age') return dashPositionAgeMs(b) - dashPositionAgeMs(a);
+            if (sortKey === 'size') return Number(b.size || 0) - Number(a.size || 0);
+            return 0;
+        });
+    }
 
     posCount.textContent = (positions || []).length;
 
@@ -4936,7 +5094,7 @@ function dashRenderPositionsMasterDetail(positions, prevIdSet) {
 
     if (!list.length) {
         master.innerHTML = '<div class="pos-detail-empty" style="padding:16px;">'
-            + ((positions || []).length ? 'No positions match this strategy filter.' : 'No active positions')
+            + ((positions || []).length ? 'No positions match the active filters.' : 'No active positions')
             + '</div>';
         dashRenderPositionDetailPane(positions || []);
         return;
@@ -4950,13 +5108,42 @@ function dashRenderPositionsMasterDetail(positions, prevIdSet) {
         const isSel = pos.position_id === window._dashSelectedPositionId;
         const ent = (prev.size > 0 && added.has(pos.position_id)) ? ' pos-row-enter' : '';
         const snip = (pos.market_question || pos.market_id || '').slice(0, 56);
+        const side = dashPositionSide(pos);
+        const ageMs = dashPositionAgeMs(pos);
+        const pnlNum = Number(pos.pnl || 0);
+        const pnlTxt = (pnlNum >= 0 ? '+' : '-') + '$' + Math.abs(pnlNum).toFixed(2);
+        const mark = pos.current_price != null ? Number(pos.current_price) : null;
+        const entry = pos.entry_price != null ? Number(pos.entry_price) : null;
+        const size = pos.size != null ? Number(pos.size) : null;
+        const endTxt = pos.end_date ? dashPositionAgeLabel(Math.max(0, new Date(pos.end_date).getTime() - Date.now())) : '—';
+        const lane = dashPositionLaneId(pos);
         return '<div class="pos-master-row' + (isSel ? ' selected' : '') + ent + '" data-position-id="' + _htmlEscape(pos.position_id) + '">'
+            + '<div class="pos-row-summary">'
             + stratPillHTML(pos.strategy || '?')
+            + '<span class="pos-master-side ' + side + '">' + side.toUpperCase() + '</span>'
             + '<span class="pos-master-snippet" title="' + _htmlEscape(pos.market_question || '') + '">' + _htmlEscape(snip) + '</span>'
-            + '<span class="pos-master-meta ' + pnlCls + '">$' + Number(pos.pnl || 0).toFixed(0) + '</span></div>';
+            + '<span class="pos-master-pnlbar ' + pnlCls + '" style="--w:' + dashPositionPnlWidth(pos, list) + '"><span>' + pnlTxt + '</span></span>'
+            + '<span class="pos-master-age" title="' + _htmlEscape(pos.opened_at || '') + '">' + dashPositionAgeLabel(ageMs) + '</span>'
+            + '<span class="pos-row-toggle">▶</span>'
+            + '</div>'
+            + '<div class="pos-row-detail">'
+            + '<div>'
+            + '<div class="pos-row-fullq">' + _htmlEscape(pos.market_question || pos.market_id || '') + '</div>'
+            + '<div class="pos-row-meta">'
+            + '<div><div class="k">Entry price</div><div class="v">' + (entry != null && Number.isFinite(entry) ? '$' + entry.toFixed(3) : '—') + '</div></div>'
+            + '<div><div class="k">Current price</div><div class="v ' + pnlCls + '">' + (mark != null && Number.isFinite(mark) ? '$' + mark.toFixed(3) : '—') + '</div></div>'
+            + '<div><div class="k">Size</div><div class="v">' + (size != null && Number.isFinite(size) ? '$' + size.toFixed(2) : '—') + '</div></div>'
+            + '<div><div class="k">Time to resolution</div><div class="v">' + endTxt + '</div></div>'
+            + '<div><div class="k">Market</div><div class="v" title="' + _htmlEscape(pos.market_id || '') + '">' + _htmlEscape(pos.market_id || '—') + '</div></div>'
+            + '<div><div class="k">Lane ID</div><div class="v" title="' + _htmlEscape(lane) + '">' + _htmlEscape(lane || '—') + '</div></div>'
+            + '</div>'
+            + '</div>'
+            + '<div class="pos-row-spark"><div class="pos-row-spark-label"><span>entry → mark</span><span>' + (mark != null && Number.isFinite(mark) ? '$' + mark.toFixed(3) : '—') + '</span></div>' + dashPositionMiniSpark(pos) + '</div>'
+            + '</div>'
+            + '</div>';
     }).join('');
 
-    dashRenderPositionDetailPane(positions || []);
+    dashStopOrderbookPoll();
 }
 
 function updateStatus(d) {
@@ -5018,6 +5205,7 @@ async function toggleKillSwitch() {
 
 function updateMetrics(d) {
     if (!d || typeof d !== 'object') return;
+    lastMetricsData = d;
     updateScanDiagnosticsFromMetrics(d);
     const tbody = document.querySelector('#strategy-table tbody');
     if (!tbody) return;
@@ -6426,13 +6614,15 @@ async function toggleFullscreen() {
 
 // ─── EXPOSURE MANAGER ────────────────────────────────────────
 const EXPOSURE_KEYS = ['btc', 'sol', 'eth', 'hype', 'xrp', 'doge', 'bnb'];
-const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP' };
+const EXPOSURE_LABELS = { btc: 'BTC', sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', doge: 'DOGE', bnb: 'BNB' };
 const tierColors = {FULL:'var(--green)',MODERATE:'var(--yellow)',MINIMAL:'var(--red)',PAUSED:'var(--red)',UNKNOWN:'var(--text-muted)'};
 
 function updateExposure(d) {
     const container = document.getElementById('exposure-managers');
+    const summaryEl = document.getElementById('exposure-summary');
     if (!container) return;
     if (d.error) {
+        if (summaryEl) summaryEl.innerHTML = '<span class="bad">Not connected</span><span>' + String(d.error) + '</span>';
         container.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;">${String(d.error)}</div>`;
         return;
     }
@@ -6450,6 +6640,17 @@ function updateExposure(d) {
 
     container.className = 'exp-grid';
     container.removeAttribute('style');
+    const activeCount = managers.filter(m => m.exists).length;
+    const pausedCount = managers.filter(m => m.exists && !!m.paused).length;
+    const source = d._source === 'trading_runtime' || d._source === 'runtime_status' ? 'trading child snapshot' : 'dashboard memory';
+    if (summaryEl) {
+        summaryEl.innerHTML = [
+            `<span class="${activeCount ? 'ok' : 'bad'}">${activeCount}/${EXPOSURE_KEYS.length} managers</span>`,
+            `<span class="${pausedCount ? 'warn' : 'ok'}">${pausedCount} paused</span>`,
+            `<span>${source}</span>`,
+            d._runtime_phase ? `<span>phase ${d._runtime_phase}</span>` : '',
+        ].filter(Boolean).join('');
+    }
     const tierClass = t => t==='MINIMAL'?'t-min':t==='MODERATE'?'t-mod':t==='FULL'?'t-full':'';
     const tierMulColor = t => t==='MINIMAL'?'var(--cy)':t==='MODERATE'?'var(--ye)':t==='FULL'?'var(--gr)':'var(--tm)';
     container.innerHTML = managers.map((m, i) => {
@@ -6465,16 +6666,30 @@ function updateExposure(d) {
         const paused = !!m.paused;
         const reason = m.pause_reason || (paused ? 'manual' : '');
         const cons = losses >= 2 ? '<br><span style="color:var(--re);font-size:9px;">live streak</span>' : '';
+        const recentPnl = Number(m.recent_pnl || 0);
+        const recentTrades = Number(m.recent_trades || 0);
+        const portfolioPnl = Number(m.portfolio_pnl || 0);
+        const statusText = paused ? 'Paused' : 'Active';
         return `<div class="exp" style="animation-delay:${0.04+i*0.05}s">
-            <div class="exp-nm">${m.label}</div>
+            <div class="exp-top">
+                <div class="exp-nm">${m.label}</div>
+                <div class="exp-st ${paused?'paused':'active'}">${statusText}</div>
+            </div>
             <div class="exp-tier ${tierClass(tier)}">${tier}</div>
             <div class="exp-mul" style="color:${tierMulColor(tier)}">x${(m.multiplier ?? 0).toFixed(1)}</div>
-            <div class="exp-info">Max $${(m.max_size ?? 0).toFixed(2)}<br>Consec Losses <span class="lv">${losses}</span>${cons}</div>
+            <div class="exp-info">
+                <span>Max size<b>$${(m.max_size ?? 0).toFixed(2)}</b></span>
+                <span>Loss streak<b class="lv">${losses}</b></span>
+                <span>Recent trades<b>${recentTrades}</b></span>
+                <span>Recent P&L<b style="color:${recentPnl >= 0 ? 'var(--gr)' : 'var(--re)'}">${recentPnl >= 0 ? '+' : ''}$${recentPnl.toFixed(2)}</b></span>
+                <span>Portfolio P&L<b style="color:${portfolioPnl >= 0 ? 'var(--gr)' : 'var(--re)'}">${portfolioPnl >= 0 ? '+' : ''}$${portfolioPnl.toFixed(2)}</b></span>
+                <span>Cycles paused<b>${m.cycles_since_pause ?? 0}</b></span>
+            </div>
+            ${cons ? `<div style="font-size:9px;color:var(--re);margin-top:5px;">loss-streak risk</div>` : ''}
             <div class="exp-btns">
                 <button type="button" class="ebtn ep" onclick="pauseExposureLane('${lane}')">Pause</button>
                 <button type="button" class="ebtn er" onclick="resumeExposureLane('${lane}')">Resume</button>
             </div>
-            <div class="exp-st ${paused?'paused':'active'}">${paused?'Paused':'Active'}</div>
             ${reason ? `<div style="font-size:9px;color:var(--td);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${reason.replace(/"/g,'&quot;')}">${reason}</div>` : ''}
         </div>`;
     }).join('');
@@ -7078,6 +7293,81 @@ async function loadActionBreakdown() {
 }
 
 
+function updateLaneGates(d) {
+    const gridEl = document.getElementById('lane-gates-grid');
+    const loadingEl = document.getElementById('lane-gates-loading');
+    const updatedEl = document.getElementById('lane-gates-updated');
+    if (!gridEl) return;
+
+    if (!d || !d.strategies) {
+        gridEl.innerHTML = '<span style="color:var(--text-muted)">No gate data</span>';
+        if (loadingEl) loadingEl.style.display = 'none';
+        return;
+    }
+    if (loadingEl) loadingEl.style.display = 'none';
+
+    const windows = ['5m', '15m', '1h'];
+    const sides = ['BUY_YES', 'BUY_NO'];
+    const sideLabel = { BUY_YES: 'Y', BUY_NO: 'N' };
+
+    function pill(side, status) {
+        const cls = status.open
+            ? 'lane-gate-pill--open'
+            : status.kind === 'conditional'
+                ? 'lane-gate-pill--conditional'
+                : 'lane-gate-pill--closed';
+        const dotColor = status.open ? 'var(--gr)' : status.kind === 'conditional' ? 'var(--ye)' : 'var(--re)';
+        const title = status.open
+            ? `${side}: open`
+            : `${side}: ${status.kind}${status.flag ? ' · ' + status.flag : ''}${status.condition ? ' · ' + status.condition : ''}`;
+        return `<span class="lane-gate-pill ${cls}" title="${title.replace(/"/g, '&quot;')}">
+            <span class="lane-gate-dot" style="color:${dotColor};background:${dotColor}"></span>
+            ${sideLabel[side]}
+        </span>`;
+    }
+
+    let html = '<table class="lane-gates-table"><thead><tr><th>Asset</th>';
+    windows.forEach(w => { html += `<th>${w}</th>`; });
+    html += '</tr></thead><tbody>';
+    d.strategies.forEach(s => {
+        html += `<tr><td style="color:var(--cy);font-weight:600;">${s.label}</td>`;
+        windows.forEach(w => {
+            const win = (s.windows && s.windows[w]) || {};
+            html += '<td><div class="lane-gate-cell">';
+            sides.forEach(side => {
+                html += pill(side, win[side] || { open: true, kind: 'open' });
+            });
+            html += '</div></td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="lane-gate-legend">' +
+        '<span><span class="lane-gate-dot" style="color:var(--gr);background:var(--gr)"></span> Open</span>' +
+        '<span><span class="lane-gate-dot" style="color:var(--re);background:var(--re)"></span> Closed by config</span>' +
+        '<span><span class="lane-gate-dot" style="color:var(--ye);background:var(--ye)"></span> Conditional on bias</span>' +
+        '</div>';
+    gridEl.innerHTML = html;
+
+    if (updatedEl && d.updated_at) {
+        updatedEl.textContent = 'updated ' + String(d.updated_at).replace('T', ' ').slice(0, 19) + ' UTC';
+    }
+}
+
+async function loadLaneGates() {
+    try {
+        const r = await fetchT('/api/lane_gates');
+        if (r?.ok) {
+            updateLaneGates(await r.json());
+            return;
+        }
+        updateLaneGates(null);
+    } catch (e) {
+        updateLaneGates(null);
+    }
+}
+
+
 function updateUpdownBreakdown(ud) {
     if (!ud) return;
 
@@ -7120,7 +7410,6 @@ function updateUpdownBreakdown(ud) {
         }).join('');
     }
     renderBucket(ud.new_code, 'updown-new');
-    renderBucket(ud.old_code, 'updown-old');
 }
 
 function updateReasonBuckets(d) {
@@ -7656,9 +7945,13 @@ function _chartPlaceholder(ctx, w, h, line1, line2) {
 }
 
 async function _allocationCountsFromMetrics() {
-    const r = await fetch('/api/strategy/metrics').catch(() => null);
-    if (!r?.ok) return null;
-    const md = await r.json();
+    let md = lastMetricsData;
+    if (!md) {
+        const r = await fetch('/api/strategy/metrics').catch(() => null);
+        if (!r?.ok) return null;
+        md = await r.json();
+        lastMetricsData = md;
+    }
     const counts = {};
     for (const [k, v] of Object.entries(md)) {
         if (typeof v !== 'object' || !v) continue;
@@ -7687,9 +7980,8 @@ async function loadAllocationChart() {
         let counts = {};
         let subtitle = '';
 
-        const r = await fetch('/api/status').catch(() => null);
-        if (r?.ok) {
-            const d = await r.json();
+        if (lastStatusData) {
+            const d = lastStatusData;
             const positions = d.positions || [];
             if (positions.length) {
                 positions.forEach(p => {
@@ -7768,9 +8060,13 @@ async function loadAllocationChart() {
 
 // ─── STRATEGY PNL BAR CHART ─────────────────────────────────
 async function _stratPnLFromMetrics() {
-    const r = await fetch('/api/strategy/metrics').catch(() => null);
-    if (!r?.ok) return null;
-    const md = await r.json();
+    let md = lastMetricsData;
+    if (!md) {
+        const r = await fetch('/api/strategy/metrics').catch(() => null);
+        if (!r?.ok) return null;
+        md = await r.json();
+        lastMetricsData = md;
+    }
     const stratPnL = {};
     for (const [k, v] of Object.entries(md)) {
         if (typeof v !== 'object' || !v) continue;
@@ -7794,9 +8090,8 @@ async function loadStrategyPnLChart() {
         let stratPnL = {};
         let subtitle = '';
 
-        const r = await fetch('/api/status').catch(() => null);
-        if (r?.ok) {
-            const d = await r.json();
+        if (lastStatusData) {
+            const d = lastStatusData;
             const positions = d.positions || [];
             if (positions.length) {
                 positions.forEach(p => {
@@ -8101,9 +8396,9 @@ function _renderAISummaryStructured(s) {
     }
 }
 
-// ── Ghost Lab — counterfactual + time-of-day explorer
-//    Reads /api/ghosts/lab. Renders: 24h clock ring, 7×24 heatmap, animated
-//    replay scrubber, lane detail table. Internal state is kept on _gl below.
+// ── Ghost Lab — lightweight counterfactual time-of-day explorer
+//    Reads /api/ghosts/lab aggregates. Renders only the 24h clock ring and
+//    lane×hour heatmap so the tab stays cheap while ghost collection continues.
 const _gl = {
     raw: null,                       // last full payload
     selectedLane: '',                // lane_id filter (empty = all)
@@ -8111,7 +8406,6 @@ const _gl = {
     sortKey: 'n_ghosts',
     sortDir: -1,
     clockAnim: { running:false, raf:null, hour:0, lastTick:0 },
-    replay: { running:false, raf:null, t:0, speed:100, lastTick:0, scrubbing:false },
 };
 
 function _glColorForWR(wr, n) {
@@ -8158,24 +8452,19 @@ async function loadGhostLab() {
     const sinceISO = sinceRaw === 'all'
         ? '1970-01-01T00:00:00Z'
         : new Date(Date.now() - parseInt(sinceRaw, 10) * 86400000).toISOString();
-    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=5000`;
+    const url = `/api/ghosts/lab?since=${encodeURIComponent(sinceISO)}&limit=1`;
     try {
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
         _gl.raw = data;
         _glRenderControls();
         _glRenderClock();
-        _glRenderHeatmap();
-        _glRenderReplay();
-        _glRenderTable();
+        _glRenderLaneHourHeatmap();
         _glRenderCounts();
-        loadGhostLabRegime();
-        loadGhostDecisionDigest();
-        loadGhostMorningSummary();
     } catch (e) {
         console.warn('Ghost Lab load failed', e);
-        const tbody = document.getElementById('gl-lane-tbody');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="color:var(--rd);padding:10px;">Load failed: ${e.message}</td></tr>`;
+        const host = document.getElementById('gl-lh-heatmap');
+        if (host) host.innerHTML = `<div style="color:var(--rd);padding:10px;">Load failed: ${e.message}</div>`;
     }
 }
 
@@ -8197,293 +8486,6 @@ function _glRenderControls() {
     document.querySelectorAll('.gl-chip[data-src]').forEach(el => {
         el.classList.toggle('active', _gl.selectedSources.has(el.getAttribute('data-src')));
     });
-}
-
-// ── Decision digest: gate / calibration rollup ──────────
-async function loadGhostDecisionDigest() {
-    const sinceRaw = document.getElementById('gl-since')?.value || 'all';
-    const sinceISO = sinceRaw === 'all'
-        ? '1970-01-01T00:00:00Z'
-        : new Date(Date.now() - parseInt(sinceRaw, 10) * 86400000).toISOString();
-    const status = document.getElementById('gl-digest-status');
-    if (status) status.textContent = 'loading';
-    try {
-        const res = await fetch(`/api/ghosts/decision-digest?since=${encodeURIComponent(sinceISO)}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        _glRenderDecisionDigest(data);
-        if (status) status.textContent = 'live';
-    } catch (e) {
-        if (status) status.textContent = `failed: ${e.message}`;
-        const dg = document.getElementById('gl-digest-tbody');
-        if (dg) dg.innerHTML = `<tr><td colspan="3" style="padding:8px;color:var(--rd);">Digest load failed: ${e.message}</td></tr>`;
-    }
-}
-
-function _glPct(v) {
-    return v == null || !isFinite(v) ? '—' : `${(v * 100).toFixed(1)}%`;
-}
-
-function _glSeverityColor(sev) {
-    if (sev === 'warning') return '#ffcc66';
-    if (sev === 'positive') return '#88d8ff';
-    return 'var(--text-muted)';
-}
-
-function _glTinyCard(row) {
-    const title = _htmlEscape(row.title || row.setting || row.lane_id || 'signal');
-    const evidence = _htmlEscape(row.evidence || '');
-    const action = _htmlEscape(row.action || row.recommendation || '');
-    const n = Number(row.n || 0);
-    const sev = row.severity || 'info';
-    const color = _glSeverityColor(sev);
-    const grade = _htmlEscape(row.sample_grade || row.confidence || 'thin');
-    return `
-        <div style="border:1px solid ${color}55;border-radius:6px;padding:7px 8px;background:rgba(255,255,255,.025);font-family:'IBM Plex Mono',monospace;font-size:.68rem;line-height:1.35;">
-            <div style="display:flex;justify-content:space-between;gap:8px;color:${color};">
-                <strong style="font-weight:700;">${title}</strong>
-                <span>n=${n} · ${grade}</span>
-            </div>
-            ${evidence ? `<div style="color:var(--text-muted);margin-top:4px;">${evidence}</div>` : ''}
-            ${action ? `<div style="color:var(--text);margin-top:4px;">${action}</div>` : ''}
-        </div>
-    `;
-}
-
-async function loadGhostMorningSummary() {
-    const status = document.getElementById('gl-morning-status');
-    if (status) status.textContent = 'loading';
-    try {
-        const res = await fetch('/api/ghosts/morning-summary?tz=America/Los_Angeles', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        _glRenderMorningSummary(data);
-        if (status) status.textContent = 'live';
-    } catch (e) {
-        if (status) status.textContent = `failed: ${e.message}`;
-        for (const id of ['gl-morning-standouts', 'gl-morning-adjustments', 'gl-morning-calibration']) {
-            const el = document.getElementById(id);
-            if (el) el.innerHTML = `<div style="color:var(--rd);font-size:.72rem;">Morning summary failed: ${_htmlEscape(e.message)}</div>`;
-        }
-    }
-}
-
-function _glRenderMorningSummary(data) {
-    const windowEl = document.getElementById('gl-morning-window');
-    const summaryEl = document.getElementById('gl-morning-summary');
-    const standoutsEl = document.getElementById('gl-morning-standouts');
-    const adjustmentsEl = document.getElementById('gl-morning-adjustments');
-    const calibrationEl = document.getElementById('gl-morning-calibration');
-    const nextEditsEl = document.getElementById('gl-morning-next-edits');
-    const loopsEl = document.getElementById('gl-morning-loops');
-    const counts = data.counts || {};
-    const loops = data.data_loops || [];
-    const learning = data.learning_loop || {};
-    const loopsClosed = loops.filter((row) => row.status === 'closed').length;
-    if (windowEl) {
-        windowEl.textContent = data.window && data.window.label
-            ? data.window.label
-            : `${data.window?.since || ''} -> ${data.window?.until || ''}`;
-    }
-    if (summaryEl) {
-        const cards = [
-            ['ghost rows', counts.ghost_rows || 0, '#00e5ff'],
-            ['calibration records', counts.calibration_records || 0, '#88d8ff'],
-            ['learning step', learning.next_step || `${loopsClosed}/${loops.length || 0} loops`, '#00ff88'],
-        ];
-        summaryEl.innerHTML = cards.map(([label, value, color]) => `
-            <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
-                <div style="font-size:.66rem;color:var(--text-muted);">${label}</div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${value}</div>
-            </div>
-        `).join('');
-    }
-    if (loopsEl) {
-        loopsEl.innerHTML = loops.length ? loops.map((row) => {
-            const closed = row.status === 'closed';
-            const manual = row.status === 'manual_review';
-            const color = closed ? '#00ff88' : (manual ? '#ffcc66' : 'var(--text-muted)');
-            return `
-                <div style="border:1px solid ${color}44;border-radius:6px;padding:7px 8px;background:rgba(255,255,255,.02);font-family:'IBM Plex Mono',monospace;font-size:.66rem;line-height:1.35;">
-                    <div style="color:${color};font-weight:700;">${_htmlEscape(row.status || 'unknown')}</div>
-                    <div style="color:var(--text);margin-top:2px;">${_htmlEscape(row.loop || '')}</div>
-                    <div style="color:var(--text-muted);margin-top:2px;">${_htmlEscape(row.detail || '')}</div>
-                </div>
-            `;
-        }).join('') : '';
-    }
-    const empty = '<div style="color:var(--text-muted);font-size:.72rem;">No strong signal in this overnight window.</div>';
-    if (standoutsEl) standoutsEl.innerHTML = (data.standouts || []).length ? data.standouts.slice(0, 6).map(_glTinyCard).join('') : empty;
-    if (adjustmentsEl) adjustmentsEl.innerHTML = (data.settings_adjustments || []).length ? data.settings_adjustments.slice(0, 6).map(_glTinyCard).join('') : empty;
-    if (calibrationEl) {
-        const rows = (data.lane_calibrations || []).slice(0, 6).map((row) => _glTinyCard({
-            title: row.lane_id,
-            evidence: `WR ${row.win_rate_pct == null ? 'n/a' : row.win_rate_pct + '%'} · pnl ${Number(row.total_pnl || 0).toFixed(2)} · avg ${Number(row.avg_pnl || 0).toFixed(2)} · alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied} · veto ${row.veto_active ? 'ON' : 'off'}${row.veto_source && row.veto_source !== 'none' ? ` (${row.veto_source})` : ''}`,
-            recommendation: row.recommendation,
-            n: row.n,
-            sample_grade: row.sample_grade,
-            severity: row.severity,
-        }));
-        calibrationEl.innerHTML = rows.length ? rows.join('') : empty;
-    }
-    if (nextEditsEl) {
-        const rows = (data.priority_actions || []).slice(0, 6).map((row) => _glTinyCard({
-            title: row.title,
-            evidence: `${row.change_type || 'candidate'} · ${row.evidence || ''}`,
-            recommendation: `${row.recommendation || ''}${row.next_measurement ? ' Next: ' + row.next_measurement : ''}`,
-            n: row.n || 0,
-            sample_grade: row.confidence || 'thin',
-            severity: row.apply_mode === 'manual_review' ? 'warning' : 'info',
-        }));
-        nextEditsEl.innerHTML = rows.length ? rows.join('') : empty;
-    }
-}
-
-function _glRenderDecisionDigest(data) {
-    const summary = document.getElementById('gl-digest-summary');
-    const digestBody = document.getElementById('gl-digest-tbody');
-    const ghostGate = data.ghost_gate || {};
-    if (summary) {
-        const cards = [
-            ['overtight gates', (ghostGate.actionable_overtight_gates || []).length, '#ffcc66'],
-            ['missed EV', (ghostGate.top_missed_ev || []).length, '#88d8ff'],
-            ['protected loss', (ghostGate.top_protected_loss || []).length, '#00e5ff'],
-            ['calibration lanes', ((data.calibration && data.calibration.rows) || []).length, '#00ff88'],
-        ];
-        summary.innerHTML = cards.map(([label, value, color]) => `
-            <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
-                <div style="font-size:.66rem;color:var(--text-muted);">${label}</div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${value}</div>
-            </div>
-        `).join('');
-    }
-
-    const digestRows = [];
-    for (const row of (ghostGate.actionable_overtight_gates || []).slice(0, 4)) {
-        digestRows.push({
-            label: row.gate_key || row.reason || 'overtight gate',
-            n: row.n || 0,
-            metric: `WR ${_glPct(row.win_rate)} net ${Number(row.net_gate_value_pct || 0).toFixed(2)}`,
-        });
-    }
-    for (const row of ((data.calibration && data.calibration.rows) || []).slice(0, 4)) {
-        digestRows.push({
-            label: row.lane_id || 'calibration lane',
-            n: row.n || 0,
-            metric: `pnl ${Number(row.total_pnl || 0).toFixed(2)} alpha ${row.alpha_implied == null ? 'n/a' : row.alpha_implied}`,
-        });
-    }
-    if (digestBody) {
-        digestBody.innerHTML = digestRows.length ? digestRows.slice(0, 12).map(r => `
-            <tr style="border-bottom:1px solid rgba(255,255,255,.04);">
-                <td style="padding:4px 8px;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.label}">${r.label}</td>
-                <td style="padding:4px 8px;text-align:right;">${r.n}</td>
-                <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${r.metric}</td>
-            </tr>
-        `).join('') : '<tr><td colspan="3" style="padding:8px;color:var(--text-muted);">No digest rows in this window.</td></tr>';
-    }
-}
-
-// ── Panel 4: Regime × Ghost breakdown ───────────────────────────────────
-const REGIME_COLORS = {
-    deadzone_confirmed: 'rgba(176,96,255,.18)',
-    active: 'rgba(0,255,136,.12)',
-    quiet: 'rgba(0,229,255,.08)',
-    unknown: 'rgba(80,80,100,.10)',
-};
-const REGIME_LABEL_COLORS = {
-    deadzone_confirmed: '#b060ff',
-    active: '#00ff88',
-    quiet: '#00e5ff',
-    unknown: '#888',
-};
-
-async function loadGhostLabRegime() {
-    const sinceDays = parseInt(document.getElementById('gl-regime-since')?.value || '7', 10);
-    const sinceISO = new Date(Date.now() - sinceDays * 86400000).toISOString().split('T')[0];
-    try {
-        const res = await fetch(`/api/ghosts/regime-breakdown?since=${encodeURIComponent(sinceISO)}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        _glRegimeRender(data);
-    } catch (e) {
-        document.getElementById('gl-regime-summary').innerHTML = '';
-        document.getElementById('gl-regime-table-wrap').style.display = 'none';
-        const empty = document.getElementById('gl-regime-empty');
-        if (empty) {
-            empty.style.display = 'block';
-            empty.innerHTML = `Load failed: ${e.message}.`;
-        }
-    }
-}
-
-function _glRegimeRender(data) {
-    const rows = data.rows || [];
-    const tbody = document.getElementById('gl-regime-tbody');
-    const summary = document.getElementById('gl-regime-summary');
-    const tableWrap = document.getElementById('gl-regime-table-wrap');
-    const empty = document.getElementById('gl-regime-empty');
-
-    if (!rows.length) {
-        tbody.innerHTML = '';
-        summary.innerHTML = '';
-        tableWrap.style.display = 'none';
-        if (empty) empty.style.display = 'block';
-        return;
-    }
-    if (empty) empty.style.display = 'none';
-    tableWrap.style.display = '';
-
-    // Summary pills
-    const regimeOrder = ['deadzone_confirmed', 'active', 'quiet', 'unknown'];
-    const byRegime = {};
-    for (const r of rows) {
-        const key = r.regime || 'unknown';
-        if (!byRegime[key]) byRegime[key] = { n: 0, wins: 0 };
-        byRegime[key].n += r.n || 0;
-        byRegime[key].wins += Math.round((r.win_rate || 0) * (r.n || 0));
-    }
-    summary.innerHTML = regimeOrder.filter(r => byRegime[r]).map(r => {
-        const d = byRegime[r];
-        if (!d || !d.n) return '';
-        const wr = d.n > 0 ? (d.wins / d.n * 100).toFixed(1) : '—';
-        const bg = REGIME_COLORS[r] || 'rgba(80,80,100,.10)';
-        const col = REGIME_LABEL_COLORS[r] || '#888';
-        return `<div style="background:${bg};border:1px solid ${col}33;border-radius:6px;padding:6px 12px;min-width:100px;">
-            <div style="color:${col};font-size:.72rem;font-weight:600;margin-bottom:2px;">${r}</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:.9rem;color:var(--text);">${wr}</div>
-            <div style="font-size:.65rem;color:var(--text-muted);">n=${d.n.toLocaleString()}</div>
-        </div>`;
-    }).join('');
-
-    // Table — sort by n desc
-    const sorted = [...rows].sort((a, b) => (b.n || 0) - (a.n || 0));
-    tbody.innerHTML = sorted.map(r => {
-        const regime = r.regime || 'unknown';
-        const wr = r.win_rate != null ? (r.win_rate * 100).toFixed(1) + '%' : '—';
-        const ciLo = r.ci_lower != null ? (r.ci_lower * 100).toFixed(1) + '%' : '—';
-        const ciHi = r.ci_upper != null ? (r.ci_upper * 100).toFixed(1) + '%' : '—';
-        const n = (r.n || 0).toLocaleString();
-        const wrNum = r.win_rate || 0;
-        let verdict = '—';
-        if (r.n >= 20) {
-            if (wrNum > 0.55) verdict = '<span style="color:#ffcc66;">high ghost WR</span>';
-            else if (wrNum < 0.45) verdict = '<span style="color:#88d8ff;">low ghost WR</span>';
-            else verdict = '<span style="color:#888;">~50%</span>';
-        } else {
-            verdict = `<span style="color:#888;">n&lt;20</span>`;
-        }
-        const bg = REGIME_COLORS[regime] || 'transparent';
-        return `<tr style="background:${bg};border-bottom:1px solid rgba(255,255,255,.04);">
-            <td style="padding:4px 8px;color:${REGIME_LABEL_COLORS[regime] || '#888'};font-size:.7rem;">${regime}</td>
-            <td style="padding:4px 8px;color:var(--text-muted);font-size:.68rem;">${r.gate || 'unknown'}</td>
-            <td style="padding:4px 8px;text-align:right;">${n}</td>
-            <td style="padding:4px 8px;text-align:right;font-weight:600;">${wr}</td>
-            <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${ciLo}</td>
-            <td style="padding:4px 8px;text-align:right;color:var(--text-muted);">${ciHi}</td>
-            <td style="padding:4px 8px;">${verdict}</td>
-        </tr>`;
-    }).join('');
 }
 
 function _glRenderCounts() {
@@ -8521,11 +8523,7 @@ function _glRenderCounts() {
 
 function onGhostLabLaneChange() {
     _gl.selectedLane = document.getElementById('gl-lane').value || '';
-    _glRenderClock(); _glRenderHeatmap(); _glRenderReplay(); _glRenderTable();
-    // Highlight matching row in table.
-    document.querySelectorAll('#gl-lane-tbody tr').forEach(tr => {
-        tr.classList.toggle('active', tr.getAttribute('data-lane') === _gl.selectedLane);
-    });
+    _glRenderClock(); _glRenderLaneHourHeatmap();
 }
 
 function toggleGhostLabSource(src) {
@@ -8533,20 +8531,27 @@ function toggleGhostLabSource(src) {
     else _gl.selectedSources.add(src);
     if (_gl.selectedSources.size === 0) _gl.selectedSources.add(src);
     _glRenderControls();
-    _glRenderClock(); _glRenderHeatmap(); _glRenderReplay();
+    _glRenderClock(); _glRenderLaneHourHeatmap();
 }
 
 // ── Panel 1: 24h clock ring ─────────────────────────────────────────────
 function _glRenderClock() {
     const svg = document.getElementById('gl-clock');
     if (!svg) return;
-    // Aggregate filtered events by hour (only those with a settled win/loss).
+    // Aggregate buckets by hour. The raw events array is intentionally capped,
+    // so the clock must render from server-side aggregate buckets.
     const buckets = new Array(24).fill(0).map(() => ({ n: 0, w: 0 }));
-    for (const e of _glFilteredEvents()) {
-        if (e.win === null || e.win === undefined) continue;
-        if (typeof e.hour_utc !== 'number') continue;
-        const b = buckets[e.hour_utc];
-        b.n++; if (e.win) b.w++;
+    const lane = _gl.selectedLane;
+    for (const row of ((_gl.raw && _gl.raw.buckets_hour) || [])) {
+        if (lane && row.lane_id !== lane) continue;
+        const h = Number(row.hour_utc);
+        if (!Number.isInteger(h) || h < 0 || h > 23) continue;
+        const n = Number(row.n || 0);
+        const w = Number(row.wins || 0);
+        if (n <= 0) continue;
+        const b = buckets[h];
+        b.n += n;
+        b.w += w;
     }
     const maxN = Math.max(1, ...buckets.map(b => b.n));
     // Draw wedges.
@@ -8587,23 +8592,28 @@ function _glRenderClock() {
 }
 function _glComputeOverallWR() {
     let n = 0, w = 0;
-    for (const e of _glFilteredEvents()) {
-        if (e.win === true) { w++; n++; } else if (e.win === false) { n++; }
+    const lane = _gl.selectedLane;
+    for (const row of ((_gl.raw && _gl.raw.buckets_hour) || [])) {
+        if (lane && row.lane_id !== lane) continue;
+        n += Number(row.n || 0);
+        w += Number(row.wins || 0);
     }
     return n > 0 ? w / n : 0;
 }
 function _glClockHover(h) {
     const stats = document.getElementById('gl-clock-stats');
     if (!stats) return;
-    const evs = _glFilteredEvents().filter(e => e.hour_utc === h && (e.win === true || e.win === false));
-    const wins = evs.filter(e => e.win === true).length;
-    const n = evs.length;
+    const lane = _gl.selectedLane;
+    let n = 0, wins = 0;
+    for (const row of ((_gl.raw && _gl.raw.buckets_hour) || [])) {
+        if (lane && row.lane_id !== lane) continue;
+        if (Number(row.hour_utc) !== h) continue;
+        n += Number(row.n || 0);
+        wins += Number(row.wins || 0);
+    }
     const wr = n ? wins / n : 0;
-    const bySource = { ghost: 0, live: 0 };
-    evs.forEach(e => { bySource[e.source] = (bySource[e.source] || 0) + 1; });
     stats.innerHTML = `<strong>hour ${String(h).padStart(2,'0')} UTC</strong> &middot; n=${n} &middot; WR=${(wr*100).toFixed(1)}% &middot; ` +
-        `<span style="color:#888;">ghosts ${bySource.ghost}</span> / ` +
-        `<span style="color:var(--gn);">live ${bySource.live}</span>`;
+        `<span style="color:var(--text-muted);">${lane || 'all lanes'}</span>`;
 }
 function toggleGhostLabClock() {
     _gl.clockAnim.running = !_gl.clockAnim.running;
@@ -8629,171 +8639,55 @@ function _glClockStep() {
     _gl.clockAnim.raf = requestAnimationFrame(_glClockStep);
 }
 
-// ── Panel 2: 7×24 heatmap ────────────────────────────────────────────────
-function _glRenderHeatmap() {
-    const host = document.getElementById('gl-heatmap');
+// ── Panel 2: lane×hour heatmap ───────────────────────────────────────────
+function _glRenderLaneHourHeatmap() {
+    const host = document.getElementById('gl-lh-heatmap');
     if (!host) return;
-    const buckets = {};  // key = "dow-hour" -> {n, w}
-    for (const e of _glFilteredEvents()) {
-        if (e.win !== true && e.win !== false) continue;
-        if (typeof e.hour_utc !== 'number' || typeof e.dow !== 'number') continue;
-        const k = `${e.dow}-${e.hour_utc}`;
-        const b = buckets[k] || (buckets[k] = { n: 0, w: 0 });
-        b.n++; if (e.win) b.w++;
+    const lanes = _glLaneRows().slice(0, 18);
+    if (!lanes.length) {
+        host.innerHTML = '<div style="color:var(--text-muted);font-size:.75rem;padding:10px;">No lanes match the current filter.</div>';
+        return;
     }
-    const dows = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-    const maxN = Math.max(1, ...Object.values(buckets).map(b => b.n));
-
-    // Responsive CSS grid: 1 label col + 24 hour cols. Cells use aspect-ratio:1
-    // so the whole grid scales with the card width — no horizontal scroll.
     const headCells = Array.from({length:24}, (_, h) =>
         `<div style="text-align:center;color:var(--text-muted);font-size:.6rem;line-height:1;">${String(h).padStart(2,'0')}</div>`
     ).join('');
-    const rows = [];
-    for (let d = 0; d < 7; d++) {
+    const bucketRows = (_gl.raw && Array.isArray(_gl.raw.buckets_hour)) ? _gl.raw.buckets_hour : [];
+    const bucketByLane = new Map();
+    for (const b of bucketRows) {
+        const lid = b.lane_id;
+        if (!lid) continue;
+        if (!bucketByLane.has(lid)) bucketByLane.set(lid, []);
+        bucketByLane.get(lid).push(b);
+    }
+    const maxN = Math.max(1, ...lanes.flatMap(L => (bucketByLane.get(L.lane_id) || []).map(b => Number(b.n || 0))));
+    const rows = lanes.map((lane) => {
         const rowCells = [];
-        rowCells.push(`<div style="color:var(--text-muted);font-size:.65rem;align-self:center;text-align:right;padding-right:4px;">${dows[d]}</div>`);
+        rowCells.push(`<div title="${lane.lane_id}" style="color:var(--text-muted);font-size:.62rem;align-self:center;text-align:right;padding-right:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${lane.lane_id}</div>`);
+        const byHour = new Map((bucketByLane.get(lane.lane_id) || []).map((b) => [Number(b.hour_utc), b]));
         for (let h = 0; h < 24; h++) {
-            const b = buckets[`${d}-${h}`] || { n: 0, w: 0 };
-            const wr = b.n ? b.w / b.n : NaN;
+            const b = byHour.get(h) || { n: 0, wr: null };
+            const n = Number(b.n || 0);
+            const wr = n ? Number(b.wr || 0) : NaN;
             // Inner dot scales 30%–96% of cell based on sqrt(n).
-            const pct = b.n ? Math.max(30, Math.min(96, 30 + 66 * Math.sqrt(b.n) / Math.sqrt(maxN))) : 22;
-            const color = b.n ? _glColorForWR(wr, b.n) : 'rgba(60,60,80,.22)';
-            const title = b.n
-                ? `${dows[d]} ${String(h).padStart(2,'0')}:00 — n=${b.n}, wins=${b.w}, WR=${(wr*100).toFixed(0)}%`
-                : `${dows[d]} ${String(h).padStart(2,'0')}:00 — no data`;
+            const pct = n ? Math.max(30, Math.min(96, 30 + 66 * Math.sqrt(n) / Math.sqrt(maxN))) : 22;
+            const color = n ? _glColorForWR(wr, n) : 'rgba(60,60,80,.22)';
+            const title = n
+                ? `${lane.lane_id} ${String(h).padStart(2,'0')}:00 UTC — n=${n}, WR=${(wr*100).toFixed(0)}%`
+                : `${lane.lane_id} ${String(h).padStart(2,'0')}:00 UTC — no data`;
             rowCells.push(
                 `<div style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;" title="${title}">` +
                 `<div class="gl-heatcell" style="width:${pct}%;height:${pct}%;background:${color};border-radius:2px;"></div>` +
                 `</div>`
             );
         }
-        rows.push(rowCells.join(''));
-    }
+        return rowCells.join('');
+    });
     host.innerHTML = `
-        <div style="display:grid;grid-template-columns:minmax(28px,auto) repeat(24, minmax(0, 1fr));gap:2px;width:100%;font-family:'IBM Plex Mono',monospace;">
+        <div style="display:grid;grid-template-columns:minmax(92px,1.3fr) repeat(24, minmax(0, 1fr));gap:2px;width:100%;font-family:'IBM Plex Mono',monospace;">
             <div></div>${headCells}
             ${rows.join('')}
         </div>
     `;
-}
-
-// ── Panel 3: animated replay scrubber ───────────────────────────────────
-function _glRenderReplay() {
-    const cv = document.getElementById('gl-replay');
-    if (!cv || !_gl.raw) return;
-    const W = cv.clientWidth || 800; const H = 80;
-    if (cv.width !== W) cv.width = W;
-    if (cv.height !== H) cv.height = H;
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = 'rgba(255,255,255,.04)'; ctx.fillRect(0, H/2 - .5, W, 1);
-    const events = _glFilteredEvents().slice().sort((a, b) => (a.ts < b.ts ? -1 : 1));
-    if (!events.length) return;
-    const t0 = new Date(events[0].ts).getTime();
-    const t1 = new Date(events[events.length - 1].ts).getTime();
-    const span = Math.max(1, t1 - t0);
-    const cursor = _gl.replay.running ? Math.min(1, _gl.replay.t) : (_gl.replay.scrubbing ? _gl.replay.t : 1);
-    const cutoff = t0 + cursor * span;
-    for (const e of events) {
-        const t = new Date(e.ts).getTime();
-        if (t > cutoff) continue;
-        const x = ((t - t0) / span) * W;
-        let y, color;
-        if (e.source === 'ghost') { y = H * 0.25; color = 'rgba(180,180,200,.55)'; }
-        else { y = H * 0.85; color = e.win ? 'rgba(0,255,136,.75)' : 'rgba(255,80,80,.75)'; }
-        ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(x, y, 1.6, 0, 2 * Math.PI); ctx.fill();
-    }
-    // Cursor line.
-    const cx = cursor * W;
-    ctx.strokeStyle = 'rgba(176,96,255,.65)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
-    // Time label.
-    const lbl = document.getElementById('gl-replay-time');
-    if (lbl) lbl.textContent = new Date(cutoff).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
-}
-function toggleGhostLabReplay() {
-    _gl.replay.running = !_gl.replay.running;
-    const btn = document.getElementById('gl-replay-btn');
-    if (btn) btn.textContent = _gl.replay.running ? '❚❚ Pause' : '▶ Play';
-    if (_gl.replay.running) {
-        if (_gl.replay.t >= 1) _gl.replay.t = 0;
-        _gl.replay.lastTick = performance.now();
-        _glReplayStep();
-    } else if (_gl.replay.raf) {
-        cancelAnimationFrame(_gl.replay.raf); _gl.replay.raf = null;
-    }
-}
-function setGhostLabReplaySpeed() {
-    _gl.replay.speed = parseInt(document.getElementById('gl-replay-speed').value, 10) || 100;
-}
-function _glReplayStep() {
-    if (!_gl.replay.running) return;
-    const now = performance.now();
-    const dt = (now - _gl.replay.lastTick) / 1000;
-    _gl.replay.lastTick = now;
-    // span / speed = real seconds to traverse the whole timeline at 1×.
-    // We just advance t by dt * speed / 30 (i.e. 30 simulated-units per real-second baseline).
-    _gl.replay.t = Math.min(1, _gl.replay.t + dt * _gl.replay.speed / 30 / 60);
-    _glRenderReplay();
-    _glRenderHeatmap();
-    document.getElementById('gl-replay-scrub').value = Math.round(_gl.replay.t * 1000);
-    if (_gl.replay.t >= 1) {
-        toggleGhostLabReplay();
-        return;
-    }
-    _gl.replay.raf = requestAnimationFrame(_glReplayStep);
-}
-function onGhostLabScrub() {
-    const v = parseInt(document.getElementById('gl-replay-scrub').value, 10) || 0;
-    _gl.replay.t = v / 1000;
-    _gl.replay.scrubbing = true;
-    _glRenderReplay();
-    _glRenderHeatmap();
-}
-
-// ── Panel 4: lane × source table ────────────────────────────────────────
-function _glRenderTable() {
-    const tb = document.getElementById('gl-lane-tbody');
-    if (!tb) return;
-    const rows = _glLaneRows();
-    if (!rows.length) {
-        tb.innerHTML = '<tr><td colspan="9" style="color:var(--text-muted);padding:10px;">No lanes match the current filter.</td></tr>';
-        return;
-    }
-    const cellWR = (wr, lo, hi, n) => {
-        if (!n) return '<span style="color:var(--text-muted);">—</span>';
-        const c = _glColorForWR(wr, n);
-        return `<span style="color:${c};">${(wr*100).toFixed(0)}%</span><span style="color:var(--text-muted);font-size:.65rem;"> [${(lo*100).toFixed(0)}-${(hi*100).toFixed(0)}]</span>`;
-    };
-    tb.innerHTML = rows.slice(0, 200).map(L => {
-        const post = L.posterior;
-        const postCell = post && post.mean != null
-            ? `<span title="α=${post.beta_a}, β=${post.beta_b}, n=${post.n}" style="color:${_glColorForWR(post.mean, post.n||0)};">${(post.mean*100).toFixed(0)}%</span>`
-            : '<span style="color:var(--text-muted);">—</span>';
-        const isActive = _gl.selectedLane === L.lane_id ? 'active' : '';
-        return `<tr class="${isActive}" data-lane="${L.lane_id}" onclick="_glPickLane('${L.lane_id.replace(/'/g, "\\'")}')">
-            <td>${L.lane_id}</td>
-            <td style="text-align:right;">${L.n_ghosts || 0}</td>
-            <td style="text-align:right;">${cellWR(L.ghost_wr, L.ghost_wr_lo, L.ghost_wr_hi, L.n_ghosts)}</td>
-            <td style="text-align:right;">${L.n_live || 0}</td>
-            <td style="text-align:right;">${cellWR(L.live_wr, L.live_wr_lo, L.live_wr_hi, L.n_live)}</td>
-            <td style="text-align:right;">${postCell}</td>
-        </tr>`;
-    }).join('');
-}
-function sortGhostLabTable(key) {
-    if (_gl.sortKey === key) _gl.sortDir = -_gl.sortDir;
-    else { _gl.sortKey = key; _gl.sortDir = -1; }
-    _glRenderTable();
-}
-function _glPickLane(lane) {
-    const sel = document.getElementById('gl-lane');
-    if (sel) {
-        sel.value = (_gl.selectedLane === lane) ? '' : lane;
-        onGhostLabLaneChange();
-    }
 }
 
 // ── SSE — real-time snapshot every ~2s (heroes + badges + BTC); fetchAll is slower for heavy panels.
@@ -8964,6 +8858,8 @@ let _btcChartWindowResizeHandler = null;
 let _btcTradeOverlayPoints = [];
 let _btcTradeOverlayCandles = [];
 let _btcTradeOverlayRaf = null;
+let _btcLastSabreMarkers = [];
+let _tradePointRefreshStarted = false;
 const _HUD_STRATS = [
     { key: 'bitcoin',    label: 'BTC',  c: '#22d3ee' },
     { key: 'sol_macro',  label: 'SOL',  c: '#a855f7' },
@@ -9663,11 +9559,86 @@ function _tradeMarkersFromPoints(points, strategy) {
             const pnl = Number(p.pnl || 0);
             return [{
                 time: closedAt,
+                closed_at: closedAt,
                 strategy,
                 outcome: pnl >= 0 ? 'win' : 'loss',
                 pnl,
             }];
         });
+}
+
+function _dashboardSessionIdForTradePoints() {
+    return String(lastStatusData?.session_id || window._dashSessionId || '').trim();
+}
+
+function _tradePointsUrl(limit = 500) {
+    const sid = _dashboardSessionIdForTradePoints();
+    return '/api/journal/trade-points?limit=' + encodeURIComponent(String(limit))
+        + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+}
+
+function _btcOverlayMarkersFromTradePoints(tradePoints) {
+    return []
+        .concat(_tradeMarkersFromPoints(tradePoints, 'bitcoin'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'sol_macro'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'eth_macro'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'xrp_macro'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'hype_macro'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'doge_macro'))
+        .concat(_tradeMarkersFromPoints(tradePoints, 'bnb_macro'))
+        .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+}
+
+function _nativeTradeMarkersFromPoints(tradePoints) {
+    return _btcOverlayMarkersFromTradePoints(tradePoints).slice(-80).map((p) => {
+        const isWin = p.outcome === 'win';
+        const color = stratChipHexForJournal(p.strategy);
+        return {
+            time: Number(p.time),
+            position: isWin ? 'belowBar' : 'aboveBar',
+            color,
+            shape: 'circle',
+        };
+    });
+}
+
+async function refreshTradePoints() {
+    try {
+        const tr = await fetchT(_tradePointsUrl(500), 8000);
+        if (!tr || !tr.ok) return [];
+        const tj = await tr.json();
+        const tradePoints = (tj && Array.isArray(tj.points)) ? tj.points : [];
+        _exitHudTradePoints = tradePoints;
+        _maState.tradePoints = tradePoints;
+        _renderExitTimingHud();
+        _wireExitHudToChart();
+        const overlayPoints = _btcOverlayMarkersFromTradePoints(tradePoints);
+        if (_btcCandleSeries) {
+            const nativeTradeMarkers = _nativeTradeMarkersFromPoints(tradePoints);
+            const current = Array.isArray(_btcLastSabreMarkers) ? _btcLastSabreMarkers : [];
+            _btcCandleSeries.setMarkers(_mergeMarkers(current.slice(-80), nativeTradeMarkers));
+        }
+        if (_btcTradeOverlayCandles && _btcTradeOverlayCandles.length) {
+            _setBTCTradeOverlayData(overlayPoints, _btcTradeOverlayCandles);
+        } else {
+            _btcTradeOverlayPoints = overlayPoints.slice(-220);
+            _queueBTCTradeOverlayDraw();
+        }
+        if (_maState.view === 'macro') {
+            _maRenderBubbles();
+        }
+        return tradePoints;
+    } catch (e) {
+        console.error('trade point refresh error:', e);
+        return [];
+    }
+}
+
+function _ensureTradePointRefresh() {
+    if (_tradePointRefreshStarted) return;
+    _tradePointRefreshStarted = true;
+    refreshTradePoints();
+    _registerInterval(refreshTradePoints, 10000);
 }
 
 function _findNearestBTCCandle(ts) {
@@ -10225,13 +10196,13 @@ async function loadMacroAlignChart() {
             _maState.tradePoints = _exitHudTradePoints;
         } else {
             try {
-                const sid = String(lastStatusData?.session_id || window._dashSessionId || '');
-                const url = '/api/journal/trade-points?limit=500' + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
-                const tr = await fetchT(url, 8000);
+                const tr = await fetchT(_tradePointsUrl(500), 8000);
                 if (tr && tr.ok) {
                     const tj = await tr.json();
                     _maState.tradePoints = (tj && tj.points) || [];
                     _exitHudTradePoints = _maState.tradePoints;
+                    _renderExitTimingHud();
+                    _wireExitHudToChart();
                 } else {
                     _maState.tradePoints = [];
                 }
@@ -10292,12 +10263,13 @@ async function loadBTCChart() {
 
         const [ar, tr, wr] = await Promise.all([
             fetchT('/api/bitcoin/analysis'),
-            fetchT('/api/journal/trade-points?limit=500' + (lastStatusData?.session_id ? '&session_id=' + encodeURIComponent(lastStatusData.session_id) : '')),
+            fetchT(_tradePointsUrl(500)),
             fetchT('/api/strategy/watchlist?limit=80&include_general_markets=false', 8000),
         ]);
         const d = ar?.ok ? await ar.json().catch(() => ({})) : {};
         const tradePoints = tr?.ok ? (await tr.json()).points || [] : [];
         _exitHudTradePoints = tradePoints;
+        _maState.tradePoints = tradePoints;
         _renderExitTimingHud();
         _wireExitHudToChart();
         const watchlist = wr?.ok ? (await wr.json()).watchlist || [] : [];
@@ -10305,17 +10277,12 @@ async function loadBTCChart() {
 
         // ── Native markers on the existing BTC chart ──
         if (_btcCandleSeries) {
-            _btcCandleSeries.setMarkers((sabreMarkers || []).slice(-80));
+            _btcLastSabreMarkers = (sabreMarkers || []).slice(-80);
+            _btcCandleSeries.setMarkers(
+                _mergeMarkers(_btcLastSabreMarkers, _nativeTradeMarkersFromPoints(tradePoints))
+            );
         }
-        const overlayPoints = []
-            .concat(_tradeMarkersFromPoints(tradePoints, 'bitcoin'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'sol_macro'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'eth_macro'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'xrp_macro'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'hype_macro'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'doge_macro'))
-            .concat(_tradeMarkersFromPoints(tradePoints, 'bnb_macro'))
-            .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+        const overlayPoints = _btcOverlayMarkersFromTradePoints(tradePoints);
         _setBTCTradeOverlayData(overlayPoints, _candles || []);
 
         // ── Draw S/R, VP, and next BTC trigger lines on the existing chart ──
@@ -10372,6 +10339,7 @@ async function loadBTCChart() {
 
 // Init chart on DOM ready, then refresh every 20s
 (function initChartWhenReady() {
+    _ensureTradePointRefresh();
     if (typeof LightweightCharts !== 'undefined') {
         initBTCChart();
         _registerInterval(loadBTCChart, 20000);
