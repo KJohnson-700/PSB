@@ -3981,9 +3981,12 @@ async function fetchAll() {
     try {
         if (laneGatesR?.ok) {
             updateLaneGates(await laneGatesR.json());
-        } else {
+        } else if (laneGatesR) {
+            // a real failed response (4xx/5xx) — show empty state.
             updateLaneGates(null);
         }
+        // laneGatesR === null means this poll skipped the heavy tier on purpose —
+        // keep the last-rendered gates instead of clearing to "No gate data".
     } catch (e) {
         console.error('[dashboard] lane gates:', e);
         updateLaneGates(null);
