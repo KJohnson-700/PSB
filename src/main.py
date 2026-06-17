@@ -7,6 +7,7 @@ import asyncio
 import faulthandler
 import json
 import logging
+import atexit
 import os
 import re
 import signal
@@ -84,7 +85,16 @@ KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITC
 RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
+# Crash-triage breadcrumbs (see _init_fault_handler). HEARTBEAT_FILE is rewritten
+# every runtime-status tick; if it is stale (>~90s) when the process is found dead,
+# the event loop HUNG before dying. DEATH_MARKER_FILE is written on SIGTERM/normal
+# exit; its presence vs absence distinguishes an orderly stop (launchd/operator) or
+# graceful exit from a hard SIGKILL/OOM-Jetsam kill (no marker, fresh heartbeat) or
+# a native crash (no marker, faulthandler dump in polybot_fault.log).
+HEARTBEAT_FILE = RUNTIME_DIR / "bot_heartbeat.json"
+DEATH_MARKER_FILE = RUNTIME_DIR / "bot_last_death.json"
 _FAULT_HANDLER_STREAM = None
+_DEATH_MARKER_WRITTEN = False
 
 
 def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
@@ -109,8 +119,71 @@ def _shutdown_timeout_seconds(default: float = 8.0) -> float:
         return default
 
 
+def _write_heartbeat(phase: str) -> None:
+    """Stamp a tiny liveness file every runtime-status tick (hang detector)."""
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT_FILE.write_text(
+            json.dumps(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "monotonic": time.monotonic(),
+                    "pid": os.getpid(),
+                    "phase": phase,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # never let a breadcrumb write affect the trading loop
+
+
+def _write_death_marker(reason: str) -> None:
+    """Record an orderly stop/exit BEFORE the runtime tears down.
+
+    Runs from an atexit hook (normal/exception exit) and a SIGTERM handler
+    (launchd stop / `kill`). Does NOT run on SIGKILL or a native abort — that
+    absence is itself the signal: no marker + a fresh heartbeat == hard kill
+    (OOM/Jetsam); no marker + a faulthandler dump == native crash.
+    """
+    global _DEATH_MARKER_WRITTEN
+    if _DEATH_MARKER_WRITTEN:
+        return
+    _DEATH_MARKER_WRITTEN = True
+    try:
+        hb = {}
+        try:
+            hb = json.loads(HEARTBEAT_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            hb = {}
+        last_hb_age = None
+        try:
+            if hb.get("monotonic") is not None:
+                last_hb_age = round(time.monotonic() - float(hb["monotonic"]), 1)
+        except Exception:
+            last_hb_age = None
+        DEATH_MARKER_FILE.write_text(
+            json.dumps(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "pid": os.getpid(),
+                    "reason": reason,
+                    "last_heartbeat": hb,
+                    "last_heartbeat_age_sec": last_hb_age,
+                    "last_status": _read_runtime_status(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def _init_fault_handler() -> None:
-    """Persist fatal-signal Python tracebacks for post-mortem debugging."""
+    """Persist fatal-signal Python tracebacks + death breadcrumbs for triage."""
     global _FAULT_HANDLER_STREAM
     if _FAULT_HANDLER_STREAM is not None:
         return
@@ -124,6 +197,36 @@ def _init_fault_handler() -> None:
         faulthandler.enable(file=_FAULT_HANDLER_STREAM, all_threads=True)
     except Exception as exc:
         logging.warning("Failed to initialize fault handler: %s", exc)
+    # Fresh process == previous death is now explainable: clear the stale marker so
+    # its presence always refers to the most recent stop. Keep the heartbeat so an
+    # external monitor can read the last-known-good age across the restart.
+    try:
+        DEATH_MARKER_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    # SIGTERM (launchd stop / kill) is not a fatal signal faulthandler catches, so
+    # record it ourselves then chain to the previous handler so shutdown proceeds.
+    try:
+        _prev_term = signal.getsignal(signal.SIGTERM)
+
+        def _on_sigterm(signum, frame):
+            _write_death_marker("sigterm")
+            if callable(_prev_term) and _prev_term not in (
+                signal.SIG_DFL,
+                signal.SIG_IGN,
+            ):
+                _prev_term(signum, frame)
+            else:
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except Exception as exc:
+        logging.debug("SIGTERM death-marker handler not installed: %s", exc)
+    try:
+        atexit.register(_write_death_marker, "atexit")
+    except Exception:
+        pass
 
 
 def _read_runtime_status() -> Dict[str, Any]:
@@ -172,6 +275,7 @@ def _write_runtime_status(
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        _write_heartbeat(phase)
     except Exception as exc:
         logging.debug("runtime status write failed: %s", exc)
 
@@ -4816,6 +4920,7 @@ async def main():
                 "Graceful shutdown exceeded %.1fs timeout; forcing process exit.",
                 timeout_sec,
             )
+            _write_death_marker("shutdown_timeout")
             os._exit(1)
 
     loop = asyncio.get_running_loop()
@@ -4823,12 +4928,14 @@ async def main():
     shutdown_state = {"signal": None}
 
     def signal_handler(sig, frame):
+        _write_death_marker(f"signal_{int(sig)}")
         if shutdown_state["signal"] is not None:
             # Second Ctrl-C / SIGTERM: the first graceful pass is already running but
             # something is wedged. Give the operator a hard escape hatch instead of the
             # old behavior (log "waiting" and ignore — which left the process unkillable
             # by Ctrl-C when asyncio teardown hung, observed 2026-06-07).
             logging.warning("Received repeated shutdown signal %s; forcing immediate exit.", sig)
+            _write_death_marker(f"forced_repeat_signal_{int(sig)}")
             os._exit(1)
         shutdown_state["signal"] = sig
         bot._terminal_shutdown_sig = sig
@@ -4865,6 +4972,7 @@ async def main():
             # a lingering aiohttp/uvloop stream reader or run_in_executor call won't
             # unblock (observed 2026-06-07: process stuck *after* "shutdown_complete",
             # ignoring Ctrl-C). Mirrors the existing _os._exit(0) fast-path.
+            _write_death_marker("graceful_exit")
             sys.stdout.flush()
             sys.stderr.flush()
             os._exit(0)
