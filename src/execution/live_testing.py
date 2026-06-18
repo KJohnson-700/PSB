@@ -160,6 +160,16 @@ class PositionExitManager:
         self._stop_use_executable_price = bool(
             exit_cfg.get("stop_use_executable_price", False)
         )
+        # Require the percentage stop to trigger on N consecutive exit ticks before
+        # firing (default 2). At the 3s fast-exit cadence this is ~6s of confirmation
+        # and prevents a single noisy book read from cutting a winner — the
+        # 2026-06-17 BTC BUY_NO phantom stops resolved as WINS (+$17.80, +$30.92) yet
+        # were stopped on one bad tick. Counter lives on the position and resets the
+        # moment the mark recovers above the stop. Set to 1 to disable (fire on first
+        # tick, legacy behavior).
+        self._updown_stop_confirm_ticks = max(
+            1, int(exit_cfg.get("updown_stop_confirm_ticks", 1) or 1)
+        )
         # Optional: realistic paper fills (default OFF). Paper/dry_run fills every
         # order at the requested price; this walks the book ladder so the recorded
         # exit price + P&L reflect the slippage a real sweep would pay. Covers all
@@ -399,8 +409,23 @@ class PositionExitManager:
                     # waiting for the late-window cents stop, which fires at whatever price
                     # the position has already collapsed to. stop_pnl_pct == pnl_pct unless
                     # stop_use_executable_price is on (then it marks the exit-side bid).
-                    reason = "updown_stop_loss"
+                    # Require N consecutive triggering ticks (default 2) so one noisy
+                    # book read can't cut a winner; reset the moment the mark recovers.
+                    _confirm = int(getattr(pos, "_stop_confirm_count", 0)) + 1
+                    setattr(pos, "_stop_confirm_count", _confirm)
+                    if _confirm >= self._updown_stop_confirm_ticks:
+                        reason = "updown_stop_loss"
+                    else:
+                        logger.debug(
+                            "Stop pending confirm %d/%d for %s (stop_pnl=%.1f%%)",
+                            _confirm, self._updown_stop_confirm_ticks,
+                            pos.market_id, stop_pnl_pct * 100,
+                        )
                 else:
+                    # Mark is above the stop this tick — clear any pending stop
+                    # confirmation so a transient dip doesn't carry over.
+                    if getattr(pos, "_stop_confirm_count", 0):
+                        setattr(pos, "_stop_confirm_count", 0)
                     # Time-based stop: when near expiry and price has moved against us,
                     # exit at the current partial-loss price rather than holding to a
                     # binary zero resolution.

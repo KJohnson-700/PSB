@@ -2390,10 +2390,22 @@ class PolyBot:
                     f"PnL=${event_pnl:+.2f}, bankroll=${self.bankroll:,.2f}"
                 )
 
-        # Update live prices on open positions
+        # Update live (unrealized) marks on open positions. Price them off the
+        # SAME CLOB /midpoint used for entry + exit so the dashboard mark rides one
+        # ruler; Gamma is only a fallback inside check_price_updates for markets we
+        # couldn't price here. Display-only — does not drive exits or resolution.
+        clob_marks: Dict[str, float] = {}
+        for _pos in list(self.risk_manager.active_positions.values()):
+            _mid = getattr(_pos, "market_id", "") or ""
+            _tok = getattr(_pos, "token_id_yes", "") or ""
+            if not _mid or not _tok or _mid in clob_marks:
+                continue
+            _mp = await self.clob_client.fetch_midpoint(_tok)
+            if _mp is not None:
+                clob_marks[_mid] = _mp
         updated = await asyncio.to_thread(
             self.resolution_tracker.check_price_updates,
-            self.journal, self.bankroll, True
+            self.journal, self.bankroll, True, clob_marks
         )
         price_update_markets: Dict[str, float] = {}
         if isinstance(updated, tuple):
@@ -2645,6 +2657,23 @@ class PolyBot:
                 yes_price = best_ask
             else:
                 continue
+            # Mark on the SAME CLOB /midpoint the scanner uses for entry, so entry,
+            # mark, and stop ride one ruler. The hand-rolled (best_bid+best_ask)/2
+            # above diverged from the entry midpoint on thin up/down books at window
+            # open, cutting BUY_NO winners with phantom stops (2026-06-17). Keep the
+            # book (fetched above) for the two-sided/spread guard + liquidity; only
+            # the mark value switches. Fall back to the book mid if /midpoint is
+            # unavailable. Opt-out: exit_mark_use_clob_midpoint: false.
+            if bool(_excfg.get("exit_mark_use_clob_midpoint", True)):
+                _mp = await self.clob_client.fetch_midpoint(yes_token)
+                if _mp is not None:
+                    if abs(_mp - yes_price) > 0.05:
+                        logging.info(
+                            "exit mark divergence %s: /midpoint=%.3f vs book-mid=%.3f "
+                            "(bid=%s ask=%s) — using /midpoint",
+                            mid, _mp, yes_price, best_bid, best_ask,
+                        )
+                    yes_price = _mp
             market_prices[mid] = yes_price
             market_token_ids[mid] = (yes_token, no_token)
             taker_fee_rate = await self.clob_client.fetch_taker_fee_rate(yes_token)

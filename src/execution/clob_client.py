@@ -1318,6 +1318,36 @@ class CLOBClient:
             logger.warning("[fetch_tick_size] %s", e)
             return None
 
+    async def fetch_midpoint(self, token_id: str) -> Optional[float]:
+        """Return the CLOB ``/midpoint`` for an outcome token (e.g. ``0.55``).
+
+        This is the SAME source the scanner uses to mark entries
+        (``scanner.fetch_prices`` -> ``/midpoint``). Marking exits/stops off this
+        endpoint instead of a hand-rolled ``(best_bid+best_ask)/2`` keeps entry,
+        mark-to-market, and stop on ONE consistent ruler — the cross-ruler
+        mismatch (CLOB book mid vs Gamma outcomePrices) was cutting BUY_NO
+        winners with phantom stops (2026-06-17: stopped −$4.59/−$3.94 on markets
+        that resolved +$17.80/+$30.92). Fail-safe: returns None on any error so
+        the caller falls back to the book mid.
+        """
+        tid = str(token_id or "").strip()
+        if not tid:
+            return None
+        pc = self._py_client_for_public_reads()
+        if not pc:
+            return None
+        try:
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(None, lambda: pc.get_midpoint(tid))
+            mid = resp.get("mid") if isinstance(resp, dict) else getattr(resp, "mid", None)
+            if mid is None:
+                return None
+            mid_f = float(mid)
+            return mid_f if 0.0 < mid_f < 1.0 else None
+        except Exception as e:
+            logger.warning("[fetch_midpoint] %s", e)
+            return None
+
     @staticmethod
     def _quantize_price_for_tick(
         price: float,

@@ -87,6 +87,17 @@ trading:
     # this tick (scan-loop Gamma price + next healthy book tick re-evaluate it).
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.30
+    # 2026-06-17 one-ruler fix: mark exits/stops off the SAME CLOB /midpoint the
+    # scanner uses for entry, instead of a hand-rolled (best_bid+best_ask)/2 off the
+    # book. The cross-ruler mismatch (book mid vs Gamma vs entry midpoint) cut BUY_NO
+    # winners with phantom stops — stopped −$4.59/−$3.94 on markets that resolved
+    # +$17.80/+$30.92 (validated on trades_settled.held_pnl). Book still drives the
+    # two-sided/spread guard + liquidity; only the mark value switches.
+    exit_mark_use_clob_midpoint: true
+    # Require N consecutive triggering ticks before the % stop fires (3s cadence ->
+    # ~6s confirm). Stops a single noisy book read from cutting a winner. 1 = legacy
+    # fire-on-first-tick.
+    updown_stop_confirm_ticks: 2
     bid_depth_exit:
       enabled: false
       mode: observe

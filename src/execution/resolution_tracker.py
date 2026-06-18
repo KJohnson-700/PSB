@@ -274,20 +274,42 @@ class ResolutionTracker:
         self,
         journal,
         bankroll: float = 0.0,
-    ) -> int:
-        """Update current prices for all open positions from Polymarket.
+        return_prices: bool = False,
+        clob_prices: Optional[dict[str, float]] = None,
+    ) -> int | tuple[int, dict[str, float]]:
+        """Update current (unrealized) marks for all open positions.
+
+        ``clob_prices`` maps market_id -> CLOB ``/midpoint`` YES price. When a
+        held market is present there, the mark is taken from CLOB — the SAME
+        ruler used for entry (scanner ``/midpoint``) and for the exit/stop mark.
+        This keeps the dashboard's mark-to-market consistent with the price the
+        bot actually enters and exits on, in both live and paper (CLOB is the
+        live-correct source and the closest paper can mirror it). Gamma
+        ``outcomePrices`` is used only as a fallback for markets CLOB couldn't
+        price this cycle. Resolution *detection* (``check_resolutions``) is
+        unaffected and remains Gamma-authoritative.
 
         Returns number of positions updated.
         """
         open_positions = journal.get_open_positions()
         if not open_positions:
-            return 0
+            return (0, {}) if return_prices else 0
 
+        clob_prices = clob_prices or {}
         updated = 0
+        market_prices: dict[str, float] = {}
         for pos in open_positions:
             mid = pos.get("market_id", "")
             trade_id = pos.get("trade_id", "")
             if not mid or not trade_id:
+                continue
+
+            # Prefer the CLOB /midpoint mark (one ruler with entry + exit).
+            clob_mark = clob_prices.get(mid)
+            if clob_mark is not None:
+                journal.log_price_update(trade_id, float(clob_mark), bankroll)
+                market_prices[mid] = float(clob_mark)
+                updated += 1
                 continue
 
             try:
@@ -299,12 +321,17 @@ class ResolutionTracker:
                 outcome_prices = data.get("outcomePrices", "")
                 if outcome_prices:
                     import json
-                    prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
-                    if len(prices) >= 1:
-                        current_yes_price = float(prices[0])
+                    outcome_price_list = (
+                        json.loads(outcome_prices)
+                        if isinstance(outcome_prices, str)
+                        else outcome_prices
+                    )
+                    if len(outcome_price_list) >= 1:
+                        current_yes_price = float(outcome_price_list[0])
                         journal.log_price_update(trade_id, current_yes_price, bankroll)
+                        market_prices[mid] = current_yes_price
                         updated += 1
             except Exception as e:
                 logger.debug(f"Price update failed for {trade_id}: {e}")
 
-        return updated
+        return (updated, market_prices) if return_prices else updated

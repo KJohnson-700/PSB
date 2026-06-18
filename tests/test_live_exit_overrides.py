@@ -243,6 +243,57 @@ def test_updown_percentage_stop_loss_fires_before_expiry_window():
     assert decision.unrealized_pnl == -1.1
 
 
+def test_updown_stop_requires_consecutive_ticks_to_confirm():
+    """With updown_stop_confirm_ticks=2 a single triggering tick must NOT fire the
+    stop (it pends), the second consecutive triggering tick fires it, and a tick
+    where the mark recovers above the stop clears the pending count.
+
+    Guards the 2026-06-17 fix: BTC BUY_NO positions stopped on one noisy book read
+    that resolved as wins (+$17.80, +$30.92)."""
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_exit_window_mins": 0.5,
+                "updown_max_hold_mins": 600,
+                "updown_stop_confirm_ticks": 2,
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc)
+    pos = SimpleNamespace(
+        market_id="m1",
+        market_question="Bitcoin Up or Down - test",
+        outcome="YES",
+        strategy="bitcoin",
+        size=10.0,
+        entry_price=0.50,
+        opened_at=now - timedelta(minutes=1),
+        end_date=now + timedelta(minutes=60),
+        entry_leg="YES",
+    )
+    tokens = {"m1": ("YES_TOKEN", "NO_TOKEN")}
+
+    # Tick 1: breached (0.39 = -22% vs -20% stop) — pends, no exit.
+    assert mgr.check_exits({"p1": pos}, {"m1": 0.39}, tokens) == []
+    assert getattr(pos, "_stop_confirm_count") == 1
+
+    # Recovery tick: mark back above stop — pending count clears.
+    assert mgr.check_exits({"p1": pos}, {"m1": 0.50}, tokens) == []
+    assert getattr(pos, "_stop_confirm_count") == 0
+
+    # Two consecutive breaches now fire on the second.
+    assert mgr.check_exits({"p1": pos}, {"m1": 0.39}, tokens) == []
+    exits = mgr.check_exits({"p1": pos}, {"m1": 0.39}, tokens)
+    assert len(exits) == 1
+    assert exits[0].reason == "updown_stop_loss"
+
+
 def test_late_entry_shrinks_cents_stop_window():
     """Position opened with only 3 min on the clock should not trigger the
     cents stop at 2.25 min remaining when the configured fraction is 0.5
