@@ -319,15 +319,20 @@ trading:
             down:
               updown_stop_loss_pct: 0.15
   execution_fees:
-    enabled: true
-    # 2026-06-17: live get_fee_rate_bps returned a bogus 0.10 that overrode this
-    # and flipped a +$96 gross session to -$24 net. Authoritative rate from the
-    # vault deep-pass (projects/psb/research/2026-06-13-polymarket-execution-layer-
-    # deep-pass-kimi): crypto category feeRate = 0.072 -> peak 1.80% at 50c under
-    # fee = shares*rate*p*(1-p). (Retires the older "~1.56%" blended figure.)
-    # Makers pay zero. Olympus is a 3rd-party Polymarket interface; if it adds a
-    # surcharge, bump this once measured — do not guess. live_testing.py clamps
-    # any fetched rate to this ceiling so a bad get_fee_rate_bps can't override.
+    enabled: false
+    # 2026-06-18: DISABLED for the Olympus phase. REAL smoke fills (36, 06-13,
+    # data/calibration/exec_smoke.jsonl) charged $0: olympus_spent_usd == filled_price*size
+    # exactly on every entry AND exit, winners and losers — no haircut in USD or shares.
+    # The synthetic 2-leg taker fee the sim was subtracting was a PHANTOM (masked
+    # profitable sessions; compounded earlier by the bogus 0.10 rate). Olympus is the
+    # funded/production venue for now → paper fee must be $0 to match reality.
+    # POLYMARKET GO-LIVE TODO: when the Polymarket proxy is funded, run a real
+    # Polymarket smoke fill; if it deducts the documented crypto taker fee, re-enable
+    # this AND make it venue-conditional (Olympus 0 / Polymarket measured-rate) since
+    # the bot may run both. Do NOT re-enable globally without a Polymarket receipt.
+    # Authoritative Polymarket doc rate (unverified by fill): crypto feeRate = 0.072,
+    # fee = shares*rate*p*(1-p), peak 1.80% at 50c. live_testing.py clamps any fetched
+    # rate to this ceiling when enabled.
     crypto_updown_15m_taker_fee_rate: 0.072
 olympus:
   base_url: https://api.olympusx.app
@@ -418,7 +423,7 @@ strategies:
         entry_window_min: 0.5
         entry_window_max: 5.5
       15m:
-        min_edge: 0.09
+        min_edge: 0.06   # 2026-06-18: ghost loosen — 15m LONG [0.06,0.10)=+0.275 RP n=55 (gross; Olympus fee=0). Floor at 0.06 NOT 0.04: [0.04,0.06) is -0.140. Was 0.09.
         entry_window_min: 2.0
         entry_window_max: 19.0
       1h:
@@ -621,7 +626,7 @@ strategies:
       datetime_utc: '2026-12-09T19:00:00Z'
   sol_macro:
     disable_buy_yes_5m: true  # 2026-06-16: sit out SOL 5m LONG — ghost net-of-fee EV -0.084 all / -0.065 recent (n=7.4k). Live: overbought longs gapped through stop -26/-75% (2-3min-to-end). Ghost-logged.
-    disable_buy_no_5m: true   # 2026-06-16: sit out SOL 5m SHORT — ghost net-of-fee EV -0.074 all / -0.115 recent (n=3.4k). Lane is -EV both sides. Ghost-logged.
+    disable_buy_no_5m: false  # 2026-06-18: RE-ENABLED. The -0.074 disable was NET-OF-(phantom)-FEE; fee=0 (Olympus). Native sol 5m SHORT is +0.032 gross (n=1777, 54% WR); flip subset is -EV (n=77) but tiny. disable blocked the +EV native. Re-validate on accumulation.
     disable_buy_no_15m: true  # 2026-06-16: sit out SOL 15m SHORT — ghost net-of-fee EV -0.186 (worst lane, large n); Kimi-flagged. Ghost-logged.
     disable_buy_no_1h: true   # 2026-06-16: sit out SOL 1h SHORT — ghost net-of-fee EV -0.150; Kimi-flagged. Ghost-logged.
     buy_no_1h_allow_postflip: true  # 2026-06-17: admit the window-delta-FLIP 1h short (keep native disabled). Current-era ghost: flip subset +0.220 EV (n=2146) vs native −0.344; bias split confirms neutral-htf +0.512 / bullish +0.442 / bearish −0.072 — the flip catches the off-bias winners. Restores SHORT side; native bleed stays blocked.
@@ -667,7 +672,7 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.0
       15m:
-        min_edge: 0.09
+        min_edge: 0.06   # 2026-06-18: ghost loosen — 15m LONG blocked [0.06,0.10) band = +0.338 RP n=36 (gross; Olympus fee=0). Was 0.09.
         min_edge_buy_no: 0.06
         entry_window_min: 1.0
         entry_window_max: 32.0
@@ -1142,7 +1147,7 @@ strategies:
         entry_window_min: 2.0
         entry_window_max: 36.0
       1h:
-        min_edge: 0.09
+        min_edge: 0.0   # 2026-06-18: ghost loosen — hype 1h LONG blocked by lane_min_edge n=1004 meanRP +0.273; edge-band ALL +EV below 0.06 (incl inverted <0: +0.286 n271, [0.04,0.06) +0.258 n626). Mirror xrp 1h up=0. SHORT stays gated via min_edge_buy_no=0.08 (hype 1h SHORT ghost -0.366, -EV). Was 0.09.
         entry_window_min: 1.0
         entry_window_max: 59.0
     hard_min_edge: 0.0
@@ -1571,7 +1576,7 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 4.5
       15m:
-        min_edge: 0.085
+        min_edge: 0.04   # 2026-06-18: ghost loosen — 15m LONG [0.04,0.06)=+0.067 & [0.06,0.10)=+0.538 RP (gross; Olympus fee=0). Was 0.085.
         entry_window_min: 2.0
         entry_window_max: 32.0
       1h:
@@ -1782,7 +1787,7 @@ strategies:
         entry_window_min: 0.0
         entry_window_max: 10.0
       15m:
-        min_edge: 0.09
+        min_edge: 0.04   # 2026-06-18: ghost loosen — 15m LONG [0.04,0.06)=+0.204 RP n=1607 (gross; Olympus fee=0). Floor at 0.04: [0.02,0.04) is -0.124. Was 0.09.
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 150.0

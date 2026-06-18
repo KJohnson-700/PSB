@@ -5950,6 +5950,41 @@ class SolMacroStrategy:
                 "%s lane-disable filter dropped %d emitted signal(s) (late-flip/native bypass)",
                 self._signal_strategy_name, _before - len(signals),
             )
+        # 2026-06-18: per-pulse fan-out dedup. One (window, side) signal was being
+        # applied to EVERY concurrently-open same-window market in a single scan —
+        # e.g. hype 15m fired 3 IDENTICAL entries (edge=0.145, rsi=69) on the
+        # 4:30/4:45/5:00 markets, and again on 1h — tying up 3x correlated capital on
+        # one bet AND tripping "Max concurrent positions reached" (starving distinct
+        # entries). Collapse to ONE market per (window_size, action): the
+        # nearest-resolving (active bucket) by end_date. Opt-out, default on.
+        if bool(self.config.get("dedup_concurrent_window_signals", True)):
+            def _end_ts(sig):
+                end = getattr(sig, "end_date", None)
+                try:
+                    return end.timestamp() if end is not None else None
+                except Exception:
+                    return None
+            best: Dict[tuple, Any] = {}
+            passthrough = []
+            for s in signals:
+                w = getattr(s, "window_size", None)
+                a = getattr(s, "action", None)
+                ts = _end_ts(s)
+                if w is None or a is None or ts is None:
+                    passthrough.append(s)  # can't key/rank → keep (fail-safe)
+                    continue
+                k = (w, a)
+                cur = best.get(k)
+                if cur is None or ts < cur[0]:
+                    best[k] = (ts, s)
+            deduped = passthrough + [v[1] for v in best.values()]
+            if len(deduped) != len(signals):
+                logger.info(
+                    "%s fan-out dedup: %d -> %d signals (collapsed duplicate "
+                    "(window,side) markets; kept nearest-resolving)",
+                    self._signal_strategy_name, len(signals), len(deduped),
+                )
+            signals = deduped
         return signals
 
 
