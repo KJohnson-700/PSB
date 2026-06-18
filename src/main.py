@@ -120,20 +120,27 @@ def _shutdown_timeout_seconds(default: float = 8.0) -> float:
 
 
 def _self_rss_mb() -> Optional[float]:
-    """Best-effort resident-set size of this process, in MB (stdlib only).
+    """CURRENT resident-set size of this process, in MB.
 
-    ru_maxrss is bytes on macOS, kilobytes on Linux — normalize both.
-    Tracking this on the heartbeat makes a memory leak / OOM-Jetsam kill
-    (the leading suspect for the recurring deaths) visible as a trend.
+    Must be CURRENT, not peak: the OOM monitor and alert depend on seeing RSS
+    fall back down after a transient spike. ru_maxrss is the lifetime PEAK
+    (high-water mark, never decreases) — using it made the heartbeat look
+    permanently stuck at the worst spike and the OOM alert over-fire. Prefer
+    psutil's live RSS; fall back to ru_maxrss only if psutil is unavailable.
     """
     try:
-        import resource
+        import psutil
 
-        ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
-        return round(ru / divisor, 1)
+        return round(psutil.Process().memory_info().rss / 1024.0 / 1024.0, 1)
     except Exception:
-        return None
+        try:
+            import resource
+
+            ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+            return round(ru / divisor, 1)  # peak fallback
+        except Exception:
+            return None
 
 
 _MEM_PROFILE = {"on": False, "baseline": None, "last": 0.0, "interval": 300.0}
