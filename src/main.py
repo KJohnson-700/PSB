@@ -161,15 +161,53 @@ def _mem_profile_init() -> None:
         except (TypeError, ValueError):
             _MEM_PROFILE["interval"] = 300.0
         logging.warning(
-            "PSB_MEM_PROFILE on — tracemalloc leak hunt every %.0fs -> data/runtime/mem_profile.jsonl",
+            "PSB_MEM_PROFILE on — tracemalloc+gc leak hunt every %.0fs -> data/runtime/mem_profile.jsonl",
             _MEM_PROFILE["interval"],
         )
+        t = threading.Thread(target=_mem_profile_thread, name="mem-profile", daemon=True)
+        t.start()
     except Exception as exc:
         logging.warning("mem profile init failed: %s", exc)
 
 
-def _mem_profile_tick(phase: str) -> None:
-    """Throttled tracemalloc diff -> mem_profile.jsonl. No-op unless armed."""
+def _gc_native_census() -> dict:
+    """Census of live objects by type + pandas/numpy native bytes (tracemalloc-blind).
+
+    The leak is native (RSS >> tracemalloc-traced), so the signal is here: count
+    live objects per type and sum the C-buffer bytes of DataFrames / ndarrays.
+    A growing DataFrame/ndarray count or nbytes names the leaking object class.
+    """
+    import gc
+    from collections import Counter
+
+    type_counts: Counter = Counter()
+    df_n = df_bytes = arr_n = arr_bytes = 0
+    for o in gc.get_objects():
+        try:
+            tn = type(o).__name__
+            type_counts[tn] += 1
+            if tn == "DataFrame":
+                df_n += 1
+                df_bytes += int(o.memory_usage(deep=True).sum())
+            elif tn == "Series":
+                df_bytes += int(o.memory_usage(deep=True))
+            elif tn == "ndarray":
+                arr_n += 1
+                arr_bytes += int(o.nbytes)
+        except Exception:
+            continue
+    return {
+        "top_types": type_counts.most_common(15),
+        "dataframes": df_n,
+        "dataframe_mb": round(df_bytes / 1024 / 1024, 1),
+        "ndarrays": arr_n,
+        "ndarray_mb": round(arr_bytes / 1024 / 1024, 1),
+        "gc_tracked": len(gc.get_objects()),
+    }
+
+
+def _mem_profile_tick(phase: str = "timer") -> None:
+    """Throttled tracemalloc diff + gc native census -> mem_profile.jsonl."""
     if not _MEM_PROFILE["on"]:
         return
     now = time.monotonic()
@@ -186,20 +224,19 @@ def _mem_profile_tick(phase: str) -> None:
             )
         )
         base = _MEM_PROFILE["baseline"]
-        if base is None:
+        rows = []
+        if base is not None:
+            rows = [
+                {
+                    "site": str(s.traceback[0]) if s.traceback else "?",
+                    "growth_mb": round(s.size_diff / 1024 / 1024, 2),
+                    "count_diff": s.count_diff,
+                }
+                for s in snap.compare_to(base, "lineno")[:12]
+            ]
+        else:
             _MEM_PROFILE["baseline"] = snap
-            return  # first tick establishes the baseline
-        top = snap.compare_to(base, "lineno")[:15]
-        rows = [
-            {
-                "site": str(s.traceback[0]) if s.traceback else "?",
-                "growth_mb": round(s.size_diff / 1024 / 1024, 2),
-                "total_mb": round(s.size / 1024 / 1024, 2),
-                "count_diff": s.count_diff,
-            }
-            for s in top
-        ]
-        cur, peak = tracemalloc.get_traced_memory()
+        cur, _peak = tracemalloc.get_traced_memory()
         with (RUNTIME_DIR / "mem_profile.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(
                 json.dumps(
@@ -208,7 +245,7 @@ def _mem_profile_tick(phase: str) -> None:
                         "phase": phase,
                         "rss_mb": _self_rss_mb(),
                         "traced_mb": round(cur / 1024 / 1024, 1),
-                        "traced_peak_mb": round(peak / 1024 / 1024, 1),
+                        "native": _gc_native_census(),
                         "top_growth": rows,
                     },
                     default=str,
@@ -217,6 +254,16 @@ def _mem_profile_tick(phase: str) -> None:
             )
     except Exception as exc:
         logging.debug("mem profile tick failed: %s", exc)
+
+
+def _mem_profile_thread() -> None:
+    """Time-based ticker so the census fires even during long/wedged cycles."""
+    while _MEM_PROFILE["on"]:
+        try:
+            time.sleep(min(30.0, _MEM_PROFILE["interval"]))
+            _mem_profile_tick("timer")
+        except Exception:
+            pass
 
 
 def _write_heartbeat(phase: str) -> None:
