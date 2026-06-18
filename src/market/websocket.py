@@ -144,6 +144,14 @@ class WebSocketClient:
         if channel in self.subscriptions:
             self.subscriptions[channel].difference_update(token_ids)
 
+        # Free the per-token OrderBook on unsubscribe. subscribe() creates one in
+        # self.order_books for every token; without this pop, books for expired
+        # markets (new token_ids every 5/15/60-min window) accumulate forever,
+        # each retaining bid/ask price-ladder dicts of small str/float values.
+        # That was THE memory leak: ~600MB of MALLOC_TINY/NANO growth -> OOM/Jetsam.
+        for _tid in token_ids:
+            self.order_books.pop(_tid, None)
+
         id_key = self._asset_ids_key()
         if channel == "market":
             message: Dict[str, Any] = {"operation": "unsubscribe", id_key: token_ids}
