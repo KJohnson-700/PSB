@@ -2295,6 +2295,9 @@ def _gl_wilson_ci(wins: int, n: int, z: float = 1.96) -> Tuple[float, float, flo
 
 _GL_GHOST_CACHE: Dict[str, Any] = {"key": None, "ts": 0.0, "rows": None}
 _GL_GHOST_CACHE_TTL = 180.0  # seconds
+# Cheap raw-line ts extractors for the pre-filter below (no full json.loads).
+_GL_TS_RE = re.compile(r'"ts"\s*:\s*"([^"]+)"')
+_GL_SETTLED_AT_RE = re.compile(r'"settled_at"\s*:\s*"([^"]+)"')
 
 
 def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
@@ -2319,6 +2322,17 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
                 line = line.strip()
                 if not line:
                     continue
+                # Cheap ts pre-filter: skip rows older than `since` WITHOUT a full
+                # json.loads of the fat nested row. This endpoint otherwise parses
+                # ~450k rows of the 818MB ghost log on every dashboard/Hermes call,
+                # ballooning the IN-PROCESS bot heap toward OOM (2026-06-18). Only
+                # rows in the time window get fully parsed. A regex miss (e.g. epoch
+                # ts) falls through to the authoritative full parse below.
+                _mts = _GL_TS_RE.search(line) or _GL_SETTLED_AT_RE.search(line)
+                if _mts is not None:
+                    _qts = _gl_parse_ts(_mts.group(1))
+                    if _qts is not None and _qts < since:
+                        continue
                 try:
                     rec = json.loads(line)
                 except Exception:
