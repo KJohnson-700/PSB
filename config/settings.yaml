@@ -624,6 +624,7 @@ strategies:
     disable_buy_no_5m: true   # 2026-06-16: sit out SOL 5m SHORT — ghost net-of-fee EV -0.074 all / -0.115 recent (n=3.4k). Lane is -EV both sides. Ghost-logged.
     disable_buy_no_15m: true  # 2026-06-16: sit out SOL 15m SHORT — ghost net-of-fee EV -0.186 (worst lane, large n); Kimi-flagged. Ghost-logged.
     disable_buy_no_1h: true   # 2026-06-16: sit out SOL 1h SHORT — ghost net-of-fee EV -0.150; Kimi-flagged. Ghost-logged.
+    buy_no_1h_allow_postflip: true  # 2026-06-17: admit the window-delta-FLIP 1h short (keep native disabled). Current-era ghost: flip subset +0.220 EV (n=2146) vs native −0.344; bias split confirms neutral-htf +0.512 / bullish +0.442 / bearish −0.072 — the flip catches the off-bias winners. Restores SHORT side; native bleed stays blocked.
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75 from settled ghost log).
     # Legacy 0.01/0.03 was SOL-scale AND mis-scaled — low-vol penalty fired on ~98% of
     # trades, wrongly suppressing the best mid-vol longs (Q3 +0.080). RSI bands left at
@@ -1235,7 +1236,7 @@ strategies:
             entry_price_min: 0.46
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 5.5
+            entry_window_max: 11.0   # 2026-06-17: ghost loosen — hype 5m SHORT lane_entry_window rejects are +0.137 EV (n=387); admit next-window not-started bars (5.5->11). min_edge LEFT at 0.08 (its rejects only +0.017). Lane EV +0.33 all / +0.48 BEAR.
         15m:
           up:
             min_edge: 0.06
@@ -1495,7 +1496,7 @@ strategies:
             entry_window_max: 32.0
         1h:
           up:
-            min_edge: 0.05
+            min_edge: 0.0   # 2026-06-17: ghost loosen — xrp 1h LONG rejected pop +0.228 EV (n=213); edge is INVERTED here (edge<0.02 = +0.327 n=170; 0.02-0.05 = -0.163). A floor can't carve the middle band → admit all below 0.05 (net +0.228, bearish-htf contrarian, 82% WR). size_multiplier 0.3 caps risk; re-check on accumulation.
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1528,6 +1529,7 @@ strategies:
       atr_low_pct: 0.0035
       atr_high_pct: 0.0053
     disable_buy_no_1h: true   # 2026-06-15: sit out doge 1h SHORT — ghost avgEV -0.118, 52% WR (n=1393); LONG side +0.066 EV / 62% WR kept. Ghost-logged; re-admit if edge returns.
+    buy_no_1h_allow_postflip: true  # 2026-06-17: EDGE RETURNED — admit window-delta-FLIP 1h short. Current-era ghost: flip +0.163 EV (n=1529), full lane +0.126 / 62% WR (n=2046), BEAR +0.151 / 64% WR / RANGE +0.69. Native side ~breakeven, stays blocked. Restores SHORT side.
     disable_buy_no_15m: true  # 2026-06-15: sit out doge 15m SHORT — ghost net-of-fee EV -0.146 all / -0.103 recent (n=16k); dominant live short bleed. LONG side kept. Ghost-logged.
     disable_buy_yes_1h_when_bullish: true  # 2026-06-16: sit out doge 1h LONG only when htf=BULLISH — ghost recent BULLISH n=119 -0.318 (chasing extended tape); NEUTRAL +0.350 / BEARISH +0.086 kept. Bias-conditioned. Ghost-logged.
     buy_no_5m_flip_to_yes: false

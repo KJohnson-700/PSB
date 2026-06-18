@@ -58,6 +58,7 @@ from src.analysis.ai_decision_broker import (
 )
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
 from src.analysis.math_utils import PositionSizer
+from src.strategies._scan_timeout import analysis_with_timeout
 from src.analysis.sol_btc_service import SOLBTCService, SOLTechnicalAnalysis, BTCSOLCorrelation
 from src.analysis.updown_composite_score import (
     CompositeScore,
@@ -371,6 +372,13 @@ class SolMacroStrategy:
         self.position_sizer = position_sizer
         self.kelly_sizer = kelly_sizer or KellySizer(config)
         self.btc_service = BTCPriceService()
+        # BTC analysis is DIAGNOSTIC-ONLY for alts (they're decided by alt-native
+        # indicators; _btc_trade_inputs_enabled() is False). main.py computes BTC
+        # once per cycle and injects it here so the 6 alt/eth lanes don't each run a
+        # full redundant BTC get_full_analysis just to log it. When not injected
+        # (e.g. tests), the scan falls back to fetching its own.
+        self._injected_btc_ta: Optional[TechnicalAnalysis] = None
+        self._btc_ta_inject_set: bool = False
         self.exposure_manager = exposure_manager or ExposureManager(config)
         if self.exposure_manager:
             self.exposure_manager._on_pause_ai_callback = self._ai_kill_switch_analysis
@@ -1904,8 +1912,18 @@ class SolMacroStrategy:
         if not (side_source and "window_delta_flip" in side_source):
             return None
         if action == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{tf}", False)):
+            # `buy_no_<tf>_allow_postflip`: admit the window-delta-FLIP short even
+            # while the native side stays disabled. The flip short is the tape-driven
+            # off-bias edge; the native (htf-aligned) short is the bleed. 2026-06-17
+            # ghost (current era): the flip subset is +EV where the native isn't —
+            # sol 1h flip +0.220 vs native −0.344; doge 1h flip +0.163. Lets the
+            # disable keep blocking native shorts while the proven flip shorts pass.
+            if bool(self.config.get(f"buy_no_{tf}_allow_postflip", False)):
+                return None
             return f"buy_no_{tf}_disabled_lane_postflip"
         if action == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{tf}", False)):
+            if bool(self.config.get(f"buy_yes_{tf}_allow_postflip", False)):
+                return None
             return f"buy_yes_{tf}_disabled_lane_postflip"
         return None
 
@@ -2421,9 +2439,12 @@ class SolMacroStrategy:
     ) -> float:
         """Apply the same HTF bias that determined the allowed side.
 
-        Once BTC 4H became the primary gate for alt strategies, probability estimation
-        needs to use that same resolved bias. Otherwise the action can be chosen from
-        BTC HTF while the probability model still leans the other way from alt-only HTF.
+        `primary_htf_bias` here is the ALT's own resolved HTF bias from
+        `_resolve_alt_bias_for_tf` (alt 5m/15m/1h/4h) — NOT BTC. (The old wording
+        referencing "BTC 4H as the primary gate" is obsolete: alts are decided by
+        alt-native indicators; BTC inputs are gated off via `_btc_trade_inputs_enabled`
+        which returns False.) Keeping est_prob aligned with the same alt bias that
+        chose the side avoids the model leaning the other way.
         """
         if primary_htf_bias == "BULLISH":
             return est_prob_up + weight
@@ -2874,13 +2895,26 @@ class SolMacroStrategy:
 
         logger.info(f"{_brand} strategy: Found {len(sol_markets)} {_alt_label} markets")
 
-        # Fetch full technical analysis ONCE per cycle
-        ta = self.sol_service.get_full_analysis()
+        # Fetch full technical analysis ONCE per cycle.
+        # Run off-loop with a hard per-lane timeout so a slow data source
+        # (e.g. hyperliquid /info) can't block exits/dashboard or wedge the cycle.
+        _scan_to = float(self.config.get("scan_analysis_timeout_sec", 15.0) or 15.0)
+        ta = await analysis_with_timeout(
+            self.sol_service.get_full_analysis, lane=_brand, timeout_sec=_scan_to
+        )
         if not ta:
             logger.warning(f"{_brand} strategy: Could not fetch {_alt_label}/BTC price data")
             return []
 
-        btc_ta = self.btc_service.get_full_analysis()
+        # BTC analysis is diagnostic-only here. Prefer the once-per-cycle value
+        # injected by main.py; only fetch our own if none was injected (e.g. tests).
+        if self._btc_ta_inject_set:
+            btc_ta = self._injected_btc_ta
+            self._btc_ta_inject_set = False  # consume; main re-sets each cycle
+        else:
+            btc_ta = await analysis_with_timeout(
+                self.btc_service.get_full_analysis, lane=f"{_brand}:btc", timeout_sec=_scan_to
+            )
         btc_1h_regime = "BULL"
         if btc_ta:
             btc_htf_details = self._get_btc_htf_bias_details(btc_ta)
@@ -4998,6 +5032,25 @@ class SolMacroStrategy:
                     _updown_tf,
                 )
                 continue
+            # 2026-06-16: per-window BUY_YES entry-timing DEAD-ZONE. Some lanes are +EV at
+            # the timing tails but -EV in a mid-window band — hype 15m: <5min +0.36 / >=15min
+            # +0.02, but 5-12min -0.18 to -0.35 (those mid-window longs get stopped near
+            # expiry). Skip BUY_YES when skip_lo <= mins_left < skip_hi. Opt-in (keys unset=off).
+            _sz_lo = self.config.get(f"buy_yes_{_updown_tf}_skip_mins_lo")
+            _sz_hi = self.config.get(f"buy_yes_{_updown_tf}_skip_mins_hi")
+            if (
+                is_updown and action == "BUY_YES"
+                and _sz_lo is not None and _sz_hi is not None
+                and float(_sz_lo) <= _eval_left < float(_sz_hi)
+            ):
+                _bump_skip(f"buy_yes_{_updown_tf}_timing_deadzone")
+                _log_skip_reject(
+                    market=market, window=_updown_tf, side=allowed_side, action=action,
+                    reason=f"buy_yes_{_updown_tf}_timing_deadzone",
+                    yes_price=yes_price, htf_bias=primary_htf_bias,
+                    context={"eval_mins_left": float(_eval_left)},
+                )
+                continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
                 _log_skip_reject(
@@ -5876,6 +5929,27 @@ class SolMacroStrategy:
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }
+        # 2026-06-16: belt-and-suspenders lane-disable filter. The in-loop disable hooks
+        # run before late side-flips / the 1h-neutral routing (side_source *_1h_native /
+        # *_1h_neutral) finalize `action`, so a disabled lane (e.g. doge 1h BUY_NO) can
+        # slip through and trade. This final pass on emitted signals catches ALL paths.
+        def _lane_disabled(sig):
+            w = getattr(sig, "window_size", None)
+            if not w:
+                return False
+            a = getattr(sig, "action", None)
+            if a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)):
+                return True
+            if a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)):
+                return True
+            return False
+        _before = len(signals)
+        signals = [s for s in signals if not _lane_disabled(s)]
+        if len(signals) != _before:
+            logger.info(
+                "%s lane-disable filter dropped %d emitted signal(s) (late-flip/native bypass)",
+                self._signal_strategy_name, _before - len(signals),
+            )
         return signals
 
 
