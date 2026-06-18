@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +93,52 @@ REJECTED_COPY_FIELDS = (
 def ghost_id(rec: Dict[str, Any]) -> str:
     key = f"{rec.get('ts','')}|{rec.get('market_id','')}|{rec.get('reason','')}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+_QGID_TS = re.compile(r'"ts"\s*:\s*"([^"]*)"')
+_QGID_MID = re.compile(r'"market_id"\s*:\s*(?:"([^"]*)"|([^,}\s]+))')
+_QGID_REASON = re.compile(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _quick_ghost_id(line: str) -> Optional[str]:
+    """Compute ghost_id from a RAW jsonl line without a full json.loads.
+
+    The settle loop re-reads the whole multi-hundred-MB rejected log every run
+    just to skip the already-settled majority; full-parsing each fat nested row
+    churns the allocator and ratchets RSS toward OOM. Extracting the three
+    ghost_id inputs (ts|market_id|reason) by regex lets us skip settled rows
+    without parsing them. SAFE: a mis-extraction yields an id that simply won't
+    be in settled_ids, so it falls through to the authoritative full-parse path
+    (only a sha1 collision could mis-skip — negligible). Returns None when the
+    line can't be cheaply matched, forcing the full path.
+    """
+    mt = _QGID_TS.search(line)
+    mm = _QGID_MID.search(line)
+    mr = _QGID_REASON.search(line)
+    if not (mt and mm and mr):
+        return None
+    ts = mt.group(1)
+    mid = mm.group(1) if mm.group(1) is not None else mm.group(2)
+    raw_reason = mr.group(1)
+    try:
+        reason = json.loads('"' + raw_reason + '"') if "\\" in raw_reason else raw_reason
+    except json.JSONDecodeError:
+        return None
+    return hashlib.sha1(f"{ts}|{mid}|{reason}".encode("utf-8")).hexdigest()[:16]
+
+
+def _iter_raw_lines(path: Path) -> Iterable[str]:
+    """Yield stripped, non-empty raw lines (no json parse) for the pre-filter."""
+    if not path.exists():
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    yield line
+    except OSError as exc:
+        logger.warning("rejected-candidate raw read failed (%s): %s", path, exc)
 
 
 def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
@@ -776,7 +823,20 @@ def settle_rejected_candidates(
     newly_settled_ids: List[str] = []
     ts_now = now or datetime.now(timezone.utc)
 
-    for rec in _iter_jsonl(input_path):
+    for _line in _iter_raw_lines(input_path):
+        # Cheap pre-filter: skip already-settled rows WITHOUT a full json.loads of
+        # the fat nested row. Most rows are already settled, so this avoids ~95%
+        # of the per-settle parse churn that was ratcheting RSS toward OOM.
+        _qgid = _quick_ghost_id(_line)
+        if _qgid is not None and _qgid in settled_ids:
+            summary["already_settled"] += 1
+            continue
+        try:
+            rec = json.loads(_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(rec, dict):
+            continue
         gid = ghost_id(rec)
         if gid in settled_ids:
             summary["already_settled"] += 1
