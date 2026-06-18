@@ -32,7 +32,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import openai
@@ -1944,6 +1944,55 @@ OUTPUT (machine-parseable — follow exactly):
         self._file_cache[key] = (sig, rows)
         return list(rows)
 
+    def _ghost_lane_counts(self) -> Dict[Tuple[str, str, str], Dict[str, int]]:
+        """Per-(strategy, window, side) settled-ghost {n, wins}, cached by file sig.
+
+        2026-06-18 OOM FIX: lane feedback only needs ~8 samples per lane, but the
+        old path (_read_jsonl_cached on the 877MB settled log) loaded ALL ~471k rows
+        into a RETAINED list AND returned a full copy each call — ~4-8GB that
+        re-loaded on every settle (file grows -> cache invalidates). That retention
+        was THE OOM/Jetsam session-killer (streaming parse alone is ~30MB; the
+        balloon came from holding+copying the rows). Here we stream once per
+        file-change and cache only the tiny per-lane aggregate (no rows retained).
+        """
+        try:
+            stat = self._rejected_settled_path.stat()
+        except OSError:
+            return {}
+        sig = (int(stat.st_mtime_ns), int(stat.st_size))
+        cached = getattr(self, "_ghost_lane_agg", None)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        agg: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+        try:
+            with open(self._rejected_settled_path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(obj, dict):
+                        continue
+                    k = (
+                        str(obj.get("strategy") or "").strip().lower(),
+                        str(obj.get("window") or "").strip().lower(),
+                        "down" if str(obj.get("action") or "").strip().upper() == "BUY_NO" else "up",
+                    )
+                    b = agg.get(k)
+                    if b is None:
+                        b = {"n": 0, "wins": 0}
+                        agg[k] = b
+                    b["n"] += 1
+                    if obj.get("win") is True:
+                        b["wins"] += 1
+        except OSError:
+            return {}
+        self._ghost_lane_agg = (sig, agg)
+        return agg
+
     def _build_lane_feedback_bundle(
         self,
         *,
@@ -2074,21 +2123,11 @@ OUTPUT (machine-parseable — follow exactly):
                     f"Dominant regime bucket in this lane family: {top_regime} (n={top_regime_n})."
                 )
 
-        rejected = self._read_jsonl_cached(self._rejected_settled_path)
-        ghost_n = 0
-        ghost_wins = 0
-        for row in rejected:
-            if str(row.get("strategy") or "").strip().lower() != tokens["strategy"]:
-                continue
-            if str(row.get("window") or "").strip().lower() != tokens["window"]:
-                continue
-            action = str(row.get("action") or "").strip().upper()
-            ghost_side = "down" if action == "BUY_NO" else "up"
-            if ghost_side != tokens["side"]:
-                continue
-            ghost_n += 1
-            if row.get("win") is True:
-                ghost_wins += 1
+        _ghost_stats = self._ghost_lane_counts().get(
+            (tokens["strategy"], tokens["window"], tokens["side"])
+        ) or {"n": 0, "wins": 0}
+        ghost_n = _ghost_stats["n"]
+        ghost_wins = _ghost_stats["wins"]
         if ghost_n >= self.lane_feedback_min_samples:
             feedback_sources_used.append("rejected_siblings")
             sample_count_used["rejected_siblings"] = ghost_n
