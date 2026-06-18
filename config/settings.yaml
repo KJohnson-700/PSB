@@ -98,6 +98,11 @@ trading:
     # ~6s confirm). Stops a single noisy book read from cutting a winner. 1 = legacy
     # fire-on-first-tick.
     updown_stop_confirm_ticks: 2
+    # Phantom-exit floor: refuse the EARLY % stop/TP on an up/down position held
+    # fewer than this many seconds (late-window cents/time/expiry stops are NOT
+    # gated). 2026-06-17 audit: every phantom exit was a 3–41s hold (impossible
+    # 28–52% moves); every correct exit was 14–30 min — 60s cleanly separates them.
+    updown_min_hold_sec_before_pct_exit: 60
     bid_depth_exit:
       enabled: false
       mode: observe

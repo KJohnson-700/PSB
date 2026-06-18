@@ -3068,14 +3068,22 @@ class PolyBot:
         for pos in self.journal.get_open_positions():
             held_market_ids.add(pos.get("market_id", ""))
 
-        # Check active positions for exit conditions (TP/SL/time)
+        # Check active positions for exit conditions (TP/SL/time).
+        # Price held markets via _fetch_held_market_prices (CLOB /midpoint + the
+        # two-sided/spread guard), NOT the scanner's m.yes_price — the scanner
+        # defaults yes_price to 0.5 when a /midpoint fetch misses (thin/just-opened
+        # 5m/1h book), and that placeholder leaking into the exit check fired phantom
+        # TP/stops on held positions (2026-06-17 audit: the window-size divide). This
+        # also unifies the 60s scan-loop exit onto the same ruler as the 3s fast loop.
         try:
             exit_started = time.perf_counter()
-            market_prices = {m.id: m.yes_price for m in high_liquidity}
-            market_token_ids = {
-                m.id: (m.token_id_yes, m.token_id_no) for m in high_liquidity
-            }
-            await self._run_exit_checks(market_prices, market_token_ids)
+            market_prices, market_token_ids, market_liquidity = (
+                await self._fetch_held_market_prices()
+            )
+            if market_prices:
+                await self._run_exit_checks(
+                    market_prices, market_token_ids, market_liquidity
+                )
             cycle_timings_ms["cycle_exit_check_ms"] = int(
                 (time.perf_counter() - exit_started) * 1000
             )

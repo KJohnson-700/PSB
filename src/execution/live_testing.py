@@ -170,6 +170,17 @@ class PositionExitManager:
         self._updown_stop_confirm_ticks = max(
             1, int(exit_cfg.get("updown_stop_confirm_ticks", 1) or 1)
         )
+        # Mechanism-agnostic phantom-exit guard: refuse the EARLY % stop/TP on an
+        # up/down position held fewer than N seconds. The late-window cents/time
+        # stop + expiry exits are NOT gated (they fire near resolution and are the
+        # real protection). Every phantom exit in the 2026-06-17 audit was a 3–41s
+        # hold (impossible 28–52% moves from thin-book mids / the scanner's 0.5
+        # placeholder leaking into the 60s scan-loop exit); every correct exit was
+        # 14–30 min. A short floor cleanly separates them regardless of which price
+        # path misfired. 0 = off (code default; settings.yaml enables it).
+        self._updown_min_hold_sec_before_pct_exit = max(
+            0.0, float(exit_cfg.get("updown_min_hold_sec_before_pct_exit", 0.0) or 0.0)
+        )
         # Optional: realistic paper fills (default OFF). Paper/dry_run fills every
         # order at the requested price; this walks the book ladder so the recorded
         # exit price + P&L reflect the slippage a real sweep would pay. Covers all
@@ -489,6 +500,25 @@ class PositionExitManager:
                     pnl_pct=pnl_pct,
                     market_liquidity=market_liquidity,
                 )
+
+            # Phantom-exit floor: suppress the EARLY % stop/TP until the position has
+            # aged past the min-hold. Leaves the late-window cents/time/expiry stops
+            # untouched (they only fire near resolution). Resets the stop-confirm
+            # count so it re-confirms cleanly once the hold clears.
+            if (
+                is_updown
+                and reason in ("take_profit", "updown_stop_loss")
+                and self._updown_min_hold_sec_before_pct_exit > 0
+                and (hours_held * 3600.0) < self._updown_min_hold_sec_before_pct_exit
+            ):
+                logger.info(
+                    "Suppress %s for %s: held %.0fs < min-hold %.0fs (phantom-exit floor)",
+                    reason, pos.market_id, hours_held * 3600.0,
+                    self._updown_min_hold_sec_before_pct_exit,
+                )
+                reason = None
+                if getattr(pos, "_stop_confirm_count", 0):
+                    setattr(pos, "_stop_confirm_count", 0)
 
             if reason:
                 token_yes, token_no = token_map.get(pos.market_id, ("", ""))

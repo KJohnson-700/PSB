@@ -294,6 +294,48 @@ def test_updown_stop_requires_consecutive_ticks_to_confirm():
     assert exits[0].reason == "updown_stop_loss"
 
 
+def test_updown_min_hold_suppresses_early_pct_exit_but_not_late_stops():
+    """The phantom-exit floor suppresses an early % stop/TP on a position held
+    under the min-hold, then lets it fire once aged past it. Guards the 2026-06-17
+    audit: every phantom exit was a 3–41s hold."""
+    cfg = {
+        "trading": {
+            "exit_rules": {
+                "enabled": True,
+                "take_profit_pct": 0.99,
+                "stop_loss_pct": 0.30,
+                "max_hold_hours": 72,
+                "updown_stop_loss_pct": 0.20,
+                "updown_exit_window_mins": 0.5,
+                "updown_max_hold_mins": 600,
+                "updown_min_hold_sec_before_pct_exit": 60,
+            }
+        }
+    }
+    mgr = PositionExitManager(cfg)
+    now = datetime.now(timezone.utc)
+    tokens = {"m1": ("YES_TOKEN", "NO_TOKEN")}
+
+    def _pos(age_sec):
+        return SimpleNamespace(
+            market_id="m1",
+            market_question="Bitcoin Up or Down - test",
+            outcome="YES",
+            strategy="bitcoin",
+            size=10.0,
+            entry_price=0.50,
+            opened_at=now - timedelta(seconds=age_sec),
+            end_date=now + timedelta(minutes=60),
+            entry_leg="YES",
+        )
+
+    # Held 10s, mark −22% (breaches −20% stop): suppressed by the floor.
+    assert mgr.check_exits({"p1": _pos(10)}, {"m1": 0.39}, tokens) == []
+    # Held 120s (> 60s floor): the same breach now fires.
+    exits = mgr.check_exits({"p1": _pos(120)}, {"m1": 0.39}, tokens)
+    assert len(exits) == 1 and exits[0].reason == "updown_stop_loss"
+
+
 def test_late_entry_shrinks_cents_stop_window():
     """Position opened with only 3 min on the clock should not trigger the
     cents stop at 2.25 min remaining when the configured fraction is 0.5
