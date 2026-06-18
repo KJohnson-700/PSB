@@ -492,6 +492,92 @@ def _build_lane_states(journal: Any) -> Dict[str, Any]:
     }
 
 
+# ── Lane gate status (config-driven open/closed tracker) ───────────────────────
+# Mirrors the per-asset disable_buy_* flags so the dashboard can show, at a glance,
+# which strategy/window/side lanes are deliberately stopped.
+_LANE_GATE_STRATEGIES: List[Tuple[str, str]] = [
+    ("bitcoin", "BTC"),
+    ("sol_macro", "SOL"),
+    ("eth_macro", "ETH"),
+    ("hype_macro", "HYPE"),
+    ("xrp_macro", "XRP"),
+    ("doge_macro", "DOGE"),
+    ("bnb_macro", "BNB"),
+]
+_LANE_GATE_WINDOWS: List[str] = ["5m", "15m", "1h"]
+_LANE_GATE_SIDES: List[str] = ["BUY_YES", "BUY_NO"]
+
+
+def _resolve_lane_gate(
+    strategy_cfg: Dict[str, Any],
+    window: str,
+    side: str,
+    strategy_id: str,
+) -> Dict[str, Any]:
+    """Return open/closed status for one strategy/window/side lane.
+
+    Checks, in order of precedence:
+      - blanket disable for the side (disable_buy_yes / disable_buy_no)
+      - per-window disable (disable_buy_yes_<tf> / disable_buy_no_<tf>)
+      - bias-conditioned per-window disable (..., _when_bullish / _when_bearish)
+      - native 5m BUY_NO suppression (disable_buy_no_5m_native)
+      - BTC counter-trend BUY_NO suppression (disable_buy_no_counter_trend)
+    """
+    side_key = side.lower()  # buy_yes / buy_no
+
+    # 1. Blanket side disable
+    flag = f"disable_{side_key}"
+    if bool(strategy_cfg.get(flag, False)):
+        return {"open": False, "kind": "disabled", "flag": flag}
+
+    # 2. Per-window disable
+    flag = f"disable_{side_key}_{window}"
+    if bool(strategy_cfg.get(flag, False)):
+        return {"open": False, "kind": "disabled", "flag": flag}
+
+    # 3. Bias-conditioned per-window disable
+    for bias in ("bullish", "bearish"):
+        flag = f"disable_{side_key}_{window}_when_{bias}"
+        if bool(strategy_cfg.get(flag, False)):
+            return {"open": False, "kind": "conditional", "flag": flag, "condition": f"htf={bias.upper()}"}
+
+    # 4. Native 5m BUY_NO suppression (used by alt strategies)
+    if side == "BUY_NO" and window == "5m" and bool(strategy_cfg.get("disable_buy_no_5m_native", False)):
+        return {"open": False, "kind": "disabled", "flag": "disable_buy_no_5m_native"}
+
+    # 5. BTC counter-trend BUY_NO suppression
+    if side == "BUY_NO" and bool(strategy_cfg.get("disable_buy_no_counter_trend", False)):
+        return {"open": False, "kind": "disabled", "flag": "disable_buy_no_counter_trend"}
+
+    return {"open": True, "kind": "open", "flag": None}
+
+
+def _build_lane_gates(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if cfg is None:
+        cfg = _load_yaml_config()
+    strategies_cfg = dict(cfg.get("strategies") or {})
+    out: Dict[str, Any] = {"updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z", "strategies": []}
+    for strategy_id, label in _LANE_GATE_STRATEGIES:
+        strategy_cfg = dict(strategies_cfg.get(strategy_id) or {})
+        windows: Dict[str, Any] = {}
+        for window in _LANE_GATE_WINDOWS:
+            windows[window] = {
+                side: _resolve_lane_gate(strategy_cfg, window, side, strategy_id)
+                for side in _LANE_GATE_SIDES
+            }
+        closed_count = sum(1 for w in windows.values() for s in w.values() if not s["open"])
+        out["strategies"].append(
+            {
+                "id": strategy_id,
+                "label": label,
+                "windows": windows,
+                "closed_count": closed_count,
+                "total_count": len(_LANE_GATE_WINDOWS) * len(_LANE_GATE_SIDES),
+            }
+        )
+    return out
+
+
 # ── Background BTC analysis cache ─────────────────────────────────────────────
 # get_full_analysis() takes ~9s (4 Binance fetches). Run it in a background
 # thread every 60s and serve the cached result instantly so HTTP never blocks.
@@ -832,10 +918,12 @@ def _get_journal():
     if not JOURNAL_DIR.exists():
         return None
 
-    # Match TradeJournal(resume_latest): use the newest dir that actually has
-    # journal data, not a newer empty stub folder (fixes blank Journal after restarts
-    # when the dashboard process has no in-memory bot_instance).
-    chosen = TradeJournal.newest_resumable_session_dir()
+    # Prefer the newest directory by session id even if it is still empty. After
+    # a clean restart/reset, that empty folder is the active paper session and
+    # the dashboard must not keep showing the previous resumable session.
+    chosen = _latest_session_dir_by_name()
+    if chosen is None:
+        chosen = TradeJournal.newest_resumable_session_dir()
     if chosen is None:
         sessions = sorted(
             [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
@@ -949,6 +1037,21 @@ def _get_cached_journal_summary() -> Dict:
     summary = _get_journal_summary()
     _journal_summary_cache["summary"] = summary
     _journal_summary_cache["ts"] = now
+    return summary
+
+
+def _get_current_session_summary() -> Dict:
+    """Journal summary for the dashboard's active session.
+
+    A fresh restart creates a newer empty session directory before any fills are
+    written. In dashboard-only mode, ``TradeJournal.newest_resumable_session_dir``
+    still points at the previous non-empty session; use the empty newer session
+    for UI rollups so Performance does not show stale prior-session data.
+    """
+    summary = _get_cached_journal_summary()
+    empty_startup_dir = None if bot_instance is not None else _newer_empty_startup_session(summary)
+    if empty_startup_dir is not None:
+        return _empty_session_summary(empty_startup_dir.name)
     return summary
 
 
@@ -1314,7 +1417,10 @@ async def sse_stream(request: Request):
                     else:
                         disk_pos = _load_disk_positions_for_status()
                     if split_bot_running and int(runtime_status.get("open_positions") or 0) == 0:
-                        disk_pos = []
+                        # Don't clobber disk positions just because runtime_status
+                        # reports 0; it can lag behind disk writes. (See sse_stream
+                        # comment at the matching site in get_status.)
+                        pass
                     if empty_startup_dir is not None:
                         disk_pos = []
                     disk_n = len(disk_pos)
@@ -1434,6 +1540,12 @@ async def sse_stream(request: Request):
                         initial_bankroll=float(
                             (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500)
                             or 500
+                        ),
+                        prefer_summary_equity=split_bot_running,
+                        summary_realized_pnl=(
+                            float(js["realized_pnl"])
+                            if js.get("realized_pnl") is not None
+                            else None
                         ),
                     )
                     bankroll_snap = bankroll_payload.get("bankroll")
@@ -1657,8 +1769,26 @@ def _resolve_bankroll_snapshot(
     summary_total_pnl: float,
     summary_has_session: bool,
     initial_bankroll: float,
+    prefer_summary_equity: bool = False,
+    summary_realized_pnl: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Preserve a real zero bankroll and surface source/availability to the UI."""
+    """Preserve a real zero bankroll and surface source/availability to the UI.
+
+    Bankroll is closed (realized) equity only. Unrealized P&L on open positions
+    is at-risk and surfaced separately by the UI; folding it into bankroll would
+    double-count and inflate/deflate the headline number whenever a session has
+    open positions. The display layer (index.html) shows realized in the
+    "Bankroll" card and the user can inspect unrealized per-position in the
+    open-positions list.
+    """
+    realized = float(summary_realized_pnl) if summary_realized_pnl is not None else None
+
+    if prefer_summary_equity and summary_has_session and realized is not None:
+        return {
+            "bankroll": round(float(initial_bankroll) + realized, 2),
+            "source": "summary_realized_equity",
+        }
+
     if journal_bankroll is not None:
         return {"bankroll": round(float(journal_bankroll), 2), "source": "journal"}
 
@@ -1667,9 +1797,12 @@ def _resolve_bankroll_snapshot(
         return {"bankroll": round(float(br_snap), 2), "source": "snapshots"}
 
     if summary_has_session:
+        # Prefer realized-only; fall back to total_pnl only if realized is missing
+        # (legacy summaries that pre-date the realized field).
+        addend = realized if realized is not None else float(summary_total_pnl)
         return {
-            "bankroll": round(float(initial_bankroll) + float(summary_total_pnl), 2),
-            "source": "summary",
+            "bankroll": round(float(initial_bankroll) + addend, 2),
+            "source": "summary_realized" if realized is not None else "summary",
         }
 
     return {
@@ -1899,7 +2032,11 @@ async def get_status():
         except Exception:
             disk_positions = []
     if split_bot_running and int(runtime_status.get("open_positions") or 0) == 0:
-        disk_positions = []
+        # The runtime_status JSON can lag or have been written before an open
+        # position was persisted to disk; do NOT clobber the disk positions
+        # just because runtime_status reports 0. Only override disk when the
+        # runtime value is a positive, trustworthy count.
+        pass
     session_cc = _command_center_session(summary)
 
     # Infer dry_run and AI status from config if available
@@ -1945,6 +2082,12 @@ async def get_status():
         summary_has_session=bool(summary.get("session_id")),
         initial_bankroll=float(
             (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500) or 500
+        ),
+        prefer_summary_equity=split_bot_running,
+        summary_realized_pnl=(
+            float(summary["realized_pnl"])
+            if summary.get("realized_pnl") is not None
+            else None
         ),
     )
 
@@ -2863,14 +3006,13 @@ async def get_ghost_morning_summary(
     return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
 
 
-@app.get("/api/ghosts/lab")
-async def get_ghost_lab(
+def _gl_build_lab_payload(
     since: Optional[str] = None,
     strategy: Optional[str] = None,
     window: Optional[str] = None,
     side: Optional[str] = None,
     limit: int = 5000,
-):
+) -> Dict[str, Any]:
     """Ghost Lab — settled-ghost + live-trade explorer with time-of-day buckets."""
     # Default = last 30 days (time-of-day buckets need sample volume).
     if since:
@@ -2927,22 +3069,42 @@ async def get_ghost_lab(
         "live": sum(1 for e in events if e.get("source") == "live"),
     }
     current_regime = _gl_current_regime_status()
-    return JSONResponse(
-        content={
-            "events": capped,
-            "lanes": agg["lanes"],
-            "buckets_hour": agg["buckets_hour"],
-            "buckets_hour_dow": agg["buckets_hour_dow"],
-            "reasons": reasons,
-            "current_regime": current_regime,
-            "session": {
-                "since": since_dt.isoformat(),
-                "now": datetime.utcnow().isoformat(),
-                "n_events_total": len(events),
-                "n_events_capped": len(capped),
-                "n_events_per_source": counts,
-            },
+    return {
+        "events": capped,
+        "lanes": agg["lanes"],
+        "buckets_hour": agg["buckets_hour"],
+        "buckets_hour_dow": agg["buckets_hour_dow"],
+        "reasons": reasons,
+        "current_regime": current_regime,
+        "session": {
+            "since": since_dt.isoformat(),
+            "now": datetime.utcnow().isoformat(),
+            "n_events_total": len(events),
+            "n_events_capped": len(capped),
+            "n_events_per_source": counts,
         },
+    }
+
+
+@app.get("/api/ghosts/lab")
+async def get_ghost_lab(
+    since: Optional[str] = None,
+    strategy: Optional[str] = None,
+    window: Optional[str] = None,
+    side: Optional[str] = None,
+    limit: int = 5000,
+):
+    """Ghost Lab — settled-ghost + live-trade explorer with time-of-day buckets."""
+    payload = await asyncio.to_thread(
+        _gl_build_lab_payload,
+        since,
+        strategy,
+        window,
+        side,
+        limit,
+    )
+    return JSONResponse(
+        content=payload,
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
@@ -2986,7 +3148,7 @@ async def get_ghost_decision_digest(
 async def get_live_performance():
     """Live trade performance metrics sourced from summary.json (cached journal for
     closed-trade detail).  No fresh PerformanceTracker() construction per call."""
-    summary = _get_cached_journal_summary()
+    summary = _get_current_session_summary()
     strategy_stats = summary.get("strategy_stats", {})
     strategy_stats_filtered: Dict[str, Any] = {}
     if isinstance(strategy_stats, dict):
@@ -3601,7 +3763,7 @@ async def get_strategy_metrics():
     }
 
     # ── Primary: live trade stats from summary.json (disk-first) ──
-    summary = _get_cached_journal_summary()
+    summary = _get_current_session_summary()
     for strat, s in summary.get("strategy_stats", {}).items():
         if strat in metrics:
             metrics[strat]["trades"] = s.get("trades", 0)
@@ -3707,7 +3869,7 @@ async def get_journal_summary(session_id: Optional[str] = None):
             else "active"
         )
         return out
-    return _get_cached_journal_summary()
+    return _get_current_session_summary()
 
 
 @app.get("/api/journal/positions")
@@ -4001,21 +4163,13 @@ async def get_action_breakdown(session_id: Optional[str] = None):
     return _build_action_breakdown(j)
 
 
-@app.get("/api/journal/trade-points")
-async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] = None):
-    """Normalized closed-trade points for charting.
+@app.get("/api/lane_gates")
+async def get_lane_gates():
+    """Config-driven open/closed status per strategy/window/side lane."""
+    return _build_lane_gates()
 
-    Returns epoch `time` + entry/exit prices so frontend can render bubble/marker
-    overlays without guessing field names.
-    """
-    if not session_id:
-        empty_startup_dir = _newer_empty_startup_session(_get_cached_journal_summary())
-        if empty_startup_dir is not None:
-            return {"points": [], "session_id": empty_startup_dir.name}
-    j = _journal_for_query(session_id) if session_id else _get_journal()
-    if session_id and not j:
-        raise HTTPException(status_code=404, detail="Session not found")
-    trades = j.get_closed_trades() if j else []
+
+def _closed_trades_to_chart_points(trades: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     points: List[Dict[str, Any]] = []
     for t in trades[-max(10, min(limit, 2000)) :]:
         # Anchor chart marker at entry time (learning) once trade is closed; fallback to exit.
@@ -4047,6 +4201,32 @@ async def get_journal_trade_points(limit: int = 300, session_id: Optional[str] =
                 "exit_reason": t.get("exit_reason"),
             }
         )
+    return points
+
+
+@app.get("/api/journal/trade-points")
+async def get_journal_trade_points(
+    limit: int = 300,
+    session_id: Optional[str] = None,
+    include_recent: bool = False,
+):
+    """Normalized closed-trade points for charting.
+
+    Returns epoch `time` + entry/exit prices so frontend can render bubble/marker
+    overlays without guessing field names. ``include_recent`` is retained only
+    for backward-compatible query parsing; fresh sessions must not inherit old
+    closed-trade points.
+    """
+    empty_startup_session_id = None
+    if not session_id:
+        empty_startup_dir = _newer_empty_startup_session(_get_cached_journal_summary())
+        if empty_startup_dir is not None:
+            empty_startup_session_id = empty_startup_dir.name
+            return {"points": [], "session_id": empty_startup_session_id}
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    points = _closed_trades_to_chart_points(j.get_closed_trades() if j else [], limit)
     return {"points": points, "session_id": getattr(j, "session_id", None) if j else session_id}
 
 
@@ -4856,7 +5036,12 @@ def _effective_exposure_section(config: Dict[str, Any]) -> Dict[str, Any]:
     bot = _full_bot_instance()
     mgr = getattr(bot, "btc_exposure_manager", None) if bot else None
     if mgr is not None and hasattr(mgr, "loss_kill_switch_enabled"):
-        base["loss_kill_switch_enabled"] = bool(mgr.loss_kill_switch_enabled)
+        # Report the EFFECTIVE state: the loss-streak pause is live-only, so a
+        # paper session shows OFF even when the flag is set. Falls back to the raw
+        # flag if loss_kill_active isn't present (older manager).
+        base["loss_kill_switch_enabled"] = bool(
+            getattr(mgr, "loss_kill_active", mgr.loss_kill_switch_enabled)
+        )
         base["_runtime_source"] = "bot"
     else:
         base["_runtime_source"] = "config"

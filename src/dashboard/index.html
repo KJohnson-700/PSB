@@ -254,19 +254,21 @@
         .action-lane-sub{font-size:0.68rem;color:var(--td);line-height:1.35}
 
         /* ── Lane Gates (config-driven lane open/closed tracker) ── */
-        .lane-gates-table{width:100%;border-collapse:collapse;font-size:0.75rem;font-family:'IBM Plex Mono',monospace}
-        .lane-gates-table th,.lane-gates-table td{padding:5px 4px;text-align:center;border-bottom:1px solid rgba(255,255,255,.05)}
-        .lane-gates-table th{color:var(--td);font-size:0.65rem;letter-spacing:.08em;text-transform:uppercase;font-weight:500}
-        .lane-gates-table td:first-child,.lane-gates-table th:first-child{text-align:left;padding-left:2px}
+        .lane-gates-table{width:100%;border-collapse:collapse;font-size:0.82rem;font-family:'IBM Plex Mono',monospace;table-layout:fixed}
+        .lane-gates-table th,.lane-gates-table td{padding:7px 6px;text-align:center;border-bottom:1px solid rgba(255,255,255,.06)}
+        .lane-gates-table th{color:var(--td);font-size:0.7rem;letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+        .lane-gates-table td:first-child,.lane-gates-table th:first-child{text-align:left;padding-left:4px;width:70px}
         .lane-gates-table tr:last-child td{border-bottom:none}
-        .lane-gate-cell{display:inline-flex;gap:4px;align-items:center;justify-content:center}
-        .lane-gate-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:3px;border:1px solid transparent;font-size:0.65rem;letter-spacing:.04em;cursor:help;white-space:nowrap}
-        .lane-gate-pill--open{background:rgba(0,255,136,.08);border-color:rgba(0,255,136,.25);color:var(--gr)}
-        .lane-gate-pill--closed{background:rgba(255,68,102,.08);border-color:rgba(255,68,102,.35);color:var(--re)}
-        .lane-gate-pill--conditional{background:rgba(255,215,0,.08);border-color:rgba(255,215,0,.35);color:var(--ye)}
-        .lane-gate-dot{width:6px;height:6px;border-radius:50%;display:inline-block;box-shadow:0 0 6px currentColor}
-        .lane-gate-legend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:8px;font-size:0.65rem;color:var(--td)}
-        .lane-gate-legend span{display:inline-flex;align-items:center;gap:4px}
+        .lane-gate-cell{display:inline-flex;gap:6px;align-items:center;justify-content:center}
+        .lane-gate-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:4px;border:1px solid transparent;font-size:0.72rem;letter-spacing:.04em;cursor:help;white-space:nowrap;min-width:36px;justify-content:center}
+        .lane-gate-pill--open{background:rgba(0,255,136,.1);border-color:rgba(0,255,136,.3);color:var(--gr)}
+        .lane-gate-pill--closed{background:rgba(255,68,102,.1);border-color:rgba(255,68,102,.4);color:var(--re)}
+        .lane-gate-pill--conditional{background:rgba(255,215,0,.1);border-color:rgba(255,215,0,.4);color:var(--ye)}
+        .lane-gate-dot{width:7px;height:7px;border-radius:50%;display:inline-block;box-shadow:0 0 8px currentColor}
+        .lane-gate-legend{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:10px;font-size:0.7rem;color:var(--td)}
+        .lane-gate-legend span{display:inline-flex;align-items:center;gap:5px}
+        #lane-gates-grid{flex:1;display:flex;flex-direction:column}
+        #lane-gates-grid .lane-gates-table{flex:1}
 
         /* ── Badges ── */
         .badge,.bdg{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.1em;padding:3px 9px;border-radius:3px;text-transform:uppercase;font-weight:500;border:1px solid;display:inline-block}
@@ -511,6 +513,12 @@
         .scrollbox::-webkit-scrollbar{width:3px}
         .scrollbox::-webkit-scrollbar-track{background:transparent}
         .scrollbox::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+        .equity-ticker{display:flex;overflow:hidden;white-space:nowrap;position:relative;border-top:1px solid var(--border);margin-top:8px;padding:6px 0}
+        .equity-ticker-track{display:inline-flex;gap:8px;animation:equity-ticker-scroll 25s linear infinite}
+        .equity-ticker:hover .equity-ticker-track{animation-play-state:paused}
+        @keyframes equity-ticker-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+        .equity-ticker-item{flex:0 0 auto;font-size:0.72rem;color:var(--text-muted);white-space:nowrap;padding:3px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:4px}
+        .equity-ticker-item b{font-weight:600;color:var(--text)}
         .backtest-output-tail{
             margin:0;
             padding:10px 12px;
@@ -2467,7 +2475,7 @@
         <div id="live-perf-strats" style="margin:8px 0;font-size:0.78rem;color:var(--text-muted);"></div>
         <div id="live-drift" style="margin-top:8px;"></div>
         <div id="kelly-status" style="margin-top:10px;font-size:0.75rem;color:var(--text-muted);"></div>
-        <div class="scrollbox" id="live-equity" style="max-height:120px;margin-top:8px;"></div>
+        <div class="equity-ticker" id="live-equity"></div>
 
         <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -2485,14 +2493,14 @@
                 <span style="font-weight:600;font-size:0.88rem;">Updown Strategy Win Rates</span>
                 <span id="updown-code-label" style="font-size:0.72rem;padding:2px 8px;border-radius:4px;background:var(--surface2);color:var(--text-muted);">detecting...</span>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch;">
                 <div>
                     <div style="font-size:0.7rem;color:var(--green);margin-bottom:6px;font-weight:600;">NEW CODE (post-restart)</div>
                     <div id="updown-new" style="font-size:0.82rem;line-height:1.8;"></div>
                 </div>
-                <div>
-                    <div style="font-size:0.7rem;color:var(--cy);margin-bottom:6px;font-weight:600;">LANE GATES</div>
-                    <div id="lane-gates-panel">
+                <div style="display:flex;flex-direction:column;height:100%;">
+                    <div style="font-size:0.7rem;color:#fff;margin-bottom:6px;font-weight:600;">LANE GATES</div>
+                    <div id="lane-gates-panel" style="flex:1;display:flex;flex-direction:column;">
                         <div id="lane-gates-loading" style="font-size:0.78rem;color:var(--text-muted);padding:8px 0;">Loading lane gates…</div>
                         <div id="lane-gates-grid"></div>
                         <div id="lane-gates-updated" style="font-size:0.65rem;color:var(--td);margin-top:8px;text-align:right;">-</div>
@@ -2504,20 +2512,25 @@
         <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                 <span style="font-weight:600;font-size:0.88rem;">Crypto reason buckets</span>
-                <span id="reason-buckets-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span id="reason-buckets-updated" style="font-size:0.72rem;color:var(--text-muted);">-</span>
+                    <button id="reason-buckets-toggle" type="button" style="font-size:0.68rem;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:3px 8px;border-radius:4px;cursor:pointer;">Show</button>
+                </div>
             </div>
-            <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
-                <strong style="color:var(--text);">Entries / path / bias</strong> are from recent journal ENTRY rows.
-                <strong style="color:var(--text);">Current blockers</strong> are live watchlist rows that are not <code style="font-size:0.68rem;">ready</code> — use them to see why a trigger is not firing (edge, window, exposure, etc.).
-            </p>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                <div id="reason-btc" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-sol" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-eth" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-hype" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-xrp" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-doge" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
-                <div id="reason-bnb" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+            <div id="reason-buckets-body" style="display:none;">
+                <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
+                    <strong style="color:var(--text);">Entries / path / bias</strong> are from recent journal ENTRY rows.
+                    <strong style="color:var(--text);">Current blockers</strong> are live watchlist rows that are not <code style="font-size:0.68rem;">ready</code> — use them to see why a trigger is not firing (edge, window, exposure, etc.).
+                </p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div id="reason-btc" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-sol" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-eth" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-hype" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-xrp" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-doge" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                    <div id="reason-bnb" style="font-size:0.8rem;line-height:1.7;color:var(--text-muted);">Loading...</div>
+                </div>
             </div>
         </div>
 
@@ -2533,17 +2546,6 @@
         <div class="card" data-aos="fade-up">
             <h2 style="margin-bottom:8px;">Strategy PnL Breakdown</h2>
             <canvas id="strategy-pnl-chart" height="220" style="width:100%;"></canvas>
-        </div>
-    </div>
-
-    <!-- Session Summary -->
-    <div class="card" data-aos="fade-up" id="session-summary-panel" style="margin-top:16px;">
-        <h2>Session Summary</h2>
-        <div id="session-summary-body" style="font-size:0.85rem;line-height:1.8;">
-            <div>Session: <span id="ss-session" style="color:var(--cyan);">-</span> &nbsp;|&nbsp; Spent: <span id="ss-spent">$0</span></div>
-            <div>Open: <span id="ss-open">0</span> | Trades: <span id="ss-trades">0</span></div>
-            <div>Wins: <span id="ss-wins">0</span> | Losses: <span id="ss-losses">0</span> | WR: <span id="ss-wr">-</span></div>
-            <div>Realized PnL: <span id="ss-rpnl">$0</span> | Total PnL: <span id="ss-tpnl">$0</span></div>
         </div>
     </div>
 
@@ -3091,6 +3093,15 @@ function stratHex(id) {
     return '#94a3b8';
 }
 
+/** Strategy id → short asset label for canvas charts (no `_macro`, abbreviated to fit). */
+function stratLabel(id) {
+    const k = String(id || '').trim();
+    if (k === 'bitcoin') return 'BTC';
+    const base = k.replace(/_macro$/, '').replace(/_lag$/, '');
+    const map = { sol: 'SOL', eth: 'ETH', hype: 'HYPE', xrp: 'XRP', doge: 'DOGE', bnb: 'BNB' };
+    return (map[base] || base.toUpperCase()).slice(0, 5);
+}
+
 function stratPill(name) {
     var c = window.STRATS[name] || '#888';
     var span = document.createElement('span');
@@ -3553,6 +3564,7 @@ function switchMainView(which, opts) {
         if (which === 'performance') {
             _perfForceHeavy = true;  // fetch the heavy analytics tier immediately on tab-open
             loadLivePerformance();
+            if (!window._laneGatesLoaded) { loadLaneGates(); window._laneGatesLoaded = true; }
         }
         if (which === 'ghosts') {
             if (typeof loadGhostLab === 'function') loadGhostLab();
@@ -3812,9 +3824,9 @@ async function fetchAll() {
         } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
     }
 
-    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR, laneGatesR;
+    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
     try {
-        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR, laneGatesR] = await Promise.all([
+        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
@@ -3836,7 +3848,6 @@ async function fetchAll() {
             Promise.resolve(null),  // trade journey removed from UI — no fetch
             _perfHeavy ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
             _perfHeavy ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),
-            _perfHeavy ? fetchT('/api/lane_gates', 5000) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
             needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
@@ -3864,6 +3875,8 @@ async function fetchAll() {
                 clearCommandCenterPnlChart();
                 const stratCanvas = document.getElementById('strategy-pnl-chart');
                 if (stratCanvas) { const c = stratCanvas.getContext('2d'); c.clearRect(0, 0, stratCanvas.width, stratCanvas.height); }
+                if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
+                if (typeof loadAllocationChart === 'function') loadAllocationChart();
                 try { _exitHudTradePoints = []; } catch (_) {}
                 try { if (typeof _maState !== 'undefined') _maState.tradePoints = []; } catch (_) {}
                 try { _btcTradeOverlayPoints = []; } catch (_) {}
@@ -3976,20 +3989,6 @@ async function fetchAll() {
     } catch (e) {
         console.error('[dashboard] action breakdown:', e);
         updateActionBreakdown({ total_closed: 0, by_strategy: {}, _error: String(e) });
-    }
-
-    try {
-        if (laneGatesR?.ok) {
-            updateLaneGates(await laneGatesR.json());
-        } else if (laneGatesR) {
-            // a real failed response (4xx/5xx) — show empty state.
-            updateLaneGates(null);
-        }
-        // laneGatesR === null means this poll skipped the heavy tier on purpose —
-        // keep the last-rendered gates instead of clearing to "No gate data".
-    } catch (e) {
-        console.error('[dashboard] lane gates:', e);
-        updateLaneGates(null);
     }
 
     try {
@@ -4173,16 +4172,20 @@ function dashDrawHeroSpark(svgId, data, color) {
         '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="1.9" fill="' + color + '"></circle>';
 }
 
-function dashSetHeroTrend(id, series, formatter) {
+function dashSetHeroTrend(id, series, formatter, baselineValue) {
     const el = document.getElementById(id);
     if (!el) return;
     const vals = (series || []).filter(Number.isFinite);
-    if (vals.length < 2) {
+    if (vals.length < 1) {
         el.textContent = '—';
         el.className = 'hero-trend flat';
         return;
     }
-    const delta = vals[vals.length - 1] - vals[Math.max(0, vals.length - 6)];
+    const last = vals[vals.length - 1];
+    const baseline = Number.isFinite(baselineValue)
+        ? baselineValue
+        : (vals.length >= 2 ? vals[Math.max(0, vals.length - 6)] : last);
+    const delta = last - baseline;
     const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
     const sym = delta > 0 ? '▲' : delta < 0 ? '▼' : '—';
     el.className = 'hero-trend ' + cls;
@@ -4200,10 +4203,10 @@ function dashUpdateHeroVisuals(values) {
     dashDrawHeroSpark('hero-spark-positions', posSeries, 'var(--pu)');
     dashDrawHeroSpark('hero-spark-trades', tradeSeries, 'var(--ye)');
 
-    dashSetHeroTrend('hero-bankroll-trend', bankSeries, function(v) { return '$' + Math.abs(v).toFixed(0); });
-    dashSetHeroTrend('hero-pnl-trend', pnlSeries, function(v) { return '$' + Math.abs(v).toFixed(2); });
-    dashSetHeroTrend('hero-positions-trend', posSeries, function(v) { return Math.abs(v).toFixed(0); });
-    dashSetHeroTrend('hero-trades-trend', tradeSeries, function(v) { return Math.abs(v).toFixed(0); });
+    dashSetHeroTrend('hero-bankroll-trend', bankSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(0); });
+    dashSetHeroTrend('hero-pnl-trend', pnlSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(2); });
+    dashSetHeroTrend('hero-positions-trend', posSeries, function(v) { return (v < 0 ? '-' : '') + Math.abs(v).toFixed(0); });
+    dashSetHeroTrend('hero-trades-trend', tradeSeries, function(v) { return (v < 0 ? '-' : '') + Math.abs(v).toFixed(0); });
 
     const pnlCard = document.getElementById('hero-card-pnl');
     if (pnlCard && Number.isFinite(values.pnl)) {
@@ -4275,7 +4278,8 @@ function applyHeroMetrics(d) {
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
         if (Number.isFinite(sessionPnlRaw)) {
-            pnlEl.textContent = '$' + Math.abs(sessionPnlRaw).toFixed(2);
+            const sign = sessionPnlRaw < 0 ? '-' : '';
+            pnlEl.textContent = sign + '$' + Math.abs(sessionPnlRaw).toFixed(2);
             pnlEl.style.color = sessionPnlRaw > 0 ? 'var(--green)' : sessionPnlRaw < 0 ? 'var(--red)' : 'var(--text)';
         } else {
             pnlEl.textContent = '-';
@@ -7100,15 +7104,21 @@ function updateLivePerf(d) {
     const equityDiv = $('live-equity');
     if (equityDiv) {
         if (d.equity_curve && d.equity_curve.length > 0) {
-            const rows = d.equity_curve.slice(-50).map((p, idx) => {
-                if (typeof p === 'number') return `#${idx + 1}: $${p.toFixed(2)}`;
+            const items = d.equity_curve.slice(-50).map((p, idx) => {
+                if (typeof p === 'number') {
+                    const color = p >= 0 ? 'var(--green)' : 'var(--red)';
+                    return `<span class="equity-ticker-item"><b>#${idx + 1}</b> <span style="color:${color};">$${p.toFixed(2)}</span></span>`;
+                }
                 const cp = Number(p?.cumulative_pnl || 0);
                 const ts = p?.timestamp ? String(p.timestamp).split('T')[0] : '?';
-                return `${ts}: $${cp.toFixed(2)}`;
+                const color = cp >= 0 ? 'var(--green)' : 'var(--red)';
+                return `<span class="equity-ticker-item"><b>${ts}</b> <span style="color:${color};">$${cp.toFixed(2)}</span></span>`;
             });
-            equityDiv.innerHTML = rows.map(r => `<div style="font-size:0.72rem;">${r}</div>`).join('');
+            const track = items.join('');
+            const duration = Math.max(12, items.length * 1.8);
+            equityDiv.innerHTML = `<div class="equity-ticker-track" style="animation-duration:${duration}s;">${track}${track}</div>`;
         } else {
-            equityDiv.innerHTML = '<div style="color:var(--text-muted);font-size:0.78rem;">No equity data yet</div>';
+            equityDiv.innerHTML = '<span class="equity-ticker-item" style="color:var(--text-muted);">No equity data yet</span>';
         }
     }
 
@@ -7333,7 +7343,7 @@ function updateLaneGates(d) {
     windows.forEach(w => { html += `<th>${w}</th>`; });
     html += '</tr></thead><tbody>';
     d.strategies.forEach(s => {
-        html += `<tr><td style="color:var(--cy);font-weight:600;">${s.label}</td>`;
+        html += `<tr><td style="color:#fff;font-weight:600;">${s.label}</td>`;
         windows.forEach(w => {
             const win = (s.windows && s.windows[w]) || {};
             html += '<td><div class="lane-gate-cell">';
@@ -7345,7 +7355,7 @@ function updateLaneGates(d) {
         html += '</tr>';
     });
     html += '</tbody></table>';
-    html += '<div class="lane-gate-legend">' +
+    html += '<div class="lane-gate-legend" style="margin-top:auto;">' +
         '<span><span class="lane-gate-dot" style="color:var(--gr);background:var(--gr)"></span> Open</span>' +
         '<span><span class="lane-gate-dot" style="color:var(--re);background:var(--re)"></span> Closed by config</span>' +
         '<span><span class="lane-gate-dot" style="color:var(--ye);background:var(--ye)"></span> Conditional on bias</span>' +
@@ -7959,10 +7969,7 @@ async function _allocationCountsFromMetrics() {
     for (const [k, v] of Object.entries(md)) {
         if (typeof v !== 'object' || !v) continue;
         const trades = v.trades || 0;
-        const op = v.open_positions || 0;
-        const sig = v.signals || 0;
-        const n = trades > 0 ? trades : (op > 0 ? op : sig);
-        if (n > 0) counts[k] = n;
+        if (trades > 0) counts[k] = trades;
     }
     return Object.keys(counts).length ? counts : null;
 }
@@ -7980,27 +7987,10 @@ async function loadAllocationChart() {
         canvas.width = w;
         const h = canvas.height = 220;
 
-        let counts = {};
-        let subtitle = '';
-
-        if (lastStatusData) {
-            const d = lastStatusData;
-            const positions = d.positions || [];
-            if (positions.length) {
-                positions.forEach(p => {
-                    const s = p.strategy || 'unknown';
-                    counts[s] = (counts[s] || 0) + 1;
-                });
-                subtitle = 'Open positions';
-            }
-        }
-        if (!Object.keys(counts).length) {
-            const fromMetrics = await _allocationCountsFromMetrics();
-            if (fromMetrics) {
-                counts = fromMetrics;
-                subtitle = 'Session (trades, or opens / signals if no closes)';
-            }
-        }
+        // Always use session metrics for allocation; mixing open-position counts with
+        // session trade counts produced inconsistent/wrong-looking slices.
+        const counts = await _allocationCountsFromMetrics() || {};
+        const subtitle = 'Session trades / mix';
 
         const labels = Object.keys(counts);
         const values = Object.values(counts);
@@ -8055,7 +8045,7 @@ async function loadAllocationChart() {
             ctx.fillRect(legendX, legendY - 5, 12, 12);
             ctx.fillStyle = '#c8d6e5';
             ctx.font = '11px "Cascadia Code", monospace';
-            ctx.fillText(`${label} (${values[i]}) ${pct}%`, legendX + 18, legendY + 3);
+            ctx.fillText(`${stratLabel(label)} (${values[i]}) ${pct}%`, legendX + 18, legendY + 3);
             legendY += 22;
         });
     } catch(e) { console.error('Allocation chart error:', e); }
@@ -8090,27 +8080,10 @@ async function loadStrategyPnLChart() {
         canvas.width = w;
         const h = canvas.height = 220;
 
-        let stratPnL = {};
-        let subtitle = '';
-
-        if (lastStatusData) {
-            const d = lastStatusData;
-            const positions = d.positions || [];
-            if (positions.length) {
-                positions.forEach(p => {
-                    const s = p.strategy || 'unknown';
-                    stratPnL[s] = (stratPnL[s] || 0) + (p.pnl || 0);
-                });
-                subtitle = 'Unrealized (open)';
-            }
-        }
-        if (!Object.keys(stratPnL).length) {
-            const fromMetrics = await _stratPnLFromMetrics();
-            if (fromMetrics) {
-                stratPnL = fromMetrics;
-                subtitle = 'Realized (journal)';
-            }
-        }
+        // Always use realized session PnL from metrics; keeps Performance tab consistent
+        // with the hero numbers and avoids blank charts when open positions lack pnl.
+        const stratPnL = await _stratPnLFromMetrics() || {};
+        const subtitle = 'Realized (journal)';
 
         // Normalize so every core strategy keeps a slot (fixes missing hype_macro when BTC/ETH/etc. have PnL).
         const labels = PERFORMANCE_STRATS_ORDER.slice();
@@ -8201,11 +8174,11 @@ async function loadStrategyPnLChart() {
                 ctx.fillText('$' + val.toFixed(2), x + barWidth / 2, val >= 0 ? zeroY - barH - 3 : zeroY + barH + 3);
             }
 
-            // Strategy label
+            // Strategy label (asset name only, no _macro, abbreviated)
             ctx.fillStyle = '#7a8da0';
             ctx.font = '9px "Cascadia Code", monospace';
             ctx.textBaseline = 'top';
-            ctx.fillText(label.slice(0, 6), x + barWidth / 2, chartBottom + 5);
+            ctx.fillText(stratLabel(label), x + barWidth / 2, chartBottom + 5);
         });
     } catch(e) { console.error('Strategy PnL chart error:', e); }
 }
@@ -8251,6 +8224,19 @@ fetchAll();
 loadConfig();
 updateFullscreenButtonState();
 document.addEventListener('fullscreenchange', updateFullscreenButtonState);
+
+// Crypto reason buckets toggle
+(function setupReasonBucketsToggle() {
+    const btn = document.getElementById('reason-buckets-toggle');
+    const body = document.getElementById('reason-buckets-body');
+    if (!btn || !body) return;
+    let shown = false;
+    btn.addEventListener('click', function() {
+        shown = !shown;
+        body.style.display = shown ? 'block' : 'none';
+        btn.textContent = shown ? 'Hide' : 'Show';
+    });
+})();
 if (_currentMainView() === 'journal') {
     loadPnLChart();
     loadAISummary();
@@ -8261,6 +8247,7 @@ if (_currentMainView() === 'journal') {
 } else if (_currentMainView() === 'performance') {
     loadAllocationChart();
     loadStrategyPnLChart();
+    loadLaneGates();
     loadLivePerformance();
 } else if (_currentMainView() === 'ghosts') {
     if (typeof loadGhostLab === 'function') loadGhostLab();
@@ -8289,6 +8276,7 @@ _registerInterval(() => {
     } else if (view === 'performance') {
         loadAllocationChart();
         loadStrategyPnLChart();
+        loadLaneGates();
     }
 }, 30000);
 
