@@ -136,6 +136,89 @@ def _self_rss_mb() -> Optional[float]:
         return None
 
 
+_MEM_PROFILE = {"on": False, "baseline": None, "last": 0.0, "interval": 300.0}
+
+
+def _mem_profile_init() -> None:
+    """Arm a tracemalloc leak hunter when PSB_MEM_PROFILE is set.
+
+    Off by default (tracemalloc adds per-alloc overhead). When on, periodically
+    diffs against a baseline snapshot and writes the top growing allocation
+    sites (file:line, +MB, +count) to data/runtime/mem_profile.jsonl — that
+    names the exact code holding the multi-GB leak behind the OOM deaths.
+    """
+    if not _env_flag_enabled("PSB_MEM_PROFILE"):
+        return
+    try:
+        import tracemalloc
+
+        tracemalloc.start(25)
+        _MEM_PROFILE["on"] = True
+        try:
+            _MEM_PROFILE["interval"] = float(
+                os.getenv("PSB_MEM_PROFILE_INTERVAL_SEC", "300") or 300
+            )
+        except (TypeError, ValueError):
+            _MEM_PROFILE["interval"] = 300.0
+        logging.warning(
+            "PSB_MEM_PROFILE on — tracemalloc leak hunt every %.0fs -> data/runtime/mem_profile.jsonl",
+            _MEM_PROFILE["interval"],
+        )
+    except Exception as exc:
+        logging.warning("mem profile init failed: %s", exc)
+
+
+def _mem_profile_tick(phase: str) -> None:
+    """Throttled tracemalloc diff -> mem_profile.jsonl. No-op unless armed."""
+    if not _MEM_PROFILE["on"]:
+        return
+    now = time.monotonic()
+    if now - _MEM_PROFILE["last"] < _MEM_PROFILE["interval"]:
+        return
+    _MEM_PROFILE["last"] = now
+    try:
+        import tracemalloc
+
+        snap = tracemalloc.take_snapshot().filter_traces(
+            (
+                tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+                tracemalloc.Filter(False, tracemalloc.__file__),
+            )
+        )
+        base = _MEM_PROFILE["baseline"]
+        if base is None:
+            _MEM_PROFILE["baseline"] = snap
+            return  # first tick establishes the baseline
+        top = snap.compare_to(base, "lineno")[:15]
+        rows = [
+            {
+                "site": str(s.traceback[0]) if s.traceback else "?",
+                "growth_mb": round(s.size_diff / 1024 / 1024, 2),
+                "total_mb": round(s.size / 1024 / 1024, 2),
+                "count_diff": s.count_diff,
+            }
+            for s in top
+        ]
+        cur, peak = tracemalloc.get_traced_memory()
+        with (RUNTIME_DIR / "mem_profile.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "phase": phase,
+                        "rss_mb": _self_rss_mb(),
+                        "traced_mb": round(cur / 1024 / 1024, 1),
+                        "traced_peak_mb": round(peak / 1024 / 1024, 1),
+                        "top_growth": rows,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
+    except Exception as exc:
+        logging.debug("mem profile tick failed: %s", exc)
+
+
 def _write_heartbeat(phase: str) -> None:
     """Stamp a tiny liveness file every runtime-status tick (hang/OOM detector)."""
     try:
@@ -153,6 +236,7 @@ def _write_heartbeat(phase: str) -> None:
             ),
             encoding="utf-8",
         )
+        _mem_profile_tick(phase)
     except Exception:
         pass  # never let a breadcrumb write affect the trading loop
 
@@ -4737,6 +4821,7 @@ async def main():
     """Main entry point"""
     _init_fault_handler()
     load_project_dotenv(Path(__file__).resolve().parent.parent)
+    _mem_profile_init()
     _write_runtime_status(phase="bootstrap", clean_shutdown=False)
 
     dry_run, run_bot = _parse_run_args()
