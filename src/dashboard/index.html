@@ -119,6 +119,17 @@
             #status-hero .hero-item.has-spark{padding-right:16px}
             #status-hero .hero-spark{display:none}
         }
+        .status-orb-wrap{position:absolute;right:12px;top:12px;display:flex;align-items:center;gap:8px}
+        .status-orb-ring{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);box-shadow:0 0 12px rgba(0,0,0,0.4)}
+        .status-orb{width:10px;height:10px;border-radius:50%;background:var(--text-muted);box-shadow:0 0 0 0 rgba(148,163,184,0.4);transition:background 0.3s,box-shadow 0.3s}
+        .status-orb.running{background:var(--gr);box-shadow:0 0 8px 2px rgba(0,255,136,0.55);animation:orb-pulse-green 2.2s ease-out infinite}
+        .status-orb.paused{background:var(--ye);box-shadow:0 0 8px 2px rgba(245,166,35,0.45);animation:orb-breathe 2.2s ease-in-out infinite}
+        .status-orb.killed{background:var(--re);box-shadow:0 0 8px 2px rgba(255,68,102,0.6);animation:orb-pulse-red 0.9s ease-out infinite}
+        .status-orb.stopped{background:var(--text-muted);box-shadow:0 0 6px 1px rgba(148,163,184,0.25);animation:none}
+        .status-orb-text{font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--td);font-family:'IBM Plex Mono',monospace;opacity:0.9}
+        @keyframes orb-pulse-green{0%{box-shadow:0 0 0 0 rgba(0,255,136,0.55)}60%{box-shadow:0 0 0 10px rgba(0,255,136,0)}100%{box-shadow:0 0 0 0 rgba(0,255,136,0)}}
+        @keyframes orb-pulse-red{0%{box-shadow:0 0 0 0 rgba(255,68,102,0.65)}60%{box-shadow:0 0 0 11px rgba(255,68,102,0)}100%{box-shadow:0 0 0 0 rgba(255,68,102,0)}}
+        @keyframes orb-breathe{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(0.92);opacity:0.75}}
         .crypto-hero-six{grid-template-columns:repeat(6,minmax(0,1fr))}
         .crypto-hero-seven{grid-template-columns:repeat(7,minmax(0,1fr))}
         .crypto-meta-four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px;font-size:0.75rem;color:var(--text-muted);min-width:0}
@@ -1915,7 +1926,9 @@
         <div class="tab active" data-view="live" onclick="switchMainView('live')">live</div>
         <div class="tab" data-view="performance" onclick="switchMainView('performance')">performance</div>
         <div class="tab" data-view="journal" onclick="switchMainView('journal')">journal</div>
-        <div class="tab" data-view="ghosts" onclick="switchMainView('ghosts')">ghost lab</div>
+        <!-- Ghost Lab tab removed 2026-06-18 — /api/ghosts/* full-parsed the 877MB ghost
+             log in-process (OOM source). Endpoints now stubbed; dormant #view-ghosts
+             panel + JS left unreachable to minimise churn. Ghost analysis is out-of-process. -->
         <div class="tab" data-view="commands" onclick="switchMainView('commands')">commands</div>
     </div>
 </div>
@@ -1931,14 +1944,18 @@
             <div class="status-bar" id="status-badges"><span class="bdg paper">Loading...</span></div>
         </div>
         <div class="status-hero" id="status-hero">
-            <div class="hero-item has-spark" id="hero-card-bankroll" title="Current paper equity">
-                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll <span class="hero-trend flat" id="hero-bankroll-trend">—</span></div><svg class="hero-spark" id="hero-spark-bankroll" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
+            <div class="hero-item" id="hero-card-bankroll" title="Current paper equity">
+                <div class="hero-val" id="hero-bankroll">-</div><div class="hero-sub" id="hero-bankroll-sub"></div><div class="hero-lbl">Bankroll <span class="hero-trend flat" id="hero-bankroll-trend">—</span></div></div>
             <div class="hero-item has-spark" id="hero-card-pnl" title="Realized PnL this session">
                 <div class="hero-val" id="hero-pnl">-</div><div class="hero-sub" id="hero-pnl-sub"></div><div class="hero-lbl">Session P&L <span class="hero-trend flat" id="hero-pnl-trend">—</span></div><svg class="hero-spark" id="hero-spark-pnl" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
-            <div class="hero-item has-spark" id="hero-card-positions" title="Currently open positions">
-                <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions <span class="hero-trend flat" id="hero-positions-trend">—</span></div><svg class="hero-spark" id="hero-spark-positions" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
-            <div class="hero-item has-spark" id="hero-card-trades" title="ENTRY events logged in the current session">
-                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills <span class="hero-trend flat" id="hero-trades-trend">—</span></div><svg class="hero-spark" id="hero-spark-trades" viewBox="0 0 112 32" preserveAspectRatio="none"></svg></div>
+            <div class="hero-item" id="hero-card-positions" title="Currently open positions">
+                <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions <span class="hero-trend flat" id="hero-positions-trend">—</span></div></div>
+            <div class="hero-item" id="hero-card-trades" title="ENTRY events logged in the current session">
+                <div class="status-orb-wrap" id="hero-status-orb-wrap" title="Scanner status">
+                    <div class="status-orb-ring"><div class="status-orb stopped" id="hero-status-orb"></div></div>
+                    <span class="status-orb-text" id="hero-status-orb-text">—</span>
+                </div>
+                <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills <span class="hero-trend flat" id="hero-trades-trend">—</span></div></div>
         </div>
         <div id="bankroll-warning" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid rgba(243,156,18,0.45);background:rgba(243,156,18,0.10);color:#f5c16c;border-radius:6px;font-size:0.76rem;"></div>
         <div class="controls" id="command-center-controls" style="padding:8px 0 4px;display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
@@ -4198,10 +4215,7 @@ function dashUpdateHeroVisuals(values) {
     const posSeries = dashPushHeroSeries('positions', values.positions, 48);
     const tradeSeries = dashPushHeroSeries('trades', values.trades, 48);
 
-    dashDrawHeroSpark('hero-spark-bankroll', bankSeries, 'var(--cy)');
     dashDrawHeroSpark('hero-spark-pnl', pnlSeries, values.pnl < 0 ? 'var(--re)' : 'var(--gr)');
-    dashDrawHeroSpark('hero-spark-positions', posSeries, 'var(--pu)');
-    dashDrawHeroSpark('hero-spark-trades', tradeSeries, 'var(--ye)');
 
     dashSetHeroTrend('hero-bankroll-trend', bankSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(0); });
     dashSetHeroTrend('hero-pnl-trend', pnlSeries, function(v) { return (v < 0 ? '-' : '') + '$' + Math.abs(v).toFixed(2); });
@@ -5250,8 +5264,46 @@ function updateMetrics(d) {
         const totalStr = m.total_signals > 0 ? ` <span style="color:var(--text-muted);font-size:0.7rem;">(${m.total_signals}Σ)</span>` : '';
         return `<tr><td>${stratPillHTML(s)}</td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.open_positions||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
     }).join('');
+
+    updateHeroStatusOrb(d);
 }
 
+function updateHeroStatusOrb(d) {
+    const orb = document.getElementById('hero-status-orb');
+    const wrap = document.getElementById('hero-status-orb-wrap');
+    const text = document.getElementById('hero-status-orb-text');
+    if (!orb) return;
+    const strats = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
+    let newestAge = Infinity;
+    let hasAny = false;
+    strats.forEach(s => {
+        const iso = (d && d[s] && d[s].last_cycle) || '';
+        if (!iso) return;
+        hasAny = true;
+        const age = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+        if (age < newestAge) newestAge = age;
+    });
+    orb.classList.remove('running','paused','killed','stopped');
+    let label = '—';
+    let tip = 'Scanner: no cycle data';
+    if (!hasAny) {
+        orb.classList.add('stopped');
+    } else if (newestAge < 90) {
+        orb.classList.add('running');
+        label = 'Scanning';
+        tip = `Scanner healthy · last cycle ${newestAge}s ago`;
+    } else if (newestAge < 300) {
+        orb.classList.add('paused');
+        label = 'Lagging';
+        tip = `Scanner lagging · last cycle ${newestAge}s ago`;
+    } else {
+        orb.classList.add('killed');
+        label = 'Stuck';
+        tip = `Scanner stuck · last cycle ${newestAge}s ago`;
+    }
+    if (text) text.textContent = label;
+    if (wrap) wrap.title = tip;
+}
 
 function updateScanDiagnosticsFromMetrics(d) {
     const sumEl = document.getElementById('scan-summary');

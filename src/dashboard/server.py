@@ -883,7 +883,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-06-10-deadzone-purged",
+        "dashboard_ui_rev": "2026-06-18-ghostlab-removed",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -2301,10 +2301,16 @@ _GL_SETTLED_AT_RE = re.compile(r'"settled_at"\s*:\s*"([^"]+)"')
 
 
 def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
-    # Cache the parsed result briefly. This endpoint json.loads ~450k rows of the
-    # 818MB ghost log on every call; back-to-back dashboard refreshes / Hermes
-    # briefings re-scanned it each time, churning the (embedded) bot's heap toward
-    # OOM. A short TTL collapses repeated calls to one parse per window.
+    # DISABLED 2026-06-18: Ghost Lab + /api/ghosts/* removed. This full-parse of the
+    # 877MB settled-ghost log was a confirmed in-process OOM source — even with the
+    # cheap ts pre-filter it ballooned the (embedded) bot's heap to multi-GB when an
+    # open Ghost Lab tab polled it (30-day default window). Return [] so this single
+    # chokepoint no-ops EVERY caller (the stubbed /api/ghosts/* endpoints + the AI
+    # Review priority_actions path). Ghost analysis is done OUT-OF-PROCESS via
+    # data/calibration/rejected_candidates_settled.jsonl + .venv scripts (stream +
+    # date pre-filter), never in the trading process.
+    return []
+    # ── legacy implementation below is unreachable (kept for history) ─────────────
     import time as _t
 
     key = since.isoformat()
@@ -3017,23 +3023,27 @@ def _gl_build_morning_summary(since_dt: datetime, until_dt: Optional[datetime] =
     }
 
 
+# Ghost Lab + /api/ghosts/* REMOVED 2026-06-18 — these endpoints full-parsed the
+# 877MB settled-ghost log inside the trading process and were a confirmed OOM source
+# (an open Ghost Lab tab polling them ballooned the bot heap to multi-GB). Ghost
+# analysis is now done OUT-OF-PROCESS via data/calibration/*.jsonl + .venv scripts.
+# The handlers return a stub so a cached/bookmarked/open tab can't trigger the load.
+_GHOST_LAB_REMOVED = {
+    "disabled": True,
+    "removed": "2026-06-18",
+    "reason": "Ghost Lab was an in-process OOM source (877MB ghost-log full-parse).",
+    "use_instead": "Query data/calibration/rejected_candidates_settled.jsonl directly (stream + date pre-filter).",
+}
+
+
 @app.get("/api/ghosts/morning-summary")
 async def get_ghost_morning_summary(
     since: Optional[str] = None,
     until: Optional[str] = None,
     timezone_name: str = Query("America/Los_Angeles", alias="tz"),
 ):
-    """Morning Ghost Lab summary for overnight evidence and lane-level adjustments."""
-    if since:
-        since_dt = _gl_parse_ts(since) or (datetime.utcnow() - timedelta(hours=14))
-        until_dt = _gl_parse_ts(until) if until else datetime.utcnow()
-        label = f"{since_dt.isoformat()} -> {until_dt.isoformat()} UTC"
-    else:
-        since_dt, until_dt, label = _gl_default_overnight_window(timezone_name)
-    if until_dt < since_dt:
-        raise HTTPException(status_code=400, detail="until must be after since")
-    payload = _gl_build_morning_summary(since_dt, until_dt, window_label=label)
-    return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
+    """REMOVED — see _GHOST_LAB_REMOVED."""
+    return JSONResponse(content=_GHOST_LAB_REMOVED, headers={"Cache-Control": "no-store"})
 
 
 def _gl_build_lab_payload(
@@ -3124,19 +3134,8 @@ async def get_ghost_lab(
     side: Optional[str] = None,
     limit: int = 5000,
 ):
-    """Ghost Lab — settled-ghost + live-trade explorer with time-of-day buckets."""
-    payload = await asyncio.to_thread(
-        _gl_build_lab_payload,
-        since,
-        strategy,
-        window,
-        side,
-        limit,
-    )
-    return JSONResponse(
-        content=payload,
-        headers={"Cache-Control": "no-store, must-revalidate"},
-    )
+    """REMOVED — see _GHOST_LAB_REMOVED."""
+    return JSONResponse(content=_GHOST_LAB_REMOVED, headers={"Cache-Control": "no-store"})
 
 
 # /api/backtest/reports route removed 2026-05-24; backtester deleted (see CLAUDE.md ghost-log rule).
@@ -3144,31 +3143,18 @@ async def get_ghost_lab(
 
 @app.get("/api/ghosts/regime-breakdown")
 async def get_ghost_regime_breakdown(
-    since: Optional[str] = Query(default=None, description="ISO timestamp or YYYY-MM-DD. Defaults to 7 days ago."),
+    since: Optional[str] = Query(default=None, description="REMOVED"),
 ):
-    """Return Ghost Lab's settled ghosts grouped by embedded market-regime labels."""
-    since_dt = _gl_parse_ts(since) if since else None
-    if since_dt is None:
-        since_dt = datetime.utcnow() - timedelta(days=7)
-    ghosts = _gl_load_ghosts(since_dt)
-    return JSONResponse(
-        content=_gl_regime_breakdown(ghosts),
-        headers={"Cache-Control": "no-store, must-revalidate"},
-    )
+    """REMOVED — see _GHOST_LAB_REMOVED."""
+    return JSONResponse(content=_GHOST_LAB_REMOVED, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/ghosts/decision-digest")
 async def get_ghost_decision_digest(
-    since: Optional[str] = Query(default=None, description="ISO timestamp or YYYY-MM-DD. Defaults to 30 days ago."),
+    since: Optional[str] = Query(default=None, description="REMOVED"),
 ):
-    """Return structured Ghost Gate and calibration dashboard data."""
-    since_dt = _gl_parse_ts(since) if since else None
-    if since_dt is None:
-        since_dt = datetime.utcnow() - timedelta(days=30)
-    return JSONResponse(
-        content=_gl_build_decision_digest(since_dt),
-        headers={"Cache-Control": "no-store, must-revalidate"},
-    )
+    """REMOVED — see _GHOST_LAB_REMOVED."""
+    return JSONResponse(content=_GHOST_LAB_REMOVED, headers={"Cache-Control": "no-store"})
 
 
 # ─── LIVE PERFORMANCE ──────────────────────────────────────────────
