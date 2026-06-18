@@ -98,6 +98,9 @@ def ghost_id(rec: Dict[str, Any]) -> str:
 _QGID_TS = re.compile(r'"ts"\s*:\s*"([^"]*)"')
 _QGID_MID = re.compile(r'"market_id"\s*:\s*(?:"([^"]*)"|([^,}\s]+))')
 _QGID_REASON = re.compile(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# Settled rows persist ghost_id as a top-level field, so it can be lifted from the
+# raw line without a full json.loads of the fat nested row.
+_QGID_SETTLED = re.compile(r'"ghost_id"\s*:\s*"([^"]+)"')
 
 
 def _quick_ghost_id(line: str) -> Optional[str]:
@@ -161,11 +164,30 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
 
 
 def _load_settled_ids(path: Path) -> set[str]:
-    return {
-        str(obj["ghost_id"])
-        for obj in _iter_jsonl(path)
-        if obj.get("ghost_id")
-    }
+    """Set of settled ghost_ids, extracted from RAW lines (no full json.loads).
+
+    This is the index-rebuild path over the multi-hundred-MB settled jsonl
+    (468k+ rows). Full-parsing each fat nested row spawns millions of transient
+    objects that balloon pymalloc arenas to multi-GB and never release back to
+    the OS — the 2026-06-18 OOM spike (678MB -> 4.7GB in one interval, stuck at
+    ~5GB until Jetsam). ghost_id is a top-level string field on settled rows, so
+    a regex lift avoids the parse churn entirely. Falls back to a full parse only
+    for lines where the cheap match misses (malformed/rare), so correctness is
+    unchanged.
+    """
+    ids: set[str] = set()
+    for line in _iter_raw_lines(path):
+        m = _QGID_SETTLED.search(line)
+        if m is not None:
+            ids.add(m.group(1))
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and obj.get("ghost_id"):
+            ids.add(str(obj["ghost_id"]))
+    return ids
 
 
 # ── Settled-index sidecar (step 3a) ───────────────────────────────────────────
@@ -202,6 +224,14 @@ def _iter_archived_settled_ids(settled_path: Path) -> Iterable[str]:
                 for line in gz:
                     line = line.strip()
                     if not line:
+                        continue
+                    # Cheap raw extract (no full json.loads) — these shards total
+                    # hundreds of MB compressed; parsing every fat row on rebuild
+                    # balloons pymalloc arenas (the 2026-06-18 OOM). Fall back to a
+                    # full parse only when the regex misses.
+                    m = _QGID_SETTLED.search(line)
+                    if m is not None:
+                        yield m.group(1)
                         continue
                     try:
                         obj = json.loads(line)
