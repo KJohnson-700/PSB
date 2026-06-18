@@ -1319,6 +1319,7 @@ strategies:
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
+    disable_buy_yes_15m: true  # 2026-06-18: sit out xrp 15m LONG — ghost gross/fee=0 -EV BOTH regimes (BEARISH -0.063 n888 / BULLISH -0.156 n1553); live 6t 33%WR -$1.16 unguarded. -EV lane. Ghost-logged.
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
     marginal_ev_admit_lanes:

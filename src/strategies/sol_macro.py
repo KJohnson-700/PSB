@@ -5398,6 +5398,29 @@ class SolMacroStrategy:
                 if edge < self._a1hsl_sizing_edge:
                     edge = self._a1hsl_sizing_edge
                 reason_parts.append("alt_1h_simple_long")
+            # 2026-06-18: INVERTED-EDGE / tape-flip admit (DEFAULT OFF, per-lane
+            # flip_exempt_min_edge_<tf> or global flip_exempt_min_edge). window_delta_flip
+            # candidates are tape-driven: est_prob = the window-delta P(up), so the model
+            # edge (est-yes) lands ~0/negative by construction and lane_min_edge wrongly
+            # rejects them — yet the flip subset is ghost-+EV across lanes (hype 1h +0.314,
+            # xrp 1h +0.220, bnb 15m +0.167, sol 1h SHORT +0.094, doge 15m SHORT bull +0.334).
+            # When enabled, admit on TAPE CONVICTION (already cleared window_delta_flip_margin)
+            # and size on a flat flip edge (sizing policy, not a fabricated prob); size still
+            # capped by the lane size_multiplier. Mirrors the _simple_band_long pattern. Keep
+            # OFF until per-lane ghost-validated, then enable one lane at a time and watch.
+            _is_flip = bool(side_source and "window_delta_flip" in side_source)
+            if (
+                is_updown and _is_flip and _timing_window_open
+                and bool(self.config.get(
+                    f"flip_exempt_min_edge_{_updown_tf}",
+                    self.config.get("flip_exempt_min_edge", False),
+                ))
+            ):
+                _flip_edge = float(self.config.get("flip_edge_credit", 0.05) or 0.05)
+                effective_min_edge = min(effective_min_edge, _flip_edge)
+                if edge < _flip_edge:
+                    edge = _flip_edge
+                reason_parts.append(f"flip_exempt_min_edge({_flip_edge:.3f})")
             if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
