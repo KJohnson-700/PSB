@@ -119,6 +119,38 @@ def _shutdown_timeout_seconds(default: float = 8.0) -> float:
         return default
 
 
+_LIBC = None
+
+
+def _release_memory_to_os() -> None:
+    """Return freed allocator arenas to the OS so RSS stops ratcheting.
+
+    The bot's high-churn json parsing (scan + settle + embedded-dashboard ghost
+    reads) allocates and frees millions of small objects; macOS keeps the freed
+    arenas, so the RSS high-water mark climbs toward OOM/Jetsam even though live
+    memory is small. malloc_zone_pressure_relief(NULL, 0) asks every malloc zone
+    to hand idle pages back to the kernel — the direct counter to the ratchet.
+    Best-effort, no-op if the symbol is unavailable.
+    """
+    global _LIBC
+    try:
+        import ctypes
+
+        if _LIBC is None:
+            _LIBC = ctypes.CDLL(None)  # libSystem on macOS / libc on Linux
+        fn = getattr(_LIBC, "malloc_zone_pressure_relief", None)
+        if fn is not None:
+            fn.restype = ctypes.c_size_t
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            fn(None, 0)  # all zones, release as much as possible
+            return
+        trim = getattr(_LIBC, "malloc_trim", None)  # Linux fallback
+        if trim is not None:
+            trim(0)
+    except Exception:
+        pass
+
+
 def _self_rss_mb() -> Optional[float]:
     """CURRENT resident-set size of this process, in MB.
 
@@ -1108,6 +1140,9 @@ class PolyBot:
             calibrator=cal,
             ghost_weight=ghost_weight,
         )
+        # The settle is the heaviest per-interval allocator churn — hand the freed
+        # arenas back to the OS so RSS doesn't ratchet toward Jetsam.
+        _release_memory_to_os()
         # Persist β/α updates so the self-heal survives restarts.
         if cal is not None and settle_summary.get("ghost_beta_updates", 0) > 0:
             try:
@@ -3509,6 +3544,10 @@ class PolyBot:
         logging.info(
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{trade_limit}"
         )
+        # Return scan-cycle churn arenas to the OS every few cycles (cheap; counters
+        # the RSS ratchet from per-market json/DataFrame allocation).
+        if int(getattr(self, "cycle_count", 0) or 0) % 5 == 0:
+            _release_memory_to_os()
         _write_runtime_status(
             phase="cycle_complete",
             session_id=getattr(self.journal, "session_id", None),

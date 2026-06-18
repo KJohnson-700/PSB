@@ -2293,7 +2293,22 @@ def _gl_wilson_ci(wins: int, n: int, z: float = 1.96) -> Tuple[float, float, flo
     return (p, max(0.0, centre - margin), min(1.0, centre + margin))
 
 
+_GL_GHOST_CACHE: Dict[str, Any] = {"key": None, "ts": 0.0, "rows": None}
+_GL_GHOST_CACHE_TTL = 180.0  # seconds
+
+
 def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
+    # Cache the parsed result briefly. This endpoint json.loads ~450k rows of the
+    # 818MB ghost log on every call; back-to-back dashboard refreshes / Hermes
+    # briefings re-scanned it each time, churning the (embedded) bot's heap toward
+    # OOM. A short TTL collapses repeated calls to one parse per window.
+    import time as _t
+
+    key = since.isoformat()
+    c = _GL_GHOST_CACHE
+    if c["key"] == key and c["rows"] is not None and (_t.monotonic() - c["ts"]) < _GL_GHOST_CACHE_TTL:
+        return c["rows"]
+
     path = DATA_ROOT / "calibration" / "rejected_candidates_settled.jsonl"
     out: List[Dict[str, Any]] = []
     if not path.exists():
@@ -2358,6 +2373,7 @@ def _gl_load_ghosts(since: datetime) -> List[Dict[str, Any]]:
                 })
     except Exception:
         pass
+    _GL_GHOST_CACHE.update({"key": since.isoformat(), "ts": __import__("time").monotonic(), "rows": out})
     return out
 
 
