@@ -867,7 +867,6 @@ class PolyBot:
         self.topup_sampler_enabled = bool(_tcfg.get("sampler_enabled", False))
         self._topup_sampler_window_mins = float(_tcfg.get("sampler_window_mins", 1.5) or 1.5)
         self._topup_universe = []  # list of (market_id, yes_token, no_token, end_date, question)
-        self._latest_btc_spot = None  # cached per scan cycle for the top-up sampler oracle-basis calc
         # Throttle: the sampler awaits /midpoint+book per final-window market and shares the
         # httpx pool with the 120-market main scan. Running it every fast-exit tick (~3s) caused
         # event-loop/pool contention (cycle median 11s vs ~5s baseline). Cap to ~20s between runs:
@@ -2878,17 +2877,6 @@ class PolyBot:
         self._topup_last_run = mono
         now = datetime.now(timezone.utc)
         win = self._topup_sampler_window_mins
-        # BTC oracle basis (spot vs on-chain Chainlink), one value per tick. Records
-        # whether the on-chain oracle agrees so the settler can test if oracle-confirmed
-        # winners are the +EV subset. Shadow/log-only — cannot affect trading.
-        _btc_basis_bps = None
-        try:
-            _spot = float(getattr(self, "_latest_btc_spot", 0) or 0)
-            _cl, _ = self.bitcoin_strategy.btc_service.get_chainlink_price()
-            if _cl and float(_cl) > 0 and _spot > 0:
-                _btc_basis_bps = ((_spot - float(_cl)) / float(_cl)) * 10000.0
-        except Exception:
-            _btc_basis_bps = None
         for market_id, yes_token, no_token, end_date, question in universe:
             try:
                 if not end_date or not yes_token:
@@ -2918,7 +2906,7 @@ class PolyBot:
                     best_ask_yes=best_ask,
                     best_bid_yes=best_bid,
                     mins_left=mins_left,
-                    oracle_basis_bps=_btc_basis_bps,
+                    oracle_basis_bps=None,
                     market_end_at=ed,
                 )
             except Exception:
@@ -3323,13 +3311,6 @@ class PolyBot:
             lane="shared_btc_diag",
             timeout_sec=_btc_diag_to,
         )
-        # Cache BTC spot for the final-window top-up sampler's oracle-basis calc
-        # (it runs in the fast-exit loop and has no analysis of its own).
-        try:
-            if shared_btc_ta is not None:
-                self._latest_btc_spot = float(getattr(shared_btc_ta, "current_price", 0) or 0) or None
-        except Exception:
-            pass
         for _alt_strat in (
             self.sol_macro_strategy,
             getattr(self, "eth_macro_strategy", None),
