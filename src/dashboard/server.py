@@ -883,7 +883,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-06-18-ghostlab-removed",
+        "dashboard_ui_rev": "2026-06-18-journal-cleanup",
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -4247,7 +4247,7 @@ async def get_journal_trade_points(
 
 
 @app.get("/api/session/equity_history")
-async def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = None):
+def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = None):
     """Equity time-series for the current (or named) session, sourced from
     ``snapshots.jsonl``. Each row contains ``t`` (epoch ms) and ``v`` (equity =
     bankroll + realized_pnl + unrealized_pnl). Used to restore the Live P&L
@@ -4352,7 +4352,7 @@ async def get_trade_journey(
 
 
 @app.get("/api/journal/updown_breakdown")
-async def get_updown_breakdown(session_id: Optional[str] = None):
+def get_updown_breakdown(session_id: Optional[str] = None):
     """Break down closed trades by up/down bucket (1h / 30m / 15m / 5m per asset).
     Also splits trades before/after recent marker lines in local logs.
     """
@@ -4516,7 +4516,7 @@ async def get_strategy_reason_buckets(limit: int = 4000, watchlist_limit: int = 
 
 
 @app.get("/api/journal/entries")
-async def get_journal_entries(limit: int = 100, session_id: Optional[str] = None):
+def get_journal_entries(limit: int = 100, session_id: Optional[str] = None):
     limit = max(1, min(int(limit), 500))
     j = _journal_for_query(session_id) if session_id else _get_journal()
     if session_id and not j:
@@ -4570,7 +4570,7 @@ async def get_lane_state_history(limit: int = 20):
 
 
 @app.get("/api/journal/snapshots")
-async def get_journal_snapshots(limit: int = 500, session_id: Optional[str] = None):
+def get_journal_snapshots(limit: int = 500, session_id: Optional[str] = None):
     j = _journal_for_query(session_id) if session_id else _get_journal()
     if session_id and not j:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -4581,6 +4581,15 @@ async def get_journal_snapshots(limit: int = 500, session_id: Optional[str] = No
 async def get_journal_sessions():
     from src.execution.trade_journal import TradeJournal
     return {"sessions": TradeJournal.list_sessions()}
+
+
+@app.post("/api/journal/prune-short-sessions")
+async def prune_short_journal_sessions(request: Request, execute: bool = False):
+    """Dry-run or delete completed paper sessions below the 50-fill listing floor."""
+    _check_auth(request)
+    from src.execution.trade_journal import TradeJournal
+
+    return TradeJournal.prune_short_completed_sessions(execute=execute)
 
 
 @app.get("/api/journal/session/{session_id}")

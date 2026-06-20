@@ -23,7 +23,7 @@
         body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 3px,rgba(0,0,0,.07) 3px,rgba(0,0,0,.07) 4px);pointer-events:none;z-index:9000}
 
         /* ── Layout ── */
-        .container{max-width:1540px;margin:0 auto;padding:12px 18px 48px;position:relative;z-index:1}
+        .container{max-width:min(1880px,calc(100vw - 48px));margin:0 auto;padding:12px 18px 48px;position:relative;z-index:1}
         .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
         .grid-3cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
         .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
@@ -111,6 +111,7 @@
         #status-hero .hero-item{padding:14px 16px;min-height:98px}
         #status-hero .hero-item.has-spark{padding-right:128px}
         #status-hero .hero-item .hero-val{font-size:clamp(26px,2.6vw,42px);line-height:1.04;letter-spacing:0;overflow:visible;text-overflow:clip}
+        #hero-card-trades{padding-right:96px}
         @media (max-width:1280px){
             #status-hero .hero-item.has-spark{padding-right:76px}
             #status-hero .hero-spark{width:60px;opacity:.58}
@@ -119,14 +120,80 @@
             #status-hero .hero-item.has-spark{padding-right:16px}
             #status-hero .hero-spark{display:none}
         }
-        .status-orb-wrap{position:absolute;right:12px;top:12px;display:flex;align-items:center;gap:8px}
-        .status-orb-ring{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);box-shadow:0 0 12px rgba(0,0,0,0.4)}
-        .status-orb{width:10px;height:10px;border-radius:50%;background:var(--text-muted);box-shadow:0 0 0 0 rgba(148,163,184,0.4);transition:background 0.3s,box-shadow 0.3s}
-        .status-orb.running{background:var(--gr);box-shadow:0 0 8px 2px rgba(0,255,136,0.55);animation:orb-pulse-green 2.2s ease-out infinite}
-        .status-orb.paused{background:var(--ye);box-shadow:0 0 8px 2px rgba(245,166,35,0.45);animation:orb-breathe 2.2s ease-in-out infinite}
-        .status-orb.killed{background:var(--re);box-shadow:0 0 8px 2px rgba(255,68,102,0.6);animation:orb-pulse-red 0.9s ease-out infinite}
-        .status-orb.stopped{background:var(--text-muted);box-shadow:0 0 6px 1px rgba(148,163,184,0.25);animation:none}
-        .status-orb-text{font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--td);font-family:'IBM Plex Mono',monospace;opacity:0.9}
+        .status-orb-wrap{
+            position:absolute;
+            right:12px;
+            top:10px;
+            display:inline-flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:flex-start;
+            gap:4px;
+            width:70px;
+            max-width:70px;
+            padding:0;
+            border:0;
+            background:transparent;
+            box-shadow:none;
+        }
+        .scanner-cycle-ring{
+            --orb-accent:var(--tm);
+            position:relative;
+            width:54px;
+            height:54px;
+            flex:0 0 auto;
+        }
+        .scanner-cycle-ring svg{width:100%;height:100%;transform:rotate(-90deg);display:block}
+        .scanner-cycle-ring .ring-bg{fill:none;stroke:rgba(136,136,170,.18);stroke-width:3}
+        .scanner-cycle-ring .ring-fg{fill:none;stroke:var(--orb-accent);stroke-width:3;stroke-linecap:round;transition:stroke-dasharray .3s linear,stroke .2s;stroke-dashoffset:0}
+        .scanner-cycle-text{
+            position:absolute;
+            inset:0;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-family:'IBM Plex Mono',monospace;
+            font-size:10px;
+            font-weight:700;
+            color:var(--tx);
+            font-variant-numeric:tabular-nums;
+            text-shadow:0 0 7px color-mix(in srgb,var(--orb-accent) 54%,transparent);
+        }
+        .status-orb-row{
+            --orb-accent:var(--tm);
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:5px;
+            max-width:70px;
+            min-width:0;
+        }
+        .status-orb{
+            display:inline-block;
+            width:9px;
+            height:9px;
+            border-radius:50%;
+            background:var(--orb-accent);
+            box-shadow:0 0 0 0 color-mix(in srgb,var(--orb-accent) 50%,transparent);
+            margin:0;
+            transition:background 0.2s,box-shadow 0.2s,opacity 0.2s;
+        }
+        .status-orb.running{--orb-accent:var(--cy);animation:pulse-cyan 2s ease-out infinite}
+        .status-orb.paused{--orb-accent:var(--ye);animation:orb-breathe 2.2s ease-in-out infinite;box-shadow:0 0 8px color-mix(in srgb,var(--ye) 56%,transparent)}
+        .status-orb.killed{--orb-accent:var(--re);animation:pulse-red .6s ease-out infinite}
+        .status-orb.stopped{--orb-accent:var(--tm);animation:none;opacity:.55;box-shadow:0 0 6px rgba(136,136,170,.4)}
+        .status-orb-wrap.orb-running .scanner-cycle-ring,.status-orb-wrap.orb-running .status-orb-row{--orb-accent:var(--cy)}
+        .status-orb-wrap.orb-paused .scanner-cycle-ring,.status-orb-wrap.orb-paused .status-orb-row{--orb-accent:var(--ye)}
+        .status-orb-wrap.orb-killed .scanner-cycle-ring,.status-orb-wrap.orb-killed .status-orb-row{--orb-accent:var(--re)}
+        .status-orb-wrap.orb-stopped .scanner-cycle-ring,.status-orb-wrap.orb-stopped .status-orb-row{--orb-accent:var(--tm)}
+        .status-orb-wrap.orb-running .scanner-cycle-ring .ring-fg{animation:scanner-ring-flow 1.2s linear infinite}
+        .status-orb-text{font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--td);font-family:'IBM Plex Mono',monospace;opacity:0.95;max-width:54px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+        .status-orb-wrap.orb-running .status-orb-text{color:var(--cy)}
+        .status-orb-wrap.orb-paused .status-orb-text{color:var(--ye)}
+        .status-orb-wrap.orb-killed .status-orb-text{color:var(--re)}
+        @keyframes pulse-cyan{0%{box-shadow:0 0 0 0 rgba(0,229,255,.45)}70%{box-shadow:0 0 0 9px rgba(0,229,255,0)}100%{box-shadow:0 0 0 0 rgba(0,229,255,0)}}
+        @keyframes pulse-red{0%{box-shadow:0 0 0 0 rgba(255,68,102,.58)}70%{box-shadow:0 0 0 10px rgba(255,68,102,0)}100%{box-shadow:0 0 0 0 rgba(255,68,102,0)}}
+        @keyframes scanner-ring-flow{to{stroke-dashoffset:-100}}
         @keyframes orb-pulse-green{0%{box-shadow:0 0 0 0 rgba(0,255,136,0.55)}60%{box-shadow:0 0 0 10px rgba(0,255,136,0)}100%{box-shadow:0 0 0 0 rgba(0,255,136,0)}}
         @keyframes orb-pulse-red{0%{box-shadow:0 0 0 0 rgba(255,68,102,0.65)}60%{box-shadow:0 0 0 11px rgba(255,68,102,0)}100%{box-shadow:0 0 0 0 rgba(255,68,102,0)}}
         @keyframes orb-breathe{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(0.92);opacity:0.75}}
@@ -883,22 +950,6 @@
             font-family:'IBM Plex Mono',monospace;font-size:10px;
             color:var(--text-muted);letter-spacing:.08em;font-variant-numeric:tabular-nums;
         }
-        #macro-align-section .ma-toggle{
-            display:inline-flex;border:1px solid rgba(255,255,255,.08);
-            border-radius:3px;overflow:hidden;flex-shrink:0;
-        }
-        #macro-align-section .ma-tog{
-            font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;
-            padding:5px 12px;background:transparent;color:var(--text-muted);
-            border:none;cursor:pointer;text-transform:uppercase;
-            transition:background .15s ease, color .15s ease;
-        }
-        #macro-align-section .ma-tog + .ma-tog{border-left:1px solid rgba(255,255,255,.08)}
-        #macro-align-section .ma-tog:hover{color:var(--text)}
-        #macro-align-section .ma-tog.active{
-            background:rgba(176,96,255,.14);color:var(--pu);
-            text-shadow:0 0 6px rgba(176,96,255,.65);
-        }
         #macro-align-section .ma-chips{
             display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;
         }
@@ -1087,15 +1138,6 @@
             width:6px;height:6px;border-radius:50%;display:inline-block;
             box-shadow:0 0 6px currentColor;
         }
-        #macro-align-section.candles-view .ma-chartwrap,
-        #macro-align-section.candles-view .ma-chips,
-        #macro-align-section.candles-view .ma-foot{display:none}
-        #macro-align-section.candles-view .ma-candles-hint{
-            display:block;padding:24px 16px;text-align:center;
-            font-family:'IBM Plex Mono',monospace;font-size:11px;
-            color:var(--text-muted);font-style:italic;letter-spacing:.08em;
-        }
-        #macro-align-section .ma-candles-hint{display:none}
 
         /* ── Test dots ── */
         .test-item{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px}
@@ -1119,9 +1161,23 @@
 
         /* ── BTC chart ── */
         #btc-chart-section{margin-bottom:12px}
-        #btc-chart-wrap{position:relative;border-radius:4px;overflow:hidden;background:transparent;width:100%;height:min(520px,max(280px,45dvh))}
+        #btc-chart-wrap{position:relative;border-radius:4px;overflow:hidden;background:transparent;width:100%;height:min(620px,max(320px,52dvh))}
         #tradingview_btc{width:100%;height:100%;min-height:0}
         #btc-trade-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
+        .live-top-layout{display:grid;grid-template-columns:minmax(620px,1.45fr) minmax(420px,.75fr);gap:14px;align-items:start;margin-bottom:16px;max-width:100%;overflow:hidden}
+        .live-top-layout > *{min-width:0}
+        .live-top-layout #btc-chart-section{margin-bottom:0}
+        .live-top-layout #btc-chart-section > div:first-child{flex-wrap:wrap;gap:8px}
+        .live-top-layout #btc-chart-section .btc-chip-hdr{flex:1 1 360px;min-width:0;justify-content:flex-end;flex-wrap:wrap}
+        .live-top-layout #btc-chart-section .btc-chip-hdr select{flex:0 0 auto}
+        .live-top-side{display:flex;flex-direction:column;gap:12px;min-width:0;overflow:hidden}
+        .live-top-side #exit-timing-hud{margin-top:0}
+        .live-top-side #macro-align-section{margin-bottom:0;flex:1 1 auto}
+        .live-top-side #macro-align-section .ma-hdr{align-items:flex-start;flex-wrap:wrap}
+        .live-top-side #macro-align-section .ma-chartwrap{min-height:190px;aspect-ratio:16 / 6.6}
+        @media (max-width:1100px){
+            .live-top-layout{grid-template-columns:1fr}
+        }
 
         /* ── Commands ref ── */
         .cmd-ref h3{font-size:27px;color:var(--cy);margin:14px 0 8px;text-transform:uppercase;letter-spacing:.05em}
@@ -1396,6 +1452,8 @@
         @media (max-width:640px){
             .crypto-hero-six,.crypto-hero-seven,.crypto-meta-four,.crypto-meta-five,.crypto-meta-six{grid-template-columns:1fr}
             #status-hero{grid-template-columns:1fr}
+            #hero-card-trades{padding-right:16px;padding-top:84px}
+            #hero-card-trades .status-orb-wrap{left:16px;right:auto;top:14px}
         }
         @media (max-height:760px) and (min-width:901px){
             .ops-mini-grid{grid-template-columns:1fr 1.8fr 1fr;gap:6px}
@@ -1440,6 +1498,9 @@
         html.dashboard-fullscreen body{font-size:15px}
         html.dashboard-fullscreen .container{max-width:none;padding:20px 26px 72px}
         html.dashboard-fullscreen .card{padding:20px}
+        html.dashboard-fullscreen .live-top-layout{grid-template-columns:minmax(720px,1.5fr) minmax(420px,.72fr);gap:16px}
+        html.dashboard-fullscreen #btc-chart-wrap{height:min(720px,max(520px,64dvh))}
+        html.dashboard-fullscreen .live-top-side #macro-align-section .ma-chartwrap{min-height:220px;aspect-ratio:16 / 6.4}
         html.dashboard-fullscreen .crypto-grid{gap:22px}
         html.dashboard-fullscreen .crypto-grid.three{grid-template-columns:1fr}
         html.dashboard-fullscreen .hero-item{padding:18px 20px;min-height:116px}
@@ -1935,9 +1996,7 @@
 
 <div class="container">
 
-    <div id="view-live">
-
-    <!-- COMMAND CENTER — top of live tab -->
+    <!-- COMMAND CENTER — persistent across tabs -->
     <div class="card" data-aos="fade-up" data-aos-delay="0" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
             <h2 style="flex:1 1 220px;min-width:200px;padding:10px 0 7px;">Command Center</h2>
@@ -1952,8 +2011,17 @@
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions <span class="hero-trend flat" id="hero-positions-trend">—</span></div></div>
             <div class="hero-item" id="hero-card-trades" title="ENTRY events logged in the current session">
                 <div class="status-orb-wrap" id="hero-status-orb-wrap" title="Scanner status">
-                    <div class="status-orb-ring"><div class="status-orb stopped" id="hero-status-orb"></div></div>
-                    <span class="status-orb-text" id="hero-status-orb-text">—</span>
+                    <div class="scanner-cycle-ring" id="hero-scanner-ring" aria-hidden="true">
+                        <svg viewBox="0 0 36 36">
+                            <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                            <path class="ring-fg" id="hero-scan-progress" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                        </svg>
+                        <span class="scanner-cycle-text" id="hero-scan-age">—</span>
+                    </div>
+                    <div class="status-orb-row">
+                        <div class="status-orb stopped" id="hero-status-orb"></div>
+                        <span class="status-orb-text" id="hero-status-orb-text">—</span>
+                    </div>
                 </div>
                 <div class="hero-val" id="hero-trades">-</div><div class="hero-sub" id="hero-trades-sub"></div><div class="hero-lbl">Session fills <span class="hero-trend flat" id="hero-trades-trend">—</span></div></div>
         </div>
@@ -2039,6 +2107,9 @@
         </div>
     </div>
 
+    <div id="view-live">
+
+    <div class="live-top-layout">
     <!-- BTC LIVE CHART — hero top -->
     <div class="card" data-aos="fade-up" data-aos-delay="80" id="btc-chart-section" style="margin-bottom:16px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -2065,6 +2136,10 @@
             <div id="tradingview_btc"></div>
             <div id="btc-trade-overlay" class="bbl-layer" aria-hidden="true"></div>
         </div>
+        <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE / DOGE / BNB watchlist: loading…</div>
+    </div>
+
+    <div class="live-top-side">
         <div id="exit-timing-hud" role="region" aria-label="Exit timing telemetry">
             <div class="hud-head">
                 <span class="hud-pulse" aria-hidden="true"></span>
@@ -2073,8 +2148,6 @@
             </div>
             <div class="hud-body" id="exit-timing-hud-body"></div>
         </div>
-        <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE / DOGE / BNB watchlist: loading…</div>
-    </div>
 
     <!-- Simulated Macro Alignment — low-latency proxy tape + trade bubbles -->
     <div class="card" data-aos="fade-up" id="macro-align-section" style="margin-bottom:16px;">
@@ -2083,10 +2156,6 @@
                 <span class="ma-pulse" aria-hidden="true"></span>
                 <h2 class="ma-title">Macro Alignment // Sim Proxy</h2>
                 <span class="ma-sub" id="macro-align-updated">awaiting sim tape…</span>
-            </div>
-            <div class="ma-toggle" role="tablist" aria-label="Chart view">
-                <button type="button" class="ma-tog active" data-view="macro" id="macro-align-tog-macro" role="tab" aria-selected="true">Macro Align</button>
-                <button type="button" class="ma-tog" data-view="candles" id="macro-align-tog-candles" role="tab" aria-selected="false">Candles</button>
             </div>
         </div>
         <div class="ma-chips chart-hdr" id="macro-align-chips" role="toolbar" aria-label="Asset filters"></div>
@@ -2102,7 +2171,19 @@
             <span id="macro-align-foot-pairs"></span>
             <span class="ma-foot-meta">SIMULATED · LOW-LATENCY PROXY</span>
         </div>
-        <div class="ma-candles-hint">Candles view active — see the BTC candle chart above. Switch back to <strong>Macro Align</strong> for the low-latency simulation panel.</div>
+    </div>
+    </div>
+    </div>
+
+    <!-- Exposure Manager (live tab) -->
+    <div class="card" data-aos="fade-up" data-aos-delay="720" id="exposure-panel" style="margin-bottom:16px;">
+        <h2>Exposure Manager</h2>
+        <div id="exposure-summary" class="exp-summary"></div>
+        <div id="exposure-managers" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:6px;">
+            <button class="btn-sm btn-red" onclick="pauseExposure()">Pause</button>
+            <button class="btn-sm btn-green" onclick="resumeExposure()">Resume</button>
+        </div>
     </div>
 
     <!-- Operations Pipeline (scan_skip_digest + decision gates + ai_pipeline) -->
@@ -2443,30 +2524,8 @@
 
     </div>
 
-    <dialog id="ai-review-dialog" class="ai-review-modal">
-      <div style="padding:16px 18px 18px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
-          <h2 style="margin:0;font-size:1.9rem;font-weight:600;">Session AI review</h2>
-          <button type="button" class="btn-sm" onclick="closeAIReviewDialog()">Close</button>
-        </div>
-        <div id="ai-review-dialog-meta" style="font-size:0.7rem;color:var(--text-muted);margin-bottom:10px;"></div>
-        <div id="ai-review-dialog-body" style="font-size:0.84rem;line-height:1.65;color:var(--text);max-height:min(72vh,640px);overflow:auto;white-space:pre-wrap;word-break:break-word;"></div>
-      </div>
-    </dialog>
-
     <!-- hidden compat element for signal-status-updated referenced by JS -->
     <span id="signal-status-updated" style="display:none;"></span>
-
-    <!-- Exposure Manager (live tab) -->
-    <div class="card" data-aos="fade-up" data-aos-delay="720" id="exposure-panel" style="margin-bottom:16px;">
-        <h2>Exposure Manager</h2>
-        <div id="exposure-summary" class="exp-summary"></div>
-        <div id="exposure-managers" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:10px;"></div>
-        <div style="display:flex;gap:6px;">
-            <button class="btn-sm btn-red" onclick="pauseExposure()">Pause</button>
-            <button class="btn-sm btn-green" onclick="resumeExposure()">Resume</button>
-        </div>
-    </div>
 
     </div><!-- /view-live -->
 
@@ -2618,6 +2677,10 @@
         </div>
         <!-- Strategy breakdown -->
         <div id="journal-strats" style="margin-bottom:10px;"></div>
+        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.3);">
+            <span style="font-size:0.78rem;">Reviewing a past session (positions / closed / log / chart are scoped to it).</span>
+            <button type="button" class="btn-sm btn-green" onclick="resetJournalViewToLive()">Back to live session</button>
+        </div>
         <!-- Tabs: Open Positions / Closed Trades / Audit Log -->
         <div class="tabs" id="journal-tabs">
             <div class="tab active" onclick="switchJournalTab('positions')">Open Positions</div>
@@ -2636,72 +2699,11 @@
         </div>
     </div>
 
-    <div class="card" data-aos="fade-up" id="ai-summary-card" style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-          <h2 style="margin:0;">Last Session &#8212; AI Review</h2>
-          <button type="button" class="btn-sm btn-purple" onclick="openAIReviewDialog()" title="Open full review in a window">Review window</button>
-        </div>
-        <div id="ai-summary-kpis" style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;margin-bottom:10px;"></div>
-        <div id="ai-summary-text" style="font-size:0.82rem;line-height:1.6;color:var(--text);max-height:200px;overflow:auto;">Waiting for session data...</div>
-        <div id="ai-summary-meta" style="font-size:0.68rem;color:var(--text-muted);margin-top:6px;"></div>
-        <div id="ai-summary-strategies" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;"></div>
-        <div style="margin-top:12px;display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:12px;">
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Standouts</h4>
-                <div id="ai-summary-standouts" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-            <div>
-                <h4 style="margin:0 0 6px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">Next edit queue</h4>
-                <div id="ai-summary-next-edits" style="display:flex;flex-direction:column;gap:6px;"></div>
-            </div>
-        </div>
-    </div>
-
-    <div class="card" data-aos="fade-up" id="lane-health-card" style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-            <div>
-                <h2 style="margin:0;">Lane Health</h2>
-                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;">Lane states + recent closed-trade expectancy by lane.</div>
-            </div>
-            <div id="lane-health-meta" style="font-size:0.68rem;color:var(--text-muted);"></div>
-        </div>
-        <div id="lane-states-summary" style="font-size:0.76rem;margin-bottom:10px;"></div>
-        <div id="lane-health-filters" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">
-            <button type="button" class="btn-sm" id="lane-filter-all" onclick="setLaneHealthFilter('all')">All lanes</button>
-            <button type="button" class="btn-sm" id="lane-filter-ready" onclick="setLaneHealthFilter('ready_only')">Ready only</button>
-        </div>
-        <div id="lane-health-body" class="scrollbox" style="max-height:280px;">
-            <p style="color:var(--text-muted);">Waiting for lane data...</p>
-        </div>
-        <div style="margin-top:10px;">
-            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:6px;">Recent lane changes</div>
-            <div id="lane-history-body" class="scrollbox" style="max-height:120px;">
-                <p style="color:var(--text-muted);">Waiting for lane change history...</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Test runs: pick a session to review (summary + tabs + chart scope to that run) -->
-    <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="journal-runs-card">
-        <h2 style="margin-bottom:4px;">Test runs</h2>
-        <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
-            Each row is one paper session. <strong style="color:var(--text);">Started</strong> / <strong style="color:var(--text);">Ended</strong> come from the journal log (archived runs have an end time; the live folder shows ongoing). Click a row to load that run into the journal below.
-        </p>
-        <div id="journal-session-view-banner" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.3);">
-            <span style="font-size:0.78rem;">Reviewing a past session (positions / closed / log / chart are scoped to it).</span>
-            <button type="button" class="btn-sm btn-green" onclick="resetJournalViewToLive()">Back to live session</button>
-        </div>
-        <div id="journal-session-featured" style="margin-bottom:10px;font-size:0.78rem;"></div>
-        <div id="journal-session-list-body" class="scrollbox" style="max-height:260px;">
-            <p style="color:var(--text-muted);">Loading sessions…</p>
-        </div>
-    </div>
-
-    <!-- Past sessions: wide table (same API as Test runs); row click loads session in journal above) -->
+    <!-- Past sessions: wide table; row click loads session in journal above) -->
     <div class="card" data-aos="fade-up" style="margin-bottom:16px;" id="session-history-card">
-        <h2 style="margin-bottom:4px;">Test Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
+        <h2 style="margin-bottom:4px;">Session History <span style="font-size:0.7rem;color:var(--text-muted);font-weight:normal;" id="session-history-count"></span></h2>
         <p style="font-size:0.72rem;color:var(--text-muted);line-height:1.45;margin:0 0 10px 0;">
-            Completed and archived paper runs with per-strategy PnL. Click a row to load that session into the Paper Trade Journal (same API as Test runs above).
+            Completed paper runs with at least 50 fills. Click a row to load that session into the Paper Trade Journal.
         </p>
         <div id="session-history-body" style="font-size:0.78rem;">
             <p style="color:var(--text-muted);">Loading sessions...</p>
@@ -3574,7 +3576,6 @@ function switchMainView(which, opts) {
         }
         if (which === 'journal' && typeof loadJournalSessionList === 'function') {
             loadJournalSessionList();
-            loadAISummary();
             loadSessionHistory();
             fetchAll();
         }
@@ -3807,6 +3808,7 @@ function _safeUpdateLiveAsset(key, payload, updateFn, missLimit = 3) {
 // slow-changing analytics refresh every 3rd poll (~42s) or immediately on tab-open.
 let _perfPollCount = 0;
 let _perfForceHeavy = true;  // first Performance render fetches the heavy tier
+let _lastLaneGatesPayload = null;
 
 async function fetchAll() {
     const currentView = _currentMainView();
@@ -3841,9 +3843,9 @@ async function fetchAll() {
         } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
     }
 
-    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR;
+    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR;
     try {
-        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR, laneHealthR, laneStatesR, laneHistoryR] = await Promise.all([
+        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR] = await Promise.all([
             fetchT('/api/status'),
             fetchT('/api/strategy/metrics'),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
@@ -3865,9 +3867,6 @@ async function fetchAll() {
             Promise.resolve(null),  // trade journey removed from UI — no fetch
             _perfHeavy ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
             _perfHeavy ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),
-            needJournal ? fetchT(_journalApiPath('/api/journal/lane-health')) : Promise.resolve(null),
-            needJournal ? fetchT(_journalApiPath('/api/journal/lane-states')) : Promise.resolve(null),
-            needJournal ? fetchT('/api/lane-state-history?limit=12') : Promise.resolve(null),
         ]);
     } catch (e) {
         console.error('[dashboard] fetch batch:', e);
@@ -3926,17 +3925,6 @@ async function fetchAll() {
     try {
         if (needJournal && journalTradesR?.ok) updateRecentTrades(await journalTradesR.json());
     } catch (e) { console.error('[dashboard] journal trades:', e); }
-
-    try {
-        if (needJournal) {
-            const health = laneHealthR?.ok ? await laneHealthR.json() : null;
-            const states = laneStatesR?.ok ? await laneStatesR.json() : null;
-            window._lastLaneHealthData = { health, states };
-            updateLaneHealth(health, states);
-            const history = laneHistoryR?.ok ? await laneHistoryR.json() : null;
-            updateLaneHistory(history);
-        }
-    } catch (e) { console.error('[dashboard] lane health:', e); }
 
     try {
         if (exposureR?.ok) {
@@ -5228,6 +5216,7 @@ function updateMetrics(d) {
     if (!d || typeof d !== 'object') return;
     lastMetricsData = d;
     updateScanDiagnosticsFromMetrics(d);
+    updateHeroStatusOrb(d);   // feed the orb /api/strategy/metrics (has per-strategy last_cycle)
     const tbody = document.querySelector('#strategy-table tbody');
     if (!tbody) return;
 
@@ -5265,44 +5254,92 @@ function updateMetrics(d) {
         return `<tr><td>${stratPillHTML(s)}</td><td>${m.signals||0}${totalStr}${ageStr}</td><td>${m.trades||0}</td><td class="${pnlCls}">$${(m.pnl||0).toFixed(2)}</td><td>${m.open_positions||0}</td><td><span style="color:var(--text-muted);font-size:0.8rem;">${breakEven[s]} (${riskProfile[s]})</span></td></tr>`;
     }).join('');
 
-    updateHeroStatusOrb(d);
+    // /api/status has no per-strategy last_cycle; use the stored metrics payload
+    // so this tick doesn't null the orb back to "unknown".
+    if (lastMetricsData) updateHeroStatusOrb(lastMetricsData);
 }
 
-function updateHeroStatusOrb(d) {
+function _dashAgeText(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'unknown';
+    if (seconds < 60) return Math.round(seconds) + 's';
+    if (seconds < 3600) return Math.round(seconds / 60) + 'm';
+    return Math.round(seconds / 3600) + 'h';
+}
+
+let _heroScannerNewestCycleMs = null;
+
+function _setHeroScannerOrb(ageSeconds, hasAny) {
     const orb = document.getElementById('hero-status-orb');
     const wrap = document.getElementById('hero-status-orb-wrap');
     const text = document.getElementById('hero-status-orb-text');
+    const progress = document.getElementById('hero-scan-progress');
+    const ageText = document.getElementById('hero-scan-age');
     if (!orb) return;
-    const strats = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
-    let newestAge = Infinity;
-    let hasAny = false;
-    strats.forEach(s => {
-        const iso = (d && d[s] && d[s].last_cycle) || '';
-        if (!iso) return;
-        hasAny = true;
-        const age = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-        if (age < newestAge) newestAge = age;
-    });
+
     orb.classList.remove('running','paused','killed','stopped');
-    let label = '—';
-    let tip = 'Scanner: no cycle data';
-    if (!hasAny) {
-        orb.classList.add('stopped');
-    } else if (newestAge < 90) {
-        orb.classList.add('running');
+    if (wrap) wrap.classList.remove('orb-running','orb-paused','orb-killed','orb-stopped');
+
+    let cls = 'stopped';
+    let label = 'No scan';
+    let tip = 'Scanner: no strategy cycle data';
+    if (!hasAny || !Number.isFinite(ageSeconds)) {
+        cls = 'stopped';
+    } else if (ageSeconds < 90) {
+        cls = 'running';
         label = 'Scanning';
-        tip = `Scanner healthy · last cycle ${newestAge}s ago`;
-    } else if (newestAge < 300) {
-        orb.classList.add('paused');
+        tip = `Scanner healthy · last cycle ${_dashAgeText(ageSeconds)} ago`;
+    } else if (ageSeconds < 300) {
+        cls = 'paused';
         label = 'Lagging';
-        tip = `Scanner lagging · last cycle ${newestAge}s ago`;
+        tip = `Scanner lagging · last cycle ${_dashAgeText(ageSeconds)} ago`;
     } else {
-        orb.classList.add('killed');
+        cls = 'killed';
         label = 'Stuck';
-        tip = `Scanner stuck · last cycle ${newestAge}s ago`;
+        tip = `Scanner stuck · last cycle ${_dashAgeText(ageSeconds)} ago`;
     }
+
+    orb.classList.add(cls);
+    if (wrap) wrap.classList.add('orb-' + cls);
     if (text) text.textContent = label;
     if (wrap) wrap.title = tip;
+    if (progress) {
+        const cycleWindow = cls === 'killed' ? 300 : 90;
+        const pct = hasAny && Number.isFinite(ageSeconds)
+            ? Math.max(4, Math.min(100, Math.round((ageSeconds / cycleWindow) * 100)))
+            : 0;
+        progress.setAttribute('stroke-dasharray', `${pct}, 100`);
+    }
+    if (ageText) {
+        ageText.textContent = hasAny && Number.isFinite(ageSeconds) ? _dashAgeText(ageSeconds) : '--';
+    }
+}
+
+function _tickHeroScannerOrb() {
+    if (_heroScannerNewestCycleMs == null) {
+        _setHeroScannerOrb(NaN, false);
+        return;
+    }
+    _setHeroScannerOrb((Date.now() - _heroScannerNewestCycleMs) / 1000, true);
+}
+
+function updateHeroStatusOrb(metricsData) {
+    const strats = ['bitcoin','sol_macro','eth_macro','hype_macro','xrp_macro','doge_macro','bnb_macro'];
+    let newestMs = null;
+    let hasAny = false;
+    strats.forEach(s => {
+        let iso = (metricsData && metricsData[s] && metricsData[s].last_cycle) || '';
+        if (!iso) return;
+        // last_cycle is emitted in UTC but without a tz suffix; a non-UTC browser
+        // would parse it as local time, putting it ~hours in the future -> negative
+        // age -> orb stuck on "unknown". Force UTC parse when no tz is present.
+        if (!/[zZ]|[+-]\d\d:?\d\d$/.test(iso)) iso += 'Z';
+        const ms = new Date(iso).getTime();
+        if (!Number.isFinite(ms)) return;
+        hasAny = true;
+        if (newestMs == null || ms > newestMs) newestMs = ms;
+    });
+    _heroScannerNewestCycleMs = hasAny ? newestMs : null;
+    _tickHeroScannerOrb();
 }
 
 function updateScanDiagnosticsFromMetrics(d) {
@@ -5745,173 +5782,6 @@ function updateJournal(d) {
     loadJournalTab(currentJournalTab);
 }
 
-function updateLaneHealth(health, states) {
-    const body = document.getElementById('lane-health-body');
-    const meta = document.getElementById('lane-health-meta');
-    const summary = document.getElementById('lane-states-summary');
-    const filterAllBtn = document.getElementById('lane-filter-all');
-    const filterReadyBtn = document.getElementById('lane-filter-ready');
-    if (!body || !meta || !summary) return;
-    const lanes = Array.isArray(health && health.lanes) ? health.lanes : [];
-    const stateRows = Array.isArray(states && states.lanes) ? states.lanes : [];
-    const stateMap = Object.fromEntries(stateRows.map(r => [r.lane_id, r]));
-    const readyCount = lanes.filter(l => !!(l.auto_pause_confirmed || (stateMap[l.lane_id] && stateMap[l.lane_id].auto_pause_confirmed))).length;
-    meta.textContent = `${lanes.length} lane${lanes.length === 1 ? '' : 's'} with closed-trade data`;
-    if (!states) {
-        summary.innerHTML = '<span style="color:var(--text-muted);">Lane state data unavailable.</span>';
-    } else {
-        const enabled = !!states.enabled;
-        const dryRun = !!states.dry_run;
-        summary.innerHTML =
-            `<span class="badge ${enabled ? 'badge-green' : 'badge-muted'}">lane mgmt ${enabled ? 'on' : 'off'}</span> ` +
-            `<span class="badge ${dryRun ? 'badge-yellow' : 'badge-muted'}">${dryRun ? 'paper mode' : 'live mode'}</span> ` +
-            `<span class="badge ${readyCount ? 'badge-red' : 'badge-muted'}">${readyCount} ready</span> ` +
-            `<span style="color:var(--text-muted);margin-left:6px;">default=${_htmlEscape(states.default_state || 'paper')} · rules=${Number(states.configured_rules || 0)}</span>`;
-    }
-    if (filterAllBtn) filterAllBtn.disabled = window._laneHealthFilter === 'all';
-    if (filterReadyBtn) filterReadyBtn.disabled = window._laneHealthFilter === 'ready_only';
-    if (!lanes.length) {
-        body.innerHTML = '<p style="color:var(--text-muted);">No lane-level closed trades yet.</p>';
-        return;
-    }
-    const filteredLanes = lanes.filter(l => {
-        if (window._laneHealthFilter === 'ready_only') {
-            return !!(l.auto_pause_confirmed || (stateMap[l.lane_id] && stateMap[l.lane_id].auto_pause_confirmed));
-        }
-        return true;
-    });
-    if (!filteredLanes.length) {
-        body.innerHTML = '<p style="color:var(--text-muted);">No lanes match the current filter.</p>';
-        return;
-    }
-    const rows = filteredLanes.slice().sort((a, b) => {
-        const strat = String(a.strategy || '').localeCompare(String(b.strategy || ''));
-        if (strat) return strat;
-        return String(a.lane_id || '').localeCompare(String(b.lane_id || ''));
-    });
-    body.innerHTML = '<table><thead><tr><th>Lane</th><th>State</th><th>Recommend</th><th>Reviewed</th><th>Trades</th><th>WR</th><th>Exp</th><th>Gap</th><th>Top exit</th></tr></thead><tbody>' +
-        rows.map(l => {
-            const s = stateMap[l.lane_id] || null;
-            const eff = String((s && s.effective_state) || l.state_at_entry || 'unknown');
-            const stateCls = eff === 'live' ? 'badge-green' : eff === 'paused' ? 'badge-red' : eff === 'paper' ? 'badge-yellow' : 'badge-muted';
-            const rec = String((l.recommended_state || (s && s.recommended_state) || 'paper'));
-            const recCls = rec === 'live' ? 'badge-green' : rec === 'paused' ? 'badge-red' : rec === 'paper' ? 'badge-yellow' : 'badge-muted';
-            const recReasons = (l.recommendation_reasons || (s && s.recommendation_reasons) || []);
-            const autoPauseCandidate = !!(l.auto_pause_candidate || (s && s.auto_pause_candidate));
-            const autoPauseConfirmed = !!(l.auto_pause_confirmed || (s && s.auto_pause_confirmed));
-            const autoPauseRemaining = Number((l.auto_pause_confirmation_remaining ?? (s && s.auto_pause_confirmation_remaining) ?? 0));
-            const autoPauseReason = String((l.auto_pause_reason || (s && s.auto_pause_reason) || ''));
-            const autoPauseStatus = String((l.auto_pause_status || (s && s.auto_pause_status) || ''));
-            const autoPauseFirstSeenAt = String((l.auto_pause_first_seen_at || (s && s.auto_pause_first_seen_at) || ''));
-            const autoPauseAgeMinutes = Number((l.auto_pause_age_minutes ?? (s && s.auto_pause_age_minutes) ?? NaN));
-            const metaRow = (s && s.state_meta) || {};
-            const reviewedAt = String(metaRow.reviewed_at || metaRow.updated_at || '');
-            const reviewedVia = String(metaRow.updated_via || '');
-            const exp = Number(l.expectancy || 0);
-            const gap = Number(l.edge_realized_gap || 0);
-            const wr = Number(l.win_rate || 0);
-            const laneTitle = `${l.lane_id}\nstate=${eff}${s && s.matched_rule ? `\nrule=${s.matched_rule}` : ''}`;
-            const laneEnc = encodeURIComponent(String(l.lane_id || ''));
-            return `<tr>
-                <td title="${_htmlEscape(laneTitle)}" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                    <div style="font-weight:600;">${_htmlEscape(l.strategy || '?')} · ${_htmlEscape(l.lane_window || '?')} · ${_htmlEscape(l.lane_side || '?')}</div>
-                    <div style="font-size:0.68rem;color:var(--text-muted);">${_htmlEscape(l.entry_family || 'standard')} · ${_htmlEscape(l.lane_regime || 'unclassified')}</div>
-                </td>
-                <td>
-                    <div><span class="badge ${stateCls}">${_htmlEscape(eff.toUpperCase())}</span></div>
-                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
-                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'live')">Live</button>
-                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'paper')">Paper</button>
-                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'paused')">Pause</button>
-                        <button type="button" class="btn-sm" onclick="setLaneState(decodeURIComponent('${laneEnc}'),'default')">Default</button>
-                    </div>
-                </td>
-                <td title="${_htmlEscape(recReasons.join(' | '))}">
-                    <div><span class="badge ${recCls}">${_htmlEscape(rec.toUpperCase())}</span></div>
-                    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_htmlEscape(recReasons[0] || '—')}</div>
-                    ${autoPauseCandidate ? `<div style="margin-top:4px;"><span class="badge ${autoPauseConfirmed ? 'badge-red' : 'badge-yellow'}">${autoPauseConfirmed ? 'AUTO-PAUSE READY' : 'AUTO-PAUSE WATCH'}</span></div>` : ''}
-                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(autoPauseReason)}">${_htmlEscape(autoPauseConfirmed ? 'confirmation window met' : `${autoPauseRemaining} trade${autoPauseRemaining === 1 ? '' : 's'} until confirmation`)}</div>` : ''}
-                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(autoPauseFirstSeenAt || '')}">${_htmlEscape(autoPauseFirstSeenAt ? `since ${autoPauseFirstSeenAt.replace('T', ' ').replace('Z', ' UTC')}` : 'candidate just detected')}</div>` : ''}
-                    ${autoPauseCandidate ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_htmlEscape(Number.isFinite(autoPauseAgeMinutes) ? `${autoPauseAgeMinutes}m active · ${autoPauseStatus || 'watch'}` : (autoPauseStatus || 'watch'))}</div>` : ''}
-                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;">
-                        <button type="button" class="btn-sm" ${rec === eff ? 'disabled' : ''} onclick="applyLaneRecommendation(decodeURIComponent('${laneEnc}'),'${_htmlEscape(rec)}')">Apply rec</button>
-                    </div>
-                </td>
-                <td title="${_htmlEscape(reviewedAt ? `${reviewedAt}${reviewedVia ? ` via ${reviewedVia}` : ''}` : 'Not reviewed yet')}">
-                    <div style="font-size:0.72rem;">${_htmlEscape(reviewedAt ? reviewedAt.replace('T', ' ').replace('Z', ' UTC') : '—')}</div>
-                    <div style="font-size:0.68rem;color:var(--text-muted);">${_htmlEscape(reviewedVia || 'not reviewed')}</div>
-                </td>
-                <td>${Number(l.trades || 0)}</td>
-                <td style="color:${wr >= 0.5 ? 'var(--green)' : 'var(--red)'}">${(wr * 100).toFixed(1)}%</td>
-                <td style="color:${exp >= 0 ? 'var(--green)' : 'var(--red)'}">${exp >= 0 ? '+' : ''}$${Math.abs(exp).toFixed(2)}</td>
-                <td style="color:${gap <= 0.04 ? 'var(--green)' : 'var(--yellow)'}">${gap >= 0 ? '+' : ''}${gap.toFixed(3)}</td>
-                <td style="font-size:0.72rem;color:var(--text-muted);">${_htmlEscape(String(l.top_exit_reason || '—'))}</td>
-            </tr>`;
-        }).join('') + '</tbody></table>';
-}
-
-function setLaneHealthFilter(mode) {
-    window._laneHealthFilter = mode === 'ready_only' ? 'ready_only' : 'all';
-    if (window._lastLaneHealthData) {
-        updateLaneHealth(window._lastLaneHealthData.health, window._lastLaneHealthData.states);
-    }
-}
-
-function updateLaneHistory(history) {
-    const body = document.getElementById('lane-history-body');
-    if (!body) return;
-    const items = Array.isArray(history && history.items) ? history.items : [];
-    if (!items.length) {
-        body.innerHTML = '<p style="color:var(--text-muted);">No lane state changes recorded yet.</p>';
-        return;
-    }
-    body.innerHTML = items.map(item => {
-        const when = String(item.timestamp || '').replace('T', ' ').replace('Z', ' UTC');
-        const lane = String(item.lane_id || 'unknown');
-        const requested = String(item.requested_state || 'unknown');
-        const effective = String(item.effective_state || requested);
-        const previous = String(item.previous_state || 'unknown');
-        const source = String(item.source || 'unknown');
-        const note = String(item.note || '');
-        const badgeCls = effective === 'live' ? 'badge-green' : effective === 'paused' ? 'badge-red' : effective === 'paper' ? 'badge-yellow' : 'badge-muted';
-        return `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:0.72rem;">
-            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
-                <div style="font-weight:600;max-width:72%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${_htmlEscape(lane)}">${_htmlEscape(lane)}</div>
-                <div><span class="badge ${badgeCls}">${_htmlEscape(effective.toUpperCase())}</span></div>
-            </div>
-            <div style="color:var(--text-muted);margin-top:4px;">${_htmlEscape(when || 'unknown time')} · ${_htmlEscape(source)} · ${_htmlEscape(previous)} → ${_htmlEscape(requested)}</div>
-            <div style="color:var(--text-muted);margin-top:2px;">${_htmlEscape(note || 'no note')}</div>
-        </div>`;
-    }).join('');
-}
-
-async function setLaneState(laneId, state) {
-    return _setLaneStateInternal(laneId, state, 'dashboard_manual', '');
-}
-
-async function applyLaneRecommendation(laneId, state) {
-    return _setLaneStateInternal(laneId, state, 'dashboard_recommendation', 'applied recommended lane state');
-}
-
-async function _setLaneStateInternal(laneId, state, source, note) {
-    if (!laneId || !state) return;
-    try {
-        const r = await _mutatingFetch('/api/lane-state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lane_id: laneId, state, source, note }),
-        });
-        const d = await r.json();
-        if (!r.ok) {
-            alert(`Lane state update failed: ${d.detail || JSON.stringify(d)}`);
-            return;
-        }
-        await fetchAll();
-    } catch (e) {
-        alert('Lane state update failed: ' + e);
-    }
-}
-
 async function settleArchivedPositions() {
     const btn = document.getElementById('settle-archived-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Settling...'; }
@@ -5942,7 +5812,7 @@ function switchJournalTab(tab) {
 async function loadJournalTab(tab) {
     if (tab === 'positions') {
         try {
-            const r = await fetch(_journalApiPath('/api/journal/positions'));
+            const r = await fetchT(_journalApiPath('/api/journal/positions'));
             const d = await r.json();
             const el = document.getElementById('journal-positions');
             if (!d.positions?.length) { el.innerHTML = '<p style="color:var(--text-muted);padding:8px;">No open positions.</p>'; return; }
@@ -5963,7 +5833,7 @@ async function loadJournalTab(tab) {
         } catch(e) { console.error(e); }
     } else if (tab === 'closed') {
         try {
-            const r = await fetch(_journalApiPath('/api/journal/trades'));
+            const r = await fetchT(_journalApiPath('/api/journal/trades'));
             const d = await r.json();
             const el = document.getElementById('journal-closed');
             if (!d.trades?.length) { el.innerHTML = '<p style="color:var(--text-muted);padding:8px;">No closed trades yet.</p>'; return; }
@@ -5984,7 +5854,7 @@ async function loadJournalTab(tab) {
         } catch(e) { console.error(e); }
     } else if (tab === 'log') {
         try {
-            const r = await fetch(_journalApiPath('/api/journal/entries?limit=200'));
+            const r = await fetchT(_journalApiPath('/api/journal/entries?limit=200'));
             const d = await r.json();
             const el = document.getElementById('journal-log');
             if (!d.entries?.length) { el.innerHTML = '<p style="color:var(--text-muted);padding:8px;">No journal entries yet.</p>'; return; }
@@ -6046,7 +5916,6 @@ async function selectJournalSession(sessionId, opts = {}) {
         await loadJournalSessionList(opts);
         loadJournalTab(currentJournalTab);
         await loadPnLChart();
-        await loadAISummary();
     } catch (e) {
         console.error(e);
         alert('Failed to load session');
@@ -6062,7 +5931,7 @@ async function loadJournalSessionList(opts = {}) {
     const feat = document.getElementById('journal-session-featured');
     if (!body) return;
     try {
-        const r = await fetch('/api/journal/sessions').catch(() => null);
+        const r = await fetchT('/api/journal/sessions').catch(() => null);
         if (!r?.ok) {
             body.innerHTML = '<p style="color:var(--text-muted);">Could not load sessions.</p>';
             return;
@@ -6159,7 +6028,7 @@ async function loadJournalSessionList(opts = {}) {
 
 async function loadPnLChart() {
     try {
-        const r = await fetch(_journalApiPath('/api/journal/snapshots?limit=200'));
+        const r = await fetchT(_journalApiPath('/api/journal/snapshots?limit=200'));
         const d = await r.json();
         const section = document.getElementById('journal-chart-section');
         if (!d.snapshots?.length || d.snapshots.length < 2) {
@@ -7364,11 +7233,13 @@ function updateLaneGates(d) {
     const updatedEl = document.getElementById('lane-gates-updated');
     if (!gridEl) return;
 
-    if (!d || !d.strategies) {
-        gridEl.innerHTML = '<span style="color:var(--text-muted)">No gate data</span>';
+    if (!d || !Array.isArray(d.strategies)) {
+        if (_lastLaneGatesPayload) return;
+        gridEl.innerHTML = '<span style="color:var(--text-muted)">Lane gate data unavailable</span>';
         if (loadingEl) loadingEl.style.display = 'none';
         return;
     }
+    _lastLaneGatesPayload = d;
     if (loadingEl) loadingEl.style.display = 'none';
 
     const windows = ['5m', '15m', '1h'];
@@ -7420,15 +7291,20 @@ function updateLaneGates(d) {
 }
 
 async function loadLaneGates() {
+    const loadingEl = document.getElementById('lane-gates-loading');
+    if (loadingEl && !_lastLaneGatesPayload) {
+        loadingEl.style.display = 'block';
+        loadingEl.textContent = 'Loading lane gates…';
+    }
     try {
         const r = await fetchT('/api/lane_gates');
         if (r?.ok) {
             updateLaneGates(await r.json());
             return;
         }
-        updateLaneGates(null);
+        if (!_lastLaneGatesPayload) updateLaneGates(null);
     } catch (e) {
-        updateLaneGates(null);
+        if (!_lastLaneGatesPayload) updateLaneGates(null);
     }
 }
 
@@ -8291,7 +8167,6 @@ document.addEventListener('fullscreenchange', updateFullscreenButtonState);
 })();
 if (_currentMainView() === 'journal') {
     loadPnLChart();
-    loadAISummary();
     loadJournalSessionList();
     loadSessionHistory();
 } else if (_currentMainView() === 'live') {
@@ -8317,13 +8192,13 @@ window.addEventListener('beforeunload', () => {
 });
 
 _registerInterval(fetchAll, 14000);
+_registerInterval(_tickHeroScannerOrb, 1000);
 _registerInterval(() => {
     const view = _currentMainView();
     if (view === 'live') {
         renderCommandCenterPnlChart();
     } else if (view === 'journal') {
         loadPnLChart();
-        loadAISummary();
         loadSessionHistory();
     } else if (view === 'performance') {
         loadAllocationChart();
@@ -8331,113 +8206,6 @@ _registerInterval(() => {
         loadLaneGates();
     }
 }, 30000);
-
-// ── AI Session Summary (card + modal) ─────────────────────────────────
-window._lastAiSummary = '';
-window._lastAiSummaryMeta = '';
-
-function openAIReviewDialog() {
-    const dlg = document.getElementById('ai-review-dialog');
-    const body = document.getElementById('ai-review-dialog-body');
-    const meta = document.getElementById('ai-review-dialog-meta');
-    const cardText = document.getElementById('ai-summary-text');
-    if (body) body.textContent = window._lastAiSummary || (cardText ? cardText.textContent : '') || 'No summary yet. Wait for /api/journal/ai-summary or refresh.';
-    if (meta) meta.textContent = window._lastAiSummaryMeta || '';
-    try { dlg?.showModal(); } catch(e) {}
-}
-
-function closeAIReviewDialog() {
-    try { document.getElementById('ai-review-dialog')?.close(); } catch(e) {}
-}
-
-async function loadAISummary() {
-    try {
-        const r = await fetch(
-            window._journalViewSessionId
-                ? ('/api/journal/ai-summary?session_id=' + encodeURIComponent(window._journalViewSessionId))
-                : '/api/journal/ai-summary'
-        );
-        if (!r.ok) return;
-        const d = await r.json();
-        const el = document.getElementById('ai-summary-text');
-        const meta = document.getElementById('ai-summary-meta');
-        if (el && d.summary) {
-            el.textContent = d.summary;
-            window._lastAiSummary = d.summary;
-            const line = d.cached ? '(cached)' : (d.session_id ? 'Generated for session ' + d.session_id : '');
-            window._lastAiSummaryMeta = line;
-            if (meta) meta.textContent = line;
-            const dlgOpen = document.getElementById('ai-review-dialog')?.open;
-            if (dlgOpen) {
-                const db = document.getElementById('ai-review-dialog-body');
-                const dm = document.getElementById('ai-review-dialog-meta');
-                if (db) db.textContent = d.summary;
-                if (dm) dm.textContent = line;
-            }
-        }
-        _renderAISummaryStructured(d.structured || null);
-    } catch(e) {}
-}
-
-function _renderAISummaryStructured(s) {
-    const kpisEl = document.getElementById('ai-summary-kpis');
-    const stratsEl = document.getElementById('ai-summary-strategies');
-    const standoutsEl = document.getElementById('ai-summary-standouts');
-    const nextEditsEl = document.getElementById('ai-summary-next-edits');
-    const empty = '<div style="color:var(--text-muted);font-size:.72rem;">Not enough session data yet.</div>';
-    if (!s) {
-        if (kpisEl) kpisEl.innerHTML = '';
-        if (stratsEl) stratsEl.innerHTML = '';
-        if (standoutsEl) standoutsEl.innerHTML = empty;
-        if (nextEditsEl) nextEditsEl.innerHTML = empty;
-        return;
-    }
-    const colors = ['#00e5ff', '#00ff88', '#ffcc66', '#b060ff'];
-    const baseline = (s.alltime && s.alltime.baseline_start) ? s.alltime.baseline_start : null;
-    const baselineMeta = baseline
-        ? `All-time baseline: sessions started on/after ${baseline} (n=${s.alltime.n_sessions || 0}; skipped ${s.alltime.skipped_pre_baseline || 0} earlier).`
-        : '';
-    const metaEl = document.getElementById('ai-summary-meta');
-    if (metaEl && baselineMeta) {
-        const existing = window._lastAiSummaryMeta || '';
-        metaEl.textContent = existing ? `${existing} · ${baselineMeta}` : baselineMeta;
-    }
-    if (kpisEl) {
-        kpisEl.innerHTML = (s.kpis || []).map((card, i) => {
-            const color = colors[i % colors.length];
-            return `
-                <div style="border:1px solid ${color}33;border-radius:6px;padding:7px 10px;background:rgba(255,255,255,.025);">
-                    <div style="font-size:.66rem;color:var(--text-muted);">${_htmlEscape(card.label)}</div>
-                    <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;color:${color};">${_htmlEscape(String(card.value))}</div>
-                    <div style="font-size:.6rem;color:var(--text-muted);margin-top:2px;">${_htmlEscape(card.delta || '')}</div>
-                </div>
-            `;
-        }).join('');
-    }
-    if (stratsEl) {
-        const rows = (s.per_strategy || []);
-        stratsEl.innerHTML = rows.length ? rows.map((r) => {
-            const pnlColor = r.pnl > 0 ? '#00ff88' : (r.pnl < 0 ? '#ff5c5c' : 'var(--text-muted)');
-            const dPp = (r.wr_delta_pp == null) ? '' : ` (${r.wr_delta_pp >= 0 ? '+' : ''}${r.wr_delta_pp}pp vs all-time n=${r.alltime_n})`;
-            return `
-                <div style="border:1px solid rgba(255,255,255,.08);border-radius:4px;padding:4px 8px;font-family:'IBM Plex Mono',monospace;font-size:.7rem;">
-                    <span style="color:var(--text);font-weight:700;">${_htmlEscape(r.strategy)}</span>
-                    <span style="color:var(--text-muted);">n=${r.n}</span>
-                    <span style="color:var(--text-muted);"> WR ${r.wr_pct}%${dPp}</span>
-                    <span style="color:${pnlColor};"> $${r.pnl >= 0 ? '+' : ''}${r.pnl}</span>
-                </div>
-            `;
-        }).join('') : '<div style="color:var(--text-muted);font-size:.72rem;">No per-strategy fills this session.</div>';
-    }
-    if (standoutsEl) {
-        const items = s.standouts || [];
-        standoutsEl.innerHTML = items.length ? items.map(_glTinyCard).join('') : empty;
-    }
-    if (nextEditsEl) {
-        const items = s.next_edits || [];
-        nextEditsEl.innerHTML = items.length ? items.map(_glTinyCard).join('') : empty;
-    }
-}
 
 // ── Ghost Lab — lightweight counterfactual time-of-day explorer
 //    Reads /api/ghosts/lab aggregates. Renders only the 24h clock ring and
@@ -8499,6 +8267,17 @@ async function loadGhostLab() {
     try {
         const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
+        if (data && (data.disabled || data.removed)) {
+            // Ghost Lab was removed (in-process OOM source). The old renderers
+            // assume a {lanes:[...]} shape that no longer exists; render a static
+            // notice instead of throwing and showing a scary "Load failed".
+            const host = document.getElementById('gl-lh-heatmap');
+            if (host) host.innerHTML =
+                `<div style="color:var(--muted);padding:12px;line-height:1.5;">`
+                + `<b>Ghost Lab removed</b> (${data.removed || '2026-06-18'}).<br>`
+                + `${data.reason || ''}<br>${data.use_instead || ''}</div>`;
+            return;
+        }
         _gl.raw = data;
         _glRenderControls();
         _glRenderClock();
@@ -8784,7 +8563,7 @@ async function loadSessionHistory() {
     const countEl = document.getElementById('session-history-count');
     if (!el) return;
     try {
-        const r = await fetch('/api/journal/sessions').catch(() => null);
+        const r = await fetchT('/api/journal/sessions').catch(() => null);
         if (!r?.ok) { el.innerHTML = '<p style="color:var(--text-muted);">No sessions found</p>'; return; }
         const data = await r.json();
         const sessions = data.sessions || [];
@@ -8970,22 +8749,14 @@ function _renderExitTimingHud() {
 
     const points = (_exitHudTradePoints || []).filter(p => p && _hudExitTimeSec(p) != null);
 
-    // Determine visible window: prefer chart's visible range, else dataset min→max.
+    // Rollup numbers should reflect the loaded trade-point set, not whatever
+    // slice of the BTC chart happens to be visible after pan/zoom.
     let from = null, to = null;
-    try {
-        const vr = _btcChart && _btcChart.timeScale && _btcChart.timeScale().getVisibleRange();
-        if (vr && Number.isFinite(Number(vr.from)) && Number.isFinite(Number(vr.to))) {
-            from = Number(vr.from);
-            to = Number(vr.to);
-        }
-    } catch (_) {}
-    if (from == null || to == null) {
-        if (points.length) {
-            const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
-            from = Math.min(...times);
-            to = Math.max(...times);
-            if (from === to) { from -= 60; to += 60; }
-        }
+    if (points.length) {
+        const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
+        from = Math.min(...times);
+        to = Math.max(...times);
+        if (from === to) { from -= 60; to += 60; }
     }
 
     let inWindow = (points.length && from != null && to != null)
@@ -8994,21 +8765,6 @@ function _renderExitTimingHud() {
             return t >= from && t <= to;
         })
         : [];
-
-    // The BTC candle feed's right edge often lags behind the most recent fills
-    // (stale/forming candle), and the user may have zoomed away — both leave the
-    // chart's visible range excluding every closed trade. Rather than dead-end
-    // the card with an empty state, fall back to the trade dataset's own range so
-    // recent exits always render.
-    if (!inWindow.length && points.length) {
-        const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
-        if (times.length) {
-            from = Math.min(...times);
-            to = Math.max(...times);
-            if (from === to) { from -= 60; to += 60; }
-            inWindow = points.slice();
-        }
-    }
 
     _exitHudWindow = { from, to };
 
@@ -9667,9 +9423,7 @@ async function refreshTradePoints() {
             _btcTradeOverlayPoints = overlayPoints.slice(-220);
             _queueBTCTradeOverlayDraw();
         }
-        if (_maState.view === 'macro') {
-            _maRenderBubbles();
-        }
+        _maRenderBubbles();
         return tradePoints;
     } catch (e) {
         console.error('trade point refresh error:', e);
@@ -9801,7 +9555,6 @@ function _clipBtcPricePoints(arr) {
 }
 
 // ── Cross-Asset Macro Alignment chart ─────────────────────────────
-const _MA_VIEW_KEY = 'psb_macro_align_view';
 const _MA_HIDDEN_KEY = 'psb_macro_align_hidden';
 let _maState = {
     interval: '15m',
@@ -9810,7 +9563,6 @@ let _maState = {
     assets: {},
     order: [],
     hidden: new Set(),
-    view: 'macro',
     hover: null,
     dpr: 1,
     layout: { W: 1200, H: 280, ML: 8, MR: 72, MT: 14, MB: 26 },
@@ -9818,8 +9570,6 @@ let _maState = {
     tradePoints: [],
 };
 try {
-    const v = localStorage.getItem(_MA_VIEW_KEY);
-    if (v === 'candles' || v === 'macro') _maState.view = v;
     const h = JSON.parse(localStorage.getItem(_MA_HIDDEN_KEY) || '[]');
     if (Array.isArray(h)) _maState.hidden = new Set(h.filter(x => typeof x === 'string'));
 } catch (_) {}
@@ -9827,10 +9577,6 @@ try {
 function _maSaveHidden() {
     try { localStorage.setItem(_MA_HIDDEN_KEY, JSON.stringify(Array.from(_maState.hidden))); } catch (_) {}
 }
-function _maSaveView() {
-    try { localStorage.setItem(_MA_VIEW_KEY, _maState.view); } catch (_) {}
-}
-
 function _maRenderChips() {
     const host = document.getElementById('macro-align-chips');
     if (!host) return;
@@ -10176,16 +9922,6 @@ function _maOnLeave() {
     _maState.hover = null;
 }
 
-function _maApplyView() {
-    const sec = document.getElementById('macro-align-section');
-    if (!sec) return;
-    sec.classList.toggle('candles-view', _maState.view === 'candles');
-    const togM = document.getElementById('macro-align-tog-macro');
-    const togC = document.getElementById('macro-align-tog-candles');
-    if (togM) { togM.classList.toggle('active', _maState.view === 'macro'); togM.setAttribute('aria-selected', _maState.view === 'macro'); }
-    if (togC) { togC.classList.toggle('active', _maState.view === 'candles'); togC.setAttribute('aria-selected', _maState.view === 'candles'); }
-}
-
 function _maBindOnce() {
     if (_maBindOnce._bound) return;
     _maBindOnce._bound = true;
@@ -10210,12 +9946,7 @@ function _maBindOnce() {
         wrap.addEventListener('mousemove', _maOnHover);
         wrap.addEventListener('mouseleave', _maOnLeave);
     }
-    const togM = document.getElementById('macro-align-tog-macro');
-    const togC = document.getElementById('macro-align-tog-candles');
-    if (togM) togM.addEventListener('click', () => { _maState.view = 'macro'; _maSaveView(); _maApplyView(); _maDrawCanvas(); _maRenderBubbles(); });
-    if (togC) togC.addEventListener('click', () => { _maState.view = 'candles'; _maSaveView(); _maApplyView(); });
     window.addEventListener('resize', () => {
-        if (_maState.view !== 'macro') return;
         _maDrawCanvas();
         _maRenderBubbles();
     });
@@ -10223,7 +9954,6 @@ function _maBindOnce() {
 
 async function loadMacroAlignChart() {
     _maBindOnce();
-    _maApplyView();
     try {
         const r = await fetchT(`/api/macro_align/series?interval=${_maState.interval}&limit=${_maState.limit}`, 12000);
         if (!r || !r.ok) return;
@@ -10254,10 +9984,8 @@ async function loadMacroAlignChart() {
             }
         }
         _maRenderChips();
-        if (_maState.view === 'macro') {
-            _maDrawCanvas();
-            _maRenderBubbles();
-        }
+        _maDrawCanvas();
+        _maRenderBubbles();
         _maRenderFoot();
         const upd = document.getElementById('macro-align-updated');
         if (upd) {
