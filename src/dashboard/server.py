@@ -203,14 +203,31 @@ def _iter_lane_entries(journal: Any, limit: int = 5000) -> List[Dict[str, Any]]:
         return []
 
 
+# mtime-keyed cache for settings.yaml (2026-06-20: cycle-stall root cause, py-spy-confirmed).
+# Many dashboard endpoints parse settings.yaml on every poll; pure-Python yaml.safe_load
+# holds the GIL, and since the dashboard runs IN the bot process that starves the trading
+# loop (cycles 6s -> 300s+). Re-parse only when the file actually changes on disk.
+_yaml_config_cache: Dict[str, Any] = {"mtime": None, "value": None}
+
+
 def _load_yaml_config() -> Dict[str, Any]:
     if not CONFIG_PATH.exists():
         return {}
     try:
+        mtime = CONFIG_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    cache = _yaml_config_cache
+    if cache["value"] is not None and cache["mtime"] == mtime:
+        return cache["value"]
+    try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+            value = yaml.safe_load(f) or {}
     except Exception:
-        return {}
+        value = cache["value"] if cache["value"] is not None else {}
+    cache["value"] = value
+    cache["mtime"] = mtime
+    return value
 
 
 def _append_jsonl_record(path: Path, payload: Dict[str, Any]) -> None:
@@ -3443,11 +3460,7 @@ async def get_strategy_watchlist(
     """
     limit = max(10, min(limit, 200))
     _ = include_general_markets
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception:
-        cfg = {}
+    cfg = _load_yaml_config()  # mtime-cached: avoid re-parsing settings.yaml per poll (GIL/loop starvation)
 
     strategies_cfg = cfg.get("strategies", {})
     watchlist: List[Dict[str, Any]] = []
