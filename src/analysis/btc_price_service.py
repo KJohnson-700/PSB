@@ -420,18 +420,11 @@ class BTCPriceService:
 
     def get_chainlink_price(self) -> Tuple[Optional[float], Optional[datetime]]:
         """Read BTC/USD price from Chainlink oracle on Polygon."""
-        try:
-            from web3 import Web3
-        except Exception as exc:
-            if not self._warned_missing_web3:
-                logger.warning("Chainlink BTC disabled: web3 unavailable (%s)", exc)
-                self._warned_missing_web3 = True
+        import os as _os
+        if _os.getenv("PSB_DISABLE_ORACLE") == "1":
             return None, None
 
         # Process-shared result cache (see sol_btc_service for the dict).
-        # Every strategy instantiates its own BTCPriceService, so without
-        # this dedup we'd issue 2 blocking Web3 RPCs per strategy per 60s
-        # cycle for the same on-chain BTC/USD feed.
         from src.analysis.sol_btc_service import (
             _CHAINLINK_RESULT_CACHE,
             _CHAINLINK_RESULT_TTL_SEC,
@@ -444,35 +437,14 @@ class BTCPriceService:
             if (time.monotonic() - _ts) < _CHAINLINK_RESULT_TTL_SEC:
                 return _price, _updated
 
-        if self._w3 is not None and self._chainlink_contract is not None:
-            try:
-                round_data = self._chainlink_contract.functions.latestRoundData().call()
-                _, answer, _, updated_at, _ = round_data
-                decimals = self._chainlink_contract.functions.decimals().call()
-                price = answer / (10 ** decimals)
-                updated = datetime.utcfromtimestamp(updated_at)
-                _CHAINLINK_RESULT_CACHE[_cache_key] = (price, updated, time.monotonic())
-                return price, updated
-            except Exception:
-                self._w3 = None
-                self._chainlink_contract = None
-
+        # Raw JSON-RPC eth_call — NOT web3. BISECTION-CONFIRMED the web3 eth_call
+        # C-extensions (eth-abi/eth-hash/coincurve) leaked native memory ~60MB/min.
         for rpc_url in self.polygon_rpcs:
             try:
-                w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 8}))
-                contract = w3.eth.contract(
-                    address=w3.to_checksum_address(CHAINLINK_BTC_USD),
-                    abi=CHAINLINK_ABI,
-                )
-                round_data = contract.functions.latestRoundData().call()
-                _, answer, _, updated_at, _ = round_data
-                decimals = contract.functions.decimals().call()
-                price = answer / (10 ** decimals)
-                updated = datetime.utcfromtimestamp(updated_at)
-                self._w3 = w3
-                self._chainlink_contract = contract
+                price, updated = self._raw_chainlink_read(rpc_url, CHAINLINK_BTC_USD)
+                if price is None:
+                    continue
                 _CHAINLINK_RESULT_CACHE[_cache_key] = (price, updated, time.monotonic())
-                logger.info(f"Chainlink BTC/USD: ${price:,.2f} via {rpc_url}")
                 return price, updated
             except Exception as e:
                 logger.debug(f"Chainlink RPC {rpc_url} failed: {e}")
@@ -483,6 +455,38 @@ class BTCPriceService:
             logger.warning("Chainlink: all Polygon RPCs failed")
             self._last_chainlink_fail_warn_ts = _now
         return None, None
+
+    def _raw_chainlink_read(self, rpc_url: str, address: str):
+        """latestRoundData() + decimals() via RAW JSON-RPC eth_call over the pooled
+        requests session — no web3 (its C-extensions were the native leak)."""
+        def _eth_call(data_hex: str):
+            payload = {
+                "jsonrpc": "2.0", "method": "eth_call",
+                "params": [{"to": address, "data": data_hex}, "latest"], "id": 1,
+            }
+            r = self._http_session.post(rpc_url, json=payload, timeout=8)
+            r.raise_for_status()
+            return (r.json() or {}).get("result")
+
+        raw = _eth_call("0xfeaf968c")  # latestRoundData()
+        if not raw:
+            return None, None
+        h = raw[2:] if raw.startswith("0x") else raw
+        if len(h) < 64 * 5:
+            return None, None
+        answer = int(h[64:128], 16)
+        if answer >= 2 ** 255:
+            answer -= 2 ** 256
+        updated_at = int(h[192:256], 16)
+        draw = _eth_call("0x313ce567")  # decimals()
+        if not draw:
+            return None, None
+        dh = draw[2:] if draw.startswith("0x") else draw
+        decimals = int(dh, 16)
+        if decimals <= 0 or decimals > 30 or answer <= 0:
+            return None, None
+        price = answer / (10 ** decimals)
+        return (price, datetime.utcfromtimestamp(updated_at)) if price > 0 else (None, None)
 
     # ──────────────────────────────────────────────────────────────────
     # Basic Indicators

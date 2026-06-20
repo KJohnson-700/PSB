@@ -74,7 +74,11 @@ CHAINLINK_ABI = [
 # (network, address) so BTCPriceService + every SOLBTCService subclass share
 # the same BTC feed result. Value is (price, on_chain_updated_at, fetch_monotonic).
 _CHAINLINK_RESULT_CACHE: Dict[Tuple[str, str], Tuple[float, datetime, float]] = {}
-_CHAINLINK_RESULT_TTL_SEC = 60.0
+# 120s (2026-06-19): was 60s; briefly tried 600s to cut RPC connection churn but
+# that aged the cached price past the 180s oracle-basis freshness check -> oracle_stale
+# blocked trades. 120s stays under that bar while halving the fetch rate. (The leak is
+# NOT this path — reducing it did not move RSS; see ledger.)
+_CHAINLINK_RESULT_TTL_SEC = 120.0
 
 
 ORACLE_FEEDS = {
@@ -315,6 +319,11 @@ class SOLBTCService:
         self.lag_signal_min_pct = float(lag_signal_min_pct)
         self.spike_z_threshold = 1.5  # Z-score threshold for adaptive BTC spike detection
         self._oracle_clients: Dict[Tuple[str, str], Tuple[object, object]] = {}
+        # Don't recreate the Web3 client on every transient RPC failure (it churns
+        # native OpenSSL/socket memory that malloc_trim can't reclaim). Keep the
+        # cached client and only rotate after this many consecutive failures.
+        self._oracle_fail_counts: Dict[Tuple[str, str], int] = {}
+        self._oracle_max_consec_fail = 5
         self._warned_missing_web3 = False
         self._cache: Dict[str, Tuple[float, pd.DataFrame]] = {}  # key -> (timestamp, df)
         self._cache_ttl = 60  # seconds
@@ -329,6 +338,45 @@ class SOLBTCService:
         # is reused for CoinGecko fallback (different host, separate pool entry).
         self._http_session: requests.Session = requests.Session()
 
+    # Per-interval staleness cap: a candle may only be served from stale cache up
+    # to ~2.5 candle-widths old (floor 180s). Prevents the silent corruption where
+    # a 1m candle was served 15min (15 candles!) stale during a Binance outage and
+    # MACD/RSI were computed on data 15 bars behind. Beyond the cap we return empty
+    # so the lane degrades/sits out rather than trading on rotten indicators.
+    _INTERVAL_SECONDS = {
+        "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+        "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+    }
+
+    def _stale_cap_for_key(self, cache_key: str) -> float:
+        """Max age (sec) a stale cached candle may be served for, by interval."""
+        try:
+            interval = cache_key.split("_")[2]
+        except (IndexError, AttributeError):
+            interval = ""
+        cw = self._INTERVAL_SECONDS.get(interval)
+        if not cw:
+            return float(self._stale_cache_max_age_sec)
+        # 2.5 candle-widths, floored at 180s, never looser than the global cap.
+        return min(float(self._stale_cache_max_age_sec), max(180.0, 2.5 * cw))
+
+    @staticmethod
+    def _close_oracle_client(client) -> None:
+        """Close a Web3 client's underlying HTTP session to release native
+        OpenSSL/socket memory before dropping it (recreate-without-close was the leak)."""
+        if not client:
+            return
+        try:
+            w3 = client[0]
+            provider = getattr(w3, "provider", None)
+            # web3 v6 keeps the session on a manager; older versions on .session
+            mgr = getattr(provider, "_request_session_manager", None)
+            sess = getattr(mgr, "session", None) or getattr(provider, "session", None)
+            if sess is not None and hasattr(sess, "close"):
+                sess.close()
+        except Exception:
+            pass
+
     def _get_stale_cached_klines(self, cache_key: str) -> Tuple[pd.DataFrame, Optional[float]]:
         """Return stale cached klines for key when fresh pull fails."""
         cached = self._cache.get(cache_key)
@@ -338,7 +386,7 @@ class SOLBTCService:
         if df is None or df.empty:
             return pd.DataFrame(), None
         age = max(0.0, time.time() - float(ts))
-        if age > float(self._stale_cache_max_age_sec):
+        if age > self._stale_cap_for_key(cache_key):
             return pd.DataFrame(), age
         return df, age
 
@@ -512,64 +560,35 @@ class SOLBTCService:
         symbol: str,
     ) -> Tuple[Optional[float], Optional[datetime], Optional[str]]:
         """Read asset/USD price from the configured Chainlink reference feed."""
-        try:
-            from web3 import Web3
-        except Exception as exc:
-            if not self._warned_missing_web3:
-                logger.warning(
-                    "Chainlink disabled for %s: web3 unavailable (%s)",
-                    symbol,
-                    exc,
-                )
-                self._warned_missing_web3 = True
+        # Bisection kill-switch (leak hunt): PSB_DISABLE_ORACLE=1 skips the entire
+        # web3/Chainlink eth_call path so we can measure its RSS-slope contribution.
+        import os as _os
+        if _os.getenv("PSB_DISABLE_ORACLE") == "1":
             return None, None, None
-
         feed = ORACLE_FEEDS.get((symbol or "").upper())
         if not feed:
             return None, None, None
         network, address = feed
         cache_key = (network, address)
 
-        # Process-shared result cache: skip the 2 blocking Web3 RPCs when a
-        # recent read for this feed is on hand. Chainlink updates ~hourly on
-        # major pairs, so a 60s TTL is well within freshness tolerance.
+        # Result cache (TTL): skip the RPC when a recent read is on hand.
         _cached_result = _CHAINLINK_RESULT_CACHE.get(cache_key)
         if _cached_result is not None:
             _price, _updated, _ts = _cached_result
             if (time.monotonic() - _ts) < _CHAINLINK_RESULT_TTL_SEC:
                 return _price, _updated, network
 
-        cached = self._oracle_clients.get(cache_key)
-        if cached is not None:
-            try:
-                _w3, contract = cached
-                round_data = contract.functions.latestRoundData().call()
-                _, answer, _, updated_at, _ = round_data
-                decimals = contract.functions.decimals().call()
-                price = answer / (10 ** decimals)
-                updated = datetime.utcfromtimestamp(updated_at)
-                _CHAINLINK_RESULT_CACHE[cache_key] = (price, updated, time.monotonic())
-                return price, updated, network
-            except Exception:
-                self._oracle_clients.pop(cache_key, None)
-
+        # Read via RAW JSON-RPC eth_call — NOT web3. BISECTION-CONFIRMED (2026-06-19):
+        # the web3 eth_call path (eth-abi/eth-hash/coincurve C-extensions) leaked
+        # native memory ~60MB/min (RSS climbed, gc-flat, malloc_trim-proof; disabling
+        # the oracle flattened the slope 63->~1MB/min). Raw eth_call over the pooled
+        # requests session does the same read with zero C-extension allocation.
         for rpc_url in self._chainlink_rpcs_for_network(network):
             try:
-                w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 8}))
-                contract = w3.eth.contract(
-                    address=w3.to_checksum_address(address),
-                    abi=CHAINLINK_ABI,
-                )
-                round_data = contract.functions.latestRoundData().call()
-                _, answer, _, updated_at, _ = round_data
-                decimals = contract.functions.decimals().call()
-                price = answer / (10 ** decimals)
-                updated = datetime.utcfromtimestamp(updated_at)
-                self._oracle_clients[cache_key] = (w3, contract)
+                price, updated = self._raw_chainlink_read(rpc_url, address)
+                if price is None:
+                    continue
                 _CHAINLINK_RESULT_CACHE[cache_key] = (price, updated, time.monotonic())
-                logger.info(
-                    f"Chainlink {symbol.replace('USDT', '')}/USD: ${price:,.2f} via {network}:{rpc_url}"
-                )
                 return price, updated, network
             except Exception as e:
                 logger.debug(f"Chainlink RPC {network}:{rpc_url} failed for {symbol}: {e}")
@@ -582,6 +601,41 @@ class SOLBTCService:
             logger.warning(f"Chainlink: all {network} RPCs failed for {symbol}")
             self._last_chainlink_fail_warn[_key] = _now
         return None, None, network
+
+    def _raw_chainlink_read(self, rpc_url: str, address: str):
+        """Read Chainlink latestRoundData() + decimals() via RAW JSON-RPC eth_call
+        over the pooled requests session — no web3 (its C-extensions were the leak)."""
+        def _eth_call(data_hex: str):
+            payload = {
+                "jsonrpc": "2.0", "method": "eth_call",
+                "params": [{"to": address, "data": data_hex}, "latest"], "id": 1,
+            }
+            r = self._http_session.post(rpc_url, json=payload, timeout=8)
+            r.raise_for_status()
+            return (r.json() or {}).get("result")
+
+        # latestRoundData() = selector 0xfeaf968c -> 5x 32-byte words:
+        # (roundId, answer int256, startedAt, updatedAt, answeredInRound)
+        raw = _eth_call("0xfeaf968c")
+        if not raw:
+            return None, None
+        h = raw[2:] if raw.startswith("0x") else raw
+        if len(h) < 64 * 5:
+            return None, None
+        answer = int(h[64:128], 16)
+        if answer >= 2 ** 255:
+            answer -= 2 ** 256  # int256 two's-complement
+        updated_at = int(h[192:256], 16)
+        # decimals() = selector 0x313ce567
+        draw = _eth_call("0x313ce567")
+        if not draw:
+            return None, None
+        dh = draw[2:] if draw.startswith("0x") else draw
+        decimals = int(dh, 16)
+        if decimals <= 0 or decimals > 30 or answer <= 0:
+            return None, None
+        price = answer / (10 ** decimals)
+        return (price, datetime.utcfromtimestamp(updated_at)) if price > 0 else (None, None)
 
     def get_chainlink_btc_price(self) -> Tuple[Optional[float], Optional[datetime]]:
         """Read BTC/USD price from Chainlink reference feed."""
@@ -1162,6 +1216,11 @@ class SOLBTCService:
             )
 
         # --- 15m trend (confirmation via MACD) ---
+        # NOTE: kept at limit=100 (NOT deduped to 200). A 200-row series changes
+        # EMA-50 warmup vs 100, which can marginally shift this multi_tf 15m trend →
+        # multi_tf.aligned → alignment scoring (a decision input). During calibration
+        # we don't perturb decision inputs for a ~1-fetch/cycle saving that is moot now
+        # that scans run off-loop. Leave at 100.
         df_15m = self.fetch_klines(self.alt_symbol, "15m", 100)
         if not df_15m.empty:
             macd_15m = self.calc_macd(df_15m, fast=12, slow=26, signal=9)
