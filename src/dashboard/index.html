@@ -3888,7 +3888,7 @@ async function fetchAll() {
     try {
         [statusR, scannerR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR] = await Promise.all([
             fetchT('/api/status'),
-            fetchT('/api/scanner/health', 2000),
+            fetchT('/api/scanner/health', 5000),
             fetchT('/api/strategy/metrics'),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
             needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
@@ -5456,15 +5456,23 @@ function _setHeroScannerOrb(ageSeconds, hasAny, fetchOk = true) {
 }
 
 function _tickHeroScannerOrb() {
-    if (_heroScannerFetchFailedAtMs && Date.now() - _heroScannerFetchFailedAtMs < 120000) {
+    const haveCycle = _heroScannerNewestCycleMs != null;
+    const cycleAge = haveCycle ? (Date.now() - _heroScannerNewestCycleMs) / 1000 : Infinity;
+    const failing = _heroScannerFetchFailedAtMs && (Date.now() - _heroScannerFetchFailedAtMs < 120000);
+    // A brief scanner-health fetch hiccup (timeout/backoff) must NOT blank the orb to
+    // "Dashboard blind" when we still have a fresh last-cycle time — keep showing the
+    // real scan age (it ages into Lagging/Stuck honestly if the bot truly stalls).
+    // Only show "Dashboard blind" when the fetch is failing AND we have no recent
+    // cycle data to fall back on.
+    if (failing && (!haveCycle || cycleAge > 150)) {
         _setHeroScannerOrb(NaN, false, false);
         return;
     }
-    if (_heroScannerNewestCycleMs == null) {
+    if (!haveCycle) {
         _setHeroScannerOrb(NaN, false);
         return;
     }
-    _setHeroScannerOrb((Date.now() - _heroScannerNewestCycleMs) / 1000, true);
+    _setHeroScannerOrb(cycleAge, true);
 }
 
 function updateHeroScannerFromHealth(payload) {
