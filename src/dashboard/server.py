@@ -943,6 +943,20 @@ def _cached_public_feedback_status(config: Dict[str, Any]) -> Dict[str, Any]:
     return value
 
 
+def _feedback_status_nonblocking() -> Optional[Dict[str, Any]]:
+    """Return the last cached feedback status WITHOUT ever parsing on miss.
+
+    public_feedback_status() parses the multi-hundred-MB settled ghost log. In
+    split/--dashboard-only mode the dashboard process never has a warm cache, so
+    calling the blocking variant inside /api/status made the whole endpoint
+    exceed its 12s deadline -> 504 -> the status cache never populated -> bankroll
+    and the orb stayed dead permanently. The headline status must never block on
+    that parse; the feedback panel has its own (slow-tolerant) endpoint to warm it.
+    """
+    cache = _feedback_status_cache
+    return cache["value"] if cache["value"] is not None else None
+
+
 def _get_journal():
     """Return a TradeJournal, rebuilding only when entries.jsonl changes on disk.
 
@@ -1155,6 +1169,16 @@ def _scanner_health_payload_sync() -> Dict[str, Any]:
         if ms is not None and (newest_ms is None or ms > newest_ms):
             newest_ms = ms
 
+    # Split / --dashboard-only mode: the lightweight bot_runtime_status.json
+    # heartbeat does NOT carry last_cycle_times, so the loop above yields None
+    # and the orb shows "not connected". Fall back to the runtime file's own
+    # top-level `ts` (rewritten every cycle) as the freshness signal — that IS
+    # the scanner heartbeat. Keeps the orb honest without a bot-side change.
+    if newest_ms is None and runtime_status:
+        rt_ms = _parse_cycle_epoch_ms(runtime_status.get("ts"))
+        if rt_ms is not None:
+            newest_ms = rt_ms
+
     now_ms = int(_time_mod.time() * 1000)
     age_seconds = (now_ms - newest_ms) / 1000 if newest_ms is not None else None
     return {
@@ -1164,6 +1188,8 @@ def _scanner_health_payload_sync() -> Dict[str, Any]:
         "last_cycle_times": last_cycles,
         "newest_cycle_ms": newest_ms,
         "age_seconds": age_seconds,
+        "cycle_count": runtime_status.get("cycle_count") if runtime_status else None,
+        "phase": runtime_status.get("phase") if runtime_status else None,
         "ts": now_ms,
     }
 
@@ -1735,6 +1761,13 @@ async def get_scanner_health():
     )
 
 
+# Short-TTL snapshot of the disk-assembled status payload for split/dashboard-only
+# mode (see note in _get_status_payload_sync). Keyed by nothing — there is exactly
+# one trading process — so a plain {ts,value} cell suffices.
+_split_status_cache: Dict[str, Any] = {"ts": 0.0, "value": None}
+_SPLIT_STATUS_TTL = 5.0
+
+
 def _get_status_payload_sync():
     """Bot status.
 
@@ -1750,6 +1783,16 @@ def _get_status_payload_sync():
     kill_switch_file = DATA_ROOT / "KILL_SWITCH"
     kill_switch_active = kill_switch_file.exists()
     bot = _full_bot_instance()
+    # Split / --dashboard-only mode has no in-process bot, so this payload is
+    # assembled entirely from disk (journal rebuild + a 260MB feedback parse on a
+    # cache miss). Repeated frontend polls otherwise saturate the small dashboard
+    # thread pool — which is exactly what made /api/status hang >12s and starved
+    # the orb worker into 504s. Serve a short-TTL snapshot so the heavy disk
+    # assembly runs at most once per TTL; all other polls return instantly.
+    if bot is None:
+        _sc = _split_status_cache
+        if _sc["value"] is not None and (_time_mod.time() - _sc["ts"]) < _SPLIT_STATUS_TTL:
+            return _sc["value"]
     strategy_names = (
         "bitcoin",
         "sol_macro",
@@ -2029,7 +2072,7 @@ def _get_status_payload_sync():
     except Exception:
         decision_gates_disk = None
 
-    return {
+    _split_payload = {
         "running": split_bot_running,
         "mode": "paper" if dry_run else "live",
         "dry_run": dry_run,
@@ -2066,9 +2109,14 @@ def _get_status_payload_sync():
         "buy_no_skip_diagnostics": None,
         "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
-        "performance_feedback": _cached_public_feedback_status(cfg_disk),
+        # Non-blocking: never parse the 460MB settled log inside /api/status
+        # (that 12s+ parse is what 504'd the endpoint and killed bankroll/orb).
+        "performance_feedback": _feedback_status_nonblocking(),
         "ts": int(_time_mod.time()),
     }
+    _split_status_cache["value"] = _split_payload
+    _split_status_cache["ts"] = _time_mod.time()
+    return _split_payload
 
 
 def _process_env_ai_keys() -> Dict[str, str]:
