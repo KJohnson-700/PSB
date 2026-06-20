@@ -51,6 +51,7 @@ from src.analysis.rejected_candidate_log import (
 )
 from src.analysis.math_utils import PositionSizer
 from src.analysis.btc_price_service import BTCPriceService, TechnicalAnalysis
+from src.strategies._scan_timeout import analysis_with_timeout
 from src.analysis.btc_1h_regime import (
     DEFAULT_SIZE_MULT,
     classify_btc_1h_sma_regime,
@@ -161,6 +162,10 @@ class BitcoinSignal(BaseModel):
     edge: float = Field(..., description="Estimated edge")
     token_id_yes: str = Field(..., description="YES token ID")
     token_id_no: str = Field(..., description="NO token ID")
+    condition_id: Optional[str] = Field(None, description="Polymarket conditionId")
+    market_slug: Optional[str] = Field(None, description="Polymarket market slug")
+    outcome_label_yes: Optional[str] = Field(None, description="Label for the first CLOB outcome token")
+    outcome_label_no: Optional[str] = Field(None, description="Label for the second CLOB outcome token")
     end_date: Optional[datetime] = Field(None, description="Resolution date")
     direction: str = Field(..., description="UP or DOWN — what this market is betting on")
     btc_threshold: Optional[float] = Field(None, description="BTC price threshold from question")
@@ -262,7 +267,8 @@ class BitcoinStrategy:
         self._log_tf_config_overrides()
         self.min_liquidity = self.config.get('min_liquidity', 10000)
         self.min_edge = self.config.get('min_edge', 0.08)
-        self.min_edge_5m = float(self._tf_cfg("5m", "min_edge", self.min_edge))
+        # NOTE: per-window 5m min_edge is sourced live via _min_edge_for_window()/_tf_cfg();
+        # the old self.min_edge_5m attribute was assigned but never read (removed 2026-06-20).
         self.min_edge_15m_neutral = float(
             self.config.get("min_edge_15m_neutral", self.min_edge) or self.min_edge
         )
@@ -294,10 +300,10 @@ class BitcoinStrategy:
             self.config.get("ai_decision_timeout_sec", legacy_ai_timeout) or legacy_ai_timeout
         )
         self.use_ai_updown_5m = bool(self.config.get("use_ai_updown_5m", False))
-        self.kelly_fraction = self.config.get('kelly_fraction', 0.15)
+        # kelly_fraction lives on the PositionSizer (math_utils); the local copy here was
+        # never read. clear_distance_pct was assigned and never used. Both removed 2026-06-20.
         self.entry_price_min = self.config.get('entry_price_min', 0.15)
         self.entry_price_max = self.config.get('entry_price_max', 0.85)
-        self.clear_distance_pct = self.config.get('clear_distance_pct', 0.15)
         # ── [1h] Simple consensus-follow BUY_YES lane (DEFAULT OFF; forward-test) ──
         # Ghost-validated (rejected_candidates_settled): BTC 1h BUY_YES at yes_price in
         # [0.50,0.85] = 65.8% WR / +$71 over 732 settled, vs the gated lane's 130 / -$1.
@@ -487,6 +493,48 @@ class BitcoinStrategy:
             quant_side=quant_side,
             momentum_side=momentum_side,
         )
+
+    def _btc_window_delta_flip(
+        self, ta: Any, tf: str, mins_left: float, action: str
+    ):
+        """Tape-truth side override for BTC up/down markets (5m/15m only).
+
+        Ports the alt ``_window_delta_flip`` (sol_macro.py) to BTC. When BTC's
+        OWN % move since the window opened clearly OPPOSES the chosen side,
+        redirect to the tape side instead of forcing the (lagging-bias) entry.
+        Every alt already has this override; BTC did not — so a 4H ``htf_bias``
+        stuck BULLISH drove long-only entries into a falling intraday tape
+        (2026-06-17: 5m/15m −$150, long-only, mfe≈0 on every stopped loser).
+
+        Keys on the same model-independent window-delta signal the alts use; the
+        BTC ``TechnicalAnalysis`` object exposes the identical ``window_open_<tf>``
+        fields, so ``evaluate_window_delta`` works unchanged. REDIRECT, never a
+        block (block-mode froze the bot historically).
+
+        Returns ``(action, direction, effective_side, wd_prob)`` on a flip, else
+        ``None`` (gate off, delta unavailable → fail OPEN, tape agrees, or tape
+        within ``window_delta_flip_margin`` of 0.5 — don't flip on coin-flip
+        noise). The caller restricts this to 5m/15m; 1h is intentionally left
+        bias-driven. TODO(1h): if BTC 1h degrades, lift the caller's tf guard to
+        include 1h and re-tune the margin.
+        """
+        if not bool(self.config.get("window_delta_confirm_enabled", False)):
+            return None
+        try:
+            from src.analysis.window_delta import evaluate_window_delta
+
+            wd = evaluate_window_delta(ta, tf, mins_left)
+        except Exception:
+            return None
+        if wd is None:
+            return None
+        _move, prob = wd
+        fmargin = float(self.config.get("window_delta_flip_margin", 0.05) or 0.0)
+        if action == "BUY_YES" and prob < 0.5 - fmargin:
+            return "BUY_NO", "DOWN", "SHORT", prob
+        if action == "BUY_NO" and prob > 0.5 + fmargin:
+            return "BUY_YES", "UP", "LONG", prob
+        return None
 
     def _btc_direction_guard_reason(
         self,
@@ -1640,7 +1688,11 @@ class BitcoinStrategy:
         logger.info(f"Bitcoin strategy: Found {len(btc_markets)} BTC markets")
 
         # ── Fetch full technical analysis ONCE per cycle ──
-        ta = self.btc_service.get_full_analysis()
+        # Off-loop with a hard timeout so a slow data fetch can't wedge the cycle.
+        _scan_to = float(self.config.get("scan_analysis_timeout_sec", 15.0) or 15.0)
+        ta = await analysis_with_timeout(
+            self.btc_service.get_full_analysis, lane="bitcoin", timeout_sec=_scan_to
+        )
         btc_1h_regime = "BULL"
         if ta and self._btc_1h_regime_gates.get("enabled", False):
             btc_1h_regime = self._classify_btc_1h_regime(ta)
@@ -1928,6 +1980,25 @@ class BitcoinStrategy:
                 effective_side = direction_decision.effective_side
                 side_source = direction_decision.side_source
 
+                # ── [5m/15m] window-delta tape flip ──
+                # Redirect the htf-bias-chosen side to the tape side when BTC's
+                # own % move since window-open clearly opposes it. 1h is excluded
+                # on purpose (bias-driven, +EV long-only). Runs BEFORE the
+                # disable_* sit-outs below, so they re-apply to the flipped side
+                # (no post-flip bypass — cf. the alt _post_flip_disabled_side fix).
+                # TODO(1h): extend this guard to "1h" if BTC 1h WR/PnL degrades.
+                if _updown_tf in ("5m", "15m"):
+                    _btc_wd_flip = self._btc_window_delta_flip(
+                        ta, _updown_tf, _eval_left, action
+                    )
+                    if _btc_wd_flip is not None:
+                        action, direction, effective_side, _wd_prob = _btc_wd_flip
+                        allowed_side = effective_side
+                        side_source = f"{side_source or ''}+window_delta_flip"
+                        reason_parts.append(
+                            f"window_delta_flip->{effective_side}(p={_wd_prob:.3f})"
+                        )
+
                 # ── BUY_YES manual disable ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
                 # Downside leg uses BUY_NO on the NO token.
@@ -2016,6 +2087,8 @@ class BitcoinStrategy:
                             est_prob_up=0.50,
                             htf_bias=htf_bias,
                             btc_1h_regime=btc_1h_regime if ta else None,
+                            side_source=locals().get("side_source"),
+                            resolver_path=locals().get("resolver_path"),
                             context={
                                 "btc_1h_regime": btc_1h_regime if ta else None,
                                 "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
@@ -2227,6 +2300,10 @@ class BitcoinStrategy:
                                     reason=f"hist_gate_{window_label}_long_reject", market=market,
                                     yes_price=yes_price, est_prob_up=est_prob_up, htf_bias=htf_bias,
                                     btc_1h_regime=btc_1h_regime if ta else None,
+                                    # Forward resolved side so this LONG-side gate reject buckets by
+                                    # lane instead of pre_resolver_reject. locals().get => safe None.
+                                    side_source=locals().get("side_source"),
+                                    resolver_path=locals().get("resolver_path"),
                                     context={
                                         "btc_1h_regime": btc_1h_regime if ta else None,
                                         "macd_4h_histogram_rising": bool(macd_4h.histogram_rising),
@@ -3570,6 +3647,56 @@ class BitcoinStrategy:
                         composite.floor,
                         composite.components,
                     )
+                    # Instrument the neutral-15m composite floor so it is
+                    # ghost-validatable (without this it only bumps a live ops
+                    # counter and never settles — can't tell if the floor
+                    # over-blocks +EV neutral candidates). Mirrors sol_macro.
+                    log_rejected_candidate(
+                        strategy="bitcoin",
+                        window="15m",
+                        side="LONG" if action == "BUY_YES" else "SHORT",
+                        action=action,
+                        reason="composite_score_below_floor",
+                        market=market,
+                        yes_price=yes_price,
+                        est_prob_up=estimated_prob,
+                        htf_bias=htf_bias,
+                        stage="composite_score_below_floor",
+                        gate_reason=composite.reason,
+                        gate_stage="composite_floor",
+                        btc_1h_regime=btc_1h_regime if ta else None,
+                        side_source=locals().get("side_source"),
+                        convergence_score=composite.convergence_score,
+                        context={
+                            "composite_score": round(float(composite.score), 6),
+                            "composite_floor": round(float(composite.floor), 6),
+                            "composite_components": composite.components,
+                            "edge": round(float(edge), 6),
+                            "effective_min_edge": round(float(effective_min_edge), 6),
+                            "raw_est_prob": round(float(raw_est_prob), 6),
+                            "estimated_prob": round(float(estimated_prob), 6),
+                            "confidence": round(float(confidence), 6),
+                            "btc_1h_regime": btc_1h_regime if ta else None,
+                            **build_market_context(
+                                asset_spot=ta.current_price,
+                                btc_spot=ta.current_price,
+                                rsi_14=ta.rsi_14,
+                                atr_14=getattr(ta.trend_sabre, "atr", None),
+                                macd_hist_5m=getattr(getattr(getattr(ta, "tf_5m", None), "macd", None), "histogram", None),
+                                macd_hist_15m=getattr(getattr(ta, "macd_15m", None), "histogram", None),
+                                macd_hist_1h=getattr(getattr(ta, "macd_1h", None), "histogram", None),
+                                rsi_5m=getattr(getattr(ta, "tf_5m", None), "rsi_14", None),
+                                rsi_15m=getattr(getattr(ta, "tf_15m", None), "rsi_14", None),
+                                rsi_1h=getattr(getattr(ta, "tf_1h", None), "rsi_14", None),
+                            ),
+                        },
+                        probe_variants=build_threshold_probe_variants(
+                            metric_name="composite_score",
+                            observed_value=float(composite.score),
+                            baseline_threshold=float(composite.floor),
+                        ),
+                        policy_version="composite_floor_v1",
+                    )
                     continue
 
                 if not ai_used:
@@ -3798,6 +3925,10 @@ class BitcoinStrategy:
                 edge=edge,
                 token_id_yes=market.token_id_yes,
                 token_id_no=market.token_id_no,
+                condition_id=getattr(market, "condition_id", None),
+                market_slug=getattr(market, "slug", None),
+                outcome_label_yes=getattr(market, "outcome_label_yes", None),
+                outcome_label_no=getattr(market, "outcome_label_no", None),
                 end_date=market.end_date,
                 direction=direction,
                 btc_threshold=threshold,
