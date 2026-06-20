@@ -13,7 +13,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from threading import Lock
 from threading import local as thread_local
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import aiohttp
@@ -41,6 +41,9 @@ class Market:
     token_id_yes: str
     token_id_no: str
     group_item_title: str
+    condition_id: str = ""
+    outcome_label_yes: str = "Yes"
+    outcome_label_no: str = "No"
     # Event slug when fetched via Gamma (e.g. eth-updown-15m-1712345678); empty for bulk feeds.
     slug: str = ""
     # Parsed candle duration for crypto Up/Down event markets. Current Gamma
@@ -156,6 +159,37 @@ def _dedupe_markets_by_id(markets: List[Market]) -> List[Market]:
         seen.add(mid)
         out.append(m)
     return out
+
+
+def _drop_expired_markets(
+    markets: List[Market], *, now: Optional[datetime] = None
+) -> Tuple[List[Market], int]:
+    """Remove markets whose ``end_date`` is already in the past (untradeable).
+
+    Fast crypto up/down markets keep reporting ``active=true closed=false`` in
+    Gamma for a window AFTER they resolve, so without this guard already-expired
+    windows (e.g. a 2:40AM market still in the set at 7AM) flow into the scan.
+    Each one then costs a /midpoint price-fetch + microstructure enrich + a full
+    per-lane TA pass every cycle — the backlog grows through the day and is what
+    balloons scanner_sync. Expired == untradeable, so this is pure dead-weight
+    removal (the strategies already require positive minutes-left to enter, so no
+    real entry is lost). Markets with no parsed ``end_date`` are kept (unknown).
+    """
+    if not markets:
+        return markets, 0
+    ref = now or datetime.now(timezone.utc)
+    kept: List[Market] = []
+    dropped = 0
+    for m in markets:
+        ed = getattr(m, "end_date", None)
+        if ed is not None:
+            if ed.tzinfo is None:
+                ed = ed.replace(tzinfo=timezone.utc)
+            if ed <= ref:
+                dropped += 1
+                continue
+        kept.append(m)
+    return kept, dropped
 
 
 def is_crypto_updown_market(market: Market) -> bool:
@@ -362,6 +396,12 @@ class MarketScanner:
         self._scan_call_count = 0
         self._updown_1h_cache: List[Market] = []
         self._updown_1h_cache_updated_at: Optional[datetime] = None
+        # WSS price overlay (wired by main after ws_client exists). Hot-path read.
+        self.ws_client = None
+        # Tokens we last requested prices for -> the WS subscription want-set
+        # (unioned with open positions in main, with stale-unsubscribe for OOM safety).
+        self._last_priced_token_ids: Set[str] = set()
+        self._ws_price_stats: Dict[str, int] = {"ws_hit": 0, "rest": 0}
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
@@ -385,6 +425,12 @@ class MarketScanner:
         self._gamma_http_retry_backoff_base_sec = max(
             0.05, float(_pm.get("gamma_http_retry_backoff_base_sec", 0.5))
         )
+        # WSS price overlay: serve mids from the pushed CLOB websocket book when fresh,
+        # falling back to REST /midpoint per uncovered token. Removes most of the
+        # per-cycle /midpoint fan-out. Fail-safe: any miss/staleness -> REST.
+        _ws = _tr.get("clob_ws", {}) or {}
+        self._ws_drive_prices = bool(_ws.get("drive_scanner_prices", False))
+        self._ws_price_max_age_sec = float(_ws.get("price_max_age_sec", 8.0) or 8.0)
 
     def reload_from_config(self, config: Dict[str, Any]) -> None:
         """Apply updated config to the live scanner without replacing caches/pool."""
@@ -678,9 +724,55 @@ class MarketScanner:
     _PRICE_CONCURRENCY = 20  # max simultaneous CLOB midpoint requests
 
     async def fetch_prices(self, token_ids: List[str]) -> Dict[str, float]:
-        """Fetch current mid prices for token IDs via CLOB API /midpoint."""
+        """Fetch current mid prices for token IDs.
+
+        When the WSS overlay is enabled, mids are read from the pushed CLOB
+        websocket book first (fresh within ``price_max_age_sec``); only the
+        uncovered tokens hit REST ``/midpoint``. Fail-safe: any miss/staleness
+        falls through to REST, so pricing is always correct even if WS is empty.
+        """
         if not token_ids:
             return {}
+
+        # Record the want-set so main can subscribe these tokens on the WS
+        # (with stale-unsubscribe for OOM safety).
+        self._last_priced_token_ids = set(token_ids)
+
+        prices: Dict[str, float] = {}
+        remaining = token_ids
+        ws = self.ws_client
+        if self._ws_drive_prices and ws is not None and getattr(ws, "order_books", None):
+            try:
+                loop_now = asyncio.get_event_loop().time()
+                max_age = self._ws_price_max_age_sec
+                covered: List[str] = []
+                for tid in token_ids:
+                    book = ws.order_books.get(tid)
+                    if book is None:
+                        continue
+                    mid = book.mid_price
+                    if mid is None or mid <= 0:
+                        continue
+                    if (loop_now - float(book.last_update or 0)) > max_age:
+                        continue  # stale -> let REST refresh it
+                    prices[tid] = mid
+                    covered.append(tid)
+                if covered:
+                    cov = set(covered)
+                    remaining = [t for t in token_ids if t not in cov]
+                    self._ws_price_stats["ws_hit"] += len(covered)
+            except Exception as e:  # never let the overlay break pricing
+                logger.debug("WS price overlay failed, full REST fallback: %s", e)
+                remaining = token_ids
+                prices = {}
+
+        if not remaining:
+            logger.debug(
+                "Scanner.fetch_prices: %d/%d served from WS (0 REST)",
+                len(prices), len(token_ids),
+            )
+            return prices
+        self._ws_price_stats["rest"] += len(remaining)
 
         session = await self._get_session()
         sem = asyncio.Semaphore(self._PRICE_CONCURRENCY)
@@ -707,8 +799,7 @@ class MarketScanner:
                 return token_id, None
 
         try:
-            results = await asyncio.gather(*[_get_mid(tid) for tid in token_ids])
-            prices: Dict[str, float] = {}
+            results = await asyncio.gather(*[_get_mid(tid) for tid in remaining])
             timeouts = 0
             errors = 0
             misses = 0
@@ -723,13 +814,14 @@ class MarketScanner:
                     misses += 1
             if timeouts or errors or misses:
                 logger.debug(
-                    "Scanner.fetch_prices: %d/%d ok (timeouts=%d errors=%d misses=%d)",
-                    len(prices), len(token_ids), timeouts, errors, misses,
+                    "Scanner.fetch_prices: %d/%d ok via REST (ws_served=%d timeouts=%d errors=%d misses=%d)",
+                    len(prices), len(token_ids), len(token_ids) - len(remaining),
+                    timeouts, errors, misses,
                 )
             return prices
         except Exception as e:
             logger.error(f"Error fetching prices: {e}")
-            return {}
+            return prices  # keep WS-served mids even if the REST leg errored
 
     _DATA_API = "https://data-api.polymarket.com"
 
@@ -824,6 +916,7 @@ class MarketScanner:
             try:
                 # Extract token IDs (YES and NO)
                 clob_token_ids = _coerce_json_list(m.get('clobTokenIds', []))
+                outcome_labels = [str(x) for x in _coerce_json_list(m.get("outcomes", []))]
                 if len(clob_token_ids) < 2:
                     continue
                     
@@ -863,6 +956,9 @@ class MarketScanner:
                     token_id_yes=token_id_yes,
                     token_id_no=token_id_no,
                     group_item_title=group_item_title,
+                    condition_id=str(m.get("conditionId") or m.get("condition_id") or ""),
+                    outcome_label_yes=outcome_labels[0] if outcome_labels else "Yes",
+                    outcome_label_no=outcome_labels[1] if len(outcome_labels) > 1 else "No",
                     slug=slug,
                     window_minutes=window_minutes,
                 )
@@ -949,6 +1045,7 @@ class MarketScanner:
                         yes_price = float(outcomes[0]) if outcomes else 0.5
                         no_price = float(outcomes[1]) if len(outcomes) > 1 else 1.0 - yes_price
                         tokens = _coerce_json_list(gm.get("clobTokenIds", "[]"))
+                        outcome_labels = [str(x) for x in _coerce_json_list(gm.get("outcomes", "[]"))]
                         token_yes = tokens[0] if tokens else ""
                         token_no = tokens[1] if len(tokens) > 1 else ""
                         end_str = gm.get("endDate") or gm.get("end_date_iso")
@@ -975,6 +1072,9 @@ class MarketScanner:
                             yes_price=yes_price, no_price=no_price, spread=spread_val,
                             end_date=end_date, token_id_yes=token_yes, token_id_no=token_no,
                             group_item_title=group_item_title,
+                            condition_id=str(gm.get("conditionId") or gm.get("condition_id") or ""),
+                            outcome_label_yes=outcome_labels[0] if outcome_labels else "Yes",
+                            outcome_label_no=outcome_labels[1] if len(outcome_labels) > 1 else "No",
                             slug=slug,
                             window_minutes=window_minutes,
                         )
@@ -1118,6 +1218,7 @@ class MarketScanner:
                 return None
 
             tokens = _coerce_json_list(gm.get("clobTokenIds", "[]"))
+            outcome_labels = [str(x) for x in _coerce_json_list(gm.get("outcomes", "[]"))]
             vol = float(gm.get("volume", 0) or 0)
             liq = float(gm.get("liquidity", 0) or 0)
             question = gm.get("question", "")
@@ -1155,6 +1256,9 @@ class MarketScanner:
                 token_id_yes=tokens[0] if tokens else "",
                 token_id_no=tokens[1] if len(tokens) > 1 else "",
                 group_item_title=group_item_title,
+                condition_id=str(gm.get("conditionId") or gm.get("condition_id") or ""),
+                outcome_label_yes=outcome_labels[0] if outcome_labels else "Yes",
+                outcome_label_no=outcome_labels[1] if len(outcome_labels) > 1 else "No",
                 slug=slug,
                 window_minutes=window_minutes,
             )
@@ -1287,13 +1391,23 @@ class MarketScanner:
                 q = m.question.lower()
                 return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
 
+            def _is_doge_mkt(m: Market) -> bool:
+                q = m.question.lower()
+                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+
+            def _is_bnb_mkt(m: Market) -> bool:
+                q = m.question.lower()
+                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+
             logger.info(
                 f"Fetched {len(fifteen)} 15m updown markets "
                 f"(BTC: {sum(1 for m in fifteen if 'bitcoin' in m.question.lower())}, "
                 f"SOL: {sum(1 for m in fifteen if 'solana' in m.question.lower())}, "
                 f"ETH: {sum(1 for m in fifteen if _is_eth_mkt(m))}, "
                 f"XRP: {sum(1 for m in fifteen if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
-                f"HYPE: {sum(1 for m in fifteen if _is_hype_mkt(m))})"
+                f"HYPE: {sum(1 for m in fifteen if _is_hype_mkt(m))}, "
+                f"DOGE: {sum(1 for m in fifteen if _is_doge_mkt(m))}, "
+                f"BNB: {sum(1 for m in fifteen if _is_bnb_mkt(m))})"
             )
         return fifteen
 
@@ -1330,13 +1444,23 @@ class MarketScanner:
                 q = m.question.lower()
                 return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
 
+            def _is_doge_mkt_5(m: Market) -> bool:
+                q = m.question.lower()
+                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+
+            def _is_bnb_mkt_5(m: Market) -> bool:
+                q = m.question.lower()
+                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+
             logger.info(
                 f"Fetched {len(markets)} 5m updown markets "
                 f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
                 f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
                 f"ETH: {sum(1 for m in markets if _is_eth_mkt_5(m))}, "
                 f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
-                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_5(m))})"
+                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_5(m))}, "
+                f"DOGE: {sum(1 for m in markets if _is_doge_mkt_5(m))}, "
+                f"BNB: {sum(1 for m in markets if _is_bnb_mkt_5(m))})"
             )
         return markets
 
@@ -1378,13 +1502,23 @@ class MarketScanner:
                 q = m.question.lower()
                 return "hyperliquid" in q or bool(re.search(r"\bhype\b", q))
 
+            def _is_doge_mkt_1h(m: Market) -> bool:
+                q = m.question.lower()
+                return "dogecoin" in q or bool(re.search(r"\bdoge\b", q))
+
+            def _is_bnb_mkt_1h(m: Market) -> bool:
+                q = m.question.lower()
+                return "binance coin" in q or bool(re.search(r"\bbnb\b", q))
+
             logger.info(
                 f"Fetched {len(markets)} 1h updown markets "
                 f"(BTC: {sum(1 for m in markets if 'bitcoin' in m.question.lower())}, "
                 f"SOL: {sum(1 for m in markets if 'solana' in m.question.lower())}, "
                 f"ETH: {sum(1 for m in markets if _is_eth_mkt_1h(m))}, "
                 f"XRP: {sum(1 for m in markets if 'xrp' in m.question.lower() or 'ripple' in m.question.lower())}, "
-                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_1h(m))})"
+                f"HYPE: {sum(1 for m in markets if _is_hype_mkt_1h(m))}, "
+                f"DOGE: {sum(1 for m in markets if _is_doge_mkt_1h(m))}, "
+                f"BNB: {sum(1 for m in markets if _is_bnb_mkt_1h(m))})"
             )
         return markets
 
@@ -1474,6 +1608,21 @@ class MarketScanner:
 
         sync_ms = int((time.perf_counter() - t_scan_start) * 1000)
         logger.info("Scanner: sync network phase finished in %dms", sync_ms)
+
+        # Drop already-expired markets BEFORE hydration/enrichment/strategy scan.
+        # Gamma still lists fast crypto up/down windows as active for a while after
+        # they resolve; scanning them wastes a price-fetch + full per-lane TA pass
+        # each cycle and is what balloons scanner_sync as the day's expired backlog
+        # grows. Expired = untradeable, so this is pure dead-weight removal.
+        _exp_now = datetime.now(timezone.utc)
+        _exp_total = 0
+        markets, _d = _drop_expired_markets(markets, now=_exp_now); _exp_total += _d
+        updown, _d = _drop_expired_markets(updown, now=_exp_now); _exp_total += _d
+        updown_5m, _d = _drop_expired_markets(updown_5m, now=_exp_now); _exp_total += _d
+        updown_1h, _d = _drop_expired_markets(updown_1h, now=_exp_now); _exp_total += _d
+        hype_alt, _d = _drop_expired_markets(hype_alt, now=_exp_now); _exp_total += _d
+        if _exp_total:
+            logger.info("Scanner: dropped %d expired markets before scan", _exp_total)
 
         async def _hydrate(ms: List[Market]) -> List[Market]:
             return await self.update_market_prices(ms) if ms else []
