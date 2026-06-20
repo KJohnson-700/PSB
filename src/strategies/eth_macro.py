@@ -976,21 +976,8 @@ class ETHMacroStrategy(SolMacroStrategy):
                 # Match the SolMacro parent: count the sit-out but do NOT spend
                 # shadow-observer budget on it — that budget is shared per-scan and
                 # should go to real structural rejects (liquidity / oracle /
-                # momentum) where a concrete side was rejected. The sit-out itself
-                # is recorded (log-only, tape-side notional) by the shared
-                # _shadow_log_neutral_sitout so its EV settles forward.
+                # momentum) where a concrete side was rejected.
                 _bump_skip("neutral_bias")
-                self._shadow_log_neutral_sitout(
-                    eth_ta.sol,
-                    _updown_tf,
-                    market,
-                    primary_htf_bias=resolution.primary_htf_bias,
-                    alt_trends={
-                        "alt_1h_trend": alt_1h_trend,
-                        "alt_15m_trend": alt_15m_trend,
-                        "alt_5m_trend": alt_5m_trend,
-                    },
-                )
                 logger.info(
                     "ETH Macro skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
                     market.question[:40],
@@ -1798,9 +1785,6 @@ class ETHMacroStrategy(SolMacroStrategy):
                 raw_est_prob = est_prob_up
                 side_source = f"{side_source or ''}+window_delta_flip"
                 reason_parts.append(f"window_delta_flip->{action}({_wd_prob:.3f})")
-            self._shadow_log_window_delta(
-                eth, _updown_tf, _eval_left, yes_price, action, side_source, market
-            )
             # Re-apply per-window sit-out post-flip (inherited helper): window_delta_flip
             # can turn a native long into a BUY_NO (or vice-versa), bypassing the pre-flip
             # disable_buy_no_<tf> / disable_buy_yes_<tf> gate. (2026-06-16 fix, ETH parity.)

@@ -319,7 +319,6 @@ def _exit_test_bot(status: OrderStatus) -> PolyBot:
     bot.circuit_breakers.action_from_position.return_value = "BUY_YES"
     bot.kelly_sizer = MagicMock()
     bot.notifier = SimpleNamespace(notify_exit=AsyncMock(return_value=True))
-    bot.exit_excursion = MagicMock()
     bot._get_exposure_manager_for = MagicMock(return_value=None)
     bot._apply_realized_pnl_to_bankroll = MagicMock(return_value=101.0)
     bot._log_closed_trade_for_calibration = MagicMock()
