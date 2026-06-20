@@ -2884,7 +2884,9 @@ class PolyBot:
         _btc_basis_bps = None
         try:
             _spot = float(getattr(self, "_latest_btc_spot", 0) or 0)
-            _cl, _ = self.bitcoin_strategy.btc_service.get_chainlink_price()
+            # get_chainlink_price() is a BLOCKING raw-JSON-RPC call — offload it so it
+            # never wedges the shared event loop on a cache miss (cycle stall / orb lag).
+            _cl, _ = await asyncio.to_thread(self.bitcoin_strategy.btc_service.get_chainlink_price)
             if _cl and float(_cl) > 0 and _spot > 0:
                 _btc_basis_bps = ((_spot - float(_cl)) / float(_cl)) * 10000.0
         except Exception:
