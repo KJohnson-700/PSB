@@ -1399,7 +1399,7 @@ async def sse_stream(request: Request):
         sse_interval = 2.0
         try:
             cfg = await _run_dashboard_blocking(
-                _read_config_file,
+                _load_yaml_config,
                 timeout=1.0,
                 label="sse_config_read",
             )
