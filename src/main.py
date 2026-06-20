@@ -51,6 +51,7 @@ from src.execution.live_testing import (
     ExitDecision,
 )
 from src.execution.exit_excursion_shadow import ExitExcursionShadow
+from src.execution.final_window_topup_shadow import FinalWindowTopupShadow
 from src.analysis.journal_learning import (
     learning_loop_enabled,
     run_learning_cycle,
@@ -634,6 +635,8 @@ class PolyBot:
         # Initialize components
         self.market_scanner = MarketScanner(self.config)
         self.ws_client = WebSocketClient(self.config)
+        # Let the scanner read pushed WS mids first (REST fallback inside fetch_prices).
+        self.market_scanner.ws_client = self.ws_client
         self.ai_agent = AIAgent(self.config)
         # Async-decoupled AI decision broker: strategies enqueue here instead of
         # awaiting the provider in their per-market loop. See the broker module
@@ -851,15 +854,37 @@ class PolyBot:
         # Position exit manager — checks active positions for TP/SL/time exits
         self.exit_manager = PositionExitManager(self.config)
         # Uncensored exit-excursion shadow logger (logging-only; see module docstring).
-        # Keeps sampling each market to window-close AFTER our exit so MFE/MAE aren't
-        # censored at the TP/stop — unlocks per-lane TP-raise + stop-width tuning.
+        # 2026-06-20: default OFF — stale. Written but has NO reader anywhere in code;
+        # exit calibration concluded. Slated for full removal.
         try:
             _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
             self.exit_excursion = ExitExcursionShadow(
-                enabled=bool(_excfg.get("exit_excursion_shadow_enabled", True))
+                enabled=bool(_excfg.get("exit_excursion_shadow_enabled", False))
             )
         except Exception:
             self.exit_excursion = ExitExcursionShadow(enabled=False)
+
+        # Final-window winner top-up — SHADOW stage (logging-only; default-off via
+        # final_window_topup.shadow_enabled). Validates OUR winner-detection accuracy
+        # on BTC 5m before any paper/live top-up. See final_window_topup_shadow.py.
+        try:
+            self.topup_shadow = FinalWindowTopupShadow.from_config(self.config)
+        except Exception:
+            self.topup_shadow = FinalWindowTopupShadow(enabled=False)
+        # WIDE final-window sampler: the standalone (not position-bound) version that
+        # samples ALL BTC 5m markets in their final window with REAL /midpoint marks.
+        # Position-mode shadow is starved (bot exits before expiry); this is where the
+        # data + edge live. Refreshed each scan; sampled at the fast-exit cadence.
+        _tcfg = (self.config.get("final_window_topup", {}) or {})
+        self.topup_sampler_enabled = bool(_tcfg.get("sampler_enabled", False))
+        self._topup_sampler_window_mins = float(_tcfg.get("sampler_window_mins", 1.5) or 1.5)
+        self._topup_universe = []  # list of (market_id, yes_token, no_token, end_date, question)
+        # Throttle: the sampler awaits /midpoint+book per final-window market and shares the
+        # httpx pool with the 120-market main scan. Running it every fast-exit tick (~3s) caused
+        # event-loop/pool contention (cycle median 11s vs ~5s baseline). Cap to ~20s between runs:
+        # the 1.5min window still yields ~4 samples/market, with ~7x less contention.
+        self._topup_sampler_min_interval_s = float(_tcfg.get("sampler_min_interval_s", 20.0) or 20.0)
+        self._topup_last_run = 0.0
 
         # Drift-driven runtime feedback cadence (see performance_feedback in settings.yaml)
         self._performance_feedback_cycle = 0
@@ -1131,7 +1156,14 @@ class PolyBot:
         (default 0.5).
         """
         now_mono = time.monotonic()
-        if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 60.0:
+        # 60s -> 600s (2026-06-19): the settle path full-re-parses the ~1GB
+        # rejected_candidates.jsonl + settled.jsonl every call (json.loads per line,
+        # no incremental read). At 60s that churned ~1.25GB of transient JSON
+        # allocations per cycle -> glibc arena fragmentation -> RSS +~43MB/min
+        # (gc-flat, malloc_trim-proof) = THE leak (memray-confirmed). Settling
+        # against resolved outcomes is not time-critical (markets resolve over
+        # minutes-hours), so a 10-min cadence cuts the parse churn ~10x.
+        if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 600.0:
             return
         cal_cfg = (self.config.get("lane_calibration") or {})
         ghost_weight = float(cal_cfg.get("ghost_weight", 0.5) or 0.0)
@@ -1965,8 +1997,95 @@ class PolyBot:
         except Exception as e:
             logging.debug("startup narrators failed: %s", e)
 
+    def _ws_price_age_ms(self, token_id) -> Optional[float]:
+        """Age (ms) of the cached WS book for ``token_id`` at call time — the
+        entry/exit DESYNC proxy: how stale the quote we acted on was. None when
+        there is no WS book (REST-only / not subscribed / no two-sided book).
+        Read-only, never raises. Compared across environments (Mac+VPN vs the
+        Montreal VPS) this quantifies whether lower latency tightens entries/exits.
+        """
+        try:
+            tid = str(token_id or "").strip()
+            if not tid:
+                return None
+            ws = getattr(self, "ws_client", None)
+            books = getattr(ws, "order_books", None) if ws is not None else None
+            book = books.get(tid) if books else None
+            if book is None or not getattr(book, "last_update", 0):
+                return None
+            age = (asyncio.get_event_loop().time() - float(book.last_update)) * 1000.0
+            return round(age, 1) if age >= 0 else None
+        except Exception:
+            return None
+
+    def _write_live_scan_snapshot(self, opportunities: dict) -> None:
+        """Publish the current scan's candidate markets to data/live_scans/scan_<ts>.json
+        for the dashboard scanner + watchlist panels. Maps each up/down market to its
+        strategy by asset keyword. Pruned to the last 3 files so it never accumulates
+        toward OOM. Best-effort, never raises.
+        """
+        import glob as _glob
+        scan_dir = os.path.join("data", "live_scans")
+        os.makedirs(scan_dir, exist_ok=True)
+
+        def _strat_for(q: str):
+            ql = (q or "").lower()
+            if "bitcoin" in ql or "btc" in ql:
+                return "bitcoin"
+            if "solana" in ql or " sol" in ql or "sol/" in ql:
+                return "sol_macro"
+            if "ethereum" in ql or "eth" in ql:
+                return "eth_macro"
+            if "ripple" in ql or "xrp" in ql:
+                return "xrp_macro"
+            if "dogecoin" in ql or "doge" in ql:
+                return "doge_macro"
+            if "binance coin" in ql or "bnb" in ql:
+                return "bnb_macro"
+            if "hyperliquid" in ql or "hype" in ql:
+                return "hype_macro"
+            return None
+
+        seen: Set[str] = set()
+        signals: List[Dict[str, Any]] = []
+        for key in ("updown_5m", "updown_15m", "updown_1h", "high_liquidity"):
+            for m in (opportunities.get(key) or []):
+                mid = str(getattr(m, "id", "") or "").strip()
+                if not mid or mid in seen:
+                    continue
+                q = str(getattr(m, "question", "") or "")
+                strat = _strat_for(q)
+                if not strat:
+                    continue
+                seen.add(mid)
+                signals.append({
+                    "strategy": strat,
+                    "market_id": mid,
+                    "market_question": q,
+                    "price": float(getattr(m, "yes_price", 0) or 0),
+                    "action": getattr(m, "action", None),
+                })
+        path = os.path.join(scan_dir, f"scan_{int(time.time())}.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"ts": datetime.now(timezone.utc).isoformat(), "signals": signals}, fh)
+        # prune: keep only the 3 most recent snapshots
+        files = sorted(_glob.glob(os.path.join(scan_dir, "scan_*.json")),
+                       key=os.path.getmtime, reverse=True)
+        for old in files[3:]:
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+
     def _wanted_clob_book_token_ids(self) -> List[str]:
-        """YES/NO CLOB token ids for all open positions (for WS L2 subscribe)."""
+        """CLOB token ids to keep subscribed on the WS book channel.
+
+        Always includes open-position tokens (exit-path L2). When the scanner
+        price overlay is on, also includes the tokens the scanner last priced
+        (the scan universe) so mids stream in for the whole universe. Capped and
+        diffed with stale-unsubscribe (see _sync_clob_ws_book_subscriptions) so
+        the OrderBook map stays bounded — this is the path that OOM'd before.
+        """
         out: List[str] = []
         seen: Set[str] = set()
         for p in self.risk_manager.active_positions.values():
@@ -1977,6 +2096,16 @@ class PolyBot:
                 if tid and tid not in seen:
                     seen.add(tid)
                     out.append(tid)
+        ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
+        if ws_cfg.get("subscribe_universe", False):
+            cap = int(ws_cfg.get("universe_subscribe_cap", 400) or 400)
+            for tid in (getattr(self.market_scanner, "_last_priced_token_ids", None) or set()):
+                tid = str(tid or "").strip()
+                if tid and tid not in seen:
+                    seen.add(tid)
+                    out.append(tid)
+                    if len(out) >= cap:
+                        break
         return out
 
     async def _sync_clob_ws_book_subscriptions(self, channel: str) -> None:
@@ -2676,6 +2805,38 @@ class PolyBot:
                     yes_price = _mp
             market_prices[mid] = yes_price
             market_token_ids[mid] = (yes_token, no_token)
+            # Final-window winner top-up SHADOW (logging-only; default-off). Reuses the
+            # /midpoint mark + two-sided book already fetched above — no extra fetch.
+            try:
+                if getattr(self, "topup_shadow", None) is not None and self.topup_shadow.enabled:
+                    _end = getattr(pos, "market_end_at", None) or getattr(pos, "end_date", None)
+                    _mins_left = None
+                    if _end is not None:
+                        try:
+                            _enddt = _end if isinstance(_end, datetime) else datetime.fromisoformat(
+                                str(_end).replace("Z", "+00:00")
+                            )
+                            if _enddt.tzinfo is None:
+                                _enddt = _enddt.replace(tzinfo=timezone.utc)
+                            _mins_left = (_enddt - datetime.now(timezone.utc)).total_seconds() / 60.0
+                        except Exception:
+                            _mins_left = None
+                    self.topup_shadow.observe(
+                        trade_id=str(getattr(pos, "trade_id", "") or getattr(pos, "position_id", "")),
+                        market_id=str(mid),
+                        strategy=str(getattr(pos, "strategy", "") or ""),
+                        window=str(getattr(pos, "window_size", "") or ""),
+                        entry_leg=str(getattr(pos, "entry_leg", "YES") or "YES"),
+                        entry_price=float(getattr(pos, "entry_price", 0.0) or 0.0),
+                        yes_mark=float(yes_price),
+                        best_ask_yes=best_ask,
+                        best_bid_yes=best_bid,
+                        mins_left=_mins_left,
+                        oracle_basis_bps=getattr(pos, "oracle_basis_bps", None),
+                        market_end_at=_end,
+                    )
+            except Exception:
+                logging.debug("topup_shadow observe wiring failed (ignored)", exc_info=True)
             taker_fee_rate = await self.clob_client.fetch_taker_fee_rate(yes_token)
             # Compact YES-side liquidity snapshot for the (optional, default-off)
             # bid-depth exit. Sell-side support = the top YES bids we'd exit into.
@@ -2731,6 +2892,60 @@ class PolyBot:
             logging.debug("[exit-excursion] shadow price fetch failed: %s", e)
         return market_prices, market_token_ids, market_liquidity
 
+    async def _run_topup_wide_sampler(self) -> None:
+        """Sample ALL BTC 5m markets in their final window for the standalone top-up
+        shadow, using REAL /midpoint marks (never the scanner 0.5 placeholder). Log-only,
+        no execution. Fetches only for markets actually inside the final window (small set),
+        so the per-tick cost is 1-3 /midpoint+book calls. Wrapped; never raises into the loop.
+        """
+        if not (self.topup_sampler_enabled and getattr(self, "topup_shadow", None) is not None
+                and self.topup_shadow.enabled):
+            return
+        universe = list(self._topup_universe or [])
+        if not universe:
+            return
+        # throttle: skip if we ran too recently (avoids per-tick pool contention)
+        mono = time.monotonic()
+        if mono - self._topup_last_run < self._topup_sampler_min_interval_s:
+            return
+        self._topup_last_run = mono
+        now = datetime.now(timezone.utc)
+        win = self._topup_sampler_window_mins
+        for market_id, yes_token, no_token, end_date, question in universe:
+            try:
+                if not end_date or not yes_token:
+                    continue
+                ed = end_date if isinstance(end_date, datetime) else datetime.fromisoformat(
+                    str(end_date).replace("Z", "+00:00"))
+                if ed.tzinfo is None:
+                    ed = ed.replace(tzinfo=timezone.utc)
+                mins_left = (ed - now).total_seconds() / 60.0
+                if mins_left < 0 or mins_left > win:
+                    continue  # only fetch for markets actually in the final window
+                mp = await self.clob_client.fetch_midpoint(yes_token)
+                if mp is None:
+                    continue  # no real mark -> skip (the whole point: never sample a placeholder)
+                book = await self.clob_client.fetch_order_book_snapshot(yes_token)
+                best_bid = best_ask = None
+                if book:
+                    bids = book.get("bids") or []
+                    asks = book.get("asks") or []
+                    best_bid = max((b["price"] for b in bids), default=None)
+                    best_ask = min((a["price"] for a in asks), default=None)
+                self.topup_shadow.observe_market(
+                    market_id=str(market_id),
+                    strategy="bitcoin",
+                    window="5m",
+                    yes_mark=float(mp),
+                    best_ask_yes=best_ask,
+                    best_bid_yes=best_bid,
+                    mins_left=mins_left,
+                    oracle_basis_bps=None,
+                    market_end_at=ed,
+                )
+            except Exception:
+                logging.debug("topup wide sampler: market %s failed (ignored)", market_id, exc_info=True)
+
     async def _fast_exit_loop(self) -> None:
         """Decoupled TP/SL monitor — see exit_check_interval in __init__.
 
@@ -2764,6 +2979,9 @@ class PolyBot:
                             logging.info("[exit-excursion] logged %d uncensored row(s)", flushed)
                     except Exception as e:
                         logging.debug("[exit-excursion] update/flush failed: %s", e)
+                # WIDE top-up sampler — standalone, runs every tick regardless of held
+                # positions (the position-mode shadow is starved; this is the real one).
+                await self._run_topup_wide_sampler()
             except Exception as e:  # never let the monitor die
                 logging.error("[fast-exit] error: %s", e, exc_info=True)
             await asyncio.sleep(interval)
@@ -2884,6 +3102,7 @@ class PolyBot:
                             "mfe_pct": exit_decision.mfe_pct,
                             "pnl_pct_at_exit": exit_decision.pnl_pct_at_exit,
                             "effective_stop_loss_pct": exit_decision.effective_stop_loss_pct,
+                            "ws_price_age_ms": self._ws_price_age_ms(getattr(pos, "token_id_yes", None)),
                             # Per-lane fill quality (realistic_paper_fills): the mark
                             # the exit would have booked at vs what the sweep cost.
                             "fill_mark_price": getattr(exit_decision, "fill_mark_price", None),
@@ -3043,6 +3262,19 @@ class PolyBot:
         )
         high_liquidity = opportunities.get("high_liquidity", [])
         scanner_meta = opportunities.get("scanner_meta", {})
+        # Refresh the BTC 5m universe for the wide top-up sampler (token ids + end times;
+        # the sampler fetches its OWN fresh /midpoint, never uses m.yes_price which can be
+        # the 0.5 placeholder). Cheap: just stash identifiers.
+        try:
+            if self.topup_sampler_enabled:
+                self._topup_universe = [
+                    (m.id, m.token_id_yes, m.token_id_no, m.end_date, m.question)
+                    for m in (opportunities.get("updown_5m") or [])
+                    if ("bitcoin" in (m.question or "").lower() or "btc" in (m.question or "").lower())
+                    and m.token_id_yes and m.end_date is not None
+                ]
+        except Exception:
+            logging.debug("topup universe refresh failed (ignored)", exc_info=True)
         if scanner_meta:
             self.last_ai_scan_stats["scanner"] = dict(scanner_meta)
             logging.info(
@@ -3055,6 +3287,15 @@ class PolyBot:
                 scanner_meta.get("updown_1h_count"),
                 scanner_meta.get("updown_hype_alt_count"),
             )
+
+        # Publish a live-scan snapshot for the dashboard scanner/watchlist panels
+        # (they read data/live_scans/scan_*.json — nothing wrote it before, so the
+        # panels were always blank). Bounded to the last few files (OOM-safe);
+        # log-only, never raises into the scan loop.
+        try:
+            self._write_live_scan_snapshot(opportunities)
+        except Exception:
+            logging.debug("live-scan snapshot write failed (ignored)", exc_info=True)
 
         if not high_liquidity:
             logging.info("No high liquidity markets found")
@@ -3274,7 +3515,7 @@ class PolyBot:
             btc_signals = strategy_signals.get("bitcoin", [])
             if isinstance(btc_signals, Exception):
                 raise btc_signals
-            _now_iso = datetime.now().isoformat(timespec="seconds")
+            _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.last_signal_counts["bitcoin"] = len(btc_signals)
             self.last_cycle_times["bitcoin"] = _now_iso
             self.cumulative_signal_counts["bitcoin"] = (
@@ -3315,7 +3556,7 @@ class PolyBot:
             sol_signals = strategy_signals.get("sol_macro", [])
             if isinstance(sol_signals, Exception):
                 raise sol_signals
-            _now_iso = datetime.now().isoformat(timespec="seconds")
+            _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self.last_signal_counts["sol_macro"] = len(sol_signals)
             self.last_cycle_times["sol_macro"] = _now_iso
             self.cumulative_signal_counts["sol_macro"] = (
@@ -3354,7 +3595,7 @@ class PolyBot:
                 eth_signals = strategy_signals["eth_macro"]
                 if isinstance(eth_signals, Exception):
                     raise eth_signals
-                _now_iso = datetime.now().isoformat(timespec="seconds")
+                _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self.last_signal_counts["eth_macro"] = len(eth_signals)
                 self.last_cycle_times["eth_macro"] = _now_iso
                 self.cumulative_signal_counts["eth_macro"] = (
@@ -3393,7 +3634,7 @@ class PolyBot:
                 hype_signals = strategy_signals["hype_macro"]
                 if isinstance(hype_signals, Exception):
                     raise hype_signals
-                _now_iso = datetime.now().isoformat(timespec="seconds")
+                _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self.last_signal_counts["hype_macro"] = len(hype_signals)
                 self.last_cycle_times["hype_macro"] = _now_iso
                 self.cumulative_signal_counts["hype_macro"] = (
@@ -3432,7 +3673,7 @@ class PolyBot:
                 xrp_signals = strategy_signals["xrp_macro"]
                 if isinstance(xrp_signals, Exception):
                     raise xrp_signals
-                _now_iso = datetime.now().isoformat(timespec="seconds")
+                _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self.last_signal_counts["xrp_macro"] = len(xrp_signals)
                 self.last_cycle_times["xrp_macro"] = _now_iso
                 self.cumulative_signal_counts["xrp_macro"] = (
@@ -3471,7 +3712,7 @@ class PolyBot:
                 doge_signals = strategy_signals["doge_macro"]
                 if isinstance(doge_signals, Exception):
                     raise doge_signals
-                _now_iso = datetime.now().isoformat(timespec="seconds")
+                _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self.last_signal_counts["doge_macro"] = len(doge_signals)
                 self.last_cycle_times["doge_macro"] = _now_iso
                 self.cumulative_signal_counts["doge_macro"] = (
@@ -3510,7 +3751,7 @@ class PolyBot:
                 bnb_signals = strategy_signals["bnb_macro"]
                 if isinstance(bnb_signals, Exception):
                     raise bnb_signals
-                _now_iso = datetime.now().isoformat(timespec="seconds")
+                _now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self.last_signal_counts["bnb_macro"] = len(bnb_signals)
                 self.last_cycle_times["bnb_macro"] = _now_iso
                 self.cumulative_signal_counts["bnb_macro"] = (
@@ -4267,6 +4508,7 @@ class PolyBot:
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
+                    "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
                     "htf_bias": signal.htf_bias,
                     "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
                     "btc_htf": signal.htf_bias,   # alias expected by journal analysis
@@ -4553,6 +4795,7 @@ class PolyBot:
                 extra={
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
+                    "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
                     "htf_bias": signal.htf_bias,
                     "primary_htf_bias": getattr(signal, "primary_htf_bias", None),
                     "alt_htf_bias": getattr(signal, "alt_htf_bias", None),

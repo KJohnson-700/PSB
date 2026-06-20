@@ -1944,9 +1944,12 @@ class SolMacroStrategy:
         sub-15-minute spot is retained (regime snapshots are ~15m apart and the
         ohlcv cache is empty). Outcome is joined downstream by (market, ts) against
         the resolution cache. Never raises into the scan loop. Gate:
-        ``window_delta_shadow_log`` (default on). Inherited by ETH and all alts.
+        ``window_delta_shadow_log`` (default OFF as of 2026-06-20). Inherited by ETH/alts.
+        Stale: the window-delta flip it validated is already a live trigger; the settler
+        was never scheduled and no _settled file was ever produced (307k unconsumed
+        lines). Slated for full removal.
         """
-        if not bool(self.config.get("window_delta_shadow_log", True)):
+        if not bool(self.config.get("window_delta_shadow_log", False)):
             return
         try:
             wd = evaluate_window_delta(asset_obj, tf, mins_left)
@@ -1996,10 +1999,11 @@ class SolMacroStrategy:
         (the sign of the window-delta P(up)) so the counterfactual settles offline
         against the real Polymarket outcome — answering "if I'd followed the tape
         when my native bias was NEUTRAL, what's the EV?". Never raises into the
-        scan loop. Gate: ``neutral_sitout_shadow_log`` (default on). Inherited by
-        ETH and all alts; BTC has a separate NEUTRAL->AI path and is excluded.
+        scan loop. Gate: ``neutral_sitout_shadow_log`` (default OFF as of 2026-06-20).
+        Inherited by ETH and all alts; BTC has a separate NEUTRAL->AI path and is excluded.
+        Stale: 66k unconsumed lines, settler never scheduled. Slated for full removal.
         """
-        if not bool(self.config.get("neutral_sitout_shadow_log", True)):
+        if not bool(self.config.get("neutral_sitout_shadow_log", False)):
             return
         try:
             end_date = getattr(market, "end_date", None)
@@ -5543,6 +5547,55 @@ class SolMacroStrategy:
                         composite.components,
                         oracle_validation.basis_bps,
                         oracle_validation.freshness_sec,
+                    )
+                    # Instrument the composite floor so it is ghost-validatable:
+                    # without this, composite_score_below_floor only bumps a live
+                    # ops counter and is never settled, so we can't tell if the
+                    # 0.62 floor over-blocks +EV candidates. Log the score + floor
+                    # as a threshold probe; the settler resolves the real outcome.
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason="composite_score_below_floor",
+                        market=market,
+                        yes_price=yes_price,
+                        est_prob_up=estimated_prob,
+                        htf_bias=primary_htf_bias,
+                        stage="composite_score_below_floor",
+                        gate_reason=composite.reason,
+                        gate_stage="composite_floor",
+                        convergence_score=composite.convergence_score,
+                        context={
+                            "composite_score": round(float(composite.score), 6),
+                            "composite_floor": round(float(composite.floor), 6),
+                            "composite_components": composite.components,
+                            "edge": round(float(edge), 6),
+                            "effective_min_edge": round(float(effective_min_edge), 6),
+                            "raw_est_prob": round(float(raw_est_prob), 6),
+                            "estimated_prob": round(float(estimated_prob), 6),
+                            "confidence": round(float(confidence), 6),
+                            "side_source": side_source,
+                            **build_market_context(
+                                asset_spot=sol.current_price,
+                                btc_spot=corr.btc_price,
+                                rsi_14=sol.rsi_14,
+                                atr_14=sol.atr_14,
+                                macd_hist_5m=getattr(getattr(sol, "macd_5m", None), "histogram", None),
+                                macd_hist_15m=getattr(getattr(sol, "macd_15m", None), "histogram", None),
+                                macd_hist_1h=getattr(getattr(sol, "macd_1h", None), "histogram", None),
+                                rsi_5m=getattr(getattr(sol, "tf_5m", None), "rsi_14", None),
+                                rsi_15m=getattr(getattr(sol, "tf_15m", None), "rsi_14", None),
+                                rsi_1h=getattr(getattr(sol, "tf_1h", None), "rsi_14", None),
+                            ),
+                        },
+                        probe_variants=build_threshold_probe_variants(
+                            metric_name="composite_score",
+                            observed_value=float(composite.score),
+                            baseline_threshold=float(composite.floor),
+                        ),
+                        policy_version="composite_floor_v1",
                     )
                     continue
 
