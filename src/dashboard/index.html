@@ -2541,16 +2541,13 @@
             <h2 style="margin-bottom:0;">Live Test Results</h2>
             <button class="btn-sm btn-purple" onclick="loadLivePerformance()">Refresh</button>
         </div>
-        <div class="status-hero" style="grid-template-columns:repeat(6,1fr);" id="live-perf-hero">
+        <div class="status-hero" style="grid-template-columns:repeat(4,1fr);" id="live-perf-hero">
             <div class="hero-item"><div class="hero-val" id="lp-trades">-</div><div class="hero-lbl">Total Trades</div></div>
             <div class="hero-item"><div class="hero-val" id="lp-winrate">-</div><div class="hero-lbl">Win Rate</div></div>
             <div class="hero-item"><div class="hero-val" id="lp-pnl">-</div><div class="hero-lbl">Net PnL</div></div>
-            <div class="hero-item"><div class="hero-val" id="lp-sharpe">-</div><div class="hero-lbl">Sharpe</div></div>
             <div class="hero-item"><div class="hero-val" id="lp-dd">-</div><div class="hero-lbl">Max DD</div></div>
-            <div class="hero-item"><div class="hero-val" id="lp-drift">-</div><div class="hero-lbl">Drift</div></div>
         </div>
         <div id="live-perf-strats" style="margin:8px 0;font-size:0.78rem;color:var(--text-muted);"></div>
-        <div id="live-drift" style="margin-top:8px;"></div>
         <div id="kelly-status" style="margin-top:10px;font-size:0.75rem;color:var(--text-muted);"></div>
         <div class="equity-ticker" id="live-equity"></div>
 
@@ -3852,7 +3849,12 @@ async function fetchAll() {
     _fetchAllInFlight = true;
     const currentView = _currentMainView();
     const needLive = currentView === 'live';
-    const needLiveAssetCards = false;
+    // 2026-06-20: re-enable the per-asset analysis cards on the Live tab. They were
+    // hard-disabled (false) during the in-process GIL-starvation era; the dashboard
+    // is now a SEPARATE process so these fetches can't starve the trading loop, and
+    // the /api/{asset}/analysis endpoints return 200. View-gated to Live so other
+    // tabs stay light.
+    const needLiveAssetCards = needLive;
     const needPerformance = currentView === 'performance';
     const needJournal = currentView === 'journal';
     const needBacktest = currentView === 'backtest';
@@ -7144,22 +7146,19 @@ function updateLivePerf(d) {
     const lpTrades = $('lp-trades');
     const lpWin = $('lp-winrate');
     const lpPnl = $('lp-pnl');
-    const lpSharpe = $('lp-sharpe');
     const lpDd = $('lp-dd');
-    if (!lpTrades || !lpWin || !lpPnl || !lpSharpe || !lpDd) return;
-
+    // Per-element guards (no early-return) — a single missing node must not blank the
+    // whole card. Sharpe + Drift removed 2026-06-20 (not meaningful for paper).
     const totalTrades = Number(d.total_trades || 0);
     const winRate = _winRateFraction(d.win_rate || 0);
     const totalPnl = Number(d.total_pnl || 0);
-    const sharpe = Number(d.sharpe_ratio || 0);
     const maxDd = Number(d.max_drawdown || 0);
-    lpTrades.textContent = String(totalTrades);
-    lpWin.textContent = totalTrades ? (winRate * 100).toFixed(0) + '%' : '-';
-    lpPnl.textContent = '$' + totalPnl.toFixed(2);
-    lpSharpe.textContent = sharpe ? sharpe.toFixed(2) : '-';
-    lpDd.textContent = maxDd ? '-$' + maxDd.toFixed(2) : '-';
-    lpPnl.style.color = totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
-    lpWin.style.color = winRate > 0.55 ? 'var(--green)' : winRate && winRate < 0.45 ? 'var(--red)' : 'var(--text)';
+    if (lpTrades) lpTrades.textContent = String(totalTrades);
+    if (lpWin) lpWin.textContent = totalTrades ? (winRate * 100).toFixed(0) + '%' : '-';
+    if (lpPnl) lpPnl.textContent = '$' + totalPnl.toFixed(2);
+    if (lpDd) lpDd.textContent = maxDd ? '-$' + maxDd.toFixed(2) : '-';
+    if (lpPnl) lpPnl.style.color = totalPnl > 0 ? 'var(--green)' : totalPnl < 0 ? 'var(--red)' : 'var(--text)';
+    if (lpWin) lpWin.style.color = winRate > 0.55 ? 'var(--green)' : winRate && winRate < 0.45 ? 'var(--red)' : 'var(--text)';
 
     const stratDiv = $('live-perf-strats');
     if (stratDiv) {
