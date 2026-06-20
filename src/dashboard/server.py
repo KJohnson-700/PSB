@@ -1028,6 +1028,21 @@ _journal_summary_cache: Dict[str, Any] = {"ts": 0.0, "summary": None}
 _JOURNAL_SUMMARY_TTL = 6.0  # seconds
 
 
+async def _run_dashboard_blocking(fn, *args, timeout: float = 5.0, label: str = "dashboard_io", **kwargs):
+    """Run blocking dashboard I/O off the uvicorn event loop with a hard deadline."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(fn, *args, **kwargs),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.warning("%s timed out after %.1fs", label, timeout)
+        raise HTTPException(
+            status_code=504,
+            detail=f"{label} timed out after {timeout:.1f}s",
+        ) from exc
+
+
 def _get_cached_journal_summary() -> Dict:
     """``_get_journal_summary`` with a short TTL cache (see note above)."""
     now = _time_mod.time()
@@ -1053,6 +1068,63 @@ def _get_current_session_summary() -> Dict:
     if empty_startup_dir is not None:
         return _empty_session_summary(empty_startup_dir.name)
     return summary
+
+
+def _parse_cycle_epoch_ms(value: Any) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z") or re.search(r"[+-]\d\d:?\d\d$", text):
+        raw = text
+    else:
+        raw = text + "Z"
+    try:
+        return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scanner_health_payload_sync() -> Dict[str, Any]:
+    """Cheap scanner freshness payload for the hero orb; no journal parsing."""
+    bot = _full_bot_instance()
+    source = "bot_instance" if bot is not None else "runtime_status"
+    running = bool(getattr(bot, "running", False)) if bot is not None else False
+    last_cycles: Dict[str, Any] = {}
+    runtime_status: Dict[str, Any] = {}
+
+    if bot is not None:
+        last_cycles = dict(getattr(bot, "last_cycle_times", {}) or {})
+    else:
+        try:
+            runtime_status = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            runtime_status = {}
+        last_cycles = dict(runtime_status.get("last_cycle_times") or {})
+        runtime_pid = int(runtime_status.get("pid") or 0)
+        if runtime_pid and runtime_pid != os.getpid():
+            try:
+                os.kill(runtime_pid, 0)
+                running = True
+            except OSError:
+                running = False
+
+    newest_ms: Optional[int] = None
+    for iso in last_cycles.values():
+        ms = _parse_cycle_epoch_ms(iso)
+        if ms is not None and (newest_ms is None or ms > newest_ms):
+            newest_ms = ms
+
+    now_ms = int(_time_mod.time() * 1000)
+    age_seconds = (now_ms - newest_ms) / 1000 if newest_ms is not None else None
+    return {
+        "ok": True,
+        "source": source,
+        "running": running,
+        "last_cycle_times": last_cycles,
+        "newest_cycle_ms": newest_ms,
+        "age_seconds": age_seconds,
+        "ts": now_ms,
+    }
 
 
 def _command_center_session(js: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1325,282 +1397,69 @@ async def sse_stream(request: Request):
     """Server-Sent Events stream — pushes live status snapshot every 2s."""
     async def event_generator():
         sse_interval = 2.0
-        if CONFIG_PATH.exists():
-            try:
-                with open(CONFIG_PATH, encoding="utf-8") as f:
-                    cfg = yaml.safe_load(f) or {}
-                sse_interval = float((cfg.get("dashboard") or {}).get("sse_interval_sec", 2.0))
-            except Exception:
-                sse_interval = 2.0
+        try:
+            cfg = await _run_dashboard_blocking(
+                _read_config_file,
+                timeout=1.0,
+                label="sse_config_read",
+            )
+            sse_interval = float((cfg.get("dashboard") or {}).get("sse_interval_sec", 2.0))
+        except HTTPException:
+            sse_interval = 2.0
         while True:
-            bot = _full_bot_instance()
             if await request.is_disconnected():
                 break
             try:
-                # Align SSE hero fields with /api/status (risk_manager), not journal keys.
-                # journal.get_summary() has no "total_trades"; PolyBot has no .positions — both
-                # defaulted to 0 every 2s and overwrote Command Center trades/positions.
-                rm = (
-                    getattr(bot, "risk_manager", None) if bot else None
+                status = await _run_dashboard_blocking(
+                    _get_status_payload_sync,
+                    timeout=4.0,
+                    label="sse_status_snapshot",
                 )
-                open_n = (
-                    len(rm.active_positions)
-                    if rm and getattr(rm, "active_positions", None) is not None
-                    else 0
-                )
-                daily_trades_n = (
-                    int(getattr(rm, "daily_trades", 0) or 0) if rm else 0
-                )
-                daily_pnl_v = (
-                    round(float(getattr(rm, "daily_pnl", 0) or 0), 2) if rm else 0.0
-                )
-                js: Dict[str, Any] = {}
-                if bot and getattr(bot, "journal", None):
-                    try:
-                        # get_summary() parses the journal and can take ~3s. At the
-                        # 2s SSE cadence, calling it inline pins the single dashboard
-                        # event loop ~100% (CPU-bound under the GIL — a worker thread
-                        # does NOT help), starving candles/status/watchlist so the
-                        # live tab renders empty. Serve a short-TTL cached summary so
-                        # the expensive parse runs at most once per TTL window.
-                        js = _get_cached_journal_summary()
-                    except Exception:
-                        js = {}
-                open_stake = round(float(js.get("total_cost", 0) or 0), 2)
-                kill_switch_active = (DATA_ROOT / "KILL_SWITCH").exists()
-                session_open = int(js.get("open_positions", 0) or 0)
-                session_id = js.get("session_id")
-                if bot and getattr(bot, "journal", None):
-                    sid = getattr(bot.journal, "session_id", None)
-                    if sid is not None:
-                        session_id = sid
-
-                # Bot stopped: align SSE hero with /api/status (disk positions + journal).
-                empty_startup_dir = None
-                runtime_status: Dict[str, Any] = {}
-                split_bot_running = False
-                runtime_session_id = ""
-                if not bot:
-                    try:
-                        runtime_status = json.loads(
-                            BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8")
-                        )
-                    except Exception:
-                        runtime_status = {}
-                    runtime_pid = int(runtime_status.get("pid") or 0)
-                    runtime_session_id = str(runtime_status.get("session_id") or "").strip()
-                    if runtime_pid and runtime_pid != os.getpid():
-                        try:
-                            os.kill(runtime_pid, 0)
-                            split_bot_running = True
-                        except OSError:
-                            split_bot_running = False
-                    try:
-                        js = _get_cached_journal_summary()
-                    except Exception:
-                        js = {}
-                    j_runtime = _journal_for_query(runtime_session_id) if runtime_session_id else None
-                    if j_runtime is not None:
-                        try:
-                            js = j_runtime.get_summary()
-                            js["summary_source"] = "runtime_journal"
-                        except Exception:
-                            pass
-                    empty_startup_dir = None if split_bot_running else _newer_empty_startup_session(js)
-                    if empty_startup_dir is not None:
-                        js = _empty_session_summary(empty_startup_dir.name)
-                    if j_runtime is not None:
-                        try:
-                            disk_pos = j_runtime.get_open_positions()
-                        except Exception:
-                            disk_pos = []
-                    else:
-                        disk_pos = _load_disk_positions_for_status()
-                    if split_bot_running and int(runtime_status.get("open_positions") or 0) == 0:
-                        # Don't clobber disk positions just because runtime_status
-                        # reports 0; it can lag behind disk writes. (See sse_stream
-                        # comment at the matching site in get_status.)
-                        pass
-                    if empty_startup_dir is not None:
-                        disk_pos = []
-                    disk_n = len(disk_pos)
-                    if disk_n:
-                        open_n = disk_n
-                    session_open = int(
-                        js.get("open_positions", 0) or 0
-                    )
-                    if disk_n:
-                        session_open = max(session_open, disk_n)
-                    open_stake = round(float(js.get("total_cost", 0) or 0), 2)
-                    if session_id is None:
-                        session_id = js.get("session_id") or runtime_session_id or None
-
-                cfg_disk: Dict[str, Any] = {}
-                if not bot and CONFIG_PATH.exists():
-                    try:
-                        with open(CONFIG_PATH, encoding="utf-8") as f:
-                            cfg_disk = yaml.safe_load(f) or {}
-                    except Exception:
-                        cfg_disk = {}
-
-                ai_pipeline_payload: Dict[str, Any] = {}
-                decision_gates_payload: Dict[str, Any] = {}
-                side_selection_payload: Dict[str, Any] = {}
-                if bot:
-                    dry_run = bot.config.get("trading", {}).get("dry_run", True)
-                    can_trade, _reason = bot.risk_manager.can_trade()
-                    if kill_switch_active:
-                        can_trade = False
-                    exposure_payload = _effective_exposure_section(bot.config)
-                    loss_pause_payload = _loss_streak_pause_summary()
-                    _ai_keys = getattr(bot.ai_agent, "api_keys", None) or {}
-                    ai_payload = compute_ai_status(bot.config, _ai_keys)
-                    try:
-                        from src.ops_pulse import (
-                            _ai_pipeline_digest,
-                            _decision_gate_digest,
-                            _side_selection_digest,
-                        )
-
-                        scan_stats = dict(getattr(bot, "last_ai_scan_stats", {}) or {})
-                        ai_pipeline_payload = _ai_pipeline_digest(
-                            scan_stats
-                        )
-                        decision_gates_payload = _decision_gate_digest(bot.config, scan_stats)
-                        side_selection_payload = _side_selection_digest(scan_stats)
-                    except Exception:
-                        ai_pipeline_payload = {}
-                        decision_gates_payload = {}
-                        side_selection_payload = {}
-                else:
-                    dry_run = cfg_disk.get("trading", {}).get("dry_run", True)
-                    runtime_mode = str(runtime_status.get("mode") or "").lower()
-                    if split_bot_running and runtime_mode in {"paper", "live"}:
-                        dry_run = runtime_mode != "live"
-                    elif split_bot_running:
-                        argv = [str(x) for x in (runtime_status.get("argv") or [])]
-                        if "--live" in argv:
-                            dry_run = False
-                    can_trade = bool(split_bot_running and not kill_switch_active)
-                    exposure_payload = _effective_exposure_section(cfg_disk)
-                    loss_pause_payload = {"active": False, "lanes": [], "latest_trigger": None}
-                    ai_payload = compute_ai_status(cfg_disk, None)
-                    try:
-                        from src.ops_pulse import _decision_gate_digest
-
-                        decision_gates_payload = _decision_gate_digest(cfg_disk, {})
-                    except Exception:
-                        decision_gates_payload = {}
-
-                bankroll_payload: Dict[str, Any] = {"bankroll": None, "source": "unavailable"}
-                bankroll_snap = None
-                if bot and hasattr(bot, "bankroll"):
-                    realized_pnl = float(js.get("realized_pnl", 0) or 0)
-                    total_pnl = float(js.get("total_pnl", 0) or 0)
-                    unrealized_pnl = total_pnl - realized_pnl
-                    bankroll_snap = round(float(bot.bankroll) + unrealized_pnl, 2)
-                    bankroll_payload = {
-                        "bankroll": bankroll_snap,
-                        "source": getattr(bot, "bankroll_source", "bot_mark_to_market"),
-                    }
-                elif not bot:
-                    empty_startup_dir = (
-                        None
-                        if split_bot_running
-                        else (
-                            empty_startup_dir
-                            or _empty_startup_session_dir_for_summary(js)
-                            or _newer_empty_startup_session(js)
-                        )
-                    )
-                    j_runtime = _journal_for_query(runtime_session_id) if runtime_session_id else None
-                    j_disk = (
-                        j_runtime
-                        if j_runtime is not None
-                        else (None if empty_startup_dir is not None else _get_journal())
-                    )
-                    session_dir_disk = (
-                        empty_startup_dir
-                        if empty_startup_dir is not None
-                        else (j_disk.session_dir if j_disk else _dashboard_journal_session_dir())
-                    )
-                    bankroll_journal: Optional[float] = None
-                    if j_disk:
-                        try:
-                            br = j_disk.last_bankroll_from_entries_log()
-                            if br is not None:
-                                bankroll_journal = float(br)
-                        except (TypeError, ValueError):
-                            pass
-                    bankroll_payload = _resolve_bankroll_snapshot(
-                        bankroll_journal,
-                        session_dir_disk,
-                        summary_total_pnl=float(js.get("total_pnl", 0) or 0),
-                        summary_has_session=bool(js.get("session_id")),
-                        initial_bankroll=float(
-                            (cfg_disk.get("backtest") or {}).get("initial_bankroll", 500)
-                            or 500
-                        ),
-                        prefer_summary_equity=split_bot_running,
-                        summary_realized_pnl=(
-                            float(js["realized_pnl"])
-                            if js.get("realized_pnl") is not None
-                            else None
-                        ),
-                    )
-                    bankroll_snap = bankroll_payload.get("bankroll")
-
+                portfolio = status.get("portfolio") or {}
+                session = status.get("session") or {}
+                positions = status.get("positions") or []
+                open_n = int(portfolio.get("total_positions") or len(positions) or 0)
+                # /api/status builds portfolio from risk_manager, including:
+                # int(getattr(rm, "daily_trades", 0) or 0)
+                # round(float(getattr(rm, "daily_pnl", 0) or 0), 2)
                 snapshot = {
-                    "running": bot.running if bot else split_bot_running,
-                    "kill_switch_active": kill_switch_active,
-                    "dry_run": dry_run,
-                    "exposure": exposure_payload,
-                    "loss_pause_active": bool(loss_pause_payload.get("active", False)),
-                    "loss_pause_lanes": list(loss_pause_payload.get("lanes", []) or []),
-                    "loss_pause_latest_trigger": loss_pause_payload.get("latest_trigger"),
-                    "can_trade": can_trade,
-                    "ai": ai_payload,
-                    "calibration": _calibration_status_from_config(
-                        bot.config if bot else cfg_disk,
-                        dry_run=dry_run,
-                    ),
-                    "session_id": session_id,
-                    "session_open": session_open,
-                    "bankroll": bankroll_snap,
-                    "bankroll_source": (
-                        getattr(bot, "bankroll_source", "bot_mark_to_market")
-                        if bot and hasattr(bot, "bankroll")
-                        else bankroll_payload.get("source", "unavailable")
-                    ),
-                    "bankroll_warning": (
-                        None
-                        if bot and hasattr(bot, "bankroll")
-                        else bankroll_payload.get("warning")
-                    ),
+                    "running": status.get("running", False),
+                    "kill_switch_active": status.get("kill_switch_active", False),
+                    "dry_run": status.get("dry_run", True),
+                    "exposure": status.get("exposure") or {},
+                    "loss_pause_active": bool(status.get("loss_pause_active", False)),
+                    "loss_pause_lanes": list(status.get("loss_pause_lanes", []) or []),
+                    "loss_pause_latest_trigger": status.get("loss_pause_latest_trigger"),
+                    "can_trade": status.get("can_trade", False),
+                    "ai": status.get("ai") or {},
+                    "calibration": status.get("calibration") or {},
+                    "session_id": status.get("session_id"),
+                    "session_open": int(session.get("open") or status.get("open_positions_count") or open_n),
+                    "bankroll": status.get("bankroll"),
+                    "bankroll_source": status.get("bankroll_source", "unavailable"),
+                    "bankroll_warning": status.get("bankroll_warning"),
                     "positions": open_n,
-                    "trades_today": daily_trades_n,
-                    "daily_pnl": daily_pnl_v,
-                    "open_stake": open_stake,
-                    "session_fills": int(js.get("total_entries", 0) or 0),
-                    "session_closed": int(js.get("total_exits", 0) or 0),
-                    "session_staked": round(
-                        float(js.get("session_staked_notional", 0) or 0), 2
-                    ),
-                    "session_realized_pnl": round(
-                        float(js.get("realized_pnl", 0) or 0), 2
-                    ),
-                    "session_total_pnl": round(
-                        float(js.get("total_pnl", 0) or 0), 2
-                    ),
+                    "trades_today": int(portfolio.get("daily_trades") or 0),
+                    "daily_pnl": round(float(portfolio.get("daily_pnl") or 0), 2),
+                    "open_stake": round(float(session.get("open_stake") or portfolio.get("open_stake") or 0), 2),
+                    "session_fills": int(session.get("fills") or 0),
+                    "session_closed": int(session.get("closed") or 0),
+                    "session_staked": round(float(session.get("session_staked_notional") or 0), 2),
+                    "session_realized_pnl": round(float(session.get("realized_pnl") or status.get("realized_pnl") or 0), 2),
+                    "session_total_pnl": round(float(session.get("total_pnl") or status.get("total_pnl") or 0), 2),
                     "btc_price": round(
                         float(_btc_analysis_cache.current_price), 0
                     ) if _btc_analysis_cache and hasattr(_btc_analysis_cache, "current_price") else 0,
-                    "ai_pipeline": ai_pipeline_payload,
-                    "decision_gates": decision_gates_payload,
-                    "side_selection": side_selection_payload,
+                    "ai_pipeline": status.get("ai_pipeline") or {},
+                    "decision_gates": status.get("decision_gates") or {},
+                    "side_selection": status.get("side_selection") or {},
                     "ts": int(_time_mod.time()),
                 }
                 yield f"data: {json.dumps(snapshot)}\n\n"
+            except HTTPException as e:
+                detail = getattr(e, "detail", str(e))
+                logger.warning("SSE snapshot timed out/failed: %s", detail)
+                yield f"data: {json.dumps({'ts': int(_time_mod.time()), 'sse_error': detail})}\n\n"
             except Exception as e:
                 logger.warning("SSE snapshot failed: %s", e, exc_info=True)
                 yield f"data: {json.dumps({'ts': int(_time_mod.time()), 'sse_error': str(e)})}\n\n"
@@ -1817,6 +1676,25 @@ def _resolve_bankroll_snapshot(
 
 @app.get("/api/status")
 async def get_status():
+    # Keep the blocking journal/disk/status assembly off the uvicorn event loop.
+    # Uses _get_cached_journal_summary() inside the worker thread.
+    return await _run_dashboard_blocking(
+        _get_status_payload_sync,
+        timeout=12.0,
+        label="api_status",
+    )
+
+
+@app.get("/api/scanner/health")
+async def get_scanner_health():
+    return await _run_dashboard_blocking(
+        _scanner_health_payload_sync,
+        timeout=1.0,
+        label="scanner_health",
+    )
+
+
+def _get_status_payload_sync():
     """Bot status.
 
     Journal summary for PnL fields uses the same source as ``/api/journal/summary``
@@ -2225,13 +2103,19 @@ async def get_orderbook(token_id: str = Query(..., min_length=4)):
         return {"source": "websocket", **ws_snap}
     cc = getattr(bot, "clob_client", None)
     if cc:
-        rest = await cc.fetch_order_book_snapshot(tid)
+        try:
+            rest = await asyncio.wait_for(cc.fetch_order_book_snapshot(tid), timeout=4.0)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Order book REST fallback timed out") from exc
         if rest and ((rest.get("bids") or []) or (rest.get("asks") or [])):
             return {"source": "rest", **rest}
     if ws_snap is not None:
         return {"source": "websocket", **ws_snap}
     if cc:
-        rest = await cc.fetch_order_book_snapshot(tid)
+        try:
+            rest = await asyncio.wait_for(cc.fetch_order_book_snapshot(tid), timeout=4.0)
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="Order book REST fallback timed out") from exc
         if rest:
             return {"source": "rest", **rest}
     raise HTTPException(
@@ -3713,6 +3597,16 @@ async def get_strategy_watchlist(
 
 @app.get("/api/strategy/metrics")
 async def get_strategy_metrics():
+    # Keep summary/report/scan JSON reads off the uvicorn event loop.
+    # Uses _get_current_session_summary() inside the worker thread.
+    return await _run_dashboard_blocking(
+        _get_strategy_metrics_payload_sync,
+        timeout=5.0,
+        label="strategy_metrics",
+    )
+
+
+def _get_strategy_metrics_payload_sync():
     """Aggregate strategy performance.
 
     Primary source: summary.json strategy_stats (always fresh, fast).

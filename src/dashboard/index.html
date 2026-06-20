@@ -3771,14 +3771,30 @@ function _liveAssetPollEnabled(strategyKey) {
     return Boolean(state.configured_enabled || state.runtime_enabled || state.runtime_present);
 }
 
+const _fetchBackoff = {};
+
 // Bounded fetch — aborts after `ms` so a stalled endpoint doesn't pile up
 // requests behind it on subsequent polls. Returns null on timeout/error.
 function fetchT(url, ms = 6000, init = {}) {
+    const key = String(url).split('?')[0];
+    const now = Date.now();
+    const slot = _fetchBackoff[key];
+    if (slot && slot.until && now < slot.until) return Promise.resolve(null);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms);
     return fetch(url, { ...init, signal: ctrl.signal })
-        .then((r) => { clearTimeout(timer); return r; })
-        .catch(() => { clearTimeout(timer); return null; });
+        .then((r) => {
+            clearTimeout(timer);
+            if (r && r.ok) delete _fetchBackoff[key];
+            return r;
+        })
+        .catch(() => {
+            clearTimeout(timer);
+            const prev = _fetchBackoff[key]?.delay || 1000;
+            const delay = Math.min(prev * 2, 60000);
+            _fetchBackoff[key] = { delay, until: Date.now() + delay };
+            return null;
+        });
 }
 
 // Keep last-good live TA values so brief endpoint hiccups don't blank cards.
@@ -3809,8 +3825,11 @@ function _safeUpdateLiveAsset(key, payload, updateFn, missLimit = 3) {
 let _perfPollCount = 0;
 let _perfForceHeavy = true;  // first Performance render fetches the heavy tier
 let _lastLaneGatesPayload = null;
+let _fetchAllInFlight = false;
 
 async function fetchAll() {
+    if (_fetchAllInFlight) return;
+    _fetchAllInFlight = true;
     const currentView = _currentMainView();
     const needLive = currentView === 'live';
     const needLiveAssetCards = false;
@@ -3843,10 +3862,11 @@ async function fetchAll() {
         } catch (e) { console.error('[dashboard] live/perf(pre):', e); }
     }
 
-    let statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR;
+    let statusR, scannerR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR;
     try {
-        [statusR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR] = await Promise.all([
+        [statusR, scannerR, metricsR, backtestR, journalR, journalTradesR, exposureR, btcR, solR, ethR, hypeR, xrpR, dogeR, bnbR, livePerfR, summR, recR, updownR, reasonR, journeyR, exitReasonR, actionBreakdownR] = await Promise.all([
             fetchT('/api/status'),
+            fetchT('/api/scanner/health', 2000),
             fetchT('/api/strategy/metrics'),
             needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
             needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
@@ -3871,6 +3891,7 @@ async function fetchAll() {
     } catch (e) {
         console.error('[dashboard] fetch batch:', e);
         _dashStamp();
+        _fetchAllInFlight = false;
         return;
     }
 
@@ -3902,6 +3923,11 @@ async function fetchAll() {
             }
         }
     } catch (e) { console.error('[dashboard] status:', e); }
+
+    try {
+        if (scannerR?.ok) updateHeroScannerFromHealth(await scannerR.json());
+        else markHeroScannerFetchFailure();
+    } catch (e) { console.error('[dashboard] scanner health:', e); markHeroScannerFetchFailure(); }
 
     try {
         if (metricsR?.ok) updateMetrics(await metricsR.json());
@@ -4026,6 +4052,7 @@ async function fetchAll() {
             });
         });
     }
+    _fetchAllInFlight = false;
 }
 
 function _htmlEscape(v) {
@@ -5267,8 +5294,9 @@ function _dashAgeText(seconds) {
 }
 
 let _heroScannerNewestCycleMs = null;
+let _heroScannerFetchFailedAtMs = null;
 
-function _setHeroScannerOrb(ageSeconds, hasAny) {
+function _setHeroScannerOrb(ageSeconds, hasAny, fetchOk = true) {
     const orb = document.getElementById('hero-status-orb');
     const wrap = document.getElementById('hero-status-orb-wrap');
     const text = document.getElementById('hero-status-orb-text');
@@ -5282,7 +5310,11 @@ function _setHeroScannerOrb(ageSeconds, hasAny) {
     let cls = 'stopped';
     let label = 'No scan';
     let tip = 'Scanner: no strategy cycle data';
-    if (!hasAny || !Number.isFinite(ageSeconds)) {
+    if (!fetchOk) {
+        cls = 'paused';
+        label = 'Dashboard blind';
+        tip = 'Dashboard cannot reach scanner health endpoint; this is not proof the bot is stalled';
+    } else if (!hasAny || !Number.isFinite(ageSeconds)) {
         cls = 'stopped';
     } else if (ageSeconds < 90) {
         cls = 'running';
@@ -5291,11 +5323,11 @@ function _setHeroScannerOrb(ageSeconds, hasAny) {
     } else if (ageSeconds < 300) {
         cls = 'paused';
         label = 'Lagging';
-        tip = `Scanner lagging · last cycle ${_dashAgeText(ageSeconds)} ago`;
+        tip = `Scanner lagging · fresh scanner data shows last cycle ${_dashAgeText(ageSeconds)} ago`;
     } else {
         cls = 'killed';
-        label = 'Stuck';
-        tip = `Scanner stuck · last cycle ${_dashAgeText(ageSeconds)} ago`;
+        label = 'Scanner stuck';
+        tip = `Scanner stuck · fresh scanner data shows last cycle ${_dashAgeText(ageSeconds)} ago`;
     }
 
     orb.classList.add(cls);
@@ -5315,11 +5347,32 @@ function _setHeroScannerOrb(ageSeconds, hasAny) {
 }
 
 function _tickHeroScannerOrb() {
+    if (_heroScannerFetchFailedAtMs && Date.now() - _heroScannerFetchFailedAtMs < 120000) {
+        _setHeroScannerOrb(NaN, false, false);
+        return;
+    }
     if (_heroScannerNewestCycleMs == null) {
         _setHeroScannerOrb(NaN, false);
         return;
     }
     _setHeroScannerOrb((Date.now() - _heroScannerNewestCycleMs) / 1000, true);
+}
+
+function updateHeroScannerFromHealth(payload) {
+    _heroScannerFetchFailedAtMs = null;
+    const newest = Number(payload && payload.newest_cycle_ms);
+    if (Number.isFinite(newest) && newest > 0) {
+        _heroScannerNewestCycleMs = newest;
+        _tickHeroScannerOrb();
+        return;
+    }
+    const cycles = (payload && payload.last_cycle_times) || {};
+    updateHeroStatusOrb(Object.fromEntries(Object.entries(cycles).map(([k, v]) => [k, { last_cycle: v }])));
+}
+
+function markHeroScannerFetchFailure() {
+    _heroScannerFetchFailedAtMs = Date.now();
+    _tickHeroScannerOrb();
 }
 
 function updateHeroStatusOrb(metricsData) {
@@ -5339,6 +5392,7 @@ function updateHeroStatusOrb(metricsData) {
         if (newestMs == null || ms > newestMs) newestMs = ms;
     });
     _heroScannerNewestCycleMs = hasAny ? newestMs : null;
+    _heroScannerFetchFailedAtMs = null;
     _tickHeroScannerOrb();
 }
 

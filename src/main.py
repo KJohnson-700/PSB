@@ -5045,7 +5045,14 @@ def start_dashboard(bot: Optional["PolyBot"]):
 
         set_bot_instance(bot)
         server = uvicorn.Server(
-            uvicorn.Config(app, host=host, port=port, log_level="warning")
+            # HARD CONNECTION CAP: a runaway/stuck browser tab can fire unlimited
+            # retries at the loopback dashboard and pile 100s of CLOSE-WAIT sockets,
+            # wedging the single-worker loop. limit_concurrency makes uvicorn return
+            # 503 + close once N requests are in flight (normal peak ~26: fetchAll
+            # batch + SSE), so a flood is rejected instead of freezing the dashboard.
+            # timeout_keep_alive trims idle keep-alive sockets faster.
+            uvicorn.Config(app, host=host, port=port, log_level="warning",
+                           limit_concurrency=64, timeout_keep_alive=5)
         )
         register_dashboard_uvicorn_server(server)
         if bot is not None:
