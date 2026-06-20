@@ -151,40 +151,13 @@ printf "%s\n%s\n" "$SESSION_ID" "$MAIN_START" > "$STATE_FILE"
 # --- last Hermes priority verdict ---
 LAST_HEALTH=$(tail -1 "$HEALTH" 2>/dev/null)
 
-# --- TRADE QUALITY: entry sanity + outcome streak (the data the infra watch lacked) ---
-# Catches what "wss=connected / price_age ok" cannot: lanes entering at the blind
-# 0.5 default (phantom edge, e.g. HYPE), losing streaks, and a collapsing WR — the
-# trade-level signals, not just heartbeat. Reads the LIVE session's trades.
-read -r BLIND05 LOSS_STREAK SESS_WR CLOSED_N BLIND_LANES <<<"$(python3 - "$PSB/data/calibration/trades.jsonl" "$SESSION_ID" <<'PY'
-import json,sys
-from collections import Counter
-path,sess=sys.argv[1],sys.argv[2]
-rows=[]
-try:
-    with open(path) as f:
-        for line in f:
-            line=line.strip()
-            if not line: continue
-            try: d=json.loads(line)
-            except: continue
-            if d.get("session_id")==sess: rows.append(d)
-except Exception:
-    print("0 0 - 0 -"); sys.exit()
-def is05(r):
-    try: return abs(float(r.get("entry_price"))-0.5)<0.001
-    except: return False
-blind=[r for r in rows if is05(r)]
-closed=[r for r in rows if r.get("pnl") is not None]
-streak=0
-for r in reversed(closed):
-    if r.get("win"): break
-    streak+=1
-wr=int(round(100.0*sum(1 for r in closed if r.get("win"))/len(closed))) if closed else "-"
-bl=Counter((r.get("strategy") or "?") for r in blind)
-lanes=",".join("%s:%d"%(k,v) for k,v in bl.most_common(4)) or "-"
-print(len(blind), streak, wr, len(closed), lanes)
-PY
-)"
+# --- TRADE QUALITY + PER-LANE DIAGNOSIS (the data the infra watch lacked) ---
+# Catches what "wss=connected / price_age ok" cannot: blind-0.5 entries, losing
+# streaks, collapsing WR — AND drills into the WORST lane (strategy|window|side)
+# to diagnose it the way we do (bias / exit_reason / entry pattern), writing a rich
+# per-lane record to data/logs/lane_diagnosis.jsonl that Claude reads on wake to do
+# the deep diagnosis/fix. See scripts/lane_diagnose.py.
+read -r BLIND05 LOSS_STREAK SESS_WR CLOSED_N BLIND_LANES WORST_LANE WORST_WR WORST_N WORST_REASON <<<"$(python3 "$PSB/scripts/lane_diagnose.py" "$PSB/data/calibration/trades.jsonl" "$SESSION_ID" "$PSB/data/logs/lane_diagnosis.jsonl" 2>/dev/null || echo '0 0 - 0 - - - 0 -')"
 
 # --- PRIORITY verdict ---
 PRI=ok; REASONS=""
@@ -210,12 +183,20 @@ if [ "${CLOSED_N:-0}" -ge 6 ] && [ "$SESS_WR" != "-" ]; then
   [ "${SESS_WR:-100}" -lt 30 ] && PRI=LOW_WR && REASONS="$REASONS session_wr=${SESS_WR}% n=$CLOSED_N"
 fi
 [ "${LOSS_STREAK:-0}" -ge 4 ] && PRI=LOSS_STREAK && REASONS="$REASONS loss_streak=$LOSS_STREAK consecutive"
-[ "${BLIND05:-0}" -gt 0 ] && PRI=BLIND_05 && REASONS="$REASONS blind_0.5_entries=$BLIND05 [$BLIND_LANES] = phantom-edge bleed (unhydrated/degenerate book)"
+# Blind-0.5 only matters as a CLUSTER: post scanner degenerate-0.5 guard, a lone 0.5
+# entry is a legit 50/50 edge market, not blind. >=3 = the guard likely regressed.
+[ "${BLIND05:-0}" -ge 3 ] && PRI=BLIND_05 && REASONS="$REASONS blind_0.5_entries=$BLIND05 [$BLIND_LANES] = phantom-edge CLUSTER (scanner degenerate-0.5 guard may have regressed)"
+# Per-lane escalation: a SPECIFIC lane bleeding -> name it + first-pass diagnosis,
+# flag DIAGNOSE_LANE so Hermes pages + Claude deep-dives the lane on next wake.
+if [ "$WORST_LANE" != "-" ] && [ "$WORST_WR" != "-" ]; then
+  if [ "${WORST_WR:-100}" -lt 30 ]; then PRI=DIAGNOSE_LANE; REASONS="$REASONS lane[$WORST_LANE] wr=${WORST_WR}% n=$WORST_N {$WORST_REASON} -> diagnose (data/logs/lane_diagnosis.jsonl)"; fi
+fi
 
 echo "=== PSB WATCH $(date -u +%H:%M:%SZ) ==="
 echo "LIVENESS  pid=${PID:-NONE} mode=$MODE phase=$PHASE status_age=${STATUS_AGE}s rss=${PROC_RSS_MB}MB"
 echo "TRADES    daily_trades=$TRADES open=$OPEN cycle_count=$CYCLES   [target 100]"
 echo "TRADEQUAL blind_0.5=$BLIND05 [$BLIND_LANES]  loss_streak=$LOSS_STREAK  session_wr=${SESS_WR}%  closed=$CLOSED_N"
+echo "LANEDIAG  worst=$WORST_LANE wr=${WORST_WR}% n=$WORST_N {$WORST_REASON}  (full -> data/logs/lane_diagnosis.jsonl)"
 echo "SESSION   id=$SESSION_ID main_start=$MAIN_START${RESTART_EVENT:+   ⚠️ $RESTART_EVENT}"
 echo "CYCLE     elapsed=${CYC_MS}ms scanner_sync=${SCAN_SYNC}ms scan_total=${SCAN_TOTAL}ms overrun=${OVERRUN}ms interval=${INTERVAL_MS}ms"
 echo "LANES     $LANES"
@@ -231,8 +212,8 @@ echo "PRIORITY  $PRI$REASONS"
 # Writes the SAME vps_health.jsonl the Mac watcher (psb_vps_watcher.py) tails, so the existing
 # watcher -> psb_live_drain -> phone pipeline carries the FULL comprehensive sweep, not the subset.
 if [ "${1:-}" = "--emit" ]; then
-  printf '{"ts":"%s","priority":"%s","rss_mb":%s,"cycle_ms":%s,"scanner_sync_ms":%s,"log_age_s":%s,"status_age_s":%s,"daily_trades":%s,"blind05":%s,"loss_streak":%s,"session_wr":"%s","closed":%s,"errors":%s,"geoblock":%s,"wss":"%s","price_age_s":%s,"session":"%s","reasons":"%s"}\n' \
-    "$(date -u +%FT%TZ)" "$PRI" "${PROC_RSS_MB:-0}" "${CYC_MS:--1}" "${SCAN_SYNC:--1}" "${LOG_AGE:--1}" "${STATUS_AGE:--1}" "${TRADES:-0}" "${BLIND05:-0}" "${LOSS_STREAK:-0}" "${SESS_WR:--}" "${CLOSED_N:-0}" "${ERRORS_RECENT:-0}" "${GEOBLOCK_RECENT:-0}" "${WSS_STATE:-?}" "${PRICE_AGE:--1}" "$SESSION_ID" "$(echo "$REASONS" | tr -d '"' | cut -c1-180)" >> "$HEALTH"
+  printf '{"ts":"%s","priority":"%s","rss_mb":%s,"cycle_ms":%s,"scanner_sync_ms":%s,"log_age_s":%s,"status_age_s":%s,"daily_trades":%s,"blind05":%s,"loss_streak":%s,"session_wr":"%s","closed":%s,"worst_lane":"%s","worst_wr":"%s","errors":%s,"geoblock":%s,"wss":"%s","price_age_s":%s,"session":"%s","reasons":"%s"}\n' \
+    "$(date -u +%FT%TZ)" "$PRI" "${PROC_RSS_MB:-0}" "${CYC_MS:--1}" "${SCAN_SYNC:--1}" "${LOG_AGE:--1}" "${STATUS_AGE:--1}" "${TRADES:-0}" "${BLIND05:-0}" "${LOSS_STREAK:-0}" "${SESS_WR:--}" "${CLOSED_N:-0}" "${WORST_LANE:--}" "${WORST_WR:--}" "${ERRORS_RECENT:-0}" "${GEOBLOCK_RECENT:-0}" "${WSS_STATE:-?}" "${PRICE_AGE:--1}" "$SESSION_ID" "$(echo "$REASONS" | tr -d '"' | cut -c1-180)" >> "$HEALTH"
   if [ "$PRI" != "ok" ]; then
     CD=/tmp/psb_watch_alert_cooldown; LAST=$(cat "$CD" 2>/dev/null || echo 0); NOWS=$(date +%s)
     if [ $((NOWS-LAST)) -gt 1800 ]; then
