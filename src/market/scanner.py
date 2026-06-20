@@ -57,6 +57,10 @@ class Market:
     # forward-validate whether they separate winners from losers.
     ob_imbalance: Optional[float] = None
     trade_flow_ratio: Optional[float] = None
+    # True once a REAL price (WS push or REST /midpoint) was applied. False means
+    # yes_price/no_price are the 0.5 DEFAULT — the market is unpriced and MUST NOT be
+    # traded (a 0.5 default fabricates phantom edge vs est_prob => blind entries).
+    price_hydrated: bool = True
 
     @property
     def is_binary(self) -> bool:
@@ -990,11 +994,16 @@ class MarketScanner:
         
         # Update markets
         for market in markets:
+            yes_hit = market.token_id_yes in prices
+            no_hit = market.token_id_no in prices
             yes_price = prices.get(market.token_id_yes, 0.5)
             no_price = prices.get(market.token_id_no, 0.5)
-            
+
             market.yes_price = yes_price
             market.no_price = no_price
+            # Real quote only if at least one side returned a live mid; otherwise both
+            # are the 0.5 default and the market is unpriced (filtered before strategy scan).
+            market.price_hydrated = bool(yes_hit or no_hit)
             if market.spread <= 0:
                 # Mid prices only reveal convergence, not true order-book spread.
                 market.spread = max(0.0, 1.0 - (yes_price + no_price))
@@ -1634,6 +1643,19 @@ class MarketScanner:
             _hydrate(updown_1h),
         )
 
+        # Drop UNPRICED markets (price never loaded => yes/no are the 0.5 default).
+        # Trading these fabricates phantom edge (est_prob vs a fake 0.5) and was the
+        # cause of blind 0.5 entries (e.g. every HYPE trade at exactly 0.50). Never
+        # trade a market without a real quote. REST/WS fetch already happened above.
+        def _priced(ms: List[Market]) -> List[Market]:
+            return [m for m in ms if getattr(m, "price_hydrated", True)]
+        _pre = (len(markets), len(updown), len(updown_5m), len(updown_1h))
+        markets = _priced(markets); updown = _priced(updown)
+        updown_5m = _priced(updown_5m); updown_1h = _priced(updown_1h)
+        _dropped = sum(_pre) - (len(markets) + len(updown) + len(updown_5m) + len(updown_1h))
+        if _dropped:
+            logger.info("Scanner: dropped %d UNPRICED markets (0.5-default, untradeable) before scan", _dropped)
+
         # Optional microstructure enrichment (DEFAULT-OFF, fail-safe). Attaches
         # order-book imbalance + trade-flow to up/down markets for signal hunting.
         await self.enrich_microstructure([*updown, *updown_5m, *updown_1h])
@@ -1681,6 +1703,7 @@ class MarketScanner:
 
         if hype_alt:
             hype_alt = await self.update_market_prices(hype_alt)
+            hype_alt = [m for m in hype_alt if getattr(m, "price_hydrated", True)]  # never trade unpriced (0.5-default)
             opportunities["high_liquidity"].extend(hype_alt)
             opportunities["updown_hype_alt"] = hype_alt
         else:

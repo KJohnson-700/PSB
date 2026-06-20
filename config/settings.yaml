@@ -27,6 +27,23 @@ hyperliquid:
   max_retries: 2
   retry_backoff_base_sec: 0.5
   stale_on_error_max_age_sec: 180
+# 2026-06-18: Final-window winner top-up — SHADOW stage (logging-only, no execution).
+# Validates OUR BTC 5m winner-detection accuracy on real outcomes before any paper/live
+# top-up (paper would fake near-100% fills on this +0.02/-0.98 payoff). Settle with
+# scripts/settle_topup_shadow.py; logs to data/calibration/topup_shadow.jsonl.
+final_window_topup:
+  shadow_enabled: true
+  final_window_max_mins: 1.0     # only inside the last minute before resolution
+  winner_mark_threshold: 0.90    # our-side /midpoint must be >= this to "confirm winning"
+  max_oracle_basis_bps: 25.0     # recorded (not gated) in shadow; will gate at live stage
+  max_topup_price: 0.99          # never top up above this
+  # 2026-06-18: WIDE standalone sampler — samples ALL BTC 5m markets in their final window
+  # with REAL /midpoint marks (position-mode shadow is starved: bot exits before expiry, 0 rows).
+  # Log-only, no execution. Runs at the fast-exit (3s) cadence; fetches only for markets inside
+  # sampler_window_mins (small set). Built 2026-06-18; activates on next restart.
+  sampler_enabled: true
+  sampler_window_mins: 1.5       # start sampling a market this many mins before resolution
+
 trading:
   cycle_interval_sec: 60
   exit_check_interval_sec: 3  # 10->3: cut stop-detection latency on fast 5m binaries (late-stop overshoot -15% intended vs -39% realized). Pure cadence; no gate/width change.
@@ -49,10 +66,18 @@ trading:
     require_full_depth: true
     depth_price_ceiling_cents: 0.0
   clob_ws:
-    enabled: true
+    enabled: true   # 2026-06-19: match VPS — WS off (part of OOM-prone path; VPS speed is from no-VPN, not WS)
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
+    # WSS price overlay: stream mids for the whole scan universe and serve them
+    # from the pushed book instead of REST /midpoint per cycle. REST fallback is
+    # always on inside scanner.fetch_prices, so pricing stays correct if WS is
+    # empty/stale. universe_subscribe_cap bounds the OrderBook map (OOM safety).
+    drive_scanner_prices: true   # 2026-06-19: match VPS
+    price_max_age_sec: 8
+    subscribe_universe: true   # 2026-06-19: match VPS
+    universe_subscribe_cap: 400
   default_position_size: 6
   max_position_size: 25   # 2026-06-16 revert-to-0613: undo 1.6x paper ladder (was 40)
   max_days_to_resolution: 365
@@ -512,6 +537,11 @@ strategies:
           up:
             min_edge: 0.09
             ai_override_min_edge: 0.1
+            # 2026-06-18: REVERTED to baseline 0.45. BTC 1h BUY_YES was a WINNER in baseline
+            # test_20260618_054552 (+$25.43); all its entries were >=0.50 so this floor removed
+            # ZERO real trades (no-op), and the "sub-0.50 losses" it chased were actually the
+            # phantom-entry 0.5-placeholder bug (signal 0.500 -> fills 0.49 -> marks ~0.12), not a
+            # real pocket. The phantom-entry guard (scanner missing-price fix) is the correct fix.
             entry_price_min: 0.45
             entry_price_max: 0.6
             entry_window_min: 1.0
@@ -565,7 +595,7 @@ strategies:
     quant_disagree_flip_thresh: 0.48
     allow_quant_disagree_flip_buy_no: false
     bull_regime_buy_no_max_yes_price: 0.66
-    bull_regime_buy_no_max_yes_price_5m: 0.68
+    bull_regime_buy_no_max_yes_price_5m: 0.52  # 2026-06-18: was 0.68. Sit out the baseline's #1 loser: bitcoin|5m|BUY_NO in BULL is structurally -EV (taken across 70 sessions n=45, 29% WR, -$109.82; all BULL). Losers entered yes 0.53-0.68 (fading the up-move into a rising tape). Cap to 0.52 blocks that band (keeps only near-even cheap-NO). Proven -EV sit-out, reversible. Follow-up: build BTC 5m BUY_NO->YES flip (alt precedent, 71% complement WR) to capture the +EV long instead of just avoiding the loss.
     bull_regime_buy_no_max_yes_price_15m: 0.62
     bull_regime_buy_no_min_mins_left: 2.0
     bull_regime_buy_no_min_mins_left_15m: 4.0
@@ -1107,6 +1137,11 @@ strategies:
     # narrowed lane_stop_halt cooldown stays as a backstop. Forward-test.
     low_atr_only_lanes: []
     rsi_momentum_flip_1h: true
+    # 2026-06-18: REVERTED to baseline (false). hype 1h was a WINNER in the
+    # operator-designated baseline test_20260618_054552 (+$50, +26.1 YES / +24.45 NO).
+    # Per "only the losing lane should be touched", do not augment a winning lane with
+    # flip trades. Mechanism stays available but OFF.
+    flip_exempt_min_edge_1h: false
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
     marginal_ev_admit_lanes:
@@ -1320,6 +1355,10 @@ strategies:
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
     disable_buy_yes_15m: true  # 2026-06-18: sit out xrp 15m LONG — ghost gross/fee=0 -EV BOTH regimes (BEARISH -0.063 n888 / BULLISH -0.156 n1553); live 6t 33%WR -$1.16 unguarded. -EV lane. Ghost-logged.
+    # 2026-06-18: REVERTED to baseline (false). xrp 1h was a WINNER in the
+    # operator-designated baseline test_20260618_054552 (+$62, +20.25 YES / +42.39 NO).
+    # Per "only the losing lane should be touched", do not augment a winning lane. OFF.
+    flip_exempt_min_edge_1h: false
     admit_marginal_on_quant_when_ai_disabled: true
     admit_marginal_on_quant_sides: both
     marginal_ev_admit_lanes:
