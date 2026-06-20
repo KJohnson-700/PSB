@@ -4191,9 +4191,13 @@ function updateCommandCenterDigests(d) {
 
 /** Command Center hero numbers — shared by /api/status (updateStatus) and /api/events (SSE). */
 function dashPushHeroSeries(key, value, maxLen) {
-    if (!Number.isFinite(value)) return [];
     window._dashHeroSeries = window._dashHeroSeries || {};
     const arr = window._dashHeroSeries[key] || [];
+    // A transient null/undefined value (the SSE and poll paths don't always carry
+    // bankroll/session-pnl) must NOT blank the series — returning [] made the trend
+    // flip to '—' then back to a value every ~2s (the flashing under Bankroll and
+    // Session P&L). Keep the last good series instead.
+    if (!Number.isFinite(value)) return arr;
     const last = arr.length ? arr[arr.length - 1] : null;
     if (last === null || Math.abs(last - value) > 0.000001) arr.push(value);
     while (arr.length > (maxLen || 30)) arr.shift();
