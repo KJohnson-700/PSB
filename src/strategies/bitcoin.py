@@ -2036,6 +2036,35 @@ class BitcoinStrategy:
                     )
                     continue
 
+                # ── [5m] bearish-htf SHORT sit-out (2026-06-20) ──
+                # Clean re-baseline (real-price, 0.5 excluded): btc 5m BUY_NO n=45,
+                # 29% WR, -$109.8 — the single worst BTC lane. Decomposes the SAME way
+                # as 15m: BEARISH-htf shorts bleed (n=46, 26% WR, -155) while BULLISH-htf
+                # shorts are +EV (n=12, 50% WR, +21). A stuck-BEARISH 4H bias shorts the
+                # fast binary and the tape reverts up; window_delta_flip only catches the
+                # cases where the tape already opposes at entry. Bias-conditioned (keeps
+                # the +EV bullish-htf shorts), ghost-logged for re-admit. Default ON.
+                if (
+                    action == "BUY_NO"
+                    and _updown_tf == "5m"
+                    and htf_bias == "BEARISH"
+                    and bool(self.config.get("disable_buy_no_5m_when_bearish", True))
+                ):
+                    _bump_skip("buy_no_5m_bearish_disabled")
+                    log_rejected_candidate(
+                        strategy="bitcoin", window="5m", side="SHORT", action=action,
+                        reason="buy_no_5m_bearish_disabled", market=market,
+                        yes_price=yes_price, est_prob_up=locals().get("est_prob_up"),
+                        htf_bias=htf_bias, btc_1h_regime=btc_1h_regime if ta else None,
+                        side_source=locals().get("side_source"),
+                        resolver_path=locals().get("resolver_path"),
+                    )
+                    logger.info(
+                        f"  BTC [5m] skip BUY_NO on '{market.question[:40]}' — "
+                        f"bearish-htf short sit-out (clean 29% WR / -$109.8, n=45)"
+                    )
+                    continue
+
                 if is_5m:
                     # ── [5m] FIVE-MINUTE UP/DOWN MARKET PATH ──
                     # Still requires HTF bias (4H) — the macro law applies
