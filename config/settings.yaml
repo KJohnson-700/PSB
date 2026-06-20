@@ -677,7 +677,10 @@ strategies:
     admit_marginal_on_quant_sides: both
     marginal_ev_admit_lanes:
     - 1h:LONG
-    disable_buy_no_5m_native: false
+    # 2026-06-20: sit out sol native 5m BUY_NO — confirmed-broken lane (23% WR,
+    # -$43 recent, n=13, all BEARISH bias). window_delta_flip can't save these
+    # (down-tape entries that revert post-entry). Matches eth/doge precedent.
+    disable_buy_no_5m_native: true
     enabled: true
     use_ai: true
     alt_momentum_confirm:
