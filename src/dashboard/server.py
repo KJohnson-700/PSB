@@ -901,6 +901,30 @@ _journal_cache: Dict[str, object] = {
 _exit_reason_summary_cache: Dict[Tuple[str, Optional[float]], Dict[str, Any]] = {}
 _action_breakdown_cache: Dict[Tuple[str, Optional[float]], Dict[str, Any]] = {}
 
+# ── Perf-feedback status cache (2026-06-20: cycle-stall root cause, py-spy-confirmed) ──
+# public_feedback_status() -> check_overtight() parses the multi-hundred-MB
+# rejected_candidates_settled.jsonl line-by-line on EVERY call. The dashboard polls
+# status every ~2s (SSE heartbeat + /api/status + external watchers), so uncached this
+# 260MB+ JSON re-parse runs continuously across threadpool workers, pinning the single
+# CPU core and starving the bot's scan loop (cycles ballooned 6s -> 300s+). The settled
+# file only changes on the ~600s settle cadence, so a short TTL is correct and lossless.
+_FEEDBACK_STATUS_TTL_SEC = 120.0
+_feedback_status_cache: Dict[str, Any] = {"value": None, "ts": 0.0}
+
+
+def _cached_public_feedback_status(config: Dict[str, Any]) -> Dict[str, Any]:
+    now = _time_mod.time()
+    cache = _feedback_status_cache
+    if cache["value"] is not None and (now - cache["ts"]) < _FEEDBACK_STATUS_TTL_SEC:
+        return cache["value"]
+    try:
+        value = public_feedback_status(config)
+    except Exception:
+        value = cache["value"] if cache["value"] is not None else {}
+    cache["value"] = value
+    cache["ts"] = now
+    return value
+
 
 def _get_journal():
     """Return a TradeJournal, rebuilding only when entries.jsonl changes on disk.
@@ -1869,7 +1893,7 @@ def _get_status_payload_sync():
             "ai_activity_note": _ops.get("ai_activity_note"),
             "timestamps_policy": _ops.get("timestamps_policy"),
             "regime": _ops.get("regime"),
-            "performance_feedback": public_feedback_status(bot.config),
+            "performance_feedback": _cached_public_feedback_status(bot.config),
             "ts": int(_time_mod.time()),
         }
 
@@ -2025,7 +2049,7 @@ def _get_status_payload_sync():
         "buy_no_skip_diagnostics": None,
         "side_selection": None,
         "ai_pipeline": {"per_strategy": {}, "aggregate": {}},
-        "performance_feedback": public_feedback_status(cfg_disk),
+        "performance_feedback": _cached_public_feedback_status(cfg_disk),
         "ts": int(_time_mod.time()),
     }
 
