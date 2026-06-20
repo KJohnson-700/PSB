@@ -420,10 +420,6 @@ class BTCPriceService:
 
     def get_chainlink_price(self) -> Tuple[Optional[float], Optional[datetime]]:
         """Read BTC/USD price from Chainlink oracle on Polygon."""
-        import os as _os
-        if _os.getenv("PSB_DISABLE_ORACLE") == "1":
-            return None, None
-
         # Process-shared result cache (see sol_btc_service for the dict).
         from src.analysis.sol_btc_service import (
             _CHAINLINK_RESULT_CACHE,

@@ -560,11 +560,6 @@ class SOLBTCService:
         symbol: str,
     ) -> Tuple[Optional[float], Optional[datetime], Optional[str]]:
         """Read asset/USD price from the configured Chainlink reference feed."""
-        # Bisection kill-switch (leak hunt): PSB_DISABLE_ORACLE=1 skips the entire
-        # web3/Chainlink eth_call path so we can measure its RSS-slope contribution.
-        import os as _os
-        if _os.getenv("PSB_DISABLE_ORACLE") == "1":
-            return None, None, None
         feed = ORACLE_FEEDS.get((symbol or "").upper())
         if not feed:
             return None, None, None
