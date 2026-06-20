@@ -34,11 +34,11 @@ BLIND_CLUSTER = 3     # >= this many 0.5 entries (session or single lane) = flag
 # trade here = the sit-out config/code REGRESSED — highest-severity, page immediately.
 # Match is by exact lane key OR by strategy prefix (value "*" = whole asset off).
 DISABLED_LANES = {
-    "eth_macro": "*",               # eth disabled end-to-end (-47 @ 33% WR)
-    "bnb_macro|1h|BUY_YES": True,    # bnb alt_1h_simple_long off (-28 @ 28%)
     "sol_macro|5m|BUY_NO": True,     # sol disable_buy_no_5m_native (-34 @ 29%)
-    # btc 5m BUY_NO is sat out ONLY when 4H is bearish (conditional) — not a hard
-    # zero, so it is intentionally NOT listed here.
+    # NOTE: eth is NOT disabled — it runs pocket-gated (eth_pocket_only). bnb 1h
+    # BUY_YES is NOT disabled — it's the documented TOP lane (n=18 was too thin to
+    # kill; both were over-disabled 2026-06-20 then reverted). btc 5m BUY_NO is sat
+    # out ONLY when 4H is bearish (conditional) — not a hard zero. None belong here.
 }
 # WINNERS: proven +EV lanes. Flag if WR falls below the floor with enough n — early
 # warning that a money-maker is degrading (regime shift / data break) before it bleeds.
