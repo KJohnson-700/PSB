@@ -4382,7 +4382,10 @@ function applyHeroMetrics(d) {
             } else {
                 bankEl.textContent = '$' + bankroll.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
             }
-        } else {
+        } else if (!bankEl.dataset.cuInit) {
+            // Only show the em-dash before the first real value. Once bankroll has
+            // resolved, a transient null (cache-cold poll, settle race) must NOT
+            // flicker the card back to '—' — keep the last good value.
             bankEl.textContent = '—';
         }
     }
@@ -10308,7 +10311,9 @@ function checkHeroFlash(key, el, isPnl) {
 
 (function setupSSEHeroFlash() {
     var pairs = [
-        { id: 'hero-bankroll', key: 'bankroll', isPnl: false },
+        // Bankroll intentionally omitted: it changes only on a trade close, and the
+        // glow-on-every-tick read as constant "tacky" flashing. PnL/positions/trades
+        // keep the subtle flash (meaningful, infrequent changes).
         { id: 'hero-pnl',      key: 'pnl',      isPnl: true  },
         { id: 'hero-positions',key: 'positions',isPnl: false },
         { id: 'hero-trades',   key: 'trades',   isPnl: false },
