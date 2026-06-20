@@ -3883,7 +3883,7 @@ async function fetchAll() {
             _perfHeavy ? fetchT('/api/usage/summary') : Promise.resolve(null),
             _perfHeavy ? fetchT('/api/usage/records') : Promise.resolve(null),
             needUpdownWr ? fetchT('/api/journal/updown_breakdown') : Promise.resolve(null),
-            _perfHeavy ? fetchT('/api/strategy/reason-buckets') : Promise.resolve(null),
+            Promise.resolve(null),  // 2026-06-20 PRUNED: reason-buckets panel is collapsed/unused; its endpoint (~14s, external watchlist fetch) was dragging the Performance tab. Stop fetching it.
             Promise.resolve(null),  // trade journey removed from UI — no fetch
             _perfHeavy ? fetchT('/api/journal/exit-reason-summary') : Promise.resolve(null),
             _perfHeavy ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null),

@@ -4255,27 +4255,35 @@ def get_updown_breakdown(session_id: Optional[str] = None):
     from datetime import datetime as _dt
     from collections import defaultdict as _dd
 
-    # Detect new-code start time — search last 7 days of logs (not just today)
-    log_dir = DATA_ROOT / "logs"
-    NEW_CODE_MARKERS = ["Anti-LTF gate passed", "4H histogram", "1H histogram"]
-    new_code_start: str | None = None
-    for _days_back in range(7):
-        _check_date = (_dt.now() - timedelta(days=_days_back)).strftime("%Y%m%d")
-        _log_path = log_dir / f"polybot_{_check_date}.log"
-        if not _log_path.exists():
-            continue
-        try:
-            with open(_log_path, errors="replace") as _lf:
-                for _line in _lf:
-                    if any(_mk in _line for _mk in NEW_CODE_MARKERS):
-                        _m = _re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', _line)
-                        if _m:
-                            new_code_start = _m.group(1)
-                            break
-            if new_code_start:
-                break
-        except Exception:
-            pass
+    # Detect new-code start time. This marker scan walks up to 7 daily logs and was
+    # the main cost of this endpoint (~14-17s). The running code version is stable,
+    # so compute it ONCE per process and cache (the DISPLAYED trades are session-
+    # scoped, not 7 days — the scan only sets the old/new split point).
+    _nc_cache = getattr(get_updown_breakdown, "_nc_cache", None)
+    if _nc_cache is not None:
+        new_code_start = _nc_cache["v"]
+    else:
+        log_dir = DATA_ROOT / "logs"
+        NEW_CODE_MARKERS = ["Anti-LTF gate passed", "4H histogram", "1H histogram"]
+        new_code_start: str | None = None
+        for _days_back in range(7):
+            _check_date = (_dt.now() - timedelta(days=_days_back)).strftime("%Y%m%d")
+            _log_path = log_dir / f"polybot_{_check_date}.log"
+            if not _log_path.exists():
+                continue
+            try:
+                with open(_log_path, errors="replace") as _lf:
+                    for _line in _lf:
+                        if any(_mk in _line for _mk in NEW_CODE_MARKERS):
+                            _m = _re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', _line)
+                            if _m:
+                                new_code_start = _m.group(1)
+                                break
+                if new_code_start:
+                    break
+            except Exception:
+                pass
+        get_updown_breakdown._nc_cache = {"v": new_code_start}
 
     j = _journal_for_query(session_id) if session_id else _get_journal()
     closed = j.get_closed_trades() if j else []
