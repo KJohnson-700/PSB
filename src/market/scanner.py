@@ -1003,7 +1003,17 @@ class MarketScanner:
             market.no_price = no_price
             # Real quote only if at least one side returned a live mid; otherwise both
             # are the 0.5 default and the market is unpriced (filtered before strategy scan).
-            market.price_hydrated = bool(yes_hit or no_hit)
+            hydrated = bool(yes_hit or no_hit)
+            # Degenerate-0.5 guard (2026-06-20): a thin/one-sided Polymarket book whose
+            # /midpoint falls back to an EXACT 0.50 is "present" in the price map but is
+            # not a real quote — trading it fabricates phantom edge (est_prob vs a fake
+            # 0.5) and was the recurring HYPE blind-0.5 bleed. A genuine balanced book is
+            # virtually never exactly 0.5000 on BOTH legs (real best bid/ask carry an
+            # imbalance), and a true coin-flip has ~0 edge anyway. Treat both-legs-0.5 as
+            # unpriced so the _priced() filter drops it before the strategy scan.
+            if hydrated and abs(yes_price - 0.5) < 1e-3 and abs(no_price - 0.5) < 1e-3:
+                hydrated = False
+            market.price_hydrated = hydrated
             if market.spread <= 0:
                 # Mid prices only reveal convergence, not true order-book spread.
                 market.spread = max(0.0, 1.0 - (yes_price + no_price))
