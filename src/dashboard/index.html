@@ -4254,6 +4254,38 @@ function dashUpdateHeroVisuals(values) {
     }
 }
 
+// FAST card path (2026-06-20): the Command Center cards read from the lightweight
+// /api/ops/summary (~0.4s) instead of waiting on the heavy /api/status / SSE, which
+// can take 14-17s and leave the cards stuck on "-". Maps the flat ops payload into the
+// shape applyHeroMetrics() expects. Runs on load + every 4s, independent of fetchAll.
+async function fastHeroCards() {
+    try {
+        const r = await fetchT('/api/ops/summary', 5000);
+        if (!r || !r.ok) return;
+        const o = await r.json();
+        if (!o || typeof o !== 'object') return;
+        applyHeroMetrics({
+            bankroll: o.bankroll,
+            session: {
+                total_pnl: o.total_pnl,
+                realized_pnl: o.realized_pnl,
+                open: o.open_positions,
+                fills: (o.total_entries != null ? o.total_entries : o.closed_trades),
+                session_id: o.session_id,
+            },
+            portfolio: {
+                total_positions: o.open_positions,
+                daily_trades: o.daily_trades,
+                daily_pnl: o.daily_pnl,
+            },
+        });
+    } catch (e) { /* ignore — the heavy /api/status path fills in when it returns */ }
+}
+document.addEventListener('DOMContentLoaded', function() {
+    fastHeroCards();
+    setInterval(fastHeroCards, 4000);
+});
+
 function applyHeroMetrics(d) {
     if (!d || typeof d !== 'object') return;
     const p = d.portfolio || {};
