@@ -491,12 +491,37 @@ def _compute_trading_cycle_sleep(
 async def _time_strategy_scan(
     strategy_name: str,
     scan_coro,
+    timeout_sec: float = 22.0,
 ) -> tuple[str, Any, int, bool]:
-    """Measure one strategy scan wall time without changing its behavior."""
+    """Measure one strategy scan wall time and HARD-CAP it.
+
+    The parallel scan is an ``asyncio.gather`` — it completes only when the
+    SLOWEST lane finishes. A single hung lane (e.g. Hyperliquid OHLCV stalling:
+    bisection-recursed sync fetches stacking to 38-60s) therefore drags the whole
+    cycle to ~60s, freezing exits/dashboard and tripping the status orb. The inner
+    ``analysis_with_timeout`` (15s) only caps each get_full_analysis call, not the
+    per-lane total. This wait_for bounds the WHOLE lane: on timeout the lane is
+    skipped for this cycle (signals come next cycle) so it can't stall the others.
+    The offloaded fetch thread finishes in the background; its result is discarded.
+    """
     started = time.perf_counter()
     try:
-        result = await scan_coro
+        if timeout_sec and timeout_sec > 0:
+            result = await asyncio.wait_for(scan_coro, timeout=timeout_sec)
+        else:
+            result = await scan_coro
         ok = True
+    except asyncio.TimeoutError:
+        # Empty signal list (NOT None/exc): downstream iterates the payload, so a
+        # skipped lane must stay iterable. ok=True keeps it out of strategy_errors;
+        # the warning below is the record of the degraded cycle.
+        result = []
+        ok = True
+        logging.warning(
+            "[scan] %s exceeded hard per-lane timeout %.0fs — lane skipped this cycle "
+            "(prevents one slow lane from stalling the parallel scan)",
+            strategy_name, timeout_sec,
+        )
     except Exception as exc:
         result = exc
         ok = False
