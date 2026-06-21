@@ -71,11 +71,11 @@ def test_dashboard_index_serves_and_health_has_ui_rev():
     assert 'id="live-shutdown-btn"' not in body
     assert "function shutdownLiveBot" in body
     assert "/api/live/shutdown" in body
-    assert "/api/ghosts/morning-summary" in body
     # Backtest UI elements (bt-hud, backtest-output-tail) removed 2026-05-24 with the broken backtester.
-    # Ghost Lab tab replaced it.
+    # Ghost Lab tab replaced it. Ghost Lab was stripped 2026-06-14 to the
+    # hour-of-day clock + lane×hour WR heatmap so unused windows don't slow the dashboard.
     assert 'id="view-ghosts"' in body
-    assert 'id="gl-clock"' in body
+    assert 'id="gl-clock"' in body and 'id="gl-lh-heatmap"' in body
     assert 'id="action-perf-lanes"' in body
     assert "BTC Signals" not in body.split('id="strategy-boxes"')[1].split('id="strategy-table"')[0]
 
@@ -264,7 +264,7 @@ def test_command_center_trading_control_uses_pause_language():
 
 def test_exposure_tile_labels_consecutive_losses_explicitly():
     html = INDEX.read_text(encoding="utf-8")
-    assert "Consec Losses" in html
+    assert "Loss streak" in html
     assert "live streak" in html
 
 
@@ -281,9 +281,13 @@ def test_btc_chart_uses_css_variable_overlay_for_trade_markers():
     assert "ring.className = 'bbl-ring';" in html
     assert "tip.className = 'bbl-tip';" in html
     assert "function _drawBTCTradeOverlay()" in html
+    assert "async function refreshTradePoints()" in html
     assert "_btcChart.timeScale().subscribeVisibleLogicalRangeChange(() => { _queueBTCTradeOverlayDraw(); });" in html
     assert "_setBTCTradeOverlayData(overlayPoints, _candles || []);" in html
-    assert "_btcCandleSeries.setMarkers((sabreMarkers || []).slice(-80));" in html
+    assert "_mergeMarkers(_btcLastSabreMarkers, _nativeTradeMarkersFromPoints(tradePoints))" in html
+    assert "function _ensureTradePointRefresh()" in html
+    assert "_ensureTradePointRefresh();" in html
+    assert "text: `${label} ${pnlStr}`" not in html
 
 
 def test_command_center_decision_gates_do_not_trap_scroll():
@@ -325,13 +329,14 @@ def test_crypto_live_panels_wrap_and_slow_ticker_helpers_exist():
     assert "dashboard_ui_rev" in server and '"dashboard_ui_rev":' in server
 
 
-def test_command_center_trades_card_uses_daily_trades_not_session_fills():
+def test_command_center_trades_card_uses_session_fills_not_daily_trades():
     html = INDEX.read_text(encoding="utf-8")
-    assert "Trades today (UTC)" in html
-    assert "const dailyTrades = Number(p.daily_trades || 0);" in html
-    assert "if (tradesEl) tradesEl.textContent = dailyTrades;" in html
-    assert "daily_trades: raw.trades_today" in html
     assert "Session fills" in html
+    assert "const dailyTrades = Number(p.daily_trades || 0);" in html
+    assert "const sessionFillsRaw = s && s.fills != null ? Number(s.fills) : NaN;" in html
+    assert "if (tradesEl) tradesEl.textContent = sessionFills;" in html
+    assert "daily_trades: raw.trades_today" in html
+    assert "UTC trades" in html
     assert "Paper Trade Journal" in html
 
 
@@ -341,32 +346,6 @@ def test_dashboard_sse_uses_risk_manager_daily_fields():
     assert 'round(float(getattr(rm, "daily_pnl", 0) or 0), 2)' in server
     assert '"trades_today": daily_trades_n' in server
     assert '"ai_pipeline": ai_pipeline_payload' in server
-
-
-def test_ai_summary_text_extractor_handles_provider_shapes():
-    from src.dashboard.server import _extract_ai_summary_text
-
-    assert _extract_ai_summary_text({"content": [{"type": "text", "text": " good "}]}) == "good"
-    assert _extract_ai_summary_text({"content": [{"type": "text", "content": " nested "}]}) == "nested"
-    assert _extract_ai_summary_text({"choices": [{"message": {"content": " choice "}}]}) == "choice"
-    assert _extract_ai_summary_text({"content": [{"type": "tool_use", "name": "noop"}]}) == ""
-
-
-def test_ai_summary_text_extractor_hides_thinking_blocks():
-    from src.dashboard.server import _extract_ai_summary_text
-
-    assert (
-        _extract_ai_summary_text(
-            {
-                "content": [
-                    {"type": "thinking", "text": "internal chain of thought"},
-                    {"type": "text", "text": "Operator-safe summary."},
-                ]
-            }
-        )
-        == "Operator-safe summary."
-    )
-    assert _extract_ai_summary_text("<think>private reasoning</think>\nFinal summary.") == "Final summary."
 
 
 def test_dashboard_contains_operator_toggle_buttons():
@@ -410,7 +389,11 @@ def test_heavy_dashboard_endpoints_use_cached_journal_summary():
         assert start != -1, f"{name} missing"
         next_route = server.find("\n@app.", start + 1)
         block = server[start: next_route if next_route != -1 else len(server)]
-        assert "_get_cached_journal_summary()" in block
+        assert (
+            "_get_cached_journal_summary()" in block
+            or "_get_current_session_summary()" in block
+            or "asyncio.to_thread(_get_cached_journal_summary)" in block
+        )
 
 
 def test_manual_journal_refresh_clears_summary_cache():
@@ -545,6 +528,20 @@ def test_command_center_pnl_chart_uses_bottom_anchor_until_negative():
     assert "const floor = Math.max(observedMag * 1.2, 25);" not in html
 
 
+def test_lane_gates_keep_last_good_payload_on_transient_failure():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "let _lastLaneGatesPayload = null;" in html
+    assert "if (_lastLaneGatesPayload) return;" in html
+    assert "_lastLaneGatesPayload = d;" in html
+    assert "Lane gate data unavailable" in html
+
+
+def test_command_center_pnl_hero_omits_direction_prefix():
+    html = INDEX.read_text(encoding="utf-8")
+    assert "pnlEl.textContent = '$' + Math.abs(sessionPnlRaw).toFixed(2);" in html
+    assert "pnlEl.textContent = (sessionPnlRaw >= 0 ? '+' : '-') + '$'" not in html
+
+
 def test_kelly_sizer_defaults_include_doge_and_bnb():
     from src.analysis.kelly_sizer import KellySizer
 
@@ -599,23 +596,27 @@ def test_kelly_payload_pads_missing_live_strategies(monkeypatch):
 
 
 def test_ghost_lab_tab_renders():
-    """Ghost Lab nav button + view container + key panel widgets are in the HTML."""
+    """Ghost Lab is stripped to the hour-of-day clock + lane×hour WR heatmap.
+
+    The 2026-06-14 cleanup removed the replay scrubber, lane-detail table,
+    regime×ghost panel, decision-digest and morning-summary panels from the
+    *tab* so it stops slowing the dashboard. The backend ghost endpoints are
+    untouched (they keep ingesting) — see the endpoint tests above.
+    """
     html = INDEX.read_text(encoding="utf-8")
     assert 'data-view="ghosts"' in html
     assert 'id="view-ghosts"' in html
-    assert 'id="gl-clock"' in html and 'id="gl-heatmap"' in html
-    assert 'id="gl-replay"' in html and 'id="gl-lane-table"' in html
-    assert 'id="gl-digest-tbody"' in html
-    assert 'id="gl-morning-summary"' in html
-    assert 'id="gl-morning-loops"' in html
-    assert 'id="gl-morning-next-edits"' in html
+    # Surviving widgets: clock + lane×hour heatmap.
+    assert 'id="gl-clock"' in html and 'id="gl-lh-heatmap"' in html
     assert "function loadGhostLab" in html
-    assert "function loadGhostMorningSummary" in html
+    assert "function _glRenderLaneHourHeatmap" in html
     assert "/api/ghosts/lab" in html
-    assert "/api/ghosts/regime-breakdown" in html
-    assert "/api/ghosts/decision-digest" in html
-    assert "/api/ghosts/morning-summary" in html
-    assert "high ghost WR" in html
+    # Removed widgets must be gone so the tab stays light.
+    assert 'id="gl-heatmap"' not in html
+    assert 'id="gl-replay"' not in html
+    assert 'id="gl-lane-table"' not in html
+    assert 'id="gl-digest-tbody"' not in html
+    assert 'id="gl-morning-summary"' not in html
     assert "LOOSEN" not in html
 
 
@@ -751,6 +752,24 @@ def test_resolve_bankroll_snapshot_preserves_real_zero(tmp_path):
     )
     assert payload["bankroll"] == 0.0
     assert payload["source"] == "journal"
+
+
+def test_resolve_bankroll_snapshot_can_prefer_live_equity(tmp_path):
+    from src.dashboard.server import _resolve_bankroll_snapshot
+
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    payload = _resolve_bankroll_snapshot(
+        493.3,
+        session_dir,
+        summary_total_pnl=-5.06,
+        summary_has_session=True,
+        initial_bankroll=500.0,
+        prefer_summary_equity=True,
+    )
+    assert payload["bankroll"] == 494.94
+    assert payload["source"] == "summary_equity"
 
 
 def test_resolve_bankroll_snapshot_reports_unavailable(tmp_path):
@@ -1228,22 +1247,14 @@ def test_lane_health_ready_live_warning_appends_audit_row(monkeypatch, tmp_path)
     assert '"source":"auto_pause_ready_live"' in audit_text
 
 
-def test_dashboard_contains_lane_state_controls():
+def test_journal_tab_omits_lane_health_controls():
     html = INDEX.read_text(encoding="utf-8")
-    assert 'id="lane-health-card"' in html
-    assert 'id="lane-history-body"' in html
-    assert 'id="lane-filter-ready"' in html
-    assert "function setLaneState(laneId, state)" in html
-    assert "function setLaneHealthFilter(mode)" in html
-    assert "function applyLaneRecommendation(laneId, state)" in html
-    assert "function updateLaneHistory(history)" in html
-    assert "/api/lane-state" in html
-    assert "/api/lane-state-history" in html
-    assert "Ready only" in html
-    assert "AUTO-PAUSE WATCH" in html
-    assert "candidate just detected" in html
-    assert "Recommend" in html
-    assert "Reviewed" in html
+    assert 'id="lane-health-card"' not in html
+    assert 'id="lane-history-body"' not in html
+    assert 'id="lane-filter-ready"' not in html
+    assert "function setLaneHealthFilter(mode)" not in html
+    assert "function updateLaneHistory(history)" not in html
+    assert "/api/lane-state-history" not in html
 
 
 def test_performance_table_labels_session_metrics_not_backtest():
@@ -1280,6 +1291,17 @@ def test_fetchall_only_loads_action_breakdown_on_performance_tab():
     assert "needPerformance ? fetchT('/api/journal/action_breakdown') : Promise.resolve(null)" in html
 
 
+def test_live_chart_trade_points_do_not_request_old_session_fallback():
+    html = INDEX.read_text(encoding="utf-8")
+    start = html.find("function _tradePointsUrl(")
+    assert start != -1, "_tradePointsUrl helper missing"
+    block = html[start : html.find("}", start) + 1]
+
+    assert "include_recent=true" not in block
+    assert "_exitHudTradePoints = []" in html
+    assert "_maState.tradePoints = []" in html
+
+
 def test_fetchall_skips_retired_scan_endpoint():
     html = INDEX.read_text(encoding="utf-8")
     fetchall_start = html.find("async function fetchAll()")
@@ -1294,6 +1316,7 @@ def test_fetchall_gates_alt_analysis_by_strategy_state():
     html = INDEX.read_text(encoding="utf-8")
 
     assert "function _liveAssetPollEnabled(strategyKey)" in html
+    assert "const needLiveAssetCards = false" in html
     for strategy, endpoint in {
         "sol_macro": "/api/sol/analysis",
         "eth_macro": "/api/eth/analysis",
@@ -1302,14 +1325,43 @@ def test_fetchall_gates_alt_analysis_by_strategy_state():
         "doge_macro": "/api/doge/analysis",
         "bnb_macro": "/api/bnb/analysis",
     }.items():
-        assert f"needLive && _liveAssetPollEnabled('{strategy}') ? fetchT('{endpoint}', 14000)" in html
+        assert f"needLiveAssetCards && _liveAssetPollEnabled('{strategy}') ? fetchT('{endpoint}', 14000)" in html
+
+
+def test_watchlist_backend_includes_doge_and_bnb_spot_layers():
+    server = (REPO / "src" / "dashboard" / "server.py").read_text(encoding="utf-8")
+    start = server.find("async def get_strategy_watchlist(")
+    assert start != -1, "watchlist handler missing"
+    end = server.find("# ─── STRATEGY METRICS", start)
+    assert end != -1, "watchlist handler end marker missing"
+    block = server[start:end]
+
+    for strategy, symbol, asset in (
+        ("doge_macro", "DOGEUSDT", "doge"),
+        ("bnb_macro", "BNBUSDT", "bnb"),
+    ):
+        assert strategy in block
+        assert symbol in block
+        assert f'_parse_threshold(q, asset="{asset}")' in block
+
+
+def test_threshold_parser_supports_doge_and_bnb_ranges():
+    from src.dashboard.server import _parse_threshold
+
+    assert _parse_threshold("Dogecoin above $0.18?", asset="doge") == pytest.approx(0.18)
+    assert _parse_threshold("BNB above $650?", asset="bnb") == pytest.approx(650.0)
 
 
 def test_ghost_lab_initial_payload_is_bounded():
     html = INDEX.read_text(encoding="utf-8")
 
-    assert "limit=5000" in html
+    # The stripped Ghost Lab renders only the clock + lane×hour heatmap, both of
+    # which read the server-side aggregates (buckets_hour / lanes). It no longer
+    # iterates the raw event array, so it requests the minimum capped payload.
+    assert "limit=1`" in html
+    assert "limit=5000" not in html
     assert "limit=20000" not in html
+    assert "limit=1200" not in html
 
 
 def test_updown_breakdown_can_read_archive_session(monkeypatch, tmp_path):

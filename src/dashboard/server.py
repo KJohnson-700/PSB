@@ -106,14 +106,6 @@ def _calibration_status_from_config(cfg: Dict[str, Any], *, dry_run: bool) -> Di
         "beta_veto_min_n": int(cal_cfg.get("beta_veto_min_n", 30) or 30),
     }
 
-# ── All-time journal aggregate cache (TTL'd, used for session-vs-alltime deltas)
-# Baseline cutoff: earlier sessions ran under pre-ghost / pre-calibration code
-# and aren't comparable. Start from 2026-05-15 — first day with settled-ghost
-# data and the 2026-05-22 baseline ref doc's bracket.
-_ALLTIME_BASELINE_START_ISO = "2026-05-15"
-_alltime_agg_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_ALLTIME_AGG_TTL_S = 300.0
-
 
 def _lane_meta_from_trade(trade: Dict[str, Any]) -> Dict[str, Any]:
     extra = dict(trade.get("entry_signal") or {})

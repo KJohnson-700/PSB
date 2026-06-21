@@ -40,6 +40,10 @@ def _base_config() -> dict:
             "live_inferencing": True,
             "decision_layer": {"enabled": False},
         },
+        # These tests verify execution mechanics, not the regime fade filter.
+        # Disable it so the gate (which reads the real calibration trades.jsonl)
+        # cannot suppress a band-priced test signal and blank the assertion.
+        "regime_fade": {"enabled": False},
     }
 
 
@@ -177,6 +181,149 @@ def _assert_buy_no_execution(bot: PolyBot, *, token_id_no: str, strategy: str) -
     assert journal_kwargs["side"] == "BUY"
     assert journal_kwargs["outcome"] == "NO"
     assert journal_kwargs["entry_leg"] == "NO"
+
+
+def _decision_stub():
+    decision = MagicMock()
+    decision.market_id = "m_slip_1"
+    decision.market_question = "Bitcoin Up or Down — slippage test"
+    decision.strategy = "bitcoin"
+    decision.skip_extra.return_value = {"skip_reason": "stub"}
+    return decision
+
+
+def _book(*, bid: float = 0.49, ask_levels: list[tuple[float, float]] | None = None) -> dict:
+    return {
+        "bids": [{"price": bid, "size": 100.0}],
+        "asks": [
+            {"price": price, "size": size}
+            for price, size in (ask_levels or [(0.50, 100.0)])
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_fresh_book_slippage_guard_allows_tight_spread_full_depth():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.config["trading"]["dry_run"] = False
+    bot.config["trading"]["slippage_guard"] = {
+        "enabled": True,
+        "mode": "enforce",
+        "max_slippage_cents": 0.02,
+        "max_spread_cents": 0.03,
+        "require_full_depth": True,
+        "depth_price_ceiling_cents": 0.0,
+    }
+    bot.clob_client.fetch_order_book_snapshot = AsyncMock(
+        return_value=_book(bid=0.49, ask_levels=[(0.50, 20.0)])
+    )
+
+    ok = await bot._fresh_book_slippage_ok(
+        token_id="tok",
+        side="BUY",
+        intended_price=0.50,
+        requested_size=12.0,
+        strategy="bitcoin",
+        decision=_decision_stub(),
+        market_question="Bitcoin Up or Down — slippage test",
+    )
+
+    assert ok is True
+    bot.journal.log_skip.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fresh_book_slippage_guard_enforces_spread_gate():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.config["trading"]["dry_run"] = False
+    bot.config["trading"]["slippage_guard"] = {
+        "enabled": True,
+        "mode": "enforce",
+        "max_slippage_cents": 0.02,
+        "max_spread_cents": 0.03,
+        "require_full_depth": True,
+        "depth_price_ceiling_cents": 0.0,
+    }
+    bot.clob_client.fetch_order_book_snapshot = AsyncMock(
+        return_value=_book(bid=0.46, ask_levels=[(0.50, 20.0)])
+    )
+
+    ok = await bot._fresh_book_slippage_ok(
+        token_id="tok",
+        side="BUY",
+        intended_price=0.50,
+        requested_size=12.0,
+        strategy="bitcoin",
+        decision=_decision_stub(),
+        market_question="Bitcoin Up or Down — slippage test",
+    )
+
+    assert ok is False
+    assert bot.journal.log_skip.call_args.args[3] == "buy_spread_block"
+
+
+@pytest.mark.asyncio
+async def test_fresh_book_slippage_guard_enforces_depth_at_olympus_cap():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.config["trading"]["dry_run"] = False
+    bot.config["trading"]["slippage_guard"] = {
+        "enabled": True,
+        "mode": "enforce",
+        "max_slippage_cents": 0.02,
+        "max_spread_cents": 0.03,
+        "require_full_depth": True,
+        "depth_price_ceiling_cents": 0.0,
+    }
+    bot.clob_client.fetch_order_book_snapshot = AsyncMock(
+        return_value=_book(bid=0.49, ask_levels=[(0.50, 5.0), (0.51, 100.0)])
+    )
+
+    ok = await bot._fresh_book_slippage_ok(
+        token_id="tok",
+        side="BUY",
+        intended_price=0.50,
+        requested_size=12.0,
+        strategy="bitcoin",
+        decision=_decision_stub(),
+        market_question="Bitcoin Up or Down — slippage test",
+    )
+
+    assert ok is False
+    assert bot.journal.log_skip.call_args.args[3] == "buy_depth_block"
+
+
+@pytest.mark.asyncio
+async def test_fresh_book_slippage_guard_observe_mode_logs_without_blocking():
+    bot = _bare_polybot()
+    _attach_mocks(bot)
+    bot.config["trading"]["dry_run"] = False
+    bot.config["trading"]["slippage_guard"] = {
+        "enabled": True,
+        "mode": "observe",
+        "max_slippage_cents": 0.02,
+        "max_spread_cents": 0.03,
+        "require_full_depth": True,
+        "depth_price_ceiling_cents": 0.0,
+    }
+    bot.clob_client.fetch_order_book_snapshot = AsyncMock(
+        return_value=_book(bid=0.46, ask_levels=[(0.50, 20.0)])
+    )
+
+    ok = await bot._fresh_book_slippage_ok(
+        token_id="tok",
+        side="BUY",
+        intended_price=0.50,
+        requested_size=12.0,
+        strategy="bitcoin",
+        decision=_decision_stub(),
+        market_question="Bitcoin Up or Down — slippage test",
+    )
+
+    assert ok is True
+    bot.journal.log_skip.assert_not_called()
 
 
 @pytest.mark.asyncio
