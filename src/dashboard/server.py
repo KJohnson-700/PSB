@@ -51,6 +51,7 @@ from src.config_merge import deep_merge_config as _deep_merge
 from src.env_bootstrap import load_project_dotenv, project_root_from_here
 from src.ai_status import compute_ai_status
 from src.execution.performance_feedback import public_feedback_status
+from src.execution import exposure_overrides
 
 # Standalone `uvicorn src.dashboard.server:app` still picks up repo-root `.env` / secrets.env.
 load_project_dotenv(project_root_from_here(), quiet=True)
@@ -4705,54 +4706,61 @@ async def get_exposure_status():
     return out
 
 
+# Exposure pause/resume controls are DISK-COUPLED so they work in split mode
+# (--dashboard-only has no in-process ExposureManager). We write
+# data/runtime/exposure_overrides.json; the bot reconciles its managers from it
+# every cycle (see PolyBot._reconcile_exposure_overrides). When an in-process bot
+# IS present (single-process mode) we also apply immediately for instant feedback.
 @app.post("/api/exposure/pause")
 async def pause_exposure(request: Request):
     _check_auth(request)
-    managers = _all_exposure_managers()
-    if managers:
-        for m in managers:
-            m.manual_pause()
-        return {"status": "paused", "managers": len(managers)}
-    return {"error": "No bot instance"}
+    state = exposure_overrides.set_global(True)
+    for m in _all_exposure_managers():
+        m.manual_pause()
+    return {"status": "paused", "scope": "global", "overrides": state}
 
 
 @app.post("/api/exposure/resume")
 async def resume_exposure(request: Request):
     _check_auth(request)
-    managers = _all_exposure_managers()
-    if managers:
-        for m in managers:
-            m.manual_resume()
-        return {"status": "resumed", "managers": len(managers)}
-    return {"error": "No bot instance"}
+    state = exposure_overrides.set_global(False)
+    for m in _all_exposure_managers():
+        m.manual_resume()
+    return {"status": "resumed", "scope": "global", "overrides": state}
 
 
 @app.post("/api/exposure/pause/{lane}")
 async def pause_exposure_lane(lane: str, request: Request):
     """Pause a single exposure lane (manual) — other lanes keep trading."""
     _check_auth(request)
-    mgr = _exposure_manager_for_lane(lane)
-    if mgr is None:
+    try:
+        state = exposure_overrides.set_lane(lane, True)
+    except ValueError:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, or xrp.",
+            detail="Unknown lane. Use btc, sol, eth, hype, xrp, doge, or bnb.",
         )
-    mgr.manual_pause()
-    return {"status": "paused", "lane": lane.lower().strip()}
+    mgr = _exposure_manager_for_lane(lane)
+    if mgr is not None:
+        mgr.manual_pause()
+    return {"status": "paused", "lane": lane.lower().strip(), "overrides": state}
 
 
 @app.post("/api/exposure/resume/{lane}")
 async def resume_exposure_lane(lane: str, request: Request):
     """Resume one lane after manual or loss pause (clears manual pause for that lane)."""
     _check_auth(request)
-    mgr = _exposure_manager_for_lane(lane)
-    if mgr is None:
+    try:
+        state = exposure_overrides.set_lane(lane, False)
+    except ValueError:
         raise HTTPException(
             status_code=404,
-            detail="Unknown lane or bot not running. Use btc, sol, eth, hype, or xrp.",
+            detail="Unknown lane. Use btc, sol, eth, hype, xrp, doge, or bnb.",
         )
-    mgr.manual_resume()
-    return {"status": "resumed", "lane": lane.lower().strip()}
+    mgr = _exposure_manager_for_lane(lane)
+    if mgr is not None:
+        mgr.manual_resume()
+    return {"status": "resumed", "lane": lane.lower().strip(), "overrides": state}
 
 
 # ─── BITCOIN LIVE ANALYSIS ────────────────────────────────────

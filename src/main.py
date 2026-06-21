@@ -44,6 +44,7 @@ from src.strategies._scan_timeout import analysis_with_timeout
 from src.execution.clob_client import CLOBClient, RiskManager, Position, OrderStatus
 from src.execution.trade_journal import TradeJournal, infer_entry_leg
 from src.execution.exposure_manager import ExposureManager
+from src.execution import exposure_overrides
 from src.execution.resolution_tracker import ResolutionTracker
 from src.execution.ctf_redeemer import CTFRedeemer
 from src.execution.live_testing import (
@@ -2572,6 +2573,44 @@ class PolyBot:
         """Return True if the manual global stop file exists (do not place new trades)."""
         return KILL_SWITCH_FILE.exists()
 
+    def _reconcile_exposure_overrides(self) -> None:
+        """Apply the split dashboard's pause controls to our in-process exposure
+        managers. The dashboard (separate process) writes
+        data/runtime/exposure_overrides.json; we reconcile each manager's manual
+        pause to match every cycle. Same disk-coupled pattern as KILL_SWITCH so the
+        dashboard pause/resume buttons work without an in-process bot reference.
+        Fail-safe: any read/apply error leaves managers as-is (never raises)."""
+        try:
+            ov = exposure_overrides.read_overrides()
+        except Exception:
+            return
+        managers = (
+            self.btc_exposure_manager, self.sol_exposure_manager,
+            self.eth_exposure_manager, self.hype_exposure_manager,
+            self.xrp_exposure_manager, self.doge_exposure_manager,
+            self.bnb_exposure_manager,
+        )
+        for mgr in managers:
+            try:
+                desired = exposure_overrides.lane_is_paused(
+                    getattr(mgr, "lane_name", ""), overrides=ov
+                )
+                is_manual = bool(getattr(mgr, "_manual_pause", False))
+                if desired and not is_manual:
+                    mgr.manual_pause()
+                    logging.warning(
+                        "Exposure override: PAUSED lane=%s (from dashboard)",
+                        getattr(mgr, "lane_name", "?"),
+                    )
+                elif not desired and is_manual:
+                    mgr.manual_resume()
+                    logging.warning(
+                        "Exposure override: RESUMED lane=%s (from dashboard)",
+                        getattr(mgr, "lane_name", "?"),
+                    )
+            except Exception:
+                logging.debug("exposure override reconcile failed for one lane", exc_info=True)
+
     def _notify_manual_global_stop_once(self) -> None:
         """Send the manual-stop Discord embeds once per kill-switch activation."""
         if getattr(self, "_manual_global_stop_alert_sent", False):
@@ -3185,6 +3224,10 @@ class PolyBot:
             self._notify_manual_global_stop_once()
             return
         self._manual_global_stop_alert_sent = False
+
+        # Apply the split dashboard's pause/resume controls (disk-coupled) to our
+        # in-process exposure managers before scanning this cycle.
+        self._reconcile_exposure_overrides()
 
         # Live: re-sync bankroll + run-P&L to the real venue equity every cycle so the
         # dashboard reflects the actual account (manual trades, on-chain resolutions,
