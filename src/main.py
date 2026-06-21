@@ -5453,7 +5453,14 @@ async def main():
     from src.dashboard.server import set_bot_instance, take_dashboard_uvicorn_server
 
     set_bot_instance(bot)
-    if bot.config.get("dashboard", {}).get("enabled", False):
+    # Only the in-process dashboard path owns a uvicorn handle. In split mode the
+    # bot runs --no-dashboard (the dashboard is a separate psb-dashboard service),
+    # so don't try to grab a handle that will never exist — that previously logged a
+    # misleading "Uvicorn server handle missing" warning on every bot startup.
+    if (
+        "--no-dashboard" not in sys.argv
+        and bot.config.get("dashboard", {}).get("enabled", False)
+    ):
         srv = _wait_for_dashboard_server_handle(
             _dash_holder,
             take_dashboard_uvicorn_server,
