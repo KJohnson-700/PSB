@@ -2908,6 +2908,9 @@ class PolyBot:
         # gate the sampler previously stubbed to None (oracle_ok was 0/N). Best-effort:
         # any failure leaves basis None (no worse than before); never blocks the loop.
         _btc_basis_bps = None
+        _btc_oracle_price = None
+        _btc_spot = None
+        _btc_oracle_age_s = None
         try:
             _bsvc = getattr(self.bitcoin_strategy, "btc_service", None)
             # _shared_btc_ta is a flat TechnicalAnalysis (current_price), NOT a
@@ -2917,10 +2920,17 @@ class PolyBot:
             # -> oracle_ok never fired in the top-up shadow. (fix 2026-06-21)
             _ta = getattr(self, "_shared_btc_ta", None)
             _spot = float(getattr(_ta, "current_price", 0.0) or 0.0)
+            _btc_spot = _spot if _spot > 0 else None
             if _bsvc is not None and _spot > 0:
-                _cl, _ = await asyncio.to_thread(_bsvc.get_chainlink_price)
+                _cl, _cl_ts = await asyncio.to_thread(_bsvc.get_chainlink_price)
                 if _cl and float(_cl) > 0:
+                    _btc_oracle_price = float(_cl)
                     _btc_basis_bps = ((_spot - float(_cl)) / float(_cl)) * 10000.0
+                    # oracle feed freshness — research flags stale-quote windows as the
+                    # ones where the apparent edge has already evaporated.
+                    if _cl_ts is not None:
+                        _ts = _cl_ts if _cl_ts.tzinfo else _cl_ts.replace(tzinfo=timezone.utc)
+                        _btc_oracle_age_s = (now - _ts.astimezone(timezone.utc)).total_seconds()
         except Exception:
             logging.debug("topup sampler: BTC oracle basis calc failed (ignored)", exc_info=True)
         for market_id, yes_token, no_token, end_date, question in universe:
@@ -2953,6 +2963,9 @@ class PolyBot:
                     best_bid_yes=best_bid,
                     mins_left=mins_left,
                     oracle_basis_bps=_btc_basis_bps,
+                    oracle_price=_btc_oracle_price,
+                    spot_price=_btc_spot,
+                    oracle_age_s=_btc_oracle_age_s,
                     market_end_at=ed,
                 )
             except Exception:
