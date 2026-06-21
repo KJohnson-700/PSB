@@ -223,8 +223,8 @@ echo "PRIORITY  $PRI$REASONS"
 # Writes the SAME vps_health.jsonl the Mac watcher (psb_vps_watcher.py) tails, so the existing
 # watcher -> psb_live_drain -> phone pipeline carries the FULL comprehensive sweep, not the subset.
 if [ "${1:-}" = "--emit" ]; then
-  printf '{"ts":"%s","priority":"%s","rss_mb":%s,"cycle_ms":%s,"scanner_sync_ms":%s,"log_age_s":%s,"status_age_s":%s,"daily_trades":%s,"blind05":%s,"loss_streak":%s,"session_wr":"%s","closed":%s,"worst_lane":"%s","worst_wr":"%s","worst_alert":"%s","errors":%s,"geoblock":%s,"wss":"%s","price_age_s":%s,"session":"%s","reasons":"%s"}\n' \
-    "$(date -u +%FT%TZ)" "$PRI" "${PROC_RSS_MB:-0}" "${CYC_MS:--1}" "${SCAN_SYNC:--1}" "${LOG_AGE:--1}" "${STATUS_AGE:--1}" "${TRADES:-0}" "${BLIND05:-0}" "${LOSS_STREAK:-0}" "${SESS_WR:--}" "${CLOSED_N:-0}" "${WORST_LANE:--}" "${WORST_WR:--}" "${WORST_ALERT:--}" "${ERRORS_RECENT:-0}" "${GEOBLOCK_RECENT:-0}" "${WSS_STATE:-?}" "${PRICE_AGE:--1}" "$SESSION_ID" "$(echo "$REASONS" | tr -d '"' | cut -c1-180)" >> "$HEALTH"
+  printf '{"ts":"%s","priority":"%s","rss_mb":%s,"cycle_ms":%s,"scanner_sync_ms":%s,"log_age_s":%s,"status_age_s":%s,"daily_trades":%s,"blind05":%s,"loss_streak":%s,"session_wr":"%s","closed":%s,"worst_lane":"%s","worst_wr":"%s","worst_alert":"%s","errors":%s,"geoblock":%s,"wss":"%s","price_age_s":%s,"exit_verdict":"%s","exit_payoff":"%s","exit_stop_share":"%s","exit_green_stops":"%s","session":"%s","reasons":"%s"}\n' \
+    "$(date -u +%FT%TZ)" "$PRI" "${PROC_RSS_MB:-0}" "${CYC_MS:--1}" "${SCAN_SYNC:--1}" "${LOG_AGE:--1}" "${STATUS_AGE:--1}" "${TRADES:-0}" "${BLIND05:-0}" "${LOSS_STREAK:-0}" "${SESS_WR:--}" "${CLOSED_N:-0}" "${WORST_LANE:--}" "${WORST_WR:--}" "${WORST_ALERT:--}" "${ERRORS_RECENT:-0}" "${GEOBLOCK_RECENT:-0}" "${WSS_STATE:-?}" "${PRICE_AGE:--1}" "${EQ_VERDICT:-OK}" "${EQ_PAYOFF:--}" "${EQ_STOPSHARE:--}" "${EQ_GREENSTOP:--}" "$SESSION_ID" "$(echo "$REASONS" | tr -d '"' | cut -c1-180)" >> "$HEALTH"
   if [ "$PRI" != "ok" ]; then
     CD=/tmp/psb_watch_alert_cooldown; LAST=$(cat "$CD" 2>/dev/null || echo 0); NOWS=$(date +%s)
     if [ $((NOWS-LAST)) -gt 1800 ]; then
