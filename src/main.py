@@ -4280,7 +4280,7 @@ class PolyBot:
         False to suppress (ghost-logged). Fail-open by construction (a missing
         config block / read error yields an inactive state)."""
         try:
-            state = regime_fade.evaluate(self.config)
+            state = regime_fade.evaluate(self.config, lane=strategy)
         except Exception as exc:  # never let the filter starve entries
             logging.debug("regime_fade evaluate raised (proceeding): %s", exc)
             return True

@@ -395,25 +395,23 @@ lane_management:
     max_pause_expectancy: -0.5
     min_pause_gap: 0.08
     auto_pause_confirmation_trades: 3
-# 2026-06-21: Regime fade filter (BAND-targeted). Validated on 315 live settled
-# trades: the momentum est_prob is mis-ranked in the MIDDLE — predicted-P(win) in
-# the 0.45-0.65 band wins only ~36-40% (-$93, the bulk of volume) while the genuine
-# 0.7+ band wins 64% (+$66). So gate ONLY the mis-ranked mid band; protect the 0.7+
-# winner and the fine low-conviction trades. Regime-adaptive: suppresses the band
-# only while its rolling realized WR is below fade_below_wr (edge inverting in chop)
-# and re-enables it above recover_above_wr (trend resumed) — so in a trending tape
-# it's a no-op and does NOT cut frequency. Suppressed entries are ghost-logged.
-# Default ON; opt-out enabled:false. Validate on joined dataset + ghost log.
+# 2026-06-21: Regime fade filter (PER-LANE, BAND-targeted). Validated per-lane on
+# live data: the momentum est_prob is mis-ranked in the MIDDLE and the inversion is
+# LANE-SPECIFIC (alts are alt-native) — predicted-P(win) in the 0.45-0.65 band wins
+# bnb 32% / hype 38% / xrp 35% / btc 39% (bleeding) while doge/sol are too thin to
+# judge. Each lane (strategy) gets its OWN fade state: gate ONLY that lane's mid band
+# while ITS rolling realized WR < fade_below_wr; protect >=0.65 winners + low-conv;
+# re-enable the band above recover_above_wr (hysteresis). Lanes with < min_band_samples
+# recent in-band trades stay inactive (never suppress on thin data). Trending lane wins
+# its band -> no-op (no freq cut). Suppressed entries ghost-logged. Default ON.
 regime_fade:
   enabled: true
   band_low: 0.45                 # gate predicted P(win) in [band_low, band_high)
   band_high: 0.65                # protect the genuine >=0.7 winners above this
-  window_trades: 60              # rolling window of settled trades (≈30 band samples;
-                                 # wide enough to ignore a tiny recent blip, fast enough
-                                 # to react within a session — validated 2026-06-21)
-  min_band_samples: 10           # need >= this many in-band trades before acting
-  fade_below_wr: 0.48            # activate when the band's rolling WR < this
-  recover_above_wr: 0.53         # deactivate when band WR >= this (hysteresis)
+  window_trades: 60              # rolling window of most-recent settled trades PER LANE
+  min_band_samples: 8            # per-lane: need >= this many in-band trades before acting
+  fade_below_wr: 0.48            # activate when a lane's band rolling WR < this
+  recover_above_wr: 0.53         # deactivate when that lane's band WR >= this (hysteresis)
   max_trade_age_hours: 48        # ignore settled trades older than this
   action: sit_out                # sit_out | raise_bar
   raise_bar_min_edge_bonus: 0.08 # when action=raise_bar, edge required to still enter

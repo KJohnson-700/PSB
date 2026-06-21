@@ -1,32 +1,26 @@
-"""Regime fade filter — sit out the mis-ranked mid-confidence band when its
-recent *realized* win rate has collapsed (the momentum edge inverting in chop).
+"""Per-lane regime fade filter — sit out a lane's mis-ranked mid-confidence band
+when THAT lane's recent realized win rate has collapsed (its momentum edge
+inverting in chop).
 
-WHY (2026-06-21, validated on live joined data):
-The momentum-based ``est_prob`` is REGIME-CONDITIONAL **and** mis-ranked in the
-middle. Validated on 315 settled trades (data/logs/trade_analysis_joined.jsonl):
+WHY (2026-06-21, validated per-lane on live data):
+The momentum-based ``est_prob`` is mis-ranked in the MIDDLE and the inversion is
+LANE-SPECIFIC — the alts are alt-native (HYPE off Hyperliquid, BNB its own), so a
+single pooled signal is wrong. Per-lane band win-rate over recent settled trades
+(predicted P(win) in ``[band_low, band_high)``):
 
-  predicted P(win)  trades  win rate  realized P&L
-  ~0.4               60      42%       +$20
-  ~0.5               72      40%       -$55
-  ~0.6 (the bulk)   135      36%       -$38
-  ~0.7               25      64%       +$66   <- genuine winner, DO NOT touch
-  ~0.8               18      28%       -$1
+  bnb 32% (n=34) | hype 38% (n=84) | xrp 35% (n=37) | btc 39% (n=23)  -> bleeding
+  doge 50% (n=6) | sol 50% (n=4)                                       -> too thin
 
-So the bleed is concentrated in the **0.5-0.6 band** (-$93 combined, the bulk of
-volume), while the 0.7 band is a real winner. A blanket "fade everything >=0.6"
-would kill the +$66 winner; the correct, validated move is to gate the mid band
-only: predicted P(win) in ``[band_low, band_high)``. Sitting that band out turns
-the session from +$11 to ~+$104 without touching the 0.7 lane.
+So each lane gets its OWN fade state: suppress that lane's mid-band entries only
+while ITS band WR is below ``fade_below_wr``; release above ``recover_above_wr``
+(hysteresis); protect the genuine >= band_high winners and leave < band_low alone.
+Lanes with fewer than ``min_band_samples`` recent in-band trades stay inactive
+(never suppress on thin data). Regime-adaptive: a lane that trends again wins its
+band and the filter becomes a no-op for it (no frequency cut).
 
-It stays REGIME-ADAPTIVE: it only suppresses while the band's *rolling realized*
-win rate is below ``fade_below_wr`` (the edge is inverting), and re-enables the
-band once it recovers above ``recover_above_wr`` (trend resumed) — hysteresis. In
-a trending tape the band wins and the filter is a no-op, so it does not
-permanently cut frequency.
-
-Source of truth = ``data/calibration/trades.jsonl`` (settled trades: est_prob /
-side / win). Read-only, mtime-TTL cached. Default ON, opt-out
-``regime_fade.enabled: false``. Suppressed entries are ghost-logged by the caller.
+Source of truth = ``data/calibration/trades.jsonl`` (settled trades: ``strategy``
+/ est_prob / side / win). Read-only, mtime+TTL+config cached. Default ON, opt-out
+``regime_fade.enabled: false``. Suppressed entries ghost-logged by the caller.
 """
 from __future__ import annotations
 
@@ -34,6 +28,7 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,12 +53,12 @@ class RegimeFadeConfig:
     """Parsed ``regime_fade`` config block."""
 
     enabled: bool = True
-    band_low: float = 0.45        # gate predicted P(win) in [band_low, band_high)
-    band_high: float = 0.65       # protects the genuine 0.7+ winner above this
-    window_trades: int = 40
-    min_band_samples: int = 10
-    fade_below_wr: float = 0.48   # activate when the band's rolling WR < this
-    recover_above_wr: float = 0.53  # deactivate when band WR >= this (hysteresis)
+    band_low: float = 0.45
+    band_high: float = 0.65
+    window_trades: int = 60       # most-recent settled trades PER LANE
+    min_band_samples: int = 8     # need >= this many in-band trades for a lane to act
+    fade_below_wr: float = 0.48
+    recover_above_wr: float = 0.53
     max_trade_age_hours: float = 48.0
     action: str = "sit_out"       # "sit_out" | "raise_bar"
     raise_bar_min_edge_bonus: float = 0.08
@@ -92,8 +87,8 @@ class RegimeFadeConfig:
             enabled=bool(raw.get("enabled", True)),
             band_low=_f("band_low", 0.45),
             band_high=_f("band_high", 0.65),
-            window_trades=max(1, _i("window_trades", 40)),
-            min_band_samples=max(1, _i("min_band_samples", 10)),
+            window_trades=max(1, _i("window_trades", 60)),
+            min_band_samples=max(1, _i("min_band_samples", 8)),
             fade_below_wr=_f("fade_below_wr", 0.48),
             recover_above_wr=_f("recover_above_wr", 0.53),
             max_trade_age_hours=_f("max_trade_age_hours", 48.0),
@@ -108,10 +103,11 @@ class RegimeFadeConfig:
 
 @dataclass
 class RegimeFadeState:
-    """Result of one fade evaluation."""
+    """Per-lane fade evaluation result."""
 
+    lane: str = ""
     active: bool = False
-    rolling_wr: Optional[float] = None   # band's rolling realized WR
+    rolling_wr: Optional[float] = None
     n_band: int = 0
     n_window: int = 0
     band_low: float = 0.45
@@ -124,6 +120,7 @@ class RegimeFadeState:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "lane": self.lane,
             "active": self.active,
             "rolling_wr": (round(self.rolling_wr, 4) if self.rolling_wr is not None else None),
             "n_band": self.n_band,
@@ -139,11 +136,7 @@ class RegimeFadeState:
 
 
 def predicted_p_win(side: Any, est_prob: Optional[float]) -> Optional[float]:
-    """Predicted probability that the trade WINS.
-
-    ``est_prob`` is P(YES). For a BUY_YES that is the win prob directly; for a
-    BUY_NO / SHORT the win prob is ``1 - est_prob``.
-    """
+    """Predicted probability that the trade WINS (est_prob is P(YES))."""
     if est_prob is None:
         return None
     try:
@@ -180,7 +173,7 @@ def _row_ts(row: Dict[str, Any]) -> Optional[datetime]:
     return None
 
 
-def _read_last_lines(path: Path, max_lines: int, max_bytes: int = 1_500_000) -> List[str]:
+def _read_last_lines(path: Path, max_lines: int, max_bytes: int = 3_000_000) -> List[str]:
     """Read up to ``max_lines`` final lines without loading the whole file."""
     try:
         size = path.stat().st_size
@@ -201,71 +194,22 @@ def _read_last_lines(path: Path, max_lines: int, max_bytes: int = 1_500_000) -> 
     return lines[-max_lines:]
 
 
-def _compute_state(
-    cfg: RegimeFadeConfig,
-    trades_path: Path,
-    *,
-    prev_active: bool,
-    now: Optional[datetime] = None,
+def _state_for_lane(
+    cfg: RegimeFadeConfig, lane: str, band: List[Tuple[bool, float]], n_window: int,
+    *, prev_active: bool, computed_at: str,
 ) -> RegimeFadeState:
-    now = now or datetime.now(timezone.utc)
-    computed_at = now.isoformat(timespec="seconds")
-
-    raw_lines = _read_last_lines(trades_path, max_lines=cfg.window_trades * 8)
-    cutoff = now.timestamp() - cfg.max_trade_age_hours * 3600.0
-
-    eligible: List[Tuple[float, bool, float]] = []  # (ts, win, pred_p_win)
-    for line in raw_lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(row, dict) or row.get("shadow_mode"):
-            continue
-        win = row.get("win")
-        if not isinstance(win, bool):
-            continue
-        est_prob = _row_est_prob(row)
-        if est_prob is None:
-            continue
-        p_win = predicted_p_win(row.get("side") or row.get("action"), est_prob)
-        if p_win is None:
-            continue
-        ts = _row_ts(row)
-        if ts is None or ts.timestamp() < cutoff:
-            continue
-        eligible.append((ts.timestamp(), bool(win), float(p_win)))
-
-    eligible.sort(key=lambda r: r[0])
-    window = eligible[-cfg.window_trades:]
-    band = [(w, p) for (_ts, w, p) in window if cfg.in_band(p)]
-    n_window = len(window)
-    n_band = len(band)
-
     state = RegimeFadeState(
-        band_low=cfg.band_low,
-        band_high=cfg.band_high,
-        fade_below_wr=cfg.fade_below_wr,
-        recover_above_wr=cfg.recover_above_wr,
-        action=cfg.action,
-        n_window=n_window,
-        n_band=n_band,
-        computed_at=computed_at,
+        lane=lane, band_low=cfg.band_low, band_high=cfg.band_high,
+        fade_below_wr=cfg.fade_below_wr, recover_above_wr=cfg.recover_above_wr,
+        action=cfg.action, n_window=n_window, n_band=len(band), computed_at=computed_at,
     )
-
-    if n_band < cfg.min_band_samples:
-        # Not enough realized band trades to judge — do NOT suppress on thin data.
+    if len(band) < cfg.min_band_samples:
         state.active = False
-        state.reason = f"insufficient_band_samples(n={n_band}<{cfg.min_band_samples})"
+        state.reason = f"insufficient_band_samples(n={len(band)}<{cfg.min_band_samples})"
         return state
-
     wins = sum(1 for (w, _p) in band if w)
-    rolling_wr = wins / n_band
+    rolling_wr = wins / len(band)
     state.rolling_wr = rolling_wr
-
     if prev_active:
         active = rolling_wr < cfg.recover_above_wr
     else:
@@ -282,28 +226,96 @@ def _compute_state(
     return state
 
 
-# --- process-local cache + hysteresis memory ------------------------------
+def _compute_states(
+    cfg: RegimeFadeConfig,
+    trades_path: Path,
+    *,
+    prev_active: Dict[str, bool],
+    now: Optional[datetime] = None,
+) -> Dict[str, RegimeFadeState]:
+    now = now or datetime.now(timezone.utc)
+    computed_at = now.isoformat(timespec="seconds")
+    # Read enough tail to cover window_trades for the thick lanes; thin lanes get
+    # all of their (few) rows regardless.
+    raw_lines = _read_last_lines(trades_path, max_lines=cfg.window_trades * 15)
+    cutoff = now.timestamp() - cfg.max_trade_age_hours * 3600.0
 
-_cache_state: Optional[RegimeFadeState] = None
+    per_lane: Dict[str, List[Tuple[float, bool, float]]] = defaultdict(list)
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(row, dict) or row.get("shadow_mode"):
+            continue
+        lane = row.get("strategy")
+        if not lane:
+            continue
+        win = row.get("win")
+        if not isinstance(win, bool):
+            continue
+        est_prob = _row_est_prob(row)
+        if est_prob is None:
+            continue
+        p_win = predicted_p_win(row.get("side") or row.get("action"), est_prob)
+        if p_win is None:
+            continue
+        ts = _row_ts(row)
+        if ts is None or ts.timestamp() < cutoff:
+            continue
+        per_lane[str(lane)].append((ts.timestamp(), bool(win), float(p_win)))
+
+    states: Dict[str, RegimeFadeState] = {}
+    for lane, rows in per_lane.items():
+        rows.sort(key=lambda r: r[0])
+        window = rows[-cfg.window_trades:]
+        band = [(w, p) for (_ts, w, p) in window if cfg.in_band(p)]
+        states[lane] = _state_for_lane(
+            cfg, lane, band, len(window),
+            prev_active=bool(prev_active.get(lane, False)), computed_at=computed_at,
+        )
+    return states
+
+
+# --- process-local cache + per-lane hysteresis memory ---------------------
+
+_cache_states: Optional[Dict[str, RegimeFadeState]] = None
 _cache_at: float = 0.0
 _cache_mtime: float = -1.0
-_cache_fp: Optional[tuple] = None  # config/path fingerprint the cached state was computed under
+_cache_fp: Optional[tuple] = None
+
+
+def _inactive(lane: str, cfg: RegimeFadeConfig, reason: str) -> RegimeFadeState:
+    return RegimeFadeState(
+        lane=lane, active=False, reason=reason, action=cfg.action,
+        band_low=cfg.band_low, band_high=cfg.band_high,
+        fade_below_wr=cfg.fade_below_wr, recover_above_wr=cfg.recover_above_wr,
+    )
 
 
 def evaluate(
     config: Optional[Dict[str, Any]],
     *,
+    lane: Optional[str] = None,
     trades_path: Optional[Path] = None,
     status_path: Optional[Path] = None,
     now: Optional[datetime] = None,
     force: bool = False,
 ) -> RegimeFadeState:
-    """Return the current fade state (TTL-cached on file mtime)."""
-    global _cache_state, _cache_at, _cache_mtime, _cache_fp
+    """Return the fade state for ``lane`` (TTL+mtime+config cached).
+
+    Computes every lane's state from one file read and caches the dict. ``lane``
+    is the strategy name (bitcoin, hype_macro, ...). An unknown/thin lane returns
+    an inactive state. ``lane=None`` returns a no-op inactive placeholder.
+    """
+    global _cache_states, _cache_at, _cache_mtime, _cache_fp
 
     cfg = RegimeFadeConfig.from_dict((config or {}).get("regime_fade"))
     if not cfg.enabled:
-        return RegimeFadeState(active=False, reason="disabled", action=cfg.action)
+        return _inactive(lane or "", cfg, "disabled")
 
     path = Path(trades_path) if trades_path else DEFAULT_TRADES_PATH
     try:
@@ -311,9 +323,6 @@ def evaluate(
     except OSError:
         mtime = -1.0
 
-    # Fingerprint the inputs the state depends on, so a config/path change
-    # invalidates the cache immediately instead of reusing a stale state (and a
-    # stale prev_active) for up to the TTL. (Codex review 2026-06-21)
     fp = (
         str(path), cfg.band_low, cfg.band_high, cfg.window_trades,
         cfg.min_band_samples, cfg.fade_below_wr, cfg.recover_above_wr,
@@ -321,28 +330,36 @@ def evaluate(
     )
 
     nowt = time.time()
-    if (
+    fresh = (
         not force
-        and _cache_state is not None
+        and _cache_states is not None
         and _cache_fp == fp
         and (nowt - _cache_at) < cfg.cache_ttl_sec
         and mtime == _cache_mtime
-    ):
-        return _cache_state
+    )
+    if not fresh:
+        prev_active = (
+            {lk: s.active for lk, s in _cache_states.items()}
+            if (_cache_states is not None and _cache_fp == fp)
+            else {}
+        )
+        try:
+            states = _compute_states(cfg, path, prev_active=prev_active, now=now)
+        except Exception as exc:  # fail-open
+            logger.warning("regime_fade evaluate failed (fail-open): %s", exc)
+            states = {}
+        _cache_states = states
+        _cache_at = nowt
+        _cache_mtime = mtime
+        _cache_fp = fp
+        _write_status(states, status_path)
 
-    prev_active = bool(_cache_state.active) if _cache_state is not None else False
-    try:
-        state = _compute_state(cfg, path, prev_active=prev_active, now=now)
-    except Exception as exc:  # fail-open: never starve entries
-        logger.warning("regime_fade evaluate failed (fail-open): %s", exc)
-        state = RegimeFadeState(active=False, reason=f"error:{type(exc).__name__}", action=cfg.action)
-
-    _cache_state = state
-    _cache_at = nowt
-    _cache_mtime = mtime
-    _cache_fp = fp
-    _write_status(state, status_path)
-    return state
+    if lane is None:
+        return _inactive("", cfg, "no_lane")
+    st = (_cache_states or {}).get(lane)
+    if st is None:
+        return _inactive(lane, cfg, "no_lane_data")
+    return st
 
 
 def should_suppress(
@@ -352,12 +369,8 @@ def should_suppress(
     *,
     edge: Optional[float] = None,
 ) -> Tuple[bool, str]:
-    """Decide whether a candidate should be suppressed.
-
-    Only candidates whose predicted P(win) falls in the mis-ranked band
-    ``[band_low, band_high)`` are ever suppressed — low-conviction entries and the
-    genuine high-conviction (>= band_high) winners are left alone.
-    """
+    """Suppress only when this lane's fade is active AND the candidate's predicted
+    P(win) is in the mis-ranked band ``[band_low, band_high)``."""
     if not state.active:
         return False, "fade_inactive"
     if pred_p_win is None or not (state.band_low <= pred_p_win < state.band_high):
@@ -370,20 +383,19 @@ def should_suppress(
         bonus = cfg.raise_bar_min_edge_bonus if cfg else 0.08
         if edge is None:
             return True, (
-                f"regime_fade_band_chop(sit_out;band_wr={_fmt(state.rolling_wr)};"
-                f"p_win={pred_p_win:.3f};no_edge)"
+                f"regime_fade_band_chop(sit_out;lane={state.lane};"
+                f"band_wr={_fmt(state.rolling_wr)};p_win={pred_p_win:.3f};no_edge)"
             )
         if float(edge) < bonus:
             return True, (
-                f"regime_fade_band_chop(raise_bar;band_wr={_fmt(state.rolling_wr)};"
-                f"p_win={pred_p_win:.3f};edge={float(edge):.3f}<{bonus:.3f})"
+                f"regime_fade_band_chop(raise_bar;lane={state.lane};"
+                f"band_wr={_fmt(state.rolling_wr)};p_win={pred_p_win:.3f};edge={float(edge):.3f}<{bonus:.3f})"
             )
         return False, f"regime_fade_raise_bar_cleared(edge={float(edge):.3f}>={bonus:.3f})"
 
     return True, (
-        f"regime_fade_band_chop(sit_out;band_wr={_fmt(state.rolling_wr)};"
-        f"n_band={state.n_band};p_win={pred_p_win:.3f};"
-        f"band=[{state.band_low:.2f},{state.band_high:.2f}))"
+        f"regime_fade_band_chop(sit_out;lane={state.lane};band_wr={_fmt(state.rolling_wr)};"
+        f"n_band={state.n_band};p_win={pred_p_win:.3f};band=[{state.band_low:.2f},{state.band_high:.2f}))"
     )
 
 
@@ -391,22 +403,27 @@ def _fmt(x: Optional[float]) -> str:
     return f"{x:.3f}" if isinstance(x, (int, float)) else "na"
 
 
-def _write_status(state: RegimeFadeState, status_path: Optional[Path]) -> None:
+def _write_status(states: Dict[str, RegimeFadeState], status_path: Optional[Path]) -> None:
     path = Path(status_path) if status_path else DEFAULT_STATUS_PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "per_lane": {lane: s.to_dict() for lane, s in states.items()},
+            "active_lanes": sorted(lane for lane, s in states.items() if s.active),
+            "computed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
         tmp = path.with_suffix(path.suffix + ".tmp")
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(state.to_dict(), fh)
+            json.dump(payload, fh)
         os.replace(tmp, path)
     except OSError as exc:
         logger.debug("regime_fade status write failed: %s", exc)
 
 
 def reset_cache() -> None:
-    """Test hook: clear the process-local cache + hysteresis memory."""
-    global _cache_state, _cache_at, _cache_mtime, _cache_fp
-    _cache_state = None
+    """Test hook: clear the process-local cache + per-lane hysteresis memory."""
+    global _cache_states, _cache_at, _cache_mtime, _cache_fp
+    _cache_states = None
     _cache_at = 0.0
     _cache_mtime = -1.0
     _cache_fp = None
