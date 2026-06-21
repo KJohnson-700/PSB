@@ -148,8 +148,18 @@ trading:
     updown_exit_window_max_fraction: 0.5
     updown_high_entry_threshold: 0.6
     updown_stop_cents_high_entry: 0.02
-    updown_in_profit_stop_trigger_pct: 0.0
-    updown_in_profit_stop_tighten_to_pct: 0.0
+    # 2026-06-21 EXIT FIX (the real leak): 58% of stop-losses had already gone
+    # +2%+ green (avg peak +11.3%) then reversed through entry to the -15% stop and
+    # died as 100% losses — while the same bands resolve 47-63% (ghost) and held
+    # trades won 70%. These were OFF (0.0) so nothing protected the gain. Now: once
+    # a position peaks >=+5%, tighten the stop to -7%; once it peaks >=+6%, arm a
+    # trailing floor 5% below the high-water mark (banks gains, can exit in profit).
+    # Strictly MORE protective than the -15% base stop, never wider — cannot recreate
+    # the old wide-stop bleed. Validate live: payoff ratio should climb 1.42 -> ~1.68.
+    updown_in_profit_stop_trigger_pct: 0.05
+    updown_in_profit_stop_tighten_to_pct: 0.07
+    updown_trail_arm_pct: 0.06
+    updown_trail_gap_pct: 0.05
     regime_conditioned_exits:
       enabled: false
       trend_side_hold_winners: false
@@ -405,7 +415,12 @@ lane_management:
 # recent in-band trades stay inactive (never suppress on thin data). Trending lane wins
 # its band -> no-op (no freq cut). Suppressed entries ghost-logged. Default ON.
 regime_fade:
-  enabled: true
+  enabled: false                 # 2026-06-21 DISABLED: ghost cross-check proved the
+                                 # bands resolve 47-63% (fine) — the band "bleed" was an
+                                 # EXIT artifact (premature stops), not a regime/entry
+                                 # problem. Fading good entries was treating the symptom.
+                                 # Fix is in exit_rules (in-profit tighten + trail). Re-
+                                 # enable only if a band proves -EV at RESOLUTION (ghost).
   band_low: 0.45                 # gate predicted P(win) in [band_low, band_high)
   band_high: 0.65                # protect the genuine >=0.7 winners above this
   window_trades: 60              # rolling window of most-recent settled trades PER LANE
