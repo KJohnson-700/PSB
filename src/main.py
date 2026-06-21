@@ -4230,9 +4230,10 @@ class PolyBot:
         signal: Any,
         lane_meta: Dict[str, Any],
     ) -> bool:
-        """Regime fade filter — sit out high-confidence momentum entries when the
-        rolling realized high-confidence win rate has collapsed (mean-reverting
-        tape). See ``src/analysis/regime_fade.py``. Returns True to proceed,
+        """Regime fade filter — sit out the mis-ranked mid-confidence band
+        ([band_low, band_high)) when its rolling realized win rate has collapsed
+        (momentum edge inverting in chop); protects the genuine >=band_high
+        winners. See ``src/analysis/regime_fade.py``. Returns True to proceed,
         False to suppress (ghost-logged). Fail-open by construction (a missing
         config block / read error yields an inactive state)."""
         try:
@@ -4273,7 +4274,7 @@ class PolyBot:
             getattr(signal, "market_id", ""),
             getattr(signal, "market_question", ""),
             strategy,
-            "regime_fade_high_conf_chop",
+            "regime_fade_mid_band_chop",
             self.bankroll,
             extra=extra,
         )

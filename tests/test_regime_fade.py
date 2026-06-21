@@ -240,6 +240,24 @@ def test_hysteresis_holds_between_thresholds(tmp_path):
     assert s3.active is False
 
 
+def test_cache_invalidates_on_config_change(tmp_path):
+    # Same file + within TTL, but a config change must NOT reuse stale state.
+    now = datetime.now(timezone.utc)
+    p = tmp_path / "trades.jsonl"
+    status = tmp_path / "s.json"
+    _write_trades(p, [_row(side="BUY_YES", est_prob=0.6, win=(i < 4),
+                           ts=now - timedelta(minutes=i)) for i in range(12)])
+    cfg_on = _cfg(cache_ttl_sec=999)            # band active (WR 0.33)
+    s1 = evaluate(cfg_on, trades_path=p, status_path=status, now=now)
+    assert s1.active is True
+    # Widen the band floor so 0.6 is now ABOVE band_high -> no in-band samples ->
+    # must recompute to inactive, not return the cached active state.
+    cfg_narrow = _cfg(cache_ttl_sec=999, band_high=0.55)
+    s2 = evaluate(cfg_narrow, trades_path=p, status_path=status, now=now)
+    assert s2.active is False
+    assert s2.n_band == 0
+
+
 def test_status_file_written(tmp_path):
     now = datetime.now(timezone.utc)
     p = tmp_path / "trades.jsonl"

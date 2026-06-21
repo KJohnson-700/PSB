@@ -287,6 +287,7 @@ def _compute_state(
 _cache_state: Optional[RegimeFadeState] = None
 _cache_at: float = 0.0
 _cache_mtime: float = -1.0
+_cache_fp: Optional[tuple] = None  # config/path fingerprint the cached state was computed under
 
 
 def evaluate(
@@ -298,7 +299,7 @@ def evaluate(
     force: bool = False,
 ) -> RegimeFadeState:
     """Return the current fade state (TTL-cached on file mtime)."""
-    global _cache_state, _cache_at, _cache_mtime
+    global _cache_state, _cache_at, _cache_mtime, _cache_fp
 
     cfg = RegimeFadeConfig.from_dict((config or {}).get("regime_fade"))
     if not cfg.enabled:
@@ -310,10 +311,20 @@ def evaluate(
     except OSError:
         mtime = -1.0
 
+    # Fingerprint the inputs the state depends on, so a config/path change
+    # invalidates the cache immediately instead of reusing a stale state (and a
+    # stale prev_active) for up to the TTL. (Codex review 2026-06-21)
+    fp = (
+        str(path), cfg.band_low, cfg.band_high, cfg.window_trades,
+        cfg.min_band_samples, cfg.fade_below_wr, cfg.recover_above_wr,
+        cfg.max_trade_age_hours, cfg.action,
+    )
+
     nowt = time.time()
     if (
         not force
         and _cache_state is not None
+        and _cache_fp == fp
         and (nowt - _cache_at) < cfg.cache_ttl_sec
         and mtime == _cache_mtime
     ):
@@ -329,6 +340,7 @@ def evaluate(
     _cache_state = state
     _cache_at = nowt
     _cache_mtime = mtime
+    _cache_fp = fp
     _write_status(state, status_path)
     return state
 
@@ -393,7 +405,8 @@ def _write_status(state: RegimeFadeState, status_path: Optional[Path]) -> None:
 
 def reset_cache() -> None:
     """Test hook: clear the process-local cache + hysteresis memory."""
-    global _cache_state, _cache_at, _cache_mtime
+    global _cache_state, _cache_at, _cache_mtime, _cache_fp
     _cache_state = None
     _cache_at = 0.0
     _cache_mtime = -1.0
+    _cache_fp = None
