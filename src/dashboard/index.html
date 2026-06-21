@@ -3890,7 +3890,7 @@ async function fetchAll() {
             fetchT('/api/status'),
             fetchT('/api/scanner/health', 5000),
             fetchT('/api/strategy/metrics'),
-            needBacktest ? fetchT('/api/backtest/reports?_=' + Date.now(), 6000, { cache: 'no-store' }) : Promise.resolve(null),
+            Promise.resolve(null),  // backtest tab + /api/backtest/reports removed 2026-05-24 (broken backtester); slot kept for destructuring alignment
             needJournalSummary ? fetchT(needJournal ? _journalApiPath('/api/journal/summary') : '/api/journal/summary') : Promise.resolve(null),
             needJournal ? fetchT(_journalApiPath('/api/journal/trades')) : Promise.resolve(null),
             fetchT('/api/exposure'),
@@ -3956,9 +3956,7 @@ async function fetchAll() {
         else updateMetrics(null);
     } catch (e) { console.error('[dashboard] metrics:', e); }
 
-    try {
-        if (backtestR?.ok) updateBacktest(await backtestR.json());
-    } catch (e) { console.error('[dashboard] backtest:', e); }
+    // backtest result handler removed 2026-06-21 (backtester + tab gone; backtestR is always null)
 
     try {
         if (journalR?.ok && needJournalSummary) {
