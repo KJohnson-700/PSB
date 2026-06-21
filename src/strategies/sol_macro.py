@@ -2856,7 +2856,6 @@ class SolMacroStrategy:
         # LAYER 4: Evaluate each market
         # ═══════════════════════════════════════════════
         signals = []
-        _entry_liq_capture: dict = {}  # id(signal)->market liquidity (instrumentation only)
         ai_calls = 0
         shadow_pipeline_calls = 0
         shadow_pipeline_ok = 0
@@ -5795,13 +5794,6 @@ class SolMacroStrategy:
                 ),
             )
             signals.append(signal)
-            # Instrumentation only (2026-06-21): capture entry liquidity keyed by the
-            # signal object; LOGGED post-filter/dedup below so only EMITTED signals are
-            # recorded (Codex review). Never affects any lane's decision.
-            try:
-                _entry_liq_capture[id(signal)] = getattr(market, "liquidity", None)
-            except Exception:
-                pass
 
             logger.info(
                 f"  {_brand} SIGNAL: {action} '{market.question[:50]}...' "
@@ -5906,22 +5898,6 @@ class SolMacroStrategy:
                     self._signal_strategy_name, len(signals), len(deduped),
                 )
             signals = deduped
-        # Instrumentation only (2026-06-21): now that signals is the FINAL emitted
-        # list (post lane-disable filter + fan-out dedup), log entry liquidity for the
-        # ACTUALLY-traded signals only. Wrapped; never affects behavior.
-        try:
-            from src.analysis import entry_liquidity_shadow
-            for _s in signals:
-                entry_liquidity_shadow.log_signal_liquidity(
-                    market_id=getattr(_s, "market_id", None),
-                    strategy=getattr(_s, "strategy_name", None) or "sol_macro",
-                    window=getattr(_s, "window_size", None),
-                    action=getattr(_s, "action", None),
-                    liquidity=_entry_liq_capture.get(id(_s)),
-                    est_prob=getattr(_s, "est_prob", None),
-                )
-        except Exception:
-            pass
         return signals
 
 

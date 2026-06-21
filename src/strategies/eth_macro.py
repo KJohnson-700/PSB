@@ -2747,20 +2747,6 @@ class ETHMacroStrategy(SolMacroStrategy):
                 },
             )
             signals.append(signal)
-            # Instrumentation only (2026-06-21): entry liquidity for 5m gap-risk
-            # floor calibration. Wrapped; never affects any decision.
-            try:
-                from src.analysis import entry_liquidity_shadow
-                entry_liquidity_shadow.log_signal_liquidity(
-                    market_id=getattr(market, "id", None),
-                    strategy=getattr(signal, "strategy_name", None) or "eth_macro",
-                    window=getattr(signal, "window_size", None),
-                    action=getattr(signal, "action", None),
-                    liquidity=getattr(market, "liquidity", None),
-                    est_prob=getattr(signal, "est_prob", None),
-                )
-            except Exception:
-                pass
 
         _phase_t_postloop = time.perf_counter()
         if observer_tasks:
