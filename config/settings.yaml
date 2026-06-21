@@ -34,7 +34,7 @@ hyperliquid:
 final_window_topup:
   shadow_enabled: true
   final_window_max_mins: 1.0     # only inside the last minute before resolution
-  winner_mark_threshold: 0.90    # our-side /midpoint must be >= this to "confirm winning"
+  winner_mark_threshold: 0.95    # our-side /midpoint must be >= this to "confirm winning"
   max_oracle_basis_bps: 25.0     # recorded (not gated) in shadow; will gate at live stage
   max_topup_price: 0.99          # never top up above this
   # 2026-06-18: WIDE standalone sampler — samples ALL BTC 5m markets in their final window
@@ -66,7 +66,7 @@ trading:
     require_full_depth: true
     depth_price_ceiling_cents: 0.0
   clob_ws:
-    enabled: true   # 2026-06-19: match VPS — WS off (part of OOM-prone path; VPS speed is from no-VPN, not WS)
+    enabled: false  # 2026-06-20 baseline-restore: WSS overlay OFF at +$362 baseline (REST-only); priced 0% of entries=overhead; blind-0.5 guard independent
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
@@ -74,9 +74,9 @@ trading:
     # from the pushed book instead of REST /midpoint per cycle. REST fallback is
     # always on inside scanner.fetch_prices, so pricing stays correct if WS is
     # empty/stale. universe_subscribe_cap bounds the OrderBook map (OOM safety).
-    drive_scanner_prices: true   # 2026-06-19: match VPS
+    drive_scanner_prices: false  # baseline-restore
     price_max_age_sec: 8
-    subscribe_universe: true   # 2026-06-19: match VPS
+    subscribe_universe: false  # baseline-restore
     universe_subscribe_cap: 400
   default_position_size: 6
   max_position_size: 25   # 2026-06-16 revert-to-0613: undo 1.6x paper ladder (was 40)
@@ -395,6 +395,25 @@ lane_management:
     max_pause_expectancy: -0.5
     min_pause_gap: 0.08
     auto_pause_confirmation_trades: 3
+# 2026-06-21: Regime fade filter. The momentum est_prob edge is REGIME-CONDITIONAL —
+# high-confidence calls win in a trending tape (baseline 57% WR) but INVERT in a
+# choppy/mean-reverting tape (adverse 33% WR: pred 0.6 -> actual 33%). btc_1h_regime
+# is path-blind (distance-from-SMA only) so it can't catch this. This measures the
+# realized edge directly: a rolling win rate over recent settled high-confidence
+# trades. When it drops below fade_below_wr, high-conf momentum entries are
+# suppressed (ghost-logged) until it recovers above recover_above_wr (hysteresis).
+# Default ON; opt-out with enabled:false. Validate on the joined dataset + ghost log.
+regime_fade:
+  enabled: true
+  high_conf_threshold: 0.60      # predicted P(win) at/above this = "high confidence"
+  window_trades: 25              # rolling window of most-recent settled trades
+  min_high_conf_samples: 8       # need >= this many high-conf trades before acting
+  fade_below_wr: 0.45            # activate fade when rolling high-conf WR < this
+  recover_above_wr: 0.50         # deactivate when rolling high-conf WR >= this (hysteresis)
+  max_trade_age_hours: 48        # ignore settled trades older than this
+  action: sit_out                # sit_out | raise_bar
+  raise_bar_min_edge_bonus: 0.05 # when action=raise_bar, edge required to still enter
+  cache_ttl_sec: 60              # re-evaluate at most this often (per-candidate calls are cheap)
 lane_calibration:
   enabled: true   # 2026-06-15: restored smoke-test calibration posture after accidental baseline rollback disabled runtime calibration.
   shadow_mode: false
@@ -680,7 +699,7 @@ strategies:
     # 2026-06-20: sit out sol native 5m BUY_NO — confirmed-broken lane (23% WR,
     # -$43 recent, n=13, all BEARISH bias). window_delta_flip can't save these
     # (down-tape entries that revert post-entry). Matches eth/doge precedent.
-    disable_buy_no_5m_native: true
+    disable_buy_no_5m_native: false  # 2026-06-20 baseline-restore: was +$34.9@57% at baseline
     enabled: true
     use_ai: true
     alt_momentum_confirm:
@@ -880,7 +899,7 @@ strategies:
     - 15m:LONG
     disable_buy_no_5m_native: true
     eth_5m_buy_no_flip_to_yes: false
-    enabled: true
+    enabled: true  # 2026-06-20 REVERT: eth stays pocket-gated (eth_pocket_only=true); full-disable wrongly killed the +EV BUY_NO RSI>=55 pocket
     use_ai: true
     eth_momentum_confirm:
       buy_yes:
@@ -1790,7 +1809,7 @@ strategies:
     # fee correction (live 0.10 -> real 0.0312). Ghost net-of-correct-fee since
     # 06-12: 15m -0.014 (n=10k), 5m -0.013, 1h -0.070 (n=442, worst); taken
     # trades -$19 this session. -EV all windows. Operator directive: sit out.
-    disable_buy_yes: true
+    disable_buy_yes: false  # 2026-06-20 baseline-restore: bnb 5m BUY_YES was +$54.4@66% (9t) in the +$362 baseline; 06-17 sit-out used phantom-0.10 fee (real=0 Olympus)
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1846,7 +1865,7 @@ strategies:
     ai_decision_timeout_sec: 40
     ai_hold_veto_ttl_sec: 0
     alt_1h_simple_long:
-      enabled: true
+      enabled: true  # 2026-06-20 REVERT: bnb 1h LONG is the documented TOP lane (63.3% WR +$157); n=18 was too thin to disable. Bleeder is 15m (already handled).
       entry_min: 0.5
       entry_max: 0.85
       sizing_edge: 0.06

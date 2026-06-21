@@ -59,6 +59,7 @@ from src.analysis.journal_learning import (
 from src.analysis.decision_snapshot import DecisionSnapshot
 from src.analysis.lane_identity import build_lane_metadata
 from src.analysis.rejected_candidate_log import log_rejected_candidate
+from src.analysis import regime_fade
 from src.analysis.lane_manager import LaneManager
 from src.analysis.circuit_breakers import CircuitBreakerManager
 from src.analysis.kelly_sizer import KellySizer, get_kelly_sizer
@@ -2902,6 +2903,21 @@ class PolyBot:
         self._topup_last_run = mono
         now = datetime.now(timezone.utc)
         win = self._topup_sampler_window_mins
+        # 2026-06-20: compute the BTC oracle basis ONCE per run (spot vs Chainlink) —
+        # identical across all btc 5m markets at this instant. This wires the oracle
+        # gate the sampler previously stubbed to None (oracle_ok was 0/N). Best-effort:
+        # any failure leaves basis None (no worse than before); never blocks the loop.
+        _btc_basis_bps = None
+        try:
+            _bsvc = getattr(self.bitcoin_strategy, "btc_service", None)
+            _spot = float(getattr(getattr(self, "_shared_btc_ta", None), "sol", None)
+                          and self._shared_btc_ta.sol.current_price or 0.0)
+            if _bsvc is not None and _spot > 0:
+                _cl, _ = await asyncio.to_thread(_bsvc.get_chainlink_btc_price)
+                if _cl and float(_cl) > 0:
+                    _btc_basis_bps = ((_spot - float(_cl)) / float(_cl)) * 10000.0
+        except Exception:
+            logging.debug("topup sampler: BTC oracle basis calc failed (ignored)", exc_info=True)
         for market_id, yes_token, no_token, end_date, question in universe:
             try:
                 if not end_date or not yes_token:
@@ -2931,7 +2947,7 @@ class PolyBot:
                     best_ask_yes=best_ask,
                     best_bid_yes=best_bid,
                     mins_left=mins_left,
-                    oracle_basis_bps=None,
+                    oracle_basis_bps=_btc_basis_bps,
                     market_end_at=ed,
                 )
             except Exception:
@@ -3336,6 +3352,10 @@ class PolyBot:
             lane="shared_btc_diag",
             timeout_sec=_btc_diag_to,
         )
+        # 2026-06-20: cache for the final-window top-up sampler so it can compute the
+        # BTC oracle basis (spot vs Chainlink) — previously the sampler passed
+        # oracle_basis_bps=None so oracle_ok could never fire.
+        self._shared_btc_ta = shared_btc_ta
         for _alt_strat in (
             self.sol_macro_strategy,
             getattr(self, "eth_macro_strategy", None),
@@ -4185,6 +4205,70 @@ class PolyBot:
         if em is not None and hasattr(em, "update_resume_window"):
             em.update_resume_window(green_window=True)
 
+    def _check_regime_fade(
+        self,
+        *,
+        strategy: str,
+        signal: Any,
+        lane_meta: Dict[str, Any],
+    ) -> bool:
+        """Regime fade filter — sit out high-confidence momentum entries when the
+        rolling realized high-confidence win rate has collapsed (mean-reverting
+        tape). See ``src/analysis/regime_fade.py``. Returns True to proceed,
+        False to suppress (ghost-logged). Fail-open by construction (a missing
+        config block / read error yields an inactive state)."""
+        try:
+            state = regime_fade.evaluate(self.config)
+        except Exception as exc:  # never let the filter starve entries
+            logging.debug("regime_fade evaluate raised (proceeding): %s", exc)
+            return True
+        if not state.active:
+            return True
+
+        p_win = regime_fade.predicted_p_win(
+            getattr(signal, "action", None), getattr(signal, "est_prob", None)
+        )
+        suppress, reason = regime_fade.should_suppress(
+            state, p_win, self.config, edge=getattr(signal, "edge", None)
+        )
+        if not suppress:
+            return True
+
+        extra = self._lane_skip_extra(
+            lane_meta=lane_meta,
+            signal_reason=getattr(signal, "reason", None),
+            skip_reason=reason,
+        )
+        extra.update(
+            {
+                "regime_fade_active": True,
+                "regime_fade_rolling_wr": state.rolling_wr,
+                "regime_fade_n_high_conf": state.n_high_conf,
+                "regime_fade_n_window": state.n_window,
+                "regime_fade_high_conf_threshold": state.high_conf_threshold,
+                "regime_fade_pred_p_win": (round(p_win, 4) if p_win is not None else None),
+                "regime_fade_action": state.action,
+            }
+        )
+        self.journal.log_skip(
+            getattr(signal, "market_id", ""),
+            getattr(signal, "market_question", ""),
+            strategy,
+            "regime_fade_high_conf_chop",
+            self.bankroll,
+            extra=extra,
+        )
+        logging.info(
+            "%s regime-fade suppressed: market=%s p_win=%s rolling_hc_wr=%.3f n_hc=%d reason=%s",
+            strategy,
+            getattr(signal, "market_id", ""),
+            (f"{p_win:.3f}" if p_win is not None else "na"),
+            (state.rolling_wr if state.rolling_wr is not None else float("nan")),
+            state.n_high_conf,
+            reason,
+        )
+        return False
+
     def _check_fresh_entry_window(
         self,
         *,
@@ -4304,6 +4388,12 @@ class PolyBot:
         ):
             return
         if not self._check_fresh_entry_window(
+            strategy="bitcoin",
+            signal=signal,
+            lane_meta=lane_meta,
+        ):
+            return
+        if not self._check_regime_fade(
             strategy="bitcoin",
             signal=signal,
             lane_meta=lane_meta,
@@ -4588,6 +4678,12 @@ class PolyBot:
         ):
             return
         if not self._check_fresh_entry_window(
+            strategy=strat,
+            signal=signal,
+            lane_meta=lane_meta,
+        ):
+            return
+        if not self._check_regime_fade(
             strategy=strat,
             signal=signal,
             lane_meta=lane_meta,
