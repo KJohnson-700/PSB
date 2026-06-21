@@ -417,6 +417,13 @@ class SOLBTCService:
 
     def fetch_klines(self, symbol: str, interval: str = "1h", limit: int = 200) -> pd.DataFrame:
         """Fetch klines from Binance for any symbol (SOLUSDT, BTCUSDT, etc.)."""
+        try:
+            from src.market import ws_candle_feed as _wcf
+            _wdf = _wcf.get_feed().get_klines(symbol, interval, limit)
+            if _wdf is not None and len(_wdf) >= min(limit, 30):
+                return _wdf
+        except Exception:
+            pass
         cache_key = f"binance_{symbol}_{interval}_{limit}"
         if cache_key in self._cache:
             ts, df = self._cache[cache_key]

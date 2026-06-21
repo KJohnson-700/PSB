@@ -306,6 +306,13 @@ class HyperliquidHypeService(SOLBTCService):
           - On empty/error, fall through to Hyperliquid ``candleSnapshot``.
           - Hyperliquid path retains existing retry + stale-cache fallback.
         """
+        try:
+            from src.market import ws_candle_feed as _wcf
+            _wdf = _wcf.get_feed().get_klines("HYPEUSDT", interval, limit)
+            if _wdf is not None and len(_wdf) >= min(limit, 30):
+                return _wdf
+        except Exception:
+            pass
         binance_df = self._fetch_binance_hype_klines(interval=interval, limit=limit)
         if not binance_df.empty:
             cache_key = f"hype_{interval}_{limit}"

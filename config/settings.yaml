@@ -47,6 +47,8 @@ final_window_topup:
 trading:
   cycle_interval_sec: 60
   exit_check_interval_sec: 3  # 10->3: cut stop-detection latency on fast 5m binaries (late-stop overshoot -15% intended vs -39% realized). Pure cadence; no gate/width change.
+  ws_candle_feed:
+    enabled: true  # 2026-06-21: unified WS candle feed (Binance+Hyperliquid) off the REST hot path; fail-safe REST fallback
   execution_provider: olympus
   entry_mode: marketable
   entry_maker_wait_sec: 8
@@ -66,7 +68,7 @@ trading:
     require_full_depth: true
     depth_price_ceiling_cents: 0.0
   clob_ws:
-    enabled: false  # 2026-06-20 baseline-restore: WSS overlay OFF at +$362 baseline (REST-only); priced 0% of entries=overhead; blind-0.5 guard independent
+    enabled: true  # 2026-06-21: WSS overlay was part of +improvements; re-enabled properly (drive prices)
     book_channel: market
     subscribe_interval_sec: 15
     asset_ids_json_key: assets_ids
@@ -74,9 +76,9 @@ trading:
     # from the pushed book instead of REST /midpoint per cycle. REST fallback is
     # always on inside scanner.fetch_prices, so pricing stays correct if WS is
     # empty/stale. universe_subscribe_cap bounds the OrderBook map (OOM safety).
-    drive_scanner_prices: false  # baseline-restore
+    drive_scanner_prices: true
     price_max_age_sec: 8
-    subscribe_universe: false  # baseline-restore
+    subscribe_universe: true
     universe_subscribe_cap: 400
   default_position_size: 6
   max_position_size: 25   # 2026-06-16 revert-to-0613: undo 1.6x paper ladder (was 40)
@@ -103,7 +105,7 @@ trading:
     updown_max_hold_mins: 18.0
     updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
     updown_hold_winners_to_resolution: false
-    stop_use_executable_price: false
+    stop_use_executable_price: true  # 2026-06-21 Codex: fire stop on executable bid (gap-through fix), paper-validate
     realistic_paper_fills: false
     # 2026-06-16 phantom-stop guard: the fast exit loop prices held positions off
     # the CLOB YES book mid. On thin up/down binaries near expiry a ONE-SIDED book
@@ -263,7 +265,6 @@ trading:
           1h:
             up:
               updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.72, n=11): stops/gaps cut this winner; hold to resolution
             down:
               updown_stop_loss_pct: 0.15
       hype_macro:

@@ -2215,6 +2215,12 @@ class PolyBot:
         if ws_cfg.get("enabled", True):
             self._spawn_bg(self.ws_client.listen())
             self._spawn_bg(self._clob_ws_subscription_loop())
+            try:
+                if self.config.get("trading", {}).get("ws_candle_feed", {}).get("enabled"):
+                    from src.market import ws_candle_feed as _wcf
+                    self._spawn_bg(_wcf.get_feed().run(), name="ws_candle_feed")
+            except Exception as _e:
+                logging.warning("ws_candle_feed spawn failed (REST fallback): %s", _e)
 
         from src.ops_pulse import log_ops_startup
 
@@ -4280,7 +4286,12 @@ class PolyBot:
         False to suppress (ghost-logged). Fail-open by construction (a missing
         config block / read error yields an inactive state)."""
         try:
-            state = regime_fade.evaluate(self.config, lane=strategy)
+            _fade_lane = regime_fade.lane_key(
+                strategy,
+                getattr(signal, "window_size", None),
+                getattr(signal, "action", None),
+            )
+            state = regime_fade.evaluate(self.config, lane=_fade_lane)
         except Exception as exc:  # never let the filter starve entries
             logging.debug("regime_fade evaluate raised (proceeding): %s", exc)
             return True
