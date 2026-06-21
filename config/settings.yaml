@@ -174,9 +174,11 @@ trading:
           15m:
             up:
               updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
+              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.83, n=89): stops were cutting this winner; let it run past TP, base stop still protects
           1h:
             up:
               updown_stop_loss_pct: 0.15
+              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$27.90, n=40, 58% held-WR)
       bnb_macro:
         window_lane_overrides:
           5m:
@@ -193,6 +195,7 @@ trading:
           1h:
             up:
               updown_stop_loss_pct: 0.15
+              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.47, n=15, 60% held-WR)
             down:
               updown_stop_loss_pct: 0.15
       eth_macro:
@@ -260,6 +263,7 @@ trading:
           1h:
             up:
               updown_stop_loss_pct: 0.15
+              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.72, n=11): stops/gaps cut this winner; hold to resolution
             down:
               updown_stop_loss_pct: 0.15
       hype_macro:
@@ -293,6 +297,7 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
+              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$127.98, n=23, 70% held-WR): the single biggest hold-edge lane
           1h:
             up:
               updown_stop_loss_pct: 0.15
@@ -432,7 +437,7 @@ regime_fade:
   raise_bar_min_edge_bonus: 0.08 # when action=raise_bar, edge required to still enter
   cache_ttl_sec: 60              # re-evaluate at most this often
 lane_calibration:
-  enabled: true   # 2026-06-15: restored smoke-test calibration posture after accidental baseline rollback disabled runtime calibration.
+  enabled: false   # 2026-06-15: restored smoke-test calibration posture after accidental baseline rollback disabled runtime calibration.
   shadow_mode: false
   paper_shadow_mode: false
   live_shadow_mode: false
