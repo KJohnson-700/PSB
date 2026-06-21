@@ -159,6 +159,9 @@ LAST_HEALTH=$(tail -1 "$HEALTH" 2>/dev/null)
 # the deep diagnosis/fix. See scripts/lane_diagnose.py.
 read -r BLIND05 LOSS_STREAK SESS_WR CLOSED_N BLIND_LANES WORST_LANE WORST_WR WORST_N WORST_ALERT WORST_REASON <<<"$(python3 "$PSB/scripts/lane_diagnose.py" "$PSB/data/calibration/trades.jsonl" "$SESSION_ID" "$PSB/data/logs/lane_diagnosis.jsonl" 2>/dev/null || echo '0 0 - 0 - - - 0 - -')"
 
+# Exit-quality (catches stops-cutting-winners + payoff decay — the 2-day miss).
+read -r EQ_VERDICT EQ_STOPSHARE EQ_PAYOFF EQ_GREENSTOP EQ_N EQ_REASON <<<"$(python3 "$PSB/scripts/exit_quality_audit.py" --watch 2>/dev/null || echo 'OK - - - 0 na')"
+
 # --- PRIORITY verdict ---
 PRI=ok; REASONS=""
 [ "${PROC_RSS_MB:-0}" -gt 800 ] && PRI=RSS_HIGH && REASONS="$REASONS rss=${PROC_RSS_MB}MB(>800=LEAK?)"
@@ -183,6 +186,8 @@ if [ "${CLOSED_N:-0}" -ge 6 ] && [ "$SESS_WR" != "-" ]; then
   [ "${SESS_WR:-100}" -lt 30 ] && PRI=LOW_WR && REASONS="$REASONS session_wr=${SESS_WR}% n=$CLOSED_N"
 fi
 [ "${LOSS_STREAK:-0}" -ge 4 ] && PRI=LOSS_STREAK && REASONS="$REASONS loss_streak=$LOSS_STREAK consecutive"
+# Exit-quality: stops cutting winners / payoff decay (the failure we missed for 2 days).
+[ "${EQ_VERDICT:-OK}" = "ALERT" ] && PRI=EXIT_QUALITY && REASONS="$REASONS exit_quality: stop_share=$EQ_STOPSHARE payoff=$EQ_PAYOFF green_stops=$EQ_GREENSTOP n=$EQ_N {$EQ_REASON}"
 # Blind-0.5 only matters as a CLUSTER: post scanner degenerate-0.5 guard, a lone 0.5
 # entry is a legit 50/50 edge market, not blind. >=3 = the guard likely regressed.
 [ "${BLIND05:-0}" -ge 3 ] && PRI=BLIND_05 && REASONS="$REASONS blind_0.5_entries=$BLIND05 [$BLIND_LANES] = phantom-edge CLUSTER (scanner degenerate-0.5 guard may have regressed)"
@@ -201,6 +206,7 @@ echo "=== PSB WATCH $(date -u +%H:%M:%SZ) ==="
 echo "LIVENESS  pid=${PID:-NONE} mode=$MODE phase=$PHASE status_age=${STATUS_AGE}s rss=${PROC_RSS_MB}MB"
 echo "TRADES    daily_trades=$TRADES open=$OPEN cycle_count=$CYCLES   [target 100]"
 echo "TRADEQUAL blind_0.5=$BLIND05 [$BLIND_LANES]  loss_streak=$LOSS_STREAK  session_wr=${SESS_WR}%  closed=$CLOSED_N"
+echo "EXITQUAL  verdict=$EQ_VERDICT stop_share=$EQ_STOPSHARE payoff=$EQ_PAYOFF green_stops=$EQ_GREENSTOP(cut-winners) n=$EQ_N {$EQ_REASON}"
 echo "LANEDIAG  alert=${WORST_ALERT:--} worst=$WORST_LANE wr=${WORST_WR}% n=$WORST_N {$WORST_REASON}  (full -> data/logs/lane_diagnosis.jsonl)"
 echo "SESSION   id=$SESSION_ID main_start=$MAIN_START${RESTART_EVENT:+   ⚠️ $RESTART_EVENT}"
 echo "CYCLE     elapsed=${CYC_MS}ms scanner_sync=${SCAN_SYNC}ms scan_total=${SCAN_TOTAL}ms overrun=${OVERRUN}ms interval=${INTERVAL_MS}ms"
