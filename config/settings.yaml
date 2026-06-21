@@ -437,7 +437,7 @@ regime_fade:
   raise_bar_min_edge_bonus: 0.08 # when action=raise_bar, edge required to still enter
   cache_ttl_sec: 60              # re-evaluate at most this often
 lane_calibration:
-  enabled: false   # 2026-06-15: restored smoke-test calibration posture after accidental baseline rollback disabled runtime calibration.
+  enabled: true   # 2026-06-15: restored smoke-test calibration posture after accidental baseline rollback disabled runtime calibration.
   shadow_mode: false
   paper_shadow_mode: false
   live_shadow_mode: false
