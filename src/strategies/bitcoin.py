@@ -4054,6 +4054,18 @@ class BitcoinStrategy:
                 },
             )
             signals.append(signal)
+            # Instrumentation only (2026-06-21): entry liquidity for 5m gap-risk
+            # floor calibration. Wrapped; never affects any decision.
+            try:
+                from src.analysis import entry_liquidity_shadow
+                entry_liquidity_shadow.log_signal_liquidity(
+                    market_id=market.id, strategy="bitcoin",
+                    window=getattr(signal, "window_size", None), action=action,
+                    liquidity=getattr(market, "liquidity", None),
+                    est_prob=getattr(signal, "est_prob", None),
+                )
+            except Exception:
+                pass
             logger.info(
                 f"BTC SIGNAL: {action} '{market.question[:50]}...' "
                 f"edge={edge:.3f} conf={confidence:.2f} ai={ai_used} | {reason}"
