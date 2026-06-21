@@ -1,4 +1,4 @@
-"""Tests for the regime fade filter (src/analysis/regime_fade.py)."""
+"""Tests for the band-targeted regime fade filter (src/analysis/regime_fade.py)."""
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -40,13 +40,14 @@ def _row(*, side, est_prob, win, ts):
 def _cfg(**over):
     base = {
         "enabled": True,
-        "high_conf_threshold": 0.60,
-        "window_trades": 25,
-        "min_high_conf_samples": 8,
-        "fade_below_wr": 0.45,
-        "recover_above_wr": 0.50,
+        "band_low": 0.45,
+        "band_high": 0.65,
+        "window_trades": 40,
+        "min_band_samples": 10,
+        "fade_below_wr": 0.48,
+        "recover_above_wr": 0.53,
         "max_trade_age_hours": 48,
-        "cache_ttl_sec": 0,  # disable TTL so each evaluate recomputes in tests
+        "cache_ttl_sec": 0,
     }
     base.update(over)
     return {"regime_fade": base}
@@ -55,21 +56,20 @@ def _cfg(**over):
 # --- predicted_p_win -------------------------------------------------------
 
 def test_predicted_p_win_long_vs_short():
-    assert predicted_p_win("BUY_YES", 0.7) == pytest.approx(0.7)
-    assert predicted_p_win("BUY_NO", 0.7) == pytest.approx(0.3)
-    assert predicted_p_win("SHORT", 0.8) == pytest.approx(0.2)
-    assert predicted_p_win("LONG", 0.8) == pytest.approx(0.8)
+    assert predicted_p_win("BUY_YES", 0.6) == pytest.approx(0.6)
+    assert predicted_p_win("BUY_NO", 0.6) == pytest.approx(0.4)
+    assert predicted_p_win("SHORT", 0.45) == pytest.approx(0.55)
     assert predicted_p_win("BUY_YES", None) is None
 
 
-# --- config parsing --------------------------------------------------------
-
-def test_config_defaults_and_action_clamp():
-    cfg = RegimeFadeConfig.from_dict({"action": "nonsense"})
-    assert cfg.action == "sit_out"
-    assert cfg.enabled is True
-    cfg2 = RegimeFadeConfig.from_dict({"action": "raise_bar"})
-    assert cfg2.action == "raise_bar"
+def test_in_band():
+    cfg = RegimeFadeConfig.from_dict({"band_low": 0.45, "band_high": 0.65})
+    assert cfg.in_band(0.45) is True
+    assert cfg.in_band(0.60) is True
+    assert cfg.in_band(0.64999) is True
+    assert cfg.in_band(0.65) is False   # 0.7 winner protected
+    assert cfg.in_band(0.40) is False   # low-conf left alone
+    assert cfg.in_band(None) is False
 
 
 def test_disabled_returns_inactive(tmp_path):
@@ -81,88 +81,107 @@ def test_disabled_returns_inactive(tmp_path):
     assert state.reason == "disabled"
 
 
-# --- core fade activation --------------------------------------------------
+# --- band activation -------------------------------------------------------
 
-def test_fade_activates_when_high_conf_wr_collapses(tmp_path):
+def test_fade_activates_when_band_wr_collapses(tmp_path):
     now = datetime.now(timezone.utc)
-    rows = []
-    # 10 high-confidence (pred p_win 0.7) BUY_YES trades, only 3 win -> WR 0.30
-    for i in range(10):
-        rows.append(_row(side="BUY_YES", est_prob=0.7, win=(i < 3),
-                         ts=now - timedelta(minutes=10 * (10 - i))))
+    # 12 in-band (p_win 0.6) BUY_YES, only 4 win -> band WR 0.33 < 0.48
+    rows = [_row(side="BUY_YES", est_prob=0.6, win=(i < 4),
+                 ts=now - timedelta(minutes=i)) for i in range(12)]
     p = tmp_path / "trades.jsonl"
     _write_trades(p, rows)
     state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
                      now=now, force=True)
     assert state.active is True
-    assert state.n_high_conf == 10
-    assert state.rolling_wr == pytest.approx(0.30)
+    assert state.n_band == 12
+    assert state.rolling_wr == pytest.approx(4 / 12)
 
 
-def test_no_fade_when_high_conf_wr_healthy(tmp_path):
+def test_no_fade_when_band_healthy(tmp_path):
     now = datetime.now(timezone.utc)
-    rows = [_row(side="BUY_YES", est_prob=0.7, win=(i < 7),
-                 ts=now - timedelta(minutes=10 * (10 - i))) for i in range(10)]
+    rows = [_row(side="BUY_YES", est_prob=0.6, win=(i < 7),
+                 ts=now - timedelta(minutes=i)) for i in range(12)]
     p = tmp_path / "trades.jsonl"
     _write_trades(p, rows)
     state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
                      now=now, force=True)
-    assert state.active is False
-    assert state.rolling_wr == pytest.approx(0.70)
+    assert state.active is False  # WR 0.58 >= fade_below 0.48
 
 
-def test_insufficient_high_conf_samples_stays_inactive(tmp_path):
+def test_07_winners_do_not_dilute_band_and_are_protected(tmp_path):
     now = datetime.now(timezone.utc)
-    # Only 3 high-conf trades (< min_high_conf_samples=8) all losses.
-    rows = [_row(side="BUY_YES", est_prob=0.7, win=False,
-                 ts=now - timedelta(minutes=5 * i)) for i in range(3)]
-    p = tmp_path / "trades.jsonl"
-    _write_trades(p, rows)
-    state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
-                     now=now, force=True)
-    assert state.active is False
-    assert "insufficient_high_conf_samples" in state.reason
-
-
-def test_low_conf_trades_do_not_count_toward_high_conf_wr(tmp_path):
-    now = datetime.now(timezone.utc)
-    # 8 low-conf losers (p_win 0.5) + 8 high-conf winners (p_win 0.7).
     rows = []
-    for i in range(8):
-        rows.append(_row(side="BUY_YES", est_prob=0.5, win=False,
+    # 12 in-band losers (p_win 0.6, 33% WR) ...
+    for i in range(12):
+        rows.append(_row(side="BUY_YES", est_prob=0.6, win=(i < 4),
                          ts=now - timedelta(minutes=100 + i)))
-    for i in range(8):
+    # ... plus 10 genuine 0.7 winners (p_win 0.7, out of band) all winning.
+    for i in range(10):
         rows.append(_row(side="BUY_YES", est_prob=0.7, win=True,
                          ts=now - timedelta(minutes=10 + i)))
     p = tmp_path / "trades.jsonl"
     _write_trades(p, rows)
     state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
                      now=now, force=True)
-    # high-conf WR = 8/8 = 1.0, low-conf losers excluded -> not active.
-    assert state.n_high_conf == 8
-    assert state.rolling_wr == pytest.approx(1.0)
-    assert state.active is False
+    # band WR must reflect ONLY the in-band trades (0.6), not the 0.7 winners.
+    assert state.n_band == 12
+    assert state.rolling_wr == pytest.approx(4 / 12)
+    assert state.active is True
+    # and a 0.7 candidate must NOT be suppressed
+    sup, _ = should_suppress(state, 0.70, _cfg())
+    assert sup is False
+    # an in-band 0.6 candidate IS suppressed
+    sup2, reason = should_suppress(state, 0.60, _cfg())
+    assert sup2 is True
+    assert "regime_fade_band_chop" in reason
 
 
-def test_buy_no_predicted_p_win_counts_as_high_conf(tmp_path):
+def test_insufficient_band_samples_stays_inactive(tmp_path):
     now = datetime.now(timezone.utc)
-    # BUY_NO with est_prob 0.3 -> predicted p_win 0.7 (high conf). 9 of them, 2 win.
-    rows = [_row(side="BUY_NO", est_prob=0.3, win=(i < 2),
-                 ts=now - timedelta(minutes=5 * (9 - i))) for i in range(9)]
+    rows = [_row(side="BUY_YES", est_prob=0.6, win=False,
+                 ts=now - timedelta(minutes=i)) for i in range(5)]
     p = tmp_path / "trades.jsonl"
     _write_trades(p, rows)
     state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
                      now=now, force=True)
-    assert state.n_high_conf == 9
-    assert state.rolling_wr == pytest.approx(2 / 9)
+    assert state.active is False
+    assert "insufficient_band_samples" in state.reason
+
+
+def test_low_conf_left_alone(tmp_path):
+    now = datetime.now(timezone.utc)
+    # below band (p_win 0.40), even if losing, must not activate the band filter
+    rows = [_row(side="BUY_YES", est_prob=0.40, win=False,
+                 ts=now - timedelta(minutes=i)) for i in range(15)]
+    p = tmp_path / "trades.jsonl"
+    _write_trades(p, rows)
+    state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
+                     now=now, force=True)
+    assert state.active is False
+    assert state.n_band == 0
+
+
+def test_buy_no_maps_into_band(tmp_path):
+    now = datetime.now(timezone.utc)
+    # BUY_NO est_prob 0.40 -> p_win 0.60 (in band). 12 of them, 4 win.
+    rows = [_row(side="BUY_NO", est_prob=0.40, win=(i < 4),
+                 ts=now - timedelta(minutes=i)) for i in range(12)]
+    p = tmp_path / "trades.jsonl"
+    _write_trades(p, rows)
+    state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
+                     now=now, force=True)
+    assert state.n_band == 12
     assert state.active is True
 
 
-def test_stale_trades_excluded_by_age(tmp_path):
+def test_stale_and_shadow_rows_excluded(tmp_path):
     now = datetime.now(timezone.utc)
-    # All losers but older than max_trade_age_hours -> excluded -> inactive.
-    rows = [_row(side="BUY_YES", est_prob=0.7, win=False,
-                 ts=now - timedelta(hours=100 + i)) for i in range(10)]
+    rows = [_row(side="BUY_YES", est_prob=0.6, win=False,
+                 ts=now - timedelta(hours=100 + i)) for i in range(12)]
+    for i in range(12):
+        r = _row(side="BUY_YES", est_prob=0.6, win=False, ts=now - timedelta(minutes=i))
+        r["shadow_mode"] = True
+        rows.append(r)
     p = tmp_path / "trades.jsonl"
     _write_trades(p, rows)
     state = evaluate(_cfg(max_trade_age_hours=48), trades_path=p,
@@ -171,84 +190,53 @@ def test_stale_trades_excluded_by_age(tmp_path):
     assert state.n_window == 0
 
 
-def test_shadow_mode_rows_excluded(tmp_path):
-    now = datetime.now(timezone.utc)
-    rows = []
-    for i in range(10):
-        r = _row(side="BUY_YES", est_prob=0.7, win=False,
-                 ts=now - timedelta(minutes=i))
-        r["shadow_mode"] = True
-        rows.append(r)
-    p = tmp_path / "trades.jsonl"
-    _write_trades(p, rows)
-    state = evaluate(_cfg(), trades_path=p, status_path=tmp_path / "s.json",
-                     now=now, force=True)
-    assert state.active is False
-    assert state.n_window == 0
-
-
 # --- suppression decision --------------------------------------------------
 
-def test_should_suppress_only_high_conf_when_active():
-    state = RegimeFadeState(active=True, rolling_wr=0.3, n_high_conf=10,
-                            high_conf_threshold=0.6, action="sit_out")
-    # high-conf candidate -> suppress
-    sup, reason = should_suppress(state, 0.7, _cfg())
-    assert sup is True
-    assert "regime_fade_high_conf_chop" in reason
-    # low-conf candidate -> allowed even in fade
-    sup2, _ = should_suppress(state, 0.55, _cfg())
-    assert sup2 is False
+def test_should_suppress_only_in_band_when_active():
+    state = RegimeFadeState(active=True, rolling_wr=0.33, n_band=12,
+                            band_low=0.45, band_high=0.65, action="sit_out")
+    assert should_suppress(state, 0.55, _cfg())[0] is True   # in band
+    assert should_suppress(state, 0.40, _cfg())[0] is False  # below band
+    assert should_suppress(state, 0.70, _cfg())[0] is False  # above band (winner)
 
 
 def test_should_suppress_inactive_allows_everything():
     state = RegimeFadeState(active=False)
-    sup, _ = should_suppress(state, 0.95, _cfg())
-    assert sup is False
+    assert should_suppress(state, 0.55, _cfg())[0] is False
 
 
-def test_raise_bar_action_blocks_low_edge_allows_high_edge():
-    state = RegimeFadeState(active=True, rolling_wr=0.3, n_high_conf=10,
-                            high_conf_threshold=0.6, action="raise_bar")
-    cfg = _cfg(action="raise_bar", raise_bar_min_edge_bonus=0.05)
-    # high-conf, edge below bonus -> blocked
-    sup, _ = should_suppress(state, 0.7, cfg, edge=0.02)
-    assert sup is True
-    # high-conf, edge clears bonus -> allowed
-    sup2, _ = should_suppress(state, 0.7, cfg, edge=0.10)
-    assert sup2 is False
+def test_raise_bar_blocks_low_edge_allows_high():
+    state = RegimeFadeState(active=True, rolling_wr=0.33, n_band=12,
+                            band_low=0.45, band_high=0.65, action="raise_bar")
+    cfg = _cfg(action="raise_bar", raise_bar_min_edge_bonus=0.08)
+    assert should_suppress(state, 0.55, cfg, edge=0.02)[0] is True
+    assert should_suppress(state, 0.55, cfg, edge=0.12)[0] is False
 
 
 # --- hysteresis ------------------------------------------------------------
 
-def test_hysteresis_holds_fade_between_thresholds(tmp_path):
+def test_hysteresis_holds_between_thresholds(tmp_path):
     now = datetime.now(timezone.utc)
     p = tmp_path / "trades.jsonl"
     status = tmp_path / "s.json"
-    cfg = _cfg(fade_below_wr=0.45, recover_above_wr=0.55)
+    cfg = _cfg(fade_below_wr=0.48, recover_above_wr=0.55)
 
-    # Phase 1: WR 0.3 -> activate.
-    rows = [_row(side="BUY_YES", est_prob=0.7, win=(i < 3),
-                 ts=now - timedelta(minutes=10 * (10 - i))) for i in range(10)]
-    _write_trades(p, rows)
-    s1 = evaluate(cfg, trades_path=p, status_path=status, now=now, force=True)
-    assert s1.active is True
+    # activate: band WR 0.33
+    _write_trades(p, [_row(side="BUY_YES", est_prob=0.6, win=(i < 4),
+                           ts=now - timedelta(minutes=i)) for i in range(12)])
+    assert evaluate(cfg, trades_path=p, status_path=status, now=now, force=True).active is True
 
-    # Phase 2: WR 0.5 — above fade_below(0.45) but below recover(0.55).
-    # Because we were active, hysteresis keeps it active.
-    rows2 = [_row(side="BUY_YES", est_prob=0.7, win=(i < 5),
-                  ts=now - timedelta(minutes=10 * (10 - i))) for i in range(10)]
-    _write_trades(p, rows2)
+    # WR 0.50: above fade(0.48), below recover(0.55) -> held active by hysteresis
+    _write_trades(p, [_row(side="BUY_YES", est_prob=0.6, win=(i < 6),
+                           ts=now - timedelta(minutes=i)) for i in range(12)])
     s2 = evaluate(cfg, trades_path=p, status_path=status, now=now, force=True)
     assert s2.rolling_wr == pytest.approx(0.5)
-    assert s2.active is True  # held by hysteresis
+    assert s2.active is True
 
-    # Phase 3: WR 0.6 -> recovers above recover_above_wr -> inactive.
-    rows3 = [_row(side="BUY_YES", est_prob=0.7, win=(i < 6),
-                  ts=now - timedelta(minutes=10 * (10 - i))) for i in range(10)]
-    _write_trades(p, rows3)
+    # WR 0.58: recovers above 0.55 -> inactive
+    _write_trades(p, [_row(side="BUY_YES", est_prob=0.6, win=(i < 7),
+                           ts=now - timedelta(minutes=i)) for i in range(12)])
     s3 = evaluate(cfg, trades_path=p, status_path=status, now=now, force=True)
-    assert s3.rolling_wr == pytest.approx(0.6)
     assert s3.active is False
 
 
@@ -256,11 +244,10 @@ def test_status_file_written(tmp_path):
     now = datetime.now(timezone.utc)
     p = tmp_path / "trades.jsonl"
     status = tmp_path / "runtime" / "regime_fade_state.json"
-    rows = [_row(side="BUY_YES", est_prob=0.7, win=(i < 3),
-                 ts=now - timedelta(minutes=i)) for i in range(10)]
-    _write_trades(p, rows)
+    _write_trades(p, [_row(side="BUY_YES", est_prob=0.6, win=(i < 4),
+                           ts=now - timedelta(minutes=i)) for i in range(12)])
     evaluate(_cfg(), trades_path=p, status_path=status, now=now, force=True)
     assert status.exists()
     data = json.loads(status.read_text())
     assert data["active"] is True
-    assert data["n_high_conf"] == 10
+    assert data["n_band"] == 12

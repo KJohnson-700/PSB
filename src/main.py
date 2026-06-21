@@ -4261,9 +4261,10 @@ class PolyBot:
             {
                 "regime_fade_active": True,
                 "regime_fade_rolling_wr": state.rolling_wr,
-                "regime_fade_n_high_conf": state.n_high_conf,
+                "regime_fade_n_band": state.n_band,
                 "regime_fade_n_window": state.n_window,
-                "regime_fade_high_conf_threshold": state.high_conf_threshold,
+                "regime_fade_band_low": state.band_low,
+                "regime_fade_band_high": state.band_high,
                 "regime_fade_pred_p_win": (round(p_win, 4) if p_win is not None else None),
                 "regime_fade_action": state.action,
             }
@@ -4277,12 +4278,14 @@ class PolyBot:
             extra=extra,
         )
         logging.info(
-            "%s regime-fade suppressed: market=%s p_win=%s rolling_hc_wr=%.3f n_hc=%d reason=%s",
+            "%s regime-fade suppressed: market=%s p_win=%s band_wr=%.3f n_band=%d band=[%.2f,%.2f) reason=%s",
             strategy,
             getattr(signal, "market_id", ""),
             (f"{p_win:.3f}" if p_win is not None else "na"),
             (state.rolling_wr if state.rolling_wr is not None else float("nan")),
-            state.n_high_conf,
+            state.n_band,
+            state.band_low,
+            state.band_high,
             reason,
         )
         return False
