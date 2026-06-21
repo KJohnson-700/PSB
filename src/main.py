@@ -2910,10 +2910,15 @@ class PolyBot:
         _btc_basis_bps = None
         try:
             _bsvc = getattr(self.bitcoin_strategy, "btc_service", None)
-            _spot = float(getattr(getattr(self, "_shared_btc_ta", None), "sol", None)
-                          and self._shared_btc_ta.sol.current_price or 0.0)
+            # _shared_btc_ta is a flat TechnicalAnalysis (current_price), NOT a
+            # container with a .sol sub-object; and BTCPriceService exposes
+            # get_chainlink_price(), not get_chainlink_btc_price() (that lives on
+            # SolBtcService). The old code hit both names -> basis was always None
+            # -> oracle_ok never fired in the top-up shadow. (fix 2026-06-21)
+            _ta = getattr(self, "_shared_btc_ta", None)
+            _spot = float(getattr(_ta, "current_price", 0.0) or 0.0)
             if _bsvc is not None and _spot > 0:
-                _cl, _ = await asyncio.to_thread(_bsvc.get_chainlink_btc_price)
+                _cl, _ = await asyncio.to_thread(_bsvc.get_chainlink_price)
                 if _cl and float(_cl) > 0:
                     _btc_basis_bps = ((_spot - float(_cl)) / float(_cl)) * 10000.0
         except Exception:
