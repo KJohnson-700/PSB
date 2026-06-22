@@ -1193,17 +1193,32 @@ class SolMacroStrategy:
         bullish_ok, bullish_reason = self._bullish_rally_ltf_ok(ta)
         bearish_ok, bearish_reason = self._bearish_dip_ltf_ok(ta)
 
+        side: Optional[str] = None
+        source = detail = ""
         if primary_htf_bias == "BULLISH":
             if bearish_ok and not bullish_ok:
-                return "SHORT", "bearish_dip_exception", bearish_reason
-            return "LONG", "bullish_rally_default", f"default_long: bullish={bullish_ok} bearish={bearish_ok}"
-
-        if primary_htf_bias == "BEARISH":
+                side, source, detail = "SHORT", "bearish_dip_exception", bearish_reason
+            else:
+                side, source, detail = "LONG", "bullish_rally_default", f"default_long: bullish={bullish_ok} bearish={bearish_ok}"
+        elif primary_htf_bias == "BEARISH":
             if bullish_ok and not bearish_ok:
-                return "LONG", "bullish_rally_exception", bullish_reason
-            return "SHORT", "bearish_dip_default", f"default_short: bullish={bullish_ok} bearish={bearish_ok}"
+                side, source, detail = "LONG", "bullish_rally_exception", bullish_reason
+            else:
+                side, source, detail = "SHORT", "bearish_dip_default", f"default_short: bullish={bullish_ok} bearish={bearish_ok}"
+        else:
+            return None, "skip", "neutral_htf_no_resolver"
 
-        return None, "skip", "neutral_htf_no_resolver"
+        # COUNTER-REGIME (fade) mode — 2026-06-22, default OFF. OOS ghost (347k settled,
+        # both time-halves) showed WITH-regime (momentum) = -1.5%/-2.5% edge while
+        # COUNTER-regime (fade) = +2.7%/+3.7%. When `fade_regime` is enabled for this
+        # asset, invert the resolved side so the strategy fades the regime instead of
+        # following it. Exceptions invert too (pure counter-regime). Fail-safe: any
+        # error / missing flag leaves the original momentum behaviour untouched.
+        if side and bool(self.config.get("fade_regime", False)):
+            side = "SHORT" if side == "LONG" else "LONG"
+            source = "fade_" + source
+            detail = "FADE|" + detail
+        return side, source, detail
 
     def _sol_signal_guard_reason(
         self,
