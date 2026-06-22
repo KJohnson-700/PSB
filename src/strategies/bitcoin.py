@@ -1190,13 +1190,20 @@ class BitcoinStrategy:
 
         return bias
 
-    @staticmethod
-    def _bias_to_side(bias: str) -> Optional[str]:
+    def _bias_to_side(self, bias: str) -> Optional[str]:
+        # Regime->side mapping for BTC. COUNTER-REGIME (fade) mode — 2026-06-22,
+        # default OFF. When config fade_regime=true, invert so BTC fades the regime
+        # (OOS ghost: momentum -EV, counter-regime +EV). Fail-safe: missing/false
+        # flag => byte-identical momentum behaviour.
         if bias == "BULLISH":
-            return "LONG"
-        if bias == "BEARISH":
-            return "SHORT"
-        return None
+            base = "LONG"
+        elif bias == "BEARISH":
+            base = "SHORT"
+        else:
+            return None
+        if bool(self.config.get("fade_regime", False)):
+            return "SHORT" if base == "LONG" else "LONG"
+        return base
 
     def _get_btc_tf_state(self, ta: TechnicalAnalysis, tf: str) -> Any:
         state = getattr(ta, f"tf_{tf}", None)
