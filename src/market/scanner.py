@@ -61,6 +61,11 @@ class Market:
     # yes_price/no_price are the 0.5 DEFAULT — the market is unpriced and MUST NOT be
     # traded (a 0.5 default fabricates phantom edge vs est_prob => blind entries).
     price_hydrated: bool = True
+    # True when only ONE leg's midpoint returned and the other was DERIVED as
+    # 1 - present_leg (see update_market_prices). The derived leg is a synthetic
+    # complementary midpoint, not an independently observed/executable quote — treat
+    # accordingly in any audit or live-fill provenance.
+    price_one_sided_derived: bool = False
 
     @property
     def is_binary(self) -> bool:
@@ -999,6 +1004,27 @@ class MarketScanner:
             yes_price = prices.get(market.token_id_yes, 0.5)
             no_price = prices.get(market.token_id_no, 0.5)
 
+            # One-sided-fetch repair (2026-06-22): when only ONE leg's /midpoint
+            # (or WS push) returns, the other leg silently kept the 0.5 placeholder.
+            # The market still passes the price_hydrated guard below (one leg hit),
+            # so a BUY_YES whose real YES mid is ~0.495 (NO=0.505 hit, YES fetch
+            # missed) entered AND logged at the 0.5 DEFAULT — a ½¢ adverse fill
+            # contamination on the long side (favorable on short → why longs bled).
+            # Diagnosed from trades.jsonl: a 553-row spike at *exactly* 0.5000 vs
+            # ~16 at each 0.495/0.505 neighbour = the default, not a real mid. A
+            # binary's legs are complementary (yes+no≈1), so derive the missing leg
+            # from the present one instead of trading the 0.5 default. Genuine
+            # two-sided quotes (both hit) are untouched; both-miss stays 0.5/0.5 and
+            # is dropped by the unpriced guard below.
+            if no_hit and not yes_hit:
+                yes_price = 1.0 - no_price
+                market.price_one_sided_derived = True
+            elif yes_hit and not no_hit:
+                no_price = 1.0 - yes_price
+                market.price_one_sided_derived = True
+            else:
+                market.price_one_sided_derived = False
+
             market.yes_price = yes_price
             market.no_price = no_price
             # Real quote only if at least one side returned a live mid; otherwise both
@@ -1017,7 +1043,19 @@ class MarketScanner:
             if market.spread <= 0:
                 # Mid prices only reveal convergence, not true order-book spread.
                 market.spread = max(0.0, 1.0 - (yes_price + no_price))
-        
+
+        # Observability for the one-sided-fetch rate (the upstream cause of the
+        # 0.5-default contamination). A persistently high count points at a WS-
+        # overlay / batch-/midpoint coverage gap dropping one leg, not just a
+        # transient miss — worth chasing separately from this fail-safe derive.
+        _derived = sum(1 for m in markets if getattr(m, "price_one_sided_derived", False))
+        if _derived:
+            logger.info(
+                "Scanner: derived %d/%d one-sided binary legs (1-present_leg; synthetic mid)",
+                _derived,
+                len(markets),
+            )
+
         return markets
 
     def _set_slug_fetch_stats(

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from src.market.scanner import Market, MarketScanner, is_crypto_updown_market
 
@@ -34,6 +35,15 @@ def test_iter_updown_1h_human_slugs_shape():
     assert "bnb-up-or-down-may-13-2026-5am-et" in slugs
     assert not any("hyperliquid" in s for s in slugs)
     assert not any(slug.startswith("doge-up-or-down-") for slug in slugs)
+
+
+def test_scanner_log_summaries_include_doge_and_bnb_counts():
+    source = Path("src/market/scanner.py").read_text(encoding="utf-8")
+
+    assert "DOGE:" in source
+    assert "BNB:" in source
+    assert "_is_doge_mkt" in source
+    assert "_is_bnb_mkt" in source
 
 
 def test_crypto_updown_detector_accepts_hourly_alt_human_slugs():
@@ -349,6 +359,91 @@ def test_fetch_updown_markets_filters_to_fifteen_band(monkeypatch):
     assert "m30" not in {m.id for m in fifteen}
     assert "m60" not in {m.id for m in fifteen}
     assert "mnone_bad" not in {m.id for m in fifteen}
+
+
+def _updown_market(yes_token="y", no_token="n") -> Market:
+    return Market(
+        id="m1",
+        question="Bitcoin Up or Down?",
+        description="",
+        volume=0.0,
+        liquidity=0.0,
+        yes_price=0.5,
+        no_price=0.5,
+        spread=0.0,
+        end_date=datetime(2026, 6, 22, 12, 0, tzinfo=timezone.utc),
+        token_id_yes=yes_token,
+        token_id_no=no_token,
+        group_item_title="",
+        slug="bitcoin-updown",
+        window_minutes=5,
+    )
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def test_update_market_prices_derives_missing_yes_leg(monkeypatch):
+    # One-sided fetch: only the NO leg returns a midpoint. Pre-fix, yes_price kept
+    # the 0.5 DEFAULT (a ½¢ adverse BUY_YES fill) while still passing the
+    # price_hydrated guard because the NO leg hit. The legs are complementary, so
+    # the YES leg must be derived as 1 - no_price (≈0.495), not left at 0.5.
+    scanner = MarketScanner(_config())
+
+    async def fake_fetch_prices(token_ids):
+        return {"n": 0.505}  # YES leg ("y") missing
+
+    monkeypatch.setattr(scanner, "fetch_prices", fake_fetch_prices)
+    out = _run(scanner.update_market_prices([_updown_market()]))
+    m = out[0]
+    assert abs(m.yes_price - 0.495) < 1e-9, m.yes_price
+    assert abs(m.no_price - 0.505) < 1e-9, m.no_price
+    assert m.price_hydrated is True
+
+
+def test_update_market_prices_derives_missing_no_leg(monkeypatch):
+    # Symmetric: only the YES leg returns; derive NO = 1 - yes_price.
+    scanner = MarketScanner(_config())
+
+    async def fake_fetch_prices(token_ids):
+        return {"y": 0.495}
+
+    monkeypatch.setattr(scanner, "fetch_prices", fake_fetch_prices)
+    m = _run(scanner.update_market_prices([_updown_market()]))[0]
+    assert abs(m.yes_price - 0.495) < 1e-9, m.yes_price
+    assert abs(m.no_price - 0.505) < 1e-9, m.no_price
+    assert m.price_hydrated is True
+
+
+def test_update_market_prices_two_sided_quote_untouched(monkeypatch):
+    # Genuine two-sided quote (both legs hit) must NOT be rewritten — a real
+    # 0.50/0.49 spread stays as-is, no complementary derive.
+    scanner = MarketScanner(_config())
+
+    async def fake_fetch_prices(token_ids):
+        return {"y": 0.50, "n": 0.49}
+
+    monkeypatch.setattr(scanner, "fetch_prices", fake_fetch_prices)
+    m = _run(scanner.update_market_prices([_updown_market()]))[0]
+    assert abs(m.yes_price - 0.50) < 1e-9, m.yes_price
+    assert abs(m.no_price - 0.49) < 1e-9, m.no_price
+    assert m.price_hydrated is True
+
+
+def test_update_market_prices_both_missing_stays_unpriced(monkeypatch):
+    # Neither leg returns → both stay at the 0.5 default and the market is marked
+    # unpriced so the _priced() filter drops it before strategy scan.
+    scanner = MarketScanner(_config())
+
+    async def fake_fetch_prices(token_ids):
+        return {}
+
+    monkeypatch.setattr(scanner, "fetch_prices", fake_fetch_prices)
+    m = _run(scanner.update_market_prices([_updown_market()]))[0]
+    assert m.price_hydrated is False
 
 
 def test_dedupe_markets_by_id():
