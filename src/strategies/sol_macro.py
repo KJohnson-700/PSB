@@ -50,7 +50,7 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 
-from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
+from src.market.scanner import Market, is_tradably_priced, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
 from src.analysis.ai_decision_broker import (
     PendingDecision as _BrokerPendingDecision,
@@ -2753,7 +2753,16 @@ class SolMacroStrategy:
 
         # Filter to updown markets ONLY — long-dated SOL threshold markets
         # ("Will SOL hit $200?") are noise for the 15m/5m macro strategy.
-        sol_markets = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
+        _sol_candidates = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
+        # Fail-closed price guard (2026-06-22): never trade an UNPRICED market (0.5-default
+        # phantom edge). Deferred, not dropped — re-prices next cycle, entered at a real quote.
+        sol_markets = [m for m in _sol_candidates if is_tradably_priced(m)]
+        _unpriced = len(_sol_candidates) - len(sol_markets)
+        if _unpriced:
+            logger.info(
+                "%s: skipped %d UNPRICED market(s) (0.5-default, deferred to next priced cycle)",
+                getattr(self, "asset_name", "sol_macro"), _unpriced,
+            )
         if not sol_markets:
             logger.info(
                 f"{_brand} strategy: 0 {_alt_label} updown markets found out of {len(markets)} total markets"

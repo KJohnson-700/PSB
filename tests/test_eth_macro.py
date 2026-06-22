@@ -313,6 +313,7 @@ def test_eth_scan_buy_no_ltf_override_uses_eth_ta_without_name_error():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m up/down test market",
@@ -378,6 +379,7 @@ def test_eth_scan_eth_only_when_btc_full_analysis_unavailable():
     strat.btc_service.get_full_analysis = MagicMock(return_value=None)
 
     market = Market(
+        price_hydrated=True,
         id="eth15b",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m up/down test market",
@@ -454,6 +456,7 @@ def test_eth_oracle_basis_block_is_logged_to_rejected_candidates():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_oracle",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m oracle block test market",
@@ -537,6 +540,7 @@ def test_eth_scan_uses_relaxed_oracle_basis_policy():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_oracle_relaxed",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m relaxed oracle test market",
@@ -611,6 +615,7 @@ def test_eth_lane_entry_window_is_logged_to_rejected_candidates():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_window",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m lane window test market",
@@ -689,6 +694,7 @@ def test_eth_liquidity_reject_can_feed_shadow_observer():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_liquidity_observer",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m liquidity observer test",
@@ -777,6 +783,7 @@ def test_eth_neutral_bias_does_not_feed_shadow_observer():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_neutral_observer",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m neutral_bias observer test",
@@ -851,6 +858,7 @@ def test_eth_shadow_observer_timeout_consumes_scan_budget():
 
     def _market(idx: int) -> Market:
         return Market(
+            price_hydrated=True,
             id=f"eth15_liquidity_timeout_{idx}",
             question=f"Ethereum Up or Down - May 13, 9:0{idx}AM-9:15AM ET",
             description="ETH 15m liquidity observer timeout test",
@@ -926,6 +934,7 @@ def test_eth_shadow_observer_skips_repeated_market_during_cooldown():
     strat.btc_service.get_full_analysis = MagicMock(return_value=btc_ta)
 
     market = Market(
+        price_hydrated=True,
         id="eth15_liquidity_cooldown",
         question="Ethereum Up or Down - May 13, 9:00AM-9:15AM ET",
         description="ETH 15m liquidity observer cooldown test",

@@ -18,7 +18,7 @@ from src.analysis.math_utils import PositionSizer
 from src.strategies._scan_timeout import analysis_with_timeout
 from src.analysis.sol_btc_service import SOLBTCService
 from src.execution.exposure_manager import ExposureManager, ExposureTier
-from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
+from src.market.scanner import Market, is_tradably_priced, resolved_updown_window_minutes, updown_timeframe_label
 from src.strategies.strategy_config import resolve_enabled_flag
 from src.analysis.btc_1h_regime import regime_price
 from src.analysis.lane_entry_policy import entry_policy_to_dict
@@ -587,7 +587,16 @@ class ETHMacroStrategy(SolMacroStrategy):
             self._record_eth_abort("strategy_disabled")
             return []
 
-        eth_markets = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
+        _eth_candidates = [m for m in markets if self._is_solana_market(m) and self._is_updown_market(m)]
+        # Fail-closed price guard (2026-06-22): never trade an UNPRICED market (0.5-default
+        # phantom edge). Deferred, not dropped — re-prices next cycle, entered at a real quote.
+        eth_markets = [m for m in _eth_candidates if is_tradably_priced(m)]
+        _unpriced = len(_eth_candidates) - len(eth_markets)
+        if _unpriced:
+            logger.info(
+                "ETH Macro strategy: skipped %d UNPRICED market(s) (0.5-default, deferred to next priced cycle)",
+                _unpriced,
+            )
         if not eth_markets:
             logger.info("ETH Macro strategy: 0 ETH updown markets found")
             self._record_eth_abort("no_eth_markets")

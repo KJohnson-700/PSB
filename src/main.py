@@ -3169,6 +3169,8 @@ class PolyBot:
                             "fill_slippage_pct": getattr(exit_decision, "fill_slippage_pct", None),
                             "fill_fee_usdc": getattr(exit_decision, "fill_fee_usdc", None),
                             "fill_fee_rate": getattr(exit_decision, "fill_fee_rate", None),
+                            "secs_to_expiry_at_exit": getattr(exit_decision, "secs_to_expiry_at_exit", None),
+                            "exit_book_spread": getattr(exit_decision, "exit_book_spread", None),
                             **order_execution,
                         },
                     )

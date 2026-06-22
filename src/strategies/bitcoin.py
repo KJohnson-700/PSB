@@ -38,7 +38,7 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import BaseModel, Field
 
-from src.market.scanner import Market, resolved_updown_window_minutes, updown_timeframe_label
+from src.market.scanner import Market, is_tradably_priced, resolved_updown_window_minutes, updown_timeframe_label
 from src.analysis.ai_agent import AIAgent
 from src.analysis.ai_decision_broker import (
     PendingDecision as _BrokerPendingDecision,
@@ -615,6 +615,29 @@ class BitcoinStrategy:
         self._last_calibration_lane_id = lane_id
         self._last_calibration_vetoed = bool(cal.is_vetoed(lane_id))
         return float(cal.calibrate(lane_id, raw_est_prob))
+
+    def _admission_prob(self, est_prob: float) -> float:
+        """Deflate the (overconfident) model probability to its REALIZED rate for the
+        min_edge ADMISSION gate only — side selection, sizing and logging keep the raw
+        est_prob.
+
+        2026-06-22: the ghost reliability curve (n=365k settled) shows the model is
+        badly overconfident above 0.5 — predictions of 0.6/0.7/0.8/0.9 ALL resolve in a
+        narrow 0.53-0.60 band, and the realized rate is almost exactly a linear shrink
+        of the model output toward 0.5: realized ≈ 0.5 + 0.28·(est-0.5)
+        (0.55→0.51, 0.70→0.55, 0.79→0.58, 0.90→0.60 — all within ~0.01 of empirical).
+        Computing edge against this deflated probability stops the HTF-boost/floor
+        inflation from manufacturing phantom edge that defeats min_edge. Self-correcting:
+        if the tape trends and realized rates rise, re-fit the shrink. Opt-out / tune via
+        config `entry_admission_calibration_shrink` (1.0 = disabled / raw behaviour).
+        """
+        try:
+            shrink = float(self.config.get("entry_admission_calibration_shrink", 0.28))
+        except (TypeError, ValueError):
+            shrink = 0.28
+        if shrink >= 1.0:
+            return float(est_prob)
+        return 0.5 + shrink * (float(est_prob) - 0.5)
 
     def _maybe_bias_quant_disagree_override(
         self,
@@ -1677,7 +1700,18 @@ class BitcoinStrategy:
         # "Will bitcoin hit $80k before GTA VI?") are noise for this strategy.
         # They have multi-week/month resolutions and our 15m/5m technical analysis
         # has zero predictive value on them.
-        btc_markets = [m for m in markets if self._is_bitcoin_market(m) and self._is_updown_market(m)]
+        _btc_candidates = [m for m in markets if self._is_bitcoin_market(m) and self._is_updown_market(m)]
+        # Fail-closed price guard (2026-06-22): never trade an UNPRICED market (the
+        # 0.5-default phantom-edge contamination — just-opened BTC books with no
+        # /midpoint yet). Deferred, not dropped: the market re-prices next cycle and
+        # is entered then at a REAL quote. Ghost-logged distinctly, not as edge rejects.
+        btc_markets = [m for m in _btc_candidates if is_tradably_priced(m)]
+        _unpriced = len(_btc_candidates) - len(btc_markets)
+        if _unpriced:
+            logger.info(
+                "Bitcoin strategy: skipped %d UNPRICED BTC market(s) (0.5-default, deferred to next priced cycle)",
+                _unpriced,
+            )
         if not btc_markets:
             self.last_scan_stats = {
                 "enabled": True,
@@ -2229,8 +2263,10 @@ class BitcoinStrategy:
                         side_source=direction_decision.side_source,
                         resolver_path=direction_decision.resolver_path,
                     )
+                    # Admission edge uses the calibration-deflated prob (overconfidence
+                    # removed); sizing/logging below keep the raw estimated_prob.
                     edge = edge_for_action(
-                        estimated_prob=estimated_prob,
+                        estimated_prob=self._admission_prob(estimated_prob),
                         yes_price=yes_price,
                         action=action,
                     )
@@ -2562,10 +2598,13 @@ class BitcoinStrategy:
                                 f"btc_{_updown_tf}_buy_yes_floor=+{_floor_bump:.2f}"
                             )
 
+                    # Admission edge uses the calibration-deflated prob (overconfidence
+                    # removed); sizing/logging below keep the raw estimated_prob.
+                    _adm = self._admission_prob(estimated_prob)
                     if action == "BUY_YES":
-                        edge = estimated_prob - yes_price
+                        edge = _adm - yes_price
                     else:
-                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
+                        edge = (1.0 - _adm) - (1.0 - yes_price)
 
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * timing_weight)
                     _direction_guard = self._btc_direction_guard_reason(

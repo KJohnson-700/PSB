@@ -1,7 +1,36 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.market.scanner import Market, MarketScanner, is_crypto_updown_market
+from src.market.scanner import Market, MarketScanner, is_crypto_updown_market, is_tradably_priced
+
+
+def _bare_market(**kw):
+    base = dict(
+        id="m", question="Bitcoin Up or Down", description="",
+        volume=1000.0, liquidity=1000.0, yes_price=0.55, no_price=0.45, spread=0.02,
+        end_date=datetime.now(timezone.utc), token_id_yes="y", token_id_no="n",
+        group_item_title="Bitcoin Up or Down",
+    )
+    base.update(kw)
+    return Market(**base)
+
+
+def test_is_tradably_priced_rejects_unhydrated_default():
+    # Fail-closed: a freshly-constructed market is UNPRICED until hydration sets it.
+    assert _bare_market().price_hydrated is False
+    assert is_tradably_priced(_bare_market()) is False
+
+
+def test_is_tradably_priced_rejects_explicit_unhydrated():
+    assert is_tradably_priced(_bare_market(price_hydrated=False, yes_price=0.5)) is False
+
+
+def test_is_tradably_priced_rejects_none_price():
+    assert is_tradably_priced(_bare_market(price_hydrated=True, yes_price=None)) is False
+
+
+def test_is_tradably_priced_accepts_real_hydrated_quote():
+    assert is_tradably_priced(_bare_market(price_hydrated=True, yes_price=0.55)) is True
 
 
 def _config() -> dict:

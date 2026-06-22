@@ -86,6 +86,7 @@ def _make_btc_market(
         liquidity=50000,
         yes_price=yes_price,
         no_price=round(1.0 - yes_price, 4),
+        price_hydrated=True,  # real quote in tests (fail-closed default is False)
         spread=0.02,
         end_date=end_date,
         token_id_yes="tok_yes_btc",

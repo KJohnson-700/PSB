@@ -14,9 +14,16 @@ Usage: lane_diagnose.py <trades.jsonl> <session_id> [diag_out.jsonl]
   do the deep diagnosis / fix.
 """
 import json
+import os
+import re
 import sys
 import time
 from collections import Counter, defaultdict
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - yaml is present on the bot host
+    yaml = None
 
 FLAG_WR = 35          # lane win-rate below this (with enough n) = flagged
 FLAG_MIN_N = 3        # min closed trades in a lane before WR is trusted
@@ -32,14 +39,58 @@ BLIND_CLUSTER = 3     # >= this many 0.5 entries (session or single lane) = flag
 #
 # DISABLED: lanes we deliberately sat out (bleeders). They must take ~0 trades; ANY
 # trade here = the sit-out config/code REGRESSED — highest-severity, page immediately.
-# Match is by exact lane key OR by strategy prefix (value "*" = whole asset off).
-DISABLED_LANES = {
-    "sol_macro|5m|BUY_NO": True,     # sol disable_buy_no_5m_native (-34 @ 29%)
-    # NOTE: eth is NOT disabled — it runs pocket-gated (eth_pocket_only). bnb 1h
-    # BUY_YES is NOT disabled — it's the documented TOP lane (n=18 was too thin to
-    # kill; both were over-disabled 2026-06-20 then reverted). btc 5m BUY_NO is sat
-    # out ONLY when 4H is bearish (conditional) — not a hard zero. None belong here.
-}
+#
+# 2026-06-22: derived from config/settings.yaml at runtime instead of a hardcoded list
+# (the old static list went stale — it flagged sol_macro|5m|BUY_NO as disabled long
+# after the config re-enabled it (disable_buy_no_5m: false), producing false SITOUT
+# pages). Only UNCONDITIONAL hard-zeros count: disable_buy_{yes,no}_{5m,15m,1h}(_native)
+# == true. Conditional sit-outs (…_when_bearish, counter_trend) are NOT hard zeros and
+# are excluded by the anchored regex below.
+_STRATEGIES = ("bitcoin", "eth_macro", "sol_macro", "xrp_macro",
+               "hype_macro", "doge_macro", "bnb_macro")
+_DISABLE_RE = re.compile(r"^disable_buy_(yes|no)_(5m|15m|1h)(?:_native)?$")
+
+
+def _load_disabled_from_config(config_path=None):
+    """Build {lane_key: True} of hard-disabled lanes from the live settings.yaml."""
+    out = {}
+    if config_path is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(os.path.dirname(here), "config", "settings.yaml")
+    if yaml is None or not os.path.exists(config_path):
+        return out
+    try:
+        cfg = yaml.safe_load(open(config_path)) or {}
+    except Exception:
+        return out
+
+    def scan(strat, node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                m = _DISABLE_RE.match(str(k))
+                if m and v is True:
+                    side = "BUY_YES" if m.group(1) == "yes" else "BUY_NO"
+                    out["%s|%s|%s" % (strat, m.group(2), side)] = True
+                else:
+                    scan(strat, v)
+        elif isinstance(node, list):
+            for it in node:
+                scan(strat, it)
+
+    def find(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in _STRATEGIES and isinstance(v, dict):
+                    scan(k, v)
+                find(v)
+
+    find(cfg)
+    return out
+
+
+# Derived once at import from the live config. Empty/partial if yaml is unavailable
+# (fail-open: never flag a SITOUT we can't prove from config).
+DISABLED_LANES = _load_disabled_from_config()
 # WINNERS: proven +EV lanes. Flag if WR falls below the floor with enough n — early
 # warning that a money-maker is degrading (regime shift / data break) before it bleeds.
 WINNER_FLOORS = {
@@ -89,8 +140,22 @@ def main():
         return
 
     def is05(r):
+        # Contamination = a 0.50 entry on an UNPRICED market: the bot traded the
+        # 0.5 DEFAULT because yes_price never hydrated. The discriminator is a
+        # MISSING yes_price, NOT the edge size.
+        #
+        # 2026-06-22 CORRECTION: the prior "require zero-edge" test MISSED the real
+        # bug — these blind entries carry a LARGE phantom edge (est_prob 0.76-0.90
+        # vs the fake 0.5), so the zero-edge gate ignored 29% of a session's BTC
+        # entries (all entry_price=0.5000, yes_price=None, edge 0.05-0.40). The
+        # 2026-06-20 "+EV 0.50 cohort" was REAL-priced 0.50s (yes_price present) —
+        # those still have a real yes_price and are NOT flagged here. Source is now
+        # fail-closed-guarded (is_tradably_priced); post-fix BLIND05 must be ~0, so
+        # any hit = the price-hydration guard regressed.
         v = _f(r.get("entry_price"))
-        return v is not None and abs(v - 0.5) < 1e-3
+        if v is None or abs(v - 0.5) >= 1e-3:
+            return False
+        return r.get("yes_price") is None
 
     closed = [r for r in rows if r.get("pnl") is not None]
     blind = [r for r in rows if is05(r)]

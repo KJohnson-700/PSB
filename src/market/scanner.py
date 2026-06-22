@@ -60,7 +60,12 @@ class Market:
     # True once a REAL price (WS push or REST /midpoint) was applied. False means
     # yes_price/no_price are the 0.5 DEFAULT — the market is unpriced and MUST NOT be
     # traded (a 0.5 default fabricates phantom edge vs est_prob => blind entries).
-    price_hydrated: bool = True
+    # 2026-06-22: default FLIPPED True->False (fail-CLOSED). A market is unpriced
+    # until update_market_prices() applies a real mid; any market that bypasses
+    # hydration (e.g. just-opened BTC books with no /midpoint yet) now stays
+    # untradable instead of trading the fabricated 0.5. Test/manual Market objects
+    # that need to be tradable must set price_hydrated=True explicitly.
+    price_hydrated: bool = False
     # True when only ONE leg's midpoint returned and the other was DERIVED as
     # 1 - present_leg (see update_market_prices). The derived leg is a synthetic
     # complementary midpoint, not an independently observed/executable quote — treat
@@ -125,6 +130,23 @@ def _coerce_json_list(raw: Any) -> List[Any]:
             return []
         return parsed if isinstance(parsed, list) else []
     return []
+
+
+def is_tradably_priced(market) -> bool:
+    """Single source of truth for 'this market has a REAL, tradable quote'.
+
+    Fail-CLOSED: a market is tradable only if a real mid was applied
+    (``price_hydrated`` set True by ``update_market_prices``) AND ``yes_price``
+    is a real number. Markets that bypassed hydration (just-opened books with no
+    /midpoint yet) keep the fail-closed default and are rejected here, so no
+    strategy can fabricate phantom edge against the 0.5 default. Used by the
+    scanner ``_priced`` filter and every macro-strategy entry filter so the guard
+    is uniform across all 7 assets (2026-06-22 contamination fix).
+    """
+    if not getattr(market, "price_hydrated", False):
+        return False
+    yp = getattr(market, "yes_price", None)
+    return yp is not None
 
 
 def _parse_updown_window_minutes_from_text(text: str) -> Optional[int]:
@@ -1696,7 +1718,7 @@ class MarketScanner:
         # cause of blind 0.5 entries (e.g. every HYPE trade at exactly 0.50). Never
         # trade a market without a real quote. REST/WS fetch already happened above.
         def _priced(ms: List[Market]) -> List[Market]:
-            return [m for m in ms if getattr(m, "price_hydrated", True)]
+            return [m for m in ms if is_tradably_priced(m)]
         _pre = (len(markets), len(updown), len(updown_5m), len(updown_1h))
         markets = _priced(markets); updown = _priced(updown)
         updown_5m = _priced(updown_5m); updown_1h = _priced(updown_1h)
@@ -1751,7 +1773,7 @@ class MarketScanner:
 
         if hype_alt:
             hype_alt = await self.update_market_prices(hype_alt)
-            hype_alt = [m for m in hype_alt if getattr(m, "price_hydrated", True)]  # never trade unpriced (0.5-default)
+            hype_alt = [m for m in hype_alt if is_tradably_priced(m)]  # never trade unpriced (0.5-default)
             opportunities["high_liquidity"].extend(hype_alt)
             opportunities["updown_hype_alt"] = hype_alt
         else:

@@ -73,6 +73,12 @@ class ExitDecision:
     fill_slippage_pct: Optional[float] = None
     fill_fee_usdc: Optional[float] = None
     fill_fee_rate: Optional[float] = None
+    # Microstructure at exit (Codex 2026-06-22): seconds-to-expiry and book spread at
+    # the exit tick. Lets gap-through risk (thin/late book) be split from stop policy —
+    # a stop that overshoots when secs_to_expiry is tiny / spread is wide is a
+    # microstructure fill problem, not a stop-threshold problem.
+    secs_to_expiry_at_exit: Optional[float] = None
+    exit_book_spread: Optional[float] = None
 
 
 @dataclass
@@ -647,6 +653,26 @@ class PositionExitManager:
                         fill_fee_rate = _fee_rate
                         unrealized_pnl -= _fee
 
+                # Microstructure-at-exit telemetry (best-effort; never blocks the exit).
+                _secs_to_expiry = None
+                try:
+                    if pos.end_date is not None:
+                        _ed = pos.end_date
+                        if _ed.tzinfo is None:
+                            _ed = _ed.replace(tzinfo=timezone.utc)
+                        _secs_to_expiry = round(
+                            (_ed - datetime.now(timezone.utc)).total_seconds(), 1
+                        )
+                except Exception:
+                    _secs_to_expiry = None
+                _bb = locals().get("_best_bid")
+                _ba = locals().get("_best_ask")
+                _exit_spread = (
+                    round(float(_ba) - float(_bb), 4)
+                    if _bb is not None and _ba is not None
+                    else None
+                )
+
                 exits.append(
                     ExitDecision(
                         position_id=pos_id,
@@ -672,6 +698,8 @@ class PositionExitManager:
                         fill_slippage_pct=fill_slippage_pct,
                         fill_fee_usdc=fill_fee_usdc,
                         fill_fee_rate=fill_fee_rate,
+                        secs_to_expiry_at_exit=_secs_to_expiry,
+                        exit_book_spread=_exit_spread,
                     )
                 )
 
