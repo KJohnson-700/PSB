@@ -574,7 +574,7 @@ strategies:
             entry_price_min: 0.45
             entry_price_max: 0.55
             entry_window_min: 2.0
-            entry_window_max: 19.0
+            entry_window_max: 15.0   # 2026-06-22: in-window only. pre-window BUY_NO bled n=14 WR29% -$13.54 vs in-window n=5 WR60% +$7.04 (entries-join audit); Codex GO. was 19.0
         1h:
           up:
             min_edge: 0.09
