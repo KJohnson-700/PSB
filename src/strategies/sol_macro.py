@@ -3164,7 +3164,17 @@ class SolMacroStrategy:
                 and self._a1hsl_entry_min <= float(market.yes_price or 0) <= self._a1hsl_entry_max
             )
             if _simple_band_long:
-                allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
+                # Consensus-follow force-long band — the one direct side override that
+                # was NOT routed through the faded _bias_to_side (Codex trace 2026-06-22).
+                # Honor fade_regime so the counter-regime experiment is clean: under fade
+                # this forces SHORT instead of LONG. ALWAYS stamp side_source so a forced
+                # side can never again masquerade as a native bias-resolved side in audits.
+                if bool(self.config.get("fade_regime", False)):
+                    allowed_side = "SHORT"
+                    side_source = (side_source or "") + "+simple_band_fade"
+                else:
+                    allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
+                    side_source = (side_source or "") + "+simple_band_long"
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
