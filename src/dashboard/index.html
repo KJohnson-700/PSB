@@ -2544,7 +2544,7 @@
         <div class="status-hero" style="grid-template-columns:repeat(4,1fr);" id="live-perf-hero">
             <div class="hero-item"><div class="hero-val" id="lp-trades">-</div><div class="hero-lbl">Total Trades</div></div>
             <div class="hero-item"><div class="hero-val" id="lp-winrate">-</div><div class="hero-lbl">Win Rate</div></div>
-            <div class="hero-item"><div class="hero-val" id="lp-pnl">-</div><div class="hero-lbl">Net PnL</div></div>
+            <div class="hero-item"><div class="hero-val" id="lp-pnl">-</div><div class="hero-lbl">Net PnL (closed)</div></div>
             <div class="hero-item"><div class="hero-val" id="lp-dd">-</div><div class="hero-lbl">Max DD</div></div>
         </div>
         <div id="live-perf-strats" style="margin:8px 0;font-size:0.78rem;color:var(--text-muted);"></div>
@@ -7179,7 +7179,11 @@ function updateLivePerf(d) {
     // whole card. Sharpe + Drift removed 2026-06-20 (not meaningful for paper).
     const totalTrades = Number(d.total_trades || 0);
     const winRate = _winRateFraction(d.win_rate || 0);
-    const totalPnl = Number(d.total_pnl || 0);
+    // Net PnL here must be CLOSED/realized to match the per-strategy breakdown,
+    // win rate, exit reasons and max-DD on this same card (all closed-only).
+    // Using total_pnl (incl. unrealized on open positions) made a green "+$17.84"
+    // headline sit over an all-red, low-WR closed breakdown. Realized reconciles it.
+    const totalPnl = Number(d.realized_pnl ?? d.total_pnl ?? 0);
     const maxDd = Number(d.max_drawdown || 0);
     if (lpTrades) lpTrades.textContent = String(totalTrades);
     if (lpWin) lpWin.textContent = totalTrades ? (winRate * 100).toFixed(0) + '%' : '-';
