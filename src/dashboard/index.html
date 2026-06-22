@@ -7217,10 +7217,18 @@ function updateLivePerf(d) {
     const equityDiv = $('live-equity');
     if (equityDiv) {
         if (d.equity_curve && d.equity_curve.length > 0) {
-            const items = d.equity_curve.slice(-50).map((p, idx) => {
+            const _ecFull = d.equity_curve;
+            const _ecStart = Math.max(0, _ecFull.length - 50);
+            const items = _ecFull.slice(-50).map((p, idx) => {
                 if (typeof p === 'number') {
-                    const color = p >= 0 ? 'var(--green)' : 'var(--red)';
-                    return `<span class="equity-ticker-item"><b>#${idx + 1}</b> <span style="color:${color};">$${p.toFixed(2)}</span></span>`;
+                    // equity_curve is CUMULATIVE running P&L; show each trade's OWN
+                    // P&L (delta vs the prior point) so #N reconciles with win rate
+                    // and net instead of looking like a huge per-trade win.
+                    const gi = _ecStart + idx;
+                    const prev = gi > 0 ? Number(_ecFull[gi - 1]) : 0;
+                    const delta = p - prev;
+                    const color = delta >= 0 ? 'var(--green)' : 'var(--red)';
+                    return `<span class="equity-ticker-item"><b>#${gi + 1}</b> <span style="color:${color};">${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}</span></span>`;
                 }
                 const cp = Number(p?.cumulative_pnl || 0);
                 const ts = p?.timestamp ? String(p.timestamp).split('T')[0] : '?';
