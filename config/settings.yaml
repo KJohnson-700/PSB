@@ -1973,7 +1973,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 10.0
+            entry_window_max: 5.0  # 2026-06-22 Codex+audit: bnb 5m BUY_YES pre-window (5-8min, before window opens) -$39 @31%WR vs in-window +$6.84 @67%; cap to in-window only
             size_multiplier: 0.3
           down:
             min_edge: 0.06
