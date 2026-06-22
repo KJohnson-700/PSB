@@ -4404,8 +4404,21 @@ function applyHeroMetrics(d) {
             warnEl.style.display = 'none';
         }
     }
+    // Realized vs unrealized split so the Bankroll card (realized equity) and the
+    // Session P&L card (which includes open-position unrealized) reconcile on screen
+    // instead of looking contradictory (e.g. bankroll $501 next to P&L $33.65).
+    const realizedPnlRaw = (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '')
+        ? Number(s.realized_pnl) : null;
+    const totalPnlForSplit = (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '')
+        ? Number(s.total_pnl) : null;
+    const unrealizedPnlRaw = (Number.isFinite(totalPnlForSplit) && Number.isFinite(realizedPnlRaw))
+        ? (totalPnlForSplit - realizedPnlRaw) : null;
     const brSub = document.getElementById('hero-bankroll-sub');
-    if (brSub) brSub.textContent = '';
+    if (brSub) {
+        brSub.textContent = (Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005)
+            ? ((unrealizedPnlRaw < 0 ? '-' : '+') + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' unrealized (open)')
+            : '';
+    }
 
     let sessionPnlRaw = null;
     if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
@@ -4453,10 +4466,15 @@ function applyHeroMetrics(d) {
     if (tradesEl) tradesEl.textContent = sessionFills;
 
     const pnlSub = document.getElementById('hero-pnl-sub');
-    if (pnlSub && Number.isFinite(sessionPnlRaw) && Number.isFinite(bankroll) && bankroll > 0) {
-        pnlSub.textContent = ((sessionPnlRaw / bankroll) * 100).toFixed(2) + '% of bankroll';
-    } else if (pnlSub) {
-        pnlSub.textContent = '';
+    if (pnlSub) {
+        if (Number.isFinite(realizedPnlRaw) && Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005) {
+            const uSign = unrealizedPnlRaw < 0 ? '-' : '+';
+            pnlSub.textContent = '$' + realizedPnlRaw.toFixed(2) + ' realized · ' + uSign + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' open';
+        } else if (Number.isFinite(sessionPnlRaw) && Number.isFinite(bankroll) && bankroll > 0) {
+            pnlSub.textContent = ((sessionPnlRaw / bankroll) * 100).toFixed(2) + '% of bankroll';
+        } else {
+            pnlSub.textContent = '';
+        }
     }
     const posSub = document.getElementById('hero-positions-sub');
     if (posSub) {

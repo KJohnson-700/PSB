@@ -1163,6 +1163,46 @@ def _empty_kelly_window_stats() -> Dict[str, Dict[str, Any]]:
     }
 
 
+def _disk_kelly_window_stats() -> Dict[str, Dict[str, Any]]:
+    """Per (strategy, window) win/loss/streak from on-disk closed trades.
+
+    Used when the dashboard runs SPLIT from the bot (no live ``kelly_sizer``):
+    the in-memory KellySizer is absent, so window stats must be replayed from
+    the session journal. Previously this path returned all-zeros, which blanked
+    the Kelly + updown-win-rate panels on the VPS (the split-mode default).
+    """
+    stats = {k: _empty_kelly_window_stats() for k in _KELLY_STRATEGY_KEYS}
+    try:
+        j = _get_journal()
+        closed = list(j.get_closed_trades()) if j else []
+    except Exception:
+        closed = []
+    for t in closed:  # journal returns trades in chronological order
+        strat = t.get("strategy")
+        # Journal closed trades carry the window inside ``extra`` (same keys the
+        # lane-status code uses at line ~309/397), not as a top-level field.
+        extra = t.get("extra") or {}
+        win_key = str(extra.get("lane_window") or extra.get("window_size") or "")
+        if strat not in stats or win_key not in stats[strat]:
+            continue
+        cell = stats[strat][win_key]
+        pnl = t.get("pnl", 0) or 0
+        result = str(extra.get("result") or "").upper()
+        is_win = (result == "WIN") if result in ("WIN", "LOSS") else (pnl > 0)
+        cell["trades"] += 1
+        if is_win:
+            cell["wins"] += 1
+            cell["streak"] = cell["streak"] + 1 if cell["streak"] >= 0 else 1
+        else:
+            cell["losses"] += 1
+            cell["streak"] = cell["streak"] - 1 if cell["streak"] <= 0 else -1
+    for wins_map in stats.values():
+        for cell in wins_map.values():
+            n = cell["trades"]
+            cell["wr"] = round(cell["wins"] / n, 4) if n else 0.0
+    return stats
+
+
 def _kelly_state_payload() -> Dict[str, Any]:
     """Streak + effective Kelly fraction + per-window breakdown — live from bot when connected."""
     ks = getattr(bot_instance, "kelly_sizer", None) if bot_instance else None
@@ -1194,7 +1234,7 @@ def _kelly_state_payload() -> Dict[str, Any]:
         sc = st.get(k) if isinstance(st.get(k), dict) else {}
         base = float(sc.get("kelly_fraction", 0.15))
         out[k] = {"streak": 0, "fraction": round(base, 4)}
-    out["_window_stats"] = {k: _empty_kelly_window_stats() for k in _KELLY_STRATEGY_KEYS}
+    out["_window_stats"] = _disk_kelly_window_stats()
     return out
 
 
