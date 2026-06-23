@@ -8,6 +8,30 @@
 
 ---
 
+## 2026-06-23 — Alt 1h simple-band side override removed
+
+**Context:** Local paper session `test_20260623_074054` showed alt-native SHORTs profitable while `alt_1h_simple_long` force-flipped BNB/DOGE 1h bearish-band candidates into BUY_YES losses.
+
+**What changed:** Updated `src/strategies/sol_macro.py` so `_simple_band_long` no longer assigns `allowed_side = "LONG"` or force-fades to `SHORT`. The band now only tags/admission-credits native LONG candidates; bearish/neutral side resolution remains owned by `_resolve_alt_bias_for_tf`. The anti-LTF skip bypass is now long-only: `(_simple_band_long and allowed_side == "LONG")`.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_sol_macro.py -q` -> `103 passed`.
+
+## 2026-06-20 — Research report: realistic edge for a 100–300 ms Polymarket VPS bot
+
+**Context:** Operator asked for a research report on whether a 100–300 ms non-co-located VPS Python bot with a few-hundred-dollar bankroll can realistically capture +EV in Polymarket short-duration crypto Up/Down, beyond the previously discussed “15 s / 0.95 favorite” idea.
+
+**What changed:** Added `docs/Polymarket_VPS_Realistic_Edge_Research.md`. The report reviews four approaches (liquidity provision / market-making; directional-confirm-below-fair; cross-venue / YES+NO arbitrage; longer horizons 15 m / 1 h) against academic and practitioner sources, including Akey et al. (SSRN 6443103), Saguillo et al. / IMDEA (arXiv 2508.03474), Ng et al. (SSRN 5331995), and on-chain case studies. It flags an unverified Reddit-style 98 % win-rate claim, derives current fee formulas, and concludes that for the stated latency/bankroll constraints **none of the approaches clearly clears fees + adverse selection + fill competition in short crypto Up/Down**. The only realistic low-directional-risk edge is cross-venue structural arbitrage in longer-duration political/economic events, and the recommended first build is a paper/forward-test measurement harness rather than live capital.
+
+**Validation:** Document-only deliverable; no code changes. Sources cited inline and verified against public web sources.
+
+## 2026-06-18 — Journal tab cleanup and short-run session filtering
+
+**Context:** Operator wanted the Journal tab decluttered: remove Lane Health, Last Session AI Review, and the redundant Test runs picker because Test Session History already covers past-session review.
+
+**What changed:** Removed the Journal-tab Lane Health card, Last Session AI Review card/modal/fetch path, and Test runs picker from `src/dashboard/index.html`. Moved the archive-session “Back to live session” banner into the main Paper Trade Journal card and renamed Test Session History to Session History. `TradeJournal.list_sessions()` now hides completed sessions below 50 fills by default while preserving the current active session; added a dry-run-first `/api/journal/prune-short-sessions` endpoint for explicit cleanup of short completed runs.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_trade_journal_resumable.py tests/test_dashboard_bundle.py::test_journal_tab_omits_lane_health_controls -q` -> `14 passed`; `.venv/bin/python -m py_compile src/execution/trade_journal.py src/dashboard/server.py` passed. No bot restart was performed.
+
 ## 2026-06-15 — Lane-local stop cooldowns for current losing lanes
 
 **Context:** Current local paper session `test_20260615_031614` started bleeding back profit mid-session. The loss was concentrated in a few BUY_YES lanes rather than a broad model failure.

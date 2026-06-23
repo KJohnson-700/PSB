@@ -755,11 +755,10 @@ class SolMacroStrategy:
         self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
         self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
         # ── [1h] simple consensus-follow BUY_YES lane (DEFAULT OFF; per-alt) ──
-        # Mirrors BTC's bitcoin_1h_simple_long. Ghost (rejected_candidates_settled,
-        # 1h BUY_YES, binary payout): edge is per-alt — bnb +$157/63%WR, doge +$109/60%,
-        # sol +$26/56% (enable these); xrp 1h is NEGATIVE and 15m mostly bleeds (leave off).
-        # When enabled, admit BUY_YES on yes_price band, bypass the 1h bias/LTF/min_edge
-        # gates, size on a flat edge. OFF = byte-identical (guard always False).
+        # Mirrors BTC's bitcoin_1h_simple_long as a price-band admission filter for
+        # alt-native LONG signals. It must not choose side; alts keep direction from
+        # _resolve_alt_bias_for_tf so bearish tape can short or sit out instead of
+        # being force-flipped into BUY_YES.
         _a1hsl = self.config.get("alt_1h_simple_long", {}) or {}
         self._a1hsl_enabled = bool(_a1hsl.get("enabled", False))
         self._a1hsl_entry_min = float(_a1hsl.get("entry_min", 0.50) or 0.50)
@@ -3165,25 +3164,18 @@ class SolMacroStrategy:
             allowed_side = resolution.allowed_side
             side_source = resolution.side_source
             primary_htf_bias = resolution.primary_htf_bias
-            # [1h] simple consensus-follow: admit BUY_YES on the price band regardless
-            # of the 1h bias resolver. Default-off per alt → always False, no-op.
+            # [1h] simple band: price-band admission for native LONG signals only.
+            # Do not choose side here; alt direction comes from the bias resolver.
             _simple_band_long = (
                 is_updown and _updown_tf == "1h"
                 and self._a1hsl_enabled
                 and self._a1hsl_entry_min <= float(market.yes_price or 0) <= self._a1hsl_entry_max
             )
-            if _simple_band_long:
-                # Consensus-follow force-long band — the one direct side override that
-                # was NOT routed through the faded _bias_to_side (Codex trace 2026-06-22).
-                # Honor fade_regime so the counter-regime experiment is clean: under fade
-                # this forces SHORT instead of LONG. ALWAYS stamp side_source so a forced
-                # side can never again masquerade as a native bias-resolved side in audits.
-                if bool(self.config.get("fade_regime", False)):
-                    allowed_side = "SHORT"
-                    side_source = (side_source or "") + "+simple_band_fade"
-                else:
-                    allowed_side = "LONG"  # force the upward lean even under neutral/bearish bias
-                    side_source = (side_source or "") + "+simple_band_long"
+            if _simple_band_long and allowed_side == "LONG":
+                side_source = (side_source or "") + (
+                    "+simple_band_fade" if bool(self.config.get("fade_regime", False))
+                    else "+simple_band_long"
+                )
             if allowed_side is None:
                 _bump_skip("neutral_bias")
                 logger.info(
@@ -3520,7 +3512,10 @@ class SolMacroStrategy:
                 )
                 continue
             is_5m = _updown_tf == "5m"
-            if is_updown and _updown_tf != "5m" and skip_15m_reason and not _simple_band_long:
+            if (
+                is_updown and _updown_tf != "5m" and skip_15m_reason
+                and not (_simple_band_long and allowed_side == "LONG")
+            ):
                 _bump_skip(skip_15m_reason)
                 logger.debug(
                     f"  {_brand} skip '{market.question[:40]}' — {skip_15m_reason}"
