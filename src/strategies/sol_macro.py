@@ -506,6 +506,46 @@ class SolMacroStrategy:
             self._tf_cfg(window_size, "ai_override_min_edge", self.min_edge_5m_ai_override)
         )
 
+    def _admission_prob(self, est_prob: float, *, window_size: str, action: str) -> float:
+        """Lane-scoped admission-only probability shrink.
+
+        Sizing/logging/side selection keep the raw probability; this is only for
+        min_edge admission edge, mirroring BTC without applying a blanket alt shrink.
+        """
+        lane = "down" if str(action).strip().upper() == "BUY_NO" else "up"
+        strategy_cfg: Dict[str, Any] = {}
+        try:
+            exit_rules = (self.full_config.get("trading", {}) or {}).get("exit_rules", {}) or {}
+            overrides = exit_rules.get("updown_overrides", {}) or {}
+            raw_strategy_cfg = overrides.get(self._signal_strategy_name, {}) or {}
+            if isinstance(raw_strategy_cfg, dict):
+                strategy_cfg = raw_strategy_cfg
+        except AttributeError:
+            strategy_cfg = {}
+
+        raw_shrink = strategy_cfg.get(
+            "entry_admission_calibration_shrink",
+            self.config.get("entry_admission_calibration_shrink", 1.0),
+        )
+        window_lane_overrides = strategy_cfg.get("window_lane_overrides", {})
+        if isinstance(window_lane_overrides, dict):
+            window_cfg = window_lane_overrides.get(str(window_size), {})
+            if isinstance(window_cfg, dict):
+                lane_cfg = window_cfg.get(lane, {})
+                if (
+                    isinstance(lane_cfg, dict)
+                    and "entry_admission_calibration_shrink" in lane_cfg
+                ):
+                    raw_shrink = lane_cfg["entry_admission_calibration_shrink"]
+
+        try:
+            shrink = float(raw_shrink)
+        except (TypeError, ValueError):
+            shrink = 1.0
+        if shrink >= 1.0:
+            return float(est_prob)
+        return 0.5 + shrink * (float(est_prob) - 0.5)
+
     def _prune_shadow_observer_state(self) -> None:
         if self._shadow_observer_tasks:
             self._shadow_observer_tasks = {
@@ -4159,10 +4199,15 @@ class SolMacroStrategy:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
                         reason_parts.append(f"5m_buy_yes_floor=+{_byn_floor_5m:.2f}")
 
+                    _adm = self._admission_prob(
+                        estimated_prob,
+                        window_size="5m",
+                        action=action,
+                    )
                     if action == "BUY_YES":
-                        edge = estimated_prob - yes_price
+                        edge = _adm - yes_price
                     else:
-                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
+                        edge = (1.0 - _adm) - (1.0 - yes_price)
                     # Confidence: alt-native 5m MACD momentum + RSI alignment.
                     _rsi_conf_5m = 0.03 if (
                         (action == "BUY_YES" and sol.rsi_14 < 40) or
@@ -4433,10 +4478,15 @@ class SolMacroStrategy:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor)
                         reason_parts.append(f"{window_label}_buy_yes_floor=+{_byn_floor:.2f}")
 
+                    _adm = self._admission_prob(
+                        estimated_prob,
+                        window_size=window_label,
+                        action=action,
+                    )
                     if action == "BUY_YES":
-                        edge = estimated_prob - yes_price
+                        edge = _adm - yes_price
                     else:
-                        edge = (1.0 - estimated_prob) - (1.0 - yes_price)
+                        edge = (1.0 - _adm) - (1.0 - yes_price)
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * 0.5 * timing_weight)
 
@@ -4526,10 +4576,15 @@ class SolMacroStrategy:
                     btc_1h_regime=btc_1h_regime if btc_ta else None,
                 )
 
+                _adm = self._admission_prob(
+                    estimated_prob,
+                    window_size="15m",
+                    action=action,
+                )
                 if action == "BUY_YES":
-                    edge = estimated_prob - yes_price
+                    edge = _adm - yes_price
                 else:
-                    edge = (1.0 - estimated_prob) - (1.0 - yes_price)
+                    edge = (1.0 - _adm) - (1.0 - yes_price)
                 reason_parts.extend([
                     f"{_spot_key}=${sol_price:,.2f}",
                     f"target=${threshold:,.2f}",

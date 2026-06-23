@@ -1597,6 +1597,65 @@ class TestSOLEdgeCalculation(unittest.TestCase):
         self.assertLessEqual(prob, 0.95)
         self.assertGreaterEqual(prob, 0.05)
 
+    def test_admission_prob_default_is_noop_for_alt_lanes(self):
+        est_prob = 0.80
+        yes_price = 0.60
+
+        adm = self.strategy._admission_prob(
+            est_prob,
+            window_size="5m",
+            action="BUY_YES",
+        )
+
+        self.assertEqual(adm, est_prob)
+        self.assertAlmostEqual(adm - yes_price, est_prob - yes_price)
+
+    def test_lane_admission_shrink_deflates_edge_without_mutating_signal_prob(self):
+        cfg = _make_config()
+        cfg["trading"]["exit_rules"] = {
+            "updown_overrides": {
+                "sol_macro": {
+                    "window_lane_overrides": {
+                        "5m": {
+                            "up": {
+                                "entry_admission_calibration_shrink": 0.28,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
+        estimated_prob = 0.80
+        yes_price = 0.60
+
+        adm = strategy._admission_prob(
+            estimated_prob,
+            window_size="5m",
+            action="BUY_YES",
+        )
+        edge = adm - yes_price
+        signal = SolMacroSignal(
+            market_id="m1",
+            market_question="Solana Up or Down",
+            action="BUY_YES",
+            price=yes_price,
+            size=1.0,
+            confidence=0.7,
+            edge=edge,
+            token_id_yes="yes",
+            token_id_no="no",
+            direction="UP",
+            est_prob=estimated_prob,
+            raw_est_prob=estimated_prob,
+            window_size="5m",
+        )
+
+        self.assertAlmostEqual(adm, 0.584)
+        self.assertAlmostEqual(edge, -0.016)
+        self.assertEqual(signal.est_prob, estimated_prob)
+        self.assertEqual(signal.raw_est_prob, estimated_prob)
+
 
 class TestSOLMarketDetection(unittest.TestCase):
     """Market detection: SOL vs non-SOL markets."""
