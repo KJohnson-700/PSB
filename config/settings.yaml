@@ -129,7 +129,14 @@ trading:
     # fewer than this many seconds (late-window cents/time/expiry stops are NOT
     # gated). 2026-06-17 audit: every phantom exit was a 3–41s hold (impossible
     # 28–52% moves); every correct exit was 14–30 min — 60s cleanly separates them.
-    updown_min_hold_sec_before_pct_exit: 60
+    # Per-window: 60s is 20% of a 5m window, so it held the 2026-06-23 XRP 5m short
+    # to the trough (stop true @19s, suppressed 7x, dumped @0.045 = -$13.82 vs ~-$2.4
+    # had it fired ~20s). 5m gets a short floor that still filters 3–15s bad-tick
+    # phantoms; 15m/1h unchanged. (scalar still accepted for back-compat.)
+    updown_min_hold_sec_before_pct_exit:
+      5m: 20
+      15m: 60
+      1h: 60
     bid_depth_exit:
       enabled: false
       mode: observe

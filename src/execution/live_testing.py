@@ -28,6 +28,7 @@ from src.execution.updown_exit_shared import (
     adverse_for_updown_cents_time_stop,
     cents_stop_for_entry_price,
     effective_updown_stop_loss_pct,
+    infer_updown_window_size,
     parse_updown_exit_globals,
     resolve_updown_exit_params,
     resolve_updown_exit_params_for_position,
@@ -184,9 +185,24 @@ class PositionExitManager:
         # placeholder leaking into the 60s scan-loop exit); every correct exit was
         # 14–30 min. A short floor cleanly separates them regardless of which price
         # path misfired. 0 = off (code default; settings.yaml enables it).
-        self._updown_min_hold_sec_before_pct_exit = max(
-            0.0, float(exit_cfg.get("updown_min_hold_sec_before_pct_exit", 0.0) or 0.0)
-        )
+        # Per-window aware: on a 5m market a flat 60s floor = 20% of the entire
+        # window, so a real fast adverse move gets held to the trough before the
+        # stop can fire (2026-06-23 XRP 5m: stop true at 19s, suppressed 7x, dumped
+        # at 0.045 = -$13.82 vs ~-$2.4 had it fired at ~20s). Accept either a scalar
+        # (applies to all windows, legacy) or a {5m,15m,1h} dict.
+        _mh_cfg = exit_cfg.get("updown_min_hold_sec_before_pct_exit", 0.0)
+        if isinstance(_mh_cfg, dict):
+            self._updown_min_hold_by_window = {
+                str(k): max(0.0, float(v or 0.0)) for k, v in _mh_cfg.items()
+            }
+            self._updown_min_hold_sec_before_pct_exit = max(
+                self._updown_min_hold_by_window.values(), default=0.0
+            )
+        else:
+            self._updown_min_hold_by_window = {}
+            self._updown_min_hold_sec_before_pct_exit = max(
+                0.0, float(_mh_cfg or 0.0)
+            )
         # Optional: realistic paper fills (default OFF). Paper/dry_run fills every
         # order at the requested price; this walks the book ladder so the recorded
         # exit price + P&L reflect the slippage a real sweep would pay. Covers all
@@ -213,6 +229,23 @@ class PositionExitManager:
         if not _entry_mode:
             _entry_mode = "marketable" if _t.get("entry_marketable", True) else "maker"
         self._entry_taker = _entry_mode != "maker"
+
+    def _min_hold_floor_secs(self, pos) -> float:
+        """Per-window phantom-exit floor. Prefers the position's EXPLICIT
+        ``window_size`` (so a late 15m/1h entry with little runway left is NOT
+        misclassified as 5m); only falls back to inferring from
+        (end_date - opened_at) for legacy reloads with no window_size. Unknown /
+        missing window -> the scalar floor (the conservative 60s)."""
+        if not self._updown_min_hold_by_window:
+            return self._updown_min_hold_sec_before_pct_exit
+        label = infer_updown_window_size(
+            getattr(pos, "window_size", "") or "",
+            opened_at=getattr(pos, "opened_at", None),
+            end_date=getattr(pos, "end_date", None),
+        )
+        return self._updown_min_hold_by_window.get(
+            label, self._updown_min_hold_sec_before_pct_exit
+        )
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
@@ -511,16 +544,17 @@ class PositionExitManager:
             # aged past the min-hold. Leaves the late-window cents/time/expiry stops
             # untouched (they only fire near resolution). Resets the stop-confirm
             # count so it re-confirms cleanly once the hold clears.
+            _min_hold_floor = self._min_hold_floor_secs(pos)
             if (
                 is_updown
                 and reason in ("take_profit", "updown_stop_loss")
-                and self._updown_min_hold_sec_before_pct_exit > 0
-                and (hours_held * 3600.0) < self._updown_min_hold_sec_before_pct_exit
+                and _min_hold_floor > 0
+                and (hours_held * 3600.0) < _min_hold_floor
             ):
                 logger.info(
                     "Suppress %s for %s: held %.0fs < min-hold %.0fs (phantom-exit floor)",
                     reason, pos.market_id, hours_held * 3600.0,
-                    self._updown_min_hold_sec_before_pct_exit,
+                    _min_hold_floor,
                 )
                 reason = None
                 if getattr(pos, "_stop_confirm_count", 0):
