@@ -4665,6 +4665,9 @@ class SolMacroStrategy:
                         continue
 
                 # AI tiebreaker for marginal edge (skipped when AI offline or use_ai false)
+                _ai_updown_observe_only = bool(
+                    self.config.get("ai_updown_observe_only", False)
+                )
                 _marginal_min_edge = self._min_edge_for_window(
                     _updown_tf if is_updown else "15m"
                 )
@@ -4827,74 +4830,102 @@ class SolMacroStrategy:
                         },
                     )
                     if ai_decision is None:
-                        _bump_skip("ai_decision_timeout_marginal_threshold")
-                        _log_ai_veto("ai_decision_timeout_marginal_threshold")
-                        continue
+                        if not _ai_updown_observe_only:
+                            _bump_skip("ai_decision_timeout_marginal_threshold")
+                            _log_ai_veto("ai_decision_timeout_marginal_threshold")
+                            continue
                     ai_used = True
-                    ai_analysis = ai_decision.direct_analysis
+                    ai_analysis = (
+                        ai_decision.direct_analysis if ai_decision is not None else None
+                    )
                     # veto-only marginal pass: central layer already cleared this
                     # (no confident opposition) — admit on quant terms, skip the
                     # redundant local HOLD/supports/confidence/edge re-gate.
-                    _mpass = ai_decision.reason == "direct_ai_marginal_pass"
+                    _mpass = (
+                        ai_decision is not None
+                        and ai_decision.reason == "direct_ai_marginal_pass"
+                    )
                     # Log reasoning so we can audit what the model is actually deciding
-                    if ai_analysis:
+                    if ai_decision is not None and ai_analysis:
                         logger.info(
                             f"  {self._signal_strategy_name} AI decision [{ai_decision.action} "
                             f"conf={ai_decision.confidence:.2f} edge={float(ai_decision.edge or 0.0):.4f}] "
                             f"'{market.question[:45]}' | {ai_analysis.reasoning[:120]}"
                         )
-                    if not ai_decision.approved:
-                        _bump_skip(f"ai_decision_{ai_decision.reason}")
-                        _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
-                        logger.warning(
-                            "%s: AI decision rejected market %s (%s): %s",
-                            _brand,
-                            market.id,
-                            self._signal_strategy_name,
-                            ai_decision.reason,
-                        )
-                        continue
+                    if ai_decision is not None and not ai_decision.approved:
+                        if not _ai_updown_observe_only:
+                            _bump_skip(f"ai_decision_{ai_decision.reason}")
+                            _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
+                            logger.warning(
+                                "%s: AI decision rejected market %s (%s): %s",
+                                _brand,
+                                market.id,
+                                self._signal_strategy_name,
+                                ai_decision.reason,
+                            )
+                            continue
                     if ai_analysis is None:
-                        _bump_skip("ai_none_marginal_threshold")
-                        _log_ai_veto("ai_none_marginal_threshold")
-                        continue
-                    if not _mpass and ai_decision.action == "HOLD":
-                        self._ai_hold_cache[market.id] = time.time()
-                        _bump_skip("ai_hold_marginal_threshold")
-                        _log_ai_veto("ai_hold_marginal_threshold")
-                        logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
-                        continue
-                    if not _mpass and not ai_recommendation_supports_action(
-                        ai_decision.action, action
-                    ):
-                        _bump_skip("ai_veto_marginal_threshold")
-                        _log_ai_veto("ai_veto_marginal_threshold", ai_action=str(ai_decision.action))
-                        logger.debug(
-                            f"{_brand}: AI {ai_decision.action} conflicts with {action} "
-                            f"on '{market.question[:40]}...'"
-                        )
-                        continue
-                    if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
-                        _bump_skip("ai_low_confidence_marginal_threshold")
-                        _log_ai_veto("ai_low_confidence_marginal_threshold", ai_confidence=float(ai_decision.confidence))
-                        logger.debug(
-                            f"{_brand}: AI confidence {ai_decision.confidence:.2f} "
-                            f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
-                        )
-                        continue
-                    ai_edge = float(ai_decision.edge or 0.0)
-                    if not _mpass and ai_edge <= 0:
-                        _bump_skip("ai_nonpositive_edge_marginal_threshold")
-                        _log_ai_veto("ai_nonpositive_edge_marginal_threshold", ai_edge=ai_edge)
-                        logger.debug(
-                            f"{_brand}: non-positive ai_edge={ai_edge:.4f} marginal "
-                            f"'{market.question[:40]}...'"
-                        )
-                        continue
-                    edge = max(edge, ai_edge)
-                    confidence = max(confidence, ai_decision.confidence)
-                    reason_parts.append(f"ai_decision={ai_decision.source}")
+                        if not _ai_updown_observe_only:
+                            _bump_skip("ai_none_marginal_threshold")
+                            _log_ai_veto("ai_none_marginal_threshold")
+                            continue
                     if (
+                        ai_decision is not None
+                        and not _mpass
+                        and ai_decision.action == "HOLD"
+                    ):
+                        if not _ai_updown_observe_only:
+                            self._ai_hold_cache[market.id] = time.time()
+                            _bump_skip("ai_hold_marginal_threshold")
+                            _log_ai_veto("ai_hold_marginal_threshold")
+                            logger.debug(f"{_brand}: AI says HOLD on '{market.question[:40]}...' — veto cached {self.ai_hold_veto_ttl_sec}s")
+                            continue
+                    if (
+                        ai_decision is not None
+                        and not _mpass
+                        and not ai_recommendation_supports_action(
+                        ai_decision.action, action
+                        )
+                    ):
+                        if not _ai_updown_observe_only:
+                            _bump_skip("ai_veto_marginal_threshold")
+                            _log_ai_veto("ai_veto_marginal_threshold", ai_action=str(ai_decision.action))
+                            logger.debug(
+                                f"{_brand}: AI {ai_decision.action} conflicts with {action} "
+                                f"on '{market.question[:40]}...'"
+                            )
+                            continue
+                    if (
+                        ai_decision is not None
+                        and not _mpass
+                        and ai_decision.confidence < self.ai_confidence_threshold
+                    ):
+                        if not _ai_updown_observe_only:
+                            _bump_skip("ai_low_confidence_marginal_threshold")
+                            _log_ai_veto("ai_low_confidence_marginal_threshold", ai_confidence=float(ai_decision.confidence))
+                            logger.debug(
+                                f"{_brand}: AI confidence {ai_decision.confidence:.2f} "
+                                f"< {self.ai_confidence_threshold} marginal '{market.question[:40]}...'"
+                            )
+                            continue
+                    ai_edge = float(ai_decision.edge or 0.0) if ai_decision is not None else 0.0
+                    if ai_decision is not None and not _mpass and ai_edge <= 0:
+                        if not _ai_updown_observe_only:
+                            _bump_skip("ai_nonpositive_edge_marginal_threshold")
+                            _log_ai_veto("ai_nonpositive_edge_marginal_threshold", ai_edge=ai_edge)
+                            logger.debug(
+                                f"{_brand}: non-positive ai_edge={ai_edge:.4f} marginal "
+                                f"'{market.question[:40]}...'"
+                            )
+                            continue
+                    if not _ai_updown_observe_only and ai_decision is not None:
+                        edge = max(edge, ai_edge)
+                        confidence = max(confidence, ai_decision.confidence)
+                        reason_parts.append(f"ai_decision={ai_decision.source}")
+                    if (
+                        ai_decision is not None
+                        and ai_analysis is not None
+                        and
                         self.ai_agent.shadow_pipeline_enabled()
                         and shadow_pipeline_calls
                         < self.ai_agent.shadow_pipeline_max_calls_per_scan()
@@ -5146,6 +5177,9 @@ class SolMacroStrategy:
                     }
 
             # Updown marginal (parity with BTC): quant edge just below bar — AI confirms action + edge
+            _ai_updown_observe_only = bool(
+                self.config.get("ai_updown_observe_only", False)
+            )
             if (
                 is_updown
                 and edge < effective_min_edge
@@ -5229,57 +5263,59 @@ class SolMacroStrategy:
                     },
                 )
                 if ai_decision is None:
-                    _bump_skip("ai_decision_timeout")
-                    continue
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_decision_timeout")
+                        continue
                 ai_used = True
-                ai2 = ai_decision.direct_analysis
-                if not ai_decision.approved:
-                    _bump_skip(f"ai_decision_{ai_decision.reason}")
-                    logger.debug(
-                        f"{_brand}: AI decision rejected updown marginal "
-                        f"{ai_decision.reason} action={ai_decision.action} "
-                        f"conf={ai_decision.confidence:.2f}"
-                    )
-                    continue
-                ae = float(ai_decision.edge or 0.0)
-                if ae > 0:
+                ai2 = ai_decision.direct_analysis if ai_decision is not None else None
+                if ai_decision is not None and not ai_decision.approved:
+                    if not _ai_updown_observe_only:
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        logger.debug(
+                            f"{_brand}: AI decision rejected updown marginal "
+                            f"{ai_decision.reason} action={ai_decision.action} "
+                            f"conf={ai_decision.confidence:.2f}"
+                        )
+                        continue
+                ae = float(ai_decision.edge or 0.0) if ai_decision is not None else 0.0
+                if ae > 0 and not _ai_updown_observe_only and ai_decision is not None:
                     edge = max(edge, ae)
                     confidence = max(confidence, ai_decision.confidence)
                     reason_parts.append(f"ai_decision={ai_decision.source}")
-                    if ai2 is not None:
-                        if (
-                            self.ai_agent.shadow_pipeline_enabled()
-                            and shadow_pipeline_calls
-                            < self.ai_agent.shadow_pipeline_max_calls_per_scan()
-                            and ai_decision.confidence
-                            >= self.ai_agent.shadow_pipeline_min_confidence()
-                        ):
-                            shadow_pipeline_calls += 1
-                            try:
-                                shadow_out = await self.ai_agent.run_shadow_pipeline(
-                                    market_question=market.question,
-                                    market_description=ai_context2,
-                                    current_yes_price=yes_price,
-                                    market_id=market.id,
-                                    strategy_hint=self._signal_strategy_name,
-                                    lane_id=ai_lane_id,
-                                    marginal_recommendation=str(ai_decision.action),
-                                    quant_action=action,
-                                    quant_edge=edge,
-                                    quant_threshold=effective_min_edge,
-                                    existing_research=None,
-                                )
-                                if shadow_out and shadow_out.get("ok"):
-                                    shadow_pipeline_ok += 1
-                            except Exception as e:
-                                logger.debug(
-                                    "%s shadow pipeline failed (updown) market=%s: %s",
-                                    self._signal_strategy_name,
-                                    market.id,
-                                    e,
-                                )
-                    else:
-                        _bump_skip("ai_nonpositive_edge_marginal_updown")
+                if ai2 is not None and ai_decision is not None:
+                    if (
+                        self.ai_agent.shadow_pipeline_enabled()
+                        and shadow_pipeline_calls
+                        < self.ai_agent.shadow_pipeline_max_calls_per_scan()
+                        and ai_decision.confidence
+                        >= self.ai_agent.shadow_pipeline_min_confidence()
+                    ):
+                        shadow_pipeline_calls += 1
+                        try:
+                            shadow_out = await self.ai_agent.run_shadow_pipeline(
+                                market_question=market.question,
+                                market_description=ai_context2,
+                                current_yes_price=yes_price,
+                                market_id=market.id,
+                                strategy_hint=self._signal_strategy_name,
+                                lane_id=ai_lane_id,
+                                marginal_recommendation=str(ai_decision.action),
+                                quant_action=action,
+                                quant_edge=edge,
+                                quant_threshold=effective_min_edge,
+                                existing_research=None,
+                            )
+                            if shadow_out and shadow_out.get("ok"):
+                                shadow_pipeline_ok += 1
+                        except Exception as e:
+                            logger.debug(
+                                "%s shadow pipeline failed (updown) market=%s: %s",
+                                self._signal_strategy_name,
+                                market.id,
+                                e,
+                            )
+                elif not _ai_updown_observe_only:
+                    _bump_skip("ai_nonpositive_edge_marginal_updown")
             elif (
                 is_updown
                 and edge < effective_min_edge

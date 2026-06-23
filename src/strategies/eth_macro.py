@@ -2090,6 +2090,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("ai_hold_veto")
                 continue
 
+            _ai_updown_observe_only = bool(
+                self.config.get("ai_updown_observe_only", False)
+            )
             if (
                 edge < effective_min_edge
                 and edge >= self.config.get("ai_updown_marginal_min_edge", 0.03)
@@ -2189,49 +2192,76 @@ class ETHMacroStrategy(SolMacroStrategy):
                             "effective_min_edge": round(float(effective_min_edge), 6),
                             **extra,
                         },
-                    )
+                )
                 if ai_decision is None:
-                    _bump_skip("ai_decision_timeout")
-                    _log_ai_veto("ai_decision_timeout")
-                    continue
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_decision_timeout")
+                        _log_ai_veto("ai_decision_timeout")
+                        continue
                 ai_used = True
-                ai_analysis = ai_decision.direct_analysis
-                if not ai_decision.approved:
-                    _bump_skip(f"ai_decision_{ai_decision.reason}")
-                    _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
-                    if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
-                        self._ai_hold_cache[market.id] = time.time()
-                    continue
+                ai_analysis = (
+                    ai_decision.direct_analysis if ai_decision is not None else None
+                )
+                if ai_decision is not None and not ai_decision.approved:
+                    if not _ai_updown_observe_only:
+                        _bump_skip(f"ai_decision_{ai_decision.reason}")
+                        _log_ai_veto(f"ai_decision_{ai_decision.reason}", ai_reason=str(ai_decision.reason))
+                        if ai_decision.reason in {"direct_ai_hold", "shadow_portfolio_hold"}:
+                            self._ai_hold_cache[market.id] = time.time()
+                        continue
                 if ai_analysis is None:
-                    _bump_skip("ai_none")
-                    _log_ai_veto("ai_none")
-                    continue
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_none")
+                        _log_ai_veto("ai_none")
+                        continue
                 # veto-only marginal pass: central layer cleared this (no confident
                 # opposition) — admit on quant terms, skip the redundant local re-gate.
-                _mpass = ai_decision.reason == "direct_ai_marginal_pass"
-                if not _mpass and ai_decision.action == "HOLD":
-                    self._ai_hold_cache[market.id] = time.time()
-                    _bump_skip("ai_hold")
-                    _log_ai_veto("ai_hold")
-                    continue
-                if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
-                    _bump_skip("ai_veto")
-                    _log_ai_veto("ai_veto", ai_action=str(ai_decision.action))
-                    continue
-                if not _mpass and ai_decision.confidence < self.ai_confidence_threshold:
-                    _bump_skip("ai_low_confidence")
-                    _log_ai_veto("ai_low_confidence", ai_confidence=float(ai_decision.confidence))
-                    continue
-                ai_edge = float(ai_decision.edge or 0.0)
-                if not _mpass and ai_edge <= 0:
-                    _bump_skip("ai_nonpositive_edge")
-                    _log_ai_veto("ai_nonpositive_edge", ai_edge=ai_edge)
-                    continue
-                edge = max(edge, ai_edge)
-                confidence = max(confidence, ai_decision.confidence)
-                reason_parts.append(f"ai_decision={ai_decision.source}")
+                _mpass = (
+                    ai_decision is not None
+                    and ai_decision.reason == "direct_ai_marginal_pass"
+                )
+                if (
+                    ai_decision is not None
+                    and not _mpass
+                    and ai_decision.action == "HOLD"
+                ):
+                    if not _ai_updown_observe_only:
+                        self._ai_hold_cache[market.id] = time.time()
+                        _bump_skip("ai_hold")
+                        _log_ai_veto("ai_hold")
+                        continue
+                if (
+                    ai_decision is not None
+                    and not _mpass
+                    and not ai_recommendation_supports_action(ai_decision.action, action)
+                ):
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_veto")
+                        _log_ai_veto("ai_veto", ai_action=str(ai_decision.action))
+                        continue
+                if (
+                    ai_decision is not None
+                    and not _mpass
+                    and ai_decision.confidence < self.ai_confidence_threshold
+                ):
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_low_confidence")
+                        _log_ai_veto("ai_low_confidence", ai_confidence=float(ai_decision.confidence))
+                        continue
+                ai_edge = float(ai_decision.edge or 0.0) if ai_decision is not None else 0.0
+                if ai_decision is not None and not _mpass and ai_edge <= 0:
+                    if not _ai_updown_observe_only:
+                        _bump_skip("ai_nonpositive_edge")
+                        _log_ai_veto("ai_nonpositive_edge", ai_edge=ai_edge)
+                        continue
+                if not _ai_updown_observe_only and ai_decision is not None:
+                    edge = max(edge, ai_edge)
+                    confidence = max(confidence, ai_decision.confidence)
+                    reason_parts.append(f"ai_decision={ai_decision.source}")
                 research_plan = None
                 if (
+                    ai_analysis is not None
+                    and
                     research_enabled
                     and research_calls < research_max_calls
                     and ai_analysis.confidence_score >= research_min_conf
@@ -2260,6 +2290,9 @@ class ETHMacroStrategy(SolMacroStrategy):
                             f"research={research_plan.recommendation.value}"
                         )
                 if (
+                    ai_decision is not None
+                    and ai_analysis is not None
+                    and
                     self.ai_agent.shadow_pipeline_enabled()
                     and shadow_pipeline_calls
                     < self.ai_agent.shadow_pipeline_max_calls_per_scan()
