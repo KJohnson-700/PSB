@@ -73,6 +73,7 @@ from src.analysis.lane_entry_policy import (
     resolve_lane_entry_policy,
 )
 from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
+from src.analysis import lane_regime_runtime
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
@@ -3231,11 +3232,56 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
+            # 2026-06-24 REGIME LAYER (runtime, no-restart): consult the live
+            # lane_regime_map. `overrides_yaml_disable` re-opens a YAML-disabled
+            # lane whose regime-conditioned ghost edge has returned; `force_off`
+            # is an operator/auto-pause kill. Fail-safe: a missing/stale/corrupt
+            # map yields a neutral decision so the YAML disables govern unchanged.
+            _lr = lane_regime_runtime.evaluate_lane(
+                self._signal_strategy_name, _updown_tf, action, primary_htf_bias
+            )
+            # Would the static YAML disable this lane? Used to scope the regime
+            # size cap to GENUINELY-reopened lanes only — an already-enabled lane
+            # must keep its normal size (the map never shrinks a working lane).
+            _yaml_would_disable = bool(is_updown and (
+                (action == "BUY_NO"
+                 and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False)))
+                or (action == "BUY_YES"
+                    and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False)))
+                or (action == "BUY_YES"
+                    and str(primary_htf_bias or "").upper() == "BULLISH"
+                    and bool(self.config.get(
+                        f"disable_buy_yes_{_updown_tf}_when_bullish", False)))
+                or (action == "BUY_YES"
+                    and bool(self.config.get("disable_buy_yes", False)))
+            ))
+            if is_updown and _lr.force_off:
+                _bump_skip("lane_regime_force_off")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="lane_regime_force_off",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "side_source": side_source,
+                        "lane_regime_reason": _lr.reason,
+                        "lane_regime_key": _lr.key,
+                    },
+                )
+                continue
             # 2026-06-14: per-asset BUY_YES sit-out. Data-driven lane cut — set
             # `disable_buy_yes: true` for an asset whose UP-side calls bleed (e.g. bnb:
             # 40% WR, -$67 over 113 taken-settled trades). Opt-in, default off, applies
             # to all windows for that asset; ghost-logged so the counterfactual settles.
-            if is_updown and action == "BUY_YES" and bool(self.config.get("disable_buy_yes", False)):
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and bool(self.config.get("disable_buy_yes", False))
+                and not _lr.overrides_yaml_disable
+            ):
                 _bump_skip("buy_yes_disabled_lane")
                 _log_skip_reject(
                     market=market,
@@ -3257,6 +3303,7 @@ class SolMacroStrategy:
                 is_updown
                 and action == "BUY_NO"
                 and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False))
+                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_no_{_updown_tf}_disabled_lane")
                 _log_skip_reject(
@@ -3279,6 +3326,7 @@ class SolMacroStrategy:
                 is_updown
                 and action == "BUY_YES"
                 and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False))
+                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_yes_{_updown_tf}_disabled_lane")
                 _log_skip_reject(
@@ -3303,6 +3351,7 @@ class SolMacroStrategy:
                 and action == "BUY_YES"
                 and str(primary_htf_bias or "").upper() == "BULLISH"
                 and bool(self.config.get(f"disable_buy_yes_{_updown_tf}_when_bullish", False))
+                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_yes_{_updown_tf}_bullish_disabled_lane")
                 _log_skip_reject(
@@ -5829,6 +5878,13 @@ class SolMacroStrategy:
                 raw_size *= self.degraded_correlation_size_multiplier
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier
+            # Regime layer size cap: a lane RE-OPENED by the regime map (i.e. one
+            # the static YAML would have disabled) trades at a small paper size.
+            # Lanes already enabled in YAML are untouched (_yaml_would_disable=False).
+            if (is_updown and _yaml_would_disable and _lr.overrides_yaml_disable
+                    and 0 < _lr.size_scalar < 1.0):
+                raw_size *= _lr.size_scalar
+                reason_parts.append(f"regime_size={_lr.size_scalar:.2f}x")
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
@@ -5981,11 +6037,21 @@ class SolMacroStrategy:
             if not w:
                 return False
             a = getattr(sig, "action", None)
-            if a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)):
+            _disabled = (
+                (a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)))
+                or (a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)))
+            )
+            if not _disabled:
+                return False
+            # 2026-06-24 REGIME LAYER: this belt-and-suspenders pass must honor the
+            # same runtime override as the in-loop gates, or a reopened lane would be
+            # silently re-dropped here. Re-evaluate with the signal's own bias.
+            _b = (getattr(sig, "primary_htf_bias", None)
+                  or getattr(sig, "htf_bias", None))
+            _d = lane_regime_runtime.evaluate_lane(self._signal_strategy_name, w, a, _b)
+            if _d.force_off:
                 return True
-            if a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)):
-                return True
-            return False
+            return not _d.overrides_yaml_disable
         _before = len(signals)
         signals = [s for s in signals if not _lane_disabled(s)]
         if len(signals) != _before:

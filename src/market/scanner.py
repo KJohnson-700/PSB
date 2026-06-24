@@ -1602,21 +1602,26 @@ class MarketScanner:
         return markets
 
     def fetch_hype_alt_updown_markets(self, limit: int = 100) -> List[Market]:
-        """Fetch HYPE alias slugs directly without crawling the full event set.
+        """Fetch the human-format HYPE Up/Down event slugs directly.
 
-        This is a bounded fallback path for named `hyperliquid` / `hype` event slugs.
+        Polymarket lists HYPE only under the ``hype-`` prefix; the legacy
+        ``hyperliquid-`` alias is dead (verified 2026-06-24: every
+        ``hyperliquid-...`` slug returns zero markets from both Gamma /markets
+        and /events, across all window formats). Probing it was ~50% of this
+        path's ``empty_slug_responses`` for zero coverage gain, so only ``hype``
+        is queried here. The ``hype-up-or-down-...{hour}{ampm}-et`` human slug is
+        the sole source of the *hourly* HYPE market (id family distinct from the
+        ``hype-updown-15m/5m-{ts}`` timestamp markets the main path fetches).
         """
         look_ahead_15m, look_ahead_5m, _look_ahead_1h = self._resolve_updown_lookahead()
-        # HYPE has no hourly crypto Up/Down product on Polymarket, so the hourly slug
-        # batch is skipped here. Keep 5m and 15m alt-slug families.
         slugs = self._iter_named_event_slugs(
-            prefixes=("hyperliquid", "hype"),
+            prefixes=("hype",),
             step_minutes=15,
             look_ahead=max(1, min(look_ahead_15m, 8)),
         )
         slugs.extend(
             self._iter_named_event_slugs(
-                prefixes=("hyperliquid", "hype"),
+                prefixes=("hype",),
                 step_minutes=5,
                 look_ahead=max(1, min(look_ahead_5m, 24)),
             )
