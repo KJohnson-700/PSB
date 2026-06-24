@@ -4487,6 +4487,22 @@ class SolMacroStrategy:
                         edge = _adm - yes_price
                     else:
                         edge = (1.0 - _adm) - (1.0 - yes_price)
+                    # ── 1h conviction gate (2026-06-24) — mirror of bitcoin.py ──────
+                    # 0.40–0.60 yes_price band is a 1h coin flip (ghost -0.031 EV / 46%
+                    # WR); edge lives in the favorite/conviction band (ghost +0.006 EV /
+                    # 77% WR). Sit out the mush. Default-off → no behavior change.
+                    _cg = self.config.get("updown_1h_conviction_gate", {}) or {}
+                    if window_label == "1h" and bool(_cg.get("enabled", False)) and action in ("BUY_YES", "BUY_NO"):
+                        _lpm = float(_cg.get("long_price_min", 0.60) or 0.60)
+                        _spm = float(_cg.get("short_price_max", 0.40) or 0.40)
+                        _ec = float(_cg.get("est_conviction", 0.66) or 0.66)
+                        _conv_ok = (
+                            (action == "BUY_YES" and (yes_price >= _lpm or estimated_prob >= _ec))
+                            or (action == "BUY_NO" and (yes_price <= _spm or estimated_prob <= (1.0 - _ec)))
+                        )
+                        if not _conv_ok:
+                            _bump_skip("updown_1h_low_conviction")
+                            continue
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * 0.5 * timing_weight)
 

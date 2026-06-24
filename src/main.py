@@ -1266,7 +1266,10 @@ class PolyBot:
             self._maybe_alert_exit_policy_drift(settle_summary)
         except Exception as _ee:  # noqa: BLE001 — alerting must never break settle
             logging.warning("exit-policy drift alert skipped: %s", _ee)
-        status = build_ghost_calibration_status()
+        # allow_jsonl_scan=False: in the live bot NEVER fall back to the 500MB+
+        # JSONL scan (the memory balloon we eliminated). DuckDB fast-path or the
+        # cached/unavailable status only — even on cold start with a locked db.
+        status = build_ghost_calibration_status(allow_jsonl_scan=False)
         status["last_refresh_at"] = datetime.now(timezone.utc).isoformat()
         status["last_settle_summary"] = settle_summary
         self.ghost_calibration_status = status

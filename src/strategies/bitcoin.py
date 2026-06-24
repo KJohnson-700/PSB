@@ -316,6 +316,15 @@ class BitcoinStrategy:
         self._b1hsl_entry_max = float(_b1hsl.get('entry_max', 0.85) or 0.85)
         self._b1hsl_sizing_edge = float(_b1hsl.get('sizing_edge', 0.06) or 0.06)
 
+        # LTF (lower-timeframe) momentum-gate policy — mirror the alt flags so BTC is
+        # tunable + ghost-testable instead of hardcoded. Defaults PRESERVE current
+        # behavior: anti_ltf_gate_enabled=True (skip 15m/1h when the lower TF confirms,
+        # treated as "late entry"); require_ltf_confirmation=False. 2026-06-24: the skip
+        # is now also ghost-logged with LTF context so confirmed-vs-unconfirmed EV can
+        # be measured per horizon before deciding whether the anti-gate is backwards.
+        self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
+        self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
+
         # ── AI-hold soft veto ────────────────────────────────────────────────
         # When AI says HOLD on a market, cache that decision for ai_hold_veto_ttl_sec.
         # Any quant-only 5m path entry on the same market within the TTL must meet
@@ -1927,8 +1936,42 @@ class BitcoinStrategy:
             if not is_5m:
                 ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
                 _sample("ltf_strength", ltf_strength)
-                if ltf_confirmed and not _simple_1h_long:
+                # LTF-gate policy (config-flagged; defaults = current behavior). Both
+                # branches ghost-log with LTF context so confirmed-vs-unconfirmed EV
+                # is measurable per horizon (split 15m->5m vs 1h->15m in analysis).
+                _ltf_src = "15m" if _updown_tf == "1h" else "5m"
+                _ltf_act = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
+                _ltf_ctx = {
+                    "ltf_confirmed": bool(ltf_confirmed),
+                    "ltf_strength": round(float(ltf_strength), 4),
+                    "ltf_src_tf": _ltf_src,
+                }
+                # PRO-confirmation: require the lower TF to confirm (default OFF).
+                if self.require_ltf_confirmation and not ltf_confirmed and not _simple_1h_long:
+                    _bump_skip("ltf_unconfirmed")
+                    try:
+                        log_rejected_candidate(
+                            strategy="bitcoin", window=_updown_tf, side=allowed_side, action=_ltf_act,
+                            reason="ltf_unconfirmed", market=market, yes_price=yes_price,
+                            est_prob_up=locals().get("est_prob_up"), htf_bias=htf_bias,
+                            btc_1h_regime=locals().get("btc_1h_regime"), context=_ltf_ctx,
+                        )
+                    except Exception:
+                        pass
+                    continue
+                # ANTI-confirmation (late-entry): skip when the lower TF confirms
+                # (default ON = current behavior; under test — may be backwards on 1h).
+                if self.anti_ltf_gate_enabled and ltf_confirmed and not _simple_1h_long:
                     _bump_skip("ltf_confirmed_late_entry")
+                    try:
+                        log_rejected_candidate(
+                            strategy="bitcoin", window=_updown_tf, side=allowed_side, action=_ltf_act,
+                            reason="ltf_confirmed_late_entry", market=market, yes_price=yes_price,
+                            est_prob_up=locals().get("est_prob_up"), htf_bias=htf_bias,
+                            btc_1h_regime=locals().get("btc_1h_regime"), context=_ltf_ctx,
+                        )
+                    except Exception:
+                        pass
                     logger.info(
                         "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
                         market.question[:40],
@@ -3379,6 +3422,37 @@ class BitcoinStrategy:
             except NameError:
                 pass
             _sample("edge", edge)
+            # ── 1h conviction gate (2026-06-24) ──────────────────────────────
+            # The 0.40–0.60 yes_price band is a coin flip (ghost: -0.031 EV, 46% WR);
+            # the 1h edge lives in the FAVORITE band / est tails (ghost gated: +0.006
+            # EV, 77% WR). Sit out the mush. This is the real replacement for the
+            # removed simple_long force-long: a side-correct conviction filter, not a
+            # bias-blind force-long. Default-off → no behavior change.
+            _cg = self.config.get("updown_1h_conviction_gate", {}) or {}
+            if is_1h and bool(_cg.get("enabled", False)) and action in ("BUY_YES", "BUY_NO"):
+                _lpm = float(_cg.get("long_price_min", 0.60) or 0.60)
+                _spm = float(_cg.get("short_price_max", 0.40) or 0.40)
+                _ec = float(_cg.get("est_conviction", 0.66) or 0.66)
+                # Use the post-calibration/floor-bump probability (estimated_prob),
+                # matching the edge computation; fall back to raw est_prob_up then 0.5.
+                try:
+                    _est_for_gate = float(estimated_prob)
+                except (NameError, TypeError, ValueError):
+                    try:
+                        _est_for_gate = float(est_prob_up)
+                    except (NameError, TypeError, ValueError):
+                        _est_for_gate = 0.5
+                _conv_ok = (
+                    (action == "BUY_YES" and (yes_price >= _lpm or _est_for_gate >= _ec))
+                    or (action == "BUY_NO" and (yes_price <= _spm or _est_for_gate <= (1.0 - _ec)))
+                )
+                if not _conv_ok:
+                    _bump_skip("updown_1h_low_conviction")
+                    logger.info(
+                        "BTC skip '%s' %s — 1h low conviction (yes=%.2f est=%.2f not in favorite/conviction band)",
+                        market.question[:40], action, yes_price, _est_for_gate,
+                    )
+                    continue
             _bias_quant_size_multiplier = 1.0
             if _simple_1h_long and action == "BUY_YES":
                 # Band-admitted consensus lane: the est_prob edge is unusable (~0.55),

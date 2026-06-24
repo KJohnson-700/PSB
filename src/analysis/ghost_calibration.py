@@ -34,6 +34,12 @@ DEFAULT_CALIBRATION_DIR = (
 )
 DEFAULT_REJECTED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates.jsonl"
 DEFAULT_SETTLED_LOG = DEFAULT_CALIBRATION_DIR / "rejected_candidates_settled.jsonl"
+# Columnar mirror of the settled log (scripts/psb_ghost_duckdb.py, ingested by
+# cron). When present + fresh, build_ghost_calibration_status reads aggregates
+# from here via indexed SQL instead of streaming the full settled JSONL each
+# 10-min refresh — that full scan was the periodic memory/CPU balloon. The JSONL
+# stays the source of truth; this is a read-only fast path with a JSONL fallback.
+DEFAULT_GHOST_DUCKDB = DEFAULT_CALIBRATION_DIR / "ghost.duckdb"
 # Derived idempotency sidecar (one ghost_id per line) — see step 3a of
 # docs/GHOST_LOG_CHECKPOINT_SPEC.md. Lets the settle loop skip the full scan of
 # the (large) settled jsonl when checking what is already settled. Pure cache:
@@ -42,6 +48,16 @@ DEFAULT_SETTLED_INDEX = DEFAULT_CALIBRATION_DIR / "settled_index.txt"
 DEFAULT_REGIME_LOG = DEFAULT_CALIBRATION_DIR / "market_regime.jsonl"
 GAMMA_API = "https://gamma-api.polymarket.com"
 RESOLVED_BUFFER_SEC = 90
+
+# Pooled session for per-market resolution fetches. A raw requests.get() per
+# market opens a new TCP/TLS connection (new OpenSSL context) every call — native
+# memory that malloc_trim can't reclaim, churned every refresh cycle across many
+# unresolved markets. One bounded, reused session keeps TLS contexts capped.
+_GHOST_HTTP = requests.Session()
+_GHOST_HTTP.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=8, max_retries=0),
+)
 REGIME_MATCH_MAX_AGE_SEC = 30 * 60
 REGIME_FIELDS = (
     "price_regime",
@@ -572,11 +588,11 @@ def fetch_resolution(
     if market_id in cache:
         return cache[market_id]
     try:
-        resp = requests.get(f"{GAMMA_API}/markets/{market_id}", timeout=timeout)
-        if resp.status_code != 200:
-            cache[market_id] = None
-            return None
-        data = resp.json()
+        with _GHOST_HTTP.get(f"{GAMMA_API}/markets/{market_id}", timeout=timeout) as resp:
+            if resp.status_code != 200:
+                cache[market_id] = None
+                return None
+            data = resp.json()
         if not data.get("closed", False):
             cache[market_id] = None
             return None
@@ -992,12 +1008,162 @@ def settle_rejected_candidates(
     return summary
 
 
+def _ghost_status_from_duckdb(
+    rejected_path: Path,
+    settled_path: Path,
+    duckdb_path: Path = DEFAULT_GHOST_DUCKDB,
+) -> Optional[Dict[str, Any]]:
+    """Fast path: compute the status aggregates from the columnar DuckDB mirror.
+
+    Returns None (caller falls back to the JSONL scan) when duckdb is not
+    installed, the db is missing, or any query fails. The settled aggregates use
+    the DuckDB mirror (full history incl. archived rows); total_rejected stays a
+    cheap line-count of the LIVE rejected log (no JSON parse), so unresolved
+    clamps to >=0. Output shape is identical to the JSONL path.
+    """
+    if not duckdb_path.exists():
+        return None
+    try:
+        import duckdb  # lazy: optional dependency
+    except Exception:
+        return None
+    con = None
+    try:
+        con = duckdb.connect(str(duckdb_path), read_only=True)
+        total_settled, wins, losses, last_settled_at = con.execute(
+            "SELECT count(*), "
+            "count(*) FILTER (WHERE win IS TRUE), "
+            "count(*) FILTER (WHERE win IS FALSE), "
+            "max(settled_at) FROM ghost_settled"
+        ).fetchone()
+        if not total_settled:
+            return None  # empty db — let the JSONL path handle it
+
+        # NULLIF(...,'') mirrors the Python `rec.get(...) or "?"` (empty string ->
+        # default, not just NULL). Deterministic tie-break (k ASC) so top-10 is stable.
+        reason_rows = con.execute(
+            "SELECT coalesce(nullif(reason,''),'?') || '|' || coalesce(nullif(action,''),'?') AS k, "
+            "count(*) FILTER (WHERE win IS TRUE) wins, "
+            "count(*) FILTER (WHERE win IS FALSE) losses, "
+            "count(*) n FROM ghost_settled GROUP BY k ORDER BY n DESC, k ASC LIMIT 10"
+        ).fetchall()
+        regime_rows = con.execute(
+            "SELECT coalesce(nullif(btc_1h_regime,''),'UNKNOWN') r, "
+            "count(*) FILTER (WHERE win IS TRUE) wins, "
+            "count(*) FILTER (WHERE win IS FALSE) losses, "
+            "count(*) n FROM ghost_settled GROUP BY r"
+        ).fetchall()
+        conv_rows = con.execute(
+            "SELECT CASE WHEN convergence_score IS NULL THEN 'none' "
+            "WHEN convergence_score >= 0.6 THEN 'high' "
+            "WHEN convergence_score >= 0.4 THEN 'medium' ELSE 'low' END b, "
+            "count(*) n FROM ghost_settled GROUP BY b"
+        ).fetchall()
+    except Exception as exc:  # any schema/query issue → fall back to JSONL
+        logger.debug("ghost duckdb fast-path failed, using JSONL: %s", exc)
+        return None
+    finally:
+        if con is not None:
+            con.close()
+
+    # Cheap RAW line count (one candidate per line) — NOT _iter_jsonl, which would
+    # json.loads every line (the parse/alloc cost we are eliminating). Reading bytes
+    # lands in reclaimable page cache, not anon heap, so it is safe under MemoryHigh.
+    try:
+        with open(rejected_path, "rb") as _rf:
+            total_rejected = sum(1 for _ in _rf)
+    except OSError:
+        total_rejected = 0
+    total_decided = wins + losses
+    top_reason_action = {
+        k: {"wins": w, "losses": ls, "n": n} for (k, w, ls, n) in reason_rows
+    }
+    regime_breakdown = {}
+    for r, w, ls, n in regime_rows:
+        decided = w + ls
+        regime_breakdown[r] = {
+            "n": n, "wins": w, "losses": ls,
+            "win_rate": round(w / decided, 4) if decided else None,
+        }
+    conv_buckets = {"high": 0, "medium": 0, "low": 0, "none": 0}
+    for b, n in conv_rows:
+        conv_buckets[b] = n
+
+    return {
+        "rejected_log_exists": rejected_path.exists(),
+        "settled_log_exists": settled_path.exists(),
+        "total_rejected": total_rejected,
+        "total_settled": total_settled,
+        "unresolved": max(0, total_rejected - total_settled),
+        "wins": wins,
+        "losses": losses,
+        "settled_win_rate": round(wins / total_decided, 4) if total_decided else None,
+        "last_settled_at": last_settled_at or None,
+        "top_reason_action": top_reason_action,
+        "btc_1h_regime_breakdown": dict(sorted(regime_breakdown.items())),
+        "convergence_score_breakdown": conv_buckets,
+        "source": "duckdb",
+        # Settled aggregates span FULL history (live JSONL + archives); total_rejected
+        # is live-only, so unresolved is a lower bound. Explicit so ops/dashboard
+        # don't misread total_settled as live-scope.
+        "aggregate_scope": "full_history",
+    }
+
+
+# Last successfully-built status. On a DuckDB miss in the LIVE bot we serve this
+# (stale) rather than re-running the 500MB+ JSONL scan — that scan was the memory
+# balloon we are eliminating, and a scan triggered by a DuckDB *lock* (cron writer)
+# would reintroduce it at the worst moment. The JSONL path runs ONLY on true cold
+# start (no cache, no usable DuckDB), e.g. CLI/first boot before the first ingest.
+_LAST_GHOST_STATUS: Optional[Dict[str, Any]] = None
+
+
 def build_ghost_calibration_status(
     *,
     rejected_path: Path = DEFAULT_REJECTED_LOG,
     settled_path: Path = DEFAULT_SETTLED_LOG,
+    allow_jsonl_scan: bool = True,
 ) -> Dict[str, Any]:
-    """Return a compact status block for OPS_JSON / dashboard consumers."""
+    """Return a compact status block for OPS_JSON / dashboard consumers.
+
+    Fast path is the columnar DuckDB mirror. On a DuckDB miss we prefer the last
+    cached status over re-scanning the JSONL (see _LAST_GHOST_STATUS). Pass
+    ``allow_jsonl_scan=False`` to forbid the heavy scan entirely (live bot may set
+    this once a cache exists).
+    """
+    global _LAST_GHOST_STATUS
+    # Fast path: columnar DuckDB mirror (indexed SQL, no GB scan).
+    fast = _ghost_status_from_duckdb(rejected_path, settled_path)
+    if fast is not None:
+        _LAST_GHOST_STATUS = fast
+        return fast
+    # DuckDB unavailable/locked/errored: serve the last good status if we have one,
+    # rather than reintroducing the heavy JSONL scan.
+    if _LAST_GHOST_STATUS is not None:
+        stale = dict(_LAST_GHOST_STATUS)
+        stale["source"] = "cache_stale"
+        return stale
+    if not allow_jsonl_scan:
+        # Full-shape empty status (never a sparse dict) so ops/dashboard consumers
+        # that read e.g. top_reason_action / settled_win_rate can't KeyError on the
+        # one-cycle cold-start-with-locked-db case.
+        return {
+            "rejected_log_exists": rejected_path.exists(),
+            "settled_log_exists": settled_path.exists(),
+            "total_rejected": 0,
+            "total_settled": 0,
+            "unresolved": 0,
+            "wins": 0,
+            "losses": 0,
+            "settled_win_rate": None,
+            "last_settled_at": None,
+            "top_reason_action": {},
+            "btc_1h_regime_breakdown": {},
+            "convergence_score_breakdown": {"high": 0, "medium": 0, "low": 0, "none": 0},
+            "source": "unavailable",
+            "aggregate_scope": "none",
+        }
+    # True cold start (no cache, no usable DuckDB) — fall through to the JSONL scan.
     # Stream both logs once each instead of materializing ~GB of dicts via
     # list() and looping the settled records three separate times. The rejected
     # log is only needed for its row count, so it is never materialized. Output
@@ -1074,7 +1240,7 @@ def build_ghost_calibration_status(
             "win_rate": round(stats["wins"] / decided, 4) if decided else None,
         }
 
-    return {
+    jsonl_status = {
         "rejected_log_exists": rejected_path.exists(),
         "settled_log_exists": settled_path.exists(),
         "total_rejected": total_rejected,
@@ -1089,4 +1255,10 @@ def build_ghost_calibration_status(
         },
         "btc_1h_regime_breakdown": regime_breakdown,
         "convergence_score_breakdown": conv_buckets,
+        "source": "jsonl",
+        "aggregate_scope": "live",
     }
+    # Cache the cold-start scan too, so a permanently-broken DuckDB serves this
+    # stale snapshot next time instead of re-scanning the JSONL every refresh.
+    _LAST_GHOST_STATUS = jsonl_status
+    return jsonl_status

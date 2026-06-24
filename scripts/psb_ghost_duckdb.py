@@ -45,28 +45,44 @@ COLUMNS = {
     "est_prob_up": "DOUBLE",
     "htf_bias": "VARCHAR",
     "btc_1h_regime": "VARCHAR",
+    "convergence_score": "DOUBLE",
     "reason": "VARCHAR",
     "market_id": "VARCHAR",
 }
 
 
-def _sources() -> list[str]:
-    """Live settled JSONL + any gz archives (cold storage), as glob patterns."""
-    pats = [
-        str(CAL / "rejected_candidates_settled.jsonl"),
-        str(CAL / "archive" / "rejected_candidates_settled*.jsonl"),
-        str(CAL / "archive" / "rejected_candidates_settled*.jsonl.gz"),
-    ]
+def _sources(live_only: bool = False) -> list[str]:
+    """Settled JSONL sources. live_only=True returns ONLY the live file (the cron
+    path): new rows append there, archives are static and already ingested, so
+    re-reading the gz archives every 5 min was the slow ingest (lock hog). The full
+    rebuild path (live_only=False) reads archives too."""
+    pats = [str(CAL / "rejected_candidates_settled.jsonl")]
+    if not live_only:
+        pats += [
+            str(CAL / "archive" / "rejected_candidates_settled*.jsonl"),
+            str(CAL / "archive" / "rejected_candidates_settled*.jsonl.gz"),
+        ]
     return [p for p in pats if list(Path(p).parent.glob(Path(p).name))]
 
 
-def ingest(con) -> dict:
+def ingest(con, live_only: bool = False) -> dict:
     cols_sql = ", ".join(f'"{k}" {v}' for k, v in COLUMNS.items())
     # Curated scalar columns only — no raw JSON copy (that would defeat the size
     # win). The JSONL stays the source of truth for rare nested fields.
     con.execute(
         f"CREATE TABLE IF NOT EXISTS ghost_settled ({cols_sql});"
     )
+    # Self-healing schema: ALTER only columns ACTUALLY missing. Running ADD COLUMN
+    # for all 16 cols every ingest forced a checkpoint/rewrite (the slow lock hog).
+    existing = {
+        r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='ghost_settled'"
+        ).fetchall()
+    }
+    for _col, _typ in COLUMNS.items():
+        if _col not in existing:
+            con.execute(f'ALTER TABLE ghost_settled ADD COLUMN "{_col}" {_typ};')
     con.execute(
         'CREATE INDEX IF NOT EXISTS idx_lane ON ghost_settled("strategy", "window", "side");'
     )
@@ -76,7 +92,7 @@ def ingest(con) -> dict:
         f"TRY_CAST(json_extract_string(j, '$.{k}') AS {v}) AS \"{k}\""
         for k, v in COLUMNS.items()
     )
-    for src in _sources():
+    for src in _sources(live_only=live_only):
         # read_json_objects returns one column ('json') holding each line's whole
         # JSON object; extract the curated scalar fields from it.
         con.execute(
@@ -88,9 +104,11 @@ def ingest(con) -> dict:
                     format='newline_delimited',
                     ignore_errors=true,
                     maximum_object_size=20000000)
-            )
-            WHERE json_extract_string(j, '$.ghost_id') NOT IN (
-                SELECT ghost_id FROM ghost_settled
+            ) AS s
+            -- NULL-safe anti-join (NOT IN breaks if any existing ghost_id is NULL)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM ghost_settled g
+                WHERE g.ghost_id = json_extract_string(s.j, '$.ghost_id')
             );
             """
         )
@@ -124,6 +142,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Ghost calibration DuckDB store")
     ap.add_argument("--ingest", action="store_true", help="incremental load JSONL -> DuckDB")
+    ap.add_argument("--live-only", action="store_true", help="ingest only the live JSONL (cron path; skip static archives)")
     ap.add_argument("--stats", action="store_true", help="row counts + size")
     ap.add_argument("--query", type=str, help="run a read-only SQL query against ghost_settled")
     args = ap.parse_args()
@@ -132,7 +151,7 @@ def main() -> int:
     con = duckdb.connect(str(DB_PATH))
     try:
         if args.ingest:
-            r = ingest(con)
+            r = ingest(con, live_only=args.live_only)
             print(f"ingest: +{r['inserted']:,} rows (total {r['rows_after']:,})")
         if args.query:
             for row in con.execute(args.query).fetchall():
