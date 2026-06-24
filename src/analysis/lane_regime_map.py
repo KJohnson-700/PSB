@@ -65,6 +65,12 @@ DEFAULTS = dict(
     enter_builds=3,
     exit_builds=2,
     expiry_minutes=10,
+    # ghost.duckdb is opened read-write by the transient ghost-settle subprocess;
+    # a read-only connect collides with that cross-process lock. The writer holds
+    # it only briefly, so retry with bounded linear backoff (max ~30s total, well
+    # under the 5-min cron interval) clears nearly all collisions.
+    connect_retries=5,
+    connect_backoff_sec=2.0,
 )
 
 
@@ -177,6 +183,34 @@ def _qualifies(stat: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
     )
 
 
+def _connect_readonly_retry(ghost_db: str, retries: int, backoff_sec: float):
+    """Open a read-only duckdb connection, retrying on the transient cross-process
+    lock conflict held by the ghost-settle writer.
+
+    DuckDB blocks a read-only connect while another process holds the read-write
+    lock on the same file. The settle writer holds it only briefly, so a short
+    bounded linear backoff clears nearly all collisions. Only the lock error is
+    retried; any other IOException (corrupt/missing db) re-raises immediately. If
+    all retries are exhausted the last error re-raises, so cron logs it and the
+    runtime helper fail-safes to YAML on the now-stale map (no bad trades)."""
+    import time
+    import duckdb
+
+    retries = max(0, int(retries))
+    last_exc: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            return duckdb.connect(ghost_db, read_only=True)
+        except duckdb.IOException as exc:
+            if "lock" not in str(exc).lower():
+                raise
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(backoff_sec * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
+
+
 def build_map(
     ghost_db: str,
     out_path: str,
@@ -184,13 +218,13 @@ def build_map(
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build and atomically write the lane-regime map. Returns the map dict."""
-    import duckdb
-
     cfg = {**DEFAULTS, **(cfg or {})}
     state = _load_json(state_path) or {}
     prev = state.get("lanes", {}) if isinstance(state, dict) else {}
 
-    con = duckdb.connect(ghost_db, read_only=True)
+    con = _connect_readonly_retry(
+        ghost_db, cfg["connect_retries"], cfg["connect_backoff_sec"]
+    )
     try:
         cols = _detect_columns(con)
         stats = _query_lane_stats(con, cols, cfg["lookback_days"], cfg["win_cap"])

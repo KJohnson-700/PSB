@@ -216,3 +216,62 @@ def test_builder_hysteresis_end_to_end(tmp_path):
     m3 = lm.build_map(db, out_p, st_p, cfg)
     assert key in m3["lanes"] and m3["lanes"][key]["enabled"]
     assert m3["expires_at_epoch"] > time.time()
+
+
+# --------------------------------------------------------------------------- #
+# builder: read-only connect retries past the transient ghost-settle write-lock
+# --------------------------------------------------------------------------- #
+@pytest.mark.skipif(not _has_duckdb(), reason="duckdb not installed")
+def test_connect_readonly_retries_lock_then_succeeds(monkeypatch):
+    import duckdb
+    from src.analysis import lane_regime_map as lm
+
+    calls = {"n": 0}
+    real_connect = duckdb.connect
+
+    def flaky_connect(path, read_only=False):
+        calls["n"] += 1
+        if calls["n"] < 3:  # fail the first two attempts with a lock error
+            raise duckdb.IOException(
+                'Could not set lock on file: Conflicting lock is held'
+            )
+        return real_connect(":memory:")
+
+    monkeypatch.setattr(duckdb, "connect", flaky_connect)
+    con = lm._connect_readonly_retry("x.duckdb", retries=5, backoff_sec=0.0)
+    assert calls["n"] == 3
+    con.close()
+
+
+@pytest.mark.skipif(not _has_duckdb(), reason="duckdb not installed")
+def test_connect_readonly_non_lock_error_reraises_immediately(monkeypatch):
+    import duckdb
+    from src.analysis import lane_regime_map as lm
+
+    calls = {"n": 0}
+
+    def boom(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.IOException("database is corrupt")
+
+    monkeypatch.setattr(duckdb, "connect", boom)
+    with pytest.raises(duckdb.IOException):
+        lm._connect_readonly_retry("x.duckdb", retries=5, backoff_sec=0.0)
+    assert calls["n"] == 1  # not retried
+
+
+@pytest.mark.skipif(not _has_duckdb(), reason="duckdb not installed")
+def test_connect_readonly_exhausts_and_reraises(monkeypatch):
+    import duckdb
+    from src.analysis import lane_regime_map as lm
+
+    calls = {"n": 0}
+
+    def always_locked(path, read_only=False):
+        calls["n"] += 1
+        raise duckdb.IOException("Conflicting lock is held")
+
+    monkeypatch.setattr(duckdb, "connect", always_locked)
+    with pytest.raises(duckdb.IOException):
+        lm._connect_readonly_retry("x.duckdb", retries=2, backoff_sec=0.0)
+    assert calls["n"] == 3  # initial + 2 retries
