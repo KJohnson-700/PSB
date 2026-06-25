@@ -1376,14 +1376,18 @@ class BitcoinStrategy:
 
     def _resolve_bias_for_tf(self, ta: TechnicalAnalysis, tf: str) -> BTCBiasResolution:
         backup_4h_bias = self._get_higher_tf_bias(ta)
+        # faster_biases = nearer-term TFs (where price is right now); slower = trend context.
         if tf == "5m":
             horizon_bias = self._get_5m_bias(ta)
+            faster_biases: Dict[str, str] = {}
             slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
         elif tf == "15m":
             horizon_bias = self._get_15m_bias(ta)
+            faster_biases = {"5m": self._get_5m_bias(ta)}
             slower_biases = {"1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
         else:
             horizon_bias = self._get_1h_bias(ta)
+            faster_biases = {"15m": self._get_15m_bias(ta), "5m": self._get_5m_bias(ta)}
             slower_biases = {"4h": backup_4h_bias}
 
         if horizon_bias in {"BULLISH", "BEARISH"}:
@@ -1403,6 +1407,24 @@ class BitcoinStrategy:
                 slower_biases=slower_biases,
                 primary_htf_bias=horizon_bias,
                 confidence_penalty=penalty,
+            )
+
+        # Horizon is NEUTRAL. Break the tie with the FASTER timeframes (where the
+        # tape actually is), nearest-first — NOT the lagging slower ones. A stale
+        # slow-TF bias (e.g. 4H still BEARISH after an earlier drop) was shorting
+        # BTC straight into a live 15m/5m uptrend. Only consult a slower TF when no
+        # faster TF has an opinion.
+        for faster_tf, faster_bias in faster_biases.items():
+            if faster_bias not in {"BULLISH", "BEARISH"}:
+                continue
+            return BTCBiasResolution(
+                allowed_side=self._bias_to_side(faster_bias),
+                side_source=f"btc_{tf}_neutral_faster_{faster_tf}",
+                horizon_tf=tf,
+                horizon_bias=horizon_bias,
+                slower_biases={**faster_biases, **slower_biases},
+                primary_htf_bias=faster_bias,
+                confidence_penalty=0.04,
             )
 
         for slower_tf, slower_bias in slower_biases.items():

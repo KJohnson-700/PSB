@@ -4240,6 +4240,37 @@ class SolMacroStrategy:
                         side_source = f"{side_source or ''}+buy_no_5m_to_yes_flip"
                         reason_parts.append("buy_no_5m_to_yes_flip")
 
+                    # 2026-06-25 (Fix 2b): 5m alt conviction floor — ONE rule for the
+                    # coinflip horizon, replacing the per-side/per-regime 5m gate matrix.
+                    # The 5m alt updown side clusters at calibrated P~0.50-0.59 with no
+                    # durable edge and gets gap-stopped (session test_20260624_223549:
+                    # 4/5 losses were 5m alt longs @ est 0.50-0.59). Require genuine
+                    # directional conviction, measured on the CALIBRATED est_prob BEFORE
+                    # the bullish floor-bump (so a coinflip cannot be bumped over the bar).
+                    # conviction = estimated_prob (BUY_YES) / 1-estimated_prob (BUY_NO).
+                    # Config alt_5m_min_conviction (default 0.60; <=0.5 disables; settable
+                    # per-asset). Ghost-logged so the counterfactual keeps settling.
+                    _conv_floor_5m = float(self.config.get("alt_5m_min_conviction", 0.60))
+                    _conviction_5m = (
+                        float(estimated_prob) if action == "BUY_YES"
+                        else 1.0 - float(estimated_prob)
+                    )
+                    if _conv_floor_5m > 0.5 and _conviction_5m < _conv_floor_5m:
+                        _bump_skip("alt_5m_low_conviction")
+                        _log_skip_reject(
+                            market=market, window=_updown_tf, side=allowed_side,
+                            action=action, reason="alt_5m_low_conviction", yes_price=yes_price,
+                            est_prob_up=float(estimated_prob),
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "side_source": side_source,
+                                "est_prob": round(float(estimated_prob), 4),
+                                "conviction": round(float(_conviction_5m), 4),
+                                "min_conviction": _conv_floor_5m,
+                            },
+                        )
+                        continue
+
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=mtt.h1_trend,
                         yes_price=yes_price,
