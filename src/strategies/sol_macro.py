@@ -1527,12 +1527,32 @@ class SolMacroStrategy:
         return "NEUTRAL"
 
     def _resolve_voted_bias(self, *, macd: Any, price: float, ema_9: float, ema_21: float, ema_50: float, rsi: float, min_hist_magnitude: float) -> str:
-        votes = [
-            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
-            self._vote_rsi_bias(rsi),
-            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
-        ]
-        macd_vote = votes[0]
+        macd_vote = self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude)
+        rsi_vote = self._vote_rsi_bias(rsi)
+        ema_vote = self._vote_ema_bias(price, ema_9, ema_21, ema_50)
+        # 2026-06-25 (alt Part B, ported from the BTC bias fix): momentum-aware,
+        # LONG-biased. MACD+EMA are direction/momentum votes; RSI is a *level*
+        # (reversal) vote — RSI-extreme WITH the trend is continuation, not reversal
+        # (oversold-in-uptrend = buy). The old 2-of-3 let a "bearish" RSI level veto a
+        # convicted bullish MACD down to NEUTRAL -> that is the dominant source of the
+        # alt `neutral_bias` sit-outs (the frequency collapse). When a conviction-gated
+        # MACD is BULLISH and EMA is not opposing, take BULLISH — the proven +EV alt
+        # direction (regime-layer reopened contrarian LONGs won: bnb +18.54, hype +7.01).
+        # SHORTS deliberately NOT un-vetoed here: alt momentum shorts are -EV /
+        # anti-predictive, so the bearish path stays on the require_macd_for_bearish_bias
+        # guard below. PER-LANE (per-asset) opt-in, default OFF — set
+        # alt_rsi_vote_momentum_aware: true only on the assets the data supports; never
+        # a blanket flip that could disturb a working lane. self.config is the asset's
+        # own config in each SolMacroStrategy subclass, so this is per-asset.
+        # Scale-free conviction gate: require the MACD histogram to be RISING (building
+        # momentum), so the early-return fires on a real up-move and not flat-above-zero
+        # chop. This replaces a per-asset magnitude floor (alt MACD scales vary too much
+        # by asset price to set one cleanly).
+        if self.config.get("alt_rsi_vote_momentum_aware", False):
+            _macd_rising = bool(getattr(macd, "histogram_rising", False)) if macd is not None else False
+            if macd_vote == "BULLISH" and ema_vote != "BEARISH" and _macd_rising:
+                return "BULLISH"
+        votes = [macd_vote, rsi_vote, ema_vote]
         bull_votes = sum(1 for vote in votes if vote == "BULLISH")
         bear_votes = sum(1 for vote in votes if vote == "BEARISH")
         if bull_votes >= 2:

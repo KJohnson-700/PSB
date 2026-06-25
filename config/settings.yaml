@@ -1365,6 +1365,7 @@ strategies:
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: false
     enforce_alt_1h_alignment: false
+    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (hype): un-veto bullish bias — RSI level can't override a convicted+rising MACD -> NEUTRAL. Restores LONG frequency. regime-layer hype LONG won +$7.01. Per-lane; sol/doge left OFF as control.
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
@@ -1493,6 +1494,7 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: true
     enforce_alt_1h_alignment: true
+    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (xrp): un-veto bullish bias — strongest ghost long-EV (+0.093 5m). Per-lane; sol/doge OFF as control.
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
@@ -1935,6 +1937,7 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: true
+    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (bnb): un-veto bullish bias — regime-layer bnb LONG won +$18.54 live; ghost 5m-long +0.089. Per-lane; sol/doge OFF as control.
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
