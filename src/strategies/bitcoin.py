@@ -1319,11 +1319,30 @@ class BitcoinStrategy:
         rsi: float,
         min_hist_magnitude: float,
     ) -> str:
-        votes = [
-            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
-            self._vote_rsi_bias(rsi),
-            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
-        ]
+        macd_vote = self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude)
+        rsi_vote = self._vote_rsi_bias(rsi)
+        ema_vote = self._vote_ema_bias(price, ema_9, ema_21, ema_50)
+        # 2026-06-25 (Part B): momentum-aware resolution. MACD and EMA are the
+        # direction/momentum votes; RSI is a *level* (reversal) vote — and RSI-extreme
+        # WITH the trend is continuation, not reversal (oversold in an uptrend = buy,
+        # not sell). When the two momentum votes don't conflict (both agree, or one is
+        # directional and the other neutral), that IS the bias — a contradicting RSI
+        # level must not veto it down to NEUTRAL. This fixes the proven failure: 1H
+        # MACD +85 BULLISH, EMA NEUTRAL, RSI 34 BEARISH -> old 2-of-3 = NEUTRAL ->
+        # fell back to a lagging-4H short -> loss (session test_20260625_004718).
+        # Only when MACD and EMA genuinely OPPOSE do we fall to the 2-of-3 tiebreak
+        # (where RSI participates). MACD already has a |hist| conviction gate, so a
+        # neutral/noisy MACD yields NEUTRAL here and never force-fires in chop.
+        # Opt-out: btc_rsi_vote_momentum_aware: false.
+        if self.config.get("btc_rsi_vote_momentum_aware", True):
+            # Anchor on MACD (it already has a |histogram| conviction gate, so it is
+            # NEUTRAL in chop and never force-fires on noise). If MACD is directional
+            # and EMA does not OPPOSE it, that is the bias — a contradicting RSI level
+            # cannot veto it. Genuine MACD-vs-EMA opposition falls to the 2-of-3 tiebreak.
+            _opp = {"BULLISH": "BEARISH", "BEARISH": "BULLISH"}
+            if macd_vote in _opp and ema_vote != _opp[macd_vote]:
+                return macd_vote
+        votes = [macd_vote, rsi_vote, ema_vote]
         bull_votes = sum(1 for vote in votes if vote == "BULLISH")
         bear_votes = sum(1 for vote in votes if vote == "BEARISH")
         if bull_votes >= 2:
@@ -1427,22 +1446,31 @@ class BitcoinStrategy:
                 confidence_penalty=0.04,
             )
 
-        for slower_tf, slower_bias in slower_biases.items():
-            if slower_bias not in {"BULLISH", "BEARISH"}:
-                continue
-            return BTCBiasResolution(
-                allowed_side=self._bias_to_side(slower_bias),
-                side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
-                horizon_tf=tf,
-                horizon_bias=horizon_bias,
-                slower_biases=slower_biases,
-                primary_htf_bias=slower_bias,
-                confidence_penalty=0.04,
-            )
+        # 2026-06-25 (Part A): do NOT manufacture a side from a SLOWER/lagging TF
+        # when the trade horizon AND faster TFs are all neutral. A legitimately
+        # bearish 4H ("THE LAW") was forcing SHORTs onto flat/rising 1h markets and
+        # losing (session test_20260625_004718: bias BEARISH 193/193 pulses while
+        # BTC rose 60792->60900; both BTC 1h shorts via this fallback lost). The slow
+        # TF is trend CONTEXT/sizing only — it must not flip a short-horizon trade
+        # against its own momentum. Sit out instead. Opt-out (restore old behaviour):
+        # btc_neutral_slow_side_fallback: true.
+        if bool(self.config.get("btc_neutral_slow_side_fallback", False)):
+            for slower_tf, slower_bias in slower_biases.items():
+                if slower_bias not in {"BULLISH", "BEARISH"}:
+                    continue
+                return BTCBiasResolution(
+                    allowed_side=self._bias_to_side(slower_bias),
+                    side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
+                    horizon_tf=tf,
+                    horizon_bias=horizon_bias,
+                    slower_biases=slower_biases,
+                    primary_htf_bias=slower_bias,
+                    confidence_penalty=0.04,
+                )
 
         return BTCBiasResolution(
             allowed_side=None,
-            side_source=f"btc_{tf}_neutral",
+            side_source=f"btc_{tf}_neutral_no_slow_fallback",
             horizon_tf=tf,
             horizon_bias=horizon_bias,
             slower_biases=slower_biases,
