@@ -1938,7 +1938,20 @@ class SolMacroStrategy:
             return None
         return move, prob, margin
 
-    def _window_delta_flip(self, asset_obj: Any, tf: str, mins_left: float, action: str):
+    def _flips_disabled_for_window(self, tf: str) -> bool:
+        """Per-lane kill-switch for ALL side-flips (window_delta + fresh_cross +
+        momentum) on a given window. 2026-06-25: taken-trade join shows flips are
+        net +$263 on 5m/1h but −$21 on 15m (window-delta noisier mid-bar on 15m);
+        the worst single live loss was a hype 15m flip-to-short into a bullish tape
+        (−$11.37, via fresh_5m_cross_flip — NOT window_delta, so the disable must be
+        flip-type-agnostic). Per-lane: enabled on lanes where a window's flips lose
+        (hype 15m), NOT where they win (bnb 15m flip +$4.21). Default empty = no-op.
+        """
+        return tf in (self.config.get("flip_disable_windows") or [])
+
+    def _window_delta_flip(
+        self, asset_obj: Any, tf: str, mins_left: float, action: str, rsi: Optional[float] = None
+    ):
         """When the window-delta (price since window-open) clearly OPPOSES the
         chosen side, return the flipped ``(action, allowed_side, direction,
         new_est_prob_up, prob)`` so the bot trades WITH the tape instead of being
@@ -1947,12 +1960,18 @@ class SolMacroStrategy:
         shorts recovers frequency in the correct direction. Keys on the SAME signal
         that was blocking (window-delta), NOT macd — momentum lags price.
 
-        Returns None to leave the side unchanged: gate off, delta unavailable, tape
-        agrees, or tape too uncertain (within ``window_delta_flip_margin`` of 0.5 —
-        don't flip on near-coinflip noise). Uses the window-delta's own P(up) as the
-        new est_prob (model-independent override). Inherited by ETH.
+        Returns None to leave the side unchanged: gate off, per-window flip disabled,
+        delta unavailable, tape agrees, or tape too uncertain (within
+        ``window_delta_flip_margin`` of 0.5 — don't flip on near-coinflip noise).
+        Uses the window-delta's own P(up) as the new est_prob. Inherited by ETH.
+
+        2026-06-25: ``window_delta_flip_long_to_short_max_rsi`` suppresses long→short
+        flips at/above an RSI (shorting into still-bullish momentum is net −EV — the
+        wrong-way hype loss was RSI 64.9). Short→long flips untouched.
         """
         if not bool(self.config.get("window_delta_confirm_enabled", False)):
+            return None
+        if self._flips_disabled_for_window(tf):
             return None
         wd = evaluate_window_delta(asset_obj, tf, mins_left)
         if wd is None:
@@ -1960,6 +1979,9 @@ class SolMacroStrategy:
         _move, prob = wd
         fmargin = float(self.config.get("window_delta_flip_margin", 0.05) or 0.0)
         if action == "BUY_YES" and prob < 0.5 - fmargin:
+            _max_rsi = self.config.get("window_delta_flip_long_to_short_max_rsi")
+            if _max_rsi is not None and rsi is not None and float(rsi) >= float(_max_rsi):
+                return None  # don't flip a long into a short while RSI still bullish
             return "BUY_NO", "SHORT", "DOWN", prob, prob
         if action == "BUY_NO" and prob > 0.5 + fmargin:
             return "BUY_YES", "LONG", "UP", prob, prob
@@ -4185,7 +4207,9 @@ class SolMacroStrategy:
                         direction=direction, side_source=side_source, reason_parts=reason_parts,
                         crossover=macd_5m.crossover, tf_label="5m",
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                        logger=logger,
+                        enabled=bool(self.config.get("fresh_cross_override", True))
+                        and not self._flips_disabled_for_window(_updown_tf),
                         # 2026-06-08: 5m market -> 5m RSI (own-window/faster-lead), not
                         # the 15m canonical. No-op today (flip is 1h-gated) but correct
                         # for when the flip is extended to the 5m window.
@@ -4199,7 +4223,9 @@ class SolMacroStrategy:
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    _wd_flip = self._window_delta_flip(
+                        sol, _updown_tf, _eval_left, action, rsi=getattr(sol, "rsi_14", None)
+                    )
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up
@@ -4536,7 +4562,9 @@ class SolMacroStrategy:
                         faster_crossover=(ta.sol.macd_15m if is_hourly else ta.sol.macd_5m).crossover,
                         faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                        logger=logger,
+                        enabled=bool(self.config.get("fresh_cross_override", True))
+                        and not self._flips_disabled_for_window(_updown_tf),
                         # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m->5m).
                         rsi_14=getattr(getattr(ta.sol, "tf_15m" if window_label == "1h" else "tf_5m", None), "rsi_14", None), window=window_label,
                         momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
@@ -4548,7 +4576,9 @@ class SolMacroStrategy:
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = self._window_delta_flip(sol, _updown_tf, _eval_left, action)
+                    _wd_flip = self._window_delta_flip(
+                        sol, _updown_tf, _eval_left, action, rsi=getattr(sol, "rsi_14", None)
+                    )
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up

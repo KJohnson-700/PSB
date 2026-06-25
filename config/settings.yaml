@@ -761,7 +761,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360.0
+        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -894,14 +894,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -964,7 +964,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360.0
+        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
     min_edge_15m_when_ltf_unconfirmed: 0.1
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -1120,7 +1120,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.09
@@ -1181,6 +1181,15 @@ strategies:
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
+    # 2026-06-25 flip-quality trims (hype = A/B treatment lane; other alts = controls).
+    # flip_disable_windows kills ALL side-flips (window_delta + fresh_cross + momentum)
+    # on the listed window. hype 15m flips are net -EV (worst alt 15m flip; the -$11.37
+    # session loss was a hype 15m fresh_5m_cross_flip-to-short into a BULLISH tape).
+    # bnb 15m flip is +$4.21 so it is NOT disabled there. hype 5m/1h flips stay ON (+EV).
+    flip_disable_windows:
+    - 15m
+    # long->short flips at RSI>=60 = shorting into still-bullish momentum (net -EV).
+    window_delta_flip_long_to_short_max_rsi: 60
     # 2026-06-15: removed 5m:SHORT. The low_atr gate (added 06-09 as harm
     # reduction) was blocking mid/high-ATR HYPE 5m shorts that the ghost log
     # shows are net +EV: rejected low_atr_gate_skip BUY_NO n=1570, 60.4% WR,
@@ -1351,14 +1360,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 360.0   # 2026-06-16: widen 240->360 (match up side). Starvation diag: live rejects sat at eval_mins_left 250-300, just past 240; ghost net-EV 240-300 = +0.065 recent (n=1063), whole 60-300 range +EV recent. Un-starves hype 1h BUY_NO.
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
@@ -1448,7 +1457,7 @@ strategies:
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 360.0
+        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1599,14 +1608,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.04   # 2026-06-15: ghost loosen — lane_min_edge rejecting xrp 1h SHORT at 75.6% WR/+0.280 EV (n=78)
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1794,14 +1803,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1888,7 +1897,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 360.0
+        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -2013,14 +2022,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 360.0
+            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
