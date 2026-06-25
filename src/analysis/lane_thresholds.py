@@ -232,6 +232,10 @@ def aggregate_ghost_buckets(
     """Aggregate ghost (rejected-and-settled) outcomes by translated live lane_id."""
     buckets: Dict[str, LaneBucket] = defaultdict(LaneBucket)
     for rec in _iter_settled(settled_path):
+        # Shadow/instrumentation cohorts (e.g. neutral_bias_shadow) are observational
+        # only — never let them feed per-lane threshold / veto decisions.
+        if str(rec.get("reason") or "").endswith("_shadow"):
+            continue
         win = rec.get("win")
         if not isinstance(win, bool):
             continue

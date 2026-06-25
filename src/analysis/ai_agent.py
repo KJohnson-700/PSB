@@ -1976,6 +1976,10 @@ OUTPUT (machine-parseable — follow exactly):
                         continue
                     if not isinstance(obj, dict):
                         continue
+                    # Shadow/instrumentation cohorts (neutral_bias_shadow) are
+                    # observational only — exclude from AI lane feedback aggregates.
+                    if str(obj.get("reason") or "").endswith("_shadow"):
+                        continue
                     k = (
                         str(obj.get("strategy") or "").strip().lower(),
                         str(obj.get("window") or "").strip().lower(),

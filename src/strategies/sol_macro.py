@@ -3239,6 +3239,32 @@ class SolMacroStrategy:
                 )
             if allowed_side is None:
                 _bump_skip("neutral_bias")
+                # 2026-06-25: INSTRUMENT the neutral_bias sit-out — the single largest
+                # volume leak (~43% of all rejects) that was previously UNLOGGED, so it
+                # had zero counterfactual in the ghost (0 of 850k+ settled rows). The bias
+                # chose no side, so we shadow-log a would-be LONG (the proven +EV alt
+                # direction) with the market so the ghost settles it against the real
+                # outcome. Purely observational: the bot still sits out (continue below).
+                # This is what finally lets us measure whether neutral-tape sit-outs are
+                # correct (coinflips) or are dropping baseline-level +EV long volume.
+                # Opt-out: log_neutral_bias_ghost: false.
+                if is_updown and bool(self.config.get("log_neutral_bias_ghost", True)):
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side="LONG",
+                        action="BUY_YES",
+                        reason="neutral_bias_shadow",  # _shadow = excluded from regime-map + calibrator-β
+                        yes_price=market.yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "bias_1h": macro_trend,
+                            "bias_15m": bias_15m,
+                            "bias_5m": bias_5m,
+                            "side_source": side_source,
+                            "instrumentation": "neutral_bias_shadow",
+                        },
+                    )
                 logger.info(
                     "%s skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
                     _brand,

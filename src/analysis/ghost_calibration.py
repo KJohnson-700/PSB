@@ -969,7 +969,11 @@ def settle_rejected_candidates(
         # threshold if their would-have-been WR recovers, without re-exposing
         # capital. Translation is heuristic (alt 4H assumed == alt 1H) — when
         # metadata is missing, the update is skipped.
-        if calibrator is not None:
+        # Shadow/instrumentation cohorts (e.g. neutral_bias_shadow) are settled and
+        # written to ghost_settled for counterfactual analysis ONLY — they must never
+        # feed the calibrator β (the would-be side is synthetic, not a real signal).
+        _is_shadow = str(rec.get("reason") or "").endswith("_shadow")
+        if calibrator is not None and not _is_shadow:
             try:
                 win_val = wb.get("win") if isinstance(wb, dict) else None
                 if isinstance(win_val, bool):

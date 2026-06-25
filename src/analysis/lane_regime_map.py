@@ -111,6 +111,11 @@ def _query_lane_stats(con, cols, lookback_days: int,
     bias_col = cols["bias"]
     time_col = cols["time"]
     where = ["realized_pct IS NOT NULL"]
+    # Exclude shadow/instrumentation cohorts (e.g. neutral_bias_shadow) — those are
+    # observational rows logged for counterfactual analysis only and must NEVER feed
+    # the regime enable/size decision. Guarded on the column existing (schemas vary).
+    if "reason" in cols.get("all", set()):
+        where.append(r"(reason IS NULL OR reason NOT LIKE '%\_shadow' ESCAPE '\')")
     if time_col:
         # settled_at may be stored as VARCHAR (ISO string) or a native timestamp;
         # try_cast handles both and drops unparseable rows (returns NULL).

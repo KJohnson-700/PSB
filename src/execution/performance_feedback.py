@@ -92,6 +92,10 @@ def check_overtight(
 
     buckets: Dict[str, List[Dict[str, Any]]] = {}
     for row in _iter_jsonl(path) or []:
+        # Shadow/instrumentation cohorts are observational only — never auto-loosen
+        # off them, regardless of overtight_reasons config (foot-gun guard).
+        if str(row.get("reason") or "").endswith("_shadow"):
+            continue
         if allowed_reasons and str(row.get("reason") or "") not in allowed_reasons:
             continue
         if not isinstance(row.get("win"), bool):
