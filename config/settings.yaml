@@ -129,12 +129,8 @@ trading:
     # fewer than this many seconds (late-window cents/time/expiry stops are NOT
     # gated). 2026-06-17 audit: every phantom exit was a 3–41s hold (impossible
     # 28–52% moves); every correct exit was 14–30 min — 60s cleanly separates them.
-    # Per-window: 60s is 20% of a 5m window, so it held the 2026-06-23 XRP 5m short
-    # to the trough (stop true @19s, suppressed 7x, dumped @0.045 = -$13.82 vs ~-$2.4
-    # had it fired ~20s). 5m gets a short floor that still filters 3–15s bad-tick
-    # phantoms; 15m/1h unchanged. (scalar still accepted for back-compat.)
     updown_min_hold_sec_before_pct_exit:
-      5m: 20
+      5m: 20    # 2026-06-23: 60s was 20% of a 5m window -> held XRP 5m short to trough -13.82
       15m: 60
       1h: 60
     bid_depth_exit:
@@ -188,11 +184,17 @@ trading:
             up:
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$27.90, n=40, 58% held-WR)
+          5m:
+            up:
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
       bnb_macro:
         window_lane_overrides:
           5m:
             up:
-              updown_hold_winners_to_resolution: false
+              updown_hold_winners_to_resolution: true  # 2026-06-23 settler hold-vs-stop gap +72.8 (lane_exit_policy n>=20, drift); TP-only, base stop intact, NO trail; Codex GO
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_hold_winners_to_resolution: false
           15m:
@@ -203,8 +205,11 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
+              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.47, n=15, 60% held-WR)
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_stop_loss_pct: 0.15
       eth_macro:
@@ -225,8 +230,8 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
               updown_hold_winners_to_resolution: false
           15m:
             up:
@@ -239,14 +244,16 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.1
               updown_hold_winners_to_resolution: false
       sol_macro:
         window_lane_overrides:
           5m:
             up:
               updown_hold_winners_to_resolution: false
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -254,10 +261,11 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
             up:
+              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
             down:
               updown_stop_loss_pct: 0.15
@@ -266,8 +274,8 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.1
               updown_hold_winners_to_resolution: false
           1h:
             up:
@@ -279,8 +287,8 @@ trading:
           5m:
             up:
               updown_stop_loss_pct: 0.15
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.03
+              updown_in_profit_stop_tighten_to_pct: 0.06
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -288,14 +296,15 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
-              updown_hold_winners_to_resolution: false
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
+              updown_hold_winners_to_resolution: true  # 2026-06-23 settler hold-vs-stop gap +13.5 (lane_exit_policy n>=20, drift); TP-only, base stop intact, NO trail; Codex GO
           15m:
             up:
+              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.02
@@ -303,8 +312,8 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.1
               updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$127.98, n=23, 70% held-WR): the single biggest hold-edge lane
           1h:
             up:
@@ -329,8 +338,8 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.56
               updown_stop_cents_high_entry: 0.01
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.04
+              updown_in_profit_stop_tighten_to_pct: 0.08
               updown_hold_winners_to_resolution: false
           15m:
             up:
@@ -343,8 +352,8 @@ trading:
               updown_exit_window_max_fraction: 0.45
               updown_high_entry_threshold: 0.58
               updown_stop_cents_high_entry: 0.015
-              updown_in_profit_stop_trigger_pct: 0.0
-              updown_in_profit_stop_tighten_to_pct: 0.0
+              updown_in_profit_stop_trigger_pct: 0.05
+              updown_in_profit_stop_tighten_to_pct: 0.1
               updown_hold_winners_to_resolution: false
       doge_macro:
         window_lane_overrides:
@@ -484,6 +493,7 @@ entry_policy:
     size_multiplier: 1.0
 strategies:
   bitcoin:
+    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     enabled: true
     use_ai: true
     min_liquidity: 1000
@@ -630,6 +640,7 @@ strategies:
     # WR/PnL degrades, extend the flip to 1h — see _btc_window_delta_flip caller.
     window_delta_confirm_enabled: true
     window_delta_flip_margin: 0.05
+    entry_admission_calibration_shrink: 0.28  # 2026-06-22 deflate overconfident est_prob to realized rate for min_edge admission (1.0=off)
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -761,7 +772,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+        entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
     hard_min_edge: 0.0
     min_edge_15m_when_ltf_unconfirmed: 0.1
     require_btc_catalyst_15m_when_unconfirmed: true
@@ -894,14 +905,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.07
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -916,6 +927,12 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   eth_macro:
+    disable_buy_no_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_no_15m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_yes_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_yes_15m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_yes_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     # 2026-06-16: ETH pocket-only. est_prob is ~0.50 AUC (no model to fix); edge is pure
     # selection. ONLY +EV ETH pocket = BUY_NO at RSI>=55 on 15m/1h (+0.10 to +0.26 net EV).
     # All ETH longs -EV, ETH 5m dead. Gate admits only the pocket; rest ghost-logged.
@@ -964,7 +981,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+        entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
     min_edge_15m_when_ltf_unconfirmed: 0.1
     neutral_macro_require_spike_or_lag: false
     block_counter_macro_leg_updown: true
@@ -979,7 +996,7 @@ strategies:
     buy_no_4h_hist_override_enabled: true
     buy_yes_4h_hist_override_enabled: true
     direction_source: btc
-    btc_htf_bias_dry_run_override: null
+    btc_htf_bias_dry_run_override:
     signal_15m_long_threshold: 0.55
     signal_15m_short_threshold: 0.45
     signal_4h_long_threshold: 0.7
@@ -1120,7 +1137,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.09
@@ -1160,6 +1177,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
+    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     # 2026-06-16: HYPE 15m BUY_YES timing dead-zone. Ghost timing split: <5min +0.36,
     # >=15min +0.02 (both +EV) but 5-12min -0.18 to -0.35 — mid-window overbought longs
     # get stopped near expiry (the live -$30 15m bleed). Skip 15m longs at 5<=mins_left<12.
@@ -1181,15 +1199,6 @@ strategies:
     macd_momentum_flip_long_to_short: false
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
-    # 2026-06-25 flip-quality trims (hype = A/B treatment lane; other alts = controls).
-    # flip_disable_windows kills ALL side-flips (window_delta + fresh_cross + momentum)
-    # on the listed window. hype 15m flips are net -EV (worst alt 15m flip; the -$11.37
-    # session loss was a hype 15m fresh_5m_cross_flip-to-short into a BULLISH tape).
-    # bnb 15m flip is +$4.21 so it is NOT disabled there. hype 5m/1h flips stay ON (+EV).
-    flip_disable_windows:
-    - 15m
-    # long->short flips at RSI>=60 = shorting into still-bullish momentum (net -EV).
-    window_delta_flip_long_to_short_max_rsi: 60
     # 2026-06-15: removed 5m:SHORT. The low_atr gate (added 06-09 as harm
     # reduction) was blocking mid/high-ATR HYPE 5m shorts that the ghost log
     # shows are net +EV: rejected low_atr_gate_skip BUY_NO n=1570, 60.4% WR,
@@ -1360,21 +1369,20 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 1.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
     btc_spike_floor_pct_5m: 0.15
     btc_spike_floor_pct_15m: 0.4
     lag_signal_min_pct: 0.12
     neutral_macro_require_spike_or_lag: false
     enforce_alt_1h_alignment: false
-    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (hype): un-veto bullish bias — RSI level can't override a convicted+rising MACD -> NEUTRAL. Restores LONG frequency. regime-layer hype LONG won +$7.01. Per-lane; sol/doge left OFF as control.
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
     rsi_hard_gate_enabled: false
@@ -1406,6 +1414,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    disable_buy_yes_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
     est_prob:
       atr_low_pct: 0.0035
@@ -1457,7 +1466,7 @@ strategies:
         min_edge: 0.05
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+        entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1503,7 +1512,6 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: true
     enforce_alt_1h_alignment: true
-    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (xrp): un-veto bullish bias — strongest ghost long-EV (+0.093 5m). Per-lane; sol/doge OFF as control.
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
@@ -1608,14 +1616,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.04   # 2026-06-15: ghost loosen — lane_min_edge rejecting xrp 1h SHORT at 75.6% WR/+0.280 EV (n=78)
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1630,6 +1638,7 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     disable_buy_yes_5m: true  # 2026-06-16: sit out DOGE 5m LONG — ghost net-of-fee EV -0.084; Kimi-flagged. Ghost-logged.
     buy_yes_15m_pocket_rsi_max: 35.0  # 2026-06-16: DOGE 15m LONG pocket-restrict — aggregate -0.017 but +EV only oversold/bearish (RSI<35 +0.196 n=2090; BEARISH +0.073 n=6181). Admit 15m BUY_YES only when RSI<35 OR htf bearish. Ghost-logged.
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
@@ -1803,14 +1812,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.06
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -1825,6 +1834,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    disable_buy_no_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_no_15m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     # 2026-06-16: BNB 15m LONG reclaimed from blanket sit-out -> pocket-restrict. Aggregate
     # -0.068 but RSI<35 sub-pocket is +0.065 (n1838). bearish arm OFF: BNB bearish&RSI>=35
     # longs are -0.040 (unlike DOGE). Admit 15m BUY_YES only when RSI<35.
@@ -1851,6 +1863,7 @@ strategies:
     # 06-12: 15m -0.014 (n=10k), 5m -0.013, 1h -0.070 (n=442, worst); taken
     # trades -$19 this session. -EV all windows. Operator directive: sit out.
     disable_buy_yes: false  # 2026-06-20 baseline-restore: bnb 5m BUY_YES was +$54.4@66% (9t) in the +$362 baseline; 06-17 sit-out used phantom-0.10 fee (real=0 Olympus)
+    disable_buy_yes_5m_when_bullish: true  # 2026-06-26: restore baseline behavior — baseline took ONLY bearish bnb 5m longs (9/9 +$54); bullish leak -EV (ghost -0.097 n7580 / live -$46 n74). Bearish longs kept (+$22). Codex GO.
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
@@ -1897,7 +1910,7 @@ strategies:
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
-        entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+        entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
@@ -1946,7 +1959,6 @@ strategies:
     neutral_macro_require_spike_or_lag: true
     require_btc_catalyst_5m: false
     enforce_alt_1h_alignment: true
-    alt_rsi_vote_momentum_aware: true  # 2026-06-25 (bnb): un-veto bullish bias — regime-layer bnb LONG won +$18.54 live; ghost 5m-long +0.089. Per-lane; sol/doge OFF as control.
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
@@ -2022,14 +2034,14 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
           down:
             min_edge: 0.08
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
-            entry_window_max: 60.0  # 2026-06-25: 1h cap. was 360 (=6h, unbounded for hourly mkts). taken-trade join >60min to res = -$39/~20%WR; far-out hourly entries expose to pre-resolution swings w/ no edge.
+            entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
             size_multiplier: 0.3
     btc_min_4h_hist_magnitude: 20.0
     btc_1h_regime_gates:
@@ -2248,7 +2260,7 @@ learning_loop:
   proposal_dir: data/learning/proposals
   write_vault_log: true
   ai_proposal_min_trades: 75
-  ai_proposal_max_trades: null
+  ai_proposal_max_trades:
   ai_proposal_win_rate_below: 0.63
   ai_proposal_require_negative_pnl: true
   ai_proposal_require_negative_avg_return_on_notional: false
