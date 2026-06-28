@@ -51,6 +51,7 @@ class UpdownExitGlobals:
     updown_exit_window_mins: float
     updown_max_hold_mins: float
     updown_exit_window_max_fraction: float
+    updown_flatten_before_resolution_sec: float
     updown_stop_cents_high_entry: float
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
@@ -97,6 +98,7 @@ class UpdownResolvedExitParams:
     updown_exit_window_mins: float
     updown_max_hold_mins: float
     updown_exit_window_max_fraction: float
+    updown_flatten_before_resolution_sec: float
     updown_stop_cents_high_entry: float
     updown_high_entry_threshold: float
     updown_in_profit_stop_trigger_pct: float
@@ -124,6 +126,7 @@ _UPDOWN_EXIT_PARAM_KEYS = frozenset(
         "updown_exit_window_mins",
         "updown_max_hold_mins",
         "updown_exit_window_max_fraction",
+        "updown_flatten_before_resolution_sec",
         "updown_stop_cents_high_entry",
         "updown_high_entry_threshold",
         "updown_in_profit_stop_trigger_pct",
@@ -206,6 +209,9 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         updown_exit_window_mins=base_win,
         updown_max_hold_mins=base_hold,
         updown_exit_window_max_fraction=base_frac,
+        updown_flatten_before_resolution_sec=float(
+            ec.get("updown_flatten_before_resolution_sec", 0.0) or 0.0
+        ),
         updown_stop_cents_high_entry=float(ec.get("updown_stop_cents_high_entry", 0.02) or 0.02),
         updown_high_entry_threshold=float(ec.get("updown_high_entry_threshold", 0.60) or 0.60),
         updown_in_profit_stop_trigger_pct=float(
@@ -369,6 +375,7 @@ def resolve_updown_exit_params_for_position(
         "updown_exit_window_mins": g.updown_exit_window_mins,
         "updown_max_hold_mins": g.updown_max_hold_mins,
         "updown_exit_window_max_fraction": g.updown_exit_window_max_fraction,
+        "updown_flatten_before_resolution_sec": g.updown_flatten_before_resolution_sec,
         "updown_stop_cents_high_entry": g.updown_stop_cents_high_entry,
         "updown_high_entry_threshold": g.updown_high_entry_threshold,
         "updown_in_profit_stop_trigger_pct": g.updown_in_profit_stop_trigger_pct,
@@ -411,6 +418,9 @@ def resolve_updown_exit_params_for_position(
         updown_exit_window_mins=float(params["updown_exit_window_mins"]),
         updown_max_hold_mins=float(params["updown_max_hold_mins"]),
         updown_exit_window_max_fraction=float(params["updown_exit_window_max_fraction"]),
+        updown_flatten_before_resolution_sec=float(
+            params["updown_flatten_before_resolution_sec"]
+        ),
         updown_stop_cents_high_entry=float(params["updown_stop_cents_high_entry"]),
         updown_high_entry_threshold=float(params["updown_high_entry_threshold"]),
         updown_in_profit_stop_trigger_pct=float(params["updown_in_profit_stop_trigger_pct"]),

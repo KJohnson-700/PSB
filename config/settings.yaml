@@ -97,7 +97,7 @@ trading:
     max_snapshot_age_sec: 1800
   exit_rules:
     enabled: true
-    take_profit_pct: 0.3
+    take_profit_pct: 0.3  # 2026-06-26 reverted from 0.15: not the threshold — real fix is one-sided exit eval (see main.py onesided_exitfix). Olympus smoke confirms fillable book; bot was skipping exits on one-sided CLOB books.
     stop_loss_pct: 0.3
     max_hold_hours: 72
     updown_stop_cents: 0.03
@@ -163,8 +163,8 @@ trading:
     # the old wide-stop bleed. Validate live: payoff ratio should climb 1.42 -> ~1.68.
     updown_in_profit_stop_trigger_pct: 0.0
     updown_in_profit_stop_tighten_to_pct: 0.0
-    updown_trail_arm_pct: 0.0
-    updown_trail_gap_pct: 0.0
+    updown_trail_arm_pct: 0.1  # 2026-06-27 baseline-restore (baseline=0.1; was zeroed 06-22 = the give-back regression)
+    updown_trail_gap_pct: 0.15  # 2026-06-27 baseline-restore (baseline=0.15)
     regime_conditioned_exits:
       enabled: false
       trend_side_hold_winners: false
@@ -179,11 +179,11 @@ trading:
           15m:
             up:
               updown_stop_loss_pct: 0.15  # 2026-06-16 revert-to-0613: widened stop rolled back
-              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.83, n=89): stops were cutting this winner; let it run past TP, base stop still protects
+              updown_hold_winners_to_resolution: true  # 2026-06-27 RESTORE: baseline had hold ON; settler n=315 held_wr 50-55 vs realized 12-34 (+EV). re-enabled w/ trail.
           1h:
             up:
               updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$27.90, n=40, 58% held-WR)
+              updown_hold_winners_to_resolution: true  # 2026-06-27 RESTORE: baseline had hold ON; settler n=315 held_wr 50-55 vs realized 12-34 (+EV). re-enabled w/ trail.
           5m:
             up:
               updown_in_profit_stop_trigger_pct: 0.04
@@ -192,7 +192,7 @@ trading:
         window_lane_overrides:
           5m:
             up:
-              updown_hold_winners_to_resolution: true  # 2026-06-23 settler hold-vs-stop gap +72.8 (lane_exit_policy n>=20, drift); TP-only, base stop intact, NO trail; Codex GO
+              updown_hold_winners_to_resolution: false  # 2026-06-26 REVERSED: settler regen n=21 gap -25.4 says data wants tight TP/SL (held 24%/real 0% — holding LOSES MORE). Re-enable +15% TP. Codex GO
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
@@ -207,7 +207,7 @@ trading:
             up:
               entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
-              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$38.47, n=15, 60% held-WR)
+              updown_hold_winners_to_resolution: false  # 2026-06-27 baseline-restore: removed (no data hold helps; was suppressing TP -> give-backs)
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
             down:
@@ -289,6 +289,9 @@ trading:
               updown_stop_loss_pct: 0.15
               updown_in_profit_stop_trigger_pct: 0.03
               updown_in_profit_stop_tighten_to_pct: 0.06
+              updown_hold_winners_to_resolution: true  # 2026-06-27 RESTORE: baseline had hold ON; settler n=315 held_wr 50-55 vs realized 12-34 (+EV). re-enabled w/ trail.
+              updown_trail_arm_pct: 0.1
+              updown_trail_gap_pct: 0.15
             down:
               updown_stop_loss_pct: 0.15
               updown_stop_cents: 0.015
@@ -298,7 +301,7 @@ trading:
               updown_stop_cents_high_entry: 0.01
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
-              updown_hold_winners_to_resolution: true  # 2026-06-23 settler hold-vs-stop gap +13.5 (lane_exit_policy n>=20, drift); TP-only, base stop intact, NO trail; Codex GO
+              updown_hold_winners_to_resolution: false  # 2026-06-26 REVERSED: settler regen n=24 gap +48.6 now says data wants tight TP/SL (held 38%/real 4%); hold was suppressing TP so 5/6 give-back winners (mfe +48/+29/+35%) round-tripped to stop. Re-enable +15% TP. Codex GO
           15m:
             up:
               entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
@@ -314,7 +317,7 @@ trading:
               updown_stop_cents_high_entry: 0.015
               updown_in_profit_stop_trigger_pct: 0.05
               updown_in_profit_stop_tighten_to_pct: 0.1
-              updown_hold_winners_to_resolution: true  # 2026-06-21 per-lane EXIT (settled hold-vs-stop +$127.98, n=23, 70% held-WR): the single biggest hold-edge lane
+              updown_hold_winners_to_resolution: true  # 2026-06-27 RESTORE: baseline had hold ON; settler n=315 held_wr 50-55 vs realized 12-34 (+EV). re-enabled w/ trail.
           1h:
             up:
               updown_stop_loss_pct: 0.15
@@ -375,6 +378,7 @@ trading:
               updown_hold_winners_to_resolution: false
             down:
               updown_stop_loss_pct: 0.15
+    updown_flatten_before_resolution_sec: 60
   execution_fees:
     enabled: false
     # 2026-06-18: DISABLED for the Olympus phase. REAL smoke fills (36, 06-13,
@@ -714,7 +718,10 @@ strategies:
       datetime_utc: '2026-12-10T13:30:00Z'
     - name: FOMC Rate Decision
       datetime_utc: '2026-12-09T19:00:00Z'
+    disable_buy_no_5m_when_bearish: false
   sol_macro:
+    fade_regime: true  # 2026-06-27 fade-alone test: alts fade native momentum (native -$296 all-time vs fade +$599). eth excluded.
+    fade_regime_windows: ["15m", "1h"]  # 2026-06-27 LOSERS-ONLY: sol native 15m -$59 / 1h -$26 (fade); 5m +$75 WINNER=native.
     disable_buy_yes_5m: true  # 2026-06-16: sit out SOL 5m LONG — ghost net-of-fee EV -0.084 all / -0.065 recent (n=7.4k). Live: overbought longs gapped through stop -26/-75% (2-3min-to-end). Ghost-logged.
     disable_buy_no_5m: false  # 2026-06-18: RE-ENABLED. The -0.074 disable was NET-OF-(phantom)-FEE; fee=0 (Olympus). Native sol 5m SHORT is +0.032 gross (n=1777, 54% WR); flip subset is -EV (n=77) but tiny. disable blocked the +EV native. Re-validate on accumulation.
     disable_buy_no_15m: true  # 2026-06-16: sit out SOL 15m SHORT — ghost net-of-fee EV -0.186 (worst lane, large n); Kimi-flagged. Ghost-logged.
@@ -1177,7 +1184,9 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   hype_macro:
-    disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
+    fade_regime: true  # 2026-06-27 fade-alone test: alts fade native momentum (native -$296 all-time vs fade +$599). eth excluded.
+    fade_regime_windows: ["5m", "15m"]  # 2026-06-27 LOSERS-ONLY: hype native 5m -$222 / 15m -$68 (fade); 1h +$30 WINNER=native.
+    disable_buy_no_5m: false  # 2026-06-26 RE-ENABLED: hype 0/31 was a FEED bug (Binance-futures vs Hyperliquid settlement, ~10bps), not a bad lane. Feed fixed -> Hyperliquid-primary. Let hype trade again.
     # 2026-06-16: HYPE 15m BUY_YES timing dead-zone. Ghost timing split: <5min +0.36,
     # >=15min +0.02 (both +EV) but 5-12min -0.18 to -0.35 — mid-window overbought longs
     # get stopped near expiry (the live -$30 15m bleed). Skip 15m longs at 5<=mins_left<12.
@@ -1414,6 +1423,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   xrp_macro:
+    fade_regime: false  # 2026-06-27 LOSERS-ONLY: all xrp native WIN (5m +$25, 15m +$5, 1h +$58) -> no fade.
+    fade_regime_windows: ["5m", "1h"]  # 2026-06-27 per-lane: fade only +EV alt x window (5m universal; xrp/hype 1h; NOT bnb/doge 1h). align-gate skips fully-aligned trends.
     disable_buy_yes_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     # 2026-06-15: per-asset est_prob ATR% bands (own p25/p75). RSI shared default.
     est_prob:
@@ -1638,6 +1649,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   doge_macro:
+    fade_regime: false  # 2026-06-27 LOSERS-ONLY: doge 1h +$38 WIN; 5m/15m no native loss data -> no fade.
+    fade_regime_windows: ["5m", "15m"]  # 2026-06-27 per-lane: fade only +EV alt x window (5m universal; xrp/hype 1h; NOT bnb/doge 1h). align-gate skips fully-aligned trends.
     disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     disable_buy_yes_5m: true  # 2026-06-16: sit out DOGE 5m LONG — ghost net-of-fee EV -0.084; Kimi-flagged. Ghost-logged.
     buy_yes_15m_pocket_rsi_max: 35.0  # 2026-06-16: DOGE 15m LONG pocket-restrict — aggregate -0.017 but +EV only oversold/bearish (RSI<35 +0.196 n=2090; BEARISH +0.073 n=6181). Admit 15m BUY_YES only when RSI<35 OR htf bearish. Ghost-logged.
@@ -1834,6 +1847,8 @@ strategies:
         RANGE: 0.7
         BEAR: 0.5
   bnb_macro:
+    fade_regime: true  # 2026-06-27 fade-alone test: alts fade native momentum (native -$296 all-time vs fade +$599). eth excluded.
+    fade_regime_windows: ["15m", "1h"]  # 2026-06-27 LOSERS-ONLY: bnb native 15m -$10.75 / 1h -$11.58 (fade); 5m +$11.76 WINNER=native.
     disable_buy_no_1h: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     disable_buy_no_15m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
     disable_buy_no_5m: false  # 2026-06-23 RE-OPENED: SMOKE OOS cut-list reverted (post-baseline gutting; restore baseline lane set for data-gathering)
@@ -1902,15 +1917,18 @@ strategies:
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 10.0
+        min_est_prob_conviction: 0.55
       15m:
         min_edge: 0.04   # 2026-06-18: ghost loosen — 15m LONG [0.04,0.06)=+0.204 RP n=1607 (gross; Olympus fee=0). Floor at 0.04: [0.02,0.04) is -0.124. Was 0.09.
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 150.0
+        min_est_prob_conviction: 0.55
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
+        min_est_prob_conviction: 0.55
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6

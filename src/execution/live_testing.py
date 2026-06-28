@@ -503,7 +503,13 @@ class PositionExitManager:
                             mins_at_entry,
                         )
 
-                    if mins_remaining is not None and mins_remaining < 0:
+                    if (
+                        mins_remaining is not None
+                        and resolved.updown_flatten_before_resolution_sec > 0
+                        and mins_remaining * 60.0 <= resolved.updown_flatten_before_resolution_sec
+                    ):
+                        reason = "updown_flatten_pre_resolution"
+                    elif mins_remaining is not None and mins_remaining < 0:
                         # Market already past expiry but still open — exit immediately.
                         reason = "updown_expired"
                     elif mins_remaining is not None and mins_remaining <= effective_exit_window:

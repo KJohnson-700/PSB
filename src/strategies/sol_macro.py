@@ -73,7 +73,6 @@ from src.analysis.lane_entry_policy import (
     resolve_lane_entry_policy,
 )
 from src.analysis.buy_yes_lane_repair import resolve_buy_yes_lane_repair
-from src.analysis import lane_regime_runtime
 from src.analysis.kelly_sizer import KellySizer
 from src.execution.exposure_manager import ExposureManager, MarketConditions, ExposureTier
 from src.strategies.strategy_config import (
@@ -1420,7 +1419,7 @@ class SolMacroStrategy:
         """Check if this is a 5-minute candle Up or Down market (≤5 min window)."""
         return _market_window_minutes(market) <= 5
 
-    def _bias_to_side(self, bias: str) -> Optional[str]:
+    def _bias_to_side(self, bias: str, tf: Optional[str] = None, aligned: bool = False) -> Optional[str]:
         # Primary regime->side mapping used by _resolve_alt_bias_for_tf (the live
         # side-decision path for all alts + ETH). COUNTER-REGIME (fade) mode —
         # 2026-06-22, default OFF: OOS ghost (347k settled, both time-halves) showed
@@ -1433,9 +1432,28 @@ class SolMacroStrategy:
             base = "SHORT"
         else:
             return None
-        if bool(self.config.get("fade_regime", False)):
+        # 2026-06-27 per-lane fade: fade ONLY on enabled windows (fade_regime_windows)
+        # AND when the timeframes DISAGREE (not a fully-aligned trend). The fade edge is
+        # per alt x window (5m universal +EV; xrp/hype 1h +EV; bnb/doge 1h -EV) and lives
+        # in chop/disagreement — fading a fully-aligned strong trend gets run over (the
+        # live sol 5m fully-aligned losses). aligned=True suppresses the fade.
+        if self._fade_for_window(tf) and not aligned:
             return "SHORT" if base == "LONG" else "LONG"
         return base
+
+    def _fade_for_window(self, tf: Optional[str]) -> bool:
+        """Per-lane fade enable. Master flag fade_regime + optional fade_regime_windows
+        list. windows missing => fade ALL windows (legacy global behaviour); else fade
+        only when tf is in the list. Fail-safe: flag false / unknown tf => no fade."""
+        if not bool(self.config.get("fade_regime", False)):
+            return False
+        windows = self.config.get("fade_regime_windows")
+        if windows is None:
+            return True
+        try:
+            return str(tf) in {str(w) for w in windows}
+        except TypeError:
+            return False
 
     def _hist_conviction_threshold(self, tf: str) -> float:
         fallback = {
@@ -1527,32 +1545,12 @@ class SolMacroStrategy:
         return "NEUTRAL"
 
     def _resolve_voted_bias(self, *, macd: Any, price: float, ema_9: float, ema_21: float, ema_50: float, rsi: float, min_hist_magnitude: float) -> str:
-        macd_vote = self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude)
-        rsi_vote = self._vote_rsi_bias(rsi)
-        ema_vote = self._vote_ema_bias(price, ema_9, ema_21, ema_50)
-        # 2026-06-25 (alt Part B, ported from the BTC bias fix): momentum-aware,
-        # LONG-biased. MACD+EMA are direction/momentum votes; RSI is a *level*
-        # (reversal) vote — RSI-extreme WITH the trend is continuation, not reversal
-        # (oversold-in-uptrend = buy). The old 2-of-3 let a "bearish" RSI level veto a
-        # convicted bullish MACD down to NEUTRAL -> that is the dominant source of the
-        # alt `neutral_bias` sit-outs (the frequency collapse). When a conviction-gated
-        # MACD is BULLISH and EMA is not opposing, take BULLISH — the proven +EV alt
-        # direction (regime-layer reopened contrarian LONGs won: bnb +18.54, hype +7.01).
-        # SHORTS deliberately NOT un-vetoed here: alt momentum shorts are -EV /
-        # anti-predictive, so the bearish path stays on the require_macd_for_bearish_bias
-        # guard below. PER-LANE (per-asset) opt-in, default OFF — set
-        # alt_rsi_vote_momentum_aware: true only on the assets the data supports; never
-        # a blanket flip that could disturb a working lane. self.config is the asset's
-        # own config in each SolMacroStrategy subclass, so this is per-asset.
-        # Scale-free conviction gate: require the MACD histogram to be RISING (building
-        # momentum), so the early-return fires on a real up-move and not flat-above-zero
-        # chop. This replaces a per-asset magnitude floor (alt MACD scales vary too much
-        # by asset price to set one cleanly).
-        if self.config.get("alt_rsi_vote_momentum_aware", False):
-            _macd_rising = bool(getattr(macd, "histogram_rising", False)) if macd is not None else False
-            if macd_vote == "BULLISH" and ema_vote != "BEARISH" and _macd_rising:
-                return "BULLISH"
-        votes = [macd_vote, rsi_vote, ema_vote]
+        votes = [
+            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
+            self._vote_rsi_bias(rsi),
+            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
+        ]
+        macd_vote = votes[0]
         bull_votes = sum(1 for vote in votes if vote == "BULLISH")
         bear_votes = sum(1 for vote in votes if vote == "BEARISH")
         if bull_votes >= 2:
@@ -1694,7 +1692,12 @@ class SolMacroStrategy:
         penalty_reasons: List[str] = []
 
         if horizon_bias in {"BULLISH", "BEARISH"}:
-            allowed_side = self._bias_to_side(horizon_bias)
+            # 2026-06-27 align-gate: a fully-aligned trend (every DECIDED slower TF agrees
+            # with this horizon) does not mean-revert, so fading it gets run over. Compute
+            # alignment up front so _bias_to_side can suppress the fade when aligned.
+            _slower_decided = [b for b in slower_biases.values() if b in {"BULLISH", "BEARISH"}]
+            _fully_aligned = bool(_slower_decided) and all(b == horizon_bias for b in _slower_decided)
+            allowed_side = self._bias_to_side(horizon_bias, tf=tf, aligned=_fully_aligned)
             side_source = f"{asset}_{tf}_native"
             for slower_tf, slower_bias in slower_biases.items():
                 if slower_bias not in {"BULLISH", "BEARISH"}:
@@ -1704,6 +1707,11 @@ class SolMacroStrategy:
                     penalty_reasons.append(f"{slower_tf}_disagrees")
                     side_source = f"{asset}_{tf}_vs_slower"
             primary_htf_bias = horizon_bias
+            if self._fade_for_window(tf) and not _fully_aligned:
+                # The side WAS faded (per-lane window enabled + not a fully-aligned trend)
+                # — _bias_to_side already inverted (single source); only retag here for
+                # attribution. Late flips are gated in fade_mode below (no double-flip).
+                side_source = f"{asset}_{tf}_fade_native"
             return BiasResolution(
                 allowed_side=allowed_side,
                 side_source=side_source,
@@ -1731,7 +1739,10 @@ class SolMacroStrategy:
             penalty = 0.04
             penalty_reasons = [f"{tf}_neutral_fallback", f"{slower_tf}_fallback"]
             return BiasResolution(
-                allowed_side=self._bias_to_side(slower_bias),
+                # aligned=True => NEVER fade this marginal neutral-fallback path (default
+                # sat-out anyway). Avoids an untagged faded side that would escape the
+                # _fade_active flip-gate and get double-flipped. Runs native here.
+                allowed_side=self._bias_to_side(slower_bias, tf=tf, aligned=True),
                 side_source=f"{asset}_{tf}_neutral_fallback_{slower_tf}",
                 horizon_tf=tf,
                 horizon_bias=horizon_bias,
@@ -1938,20 +1949,7 @@ class SolMacroStrategy:
             return None
         return move, prob, margin
 
-    def _flips_disabled_for_window(self, tf: str) -> bool:
-        """Per-lane kill-switch for ALL side-flips (window_delta + fresh_cross +
-        momentum) on a given window. 2026-06-25: taken-trade join shows flips are
-        net +$263 on 5m/1h but −$21 on 15m (window-delta noisier mid-bar on 15m);
-        the worst single live loss was a hype 15m flip-to-short into a bullish tape
-        (−$11.37, via fresh_5m_cross_flip — NOT window_delta, so the disable must be
-        flip-type-agnostic). Per-lane: enabled on lanes where a window's flips lose
-        (hype 15m), NOT where they win (bnb 15m flip +$4.21). Default empty = no-op.
-        """
-        return tf in (self.config.get("flip_disable_windows") or [])
-
-    def _window_delta_flip(
-        self, asset_obj: Any, tf: str, mins_left: float, action: str, rsi: Optional[float] = None
-    ):
+    def _window_delta_flip(self, asset_obj: Any, tf: str, mins_left: float, action: str):
         """When the window-delta (price since window-open) clearly OPPOSES the
         chosen side, return the flipped ``(action, allowed_side, direction,
         new_est_prob_up, prob)`` so the bot trades WITH the tape instead of being
@@ -1960,18 +1958,12 @@ class SolMacroStrategy:
         shorts recovers frequency in the correct direction. Keys on the SAME signal
         that was blocking (window-delta), NOT macd — momentum lags price.
 
-        Returns None to leave the side unchanged: gate off, per-window flip disabled,
-        delta unavailable, tape agrees, or tape too uncertain (within
-        ``window_delta_flip_margin`` of 0.5 — don't flip on near-coinflip noise).
-        Uses the window-delta's own P(up) as the new est_prob. Inherited by ETH.
-
-        2026-06-25: ``window_delta_flip_long_to_short_max_rsi`` suppresses long→short
-        flips at/above an RSI (shorting into still-bullish momentum is net −EV — the
-        wrong-way hype loss was RSI 64.9). Short→long flips untouched.
+        Returns None to leave the side unchanged: gate off, delta unavailable, tape
+        agrees, or tape too uncertain (within ``window_delta_flip_margin`` of 0.5 —
+        don't flip on near-coinflip noise). Uses the window-delta's own P(up) as the
+        new est_prob (model-independent override). Inherited by ETH.
         """
         if not bool(self.config.get("window_delta_confirm_enabled", False)):
-            return None
-        if self._flips_disabled_for_window(tf):
             return None
         wd = evaluate_window_delta(asset_obj, tf, mins_left)
         if wd is None:
@@ -1979,9 +1971,6 @@ class SolMacroStrategy:
         _move, prob = wd
         fmargin = float(self.config.get("window_delta_flip_margin", 0.05) or 0.0)
         if action == "BUY_YES" and prob < 0.5 - fmargin:
-            _max_rsi = self.config.get("window_delta_flip_long_to_short_max_rsi")
-            if _max_rsi is not None and rsi is not None and float(rsi) >= float(_max_rsi):
-                return None  # don't flip a long into a short while RSI still bullish
             return "BUY_NO", "SHORT", "DOWN", prob, prob
         if action == "BUY_NO" and prob > 0.5 + fmargin:
             return "BUY_YES", "LONG", "UP", prob, prob
@@ -2442,6 +2431,7 @@ class SolMacroStrategy:
         action: str,
         htf_bias: str,
         yes_price: Optional[float] = None,
+        rsi_14: Optional[float] = None,
     ) -> float:
         """Post-calibration BUY_YES floor bump — mirror of the BTC hook.
 
@@ -2469,6 +2459,13 @@ class SolMacroStrategy:
             self.config.get(f"{window_size}_buy_yes_bullish_floor_bump", 0.0)
         )
         if bump <= 0.0:
+            return 0.0
+        # RSI overbought guard (2026-06-28): don't inflate est into an overbought top
+        # (live: sol 15m RSI 86 -> +0.21 bump -> forced LONG into a reversal, mfe 0).
+        # Per-window opt-in via {strategy}.<tf>_buy_yes_bullish_floor_bump_rsi_max;
+        # unset => off (byte-identical to prior behaviour).
+        rsi_max = float(self.config.get(f"{window_size}_buy_yes_bullish_floor_bump_rsi_max", 0.0) or 0.0)
+        if rsi_max > 0.0 and rsi_14 is not None and float(rsi_14) >= rsi_max:
             return 0.0
         if window_size == "1h" and yes_price is not None:
             fp_min = float(self.config.get("1h_buy_yes_floor_price_min", 0.50))
@@ -3246,6 +3243,12 @@ class SolMacroStrategy:
             resolution = self._resolve_alt_bias_for_tf(ta, _updown_tf)
             allowed_side = resolution.allowed_side
             side_source = resolution.side_source
+            # 2026-06-27 per-lane fade: the side was ACTUALLY faded for this candidate
+            # only when resolution tagged it *_fade_native (window enabled + not a
+            # fully-aligned trend). Gate the late flips on THIS, not the master
+            # fade_regime flag — otherwise non-faded / aligned / excluded-window lanes
+            # would run native momentum with their flips wrongly disabled (≠ baseline).
+            _fade_active = "fade_native" in (side_source or "")
             primary_htf_bias = resolution.primary_htf_bias
             # [1h] simple band: price-band admission for native LONG signals only.
             # Do not choose side here; alt direction comes from the bias resolver.
@@ -3255,38 +3258,11 @@ class SolMacroStrategy:
                 and self._a1hsl_entry_min <= float(market.yes_price or 0) <= self._a1hsl_entry_max
             )
             if _simple_band_long and allowed_side == "LONG":
-                side_source = (side_source or "") + (
-                    "+simple_band_fade" if bool(self.config.get("fade_regime", False))
-                    else "+simple_band_long"
-                )
+                # allowed_side is LONG here (a faded side would be SHORT), so this is a
+                # native/aligned long band entry regardless of fade_regime — tag plainly.
+                side_source = (side_source or "") + "+simple_band_long"
             if allowed_side is None:
                 _bump_skip("neutral_bias")
-                # 2026-06-25: INSTRUMENT the neutral_bias sit-out — the single largest
-                # volume leak (~43% of all rejects) that was previously UNLOGGED, so it
-                # had zero counterfactual in the ghost (0 of 850k+ settled rows). The bias
-                # chose no side, so we shadow-log a would-be LONG (the proven +EV alt
-                # direction) with the market so the ghost settles it against the real
-                # outcome. Purely observational: the bot still sits out (continue below).
-                # This is what finally lets us measure whether neutral-tape sit-outs are
-                # correct (coinflips) or are dropping baseline-level +EV long volume.
-                # Opt-out: log_neutral_bias_ghost: false.
-                if is_updown and bool(self.config.get("log_neutral_bias_ghost", True)):
-                    _log_skip_reject(
-                        market=market,
-                        window=_updown_tf,
-                        side="LONG",
-                        action="BUY_YES",
-                        reason="neutral_bias_shadow",  # _shadow = excluded from regime-map + calibrator-β
-                        yes_price=market.yes_price,
-                        htf_bias=primary_htf_bias,
-                        context={
-                            "bias_1h": macro_trend,
-                            "bias_15m": bias_15m,
-                            "bias_5m": bias_5m,
-                            "side_source": side_source,
-                            "instrumentation": "neutral_bias_shadow",
-                        },
-                    )
                 logger.info(
                     "%s skip '%s' — no usable %s bias (1h=%s 15m=%s 5m=%s)",
                     _brand,
@@ -3300,56 +3276,11 @@ class SolMacroStrategy:
             yes_price = market.yes_price
             action = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
             direction = "UP" if allowed_side == "LONG" else "DOWN"
-            # 2026-06-24 REGIME LAYER (runtime, no-restart): consult the live
-            # lane_regime_map. `overrides_yaml_disable` re-opens a YAML-disabled
-            # lane whose regime-conditioned ghost edge has returned; `force_off`
-            # is an operator/auto-pause kill. Fail-safe: a missing/stale/corrupt
-            # map yields a neutral decision so the YAML disables govern unchanged.
-            _lr = lane_regime_runtime.evaluate_lane(
-                self._signal_strategy_name, _updown_tf, action, primary_htf_bias
-            )
-            # Would the static YAML disable this lane? Used to scope the regime
-            # size cap to GENUINELY-reopened lanes only — an already-enabled lane
-            # must keep its normal size (the map never shrinks a working lane).
-            _yaml_would_disable = bool(is_updown and (
-                (action == "BUY_NO"
-                 and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False)))
-                or (action == "BUY_YES"
-                    and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False)))
-                or (action == "BUY_YES"
-                    and str(primary_htf_bias or "").upper() == "BULLISH"
-                    and bool(self.config.get(
-                        f"disable_buy_yes_{_updown_tf}_when_bullish", False)))
-                or (action == "BUY_YES"
-                    and bool(self.config.get("disable_buy_yes", False)))
-            ))
-            if is_updown and _lr.force_off:
-                _bump_skip("lane_regime_force_off")
-                _log_skip_reject(
-                    market=market,
-                    window=_updown_tf,
-                    side=allowed_side,
-                    action=action,
-                    reason="lane_regime_force_off",
-                    yes_price=yes_price,
-                    htf_bias=primary_htf_bias,
-                    context={
-                        "side_source": side_source,
-                        "lane_regime_reason": _lr.reason,
-                        "lane_regime_key": _lr.key,
-                    },
-                )
-                continue
             # 2026-06-14: per-asset BUY_YES sit-out. Data-driven lane cut — set
             # `disable_buy_yes: true` for an asset whose UP-side calls bleed (e.g. bnb:
             # 40% WR, -$67 over 113 taken-settled trades). Opt-in, default off, applies
             # to all windows for that asset; ghost-logged so the counterfactual settles.
-            if (
-                is_updown
-                and action == "BUY_YES"
-                and bool(self.config.get("disable_buy_yes", False))
-                and not _lr.overrides_yaml_disable
-            ):
+            if is_updown and action == "BUY_YES" and bool(self.config.get("disable_buy_yes", False)):
                 _bump_skip("buy_yes_disabled_lane")
                 _log_skip_reject(
                     market=market,
@@ -3371,7 +3302,6 @@ class SolMacroStrategy:
                 is_updown
                 and action == "BUY_NO"
                 and bool(self.config.get(f"disable_buy_no_{_updown_tf}", False))
-                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_no_{_updown_tf}_disabled_lane")
                 _log_skip_reject(
@@ -3394,7 +3324,6 @@ class SolMacroStrategy:
                 is_updown
                 and action == "BUY_YES"
                 and bool(self.config.get(f"disable_buy_yes_{_updown_tf}", False))
-                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_yes_{_updown_tf}_disabled_lane")
                 _log_skip_reject(
@@ -3419,7 +3348,6 @@ class SolMacroStrategy:
                 and action == "BUY_YES"
                 and str(primary_htf_bias or "").upper() == "BULLISH"
                 and bool(self.config.get(f"disable_buy_yes_{_updown_tf}_when_bullish", False))
-                and not _lr.overrides_yaml_disable
             ):
                 _bump_skip(f"buy_yes_{_updown_tf}_bullish_disabled_lane")
                 _log_skip_reject(
@@ -4207,25 +4135,21 @@ class SolMacroStrategy:
                         direction=direction, side_source=side_source, reason_parts=reason_parts,
                         crossover=macd_5m.crossover, tf_label="5m",
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger,
-                        enabled=bool(self.config.get("fresh_cross_override", True))
-                        and not self._flips_disabled_for_window(_updown_tf),
+                        logger=logger, enabled=(not _fade_active) and self.config.get("fresh_cross_override", True),
                         # 2026-06-08: 5m market -> 5m RSI (own-window/faster-lead), not
                         # the 15m canonical. No-op today (flip is 1h-gated) but correct
                         # for when the flip is extended to the 5m window.
                         rsi_14=getattr(getattr(ta.sol, "tf_5m", None), "rsi_14", None), window="5m",
-                        momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                        momentum_flip_enabled=(not _fade_active) and self.config.get("rsi_momentum_flip_1h", False),
                         macd_hist_5m=getattr(macd_5m, "histogram", None),
-                        macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
-                        macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
+                        macd_flip_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = self._window_delta_flip(
-                        sol, _updown_tf, _eval_left, action, rsi=getattr(sol, "rsi_14", None)
-                    )
+                    _wd_flip = None if _fade_active else self._window_delta_flip(sol, _updown_tf, _eval_left, action)
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up
@@ -4279,7 +4203,7 @@ class SolMacroStrategy:
                     # recompute; the flipped action's edge is evaluated below with
                     # the same β-corrected est_prob and must clear the normal edge
                     # gate. Uses the exact lane_id the calibrator just keyed on.
-                    if self._directional_flip_enabled():
+                    if (not _fade_active) and self._directional_flip_enabled():
                         _cal = getattr(self, "lane_calibrator", None)
                         _flip_lid = getattr(self, "_last_calibration_lane_id", "")
                         if _cal is not None and _flip_lid and _cal.flip_recommended(_flip_lid):
@@ -4302,7 +4226,8 @@ class SolMacroStrategy:
                     # below then admits only the cheap longs. Opt-in per strategy via
                     # buy_no_5m_flip_to_yes (enabled for hype only).
                     if (
-                        bool(self.config.get("buy_no_5m_flip_to_yes", False))
+                        (not _fade_active)
+                        and bool(self.config.get("buy_no_5m_flip_to_yes", False))
                         and action == "BUY_NO"
                     ):
                         estimated_prob = max(1.0 - float(estimated_prob), 0.50)
@@ -4312,40 +4237,9 @@ class SolMacroStrategy:
                         side_source = f"{side_source or ''}+buy_no_5m_to_yes_flip"
                         reason_parts.append("buy_no_5m_to_yes_flip")
 
-                    # 2026-06-25 (Fix 2b): 5m alt conviction floor — ONE rule for the
-                    # coinflip horizon, replacing the per-side/per-regime 5m gate matrix.
-                    # The 5m alt updown side clusters at calibrated P~0.50-0.59 with no
-                    # durable edge and gets gap-stopped (session test_20260624_223549:
-                    # 4/5 losses were 5m alt longs @ est 0.50-0.59). Require genuine
-                    # directional conviction, measured on the CALIBRATED est_prob BEFORE
-                    # the bullish floor-bump (so a coinflip cannot be bumped over the bar).
-                    # conviction = estimated_prob (BUY_YES) / 1-estimated_prob (BUY_NO).
-                    # Config alt_5m_min_conviction (default 0.60; <=0.5 disables; settable
-                    # per-asset). Ghost-logged so the counterfactual keeps settling.
-                    _conv_floor_5m = float(self.config.get("alt_5m_min_conviction", 0.60))
-                    _conviction_5m = (
-                        float(estimated_prob) if action == "BUY_YES"
-                        else 1.0 - float(estimated_prob)
-                    )
-                    if _conv_floor_5m > 0.5 and _conviction_5m < _conv_floor_5m:
-                        _bump_skip("alt_5m_low_conviction")
-                        _log_skip_reject(
-                            market=market, window=_updown_tf, side=allowed_side,
-                            action=action, reason="alt_5m_low_conviction", yes_price=yes_price,
-                            est_prob_up=float(estimated_prob),
-                            htf_bias=primary_htf_bias,
-                            context={
-                                "side_source": side_source,
-                                "est_prob": round(float(estimated_prob), 4),
-                                "conviction": round(float(_conviction_5m), 4),
-                                "min_conviction": _conv_floor_5m,
-                            },
-                        )
-                        continue
-
                     _byn_floor_5m = self._alt_buy_yes_bullish_floor_bump(
                         window_size="5m", action=action, htf_bias=mtt.h1_trend,
-                        yes_price=yes_price,
+                        yes_price=yes_price, rsi_14=sol.rsi_14,
                     )
                     if _byn_floor_5m > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor_5m)
@@ -4562,23 +4456,19 @@ class SolMacroStrategy:
                         faster_crossover=(ta.sol.macd_15m if is_hourly else ta.sol.macd_5m).crossover,
                         faster_tf_label=("15m" if is_hourly else "5m"),
                         strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                        logger=logger,
-                        enabled=bool(self.config.get("fresh_cross_override", True))
-                        and not self._flips_disabled_for_window(_updown_tf),
+                        logger=logger, enabled=(not _fade_active) and self.config.get("fresh_cross_override", True),
                         # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m->5m).
                         rsi_14=getattr(getattr(ta.sol, "tf_15m" if window_label == "1h" else "tf_5m", None), "rsi_14", None), window=window_label,
-                        momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                        momentum_flip_enabled=(not _fade_active) and self.config.get("rsi_momentum_flip_1h", False),
                         macd_hist_5m=getattr(getattr(ta.sol, "macd_5m", None), "histogram", None),
-                        macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
-                        macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
+                        macd_flip_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_5m15m", False),
+                        macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
-                    _wd_flip = self._window_delta_flip(
-                        sol, _updown_tf, _eval_left, action, rsi=getattr(sol, "rsi_14", None)
-                    )
+                    _wd_flip = None if _fade_active else self._window_delta_flip(sol, _updown_tf, _eval_left, action)
                     if _wd_flip is not None:
                         action, allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                         raw_est_prob = est_prob_up
@@ -4628,7 +4518,7 @@ class SolMacroStrategy:
 
                     _byn_floor = self._alt_buy_yes_bullish_floor_bump(
                         window_size=window_label, action=action, htf_bias=mtt.h1_trend,
-                        yes_price=yes_price,
+                        yes_price=yes_price, rsi_14=sol.rsi_14,
                     )
                     if _byn_floor > 0:
                         estimated_prob = min(0.90, estimated_prob + _byn_floor)
@@ -4643,22 +4533,6 @@ class SolMacroStrategy:
                         edge = _adm - yes_price
                     else:
                         edge = (1.0 - _adm) - (1.0 - yes_price)
-                    # ── 1h conviction gate (2026-06-24) — mirror of bitcoin.py ──────
-                    # 0.40–0.60 yes_price band is a 1h coin flip (ghost -0.031 EV / 46%
-                    # WR); edge lives in the favorite/conviction band (ghost +0.006 EV /
-                    # 77% WR). Sit out the mush. Default-off → no behavior change.
-                    _cg = self.config.get("updown_1h_conviction_gate", {}) or {}
-                    if window_label == "1h" and bool(_cg.get("enabled", False)) and action in ("BUY_YES", "BUY_NO"):
-                        _lpm = float(_cg.get("long_price_min", 0.60) or 0.60)
-                        _spm = float(_cg.get("short_price_max", 0.40) or 0.40)
-                        _ec = float(_cg.get("est_conviction", 0.66) or 0.66)
-                        _conv_ok = (
-                            (action == "BUY_YES" and (yes_price >= _lpm or estimated_prob >= _ec))
-                            or (action == "BUY_NO" and (yes_price <= _spm or estimated_prob <= (1.0 - _ec)))
-                        )
-                        if not _conv_ok:
-                            _bump_skip("updown_1h_low_conviction")
-                            continue
                     # Confidence driven by LTF strength (primary); lag signal removed
                     confidence = min(0.85, 0.50 + ltf_strength * ltf_weight + abs(timing_bonus) * 0.5 * timing_weight)
 
@@ -5548,6 +5422,41 @@ class SolMacroStrategy:
                 if edge < _flip_edge:
                     edge = _flip_edge
                 reason_parts.append(f"flip_exempt_min_edge({_flip_edge:.3f})")
+            # 2026-06-28 est_prob CONVICTION FLOOR (Hermes ghost: bnb est_prob is
+            # genuinely predictive — est_up>=0.55 => 72.4% WR/+0.17EV on 15m, 66.1%/+0.12
+            # on 1h LONG; noise on the other alts). The bot gated only on edge (est-yes),
+            # so it took low-conviction coin-flips that bleed. Per-window opt-in via
+            # {strategy}.by_tf.<tf>.min_est_prob_conviction; 0 = off (byte-identical for
+            # every unset lane). Directional: BUY_YES needs est_up>=floor; BUY_NO needs
+            # P(down)=1-est_up>=floor. Admission-only, evaluated BEFORE the min_edge gate.
+            _conv_floor = float(self._tf_cfg(_updown_tf, "min_est_prob_conviction", 0.0) or 0.0)
+            if is_updown and _conv_floor > 0.0:
+                _conv = float(estimated_prob) if action == "BUY_YES" else (1.0 - float(estimated_prob))
+                if _conv < _conv_floor:
+                    _bump_skip("est_prob_conviction_floor")
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name,
+                        window=_updown_tf,
+                        side=allowed_side,
+                        action=action,
+                        reason="est_prob_conviction_floor",
+                        market=market,
+                        yes_price=yes_price,
+                        est_prob_up=estimated_prob,
+                        htf_bias=primary_htf_bias,
+                        stage="est_prob_conviction_floor",
+                        context={
+                            "conviction": round(float(_conv), 6),
+                            "min_est_prob_conviction": round(float(_conv_floor), 6),
+                            "estimated_prob": round(float(estimated_prob), 6),
+                        },
+                        policy_version="est_prob_conviction_floor_v1",
+                    )
+                    logger.info(
+                        f"  {_brand} skip '{market.question[:40]}...' "
+                        f"conviction={_conv:.3f} < floor={_conv_floor:.2f} ({_updown_tf})"
+                    )
+                    continue
             if edge < effective_min_edge and not _admit_marginal_no_ai:
                 if rsi_soft_penalty > 0 and (edge + rsi_soft_penalty) >= effective_min_edge:
                     _bump_skip("edge_after_penalty_below_threshold")
@@ -5985,13 +5894,6 @@ class SolMacroStrategy:
                 raw_size *= self.degraded_correlation_size_multiplier
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier
-            # Regime layer size cap: a lane RE-OPENED by the regime map (i.e. one
-            # the static YAML would have disabled) trades at a small paper size.
-            # Lanes already enabled in YAML are untouched (_yaml_would_disable=False).
-            if (is_updown and _yaml_would_disable and _lr.overrides_yaml_disable
-                    and 0 < _lr.size_scalar < 1.0):
-                raw_size *= _lr.size_scalar
-                reason_parts.append(f"regime_size={_lr.size_scalar:.2f}x")
             final_size = self.exposure_manager.scale_size(raw_size)
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
@@ -6144,21 +6046,11 @@ class SolMacroStrategy:
             if not w:
                 return False
             a = getattr(sig, "action", None)
-            _disabled = (
-                (a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)))
-                or (a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)))
-            )
-            if not _disabled:
-                return False
-            # 2026-06-24 REGIME LAYER: this belt-and-suspenders pass must honor the
-            # same runtime override as the in-loop gates, or a reopened lane would be
-            # silently re-dropped here. Re-evaluate with the signal's own bias.
-            _b = (getattr(sig, "primary_htf_bias", None)
-                  or getattr(sig, "htf_bias", None))
-            _d = lane_regime_runtime.evaluate_lane(self._signal_strategy_name, w, a, _b)
-            if _d.force_off:
+            if a == "BUY_NO" and bool(self.config.get(f"disable_buy_no_{w}", False)):
                 return True
-            return not _d.overrides_yaml_disable
+            if a == "BUY_YES" and bool(self.config.get(f"disable_buy_yes_{w}", False)):
+                return True
+            return False
         _before = len(signals)
         signals = [s for s in signals if not _lane_disabled(s)]
         if len(signals) != _before:
