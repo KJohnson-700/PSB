@@ -1917,18 +1917,18 @@ strategies:
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 10.0
-        min_est_prob_conviction: 0.52
+        min_est_prob_conviction: 0.48   # 2026-06-29 STAGED: LOWERED 0.52->0.48 per operator (not removed) to un-starve bnb (est_up clusters ~0.48-0.52; 447 rejects on 15m BUY_NO, a +$14.84 baseline lane)
       15m:
         min_edge: 0.04   # 2026-06-18: ghost loosen — 15m LONG [0.04,0.06)=+0.204 RP n=1607 (gross; Olympus fee=0). Floor at 0.04: [0.02,0.04) is -0.124. Was 0.09.
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 150.0
-        min_est_prob_conviction: 0.52
+        min_est_prob_conviction: 0.48   # 2026-06-29 STAGED: LOWERED 0.52->0.48 per operator (not removed) to un-starve bnb (est_up clusters ~0.48-0.52; 447 rejects on 15m BUY_NO, a +$14.84 baseline lane)
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
-        min_est_prob_conviction: 0.52
+        min_est_prob_conviction: 0.48   # 2026-06-29 STAGED: LOWERED 0.52->0.48 per operator (not removed) to un-starve bnb (est_up clusters ~0.48-0.52; 447 rejects on 15m BUY_NO, a +$14.84 baseline lane)
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6

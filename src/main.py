@@ -2036,6 +2036,96 @@ class PolyBot:
         except Exception:
             return None
 
+    async def _entry_book_features(self, token_yes, token_no, leg_hint) -> Dict[str, Any]:
+        """Book microstructure of the HELD leg at entry via a REST snapshot.
+
+        ``leg_hint`` is the order ACTION (``BUY_NO``/``BUY_YES``), NOT the
+        ``BUY``/``SELL`` execution side. The WS cache is empty for most tokens, so
+        the prior WS-cache version returned no_ws_book ~always — this fetches the
+        public CLOB book. Timeout-bounded; never raises; returns {} on any miss.
+        Called ONLY from the fire-and-forget recorder (never inline under the
+        execution lock).
+        """
+        try:
+            s = str(leg_hint or "").upper()
+            held = token_no if "NO" in s else token_yes
+            tid = str(held or "").strip()
+            if not tid:
+                return {}
+            book = await asyncio.wait_for(
+                self.clob_client.fetch_order_book_snapshot(tid), timeout=3.0
+            )
+            if not book:
+                return {"entry_book": "no_rest_book"}
+            bids = list(book.get("bids") or [])
+            asks = list(book.get("asks") or [])
+
+            def _best(levels, want_high):
+                px = None
+                for r in levels:
+                    try:
+                        p = float(r.get("price"))
+                    except Exception:
+                        continue
+                    if px is None or (p > px) == want_high:
+                        px = p
+                return px
+
+            def _depth(levels, is_bid, n=5):
+                try:
+                    rows = sorted(
+                        levels, key=lambda r: float(r.get("price", 0)), reverse=is_bid
+                    )
+                except Exception:
+                    rows = levels
+                tot = 0.0
+                for r in rows[:n]:
+                    try:
+                        tot += float(r.get("size", 0))
+                    except Exception:
+                        pass
+                return round(tot, 2)
+
+            bb = _best(bids, True)
+            ba = _best(asks, False)
+            spread = round(ba - bb, 4) if (bb is not None and ba is not None) else None
+            return {
+                "entry_book_held_leg": "NO" if "NO" in s else "YES",
+                "entry_book_best_bid": bb,
+                "entry_book_best_ask": ba,
+                "entry_book_spread": spread,
+                "entry_book_bid_depth5": _depth(bids, True),
+                "entry_book_ask_depth5": _depth(asks, False),
+                "entry_book_n_bid": len(bids),
+                "entry_book_n_ask": len(asks),
+                "entry_book_one_sided": (len(bids) == 0 or len(asks) == 0),
+                "entry_book_src": "rest",
+            }
+        except Exception:
+            return {}
+
+    async def _record_entry_book_async(
+        self, trade_id, token_yes, token_no, leg_hint
+    ) -> None:
+        """Fire-and-forget: write held-leg book microstructure at entry to
+        data/calibration/entry_book_shadow.jsonl keyed by trade_id (joins to the
+        exit's mfe_pct). Spawned via _spawn_bg OUTSIDE the execution lock, so it
+        adds no trading latency. Never raises."""
+        try:
+            feats = await self._entry_book_features(token_yes, token_no, leg_hint)
+            if not feats:
+                return
+            import json as _json
+            import os as _os
+            import time as _time
+            rec = {"trade_id": str(trade_id or ""), "ts": _time.time(), **feats}
+            path = "data/calibration/entry_book_shadow.jsonl"
+            _os.makedirs(_os.path.dirname(path), exist_ok=True)
+            with open(path, "a") as _f:
+                _f.write(_json.dumps(rec) + "\n")
+        except Exception:
+            pass
+
     def _write_live_scan_snapshot(self, opportunities: dict) -> None:
         """Publish the current scan's candidate markets to data/live_scans/scan_<ts>.json
         for the dashboard scanner + watchlist panels. Maps each up/down market to its
@@ -2820,11 +2910,13 @@ class PolyBot:
             # Phantom-stop guard. Thin up/down binaries near expiry often show a
             # ONE-SIDED book — a lone resting bid (e.g. 0.145) became the "price" and
             # fired a phantom stop while the true price was ~0.505 (2026-06-14
-            # incident). Require a two-sided book + sane spread before trusting the
-            # mid for an EXIT decision; otherwise skip this market this tick (the scan
-            # loop's Gamma price and the next healthy book tick re-evaluate it).
+            # incident). Keep the spread guard for two-sided books. For one-sided
+            # books, only evaluate exits when CLOB /midpoint gives a sane mark; never
+            # use the lone bid/ask as the exit mark. (2026-06-26: one-sided fillable
+            # books were being SKIPPED -> TP/stop never fired -> winners round-tripped.)
             _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
             _require_two_sided = bool(_excfg.get("exit_require_two_sided_book", True))
+            _use_clob_midpoint = bool(_excfg.get("exit_mark_use_clob_midpoint", True))
             if best_bid is not None and best_ask is not None:
                 if _require_two_sided:
                     _spread = best_ask - best_bid
@@ -2837,11 +2929,23 @@ class PolyBot:
                         continue
                 yes_price = (best_bid + best_ask) / 2.0
             elif _require_two_sided:
+                if not _use_clob_midpoint:
+                    logging.debug(
+                        "exit price guard: one-sided book for %s (bid=%s ask=%s) and /midpoint disabled — skip exit eval this tick",
+                        mid, best_bid, best_ask,
+                    )
+                    continue
+                yes_price = await self.clob_client.fetch_midpoint(yes_token)
+                if yes_price is None:
+                    logging.debug(
+                        "exit price guard: one-sided book for %s (bid=%s ask=%s) and no /midpoint — skip exit eval this tick",
+                        mid, best_bid, best_ask,
+                    )
+                    continue
                 logging.debug(
-                    "exit price guard: one-sided book for %s (bid=%s ask=%s) — skip exit eval this tick",
-                    mid, best_bid, best_ask,
+                    "exit price guard: one-sided book for %s (bid=%s ask=%s) — using /midpoint %.3f for exit eval",
+                    mid, best_bid, best_ask, yes_price,
                 )
-                continue
             elif best_bid is not None:
                 yes_price = best_bid
             elif best_ask is not None:
@@ -2855,7 +2959,7 @@ class PolyBot:
             # book (fetched above) for the two-sided/spread guard + liquidity; only
             # the mark value switches. Fall back to the book mid if /midpoint is
             # unavailable. Opt-out: exit_mark_use_clob_midpoint: false.
-            if bool(_excfg.get("exit_mark_use_clob_midpoint", True)):
+            if _use_clob_midpoint and best_bid is not None and best_ask is not None:
                 _mp = await self.clob_client.fetch_midpoint(yes_token)
                 if _mp is not None:
                     if abs(_mp - yes_price) > 0.05:
@@ -3874,6 +3978,21 @@ class PolyBot:
         logging.info(
             f"Cycle complete. Positions: {positions}, Daily trades: {daily}/{trade_limit}"
         )
+        try:
+            _wps = getattr(self.market_scanner, "_ws_price_stats", None)
+            if _wps:
+                _h = int(_wps.get("ws_hit", 0))
+                _r = int(_wps.get("rest", 0))
+                _tot = _h + _r
+                if _tot > 0:
+                    logging.info(
+                        "FEED_PRICE_SRC ws_hit=%d rest=%d ws_cov=%.3f "
+                        "(cumulative; fraction of priced candidate tokens from "
+                        "fresh WS vs REST fallback)",
+                        _h, _r, _h / _tot,
+                    )
+        except Exception:
+            pass
         # Return scan-cycle churn arenas to the OS every few cycles (cheap; counters
         # the RSS ratchet from per-market json/DataFrame allocation).
         if int(getattr(self, "cycle_count", 0) or 0) % 5 == 0:
@@ -4680,6 +4799,12 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
+            self._spawn_bg(self._record_entry_book_async(
+                order.order_id,
+                getattr(signal, "token_id_yes", None),
+                getattr(signal, "token_id_no", None),
+                getattr(signal, "action", None),
+            ))
             self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
@@ -4975,6 +5100,12 @@ class PolyBot:
                 market_end_at=signal.end_date,
                 entry_leg=_entry_leg,
             )
+            self._spawn_bg(self._record_entry_book_async(
+                order.order_id,
+                getattr(signal, "token_id_yes", None),
+                getattr(signal, "token_id_no", None),
+                getattr(signal, "action", None),
+            ))
             self._spawn_bg(self._annotate_entry_async(
                 trade_id=order.order_id,
                 market_id=signal.market_id,
