@@ -447,9 +447,35 @@ class PositionExitManager:
                 )
                 effective_stop_for_log = effective_stop_loss_pct
 
+                # Flatten-before-resolution FIRST: in the final window pre-empt the
+                # resolution gap. MUST precede the stop check -- an underwater position is
+                # below its stop and would otherwise loop in the stop branch (failing to
+                # fill a one-sided near-resolution book) and hold to a binary-zero
+                # resolution, which is exactly the gap-through leak. Skip only a winner on
+                # a hold-to-resolution lane (let it ride up to 1.0).
+                _flat_mins_remaining = None
+                if pos.end_date is not None:
+                    _flat_end = pos.end_date
+                    if _flat_end.tzinfo is None:
+                        _flat_end = _flat_end.replace(tzinfo=timezone.utc)
+                    _flat_mins_remaining = (
+                        _flat_end - datetime.now(timezone.utc)
+                    ).total_seconds() / 60.0
+
                 # TP: exit early when price spikes strongly in our favour rather than
                 # waiting for binary resolution (captures most of the gain).
                 if (
+                    _flat_mins_remaining is not None
+                    and resolved.updown_flatten_before_resolution_sec > 0
+                    and 0.0
+                    <= _flat_mins_remaining * 60.0
+                    <= resolved.updown_flatten_before_resolution_sec
+                    and not (
+                        resolved.updown_hold_winners_to_resolution and pnl_pct >= 0
+                    )
+                ):
+                    reason = "updown_flatten_pre_resolution"
+                elif (
                     not resolved.updown_hold_winners_to_resolution
                     and pnl_pct >= resolved.take_profit_pct
                 ):
@@ -503,13 +529,7 @@ class PositionExitManager:
                             mins_at_entry,
                         )
 
-                    if (
-                        mins_remaining is not None
-                        and resolved.updown_flatten_before_resolution_sec > 0
-                        and mins_remaining * 60.0 <= resolved.updown_flatten_before_resolution_sec
-                    ):
-                        reason = "updown_flatten_pre_resolution"
-                    elif mins_remaining is not None and mins_remaining < 0:
+                    if mins_remaining is not None and mins_remaining < 0:
                         # Market already past expiry but still open — exit immediately.
                         reason = "updown_expired"
                     elif mins_remaining is not None and mins_remaining <= effective_exit_window:
@@ -589,6 +609,18 @@ class PositionExitManager:
                 exit_marketable = False
                 if reason == "updown_stop_loss" and exec_exit_price is not None:
                     exit_price = exec_exit_price
+                    exit_marketable = True
+                elif reason in (
+                    "updown_flatten_pre_resolution",
+                    "updown_expired",
+                    "updown_time_stop",
+                ):
+                    # Near/at resolution: take the bid NOW (FAK) rather than resting a
+                    # limit that won't fill into a one-sided book and lets the position
+                    # gap to a binary-zero resolution. exec_exit_price when available,
+                    # else the current exit-side mark.
+                    if exec_exit_price is not None:
+                        exit_price = exec_exit_price
                     exit_marketable = True
 
                 # Realistic paper fill: replace the requested-price fill with a

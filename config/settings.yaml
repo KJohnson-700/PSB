@@ -205,7 +205,7 @@ trading:
               updown_hold_winners_to_resolution: false
           1h:
             up:
-              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
+              entry_admission_calibration_shrink: 1.0   # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
               updown_hold_winners_to_resolution: false  # 2026-06-27 baseline-restore: removed (no data hold helps; was suppressing TP -> give-backs)
               updown_in_profit_stop_trigger_pct: 0.04
@@ -265,7 +265,7 @@ trading:
               updown_in_profit_stop_tighten_to_pct: 0.08
           15m:
             up:
-              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
+              entry_admission_calibration_shrink: 1.0   # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
             down:
               updown_stop_loss_pct: 0.15
@@ -304,7 +304,7 @@ trading:
               updown_hold_winners_to_resolution: false  # 2026-06-26 REVERSED: settler regen n=24 gap +48.6 now says data wants tight TP/SL (held 38%/real 4%); hold was suppressing TP so 5/6 give-back winners (mfe +48/+29/+35%) round-tripped to stop. Re-enable +15% TP. Codex GO
           15m:
             up:
-              entry_admission_calibration_shrink: 0.28  # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
+              entry_admission_calibration_shrink: 1.0   # 2026-06-23 per-lane: high-conv overconfident (settled realized neg); counters bullish floor-bump est inflation. winners (xrp5m etc) exempt
               updown_stop_loss_pct: 0.15
               updown_in_profit_stop_trigger_pct: 0.04
               updown_in_profit_stop_tighten_to_pct: 0.08
@@ -644,7 +644,7 @@ strategies:
     # WR/PnL degrades, extend the flip to 1h — see _btc_window_delta_flip caller.
     window_delta_confirm_enabled: true
     window_delta_flip_margin: 0.05
-    entry_admission_calibration_shrink: 0.28  # 2026-06-22 deflate overconfident est_prob to realized rate for min_edge admission (1.0=off)
+    entry_admission_calibration_shrink: 1.0   # 2026-06-22 deflate overconfident est_prob to realized rate for min_edge admission (1.0=off)
     btc_htf_boost_strong_1h: 0.18
     btc_htf_boost_weak_1h: 0.1
     btc_htf_boost_strong_15m: 0.12
@@ -1917,18 +1917,18 @@ strategies:
         min_edge_buy_no: 0.06
         entry_window_min: 0.0
         entry_window_max: 10.0
-        min_est_prob_conviction: 0.55
+        min_est_prob_conviction: 0.52
       15m:
         min_edge: 0.04   # 2026-06-18: ghost loosen — 15m LONG [0.04,0.06)=+0.204 RP n=1607 (gross; Olympus fee=0). Floor at 0.04: [0.02,0.04) is -0.124. Was 0.09.
         min_edge_buy_no: 0.06
         entry_window_min: 2.0
         entry_window_max: 150.0
-        min_est_prob_conviction: 0.55
+        min_est_prob_conviction: 0.52
       1h:
         min_edge: 0.09
         entry_window_min: 0.0
         entry_window_max: 60.0  # repro: 1h cap kept at 60 per operator (do NOT revert to 360)
-        min_est_prob_conviction: 0.55
+        min_est_prob_conviction: 0.52
     min_edge_15m_when_ltf_unconfirmed: 0.09
     max_edge_updown: 0.15
     ai_confidence_threshold: 0.6
