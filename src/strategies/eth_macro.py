@@ -49,6 +49,8 @@ from src.analysis.rejected_candidate_log import (
     log_rejected_candidate,
 )
 from src.analysis.window_delta import evaluate_window_delta
+from src.analysis import no_signal_gate as _no_signal_gate
+from src.analysis import asset_regime as _asset_regime
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +265,14 @@ class ETHMacroStrategy(SolMacroStrategy):
             if not bool(timing_open):
                 return False
             if float(edge) < float(self.config.get("ai_updown_marginal_min_edge", 0.03)):
+                return False
+            # 2026-07-03 AI-SHADOW FIX (ETH port of sol_macro fix): yield the marginal
+            # band to the AI tiebreaker when up/down AI is ON+available.
+            if (
+                bool(self.config.get("use_ai", True))
+                and bool(self.config.get("use_ai_updown", True))
+                and self.ai_agent.is_available()
+            ):
                 return False
             if window is not None and self._marginal_ev_admit_ok(window, action):
                 return True
@@ -979,6 +989,14 @@ class ETHMacroStrategy(SolMacroStrategy):
             resolution = self._resolve_alt_bias_for_tf(eth_ta, _updown_tf)
             market_allowed_side = resolution.allowed_side
             side_source = resolution.side_source
+            # 2026-07-11 ETH 15m FADE PORT (sol parity): the inherited
+            # _resolve_alt_bias_for_tf already inverted the side + retagged
+            # eth_<tf>_fade_native when fade_regime + fade_regime_windows enable
+            # this window (align-gate suppresses on fully-aligned trends). This
+            # flag gates the loop's late flips (fresh_cross / wd_flip / 5m
+            # no->yes) so a faded side is never double-flipped, and gates the
+            # 07-06 fade-shadow logger (live fade supersedes the counterfactual).
+            _fade_active = "fade_native" in (side_source or "")
             if market_allowed_side is None:
                 # No usable bias = the lane has no side, so there is no rejected
                 # *candidate* to counterfactually score (action would be NONE).
@@ -1003,6 +1021,50 @@ class ETHMacroStrategy(SolMacroStrategy):
             )
             action = direction_decision.action
             primary_htf_bias = resolution.primary_htf_bias
+
+            # 2026-07-06 ETH FADE-SHADOW (Codex-GO, observe-only): eth is the only
+            # alt with NO fade machinery (sol_macro: 39 fade refs, eth: 0), so it can
+            # never take the contrarian side and we have zero native-vs-fade evidence
+            # (~4 lifetime live trades). Log the fade COUNTERFACTUAL for every resolved
+            # native candidate; the ghost settler scores it against the real outcome.
+            # NON-TRADING by construction: no writes to action/side/decision, no
+            # continue, fail-silent. Rows carry stage=shadow_fade + reason suffix
+            # handled by the *_shadow exclusion in decision tooling. Kill switch:
+            # eth_fade_shadow_enabled: false.
+            if bool(self.config.get("eth_fade_shadow_enabled", True)) and not _fade_active:
+                try:
+                    _fs_side = "SHORT" if market_allowed_side == "LONG" else "LONG"
+                    _fs_action = "BUY_NO" if _fs_side == "SHORT" else "BUY_YES"
+                    _fs_src = f"eth_{_updown_tf}_fade_native"
+                    try:
+                        _fs_bucket = f"{(int(float(yes_price) * 20) / 20.0):.2f}"
+                    except Exception:
+                        _fs_bucket = "?"
+                    log_rejected_candidate(
+                        strategy=self._signal_strategy_name,
+                        window=_updown_tf,
+                        side=_fs_side,
+                        action=_fs_action,
+                        reason="eth_fade_shadow",
+                        market=market,
+                        yes_price=yes_price,
+                        est_prob_up=0.50,
+                        htf_bias=primary_htf_bias,
+                        stage="shadow_fade",
+                        side_source=_fs_src,
+                        resolver_path=_fs_src,
+                        context={
+                            "shadow_kind": "eth_fade_counterfactual",
+                            "native_side": market_allowed_side,
+                            "native_action": action,
+                            "native_side_source": side_source,
+                            "fade_side": _fs_side,
+                            "fade_action": _fs_action,
+                            "yes_price_bucket": _fs_bucket,
+                        },
+                    )
+                except Exception:
+                    pass
 
             # ETH-native momentum guards. 2026-05-23 ghost-counterfactual review:
             # default-on guards were breakeven-to-harmful (BUY_NO n=9826 WR=48%,
@@ -1195,7 +1257,10 @@ class ETHMacroStrategy(SolMacroStrategy):
             # tail. Favorable tail (our side >= 0.80) ghost-WR 87–97%; kept.
             _sample("entry_price", yes_price)
             _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
-            if _our_price < 0.12:
+            # 2026-07-13 operator GO (unlock 3): port sol_macro 07-08 removal — config-driven,
+            # default OFF. Set price_too_far_min_our_price: 0.12 to restore. 373 rejects/48h.
+            _ptf_min = float(self.config.get("price_too_far_min_our_price", 0.0) or 0.0)
+            if _ptf_min > 0.0 and _our_price < _ptf_min:
                 _bump_skip("price_too_far")
                 _log_skip_reject(
                     market=market,
@@ -1208,12 +1273,12 @@ class ETHMacroStrategy(SolMacroStrategy):
                     context={
                         "entry_price": float(_our_price),
                         "yes_price": float(yes_price),
-                        "our_side_price_min": 0.12,
+                        "our_side_price_min": _ptf_min,
                     },
                     probe_variants=build_range_probe_variants(
                         metric_name="our_side_entry_price",
                         observed_value=float(_our_price),
-                        baseline_min=0.12,
+                        baseline_min=_ptf_min,
                         baseline_max=1.0,
                         relax_steps=[0.02, 0.04],
                         tighten_steps=[0.03, 0.08],
@@ -1310,9 +1375,26 @@ class ETHMacroStrategy(SolMacroStrategy):
             if _updown_tf in ("5m", "15m", "1h") and bool(self.config.get("eth_pocket_only", False)):
                 _pocket_skip = None
                 if action == "BUY_YES":
-                    _pocket_skip = "eth_pocket_buy_yes_off"
+                    # 2026-07-04 operator: reopen eth 1h BUY_YES only — blocked pop
+                    # settled 66% (n=7,541, 36h). 15m/5m longs stay pocketed.
+                    if _updown_tf == "1h" and bool(
+                        self.config.get("eth_pocket_allow_buy_yes_1h", False)
+                    ):
+                        _pocket_skip = None
+                    else:
+                        _pocket_skip = "eth_pocket_buy_yes_off"
                 elif _updown_tf == "5m":
-                    _pocket_skip = "eth_pocket_5m_off"
+                    # 2026-07-13 E2a (operator GO): eth 5m is a COLLECTION lane per
+                    # standing rule — reopen the short side THROUGH the same RSI>=55
+                    # floor as 15m/1h (Codex caveat: don't bypass the quality bar).
+                    if (
+                        action == "BUY_NO"
+                        and bool(self.config.get("eth_pocket_allow_5m_buy_no", False))
+                        and eth.rsi_14 >= float(self.config.get("eth_buy_no_rsi_min", 55.0))
+                    ):
+                        _pocket_skip = None
+                    else:
+                        _pocket_skip = "eth_pocket_5m_off"
                 elif eth.rsi_14 < float(self.config.get("eth_buy_no_rsi_min", 55.0)):
                     _pocket_skip = "eth_pocket_low_rsi_off"
                 if _pocket_skip:
@@ -1767,13 +1849,13 @@ class ETHMacroStrategy(SolMacroStrategy):
                 faster_crossover=(_eth_faster_macd.crossover if _eth_faster_macd is not None else None),
                 faster_tf_label=_eth_faster_tf,
                 strategy_name=self._signal_strategy_name, primary_htf_bias=primary_htf_bias,
-                logger=logger, enabled=self.config.get("fresh_cross_override", True),
+                logger=logger, enabled=(not _fade_active) and self.config.get("fresh_cross_override", True),
                 # 2026-06-08: window-aware faster-lead RSI (1h->15m, 15m/5m->5m).
                 rsi_14=getattr(getattr(eth, "tf_15m" if _updown_tf == "1h" else "tf_5m", None), "rsi_14", None), window=_updown_tf,
-                momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
+                momentum_flip_enabled=(not _fade_active) and self.config.get("rsi_momentum_flip_1h", False),
                 macd_hist_5m=getattr(getattr(eth, "macd_5m", None), "histogram", None),
-                macd_flip_enabled=self.config.get("macd_momentum_flip_5m15m", False),
-                macd_flip_long_to_short_enabled=self.config.get("macd_momentum_flip_long_to_short", False),
+                macd_flip_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_5m15m", False),
+                macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
             )
 
             est_prob_up = max(0.10, min(0.90, est_prob_up))
@@ -1788,7 +1870,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             direction = direction_decision.direction
             # Window-delta confirmation — side is FINAL here (post-flip + resolve).
             # Inherited from SolMacroStrategy; ETH-native price only.
-            _wd_flip = self._window_delta_flip(eth, _updown_tf, _eval_left, action)
+            _wd_flip = None if _fade_active else self._window_delta_flip(eth, _updown_tf, _eval_left, action)
             if _wd_flip is not None:
                 action, market_allowed_side, direction, est_prob_up, _wd_prob = _wd_flip
                 raw_est_prob = est_prob_up
@@ -1848,6 +1930,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             # Default-on; opt-out via strategies.eth_macro.eth_5m_buy_no_flip_to_yes: false.
             if (
                 bool(self.config.get("eth_5m_buy_no_flip_to_yes", True))
+                and not _fade_active
                 and _updown_tf == "5m"
                 and action == "BUY_NO"
             ):
@@ -1857,7 +1940,15 @@ class ETHMacroStrategy(SolMacroStrategy):
                 market_allowed_side = "LONG"
                 side_source = f"{side_source or ''}+eth_5m_no_to_yes_flip"
                 reason_parts.append("eth_5m_no_to_yes_flip")
-            edge = estimated_prob - yes_price if action == "BUY_YES" else yes_price - estimated_prob
+            # 2026-07-03 ETH port of admission shrink (sol/btc: _admission_prob):
+            # deflate overconfident est toward 0.5 for the min_edge comparison only;
+            # estimated_prob itself stays raw for floors/logging.
+            try:
+                _shrink = float(self.config.get("entry_admission_calibration_shrink", 1.0))
+            except (TypeError, ValueError):
+                _shrink = 1.0
+            _adm_prob = float(estimated_prob) if _shrink >= 1.0 else 0.5 + _shrink * (float(estimated_prob) - 0.5)
+            edge = _adm_prob - yes_price if action == "BUY_YES" else yes_price - _adm_prob
             if edge <= 0:
                 _bump_skip("nonpositive_edge")
                 continue
@@ -1879,8 +1970,58 @@ class ETHMacroStrategy(SolMacroStrategy):
                 lane_policy.hard_min_edge,
             )
             effective_min_edge += follow_penalty_min_edge_add
+            # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only.
+            _yes_conv_floor = float(
+                self.config.get("min_est_prob_conviction_buy_yes", 0.0) or 0.0
+            )
+            if (
+                action == "BUY_YES"
+                and _yes_conv_floor > 0.0
+                and float(estimated_prob) < _yes_conv_floor
+            ):
+                _bump_skip("buy_yes_conviction_floor")
+                continue
             if not lane_policy.enabled:
                 _bump_skip("lane_disabled")
+                continue
+            if _no_signal_gate.lane_blocked(self._signal_strategy_name, _updown_tf, action):
+                _bump_skip("no_signal_gate")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason="no_signal_gate",
+                    yes_price=yes_price,
+                    context={"gate": "no_signal_per_lane"},
+                )
+                continue
+            # 2026-07-03 (Codex-amended): 5m BUY_YES first-~75s skip band. Lower
+            # bound on latency-adjusted _eval_left, upper bound on RAW _mins_left
+            # so pre-open candidates are never pulled into the band by latency.
+            _sz_lo = self.config.get(f"buy_yes_{_updown_tf}_skip_mins_lo")
+            _sz_hi = self.config.get(f"buy_yes_{_updown_tf}_skip_mins_hi")
+            if (
+                action == "BUY_YES"
+                and _sz_lo is not None
+                and _sz_hi is not None
+                and float(_sz_lo) <= _eval_left
+                and _mins_left < float(_sz_hi)
+            ):
+                _bump_skip(f"buy_yes_{_updown_tf}_timing_deadzone")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=market_allowed_side,
+                    action=action,
+                    reason=f"buy_yes_{_updown_tf}_timing_deadzone",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={
+                        "eval_mins_left": float(_eval_left),
+                        "mins_left": float(_mins_left),
+                    },
+                )
                 continue
             if _eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max:
                 _bump_skip("lane_entry_window")
@@ -2218,7 +2359,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 # opposition) — admit on quant terms, skip the redundant local re-gate.
                 _mpass = (
                     ai_decision is not None
-                    and ai_decision.reason == "direct_ai_marginal_pass"
+                    and ai_decision.reason in ("direct_ai_marginal_pass", "direct_ai_marginal_confirm")  # 2026-07-03: accept new fail-closed confirm reason
                 )
                 if (
                     ai_decision is not None
@@ -2640,6 +2781,18 @@ class ETHMacroStrategy(SolMacroStrategy):
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
+            # 2026-07-13 restart passenger (operator GO, Codex conditional-GO honored):
+            # per-lane max-notional lift — tier floor=cap flattens winners; when
+            # lane_max_notional_{tf}_{side} is set, let this lane size up to
+            # min(kelly raw, lane max). Guards: only lifts an already-admitted size,
+            # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
+            if final_size >= 0.5 and is_updown:
+                _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
+                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
+                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
+                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
+                    if _ln_max > 0:
+                        final_size = max(final_size, min(raw_size, _ln_max))
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -2819,6 +2972,9 @@ class ETHMacroStrategy(SolMacroStrategy):
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(eth_markets),
+            "asset_regime": _asset_regime.get_state(
+                getattr(self.sol_service, "alt_symbol", None)
+            ),
             "btc_1h_regime": btc_1h_regime,
             "btc_1h_regime_gates_enabled": bool(
                 self._btc_1h_regime_gates.get("enabled", False)
@@ -2843,4 +2999,43 @@ class ETHMacroStrategy(SolMacroStrategy):
             "top_skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: kv[1], reverse=True)[:8]),
             "gate_distributions": gate_distributions,
         }
+        # 2026-07-07 Fix A: near-0.50 overconfidence sit-out. Stated edge is inverted
+        # near coin-flip prices; entry 0.49-0.51 & edge>=0.12 = densest clean-loss
+        # cohort (34% WR, -$161/wk). Config-gated per strategy; default OFF (inert
+        # until overconfidence_sitout.enabled=true).
+        _oc = self.config.get("overconfidence_sitout") or {}
+        if signals and bool(_oc.get("enabled", False)):
+            _oc_band = float(_oc.get("band", 0.01))
+            _oc_min_edge = float(_oc.get("min_edge", 0.12))
+            _oc_kept = []
+            for _oc_sig in signals:
+                try:
+                    _pp = float(getattr(_oc_sig, "price", 0.5) or 0.5)
+                    _ee = float(getattr(_oc_sig, "edge", 0.0) or 0.0)
+                except Exception:
+                    _oc_kept.append(_oc_sig)
+                    continue
+                if abs(_pp - 0.5) <= _oc_band and _ee >= _oc_min_edge:
+                    logger.info(
+                        "  overconfidence sit-out (near-0.50 high-edge): price=%.3f edge=%.3f action=%s",
+                        _pp, _ee, getattr(_oc_sig, "action", "?"),
+                    )
+                    continue
+                _oc_kept.append(_oc_sig)
+            _oc_dropped = len(signals) - len(_oc_kept)
+            signals = _oc_kept
+            if _oc_dropped:
+                # 2026-07-11: surface sit-out drops in ops telemetry (was log-line only)
+                # and keep the stats dict's signal count consistent with the post-sitout
+                # reality (Codex: 'signals' was assembled pre-sitout). Never raises.
+                try:
+                    _st = self.last_scan_stats
+                    if isinstance(_st, dict):
+                        if "signals" in _st:
+                            _st["signals"] = len(_oc_kept)
+                        _tsr = _st.get("top_skip_reasons")
+                        if isinstance(_tsr, dict):
+                            _tsr["overconfidence_sitout"] = _tsr.get("overconfidence_sitout", 0) + _oc_dropped
+                except Exception:
+                    pass
         return signals

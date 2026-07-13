@@ -10,7 +10,7 @@ import pytest
 
 from src.execution.clob_client import OrderStatus, Position
 from src.execution.live_testing import ExitDecision
-from src.main import PolyBot
+from src.main import PolyBot, _build_hot_reload_updates
 
 
 class _FakeAIAgent:
@@ -46,6 +46,14 @@ class _FakeNotifier:
         self.reloaded_with = cfg
 
 
+class _FakeExitManager:
+    def __init__(self):
+        self.reloaded_with = None
+
+    def reload_from_config(self, cfg):
+        self.reloaded_with = cfg
+
+
 def test_apply_config_updates_refreshes_live_runtime_objects():
     bot = PolyBot.__new__(PolyBot)
     bot.config = {
@@ -71,6 +79,7 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     bot.ai_agent = _FakeAIAgent()
     bot.notifier = _FakeNotifier()
     bot.market_scanner = _FakeScanner()
+    bot.exit_manager = _FakeExitManager()
     bot.btc_exposure_manager = _FakeExposureManager()
     bot.sol_exposure_manager = _FakeExposureManager()
     bot.eth_exposure_manager = _FakeExposureManager()
@@ -107,6 +116,7 @@ def test_apply_config_updates_refreshes_live_runtime_objects():
     assert bot.eth_macro_strategy.enabled is True
     assert bot.btc_exposure_manager.reloaded_with == {"loss_kill_switch_enabled": False}
     assert bot.notifier.reloaded_with is bot.config
+    assert bot.exit_manager.reloaded_with is bot.config
     assert bot.bitcoin_strategy.lane_calibrator is bot.lane_calibrator
     assert bot.sol_macro_strategy.lane_calibrator is bot.lane_calibrator
     assert bot.eth_macro_strategy.lane_calibrator is bot.lane_calibrator
@@ -215,6 +225,81 @@ def test_apply_config_updates_recomputes_lane_calibration_mode_when_trading_mode
     assert bot.lane_calibrator.shadow_mode is False
 
 
+def test_hot_reload_updates_only_runtime_safe_sections():
+    current = {
+        "trading": {
+            "dry_run": True,
+            "exit_rules": {"updown_trail_gap_pct": 0.15},
+            "cycle_interval_sec": 60,
+        },
+        "strategies": {"xrp_macro": {"enabled": True}},
+        "dashboard": {"dashboard_port": 8082},
+    }
+    disk = {
+        "trading": {
+            "dry_run": False,
+            "exit_rules": {"updown_trail_gap_pct": 0.05},
+            "cycle_interval_sec": 5,
+        },
+        "strategies": {"xrp_macro": {"enabled": False}},
+        "dashboard": {"dashboard_port": 9999},
+    }
+
+    updates = _build_hot_reload_updates(current, disk)
+
+    assert updates == {
+        "trading": {"exit_rules": {"updown_trail_gap_pct": 0.05}},
+        "strategies": {"xrp_macro": {"enabled": False}},
+    }
+
+
+def test_config_file_hot_reload_applies_without_restart(tmp_path):
+    cfg_path = tmp_path / "settings.yaml"
+    cfg_path.write_text(
+        "trading:\n"
+        "  dry_run: true\n"
+        "  exit_rules:\n"
+        "    updown_trail_gap_pct: 0.15\n"
+        "strategies:\n"
+        "  xrp_macro:\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+    bot = PolyBot.__new__(PolyBot)
+    bot.config_path = cfg_path
+    bot.config = {
+        "trading": {
+            "dry_run": True,
+            "exit_rules": {"updown_trail_gap_pct": 0.15},
+        },
+        "strategies": {"xrp_macro": {"enabled": True}},
+    }
+    bot._config_mtime_ns = cfg_path.stat().st_mtime_ns
+    bot._last_config_hot_reload_error_mtime_ns = None
+    bot.apply_config_updates = MagicMock()
+
+    cfg_path.write_text(
+        "trading:\n"
+        "  dry_run: false\n"
+        "  exit_rules:\n"
+        "    updown_trail_gap_pct: 0.05\n"
+        "strategies:\n"
+        "  xrp_macro:\n"
+        "    enabled: false\n",
+        encoding="utf-8",
+    )
+
+    bot._maybe_hot_reload_config_file()
+
+    bot.apply_config_updates.assert_called_once_with(
+        {
+            "trading": {"exit_rules": {"updown_trail_gap_pct": 0.05}},
+            "strategies": {"xrp_macro": {"enabled": False}},
+        }
+    )
+    assert bot._config_mtime_ns == cfg_path.stat().st_mtime_ns
+
+
 def test_apply_realized_pnl_to_bankroll_floors_at_zero():
     bot = PolyBot.__new__(PolyBot)
     bot.bankroll = 3.5
@@ -280,12 +365,13 @@ def test_resolution_price_updates_do_not_run_exit_checks():
     bot.resolution_tracker = MagicMock()
     bot.resolution_tracker.check_and_settle = MagicMock(return_value=[])
     bot.resolution_tracker.check_price_updates = MagicMock(return_value=(1, {"m1": 0.72}))
+    bot.clob_client = SimpleNamespace(fetch_midpoint=AsyncMock(return_value=None))
     bot._run_exit_checks = AsyncMock(return_value=1)
 
     asyncio.run(bot._run_resolution_check("[test]"))
 
     bot.resolution_tracker.check_price_updates.assert_called_once_with(
-        bot.journal, bot.bankroll, True
+        bot.journal, bot.bankroll, True, {}
     )
     bot._run_exit_checks.assert_not_awaited()
 

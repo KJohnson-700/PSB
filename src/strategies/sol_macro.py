@@ -102,6 +102,8 @@ from src.analysis.rejected_candidate_log import (
     build_upper_cap_probe_variants,
     log_rejected_candidate,
 )
+from src.analysis import no_signal_gate as _no_signal_gate
+from src.analysis import asset_regime as _asset_regime
 from src.analysis.window_delta import (
     delta_confirms_side,
     evaluate_window_delta,
@@ -485,6 +487,31 @@ class SolMacroStrategy:
                 return False
             if float(edge) < float(self.config.get("ai_updown_marginal_min_edge", 0.03)):
                 return False
+            # 2026-07-08 R1 (operator+Codex GO-cond): per-lane HARD allowlist that takes
+            # precedence over the AI tiebreaker - lanes in marginal_ev_admit_lanes_override_ai
+            # admit the marginal band on quant terms even while up/down AI is ON for the
+            # strategy. Everything NOT listed keeps the 2026-07-03 yield-to-AI behavior.
+            # Composite scorer remains the downstream quality gate. Shipped: xrp 15m LONG.
+            _ovr_lanes = self.config.get("marginal_ev_admit_lanes_override_ai") or []
+            if (
+                window is not None
+                and _ovr_lanes
+                and not self.ai_agent.decision_layer_enabled()
+            ):
+                _ovr_key = f"{str(window).strip()}:{str(allowed_side).strip()}".upper()
+                if _ovr_key in {str(x).strip().upper() for x in _ovr_lanes}:
+                    return True
+            # 2026-07-03 AI-SHADOW FIX (Codex): when up/down AI is ON+available this
+            # helper must YIELD the marginal [0.03,min_edge) band to the AI tiebreaker.
+            # Previously Path 1 (EV allowlist) admitted regardless, so the alt AI gate
+            # (which is `... and not _admit_marginal_quant_short(...)`) never saw the
+            # band -> alt ai_calls=0. Now it truly means "no-AI marginal admit".
+            if (
+                bool(self.config.get("use_ai", True))
+                and bool(self.config.get("use_ai_updown", True))
+                and self.ai_agent.is_available()
+            ):
+                return False
             # Path 1: ghost-derived per-lane EV allowlist (preferred).
             if window is not None and self._marginal_ev_admit_ok(window, allowed_side):
                 return True
@@ -657,7 +684,7 @@ class SolMacroStrategy:
     # Alt live-entry AI is intentionally disabled. BTC owns the 15m/1h
     # evaluate_trade_decision path; alt AI is reserved for observer/tuning and
     # self-healing surfaces.
-    _DECISION_GATE_WINDOWS = frozenset()
+    _DECISION_GATE_WINDOWS = frozenset({"15m", "1h"})  # 2026-07-03 AI-FIX: was empty = alt AI never fired; enable 15m/1h AI (5m excluded), Codex GO
 
     def _log_decision_layer(
         self,
@@ -1254,8 +1281,8 @@ class SolMacroStrategy:
         btc_1h_regime: Optional[str],
         alt_h1_trend: Optional[str],
     ) -> Optional[str]:
-        if str(self._signal_strategy_name or "") != "sol_macro":
-            return None
+        if str(self._signal_strategy_name or "") not in ("sol_macro", "bnb_macro"):
+            return None  # 2026-07-05: extend short-the-bull guard to bnb (bnb_5m_vs_slower BUY_NO 0W-8L -$25.98 live; sol behavior unchanged)
         if action != "BUY_NO":
             return None
 
@@ -1268,7 +1295,7 @@ class SolMacroStrategy:
         # reaches this guard — both BUY_YES and BUY_NO are covered there.
 
         if window_size == "5m" and source.endswith("_vs_slower") and alt_h1 == "BULLISH":
-            return "sol_vs_slower_short_against_h1"
+            return f"{str(self._signal_strategy_name or '').replace('_macro','')}_vs_slower_short_against_h1"
 
         # BTC→SOL decoupling (2026-05-29): this branch gated a SOL-*native* 15m
         # short on BTC's 1h regime, violating the standing "alts not decided by
@@ -1973,6 +2000,12 @@ class SolMacroStrategy:
         if action == "BUY_YES" and prob < 0.5 - fmargin:
             return "BUY_NO", "SHORT", "DOWN", prob, prob
         if action == "BUY_NO" and prob > 0.5 + fmargin:
+            # 2026-07-12: flip-to-LONG gated off (default-on preserves legacy).
+            # The documented freeze-fix is flip-to-SHORT; the symmetric flip-to-LONG
+            # was overriding correct bearish shorts into 0.95-pegged longs (xrp/doge
+            # 1h, fade-off) => fake +0.44 edge, live-negative. Codex GO 2026-07-12.
+            if not bool(self.config.get("window_delta_flip_to_long_enabled", True)):
+                return None
             return "BUY_YES", "LONG", "UP", prob, prob
         return None
 
@@ -2165,10 +2198,22 @@ class SolMacroStrategy:
                 f"oracle_stale_basis_relax_max_bps_{window}_{side}",
                 stale_basis_relax_max_bps,
             )
+        # 2026-07-13 A (operator GO, re-applies lost 07-01 fix): assets whose
+        # Chainlink runs minutes-stale (HYPE: 42-50min Arbitrum cadence) validate
+        # against the fresh exchange/HL mid (option-C get_current_price IS the HL
+        # mid for hype) instead of a dead oracle + stale-relax fallbacks.
+        # Per-strategy opt-in: oracle_ref_use_exchange_spot (hype_macro only).
+        _o_price = getattr(sol, "chainlink_price", None)
+        _o_updated = getattr(sol, "chainlink_updated_at", None)
+        if bool(self.config.get("oracle_ref_use_exchange_spot", False)):
+            _spot_ref = getattr(sol, "current_price", None)
+            if _spot_ref:
+                _o_price = _spot_ref
+                _o_updated = now if now is not None else datetime.now(timezone.utc)
         return validate_oracle_reference(
-            oracle_price=getattr(sol, "chainlink_price", None),
+            oracle_price=_o_price,
             exchange_spot=getattr(sol, "current_price", None),
-            oracle_updated_at=getattr(sol, "chainlink_updated_at", None),
+            oracle_updated_at=_o_updated,
             max_age_sec=self.oracle_max_age_sec,
             max_basis_bps=max_basis_bps,
             require_oracle=self.require_oracle_for_updown,
@@ -2176,6 +2221,12 @@ class SolMacroStrategy:
             allow_exchange_when_oracle_missing=self.updown_allow_exchange_when_oracle_missing,
             stale_basis_relax_max_bps=stale_basis_relax_max_bps,
             basis_relax_max_bps=basis_relax_max_bps,
+            stale_spot_is_settlement=bool(
+                self.config.get("oracle_stale_spot_is_settlement", False)
+            ),
+            stale_spot_settlement_max_basis_bps=_float_config(
+                "oracle_stale_spot_settlement_max_basis_bps", 500.0
+            ),
         )
 
     def _updown_composite_floor(
@@ -2184,12 +2235,29 @@ class SolMacroStrategy:
         lane: str,
         window_size: Optional[str] = None,
         quant_confidence: Optional[float] = None,
+        side: Optional[str] = None,
     ) -> float:
         window_overrides = self.updown_composite_cfg.get("strategy_window_min_scores", {})
         strategy_overrides = {}
         if isinstance(window_overrides, dict):
             strategy_overrides = window_overrides.get(self._signal_strategy_name, {}) or {}
         if isinstance(strategy_overrides, dict) and window_size:
+            # 2026-07-12 per-LANE (window:SIDE) override, checked before the
+            # window-level one. Early return = also bypasses the low-confidence
+            # bump below — intentional: the settled cohorts this unblocks (xrp
+            # 1h SHORT 79%/112, bnb 1h 72%/61%, hype 1h SHORT 60%, doge 1h
+            # SHORT 100%/29) are low-confidence BY CONSTRUCTION and still win.
+            if side:
+                _lane_key = f"{str(window_size).strip()}:{str(side).strip().upper()}"
+                override = strategy_overrides.get(_lane_key)
+                if override is None:
+                    override = strategy_overrides.get(_lane_key.lower())
+                if override is not None:
+                    logger.debug(
+                        "composite floor lane override %s %s=%.3f",
+                        self._signal_strategy_name, _lane_key, float(override),
+                    )
+                    return float(override)
             override = strategy_overrides.get(str(window_size))
             if override is not None:
                 return float(override)
@@ -2239,9 +2307,13 @@ class SolMacroStrategy:
                 lane=lane,
                 window_size=window_size,
                 quant_confidence=confidence,
+                side=(
+                    "LONG" if action == "BUY_YES"
+                    else ("SHORT" if action == "BUY_NO" else None)
+                ),
             ),
             action=action,
-            btc_1h_regime=btc_1h_regime,
+            btc_1h_regime=None,  # 2026-07-04 alts NOT decided by BTC (Codex GO): neutralize BTC-1h-regime blend in ALT composite; it set BULL+BUY_YES regime_quality=0.25 and dragged bull-tape alt longs below floor. bitcoin.py keeps its own (own call sites).
             regime_action_gate_enabled=bool(
                 self.updown_composite_cfg.get("regime_action_gate_enabled", True)
             ),
@@ -3418,6 +3490,28 @@ class SolMacroStrategy:
             if (
                 is_updown
                 and _updown_tf == "5m"
+                and action == "BUY_YES"
+                and "fade_native" not in (side_source or "")
+                and bool(self.config.get("disable_buy_yes_5m_native", False))
+            ):
+                # 2026-07-13 H1 (operator GO): hype 5m momentum longs WR19% -$114 July;
+                # fade-sourced 5m longs 3W/0L +$27. Suppress native-source longs only.
+                _bump_skip("buy_yes_5m_native_suppressed")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_yes_5m_native_suppressed",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
+
+            if (
+                is_updown
+                and _updown_tf == "5m"
                 and action == "BUY_NO"
                 and self._should_suppress_native_5m_buy_no()
             ):
@@ -3664,7 +3758,12 @@ class SolMacroStrategy:
                 # ~6k settled rejections; symmetric reject was throwing them out.
                 _sample("entry_price", yes_price)
                 _our_price = (1.0 - yes_price) if action == "BUY_NO" else yes_price
-                if _our_price < 0.12:
+                # 2026-07-08 operator REMOVE price_too_far_from_even: config-driven,
+                # DEFAULT 0.0 (disabled). LIVE data: cheap entries 0.20-0.35 = +$106 WIN
+                # while near-0.50 = -$555; the gate was blocking the profitable tail.
+                # Set price_too_far_min_our_price: 0.12 to restore.
+                _ptf_min = float(self.config.get("price_too_far_min_our_price", 0.0))
+                if _ptf_min > 0.0 and _our_price < _ptf_min:
                     _bump_skip("price_too_far_from_even")
                     _log_skip_reject(
                         market=market,
@@ -3826,6 +3925,27 @@ class SolMacroStrategy:
                     action=action,
                     window_size=_updown_tf if is_updown else "15m",
                 )
+                # 2026-07-13 C (operator GO): per-candidate feed-state breadcrumb —
+                # joins entries to oracle basis/age for staleness analysis.
+                try:
+                    _cl_upd = getattr(sol, "chainlink_updated_at", None)
+                    _cl_age = None
+                    if _cl_upd is not None:
+                        try:
+                            _cl_age = (datetime.now(timezone.utc) - _cl_upd).total_seconds()
+                        except TypeError:  # naive timestamp from the service
+                            _cl_age = (datetime.now() - _cl_upd).total_seconds()
+                    logger.info(
+                        "FEEDSTATE strat=%s mkt=%s tf=%s act=%s basis_bps=%s oracle_age_s=%s ref_spot=%s passed=%s",
+                        self._signal_strategy_name, market.id,
+                        _updown_tf if is_updown else "15m", action,
+                        getattr(oracle_validation, "basis_bps", None),
+                        (round(_cl_age) if _cl_age is not None else None),
+                        bool(self.config.get("oracle_ref_use_exchange_spot", False)),
+                        oracle_validation.passed,
+                    )
+                except Exception:
+                    pass
                 if not oracle_validation.passed:
                     _bump_skip(oracle_validation.reason)
                     _log_skip_reject(
@@ -4146,6 +4266,21 @@ class SolMacroStrategy:
                         macd_flip_long_to_short_enabled=(not _fade_active) and self.config.get("macd_momentum_flip_long_to_short", False),
                     )
 
+                    # 2026-07-03 FROZEN-EST FIX (sol-family 5m): blend continuous window-delta
+                    # P(up) into the step-built est. Opt-in via window_delta_est_weight_<tf>.
+                    _wd_w = float(self.config.get(
+                        f"window_delta_est_weight_{_updown_tf}",
+                        self.config.get("window_delta_est_weight", 0.0),
+                    ) or 0.0)
+                    if _wd_w > 0.0:
+                        try:
+                            from src.analysis.window_delta import evaluate_window_delta as _ewd
+                            _wde = _ewd(sol, _updown_tf, float(_eval_left or 0.0))
+                            if _wde is not None and _wde[1] is not None:
+                                est_prob_up = (1.0 - _wd_w) * est_prob_up + _wd_w * float(_wde[1])
+                                reason_parts.append(f"wd_est_blend={float(_wde[1]):.3f}x{_wd_w:.2f}")
+                        except Exception:
+                            pass
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     # Window-delta confirmation — side is FINAL here (post-flip).
@@ -4444,6 +4579,29 @@ class SolMacroStrategy:
 
                     if rsi_soft_delta != 0.0:
                         est_prob_up += rsi_soft_delta
+
+                    # 2026-07-03 FROZEN-EST FIX (sol 15m): blend the continuous
+                    # window-delta P(up) — the tape's own read of this window —
+                    # into the step-built est. Opt-in per window via
+                    # window_delta_est_weight_<tf> (default 0 = unchanged).
+                    _wd_w = float(self.config.get(
+                        f"window_delta_est_weight_{window_label}",
+                        self.config.get("window_delta_est_weight", 0.0),
+                    ) or 0.0)
+                    if _wd_w > 0.0:
+                        try:
+                            _wd_ml = 0.0
+                            if market.end_date:
+                                _wd_end = market.end_date
+                                if _wd_end.tzinfo is None:
+                                    _wd_end = _wd_end.replace(tzinfo=timezone.utc)
+                                _wd_ml = max(0.0, (_wd_end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+                            _wde = evaluate_window_delta(sol, window_label, _wd_ml)
+                            if _wde is not None and _wde[1] is not None:
+                                est_prob_up = (1.0 - _wd_w) * est_prob_up + _wd_w * float(_wde[1])
+                                reason_parts.append(f"wd_est_blend={float(_wde[1]):.3f}x{_wd_w:.2f}")
+                        except Exception:
+                            pass  # fail-open: est stays as built
 
                     # Fresh-opposing cross override — own-TF (15m/1h) + faster-TF
                     # leads (1h reads 15m, 15m reads 5m) so the slow windows aren't
@@ -4889,7 +5047,7 @@ class SolMacroStrategy:
                     # redundant local HOLD/supports/confidence/edge re-gate.
                     _mpass = (
                         ai_decision is not None
-                        and ai_decision.reason == "direct_ai_marginal_pass"
+                        and ai_decision.reason in ("direct_ai_marginal_pass", "direct_ai_marginal_confirm")  # 2026-07-03: accept new fail-closed confirm reason
                     )
                     # Log reasoning so we can audit what the model is actually deciding
                     if ai_decision is not None and ai_analysis:
@@ -5037,14 +5195,32 @@ class SolMacroStrategy:
             if (
                 is_updown and action == "BUY_YES"
                 and _sz_lo is not None and _sz_hi is not None
-                and float(_sz_lo) <= _eval_left < float(_sz_hi)
+                and float(_sz_lo) <= _eval_left
+                and _mins_left < float(_sz_hi)
             ):
                 _bump_skip(f"buy_yes_{_updown_tf}_timing_deadzone")
                 _log_skip_reject(
                     market=market, window=_updown_tf, side=allowed_side, action=action,
                     reason=f"buy_yes_{_updown_tf}_timing_deadzone",
                     yes_price=yes_price, htf_bias=primary_htf_bias,
-                    context={"eval_mins_left": float(_eval_left)},
+                    context={
+                        "eval_mins_left": float(_eval_left),
+                        "mins_left": float(_mins_left),
+                    },
+                )
+                continue
+            if is_updown and _no_signal_gate.lane_blocked(self._signal_strategy_name, _updown_tf, action):
+                _bump_skip("no_signal_gate")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="no_signal_gate",
+                    yes_price=yes_price,
+                    est_prob_up=estimated_prob,
+                    htf_bias=primary_htf_bias,
+                    context={"gate": "no_signal_per_lane"},
                 )
                 continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
@@ -5106,8 +5282,14 @@ class SolMacroStrategy:
                 continue
             # No 15m LTF confirmation: require stronger edge for 15m updown (proceeding on macro only)
             if ltf_strength == 0.0 and is_updown and _updown_tf != "5m":
+                # 2026-07-04 operator freq unlock: per-tf override so the 1h raise
+                # can be trimmed without touching 15m (unset = legacy value).
+                _unconf_edge = self.config.get(
+                    f"min_edge_when_ltf_unconfirmed_{_updown_tf}",
+                    self.min_edge_15m_when_ltf_unconfirmed,
+                )
                 effective_min_edge = max(
-                    effective_min_edge, self.min_edge_15m_when_ltf_unconfirmed
+                    effective_min_edge, float(_unconf_edge)
                 )
             if (
                 self._btc_trade_inputs_enabled()
@@ -5429,6 +5611,24 @@ class SolMacroStrategy:
             # {strategy}.by_tf.<tf>.min_est_prob_conviction; 0 = off (byte-identical for
             # every unset lane). Directional: BUY_YES needs est_up>=floor; BUY_NO needs
             # P(down)=1-est_up>=floor. Admission-only, evaluated BEFORE the min_edge gate.
+            # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only
+            # (directional bidirectional floor below stays untouched; this one must
+            # never gate BUY_NO — the deep-NO side is the proven winner).
+            _yes_conv_floor = float(
+                self._tf_cfg(_updown_tf, "min_est_prob_conviction_buy_yes", 0.0) or 0.0
+            )
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and _yes_conv_floor > 0.0
+                and float(estimated_prob) < _yes_conv_floor
+            ):
+                _bump_skip("buy_yes_conviction_floor")
+                logger.info(
+                    f"  {_brand} skip '{market.question[:40]}...' BUY_YES conviction "
+                    f"{float(estimated_prob):.3f} < floor {_yes_conv_floor:.3f} (buy_yes_conviction_floor)"
+                )
+                continue
             _conv_floor = float(self._tf_cfg(_updown_tf, "min_est_prob_conviction", 0.0) or 0.0)
             if is_updown and _conv_floor > 0.0:
                 _conv = float(estimated_prob) if action == "BUY_YES" else (1.0 - float(estimated_prob))
@@ -5895,6 +6095,18 @@ class SolMacroStrategy:
             if lane_policy.size_multiplier > 0:
                 raw_size *= lane_policy.size_multiplier
             final_size = self.exposure_manager.scale_size(raw_size)
+            # 2026-07-13 restart passenger (operator GO, Codex conditional-GO honored):
+            # per-lane max-notional lift — tier floor=cap flattens winners; when
+            # lane_max_notional_{tf}_{side} is set, let this lane size up to
+            # min(kelly raw, lane max). Guards: only lifts an already-admitted size,
+            # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
+            if final_size >= 0.5 and is_updown:
+                _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
+                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
+                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
+                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
+                    if _ln_max > 0:
+                        final_size = max(final_size, min(raw_size, _ln_max))
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -6014,6 +6226,9 @@ class SolMacroStrategy:
             "enabled": True,
             "signals": len(signals),
             "markets_considered": len(sol_markets),
+            "asset_regime": _asset_regime.get_state(
+                getattr(self.sol_service, "alt_symbol", None)
+            ),
             "btc_1h_regime": btc_1h_regime,
             "btc_1h_regime_gates_enabled": bool(
                 self._btc_1h_regime_gates.get("enabled", False)
@@ -6093,6 +6308,30 @@ class SolMacroStrategy:
                     self._signal_strategy_name, len(signals), len(deduped),
                 )
             signals = deduped
+        # 2026-07-07 Fix A: near-0.50 overconfidence sit-out. Stated edge is inverted
+        # near coin-flip prices; entry 0.49-0.51 & edge>=0.12 = densest clean-loss
+        # cohort (34% WR, -$161/wk). Config-gated per strategy; default OFF (inert
+        # until overconfidence_sitout.enabled=true).
+        _oc = self.config.get("overconfidence_sitout") or {}
+        if signals and bool(_oc.get("enabled", False)):
+            _oc_band = float(_oc.get("band", 0.01))
+            _oc_min_edge = float(_oc.get("min_edge", 0.12))
+            _oc_kept = []
+            for _oc_sig in signals:
+                try:
+                    _pp = float(getattr(_oc_sig, "price", 0.5) or 0.5)
+                    _ee = float(getattr(_oc_sig, "edge", 0.0) or 0.0)
+                except Exception:
+                    _oc_kept.append(_oc_sig)
+                    continue
+                if abs(_pp - 0.5) <= _oc_band and _ee >= _oc_min_edge:
+                    logger.info(
+                        "  overconfidence sit-out (near-0.50 high-edge): price=%.3f edge=%.3f action=%s",
+                        _pp, _ee, getattr(_oc_sig, "action", "?"),
+                    )
+                    continue
+                _oc_kept.append(_oc_sig)
+            signals = _oc_kept
         return signals
 
 
@@ -6103,6 +6342,7 @@ def _get_weekend_penalty() -> float:
     HYPE-style manipulation (a4385 CEX pump) is most likely to occur.
     Kept in sync with ``exposure_manager._get_weekend_penalty``.
     """
+    return 1.0  # 2026-07-11 re-applied on winning-artifact restore: weekend penalty data-DISABLED 05:26 (weekend -0.043/t vs weekday -0.227/t); operator-disputed, LIVE state preserved
     now_utc = datetime.now(timezone.utc)
     weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour

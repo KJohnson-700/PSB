@@ -143,3 +143,13 @@ def test_configured_buy_yes_repairs_are_soft_and_target_only_bad_lanes():
             assert "disable" not in " ".join(rule)
             assert float(rule.get("probability_haircut", 0.0)) >= 0.0
             assert float(rule.get("min_edge_add", 0.0)) >= 0.0
+
+
+def test_xrp_15m_buy_yes_stays_disabled_without_touching_5m_or_1h():
+    cfg = yaml.safe_load(Path("config/settings.yaml").read_text())
+    xrp = cfg["strategies"]["xrp_macro"]
+
+    assert xrp["enabled"] is True
+    assert xrp["disable_buy_yes_15m"] is True
+    assert xrp["disable_buy_yes_1h"] is False
+    assert xrp.get("disable_buy_yes_5m", False) is False

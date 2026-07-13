@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
+from src.execution.fill_sim import simulate_book_fill
 from src.execution.olympus_client import OlympusClient
 try:
     from importlib.metadata import PackageNotFoundError, version as package_version
@@ -123,6 +124,18 @@ class CLOBClient:
     def __init__(self, config: Dict[str, Any]):
         # Root config: trading.* lives at top level, not under polymarket.
         self._root_config = config
+        _trading_config = config.get("trading", {}) or {}
+        _slippage_guard = _trading_config.get("slippage_guard", {}) or {}
+        self._paper_entry_fresh_fill = bool(
+            _trading_config.get("paper_entry_fresh_fill", False)
+        )
+        self._paper_entry_fresh_fill_slip_tol = float(
+            _trading_config.get(
+                "paper_entry_fresh_fill_slippage_tol",
+                _slippage_guard.get("max_slippage_cents", 0.02),
+            )
+            or 0.0
+        )
         self.config = config.get("polymarket", {})
         self.api_endpoint = self.config.get(
             "api_endpoint", "https://clob.polymarket.com"
@@ -911,8 +924,60 @@ class CLOBClient:
 
         # Paper: conservative taker fill regardless of mode (maker savings live-only).
         if dry_run:
+            _eff_price = price
+            _eff_size = size
+            if self._paper_entry_fresh_fill and str(side).upper() == "BUY":
+                try:
+                    _book = await self.fetch_order_book_snapshot(token_id)
+                    if not isinstance(_book, dict):
+                        logger.warning(
+                            "paper entry fresh-fill: no book snapshot for %s; fail-open at signal price",
+                            token_id,
+                        )
+                    else:
+                        _asks = sorted(
+                            (
+                                (float(level.get("price")), float(level.get("size")))
+                                for level in (_book.get("asks") or [])
+                                if level.get("price") is not None and level.get("size") is not None
+                            ),
+                            key=lambda x: x[0],
+                        )
+                        if not _asks:
+                            logger.info(
+                                "paper entry fresh-fill no-fill: empty ask book token=%s signal=%.4f size=%.4f",
+                                token_id,
+                                price,
+                                size,
+                            )
+                            return None
+                        _fill_px, _filled = simulate_book_fill(
+                            "BUY",
+                            size,
+                            _asks,
+                            marketable=False,
+                            limit_price=price + self._paper_entry_fresh_fill_slip_tol,
+                            pad_remainder_at_worst=False,
+                        )
+                        if _filled <= 0 or _fill_px * _filled < 1.0:
+                            logger.info(
+                                "paper entry fresh-fill no-fill: token=%s signal=%.4f limit=%.4f fill_px=%.4f filled=%.4f",
+                                token_id,
+                                price,
+                                price + self._paper_entry_fresh_fill_slip_tol,
+                                _fill_px,
+                                _filled,
+                            )
+                            return None
+                        _eff_price, _eff_size = _fill_px, _filled
+                except Exception as exc:
+                    logger.warning(
+                        "paper entry fresh-fill failed for %s; fail-open at signal price: %s",
+                        token_id,
+                        exc,
+                    )
             return await self.place_order(
-                token_id=token_id, side=side, price=price, size=size,
+                token_id=token_id, side=side, price=_eff_price, size=_eff_size,
                 post_only=False, order_type="FAK", dry_run=True, **meta,
             )
 

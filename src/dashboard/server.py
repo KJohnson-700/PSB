@@ -669,6 +669,9 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
                     return (int(h) % 12 + (12 if p == "PM" else 0)) * 60 + int(m)
 
                 diff = abs(_abs(*times[1]) - _abs(*times[0]))
+                # 2026-07-13 midnight wrap fix: 11:55PM-12:00AM computed as 1435m
+                # and mis-bucketed every midnight-crossing 5m/15m trade as _1h.
+                diff = min(diff, 1440 - diff)
                 window = diff if diff > 0 else 5
         if re.search(r"\b(xrp|ripple)\b", ql):
             sym = "XRP"
@@ -822,7 +825,7 @@ def _health_payload() -> Dict[str, Any]:
     ).strip()
     return {
         "status": "ok",
-        "dashboard_ui_rev": "2026-06-18-journal-cleanup",
+        "dashboard_ui_rev": ((_latest_session_dir_by_name().name if _latest_session_dir_by_name() else None) or "2026-06-18-journal-cleanup"),
         "git_sha": sha or None,
         "railway_deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID") or None,
     }
@@ -3194,6 +3197,37 @@ async def get_live_drift():
 _bot_process: Optional[subprocess.Popen] = None
 
 
+def _scan_live_paper_bot_pid() -> Optional[int]:
+    """Authoritative process-table scan for a live ``main.py --paper`` bot.
+
+    The runtime-status file and the in-memory Popen handle both go blind during a
+    systemd restart (stale ``clean_shutdown`` before the new bot writes its PID),
+    which let the dashboard double-spawn a bot alongside the systemd one. A live
+    process is definitive, so scan /proc directly (excludes the dashboard-only
+    process and ourselves). Never raises.
+    """
+    import glob
+    try:
+        self_pid = os.getpid()
+    except Exception:
+        self_pid = -1
+    for cmd_path in glob.glob('/proc/[0-9]*/cmdline'):
+        try:
+            pid = int(cmd_path.split('/')[2])
+        except Exception:
+            continue
+        if pid == self_pid:
+            continue
+        try:
+            with open(cmd_path, 'rb') as _f:
+                cmd = b' '.join(_f.read().split(b'\x00')).decode('utf-8', 'replace')
+        except Exception:
+            continue
+        if 'main.py' in cmd and '--paper' in cmd and '--dashboard-only' not in cmd:
+            return pid
+    return None
+
+
 def _running_bot_pid() -> Optional[int]:
     """Return the PID of a live bot if one is running, else None.
 
@@ -3202,7 +3236,11 @@ def _running_bot_pid() -> Optional[int]:
     double-spawns onto the same account:
       1) the in-memory Popen handle from /api/live/start, and
       2) the cross-process runtime-status PID file the bot writes itself.
+      3) an authoritative /proc scan (closes the systemd-restart race).
     """
+    scanned = _scan_live_paper_bot_pid()
+    if scanned is not None:
+        return scanned
     proc = _bot_process
     if proc is not None and proc.poll() is None:
         return proc.pid
@@ -3243,6 +3281,18 @@ async def start_live_bot(request: Request, mode: str = "paper"):
     """Start the bot as a background subprocess in explicit paper/live mode."""
     global _bot_process
     _check_auth(request)
+
+    # Systemd owns the bot lifecycle on the VPS (ExecStart main.py --paper,
+    # Restart=no). The dashboard must NEVER Popen a competing bot -- that is the
+    # real double-spawn race closer, since a /proc scan alone can miss the
+    # mid-restart gap (old gone, new not yet exec'd). Hard-disabled by default;
+    # opt-in for LOCAL DEV ONLY via env PSB_DASHBOARD_ALLOW_SPAWN=1.
+    if os.environ.get('PSB_DASHBOARD_ALLOW_SPAWN', '').strip().lower() not in ('1', 'true', 'yes'):
+        return {
+            'status': 'disabled',
+            'message': 'Bot is managed by systemd; use systemctl start/stop psb-bot. Dashboard spawning is disabled.',
+            'pid': _running_bot_pid(),
+        }
 
     # Reconcile against the runtime-status PID too, so we don't spawn a second bot
     # alongside a supervisor-owned (split-mode) bot already trading this account.

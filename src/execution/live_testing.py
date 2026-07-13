@@ -80,6 +80,8 @@ class ExitDecision:
     # microstructure fill problem, not a stop-threshold problem.
     secs_to_expiry_at_exit: Optional[float] = None
     exit_book_spread: Optional[float] = None
+    exit_mark_src: Optional[str] = None
+    exit_mark_age_ms: Optional[float] = None
 
 
 @dataclass
@@ -134,6 +136,10 @@ class PositionExitManager:
     """
 
     def __init__(self, config: Dict[str, Any]):
+        self.reload_from_config(config)
+
+    def reload_from_config(self, config: Dict[str, Any]) -> None:
+        """Refresh exit-rule config without replacing the manager object."""
         exit_cfg = config.get("trading", {}).get("exit_rules", {}) or {}
         self.enabled = bool(exit_cfg.get("enabled", False))
         required = {"take_profit_pct", "stop_loss_pct", "max_hold_hours"}
@@ -203,6 +209,23 @@ class PositionExitManager:
             self._updown_min_hold_sec_before_pct_exit = max(
                 0.0, float(_mh_cfg or 0.0)
             )
+        # 2026-07-02 Deploy1(U2b): min-hold anchored to window OPEN for pre-open
+        # entries (live: 3x stops fired 42-58s after open; pre-open cohort +$770
+        # must not lose its grace to the first repricing). RESTORED 2026-07-11:
+        # stripped in the 07-09 08:18 file replacement; recurrence same session
+        # 07-11 = 3 stops at +30/+42/+53s after window open on pre-open entries.
+        # Kill-switch: updown_min_hold_anchor_window_open: false.
+        self._min_hold_anchor_window_open = bool(
+            exit_cfg.get("updown_min_hold_anchor_window_open", True)
+        )
+        # 2026-07-12 fresh-mark exemption: let TP/stop through the min-hold when the
+        # exit mark is a live WS book update <= N ms old. The floor exists to block
+        # phantom exits on thin/stale window-open marks; a fresh WS mark is not that.
+        # 07-12 autopsy: suppression turned a +127% MFE into a -47.5% fill and let
+        # stops fill 2-3.5x wide. 0 = disabled (pure suppression, pre-07-12 behavior).
+        self._min_hold_fresh_mark_exempt_ms = float(
+            exit_cfg.get("updown_min_hold_fresh_mark_exempt_ms", 2000) or 0.0
+        )
         # Optional: realistic paper fills (default OFF). Paper/dry_run fills every
         # order at the requested price; this walks the book ladder so the recorded
         # exit price + P&L reflect the slippage a real sweep would pay. Covers all
@@ -246,6 +269,37 @@ class PositionExitManager:
         return self._updown_min_hold_by_window.get(
             label, self._updown_min_hold_sec_before_pct_exit
         )
+
+    def _preopen_lag_secs(self, pos) -> float:
+        """Seconds between entry and the window OPEN for pre-open entries.
+
+        Min-hold is measured from max(entry, window_open) so a position entered
+        before its window starts keeps the full phantom-exit grace after the
+        first real repricing at open. Kill-switch:
+        updown_min_hold_anchor_window_open: false.
+        """
+        if not getattr(self, "_min_hold_anchor_window_open", True):
+            return 0.0
+        try:
+            end = getattr(pos, "end_date", None)
+            opened = getattr(pos, "opened_at", None)
+            if end is None or opened is None:
+                return 0.0
+            # Codex 2026-07-11: UTC-normalize so journal-reloaded naive
+            # datetimes don't TypeError into the except -> 0.0 fallback
+            # (which would silently degrade to entry-anchored behavior).
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            wl = {"5m": 300.0, "15m": 900.0, "1h": 3600.0}.get(
+                str(getattr(pos, "window_size", "") or "").lower()
+            )
+            if not wl:
+                return 0.0
+            return max(0.0, (end - opened).total_seconds() - wl)
+        except Exception:
+            return 0.0
 
     def _resolve_updown_exit_params(self, strategy_name: str) -> Tuple[float, float, float, float]:
         """Return per-strategy updown exit params with global defaults as fallback."""
@@ -571,20 +625,38 @@ class PositionExitManager:
             # untouched (they only fire near resolution). Resets the stop-confirm
             # count so it re-confirms cleanly once the hold clears.
             _min_hold_floor = self._min_hold_floor_secs(pos)
+            _held_eff_secs = hours_held * 3600.0 - self._preopen_lag_secs(pos)
             if (
                 is_updown
                 and reason in ("take_profit", "updown_stop_loss")
                 and _min_hold_floor > 0
-                and (hours_held * 3600.0) < _min_hold_floor
+                and _held_eff_secs < _min_hold_floor
             ):
-                logger.info(
-                    "Suppress %s for %s: held %.0fs < min-hold %.0fs (phantom-exit floor)",
-                    reason, pos.market_id, hours_held * 3600.0,
-                    _min_hold_floor,
-                )
-                reason = None
-                if getattr(pos, "_stop_confirm_count", 0):
-                    setattr(pos, "_stop_confirm_count", 0)
+                _fx_ms = getattr(self, "_min_hold_fresh_mark_exempt_ms", 0.0)
+                _liq = (market_liquidity or {}).get(pos.market_id) or {}
+                _mark_age = _liq.get("mark_age_ms")
+                if (
+                    _fx_ms > 0
+                    and _liq.get("mark_src") == "ws"
+                    and _mark_age is not None
+                    and float(_mark_age) <= _fx_ms
+                ):
+                    logger.info(
+                        "Min-hold fresh-mark exemption: allowing %s for %s at "
+                        "held-eff %.0fs (ws mark age %.0fms <= %.0fms)",
+                        reason, pos.market_id, _held_eff_secs,
+                        float(_mark_age), _fx_ms,
+                    )
+                else:
+                    logger.info(
+                        "Suppress %s for %s: held-eff %.0fs < min-hold %.0fs "
+                        "(phantom-exit floor, window-open anchored)",
+                        reason, pos.market_id, _held_eff_secs,
+                        _min_hold_floor,
+                    )
+                    reason = None
+                    if getattr(pos, "_stop_confirm_count", 0):
+                        setattr(pos, "_stop_confirm_count", 0)
 
             if reason:
                 token_yes, token_no = token_map.get(pos.market_id, ("", ""))
@@ -772,6 +844,8 @@ class PositionExitManager:
                         fill_fee_rate=fill_fee_rate,
                         secs_to_expiry_at_exit=_secs_to_expiry,
                         exit_book_spread=_exit_spread,
+                        exit_mark_src=((market_liquidity or {}).get(pos.market_id) or {}).get("mark_src"),
+                        exit_mark_age_ms=((market_liquidity or {}).get(pos.market_id) or {}).get("mark_age_ms"),
                     )
                 )
 

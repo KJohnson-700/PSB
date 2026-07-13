@@ -111,11 +111,12 @@ def test_sol_entry_policy_supports_hourly_by_tf_overrides():
     assert policy["entry_price_max"] == 0.60
 
 
-def test_alt_macro_has_no_live_entry_ai_windows():
+def test_alt_macro_live_entry_ai_windows_exclude_5m():
     cfg = _make_config()
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._DECISION_GATE_WINDOWS == frozenset()
+    assert strategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
+    assert "5m" not in strategy._DECISION_GATE_WINDOWS
     assert BitcoinStrategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
 
 

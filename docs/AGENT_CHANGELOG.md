@@ -8,6 +8,14 @@
 
 ---
 
+## 2026-07-10 — Restart candidate: restore real AI routing for BTC marginals and alt 15m/1h gates
+
+**Context:** VPS audit showed the running/candidate config could emit AI-looking decision logs while `ai.decision_layer.enabled` was false, meaning `evaluate_trade_decision()` returned pass-through `decision_layer_disabled` approvals. Operator requirement: BTC 5m remains quant-only, BTC 15m/1h marginal trades get real AI help, and SOL/ETH/HYPE/XRP/DOGE/BNB regain AI sorting/gating on non-5m windows.
+
+**What changed:** Enabled `ai.decision_layer`, re-enabled `strategies.bitcoin.use_ai_updown`, narrowed BTC enforced lanes to `marginal` only, and restored `SolMacroStrategy._DECISION_GATE_WINDOWS` to `{"15m", "1h"}` so inherited alt macro strategies can run decision-layer gating outside 5m. Added config and strategy guard tests proving BTC 5m stays excluded and alt AI gate windows are 15m/1h only.
+
+**Validation:** `.venv/bin/python -m pytest tests/test_ai_config_guards.py tests/test_ai_agent_parse.py tests/test_ai_broker_invalidation.py tests/test_ai_broker_outage.py tests/test_ai_broker_queue.py tests/test_ai_decision_broker.py tests/test_ai_preentry_veto.py tests/test_sol_macro.py tests/test_alt_btc_decoupling.py tests/test_bitcoin_scenarios.py tests/test_bitcoin.py tests/test_strategy_execution_drivers.py tests/test_ops_pulse.py tests/test_websocket_market_channel.py tests/test_clob_client_hardening.py tests/test_fill_sim.py tests/test_buy_yes_lane_repair.py tests/test_updown_exit_shared.py tests/test_exit_executable_stop.py tests/test_live_config_apply.py -k 'not test_kill_switch_auto_resumes_after_cycles and not test_kill_switch_after_3_losses'` -> `402 passed, 2 skipped, 2 deselected, 2 xfailed`. Full expanded run only failed the two pre-existing/stale paper kill-switch assertions tied to `exposure.loss_kill_switch_enabled: false`.
+
 ## 2026-06-23 — Alt 1h simple-band side override removed
 
 **Context:** Local paper session `test_20260623_074054` showed alt-native SHORTs profitable while `alt_1h_simple_long` force-flipped BNB/DOGE 1h bearish-band candidates into BUY_YES losses.

@@ -15,6 +15,17 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 
 
+def polymarket_taker_fee_usdc(size: float, price: float, fee_rate: float) -> float:
+    """Return the USDC taker fee for a binary CLOB fill."""
+    try:
+        shares = max(0.0, float(size))
+        p = min(1.0, max(0.0, float(price)))
+        rate = max(0.0, float(fee_rate))
+    except (TypeError, ValueError):
+        return 0.0
+    return round(shares * rate * p * (1.0 - p), 5)
+
+
 def simulate_book_fill(
     side: str,
     size: float,

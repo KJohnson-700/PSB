@@ -26,3 +26,21 @@ def test_alt_macro_btc_trade_inputs_are_disabled(strategy_cls: type) -> None:
     strategy = strategy_cls.__new__(strategy_cls)
 
     assert strategy._btc_trade_inputs_enabled() is False
+
+
+@pytest.mark.parametrize(
+    "strategy_cls",
+    [
+        SolMacroStrategy,
+        ETHMacroStrategy,
+        HYPEMacroStrategy,
+        XRPMacroStrategy,
+        DOGEMacroStrategy,
+        BNBMacroStrategy,
+    ],
+)
+def test_alt_macro_ai_gate_windows_are_15m_1h_only(strategy_cls: type) -> None:
+    strategy = strategy_cls.__new__(strategy_cls)
+
+    assert strategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
+    assert "5m" not in strategy._DECISION_GATE_WINDOWS

@@ -83,6 +83,8 @@ from src.execution.performance_feedback import (
     get_loosen_min_edge_mult,
 )
 from src.analysis.lane_identity import build_lane_metadata
+from src.analysis import no_signal_gate as _no_signal_gate
+from src.analysis import asset_regime as _asset_regime
 from src.strategies.btc_updown_5m import (
     btc_5m_hist_gate_reject_reason,
     compute_btc_5m_quant,
@@ -315,15 +317,6 @@ class BitcoinStrategy:
         self._b1hsl_entry_min = float(_b1hsl.get('entry_min', 0.50) or 0.50)
         self._b1hsl_entry_max = float(_b1hsl.get('entry_max', 0.85) or 0.85)
         self._b1hsl_sizing_edge = float(_b1hsl.get('sizing_edge', 0.06) or 0.06)
-
-        # LTF (lower-timeframe) momentum-gate policy — mirror the alt flags so BTC is
-        # tunable + ghost-testable instead of hardcoded. Defaults PRESERVE current
-        # behavior: anti_ltf_gate_enabled=True (skip 15m/1h when the lower TF confirms,
-        # treated as "late entry"); require_ltf_confirmation=False. 2026-06-24: the skip
-        # is now also ghost-logged with LTF context so confirmed-vs-unconfirmed EV can
-        # be measured per horizon before deciding whether the anti-gate is backwards.
-        self.anti_ltf_gate_enabled = bool(self.config.get("anti_ltf_gate_enabled", True))
-        self.require_ltf_confirmation = bool(self.config.get("require_ltf_confirmation", False))
 
         # ── AI-hold soft veto ────────────────────────────────────────────────
         # When AI says HOLD on a market, cache that decision for ai_hold_veto_ttl_sec.
@@ -1319,30 +1312,11 @@ class BitcoinStrategy:
         rsi: float,
         min_hist_magnitude: float,
     ) -> str:
-        macd_vote = self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude)
-        rsi_vote = self._vote_rsi_bias(rsi)
-        ema_vote = self._vote_ema_bias(price, ema_9, ema_21, ema_50)
-        # 2026-06-25 (Part B): momentum-aware resolution. MACD and EMA are the
-        # direction/momentum votes; RSI is a *level* (reversal) vote — and RSI-extreme
-        # WITH the trend is continuation, not reversal (oversold in an uptrend = buy,
-        # not sell). When the two momentum votes don't conflict (both agree, or one is
-        # directional and the other neutral), that IS the bias — a contradicting RSI
-        # level must not veto it down to NEUTRAL. This fixes the proven failure: 1H
-        # MACD +85 BULLISH, EMA NEUTRAL, RSI 34 BEARISH -> old 2-of-3 = NEUTRAL ->
-        # fell back to a lagging-4H short -> loss (session test_20260625_004718).
-        # Only when MACD and EMA genuinely OPPOSE do we fall to the 2-of-3 tiebreak
-        # (where RSI participates). MACD already has a |hist| conviction gate, so a
-        # neutral/noisy MACD yields NEUTRAL here and never force-fires in chop.
-        # Opt-out: btc_rsi_vote_momentum_aware: false.
-        if self.config.get("btc_rsi_vote_momentum_aware", True):
-            # Anchor on MACD (it already has a |histogram| conviction gate, so it is
-            # NEUTRAL in chop and never force-fires on noise). If MACD is directional
-            # and EMA does not OPPOSE it, that is the bias — a contradicting RSI level
-            # cannot veto it. Genuine MACD-vs-EMA opposition falls to the 2-of-3 tiebreak.
-            _opp = {"BULLISH": "BEARISH", "BEARISH": "BULLISH"}
-            if macd_vote in _opp and ema_vote != _opp[macd_vote]:
-                return macd_vote
-        votes = [macd_vote, rsi_vote, ema_vote]
+        votes = [
+            self._vote_macd_bias(macd, min_hist_magnitude=min_hist_magnitude),
+            self._vote_rsi_bias(rsi),
+            self._vote_ema_bias(price, ema_9, ema_21, ema_50),
+        ]
         bull_votes = sum(1 for vote in votes if vote == "BULLISH")
         bear_votes = sum(1 for vote in votes if vote == "BEARISH")
         if bull_votes >= 2:
@@ -1395,18 +1369,14 @@ class BitcoinStrategy:
 
     def _resolve_bias_for_tf(self, ta: TechnicalAnalysis, tf: str) -> BTCBiasResolution:
         backup_4h_bias = self._get_higher_tf_bias(ta)
-        # faster_biases = nearer-term TFs (where price is right now); slower = trend context.
         if tf == "5m":
             horizon_bias = self._get_5m_bias(ta)
-            faster_biases: Dict[str, str] = {}
             slower_biases = {"15m": self._get_15m_bias(ta), "1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
         elif tf == "15m":
             horizon_bias = self._get_15m_bias(ta)
-            faster_biases = {"5m": self._get_5m_bias(ta)}
             slower_biases = {"1h": self._get_1h_bias(ta), "4h": backup_4h_bias}
         else:
             horizon_bias = self._get_1h_bias(ta)
-            faster_biases = {"15m": self._get_15m_bias(ta), "5m": self._get_5m_bias(ta)}
             slower_biases = {"4h": backup_4h_bias}
 
         if horizon_bias in {"BULLISH", "BEARISH"}:
@@ -1428,49 +1398,22 @@ class BitcoinStrategy:
                 confidence_penalty=penalty,
             )
 
-        # Horizon is NEUTRAL. Break the tie with the FASTER timeframes (where the
-        # tape actually is), nearest-first — NOT the lagging slower ones. A stale
-        # slow-TF bias (e.g. 4H still BEARISH after an earlier drop) was shorting
-        # BTC straight into a live 15m/5m uptrend. Only consult a slower TF when no
-        # faster TF has an opinion.
-        for faster_tf, faster_bias in faster_biases.items():
-            if faster_bias not in {"BULLISH", "BEARISH"}:
+        for slower_tf, slower_bias in slower_biases.items():
+            if slower_bias not in {"BULLISH", "BEARISH"}:
                 continue
             return BTCBiasResolution(
-                allowed_side=self._bias_to_side(faster_bias),
-                side_source=f"btc_{tf}_neutral_faster_{faster_tf}",
+                allowed_side=self._bias_to_side(slower_bias),
+                side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
                 horizon_tf=tf,
                 horizon_bias=horizon_bias,
-                slower_biases={**faster_biases, **slower_biases},
-                primary_htf_bias=faster_bias,
+                slower_biases=slower_biases,
+                primary_htf_bias=slower_bias,
                 confidence_penalty=0.04,
             )
 
-        # 2026-06-25 (Part A): do NOT manufacture a side from a SLOWER/lagging TF
-        # when the trade horizon AND faster TFs are all neutral. A legitimately
-        # bearish 4H ("THE LAW") was forcing SHORTs onto flat/rising 1h markets and
-        # losing (session test_20260625_004718: bias BEARISH 193/193 pulses while
-        # BTC rose 60792->60900; both BTC 1h shorts via this fallback lost). The slow
-        # TF is trend CONTEXT/sizing only — it must not flip a short-horizon trade
-        # against its own momentum. Sit out instead. Opt-out (restore old behaviour):
-        # btc_neutral_slow_side_fallback: true.
-        if bool(self.config.get("btc_neutral_slow_side_fallback", False)):
-            for slower_tf, slower_bias in slower_biases.items():
-                if slower_bias not in {"BULLISH", "BEARISH"}:
-                    continue
-                return BTCBiasResolution(
-                    allowed_side=self._bias_to_side(slower_bias),
-                    side_source=f"btc_{tf}_neutral_fallback_{slower_tf}",
-                    horizon_tf=tf,
-                    horizon_bias=horizon_bias,
-                    slower_biases=slower_biases,
-                    primary_htf_bias=slower_bias,
-                    confidence_penalty=0.04,
-                )
-
         return BTCBiasResolution(
             allowed_side=None,
-            side_source=f"btc_{tf}_neutral_no_slow_fallback",
+            side_source=f"btc_{tf}_neutral",
             horizon_tf=tf,
             horizon_bias=horizon_bias,
             slower_biases=slower_biases,
@@ -1986,42 +1929,8 @@ class BitcoinStrategy:
             if not is_5m:
                 ltf_confirmed, ltf_strength, ltf_reasons = self._check_lower_tf_confirmation(ta, allowed_side, _updown_tf)
                 _sample("ltf_strength", ltf_strength)
-                # LTF-gate policy (config-flagged; defaults = current behavior). Both
-                # branches ghost-log with LTF context so confirmed-vs-unconfirmed EV
-                # is measurable per horizon (split 15m->5m vs 1h->15m in analysis).
-                _ltf_src = "15m" if _updown_tf == "1h" else "5m"
-                _ltf_act = "BUY_YES" if allowed_side == "LONG" else "BUY_NO"
-                _ltf_ctx = {
-                    "ltf_confirmed": bool(ltf_confirmed),
-                    "ltf_strength": round(float(ltf_strength), 4),
-                    "ltf_src_tf": _ltf_src,
-                }
-                # PRO-confirmation: require the lower TF to confirm (default OFF).
-                if self.require_ltf_confirmation and not ltf_confirmed and not _simple_1h_long:
-                    _bump_skip("ltf_unconfirmed")
-                    try:
-                        log_rejected_candidate(
-                            strategy="bitcoin", window=_updown_tf, side=allowed_side, action=_ltf_act,
-                            reason="ltf_unconfirmed", market=market, yes_price=yes_price,
-                            est_prob_up=locals().get("est_prob_up"), htf_bias=htf_bias,
-                            btc_1h_regime=locals().get("btc_1h_regime"), context=_ltf_ctx,
-                        )
-                    except Exception:
-                        pass
-                    continue
-                # ANTI-confirmation (late-entry): skip when the lower TF confirms
-                # (default ON = current behavior; under test — may be backwards on 1h).
-                if self.anti_ltf_gate_enabled and ltf_confirmed and not _simple_1h_long:
+                if ltf_confirmed and not _simple_1h_long:
                     _bump_skip("ltf_confirmed_late_entry")
-                    try:
-                        log_rejected_candidate(
-                            strategy="bitcoin", window=_updown_tf, side=allowed_side, action=_ltf_act,
-                            reason="ltf_confirmed_late_entry", market=market, yes_price=yes_price,
-                            est_prob_up=locals().get("est_prob_up"), htf_bias=htf_bias,
-                            btc_1h_regime=locals().get("btc_1h_regime"), context=_ltf_ctx,
-                        )
-                    except Exception:
-                        pass
                     logger.info(
                         "Bitcoin skip '%s' — LTF confirmed late-entry risk (strength=%.2f)",
                         market.question[:40],
@@ -2133,6 +2042,31 @@ class BitcoinStrategy:
                             f"window_delta_flip->{effective_side}(p={_wd_prob:.3f})"
                         )
 
+                # ── [5m] BUY_YES fade into a rising 1h histogram ──
+                # LIVE (n=27, 07-04/05): btc 5m BUY_YES with btc_1h_histogram_rising=True
+                # went 3W-16L -$26.42 (late/exhausted up-move that mean-reverts on a
+                # short-resolution market); =False went 6W-2L +$19.59. Codex GO,
+                # default-off, sit-out. Covers btc_htf_bias + btc_quant_disagree_flip
+                # (base side_source, pre window_delta_flip suffix).
+                if (
+                    action == "BUY_YES"
+                    and _updown_tf == "5m"
+                    and bool(self.config.get("btc_5m_long_sitout_on_1h_hist_rising", False))
+                    and str(side_source or "").split("+")[0] in ("btc_htf_bias", "btc_quant_disagree_flip")
+                    and ta is not None
+                    and bool(getattr(getattr(ta, "macd_1h", None), "histogram_rising", False))
+                ):
+                    _bump_skip("btc_5m_long_1h_hist_rising_sitout")
+                    log_rejected_candidate(
+                        strategy="bitcoin", window="5m", side="LONG", action=action,
+                        reason="btc_5m_long_1h_hist_rising_sitout", market=market,
+                        yes_price=yes_price, est_prob_up=locals().get("est_prob_up"),
+                        htf_bias=htf_bias, btc_1h_regime=btc_1h_regime if ta else None,
+                        side_source=locals().get("side_source"),
+                        resolver_path=locals().get("resolver_path"),
+                    )
+                    continue
+
                 # ── BUY_YES manual disable ──
                 # Live data: BUY_YES = 6 trades, 33% WR, -$4.93.
                 # Downside leg uses BUY_NO on the NO token.
@@ -2226,14 +2160,26 @@ class BitcoinStrategy:
                     hist_reject = btc_5m_hist_gate_reject_reason(
                         macd_4h, macd_1h, effective_side
                     )
-                    _short_hist_telemetry_only = (
-                        hist_reject == "hist_gate_5m_short_reject"
-                        and not bool(
-                            self.config.get("hist_gate_5m_short_hard_reject", True)
+                    # 2026-07-04 operator do#2: honor hist_gate_5m_LONG_hard_reject too.
+                    # The long flag existed in config (false) but was never wired -> BTC 5m
+                    # LONGS stayed hard-blocked (a +$90.72/52%WR live winner) while shorts
+                    # were already soft. Mirror the short branch for the long side.
+                    _hist_telemetry_only = (
+                        (
+                            hist_reject == "hist_gate_5m_short_reject"
+                            and not bool(
+                                self.config.get("hist_gate_5m_short_hard_reject", True)
+                            )
+                        )
+                        or (
+                            hist_reject == "hist_gate_5m_long_reject"
+                            and not bool(
+                                self.config.get("hist_gate_5m_long_hard_reject", True)
+                            )
                         )
                     )
-                    if _short_hist_telemetry_only:
-                        reason_parts.append("hist_gate_5m_short_telemetry")
+                    if _hist_telemetry_only:
+                        reason_parts.append(f"{hist_reject}_telemetry")
                         logger.info(
                             f"  BTC [5m] telemetry '{market.question[:40]}' — {hist_reject}"
                         )
@@ -2306,11 +2252,19 @@ class BitcoinStrategy:
                         m5_direction=m5_dir,
                         m5_in_prediction_window=bool(mom.m5_in_prediction_window),
                         hard_hist_gate=not (
-                            hist_reject == "hist_gate_5m_short_reject"
-                            and not bool(
-                                self.config.get("hist_gate_5m_short_hard_reject", True)
+                            (
+                                hist_reject == "hist_gate_5m_short_reject"
+                                and not bool(
+                                    self.config.get("hist_gate_5m_short_hard_reject", True)
+                                )
                             )
-                        ),
+                            or (
+                                hist_reject == "hist_gate_5m_long_reject"
+                                and not bool(
+                                    self.config.get("hist_gate_5m_long_hard_reject", True)
+                                )
+                            )
+                        ),  # 2026-07-04 operator do#2: honor LONG flag here too (Codex caught 2nd site) — else telemetry-admitted long still zero-edge-blocked in quant
                     )
                     if quant.rsi_blocked:
                         _bump_skip("rsi_overbought_5m")
@@ -2627,6 +2581,28 @@ class BitcoinStrategy:
                         momentum_flip_enabled=self.config.get("rsi_momentum_flip_1h", False),
                     )
 
+                    # 2026-07-03 FROZEN-EST FIX (btc 15m/1h): blend the continuous window-delta
+                    # P(up) into the step-built est. Opt-in via window_delta_est_weight_<tf>
+                    # (unset/0 = byte-identical). Fail-open.
+                    _wd_w = float(self.config.get(
+                        f"window_delta_est_weight_{_updown_tf}",
+                        self.config.get("window_delta_est_weight", 0.0),
+                    ) or 0.0)
+                    if _wd_w > 0.0:
+                        try:
+                            from src.analysis.window_delta import evaluate_window_delta as _ewd
+                            _wd_ml = 0.0
+                            if market.end_date:
+                                _wd_end = market.end_date
+                                if _wd_end.tzinfo is None:
+                                    _wd_end = _wd_end.replace(tzinfo=timezone.utc)
+                                _wd_ml = max(0.0, (_wd_end - datetime.now(timezone.utc)).total_seconds() / 60.0)
+                            _wde = _ewd(ta, _updown_tf, _wd_ml)
+                            if _wde is not None and _wde[1] is not None:
+                                est_prob_up = (1.0 - _wd_w) * est_prob_up + _wd_w * float(_wde[1])
+                                reason_parts.append(f"wd_est_blend={float(_wde[1]):.3f}x{_wd_w:.2f}")
+                        except Exception:
+                            pass
                     est_prob_up = max(0.10, min(0.90, est_prob_up))
                     raw_est_prob = est_prob_up
                     direction_decision = self._resolve_btc_direction(
@@ -3084,6 +3060,15 @@ class BitcoinStrategy:
                     _updown_tf,
                 )
                 continue
+            if is_updown and _no_signal_gate.lane_blocked(self._signal_strategy_name, _updown_tf, action):
+                _bump_skip("no_signal_gate")
+                logger.debug(
+                    "  BTC skip '%s' — no_signal_gate lane paused (%s %s)",
+                    market.question[:40],
+                    _updown_tf,
+                    action,
+                )
+                continue
             if is_updown and (_eval_left < lane_policy.entry_window_min or _eval_left > lane_policy.entry_window_max):
                 _bump_skip("lane_entry_window")
                 logger.debug(
@@ -3126,6 +3111,26 @@ class BitcoinStrategy:
                 regime=htf_bias,
             )
 
+            # 2026-07-02 Deploy2(U1): RAW conviction floor, updown BUY_YES only.
+            # Live realized 06-12..07-02: BUY_YES raw<0.60 = -$522 (chop era -$494)
+            # vs raw>=0.60 = +$152. Flat 0.60 per Codex; opt-out: set
+            # min_est_prob_conviction_buy_yes: 0 (flat or by_tf).
+            _yes_conv_floor = (
+                float(self._tf_cfg(_updown_tf, "min_est_prob_conviction_buy_yes", 0.0) or 0.0)
+                if is_updown else 0.0
+            )
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and _yes_conv_floor > 0.0
+                and float(estimated_prob) < _yes_conv_floor
+            ):
+                _bump_skip("buy_yes_conviction_floor")
+                logger.info(
+                    "  BTC skip '%s' BUY_YES conviction %.3f < floor %.3f (buy_yes_conviction_floor)",
+                    market.question[:40], float(estimated_prob), _yes_conv_floor,
+                )
+                continue
             if is_updown and action == "BUY_YES":
                 _lane_meta = build_lane_metadata(
                     strategy=self._signal_strategy_name,
@@ -3232,6 +3237,10 @@ class BitcoinStrategy:
             # AI call) so it also bypasses the per-scan call budget. The decision
             # itself is still validated for price_drift/edge_flip at get_resolved.
             # Opt-out: btc_ai_claim_pending_decisions: false.
+            # 2026-07-03 override-guard: track whether THIS candidate actually got an
+            # AI decision, so the bias/quant override below cannot admit an AI-owned
+            # marginal that never reached the AI (budget/timing/unavailable).
+            _ai_marginal_reviewed = False
             _broker_has_live = (
                 self.ai_broker is not None
                 and bool(self.config.get("btc_ai_async_broker", False))
@@ -3382,6 +3391,7 @@ class BitcoinStrategy:
                         continue
 
                 if ai_decision is not None:
+                    _ai_marginal_reviewed = True
                     if ai_decision.shadow_result is not None:
                         shadow_pipeline_calls += 1
                         if ai_decision.shadow_result.get("ok"):
@@ -3409,7 +3419,10 @@ class BitcoinStrategy:
                     )
                     # veto-only marginal pass: central layer cleared this (no confident
                     # opposition) — admit on quant terms, skip the redundant local re-gate.
-                    _mpass = ai_decision.reason == "direct_ai_marginal_pass"
+                    _mpass = ai_decision.reason in (
+                        "direct_ai_marginal_pass",  # legacy fail-open pass (pre 2026-07-03)
+                        "direct_ai_marginal_confirm",  # 2026-07-03 fail-closed strict confirm
+                    )
                     if not _mpass and not ai_recommendation_supports_action(ai_decision.action, action):
                         ai_vetos += 1
                         _bump_skip("ai_veto_marginal_updown")
@@ -3472,37 +3485,6 @@ class BitcoinStrategy:
             except NameError:
                 pass
             _sample("edge", edge)
-            # ── 1h conviction gate (2026-06-24) ──────────────────────────────
-            # The 0.40–0.60 yes_price band is a coin flip (ghost: -0.031 EV, 46% WR);
-            # the 1h edge lives in the FAVORITE band / est tails (ghost gated: +0.006
-            # EV, 77% WR). Sit out the mush. This is the real replacement for the
-            # removed simple_long force-long: a side-correct conviction filter, not a
-            # bias-blind force-long. Default-off → no behavior change.
-            _cg = self.config.get("updown_1h_conviction_gate", {}) or {}
-            if is_1h and bool(_cg.get("enabled", False)) and action in ("BUY_YES", "BUY_NO"):
-                _lpm = float(_cg.get("long_price_min", 0.60) or 0.60)
-                _spm = float(_cg.get("short_price_max", 0.40) or 0.40)
-                _ec = float(_cg.get("est_conviction", 0.66) or 0.66)
-                # Use the post-calibration/floor-bump probability (estimated_prob),
-                # matching the edge computation; fall back to raw est_prob_up then 0.5.
-                try:
-                    _est_for_gate = float(estimated_prob)
-                except (NameError, TypeError, ValueError):
-                    try:
-                        _est_for_gate = float(est_prob_up)
-                    except (NameError, TypeError, ValueError):
-                        _est_for_gate = 0.5
-                _conv_ok = (
-                    (action == "BUY_YES" and (yes_price >= _lpm or _est_for_gate >= _ec))
-                    or (action == "BUY_NO" and (yes_price <= _spm or _est_for_gate <= (1.0 - _ec)))
-                )
-                if not _conv_ok:
-                    _bump_skip("updown_1h_low_conviction")
-                    logger.info(
-                        "BTC skip '%s' %s — 1h low conviction (yes=%.2f est=%.2f not in favorite/conviction band)",
-                        market.question[:40], action, yes_price, _est_for_gate,
-                    )
-                    continue
             _bias_quant_size_multiplier = 1.0
             if _simple_1h_long and action == "BUY_YES":
                 # Band-admitted consensus lane: the est_prob edge is unusable (~0.55),
@@ -3522,8 +3504,22 @@ class BitcoinStrategy:
                     _bias_quant_disagree = float(raw_est_prob) < float(yes_price)
                 elif htf_bias == "BEARISH":
                     _bias_quant_disagree = float(raw_est_prob) > float(yes_price)
+                # 2026-07-03 OVERRIDE-YIELDS-TO-AI (Codex-designed): when the AI owns
+                # the marginal band (use_ai_updown on, 15m/1h, edge in
+                # [ai_updown_marginal_min_edge, min_edge)), the override may only admit
+                # a candidate the AI actually reviewed-and-approved this cycle. An
+                # unreviewed AI-owned marginal must NOT be admitted by the override
+                # (that path took today's 0.075-edge trades with zero AI input).
+                _ai_owns_marginal_band = (
+                    is_updown
+                    and (_updown_tf if is_updown else "15m") in self._DECISION_GATE_WINDOWS
+                    and bool(self.config.get("use_ai", True))
+                    and bool(self.config.get("use_ai_updown", True))
+                    and edge >= float(self.config.get("ai_updown_marginal_min_edge", 0.03))
+                )
                 if (
                     _bias_quant_disagree
+                    and not (_ai_owns_marginal_band and not _ai_marginal_reviewed)
                     and self._maybe_bias_quant_disagree_override(
                         is_updown=is_updown,
                         window_size=_updown_tf if is_updown else "15m",
@@ -3543,10 +3539,19 @@ class BitcoinStrategy:
                         edge,
                         effective_min_edge,
                     )
-                    _bias_quant_size_multiplier = max(
-                        0.0,
-                        min(1.0, float(self.bias_quant_disagree_size_multiplier)),
-                    )
+                    _bqm = float(self.bias_quant_disagree_size_multiplier)
+                    # 2026-07-13 P2a (operator GO): per-lane multiplier override.
+                    # btc 1h BUY_YES dampened cohort wins consistently (July WR58%
+                    # +$9.32 held to $5 sizing; lifetime +$35 delta) — lift that
+                    # lane to full size; all other lanes keep the global 0.33x.
+                    if is_updown:
+                        _bq_side = "up" if action == "BUY_YES" else "down"
+                        _bq_ov = self.config.get(
+                            f"bias_quant_disagree_size_multiplier_{_updown_tf}_{_bq_side}"
+                        )
+                        if _bq_ov is not None:
+                            _bqm = float(_bq_ov)
+                    _bias_quant_size_multiplier = max(0.0, min(1.0, _bqm))
                     if _bias_quant_size_multiplier < 0.999:
                         reason_parts.append(
                             f"bias_quant_size={_bias_quant_size_multiplier:.2f}x"
@@ -4079,6 +4084,18 @@ class BitcoinStrategy:
 
             # Apply dynamic exposure scaling
             size = self.exposure_manager.scale_size(raw_size)
+            # 2026-07-13 restart passenger (operator GO, Codex conditional-GO honored):
+            # per-lane max-notional lift — tier floor=cap flattens winners; when
+            # lane_max_notional_{tf}_{side} is set, let this lane size up to
+            # min(kelly raw, lane max). Guards: only lifts an already-admitted size,
+            # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
+            if size > 0 and is_updown:
+                _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
+                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
+                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
+                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
+                    if _ln_max > 0:
+                        size = max(size, min(raw_size, _ln_max))
             if size <= 0:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -4245,6 +4262,7 @@ class BitcoinStrategy:
             "enabled": True,
             "signals": len(signals),
             "btc_markets_considered": len(btc_markets),
+            "asset_regime": _asset_regime.get_state("BTCUSDT"),
             "btc_spot_usd": round(float(btc_price), 2),
             "htf_bias": htf_bias,
             "allowed_side": allowed_side,
@@ -4264,4 +4282,43 @@ class BitcoinStrategy:
             "gate_distributions": gate_distributions,
         }
 
+        # 2026-07-07 Fix A: near-0.50 overconfidence sit-out. Stated edge is inverted
+        # near coin-flip prices; entry 0.49-0.51 & edge>=0.12 = densest clean-loss
+        # cohort (34% WR, -$161/wk). Config-gated per strategy; default OFF (inert
+        # until overconfidence_sitout.enabled=true).
+        _oc = self.config.get("overconfidence_sitout") or {}
+        if signals and bool(_oc.get("enabled", False)):
+            _oc_band = float(_oc.get("band", 0.01))
+            _oc_min_edge = float(_oc.get("min_edge", 0.12))
+            _oc_kept = []
+            for _oc_sig in signals:
+                try:
+                    _pp = float(getattr(_oc_sig, "price", 0.5) or 0.5)
+                    _ee = float(getattr(_oc_sig, "edge", 0.0) or 0.0)
+                except Exception:
+                    _oc_kept.append(_oc_sig)
+                    continue
+                if abs(_pp - 0.5) <= _oc_band and _ee >= _oc_min_edge:
+                    logger.info(
+                        "  overconfidence sit-out (near-0.50 high-edge): price=%.3f edge=%.3f action=%s",
+                        _pp, _ee, getattr(_oc_sig, "action", "?"),
+                    )
+                    continue
+                _oc_kept.append(_oc_sig)
+            _oc_dropped = len(signals) - len(_oc_kept)
+            signals = _oc_kept
+            if _oc_dropped:
+                # 2026-07-11: surface sit-out drops in ops telemetry (was log-line only)
+                # and keep the stats dict's signal count consistent with the post-sitout
+                # reality (Codex: 'signals' was assembled pre-sitout). Never raises.
+                try:
+                    _st = self.last_scan_stats
+                    if isinstance(_st, dict):
+                        if "signals" in _st:
+                            _st["signals"] = len(_oc_kept)
+                        _tsr = _st.get("top_skip_reasons")
+                        if isinstance(_tsr, dict):
+                            _tsr["overconfidence_sitout"] = _tsr.get("overconfidence_sitout", 0) + _oc_dropped
+                except Exception:
+                    pass
         return signals

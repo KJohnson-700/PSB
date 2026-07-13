@@ -87,6 +87,36 @@ KILL_SWITCH_FILE = Path(__file__).resolve().parent.parent / "data" / "KILL_SWITC
 RUNTIME_DIR = Path(__file__).resolve().parent.parent / "data" / "runtime"
 RUNTIME_STATUS_FILE = RUNTIME_DIR / "bot_runtime_status.json"
 FAULT_LOG_FILE = RUNTIME_DIR / "polybot_fault.log"
+_HOT_RELOAD_TOP_LEVEL_KEYS = frozenset({"ai", "strategies", "exposure", "lane_management"})
+
+# Strategy modules for CODE hot-reload (option 1, 2026-07-11), in dependency order:
+# shared leaves -> sol_macro/bitcoin base -> alt subclasses. Reload in THIS order so each
+# subclass re-binds to the freshly-reloaded base when its `from ... import` re-executes.
+_HOT_RELOAD_CODE_MODULES = (
+    "src.strategies._scan_timeout",
+    "src.strategies.strategy_config",
+    "src.strategies.strategy_ai_context",
+    "src.strategies.btc_updown_5m",
+    "src.strategies.sol_macro",
+    "src.strategies.bitcoin",
+    "src.strategies.eth_macro",
+    "src.strategies.hype_macro",
+    "src.strategies.xrp_macro",
+    "src.strategies.doge_macro",
+    "src.strategies.bnb_macro",
+)
+_HOT_RELOAD_TRADING_KEYS = frozenset(
+    {
+        "daily_loss_limit",
+        "default_position_size",
+        "exit_rules",
+        "kelly_fraction",
+        "max_days_to_resolution",
+        "max_exposure_per_trade",
+        "max_position_size",
+        "min_hours_to_resolution",
+    }
+)
 # Crash-triage breadcrumbs (see _init_fault_handler). HEARTBEAT_FILE is rewritten
 # every runtime-status tick; if it is stale (>~90s) when the process is found dead,
 # the event loop HUNG before dying. DEATH_MARKER_FILE is written on SIGTERM/normal
@@ -97,6 +127,40 @@ HEARTBEAT_FILE = RUNTIME_DIR / "bot_heartbeat.json"
 DEATH_MARKER_FILE = RUNTIME_DIR / "bot_last_death.json"
 _FAULT_HANDLER_STREAM = None
 _DEATH_MARKER_WRITTEN = False
+
+
+def _select_hot_reload_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only config sections safe to apply without restarting the bot."""
+    selected: Dict[str, Any] = {}
+    for key in _HOT_RELOAD_TOP_LEVEL_KEYS:
+        section = (config or {}).get(key)
+        if isinstance(section, dict):
+            selected[key] = section
+
+    trading = (config or {}).get("trading")
+    if isinstance(trading, dict):
+        hot_trading = {
+            key: trading[key]
+            for key in _HOT_RELOAD_TRADING_KEYS
+            if key in trading
+        }
+        if hot_trading:
+            selected["trading"] = hot_trading
+    return selected
+
+
+def _build_hot_reload_updates(
+    current_config: Dict[str, Any],
+    disk_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build a partial patch for runtime-safe config changes."""
+    current_hot = _select_hot_reload_config(current_config or {})
+    disk_hot = _select_hot_reload_config(disk_config or {})
+    updates: Dict[str, Any] = {}
+    for key, next_value in disk_hot.items():
+        if current_hot.get(key) != next_value:
+            updates[key] = next_value
+    return updates
 
 
 def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
@@ -649,7 +713,17 @@ class PolyBot:
 
     def __init__(self, config_path: str = None):
         # Load configuration
-        self.config = self._load_config(config_path)
+        self.config_path = self._resolve_config_path(config_path)
+        self.config = self._load_config(str(self.config_path))
+        self._config_mtime_ns = self._config_file_mtime_ns()
+        self._last_config_hot_reload_error_mtime_ns: Optional[int] = None
+        # CODE hot-reload sentinel (option 1): touch data/reload_code.flag to hot-swap
+        # strategy modules without a restart. Initial mtime captured so a leftover flag
+        # at startup does not spuriously reload on the first loop tick.
+        _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._code_reload_flag_path = os.path.join(_repo_root, "data", "reload_code.flag")
+        self._code_reload_flag_seen_mtime_ns: Optional[int] = self._code_reload_flag_mtime_ns()
+        self._code_reload_broken: bool = False
         # Strong refs to fire-and-forget background tasks: without this the event
         # loop only weakly references tasks and may GC them mid-flight (silently
         # killing e.g. the price websocket). See _spawn_bg.
@@ -1180,6 +1254,13 @@ class PolyBot:
         # minutes-hours), so a 10-min cadence cuts the parse churn ~10x.
         if not force and (now_mono - self._last_ghost_calibration_refresh_monotonic) < 600.0:
             return
+        # 2026-07-13 operator order: ghost settle produces counterfactual outcomes
+        # barred from decisions (live-realized only) while re-parsing ~GB jsonl every
+        # 10 min in-process. Gate default-on for back-compat; config sets false.
+        _gc_cfg = (self.config.get("ghost_calibration") or {})
+        if not bool(_gc_cfg.get("auto_settle_enabled", True)):
+            self._last_ghost_calibration_refresh_monotonic = now_mono
+            return
         cal_cfg = (self.config.get("lane_calibration") or {})
         ghost_weight = float(cal_cfg.get("ghost_weight", 0.5) or 0.0)
         cal = getattr(self, "lane_calibrator", None)
@@ -1379,10 +1460,7 @@ class PolyBot:
 
     def _load_config(self, config_path: str = None) -> Dict[str, Any]:
         """Load configuration from YAML file"""
-        if config_path is None:
-            config_path = (
-                Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
-            )
+        config_path = self._resolve_config_path(config_path)
 
         try:
             with open(config_path, "r") as f:
@@ -1398,6 +1476,134 @@ class PolyBot:
         except Exception as e:
             logging.warning(f"Could not load config: {e}, using defaults")
             return self._default_config()
+
+    def _resolve_config_path(self, config_path: str = None) -> Path:
+        if config_path is None:
+            return Path(__file__).resolve().parent.parent / "config" / "settings.yaml"
+        return Path(config_path)
+
+    def _config_file_mtime_ns(self) -> Optional[int]:
+        path = getattr(self, "config_path", None)
+        if path is None:
+            return None
+        try:
+            return Path(path).stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _code_reload_flag_mtime_ns(self) -> Optional[int]:
+        try:
+            return os.stat(self._code_reload_flag_path).st_mtime_ns
+        except OSError:
+            return None
+
+    async def _maybe_hot_reload_code(self) -> None:
+        """Hot-swap STRATEGY-module code without a restart, on explicit sentinel touch.
+
+        Called ONLY from the trading-loop top, where the previous scan cycle has drained
+        (no strategy scan/entry coroutine is in-flight). Serialized by _execution_lock so
+        no entry executes during the swap. The concurrent fast-exit loop is strategy-free,
+        so it is unaffected by reloading src/strategies. Scope: src/strategies/ only —
+        edits to main.py / market / execution still need a restart. Never raises.
+        """
+        mtime_ns = self._code_reload_flag_mtime_ns()
+        if mtime_ns is None or mtime_ns == getattr(self, "_code_reload_flag_seen_mtime_ns", None):
+            return
+        async with self._execution_lock:
+            self._apply_code_reload(mtime_ns)
+
+    def _apply_code_reload(self, mtime_ns) -> None:
+        """Synchronous reload body (no awaits => atomic w.r.t. the event loop).
+
+        Stage 1 (compile-check ALL) aborts UNTOUCHED on any syntax error. Stages 2-4
+        (reload/rebind/rebuild) mutate module dicts in place, so a failure there can leave
+        MIXED code — that path FAILS CLOSED: set _code_reload_broken, which halts new
+        entries via the _unified_cycle guard (exits keep running), and page for a restart.
+        """
+        import importlib
+        import sys as _sys
+        import time as _t
+        t0 = _t.monotonic()
+        # 1) syntax-check every target file first — abort before touching anything
+        try:
+            for _name in _HOT_RELOAD_CODE_MODULES:
+                _m = _sys.modules.get(_name)
+                _f = getattr(_m, "__file__", None) if _m is not None else None
+                if _f:
+                    with open(_f, "r") as _fh:
+                        compile(_fh.read(), _f, "exec")
+        except Exception as e:
+            self._code_reload_flag_seen_mtime_ns = mtime_ns
+            logging.error("CODE_RELOAD_FAILED stage=compile err=%s — running code UNCHANGED (safe)", e)
+            return
+        # 2-4) reload -> rebind -> rebuild. ANY failure here => FAIL CLOSED.
+        try:
+            reloaded = []
+            for _name in _HOT_RELOAD_CODE_MODULES:
+                _m = _sys.modules.get(_name)
+                if _m is not None:
+                    importlib.reload(_m)
+                    reloaded.append(_name)
+            g = globals()
+            _b = _sys.modules["src.strategies.bitcoin"]
+            g["BitcoinStrategy"] = _b.BitcoinStrategy
+            g["BitcoinSignal"] = _b.BitcoinSignal
+            _s = _sys.modules["src.strategies.sol_macro"]
+            g["SolMacroStrategy"] = _s.SolMacroStrategy
+            g["SolMacroSignal"] = _s.SolMacroSignal
+            g["ETHMacroStrategy"] = _sys.modules["src.strategies.eth_macro"].ETHMacroStrategy
+            g["HYPEMacroStrategy"] = _sys.modules["src.strategies.hype_macro"].HYPEMacroStrategy
+            g["XRPMacroStrategy"] = _sys.modules["src.strategies.xrp_macro"].XRPMacroStrategy
+            g["DOGEMacroStrategy"] = _sys.modules["src.strategies.doge_macro"].DOGEMacroStrategy
+            g["BNBMacroStrategy"] = _sys.modules["src.strategies.bnb_macro"].BNBMacroStrategy
+            g["analysis_with_timeout"] = _sys.modules["src.strategies._scan_timeout"].analysis_with_timeout
+            self._rebuild_runtime_config_dependents()
+        except Exception as e:
+            self._code_reload_broken = True
+            self._code_reload_flag_seen_mtime_ns = mtime_ns
+            logging.critical(
+                "CODE_RELOAD_BROKEN stage=apply err=%s — NEW ENTRIES HALTED, exits continue, RESTART REQUIRED",
+                e, exc_info=True,
+            )
+            return
+        self._code_reload_flag_seen_mtime_ns = mtime_ns
+        logging.info(
+            "CODE_RELOAD ok modules=%d strategies=7 dur_ms=%.0f", len(reloaded), (_t.monotonic() - t0) * 1000.0
+        )
+
+    def _maybe_hot_reload_config_file(self) -> None:
+        """Apply runtime-safe settings.yaml edits without restarting the bot."""
+        path = getattr(self, "config_path", None)
+        if path is None:
+            return
+        try:
+            mtime_ns = Path(path).stat().st_mtime_ns
+        except OSError as exc:
+            logging.debug("config hot-reload stat failed: %s", exc)
+            return
+        if mtime_ns == getattr(self, "_config_mtime_ns", None):
+            return
+
+        try:
+            with open(path, "r") as f:
+                disk_config = yaml.safe_load(f) or {}
+            updates = _build_hot_reload_updates(self.config, disk_config)
+            if not updates:
+                self._config_mtime_ns = mtime_ns
+                self._last_config_hot_reload_error_mtime_ns = None
+                logging.info("config hot-reload noticed settings.yaml change; no runtime-safe keys changed")
+                return
+            self.apply_config_updates(updates)
+            self._config_mtime_ns = mtime_ns
+            self._last_config_hot_reload_error_mtime_ns = None
+            logging.warning(
+                "config hot-reload applied without restart: sections=%s",
+                sorted(updates),
+            )
+        except Exception as exc:
+            if getattr(self, "_last_config_hot_reload_error_mtime_ns", None) != mtime_ns:
+                logging.error("config hot-reload failed: %s", exc, exc_info=True)
+                self._last_config_hot_reload_error_mtime_ns = mtime_ns
 
     def apply_config_updates(self, updates: Dict[str, Any]) -> None:
         """Merge partial config (e.g. dashboard POST /api/config) into the running bot."""
@@ -1448,6 +1654,8 @@ class PolyBot:
             self.kelly_sizer = KellySizer(self.config)
         if hasattr(self, "market_scanner") and self.market_scanner is not None:
             self.market_scanner.reload_from_config(self.config)
+        if hasattr(self, "exit_manager") and self.exit_manager is not None:
+            self.exit_manager.reload_from_config(self.config)
         self.bitcoin_strategy = BitcoinStrategy(
             self.config,
             self.ai_agent,
@@ -2036,6 +2244,33 @@ class PolyBot:
         except Exception:
             return None
 
+    def _entry_price_provenance(self, token_id) -> Dict[str, Any]:
+        """Observe-only entry price provenance (2026-07-11): which source
+        priced this token in the last scan ("ws" fresh book vs "rest"
+        /midpoint fallback) and how old that price is NOW in ms (WS: age at
+        pricing + elapsed since; REST: elapsed since the fetch — a 200
+        /midpoint is server-fresh at response time). Distinguishes 'no WS
+        book' from 'REST fallback succeeded'; ws_price_age_ms alone is null
+        for both. Never raises; unknown -> None/None."""
+        out: Dict[str, Any] = {"price_src": None, "price_asof_age_ms": None}
+        try:
+            tid = str(token_id or "").strip()
+            if not tid:
+                return out
+            meta = getattr(self.market_scanner, "_last_price_src", None)
+            rec = meta.get(tid) if meta else None
+            if not rec:
+                return out
+            src, ts, age_at_pricing = rec
+            now = asyncio.get_event_loop().time()
+            out["price_src"] = src
+            out["price_asof_age_ms"] = round(
+                max(0.0, (now - float(ts)) * 1000.0) + float(age_at_pricing or 0.0), 1
+            )
+        except Exception:
+            pass
+        return out
+
     async def _entry_book_features(self, token_yes, token_no, leg_hint) -> Dict[str, Any]:
         """Book microstructure of the HELD leg at entry via a REST snapshot.
 
@@ -2207,7 +2442,16 @@ class PolyBot:
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("subscribe_universe", False):
             cap = int(ws_cfg.get("universe_subscribe_cap", 400) or 400)
-            for tid in (getattr(self.market_scanner, "_last_priced_token_ids", None) or set()):
+            # 2026-07-11 ws_cov fix: imminence-ordered universe (accumulated
+            # across concurrent hydrate batches) so the cap keeps the current/
+            # near windows; the old unordered set sliced arbitrarily + churned
+            # every 15s. Fallback to the legacy set if the accessor is missing
+            # (stale module mix) — never worse than the old behavior.
+            _want_fn = getattr(self.market_scanner, "ws_want_token_ids", None)
+            _universe = _want_fn() if callable(_want_fn) else (
+                getattr(self.market_scanner, "_last_priced_token_ids", None) or set()
+            )
+            for tid in _universe:
                 tid = str(tid or "").strip()
                 if tid and tid not in seen:
                     seen.add(tid)
@@ -2221,20 +2465,40 @@ class PolyBot:
         ws = self.ws_client
         if ws.ws is None:
             return
+        # 2026-07-13 restart passenger (operator GO, Codex GO): re-apply the 07-01 WSS
+        # post-reconnect deferral lost in the 07-02 strip. The first type:market subscribe
+        # after a (re)connect REPLACES the server-side subscription set; if the scanner
+        # universe hasn't primed yet, coverage collapses to that partial set and most
+        # markets sit on stale WS mids until additive subscribes refill it. Defer until
+        # primed. Loop retries every ~15s; the log line below is the starvation watchdog.
+        if channel == "market" and not getattr(ws, "_sent_initial_market_subscription", True):
+            _ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
+            if _ws_cfg.get("subscribe_universe", False):
+                _priced = getattr(self.market_scanner, "_last_priced_token_ids", None) or set()
+                if not _priced:
+                    logging.info("clob_ws: deferring initial market subscription until scanner universe primes (avoid partial type:market replace)")
+                    return
         want = set(self._wanted_clob_book_token_ids())
         have = set(ws.subscriptions.get(channel, set()))
         to_add = [t for t in want - have if t]
         to_remove = [t for t in have - want if t]
+        # 2026-07-11 Codex hardening: send subscriptions in chunks — a single
+        # ~400-asset frame could be silently dropped server-side, leaving
+        # ws_cov at 0 while bookkeeping says subscribed.
+        _cw = (self.config.get("trading") or {}).get("clob_ws") or {}
+        _chunk = max(1, int(_cw.get("subscribe_chunk_size", 100) or 100))
         if to_add:
-            try:
-                await ws.subscribe(channel, to_add)
-            except Exception as e:
-                logging.debug("clob ws subscribe: %s", e)
+            for _i in range(0, len(to_add), _chunk):
+                try:
+                    await ws.subscribe(channel, to_add[_i:_i + _chunk])
+                except Exception as e:
+                    logging.debug("clob ws subscribe: %s", e)
         if to_remove:
-            try:
-                await ws.unsubscribe(channel, to_remove)
-            except Exception as e:
-                logging.debug("clob ws unsubscribe: %s", e)
+            for _i in range(0, len(to_remove), _chunk):
+                try:
+                    await ws.unsubscribe(channel, to_remove[_i:_i + _chunk])
+                except Exception as e:
+                    logging.debug("clob ws unsubscribe: %s", e)
 
     async def _clob_ws_subscription_loop(self) -> None:
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
@@ -2307,6 +2571,12 @@ class PolyBot:
         ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
         if ws_cfg.get("enabled", True):
             self._spawn_bg(self.ws_client.listen())
+            _ws_wd = getattr(self.ws_client, "silence_watchdog", None)
+            if callable(_ws_wd):
+                self._spawn_bg(_ws_wd())
+            _ws_ka = getattr(self.ws_client, "keepalive", None)
+            if callable(_ws_ka):
+                self._spawn_bg(_ws_ka())
             self._spawn_bg(self._clob_ws_subscription_loop())
             try:
                 if self.config.get("trading", {}).get("ws_candle_feed", {}).get("enabled"):
@@ -2357,6 +2627,7 @@ class PolyBot:
         await asyncio.sleep(30)
         while self.running:
             try:
+                await self._maybe_hot_reload_code()
                 self._unified_cycle_count += 1
                 cycle_started = time.monotonic()
                 await self._unified_cycle()
@@ -2880,6 +3151,109 @@ class PolyBot:
                 await self._handle_exit_decision(exit_decision)
             return len(exits)
 
+    def _advance_held_peak_from_yes_mid(self, pos, yes_mid: float) -> None:
+        """Advance a held position's peak high-water from a YES /midpoint WITHOUT
+        firing any exit. Requires TWO consecutive sane reads to confirm a new high
+        (defeats phantom single-print spikes on thin books) while still capturing
+        real sustained right-way moves regardless of entry price. Never raises;
+        never writes market_prices."""
+        try:
+            ym = float(yes_mid)
+            if not (0.0 < ym < 1.0):
+                return
+            entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+            if entry <= 0.0:
+                return
+            leg = str(getattr(pos, "entry_leg", "YES") or "YES").upper()
+            token_price = (1.0 - ym) if leg == "NO" else ym
+            if not (0.0 < token_price < 1.0):
+                return
+            prev = getattr(pos, "_pending_peak_mid", None)
+            setattr(pos, "_pending_peak_mid", token_price)
+            if prev is None:
+                return  # need a second confirming read before trusting the high
+            confirmed = min(float(prev), token_price)  # the level both reads agree on
+            peak = float(getattr(pos, "peak_token_price", 0.0) or entry)
+            if confirmed > peak:
+                setattr(pos, "peak_token_price", confirmed)
+        except Exception:
+            return
+
+    def _ws_mark_note(self, reason: str) -> None:
+        """Count WS exit-mark path outcomes (used/absent/stale/one_sided/spread_wide/
+        bad_mid) so the path is never a silent zero. Logged as WS_MARK_STATS ~300s."""
+        st = getattr(self, "_ws_mark_stats", None)
+        if st is None:
+            st = {}
+            self._ws_mark_stats = st
+        st[reason] = st.get(reason, 0) + 1
+
+    def _ws_subscribe_held_now(self, position) -> None:
+        """Immediately WS-subscribe a just-filled position's YES/NO tokens (2026-07-11
+        gap-through fix). The 15s subscription sync loop left a window where a fresh fill
+        had NO WS book (WS_MARK absent) -> exit marks fell to lagging REST /midpoint and
+        stops gapped through (stop 17% -> realized -38%). Fire-and-forget via _spawn_bg;
+        never raises; no-op when clob_ws disabled or socket not up (sync loop covers it).
+        """
+        try:
+            ws_cfg = (self.config.get("trading") or {}).get("clob_ws") or {}
+            if not ws_cfg.get("enabled", True):
+                return
+            ws = getattr(self, "ws_client", None)
+            if ws is None or ws.ws is None:
+                return
+            channel = str(ws_cfg.get("book_channel", "market"))
+            toks = [t for t in (
+                str(getattr(position, "token_id_yes", "") or "").strip(),
+                str(getattr(position, "token_id_no", "") or "").strip(),
+            ) if t]
+            if toks:
+                self._spawn_bg(ws.subscribe(channel, toks), name="ws_sub_on_fill")
+        except Exception:
+            logging.debug("ws subscribe-on-fill failed (ignored)", exc_info=True)
+
+    def _ws_fresh_yes_mid(self, yes_token, max_age_sec):
+        """Fresh WS book mid for a held YES token, or (None, None).
+
+        Returns (mid, age_ms) only when the pushed CLOB WS book is (a) newer than
+        ``max_age_sec``, (b) two-sided, (c) spread <= exit_max_book_spread, and
+        (d) 0 < mid < 1. Sub-100ms exit-mark source (Option A, 2026-07-11); callers
+        sanity-check it against the REST book mid and fall back to REST on any miss.
+        Read-only, never raises.
+        """
+        try:
+            tid = str(yes_token or "").strip()
+            if not tid:
+                return None, None
+            ws = getattr(self, "ws_client", None)
+            books = getattr(ws, "order_books", None) if ws is not None else None
+            book = books.get(tid) if books else None
+            if book is None or not getattr(book, "last_update", 0):
+                self._ws_mark_note("absent")
+                return None, None
+            age_ms = (asyncio.get_event_loop().time() - float(book.last_update)) * 1000.0
+            if age_ms < 0 or age_ms > float(max_age_sec) * 1000.0:
+                self._ws_mark_note("stale")
+                return None, None
+            bb = book.best_bid
+            ba = book.best_ask
+            if bb is None or ba is None:
+                self._ws_mark_note("one_sided")
+                return None, None
+            _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
+            _max_spread = float(_excfg.get("exit_max_book_spread", 0.30) or 0.30)
+            if (ba - bb) > _max_spread:
+                self._ws_mark_note("spread_wide")
+                return None, None
+            mid = (bb + ba) / 2.0
+            if mid <= 0.0 or mid >= 1.0:
+                self._ws_mark_note("bad_mid")
+                return None, None
+            self._ws_mark_note("used")
+            return mid, round(age_ms, 1)
+        except Exception:
+            return None, None
+
     async def _fetch_held_market_prices(self):
         """Build (market_prices, market_token_ids) for currently held markets only.
 
@@ -2891,6 +3265,27 @@ class PolyBot:
         market_token_ids: Dict[str, Any] = {}
         market_liquidity: Dict[str, Any] = {}
         seen: set = set()
+        # 2026-07-11 Option C: pre-fetch all held YES-token books CONCURRENTLY (was a
+        # sequential per-position await). Cuts exit-tick wall-clock when >1 position is
+        # open; single-position = same cost. Fail-safe: any miss/exc -> per-pos REST below.
+        _held_yts = []
+        _seen_yt = set()
+        for _p in list(self.risk_manager.active_positions.values()):
+            _yt = getattr(_p, "token_id_yes", "") or ""
+            if _yt and _yt not in _seen_yt:
+                _seen_yt.add(_yt)
+                _held_yts.append(_yt)
+        _prefetched_books: Dict[str, Any] = {}
+        if _held_yts:
+            try:
+                _bres = await asyncio.gather(
+                    *[self.clob_client.fetch_order_book_snapshot(_t) for _t in _held_yts],
+                    return_exceptions=True,
+                )
+                for _t, _r in zip(_held_yts, _bres):
+                    _prefetched_books[_t] = None if isinstance(_r, Exception) else _r
+            except Exception:
+                _prefetched_books = {}
         for pos in list(self.risk_manager.active_positions.values()):
             mid = getattr(pos, "market_id", "")
             if not mid or mid in seen:
@@ -2900,7 +3295,9 @@ class PolyBot:
             no_token = getattr(pos, "token_id_no", "") or ""
             if not yes_token:
                 continue
-            book = await self.clob_client.fetch_order_book_snapshot(yes_token)
+            book = _prefetched_books.get(yes_token)
+            if book is None:
+                book = await self.clob_client.fetch_order_book_snapshot(yes_token)
             if not book:
                 continue
             bids = book.get("bids") or []
@@ -2917,11 +3314,42 @@ class PolyBot:
             _excfg = (self.config.get("trading", {}) or {}).get("exit_rules", {}) or {}
             _require_two_sided = bool(_excfg.get("exit_require_two_sided_book", True))
             _use_clob_midpoint = bool(_excfg.get("exit_mark_use_clob_midpoint", True))
+            # 2026-07-11 Option A: fresh WS mid for the held token (sub-100ms) as the exit
+            # mark, sanity-checked vs the REST book mid fetched above. ws_mark stays None
+            # (=> REST fallback below) unless two-sided, spread-sane, age<=gate, non-divergent.
+            _prefer_ws = bool(_excfg.get("exit_mark_prefer_ws", True))
+            _ws_gate = float(_excfg.get("exit_ws_mark_max_age_sec", 1.5) or 1.5)
+            ws_mark, ws_age_ms = (
+                self._ws_fresh_yes_mid(yes_token, _ws_gate) if _prefer_ws else (None, None)
+            )
+            if ws_mark is not None and best_bid is not None and best_ask is not None:
+                _rbmid = (best_bid + best_ask) / 2.0
+                _maxdiv = float(_excfg.get("exit_ws_mark_max_divergence", 0.10) or 0.10)
+                if abs(ws_mark - _rbmid) > _maxdiv:
+                    logging.info(
+                        "exit WS-mark distrust %s: ws=%.3f rest_book_mid=%.3f age=%.0fms — using REST",
+                        mid, ws_mark, _rbmid, (ws_age_ms if ws_age_ms is not None else -1),
+                    )
+                    ws_mark = None
+            # 2026-07-11 P3 telemetry: which source prices this exit tick (ws/midpoint/book_mid)
+            _mark_src = "book_mid"
             if best_bid is not None and best_ask is not None:
                 if _require_two_sided:
                     _spread = best_ask - best_bid
                     _max_spread = float(_excfg.get("exit_max_book_spread", 0.30) or 0.30)
                     if _spread > _max_spread:
+                        # 2026-07-11 give-back fix (fix-a): wide book -> do NOT fire
+                        # a stop (phantom-stop guard), but advance the trailing
+                        # high-water from /midpoint so a right-direction winner's
+                        # peak survives thin near-resolution stretches.
+                        _hw_mid = ws_mark
+                        if _hw_mid is None:
+                            try:
+                                _hw_mid = await self.clob_client.fetch_midpoint(yes_token)
+                            except Exception:
+                                _hw_mid = None
+                        if _hw_mid is not None:
+                            self._advance_held_peak_from_yes_mid(pos, float(_hw_mid))
                         logging.debug(
                             "exit price guard: spread %.3f > %.3f for %s — skip exit eval this tick",
                             _spread, _max_spread, mid,
@@ -2942,6 +3370,7 @@ class PolyBot:
                         mid, best_bid, best_ask,
                     )
                     continue
+                _mark_src = "midpoint"
                 logging.debug(
                     "exit price guard: one-sided book for %s (bid=%s ask=%s) — using /midpoint %.3f for exit eval",
                     mid, best_bid, best_ask, yes_price,
@@ -2959,9 +3388,18 @@ class PolyBot:
             # book (fetched above) for the two-sided/spread guard + liquidity; only
             # the mark value switches. Fall back to the book mid if /midpoint is
             # unavailable. Opt-out: exit_mark_use_clob_midpoint: false.
-            if _use_clob_midpoint and best_bid is not None and best_ask is not None:
+            if ws_mark is not None:
+                _mark_src = "ws"
+                if abs(ws_mark - yes_price) > 0.05:
+                    logging.info(
+                        "exit mark WS<-book %s: ws=%.3f book/mid=%.3f age=%.0fms — using WS",
+                        mid, ws_mark, yes_price, (ws_age_ms if ws_age_ms is not None else -1),
+                    )
+                yes_price = ws_mark
+            elif _use_clob_midpoint and best_bid is not None and best_ask is not None:
                 _mp = await self.clob_client.fetch_midpoint(yes_token)
                 if _mp is not None:
+                    _mark_src = "midpoint"
                     if abs(_mp - yes_price) > 0.05:
                         logging.info(
                             "exit mark divergence %s: /midpoint=%.3f vs book-mid=%.3f "
@@ -3031,9 +3469,16 @@ class PolyBot:
                 if (best_bid is not None and best_ask is not None)
                 else None,
                 "taker_fee_rate": taker_fee_rate,
+                "mark_src": _mark_src,
+                "mark_age_ms": (ws_age_ms if _mark_src == "ws" else None),
                 "bids": [{"price": p, "size": s} for p, s in top_bids],
                 "asks": [{"price": p, "size": s} for p, s in top_asks],
             }
+        # 2026-07-11 WS-mark telemetry: surface why the WS exit mark is/isn't engaging.
+        _st = getattr(self, "_ws_mark_stats", None)
+        if _st and (time.monotonic() - getattr(self, "_ws_mark_stats_logged", 0.0)) > 300:
+            self._ws_mark_stats_logged = time.monotonic()
+            logging.info("WS_MARK_STATS %s", dict(_st))
         return market_prices, market_token_ids, market_liquidity
 
     async def _run_topup_wide_sampler(self) -> None:
@@ -3044,6 +3489,11 @@ class PolyBot:
         """
         if not (self.topup_sampler_enabled and getattr(self, "topup_shadow", None) is not None
                 and self.topup_shadow.enabled):
+            return
+        # Skip while _execution_lock is held (an entry is executing OR a strategy code
+        # hot-reload is swapping self.bitcoin_strategy). The sampler reads that object, so
+        # do not run it mid-swap. Shadow/log-only: skipping a tick costs nothing.
+        if self._execution_lock.locked():
             return
         universe = list(self._topup_universe or [])
         if not universe:
@@ -3140,6 +3590,7 @@ class PolyBot:
         await asyncio.sleep(5)
         while self.running:
             try:
+                self._maybe_hot_reload_config_file()
                 if self.risk_manager.active_positions:
                     market_prices, market_token_ids, market_liquidity = await self._fetch_held_market_prices()
                     if market_prices and self.risk_manager.active_positions:
@@ -3278,6 +3729,8 @@ class PolyBot:
                             "fill_fee_rate": getattr(exit_decision, "fill_fee_rate", None),
                             "secs_to_expiry_at_exit": getattr(exit_decision, "secs_to_expiry_at_exit", None),
                             "exit_book_spread": getattr(exit_decision, "exit_book_spread", None),
+                            "exit_mark_src": getattr(exit_decision, "exit_mark_src", None),
+                            "exit_mark_age_ms": getattr(exit_decision, "exit_mark_age_ms", None),
                             **order_execution,
                         },
                     )
@@ -3316,6 +3769,14 @@ class PolyBot:
 
         No separate fast loop — `trading.cycle_interval_sec` controls cadence (default 120s).
         """
+        if getattr(self, "_code_reload_broken", False):
+            if not getattr(self, "_code_reload_broken_logged", False):
+                logging.critical(
+                    "CODE_RELOAD_BROKEN: skipping scan/entries every cycle until restart "
+                    "(exits continue via fast-exit loop)"
+                )
+                self._code_reload_broken_logged = True
+            return
         cycle_wall_start = time.perf_counter()
         cycle_timings_ms: Dict[str, Any] = {}
         logging.info("Starting trading cycle...")
@@ -3328,6 +3789,7 @@ class PolyBot:
                 "exposure_managers": self._exposure_status_payload(),
             },
         )
+        self._maybe_hot_reload_config_file()
 
         from src.ops_pulse import _scan_skip_digest, _side_selection_digest, log_ops_pulse
 
@@ -4735,6 +5197,7 @@ class PolyBot:
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
             )
             self.risk_manager.add_position(position)
+            self._ws_subscribe_held_now(position)
             self._remember_session_market_entry(signal.market_id)
 
             self.journal.log_entry(
@@ -4759,6 +5222,7 @@ class PolyBot:
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
+                    **self._entry_price_provenance(getattr(signal, "token_id_yes", None)),
                     "htf_bias": signal.htf_bias,
                     "btc_1h_regime": getattr(signal, "btc_1h_regime", None),
                     "btc_htf": signal.htf_bias,   # alias expected by journal analysis
@@ -5034,6 +5498,7 @@ class PolyBot:
                 market_slug=str(getattr(signal, "market_slug", "") or ""),
             )
             self.risk_manager.add_position(position)
+            self._ws_subscribe_held_now(position)
             self._remember_session_market_entry(signal.market_id)
 
             self.journal.log_entry(
@@ -5058,6 +5523,7 @@ class PolyBot:
                     "hour_utc": signal.hour_utc,
                     "window_size": signal.window_size,
                     "ws_price_age_ms": self._ws_price_age_ms(getattr(signal, "token_id_yes", None)),
+                    **self._entry_price_provenance(getattr(signal, "token_id_yes", None)),
                     "htf_bias": signal.htf_bias,
                     "primary_htf_bias": getattr(signal, "primary_htf_bias", None),
                     "alt_htf_bias": getattr(signal, "alt_htf_bias", None),

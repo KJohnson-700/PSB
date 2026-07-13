@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.execution.fill_sim import simulate_book_fill
+from src.execution.fill_sim import polymarket_taker_fee_usdc, simulate_book_fill
 
 
 def test_sell_fills_at_top_bid_when_depth_sufficient():
@@ -66,3 +66,9 @@ def test_ignores_nonpositive_levels():
     px, filled = simulate_book_fill("SELL", 5.0, [(0.0, 10.0), (0.42, 10.0), (0.40, -3.0)])
     assert filled == 5.0
     assert px == pytest.approx(0.42)
+
+
+def test_polymarket_taker_fee_is_symmetric_around_half():
+    assert polymarket_taker_fee_usdc(100.0, 0.50, 0.07) == pytest.approx(1.75)
+    assert polymarket_taker_fee_usdc(100.0, 0.30, 0.07) == pytest.approx(1.47)
+    assert polymarket_taker_fee_usdc(100.0, 0.70, 0.07) == pytest.approx(1.47)

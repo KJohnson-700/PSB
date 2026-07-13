@@ -60,6 +60,8 @@ class WebSocketClient:
         self._max_reconnect_delay = 60
         self._session: Optional[aiohttp.ClientSession] = None
         self._sent_initial_market_subscription = False
+        # monotonic time of the last frame received; silence_watchdog reads it
+        self.last_frame_mono: float = 0.0
 
     def _clob_ws_cfg(self) -> Dict[str, Any]:
         return (self.config.get("trading") or {}).get("clob_ws") or {}
@@ -82,10 +84,18 @@ class WebSocketClient:
                 await self._session.close()
             self._session = aiohttp.ClientSession()
             url = self._ws_url()
-            self.ws = await self._session.ws_connect(url, heartbeat=30)
+            # 2026-07-12: heartbeat was hardcoded 30 -> aiohttp tore the socket
+            # down ~every 30s (Polymarket app-level keepalive doesn't satisfy
+            # aiohttp protocol PING/PONG) = reconnect churn (85/session, ws_cov
+            # stuck 31%). Default None(off) -> rely on silence_watchdog(120s).
+            # Reversible: trading.clob_ws.ws_heartbeat_sec. Codex GO 2026-07-12.
+            _raw_hb = self._clob_ws_cfg().get("ws_heartbeat_sec")
+            _hb = float(_raw_hb) if _raw_hb not in (None, "", 0, "0") else None
+            self.ws = await self._session.ws_connect(url, heartbeat=_hb)
             self._reconnect_delay = 1
             self._sent_initial_market_subscription = False
             self.subscriptions.clear()
+            self.last_frame_mono = asyncio.get_event_loop().time()
             logger.info("Connected to Polymarket WebSocket (%s)", url)
             return True
         except Exception as e:
@@ -133,7 +143,7 @@ class WebSocketClient:
         else:
             message = {"type": "subscribe", "channel": channel, id_key: token_ids}
 
-        await self.ws.send_json(message)
+        await self._safe_send_json(message)
         logger.info(f"Subscribed to {channel} for {len(token_ids)} tokens")
 
     async def unsubscribe(self, channel: str, token_ids: List[str]):
@@ -158,7 +168,7 @@ class WebSocketClient:
         else:
             message = {"type": "unsubscribe", "channel": channel, id_key: token_ids}
 
-        await self.ws.send_json(message)
+        await self._safe_send_json(message)
 
     def add_callback(self, callback: Callable):
         """Add callback for order book updates"""
@@ -177,8 +187,12 @@ class WebSocketClient:
 
             try:
                 async for msg in self.ws:
+                    self.last_frame_mono = asyncio.get_event_loop().time()
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_message(json.loads(msg.data))
+                        if msg.data in ("PONG", "PING"):
+                            pass  # 2026-07-12 Polymarket app-level keepalive echo, not market data
+                        else:
+                            await self._handle_message(json.loads(msg.data))
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         logger.error(f"WebSocket error: {msg.data}")
                         break
@@ -190,9 +204,89 @@ class WebSocketClient:
 
             # Attempt reconnect
             if self.running:
+                # 2026-07-12: capture WHY the recv loop ended (heartbeat teardown
+                # vs server close vs error). close_code 1006 = abnormal/internal.
+                _cc = getattr(self.ws, "close_code", None) if self.ws else None
+                try:
+                    _exc = self.ws.exception() if self.ws else None
+                except Exception:
+                    _exc = None
+                logger.warning("WS_RECV_ENDED close_code=%s exception=%r", _cc, _exc)
                 logger.info(f"Reconnecting in {self._reconnect_delay} seconds...")
                 await asyncio.sleep(self._reconnect_delay)
                 await self.connect()
+
+    async def _safe_send_json(self, message: Any) -> bool:
+        """Send JSON guarded against a closing transport. 2026-07-12: the 15s
+        re-subscribe raced a server-closing socket -> ClientConnectionResetError
+        ('Cannot write to closing transport') -> 1006 churn. Swallow instead."""
+        ws = self.ws
+        if ws is None or ws.closed:
+            return False
+        try:
+            await ws.send_json(message)
+            return True
+        except (ConnectionResetError, aiohttp.ClientError, RuntimeError) as e:
+            logger.debug("ws send_json skipped (closing transport): %r", e)
+            return False
+
+    async def keepalive(self):
+        """2026-07-12: Polymarket CLOB market WS requires a client APP-LEVEL text
+        'PING' every ~10s (server replies 'PONG'); without it the server drops the
+        socket (close 1006) -- the residual churn after the aiohttp protocol-
+        heartbeat fix (protocol PING is the WRONG kind; Polymarket ignores it).
+        Config: trading.clob_ws.ws_app_ping_sec (default 10, 0=off)."""
+        while True:
+            try:
+                iv = float(self._clob_ws_cfg().get("ws_app_ping_sec", 10) or 0)
+                if iv <= 0:
+                    await asyncio.sleep(30)
+                    continue
+                await asyncio.sleep(iv)
+                ws = self.ws
+                if ws is None or ws.closed or not self.running:
+                    continue
+                try:
+                    await ws.send_str("PING")
+                except (ConnectionResetError, aiohttp.ClientError, RuntimeError) as e:
+                    logger.debug("keepalive PING send skipped: %r", e)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("keepalive: %s", e)
+
+    async def silence_watchdog(self):
+        """2026-07-11 (py-clob-client #292): the CLOB WS can accept the
+        connection and subscriptions yet send ZERO book data for hours — no
+        error, no close — so listen()'s async-for waits forever while the bot
+        silently degrades to REST-only pricing. After silence_reconnect_sec
+        (trading.clob_ws, default 120, 0=off) with no frames WHILE
+        subscriptions exist, force-close the socket; listen() reconnects and
+        the 15s sync loop re-subscribes (chunked). Never touches a socket
+        that is receiving frames."""
+        while True:
+            try:
+                thr = float(self._clob_ws_cfg().get("silence_reconnect_sec", 120) or 0)
+                await asyncio.sleep(min(30.0, thr) if thr > 0 else 60.0)
+                if thr <= 0 or not self.running or self.ws is None:
+                    continue
+                if not any(self.subscriptions.values()):
+                    continue
+                now = asyncio.get_event_loop().time()
+                if self.last_frame_mono and (now - self.last_frame_mono) > thr:
+                    logger.warning(
+                        "WS_SILENCE_WATCHDOG: no frames for %.0fs with %d subscriptions — forcing reconnect",
+                        now - self.last_frame_mono,
+                        sum(len(v) for v in self.subscriptions.values()),
+                    )
+                    try:
+                        await self.ws.close()
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("silence_watchdog: %s", e)
 
     async def _handle_message(self, data: Any):
         """Handle incoming WebSocket message.
@@ -212,7 +306,7 @@ class WebSocketClient:
             logger.debug("Ignoring unexpected websocket payload type: %r", type(data).__name__)
             return
 
-        msg_type = data.get("type")
+        msg_type = data.get("event_type") or data.get("type")
 
         if msg_type == "book":
             await self._handle_book_update(data)
@@ -221,25 +315,31 @@ class WebSocketClient:
         elif msg_type == "error":
             logger.error(f"Server error: {data.get('message')}")
 
-    async def _handle_book_update(self, data: Dict[str, Any]):
-        """Handle order book delta update"""
-        token_id = data.get("token_id")
-        if not token_id or token_id not in self.order_books:
-            return
+    def _token_id_from_event(self, data: Dict[str, Any]) -> Optional[str]:
+        token_id = data.get("asset_id") or data.get("token_id")
+        return str(token_id) if token_id else None
 
-        book = self.order_books[token_id]
+    def _parse_orders(self, orders: Any, *, bids: bool) -> List[Dict[str, float]]:
+        """Parse CLOB price levels. Bids: highest price first. Asks: lowest price first."""
+        if not isinstance(orders, list):
+            return []
 
-        # Update bids
-        if "bids" in data:
-            book.bids = self._merge_orders(book.bids, data["bids"], bids=True)
+        parsed: List[Dict[str, float]] = []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            try:
+                price = float(order["price"])
+                size = float(order["size"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if size > 0:
+                parsed.append({"price": price, "size": size})
 
-        # Update asks
-        if "asks" in data:
-            book.asks = self._merge_orders(book.asks, data["asks"], bids=False)
+        parsed.sort(key=lambda x: x["price"], reverse=bids)
+        return parsed
 
-        book.last_update = asyncio.get_event_loop().time()
-
-        # Notify callbacks
+    async def _notify_book_update(self, token_id: str, book: OrderBook):
         for callback in self.callbacks:
             try:
                 if asyncio.iscoroutinefunction(callback):
@@ -249,18 +349,72 @@ class WebSocketClient:
             except Exception as e:
                 logger.error(f"Error in callback: {e}")
 
-    async def _handle_price_change(self, data: Dict[str, Any]):
-        """Handle price change notification"""
-        token_id = data.get("token_id")
-        price = data.get("price")
+    async def _handle_book_update(self, data: Dict[str, Any]):
+        """Handle full order book snapshot."""
+        token_id = self._token_id_from_event(data)
+        if not token_id:
+            return
 
-        if token_id in self.order_books:
-            book = self.order_books[token_id]
-            # Update best bid/ask based on new price
-            if book.bids and price <= book.bids[0]["price"]:
-                book.bids[0]["price"] = price
-            elif book.asks and price >= book.asks[0]["price"]:
-                book.asks[0]["price"] = price
+        if token_id not in self.order_books:
+            self.order_books[token_id] = OrderBook(token_id=token_id)
+
+        book = self.order_books[token_id]
+
+        if "bids" in data:
+            book.bids = self._parse_orders(data["bids"], bids=True)
+
+        if "asks" in data:
+            book.asks = self._parse_orders(data["asks"], bids=False)
+
+        book.last_update = asyncio.get_event_loop().time()
+        await self._notify_book_update(token_id, book)
+
+    async def _handle_price_change(self, data: Dict[str, Any]):
+        """Handle order book delta update."""
+        changes = data.get("price_changes")
+        if isinstance(changes, list):
+            for change in changes:
+                if isinstance(change, dict):
+                    event = {**data, **change}
+                    event.pop("price_changes", None)
+                    await self._handle_price_change(event)
+            return
+
+        token_id = self._token_id_from_event(data)
+        if not token_id:
+            return
+
+        if token_id not in self.order_books:
+            self.order_books[token_id] = OrderBook(token_id=token_id)
+
+        book = self.order_books[token_id]
+        updated = False
+
+        if "bids" in data:
+            book.bids = self._merge_orders(book.bids, data["bids"], bids=True)
+            updated = True
+        if "asks" in data:
+            book.asks = self._merge_orders(book.asks, data["asks"], bids=False)
+            updated = True
+
+        if not updated:
+            side = str(data.get("side") or "").upper()
+            price = data.get("price")
+            size = data.get("size", data.get("new_size", 0))
+            if side in {"BUY", "BID"}:
+                book.bids = self._merge_orders(
+                    book.bids, [{"price": price, "size": size}], bids=True
+                )
+                updated = True
+            elif side in {"SELL", "ASK"}:
+                book.asks = self._merge_orders(
+                    book.asks, [{"price": price, "size": size}], bids=False
+                )
+                updated = True
+
+        if updated:
+            book.last_update = asyncio.get_event_loop().time()
+            await self._notify_book_update(token_id, book)
 
     def _merge_orders(
         self, existing: List[Dict], updates: List[Dict], *, bids: bool

@@ -1,6 +1,9 @@
 """Unit tests for shared crypto up/down exit parsing and adverse-stop helpers."""
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from src.execution.updown_exit_shared import (
     adverse_for_updown_cents_time_stop,
@@ -147,6 +150,51 @@ def test_trailing_floor_defaults_off_preserve_legacy():
         )
         == 0.17
     )
+
+
+def test_zero_green_stop_knobs_preserve_base_stop_floor():
+    assert (
+        effective_updown_stop_loss_pct(
+            0.30,
+            -0.50,
+            peak_pnl_pct=0.25,
+            in_profit_trigger_pct=0.0,
+            tighten_to_pct=0.0,
+            trail_arm_pct=0.0,
+            trail_gap_pct=0.0,
+        )
+        == pytest.approx(0.30)
+    )
+
+
+def test_settings_keep_global_green_stop_protection_enabled():
+    cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    exit_rules = cfg["trading"]["exit_rules"]
+
+    assert exit_rules["updown_in_profit_stop_trigger_pct"] == pytest.approx(0.05)
+    assert exit_rules["updown_in_profit_stop_tighten_to_pct"] == pytest.approx(0.07)
+    assert exit_rules["updown_trail_arm_pct"] == pytest.approx(0.06)
+    assert exit_rules["updown_trail_gap_pct"] == pytest.approx(0.05)
+
+
+def test_settings_exempt_btc_1h_up_from_green_stop_banking():
+    cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    exit_rules = cfg["trading"]["exit_rules"]
+    resolved = resolve_updown_exit_params_for_position(
+        parse_updown_exit_globals(exit_rules),
+        strategy_name="bitcoin",
+        window_size="1h",
+        entry_leg="YES",
+        outcome="YES",
+    )
+
+    assert resolved.updown_hold_winners_to_resolution is True
+    assert resolved.updown_in_profit_stop_trigger_pct == pytest.approx(0.0)
+    assert resolved.updown_in_profit_stop_tighten_to_pct == pytest.approx(0.0)
+    assert resolved.updown_trail_arm_pct == pytest.approx(0.0)
+    assert resolved.updown_trail_gap_pct == pytest.approx(0.0)
 
 
 def test_effective_stop_loss_applies_dynamic_regime_volatility_and_convergence():

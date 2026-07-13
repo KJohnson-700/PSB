@@ -391,6 +391,18 @@ def _entry_client():
     return c
 
 
+def _fresh_fill_entry_client():
+    return CLOBClient(
+        {
+            "polymarket": {},
+            "trading": {
+                "paper_entry_fresh_fill": True,
+                "paper_entry_fresh_fill_slippage_tol": 0.03,
+            },
+        }
+    )
+
+
 def _fake_order(oid="oid", status=OrderStatus.PENDING, filled=0.0):
     from src.execution.clob_client import Order
     return Order(
@@ -409,6 +421,60 @@ async def test_entry_dry_run_is_marketable_taker_regardless_of_mode():
     )
     kw = c.place_order.call_args.kwargs
     assert kw["dry_run"] is True and kw["order_type"] == "FAK" and kw["post_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_entry_dry_run_fresh_fill_uses_executable_ask_within_smoke_tolerance():
+    c = _fresh_fill_entry_client()
+    c.fetch_order_book_snapshot = AsyncMock(
+        return_value={"asks": [{"price": "0.52", "size": "25"}]}
+    )
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=True, entry_mode="marketable", maker_wait_sec=0,
+    )
+
+    kw = c.place_order.call_args.kwargs
+    assert kw["price"] == pytest.approx(0.52)
+    assert kw["size"] == pytest.approx(10.0)
+    assert kw["order_type"] == "FAK" and kw["post_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_entry_dry_run_fresh_fill_rejects_asks_outside_smoke_tolerance():
+    c = _fresh_fill_entry_client()
+    c.fetch_order_book_snapshot = AsyncMock(
+        return_value={"asks": [{"price": "0.54", "size": "25"}]}
+    )
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+
+    out = await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=True, entry_mode="marketable", maker_wait_sec=0,
+    )
+
+    assert out is None
+    c.place_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_entry_dry_run_fresh_fill_records_partial_executable_size():
+    c = _fresh_fill_entry_client()
+    c.fetch_order_book_snapshot = AsyncMock(
+        return_value={"asks": [{"price": "0.51", "size": "6"}]}
+    )
+    c.place_order = AsyncMock(return_value=_fake_order(status=OrderStatus.FILLED))
+
+    await c.place_entry_order(
+        token_id="t", side="BUY", price=0.5, size=10, window="15m",
+        dry_run=True, entry_mode="marketable", maker_wait_sec=0,
+    )
+
+    kw = c.place_order.call_args.kwargs
+    assert kw["price"] == pytest.approx(0.51)
+    assert kw["size"] == pytest.approx(6.0)
 
 
 @pytest.mark.asyncio
