@@ -4609,7 +4609,10 @@ function applyHeroMetrics(d) {
     // fallbacks that made the big number FLASH open-position mark-to-market for ~5 min
     // post-restart (before realized_pnl populated). Unrealized stays in the small sub only.
     const pnlEl = document.getElementById('hero-pnl');
-    if (pnlEl) {
+    // 2026-07-20: gate on _fullTick so the big Session P&L updates ONLY from the
+    // /api/status full poll (batched with /api/live/performance) and stays locked to
+    // Live Test 'NET PNL (CLOSED)'. The 4s ops-summary fast path could lag it a cycle.
+    if (pnlEl && _fullTick) {
         if (Number.isFinite(sessionPnlRaw)) {
             pnlEl.dataset.cuInit = '1';
             const sign = sessionPnlRaw < 0 ? '-' : '';
