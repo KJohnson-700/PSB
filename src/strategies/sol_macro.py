@@ -1779,6 +1779,33 @@ class SolMacroStrategy:
                 penalty_reasons=penalty_reasons,
             )
 
+        # 2026-07-14 ETH HTF-ALIGNED CARRY (operator GO): eth 5m/15m LTF classifier
+        # sits NEUTRAL through bull pullbacks, so with alt_neutral_fallback_sit_out the
+        # lane sat out ~9850x today (7240 under a DECIDED BULLISH 1h). Unlike the retired
+        # manufactured-direction fallback (32% WR settled), this carries the DECIDED 1h
+        # direction ALIGNED (aligned=True => never fades, never contradicts a decided LTF
+        # since it only fires when THIS tf is NEUTRAL) at a confidence penalty; lane size
+        # is already reduced via the 0.25x window override. Calibration-phase: a 0-trade
+        # lane cannot be calibrated. Default OFF (all other alts byte-identical); enabled
+        # per-strategy via alt_neutral_htf_aligned_carry (eth only).
+        if tf in {"5m", "15m"} and bool(
+            self.config.get("alt_neutral_htf_aligned_carry", False)
+        ):
+            _carry_1h = slower_biases.get("1h")
+            if _carry_1h in {"BULLISH", "BEARISH"}:
+                return BiasResolution(
+                    allowed_side=self._bias_to_side(_carry_1h, tf=tf, aligned=True),
+                    side_source=f"{asset}_{tf}_htf_aligned_carry",
+                    horizon_tf=tf,
+                    horizon_bias=horizon_bias,
+                    slower_biases=slower_biases,
+                    primary_htf_bias=_carry_1h,
+                    confidence_penalty=float(
+                        self.config.get("alt_neutral_htf_carry_penalty", 0.05)
+                    ),
+                    penalty_reasons=[f"{tf}_neutral_htf_carry"],
+                )
+
         return BiasResolution(
             allowed_side=None,
             side_source=f"{asset}_{tf}_neutral",
@@ -3509,6 +3536,34 @@ class SolMacroStrategy:
                 )
                 continue
 
+            # 2026-07-15 HYPE-MIX (operator GO, Codex): mirror of the 5m native-long
+            # suppressor for 15m. hype 15m NATIVE longs occur only when the MTF is
+            # fully aligned (fade is suppressed on aligned trends), i.e. the aligned-
+            # bull momentum-long = the -$22.82/45t/33% loser leg. Suppress native-source
+            # 15m longs only; the align-gated 15m FADE (chop mean-reversion) still fires,
+            # and the 1h BUY_YES winner (+$18/64%) carries long exposure. Config-gated
+            # (disable_buy_yes_15m_native), hype-only. Break: 10 closed, revert false if
+            # the suppressed cohort would have won (>=2 skipped-then-would-win) net-positive.
+            if (
+                is_updown
+                and _updown_tf == "15m"
+                and action == "BUY_YES"
+                and "fade_native" not in (side_source or "")
+                and bool(self.config.get("disable_buy_yes_15m_native", False))
+            ):
+                _bump_skip("buy_yes_15m_native_suppressed")
+                _log_skip_reject(
+                    market=market,
+                    window=_updown_tf,
+                    side=allowed_side,
+                    action=action,
+                    reason="buy_yes_15m_native_suppressed",
+                    yes_price=yes_price,
+                    htf_bias=primary_htf_bias,
+                    context={"side_source": side_source},
+                )
+                continue
+
             if (
                 is_updown
                 and _updown_tf == "5m"
@@ -3557,6 +3612,54 @@ class SolMacroStrategy:
             # per-(side, window) allowlist via `alt_momentum_confirm:
             # {buy_yes: [...], buy_no: [...]}`. Empty/missing = guard off for that
             # side. Uses the alt's own MACD only — BTC is not consulted.
+            # --- last-60s tape veto (2026-07-13 operator GO action 1, Codex GO) ---
+            # Never-green autopsy: 22 losses -$96 (32% of trades) entered AGAINST an
+            # in-flight ~1-minute move (shorts into bounces, longs into dumps), all on
+            # fresh feeds. 1m SPIKEs have 80-94% direction accuracy (06-30 finding).
+            # NOTE (Codex placement caveat): this sits after fade/side resolution and
+            # the enabled assets run window_delta_flip disabled, so `action` is final
+            # here — this is a final-side veto, not a pre-flip one.
+            # 2-slot pulse history on the instance (reload resets = one blind pulse, ok).
+            _tv_win = _updown_tf if is_updown else "15m"
+            # 2026-07-17 STAGED per-window port (restart-only; operator GO). tape_veto_60s
+            # was a FLAT per-strategy key: ONE bps threshold for 5m/15m/1h. Live evidence:
+            # it kills 34% of sol 1h candidates but only 0-1% of sol 5m/15m — i.e. an
+            # asset-wide gate suppressing ONE window its siblings do not need. Per-window
+            # keys fall back to the flat key when unset, so every other asset/window is
+            # byte-identical in behaviour. Set tape_veto_60s_bps_1h (or _enabled_1h) to
+            # scope sol 1h without weakening the 5m engine the veto protects.
+            if bool(self.config.get(f"tape_veto_60s_enabled_{_tv_win}",
+                                   self.config.get("tape_veto_60s_enabled", False))):
+                try:
+                    import time as _tv_time
+                    _tv_now = _tv_time.time()
+                    _tv_px = float(getattr(sol, "current_price", 0.0) or 0.0)
+                    _tv_hist = getattr(self, "_tape_veto_hist", [])
+                    if _tv_px > 0 and (not _tv_hist or _tv_now - _tv_hist[-1][1] >= 45.0):
+                        _tv_hist = (_tv_hist + [(_tv_px, _tv_now)])[-2:]
+                        self._tape_veto_hist = _tv_hist
+                    _tv_ref = _tv_hist[-2] if len(_tv_hist) >= 2 else None
+                    if _tv_ref and _tv_px > 0 and 30.0 <= _tv_now - _tv_ref[1] <= 180.0:
+                        _tv_bps = (_tv_px - _tv_ref[0]) / _tv_ref[0] * 10000.0
+                        _tv_thr = float(self.config.get(f"tape_veto_60s_bps_{_tv_win}",
+                                                        self.config.get("tape_veto_60s_bps", 20.0)) or 20.0)
+                        if (action == "BUY_NO" and _tv_bps > _tv_thr) or (
+                            action == "BUY_YES" and _tv_bps < -_tv_thr
+                        ):
+                            _bump_skip("tape_veto_60s")
+                            _log_skip_reject(
+                                market=market,
+                                window=_updown_tf if is_updown else "15m",
+                                side=allowed_side,
+                                action=action,
+                                reason="tape_veto_60s",
+                                yes_price=yes_price,
+                                htf_bias=primary_htf_bias,
+                                context={"tape_bps_60s": round(_tv_bps, 1), "thr": _tv_thr},
+                            )
+                            continue
+                except Exception:
+                    pass
             _alt_mc_cfg = self.config.get("alt_momentum_confirm") or {}
             _alt_mc_window = _updown_tf if is_updown else "15m"
             # Bias-aligned bypass: when the trade aligns with primary_htf_bias the
@@ -4061,8 +4164,16 @@ class SolMacroStrategy:
                     # disagrees with trade direction. Magnitude matches macro weight so
                     # disagreement roughly cancels the macro tilt.
                     _macd_1h = sol.macd_1h
-                    _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
-                    _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
+                    # 2026-07-20 Fix A: damp on the RESOLVED alt 1H trend (mtt.h1_trend),
+                    # not just the borderline MACD histogram sign. ETH already keys on
+                    # mtt.h1_trend==BULLISH; the sol family was left on the weaker histogram
+                    # trigger, so a clean alt_1h_trend=BULLISH with a ~0 histogram slipped
+                    # through -> buy_no_against_alt_1h_bullish losses. Resolved trend is
+                    # authoritative. Toggle via alt_h1_resolved_trend_damp (default True).
+                    _alt_h1_trend = str(getattr(mtt, "h1_trend", "") or "").upper()
+                    _h1_resolved = bool(self.config.get("alt_h1_resolved_trend_damp", True))
+                    _h1_bull_ok = (_macd_1h.histogram_rising or _macd_1h.histogram > 0) and not (_h1_resolved and _alt_h1_trend == "BEARISH")
+                    _h1_bear_ok = ((not _macd_1h.histogram_rising) or _macd_1h.histogram < 0) and not (_h1_resolved and _alt_h1_trend == "BULLISH")
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
                             est_prob_up -= 0.04
@@ -4491,8 +4602,16 @@ class SolMacroStrategy:
                     # Dampen toward neutral when 1H disagrees (magnitude ~0.05, sized close
                     # to the 15m macro weight so disagreement cancels roughly the macro tilt).
                     _macd_1h = sol.macd_1h
-                    _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
-                    _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
+                    # 2026-07-20 Fix A: damp on the RESOLVED alt 1H trend (mtt.h1_trend),
+                    # not just the borderline MACD histogram sign. ETH already keys on
+                    # mtt.h1_trend==BULLISH; the sol family was left on the weaker histogram
+                    # trigger, so a clean alt_1h_trend=BULLISH with a ~0 histogram slipped
+                    # through -> buy_no_against_alt_1h_bullish losses. Resolved trend is
+                    # authoritative. Toggle via alt_h1_resolved_trend_damp (default True).
+                    _alt_h1_trend = str(getattr(mtt, "h1_trend", "") or "").upper()
+                    _h1_resolved = bool(self.config.get("alt_h1_resolved_trend_damp", True))
+                    _h1_bull_ok = (_macd_1h.histogram_rising or _macd_1h.histogram > 0) and not (_h1_resolved and _alt_h1_trend == "BEARISH")
+                    _h1_bear_ok = ((not _macd_1h.histogram_rising) or _macd_1h.histogram < 0) and not (_h1_resolved and _alt_h1_trend == "BULLISH")
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
                             est_prob_up -= h1_dampen
@@ -5002,22 +5121,31 @@ class SolMacroStrategy:
                     # Synchronous (no async enqueue/expire). 15m/1h only. FAIL-CLOSED:
                     # marginal candidates are below threshold and only trade WITH AI
                     # blessing, so no AI => skip (returns to quant baseline).
-                    ai_decision = await self._evaluate_trade_decision_with_timeout(
-                        market_question=market.question,
-                        market_description=ai_context,
-                        current_yes_price=yes_price,
-                        market_id=market.id,
-                        strategy_hint=self._signal_strategy_name,
-                        lane_id=ai_lane_id,
-                        quant_action=action,
-                        quant_edge=edge,
-                        quant_confidence=confidence,
-                        quant_threshold=_marginal_min_edge,
-                        raw_probability=raw_est_prob,
-                        post_calibration_probability=estimated_prob,
-                        require_shadow_portfolio=False,
-                        veto_only=True,
-                    )
+                    if False:  # 2026-07-19 AI-RESTORE (operator: complete revert INCLUDES the AI layer). The 07-15 observe-only skip is DISABLED so the alt-family AI call (else branch) always runs = evaluated + logged. Observe-only still means NON-GATING (every veto below stays observe_only-guarded). Latency bounded by max_ai_calls_per_scan, NOT by skipping the call.
+                        # (2026-07-15 CYCLE-LAG skip — now dead code under if False): observe-only => AI verdict is logged-only
+                        # and never gates (every veto below is observe_only-guarded, edge
+                        # is not bumped, hold-cache is never written). Skip the ~10s
+                        # blocking call (and the downstream shadow-pipeline await).
+                        # `ai_calls += 1` below is preserved so the budget continue and
+                        # the marginal admitted set stay byte-identical.
+                        ai_decision = None
+                    else:
+                        ai_decision = await self._evaluate_trade_decision_with_timeout(
+                            market_question=market.question,
+                            market_description=ai_context,
+                            current_yes_price=yes_price,
+                            market_id=market.id,
+                            strategy_hint=self._signal_strategy_name,
+                            lane_id=ai_lane_id,
+                            quant_action=action,
+                            quant_edge=edge,
+                            quant_confidence=confidence,
+                            quant_threshold=_marginal_min_edge,
+                            raw_probability=raw_est_prob,
+                            post_calibration_probability=estimated_prob,
+                            require_shadow_portfolio=False,
+                            veto_only=True,
+                        )
                     ai_calls += 1
                     self._log_decision_layer(
                         market=market, window=(_updown_tf if is_updown else "15m"),
@@ -5459,22 +5587,29 @@ class SolMacroStrategy:
                 # Synchronous (no async enqueue/expire). 15m/1h only. VETO-ONLY:
                 # the HTF gate already selected this below-threshold extra; the AI
                 # can only block it with a confident, directly-opposing call.
-                ai_decision = await self._evaluate_trade_decision_with_timeout(
-                    market_question=market.question,
-                    market_description=ai_context2,
-                    current_yes_price=yes_price,
-                    market_id=market.id,
-                    strategy_hint=self._signal_strategy_name,
-                    lane_id=ai_lane_id,
-                    quant_action=action,
-                    quant_edge=edge,
-                    quant_confidence=confidence,
-                    quant_threshold=effective_min_edge,
-                    raw_probability=raw_est_prob,
-                    post_calibration_probability=estimated_prob,
-                    require_shadow_portfolio=False,
-                    veto_only=True,
-                )
+                if False:  # 2026-07-19 AI-RESTORE (operator: complete revert INCLUDES the AI layer). 07-15 observe-only skip DISABLED; else-branch AI call always runs (evaluated + logged; observe-only still non-gating).
+                    # (2026-07-15 CYCLE-LAG skip — now dead code under if False): observe-only veto-only path => verdict can
+                    # only veto, and every veto here is observe_only-guarded, so under
+                    # observe-only the ~10s call is pure dead latency. Skip it;
+                    # `ai_calls += 1` below preserved so admission is byte-identical.
+                    ai_decision = None
+                else:
+                    ai_decision = await self._evaluate_trade_decision_with_timeout(
+                        market_question=market.question,
+                        market_description=ai_context2,
+                        current_yes_price=yes_price,
+                        market_id=market.id,
+                        strategy_hint=self._signal_strategy_name,
+                        lane_id=ai_lane_id,
+                        quant_action=action,
+                        quant_edge=edge,
+                        quant_confidence=confidence,
+                        quant_threshold=effective_min_edge,
+                        raw_probability=raw_est_prob,
+                        post_calibration_probability=estimated_prob,
+                        require_shadow_portfolio=False,
+                        veto_only=True,
+                    )
                 ai_calls += 1
                 self._log_decision_layer(
                     market=market, window=_win, quant_action=action,
@@ -6024,7 +6159,7 @@ class SolMacroStrategy:
                     # Floor the NO price: shorting cheap NO (yes_price rich) is
                     # adverse selection — NO<0.20 wins ~5% held-to-resolution
                     # across every asset (n~8k ghost), −$97 realized. Block it.
-                    _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
+                    _buy_no_min_no = float(self.config.get(f"buy_no_min_no_price_{_win}", self.config.get("buy_no_min_no_price", 0.20)))  # 2026-07-16 STAGED per-window port (mirror eth_macro:2768, restart-only): buy_no_min_no_price_5m caps 5m shorts only; 15m/1h fall back base 0.20
                     _updown_band_bad = (
                         yes_price < _yp_low or yes_price > (1.0 - _buy_no_min_no)
                     )
@@ -6077,9 +6212,19 @@ class SolMacroStrategy:
                 _bump_skip("kelly_unavailable")
                 logger.error("%s strategy: KellySizer unavailable — skipping entry sizing", _brand)
                 continue
-            raw_size = self.kelly_sizer.size_from_edge(
-                self._signal_strategy_name, bankroll, sizing_edge
-            )
+            # 2026-07-14 K2' (operator GO): window-scoped streak — pass the lane's
+            # window so a 5m win streak no longer inflates 15m/1h sizing. TypeError
+            # fallback = version-skew guard (kelly_sizer is not hot-reloadable;
+            # full behavior lands at restart).
+            try:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge,
+                    window=_updown_tf if is_updown else None,
+                )
+            except TypeError:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge
+                )
             if (
                 self._btc_trade_inputs_enabled()
                 and self._btc_1h_regime_gates.get("enabled", False)
@@ -6102,11 +6247,24 @@ class SolMacroStrategy:
             # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
             if final_size >= 0.5 and is_updown:
                 _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
-                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
-                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
-                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
-                    if _ln_max > 0:
+                _tier_val = str(getattr(_cur_tier, "value", ""))
+                if _tier_val != "PAUSED":
+                    _ln_side = 'up' if action == 'BUY_YES' else 'down'
+                    _ln_max = float(self.config.get(f"lane_max_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    # lift toward kelly ask; still skips MINIMAL
+                    if _tier_val != "MINIMAL" and _ln_max > 0:
                         final_size = max(final_size, min(raw_size, _ln_max))
+                    # 2026-07-13 operator ORDER (Codex GO): winner-lane floors SURVIVE the
+                    # MINIMAL loss-streak tier — the $5 brake was shaving known winners
+                    # (btc 1h expiry wins at $5; xrp 5m engine at $5). Per-lane opt-in via
+                    # lane_min_notional_ignores_minimal_{tf}_{side}. PAUSED blocks all.
+                    _lnf = float(self.config.get(f"lane_min_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    _lnf_hard = bool(self.config.get(f"lane_min_notional_ignores_minimal_{_updown_tf}_{_ln_side}", False))
+                    if _lnf > 0 and (_tier_val != "MINIMAL" or _lnf_hard):
+                        final_size = max(final_size, _lnf)
+                    # lane_max is a HARD CAP last (per-lane downsize lever, e.g. sol 5m $15)
+                    if _ln_max > 0:
+                        final_size = min(final_size, _ln_max)
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -6200,13 +6358,42 @@ class SolMacroStrategy:
                     entry_volatility=getattr(conditions, "volatility", 0.0),
                 ),
             )
-            signals.append(signal)
+            # 2026-07-19 MAIN-LANE VETO (operator, per-lane allow-list): skip a main-lane
+            # trouble-lane trade only if the AI CONFIDENTLY opposes it. ALLOW-LIST only =>
+            # lanes not listed (all +869 winners/engines) are never touched. FAIL-OPEN:
+            # any error/HOLD/agree/low-conf appends the trade normally.
+            _mlv_ok = True
+            try:
+                _mlv_agent = getattr(self, "ai_agent", None)
+                _mlv_cfg = (getattr(_mlv_agent, "main_lane_veto_cfg", {}) or {}) if _mlv_agent is not None else {}
+                if _mlv_agent is not None and bool(_mlv_cfg.get("enabled", False)):
+                    _mlv_win = _updown_tf if is_updown else "15m"
+                    _mlv_side = "up" if action == "BUY_YES" else "down"
+                    _mlv_key = "%s|%s|%s" % (self._signal_strategy_name, _mlv_win, _mlv_side)
+                    if _mlv_key in set(_mlv_cfg.get("lanes", []) or []):
+                        _mlv_ok, _mlv_meta = await _mlv_agent.evaluate_main_lane_veto(
+                            market_question=market.question,
+                            market_description=getattr(market, "description", "") or "",
+                            current_yes_price=float(yes_price),
+                            market_id=str(market.id),
+                            strategy_hint=self._signal_strategy_name,
+                            lane_id=_mlv_key,
+                            quant_action=action,
+                        )
+                        if not _mlv_ok:
+                            self._mlv_skip_count = getattr(self, "_mlv_skip_count", 0) + 1
+                            logger.info("  MAIN-LANE VETO skip %s mkt=%s %s", _mlv_key, market.id, _mlv_meta)
+            except Exception as _mlv_e:
+                logger.warning("main_lane_veto wiring error (FAIL-OPEN, trade proceeds): %s", _mlv_e)
+                _mlv_ok = True
+            if _mlv_ok:
+                signals.append(signal)
 
-            logger.info(
-                f"  {_brand} SIGNAL: {action} '{market.question[:50]}...' "
-                f"edge={edge:.3f} prob={estimated_prob:.2f} "
-                f"size=${final_size:.2f} conf={confidence:.2f}"
-            )
+                logger.info(
+                    f"  {_brand} SIGNAL: {action} '{market.question[:50]}...' "
+                    f"edge={edge:.3f} prob={estimated_prob:.2f} "
+                    f"size=${final_size:.2f} conf={confidence:.2f}"
+                )
 
         if observer_tasks:
             await asyncio.wait(observer_tasks, timeout=0.01)
