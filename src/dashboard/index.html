@@ -187,6 +187,10 @@
         .status-orb-wrap.orb-killed .scanner-cycle-ring,.status-orb-wrap.orb-killed .status-orb-row{--orb-accent:var(--re)}
         .status-orb-wrap.orb-stopped .scanner-cycle-ring,.status-orb-wrap.orb-stopped .status-orb-row{--orb-accent:var(--tm)}
         .status-orb-wrap.orb-running .scanner-cycle-ring .ring-fg{animation:scanner-ring-flow 1.2s linear infinite}
+        .status-orb.healthy{--orb-accent:var(--gr);animation:orb-pulse-green 2s ease-out infinite}
+        .status-orb-wrap.orb-healthy .scanner-cycle-ring,.status-orb-wrap.orb-healthy .status-orb-row{--orb-accent:var(--gr)}
+        .status-orb-wrap.orb-healthy .scanner-cycle-ring .ring-fg{animation:scanner-ring-flow 1.2s linear infinite}
+        .status-orb-wrap.orb-healthy .status-orb-text{color:var(--gr)}
         .status-orb-text{font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:var(--td);font-family:'IBM Plex Mono',monospace;opacity:0.95;max-width:54px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
         .status-orb-wrap.orb-running .status-orb-text{color:var(--cy)}
         .status-orb-wrap.orb-paused .status-orb-text{color:var(--ye)}
@@ -1164,7 +1168,7 @@
         #btc-chart-wrap{position:relative;border-radius:4px;overflow:hidden;background:transparent;width:100%;height:min(620px,max(320px,52dvh))}
         #tradingview_btc{width:100%;height:100%;min-height:0}
         #btc-trade-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
-        .live-top-layout{display:grid;grid-template-columns:minmax(620px,1.45fr) minmax(420px,.75fr);gap:14px;align-items:start;margin-bottom:16px;max-width:100%;overflow:hidden}
+        .live-top-layout{display:grid;grid-template-columns:1fr;gap:14px;align-items:start;margin-bottom:16px;max-width:100%;overflow:hidden}
         .live-top-layout > *{min-width:0}
         .live-top-layout #btc-chart-section{margin-bottom:0}
         .live-top-layout #btc-chart-section > div:first-child{flex-wrap:wrap;gap:8px}
@@ -1226,6 +1230,19 @@
             opacity:.32;
         }
         .cmd-pnl-card > *{position:relative;z-index:1}
+        .pricing-health-body{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace;font-size:12px}
+        .ph-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}
+        .ph-label{font-weight:700;letter-spacing:.10em}
+        .ph-metrics{color:var(--text-muted);font-size:11px}
+        .ph-metrics b{color:#e8e8ea;font-weight:700}
+        .lane-spark-meta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-left:auto}
+        .lane-spark-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:7px}
+        .lane-spark-card{border:1px solid rgba(255,255,255,.09);border-radius:4px;padding:5px 6px 4px;background:rgba(0,0,0,.28)}
+        .lane-spark-top{display:flex;justify-content:space-between;align-items:baseline;gap:4px}
+        .lane-spark-name{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.02em;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .lane-spark-net{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;flex:0 0 auto}
+        .lane-spark-canvas{width:100%;height:34px;display:block;margin:2px 0 1px}
+        .lane-spark-n{font-family:'IBM Plex Mono',monospace;font-size:9px;color:rgba(255,255,255,.35);text-align:right}
         .cmd-pnl-head{
             display:flex;
             align-items:baseline;
@@ -1499,7 +1516,7 @@
         html.dashboard-fullscreen body{font-size:15px}
         html.dashboard-fullscreen .container{max-width:none;padding:20px 26px 72px}
         html.dashboard-fullscreen .card{padding:20px}
-        html.dashboard-fullscreen .live-top-layout{grid-template-columns:minmax(720px,1.5fr) minmax(420px,.72fr);gap:16px}
+        html.dashboard-fullscreen .live-top-layout{grid-template-columns:1fr;gap:16px}
         html.dashboard-fullscreen #btc-chart-wrap{height:min(720px,max(520px,64dvh))}
         html.dashboard-fullscreen .live-top-side #macro-align-section .ma-chartwrap{min-height:220px;aspect-ratio:16 / 6.4}
         html.dashboard-fullscreen .crypto-grid{gap:22px}
@@ -2011,16 +2028,36 @@
             <div class="hero-item" id="hero-card-positions" title="Currently open positions">
                 <div class="hero-val" id="hero-positions">-</div><div class="hero-sub" id="hero-positions-sub"></div><div class="hero-lbl">Open positions <span class="hero-trend flat" id="hero-positions-trend">—</span></div></div>
             <div class="hero-item" id="hero-card-trades" title="ENTRY events logged in the current session">
-                <div class="status-orb-wrap" id="hero-status-orb-wrap" title="Scanner status">
-                    <div class="scanner-cycle-ring" id="hero-scanner-ring" aria-hidden="true">
-                        <svg viewBox="0 0 36 36">
-                            <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
-                            <path class="ring-fg" id="hero-scan-progress" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"></path>
+                <style>
+                .ph-gauge-wrap{position:absolute;right:10px;top:8px;display:inline-flex;flex-direction:column;align-items:center;gap:2px;width:82px;max-width:82px;padding:0;border:0;background:transparent;box-shadow:none}
+                .ph-gauge{position:relative;width:68px;height:40px}
+                .ph-gauge svg{width:100%;height:100%;overflow:visible;display:block}
+                .ph-gauge-track{fill:none;stroke:rgba(136,136,170,.16);stroke-width:6;stroke-linecap:round}
+                .ph-gauge-fill{fill:none;stroke:var(--orb-accent,var(--tm));stroke-width:6;stroke-linecap:round;transition:stroke-dasharray .45s ease,stroke .3s}
+                .ph-gauge-readout{position:absolute;left:0;right:0;bottom:-2px;text-align:center;pointer-events:none}
+                .ph-gauge-num{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--orb-accent,var(--tx));line-height:1}
+                .ph-gauge-wrap .status-orb-row{display:flex;align-items:center;justify-content:center;max-width:82px}
+                .ph-gauge-wrap .status-orb-text{font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:var(--orb-accent,var(--td));font-family:'IBM Plex Mono',monospace;text-align:center;max-width:82px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.95}
+                .status-orb-wrap.orb-healthy{--orb-accent:var(--gr)}
+                .status-orb-wrap.orb-running{--orb-accent:var(--cy)}
+                .status-orb-wrap.orb-paused{--orb-accent:var(--ye)}
+                .status-orb-wrap.orb-killed{--orb-accent:var(--re)}
+                .status-orb-wrap.orb-stopped{--orb-accent:var(--tm)}
+                .status-orb-wrap.orb-healthy .ph-gauge-fill{animation:ph-gauge-glow 2.6s ease-in-out infinite}
+                .status-orb-wrap.orb-killed .ph-gauge-fill{animation:ph-gauge-alarm .7s ease-in-out infinite}
+                @keyframes ph-gauge-glow{0%,100%{opacity:.82}50%{opacity:1}}
+                @keyframes ph-gauge-alarm{0%,100%{opacity:.55}50%{opacity:1}}
+                </style>
+                <div class="status-orb-wrap ph-gauge-wrap orb-stopped" id="hero-status-orb-wrap" title="Pricing health">
+                    <div class="ph-gauge">
+                        <svg viewBox="0 0 80 46" aria-hidden="true">
+                            <path class="ph-gauge-track" d="M8 42 A30 30 0 0 1 72 42" pathLength="100"></path>
+                            <path class="ph-gauge-fill" id="hero-scan-progress" d="M8 42 A30 30 0 0 1 72 42" pathLength="100" stroke-dasharray="0, 100"></path>
                         </svg>
-                        <span class="scanner-cycle-text" id="hero-scan-age">—</span>
+                        <div class="ph-gauge-readout"><span class="ph-gauge-num" id="hero-scan-age">—</span></div>
                     </div>
                     <div class="status-orb-row">
-                        <div class="status-orb stopped" id="hero-status-orb"></div>
+                        <span class="status-orb stopped" id="hero-status-orb" hidden></span>
                         <span class="status-orb-text" id="hero-status-orb-text">—</span>
                     </div>
                 </div>
@@ -2112,67 +2149,163 @@
 
     <div class="live-top-layout">
     <!-- BTC LIVE CHART — hero top -->
-    <div class="card" data-aos="fade-up" data-aos-delay="80" id="btc-chart-section" style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h2 style="margin-bottom:0;">BTC Live Chart</h2>
-            <div class="btc-chip-hdr" style="display:flex;gap:6px;align-items:center;">
-                <button type="button" id="btc-toggle-btc-trades"  class="strat-cf" data-series="btcTrades"  data-strat="bitcoin"  onclick="toggleStratChip(this)">BTC</button>
-                <button type="button" id="btc-toggle-sol-trades"  class="strat-cf" data-series="solTrades"  data-strat="sol_lag"  onclick="toggleStratChip(this)">SOL</button>
-                <button type="button" id="btc-toggle-eth-trades"  class="strat-cf" data-series="ethTrades"  data-strat="eth_lag"  onclick="toggleStratChip(this)">ETH</button>
-                <button type="button" id="btc-toggle-xrp-trades"  class="strat-cf" data-series="xrpTrades"  data-strat="xrp_lag"  onclick="toggleStratChip(this)">XRP</button>
-                <button type="button" id="btc-toggle-hype-trades" class="strat-cf" data-series="hypeTrades" data-strat="hype_lag" onclick="toggleStratChip(this)">HYPE</button>
-                <button type="button" id="btc-toggle-doge-trades" class="strat-cf" data-series="dogeTrades" data-strat="doge_lag" onclick="toggleStratChip(this)">DOGE</button>
-                <button type="button" id="btc-toggle-bnb-trades"  class="strat-cf" data-series="bnbTrades"  data-strat="bnb_lag"  onclick="toggleStratChip(this)">BNB</button>
-                <select id="btc-chart-interval" onchange="setBTCInterval(this.value)" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-size:0.75rem;font-family:inherit;">
-                    <option value="15" selected>15m</option>
-                    <option value="5">5m</option>
-                    <option value="30">30m</option>
-                    <option value="60">1H</option>
-                    <option value="240">4H</option>
-                </select>
-                <span style="font-size:0.7rem;color:var(--text-muted);" id="btc-chart-updated">—</span>
-            </div>
-        </div>
-        <div id="btc-chart-wrap">
-            <div id="tradingview_btc"></div>
-            <div id="btc-trade-overlay" class="bbl-layer" aria-hidden="true"></div>
-        </div>
-        <div id="btc-chart-alt-triggers" style="font-size:0.68rem;color:var(--text-muted);margin-top:8px;line-height:1.55;border-top:1px solid var(--border);padding-top:8px;">SOL / ETH / XRP / HYPE / DOGE / BNB watchlist: loading…</div>
+    <style>
+      @keyframes vsbeat{0%,100%{opacity:1}50%{opacity:.32}}
+      #vital-signs-grid .vs-cell{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:9px 11px;min-width:0}
+      #vital-signs-grid .vs-lbl{display:flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--td);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #vital-signs-grid .vs-val{font-family:"IBM Plex Mono",monospace;font-size:18px;font-weight:600;margin-top:5px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #vital-signs-grid .vs-sub{font-family:"IBM Plex Mono",monospace;font-size:9px;letter-spacing:.06em;color:var(--tm);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #vital-signs-grid .vs-dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+    </style>
+    <div class="card" id="vital-signs-section" data-aos="fade-up" style="margin-bottom:16px;">
+      <h3 style="margin-top:0;">Vital Signs</h3>
+      <div id="vital-signs-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tm);">loading vitals&hellip;</div>
+      </div>
     </div>
+    <script>
+    (function(){
+      var COL={ok:"var(--gr)",warn:"var(--ye)",dead:"var(--re)",unknown:"var(--tm)"};
+      async function refreshVitals(){
+        try{
+          var r=await fetch("/api/vitals",{cache:"no-store"}); if(!r.ok) return;
+          var d=await r.json(); var g=document.getElementById("vital-signs-grid"); if(!g||!d||!d.vitals) return;
+          g.innerHTML=d.vitals.map(function(v){
+            var c=COL[v.state]||"var(--tm)";
+            var anim=v.beat>0?("animation:vsbeat "+v.beat+"s ease-in-out infinite"):"";
+            return "<div class=\"vs-cell\" style=\"border-left:2px solid "+c+"\">"
+              +"<div class=\"vs-lbl\"><span class=\"vs-dot\" style=\"background:"+c+";"+anim+"\"></span><span>"+v.label+"</span></div>"
+              +"<div class=\"vs-val\" style=\"color:"+c+"\">"+v.value+"</div>"
+              +"<div class=\"vs-sub\">"+v.sub+"</div></div>";
+          }).join("");
+        }catch(e){}
+      }
+      window._refreshVitals=refreshVitals; setInterval(refreshVitals,5000); refreshVitals();
+    })();
+    </script>
+
+    <style>
+      #trigger-board-list .tb-row{border:1px solid var(--border);border-radius:4px;padding:9px 11px;margin-bottom:8px;background:var(--card)}
+      #trigger-board-list .tb-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+      #trigger-board-list .tb-name{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #trigger-board-list .tb-pill{font-family:"IBM Plex Mono",monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:3px;flex:0 0 auto}
+      #trigger-board-list .tb-bar{height:5px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden;margin:7px 0 5px}
+      #trigger-board-list .tb-stat{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--tm);font-variant-numeric:tabular-nums}
+      #trigger-board-list .tb-cond{font-family:"IBM Plex Mono",monospace;font-size:9px;color:var(--td);letter-spacing:.04em;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    </style>
+    <div class="card" id="trigger-board-section" data-aos="fade-up" style="margin-bottom:16px;">
+      <h3 style="margin-top:0;">Break-Trigger Board</h3>
+      <div id="trigger-board-list"><div class="tb-stat">loading triggers&hellip;</div></div>
+    </div>
+    <script>
+    (function(){
+      var COL={safe:"var(--gr)",watch:"var(--ye)",wait:"var(--tm)",fire:"var(--re)"};
+      var BG={safe:"rgba(0,255,136,.10)",watch:"rgba(255,215,0,.10)",wait:"rgba(136,136,170,.10)",fire:"rgba(255,68,102,.14)"};
+      async function refreshTriggers(){
+        try{
+          var r=await fetch("/api/triggers",{cache:"no-store"}); if(!r.ok) return;
+          var d=await r.json(); var g=document.getElementById("trigger-board-list"); if(!g||!d||!d.triggers) return;
+          if(!d.triggers.length){ g.innerHTML="<div class=\"tb-stat\">no active triggers</div>"; return; }
+          g.innerHTML=d.triggers.map(function(t){
+            var c=COL[t.state]||"var(--tm)"; var bg=BG[t.state]||"transparent";
+            var pct=Math.min(100,Math.round((t.closed/(t.min_closed||10))*100));
+            var stat=t.closed>0
+              ?("net "+(t.net>=0?"+":"")+"$"+Number(t.net).toFixed(0)+(t.wr!=null?(" · WR "+t.wr+"%"):"")+" · "+t.closed+"/"+t.min_closed+" cl"+(t.ride0>0?(" · "+t.ride0+" ride0"):""))
+              :("no fills yet · "+t.closed+"/"+t.min_closed+" cl");
+            return "<div class=\"tb-row\" style=\"border-left:2px solid "+c+"\">"
+              +"<div class=\"tb-head\"><span class=\"tb-name\">"+t.label+"</span>"
+              +"<span class=\"tb-pill\" style=\"color:"+c+";background:"+bg+"\">"+t.state+"</span></div>"
+              +"<div class=\"tb-bar\"><div style=\"height:100%;width:"+pct+"%;background:"+c+"\"></div></div>"
+              +"<div class=\"tb-stat\">"+stat+"</div>"
+              +"<div class=\"tb-cond\">"+t.cond+(t.action?(" → "+t.action):"")+"</div></div>";
+          }).join("");
+        }catch(e){}
+      }
+      window._refreshTriggers=refreshTriggers; setInterval(refreshTriggers,15000); refreshTriggers();
+    })();
+    </script>
+
+
+
 
     <div class="live-top-side">
+    <style>
+      #exit-timing-hud .eq-grid{display:flex;flex-direction:column;gap:0;font-family:"IBM Plex Mono",monospace}
+      #exit-timing-hud .eq-row{display:grid;grid-template-columns:minmax(58px,1fr) 40px 66px 46px 58px 66px 52px 50px 46px;gap:7px;align-items:center;padding:6px 3px;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+      #exit-timing-hud .eq-row>span{overflow:hidden;text-overflow:ellipsis}
+      #exit-timing-hud .eq-row span:nth-child(n+2){text-align:right}
+      #exit-timing-hud .eq-head{font-size:8.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--td);border-bottom:1px solid var(--border);padding-top:0}
+      #exit-timing-hud .eq-head span{cursor:default}
+      #exit-timing-hud .eq-total{border-top:1px solid var(--border);border-bottom:none;margin-top:2px;padding-top:7px;font-weight:600}
+      #exit-timing-hud .eq-nm{color:var(--tx);text-align:left!important;letter-spacing:.04em}
+      #exit-timing-hud .eq-n,#exit-timing-hud .eq-wr,#exit-timing-hud .eq-ss{color:var(--tm)}
+      #exit-timing-hud .eq-empty{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--tm);padding:6px 2px}
+    </style>
         <div id="exit-timing-hud" role="region" aria-label="Exit timing telemetry">
             <div class="hud-head">
                 <span class="hud-pulse" aria-hidden="true"></span>
-                <span class="hud-title">Exit Timing // Strategy Rollup</span>
+                <span class="hud-title">Exit Quality // Strategy Rollup</span>
                 <span class="hud-window" id="exit-timing-hud-window">Window —</span>
             </div>
             <div class="hud-body" id="exit-timing-hud-body"></div>
         </div>
 
     <!-- Simulated Macro Alignment — low-latency proxy tape + trade bubbles -->
+    <!-- 2026-07-16: Loss-Reason Stream — replaces the SIMULATED macro-align proxy. Live losing
+         exits tagged by mechanical fault, from /api/journal/trade-points (cached). Real causes. -->
+    <style>
+      #loss-stream-body .ls-row{display:grid;grid-template-columns:58px 1fr 84px 52px;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.05);font-family:"IBM Plex Mono",monospace;font-size:11px;white-space:nowrap}
+      #loss-stream-body .ls-lane{color:var(--tx);letter-spacing:.04em;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis}
+      #loss-stream-body .ls-fault{font-size:9px;letter-spacing:.07em;text-transform:uppercase;overflow:hidden;text-overflow:ellipsis}
+      #loss-stream-body .ls-pnl{color:var(--re);text-align:right;font-variant-numeric:tabular-nums}
+      #loss-stream-body .ls-ago{color:var(--tm);text-align:right;font-size:10px}
+      #loss-stream-body .ls-empty{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gr);padding:8px 2px}
+    </style>
     <div class="card" data-aos="fade-up" id="macro-align-section" style="margin-bottom:16px;">
         <div class="ma-hdr">
             <div class="ma-titlewrap">
                 <span class="ma-pulse" aria-hidden="true"></span>
-                <h2 class="ma-title">Macro Alignment // Sim Proxy</h2>
-                <span class="ma-sub" id="macro-align-updated">awaiting sim tape…</span>
+                <h2 class="ma-title">Loss Reason Stream // Live</h2>
+                <span class="ma-sub" id="loss-stream-updated">loading losses&hellip;</span>
             </div>
         </div>
-        <div class="ma-chips chart-hdr" id="macro-align-chips" role="toolbar" aria-label="Asset filters"></div>
-        <div class="ma-chartwrap" id="macro-align-chartwrap">
-            <canvas id="macro-align-canvas" width="1200" height="280"></canvas>
-            <div class="ma-bbl-layer" id="macro-align-bbls" aria-hidden="true"></div>
-            <div class="ma-crosshair" id="macro-align-crosshair" aria-hidden="true"></div>
-            <div class="ma-tooltip" id="macro-align-tooltip" role="status"></div>
-            <div class="ma-empty" id="macro-align-empty">Loading low-latency sim tape…</div>
-        </div>
-        <div class="ma-foot">
-            <span id="macro-align-foot-btc"></span>
-            <span id="macro-align-foot-pairs"></span>
-            <span class="ma-foot-meta">SIMULATED · LOW-LATENCY PROXY</span>
-        </div>
+        <div id="loss-stream-body"><div class="ls-empty">loading&hellip;</div></div>
     </div>
+    <script>
+    (function(){
+      var FCOL={STOP:"var(--ye)","TIME-STOP":"var(--re)",FLATTEN:"var(--cy)","RODE-TO-0":"var(--re)"};
+      var LBL={hype_macro:"HYPE",bnb_macro:"BNB",eth_macro:"ETH",sol_macro:"SOL",bitcoin:"BTC",doge_macro:"DOGE",xrp_macro:"XRP"};
+      function fault(er){
+        er=(er||"").toLowerCase();
+        if(er.indexOf("time")>=0) return "TIME-STOP";
+        if(er.indexOf("flatten")>=0) return "FLATTEN";
+        if(er.indexOf("resolved")>=0||er.indexOf("expired")>=0) return "RODE-TO-0";
+        return "STOP";
+      }
+      function ago(sec){ if(!sec) return ""; var d=Math.max(0,Math.floor(Date.now()/1000-sec)); if(d<60)return d+"s"; if(d<3600)return Math.floor(d/60)+"m"; return Math.floor(d/3600)+"h"; }
+      async function refresh(){
+        try{
+          var r=await fetch("/api/journal/trade-points?limit=500",{cache:"no-store"}); if(!r.ok)return;
+          var d=await r.json(); var pts=(d&&d.points)||[];
+          var losses=pts.filter(function(p){return Number(p.pnl)<0;}).sort(function(a,b){return (b.closed_at||b.time||0)-(a.closed_at||a.time||0);}).slice(0,14);
+          var body=document.getElementById("loss-stream-body"); var upd=document.getElementById("loss-stream-updated");
+          if(!body)return;
+          if(!losses.length){ body.innerHTML="<div class=\"ls-empty\">no recent losses \u2014 clean tape</div>"; if(upd)upd.textContent="0 recent losses"; return; }
+          if(upd)upd.textContent=losses.length+" recent losses";
+          body.innerHTML=losses.map(function(p){
+            var f=fault(p.exit_reason); var c=FCOL[f]||"var(--ye)";
+            var lane=(LBL[p.strategy]||p.strategy||"?");
+            return "<div class=\"ls-row\" style=\"border-left:2px solid "+c+"\">"
+              +"<span class=\"ls-lane\">"+lane+"</span>"
+              +"<span class=\"ls-fault\" style=\"color:"+c+"\">"+f+"</span>"
+              +"<span class=\"ls-pnl\">\u2212$"+Math.abs(Number(p.pnl)).toFixed(2)+"</span>"
+              +"<span class=\"ls-ago\">"+ago(p.closed_at||p.time)+"</span></div>";
+          }).join("");
+        }catch(e){}
+      }
+      setInterval(refresh,15000); refresh();
+    })();
+    </script>
     </div>
     </div>
 
@@ -2611,6 +2744,10 @@
         <!-- Trade journey removed (decluttered + drops a heavy per-poll fetch); strategy charts lifted up below. -->
     </div>
 
+        <div id="lane-spark-section" class="cmd-pnl-card" style="display:none;margin-top:8px;">
+            <div class="cmd-pnl-head"><div><h3 class="cmd-pnl-title">Per-Lane P&amp;L</h3></div><span id="lane-spark-meta" class="lane-spark-meta"></span></div>
+            <div id="lane-spark-grid" class="lane-spark-grid"></div>
+        </div>
     <!-- Strategy Allocation + PnL Breakdown — moved up from the bottom for visibility -->
     <div class="grid" id="analytics-charts-grid" style="margin-top:16px;">
         <div class="card" data-aos="fade-up">
@@ -2625,7 +2762,7 @@
 
     <!-- Strategy Performance -->
     <div class="card" data-aos="fade-up" style="margin-top:16px;margin-bottom:16px;">
-        <h2>Strategy Performance</h2>
+        <h2>Lane Health Matrix // Worst-Net First</h2>
         <div class="action-perf-wrap" id="strategy-boxes">
             <div class="action-perf-head">
                 <span class="action-perf-title">Entry action · current session</span>
@@ -2638,10 +2775,46 @@
             </div>
             <div id="action-perf-note" class="action-perf-note"></div>
         </div>
-        <table id="strategy-table" style="margin-top:8px;">
-            <thead><tr><th>Strategy</th><th>Signals</th><th>Session Trades</th><th>Session PnL</th><th>Open</th><th>Break-even</th></tr></thead>
-            <tbody></tbody>
-        </table>
+        <!-- 2026-07-16: Lane Health Matrix replaces the per-strategy table. Per (strategy|window|side)
+             net/WR/payoff/ride0 from /api/exit-quality (lanes[]), ranked worst-net first so bleeders surface. -->
+        <style>
+          #lane-matrix-body .lm-row{display:grid;grid-template-columns:minmax(96px,1.4fr) 38px 64px 46px 58px 44px;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.05);font-family:"IBM Plex Mono",monospace;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+          #lane-matrix-body .lm-row>span:nth-child(n+2){text-align:right}
+          #lane-matrix-body .lm-head{font-size:9px;letter-spacing:.07em;text-transform:uppercase;color:var(--td);border-bottom:1px solid var(--border)}
+          #lane-matrix-body .lm-lane{color:var(--tx);text-align:left!important;letter-spacing:.03em;overflow:hidden;text-overflow:ellipsis}
+          #lane-matrix-body .lm-empty{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--tm);padding:8px 2px}
+        </style>
+        <div id="lane-matrix-body" style="margin-top:8px;"><div class="lm-empty">loading lanes&hellip;</div></div>
+        <script>
+        (function(){
+          function ncol(v){return v>=0?"var(--gr)":"var(--re)";}
+          function pcol(v){return v==null?"var(--tm)":(v>=1.6?"var(--gr)":v>=1.2?"var(--ye)":"var(--re)");}
+          function wcol(v){return v==null?"var(--tm)":(v>=50?"var(--gr)":v>=42?"var(--ye)":"var(--re)");}
+          async function refresh(){
+            try{
+              var r=await fetch("/api/exit-quality",{cache:"no-store"}); if(!r.ok)return;
+              var d=await r.json(); var lanes=(d&&d.lanes)||[]; var body=document.getElementById("lane-matrix-body"); if(!body)return;
+              if(!lanes.length){ body.innerHTML="<div class=\"lm-empty\">no closed lanes yet</div>"; return; }
+              var head="<div class=\"lm-row lm-head\"><span class=\"lm-lane\">lane</span><span>n</span><span>net</span><span>wr</span><span title=\"avg win / avg loss\">payoff</span><span title=\"rode to binary zero\">r0</span></div>";
+              var rows=lanes.map(function(L){
+                var net=(L.net>=0?"+":"−")+"$"+Math.abs(L.net).toFixed(0);
+                var wr=L.wr==null?"—":(L.wr+"%");
+                var po=L.payoff==null?"—":Number(L.payoff).toFixed(2);
+                var r0col=L.ride0>=3?"var(--re)":L.ride0>0?"var(--ye)":"var(--tm)";
+                return "<div class=\"lm-row\">"
+                  +"<span class=\"lm-lane\">"+L.lane+"</span>"
+                  +"<span>"+L.n+"</span>"
+                  +"<span style=\"color:"+ncol(L.net)+"\">"+net+"</span>"
+                  +"<span style=\"color:"+wcol(L.wr)+"\">"+wr+"</span>"
+                  +"<span style=\"color:"+pcol(L.payoff)+"\">"+po+"</span>"
+                  +"<span style=\"color:"+r0col+"\">"+L.ride0+"</span></div>";
+              }).join("");
+              body.innerHTML=head+rows;
+            }catch(e){}
+          }
+          setInterval(refresh,30000); refresh();
+        })();
+        </script>
     </div>
 
     </div><!-- /view-performance -->
@@ -3928,12 +4101,12 @@ async function fetchAll() {
                 // repolls summary/trades instead of freezing on a pre-restart session_id.
                 window._journalViewSessionId = null;
                 const pnlSection = document.getElementById('journal-chart-section');
-                if (pnlSection) pnlSection.style.display = 'none';
+                /* 2026-07-18 restart-flash fix: keep section visible; repaint in place */
                 const pnlCanvas = document.getElementById('pnl-chart');
-                if (pnlCanvas) { const c = pnlCanvas.getContext('2d'); c.clearRect(0, 0, pnlCanvas.width, pnlCanvas.height); }
-                clearCommandCenterPnlChart();
+                /* restart-flash fix: keep old pnl canvas until reload paints over it */
+                /* restart-flash fix: no blank; command-center pnl repaints on next poll */
                 const stratCanvas = document.getElementById('strategy-pnl-chart');
-                if (stratCanvas) { const c = stratCanvas.getContext('2d'); c.clearRect(0, 0, stratCanvas.width, stratCanvas.height); }
+                /* restart-flash fix: keep old strat canvas until loadStrategyPnLChart paints */
                 if (typeof loadStrategyPnLChart === 'function') loadStrategyPnLChart();
                 if (typeof loadAllocationChart === 'function') loadAllocationChart();
                 try { _exitHudTradePoints = []; } catch (_) {}
@@ -4366,6 +4539,11 @@ function applyHeroMetrics(d) {
     if (!d || typeof d !== 'object') return;
     const p = d.portfolio || {};
     const s = d.session || {};
+    // 2026-07-20 flicker fix: the hero SUB-labels (splits/breakdowns) update only on
+    // the authoritative /api/status full poll — which carries a positions ARRAY. The 4s
+    // fastHeroCards() path (/api/ops/summary, counts only) reports a slightly different
+    // realized/unrealized split, so letting it write the subs made them flip every 4s.
+    const _fullTick = Array.isArray(d.positions);
     const bankroll = (d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null;
     const bankEl = document.getElementById('hero-bankroll');
     if (bankEl) {
@@ -4414,27 +4592,31 @@ function applyHeroMetrics(d) {
     const unrealizedPnlRaw = (Number.isFinite(totalPnlForSplit) && Number.isFinite(realizedPnlRaw))
         ? (totalPnlForSplit - realizedPnlRaw) : null;
     const brSub = document.getElementById('hero-bankroll-sub');
-    if (brSub) {
+    if (brSub && _fullTick) {
         brSub.textContent = (Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005)
             ? ((unrealizedPnlRaw < 0 ? '-' : '+') + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' unrealized (open)')
             : '';
     }
 
     let sessionPnlRaw = null;
-    if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
-        sessionPnlRaw = Number(s.total_pnl);
-    } else if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
+    // 2026-07-15 operator GO: Session P&L card shows REALIZED (closed) so it matches the
+    // Live Test Results "NET PNL (CLOSED)" box EXACTLY (both = realized). Unrealized is shown
+    // as the bankroll sub-label. Card is titled "Realized PnL this session" so this is correct.
+    if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
         sessionPnlRaw = Number(s.realized_pnl);
-    } else if (p.daily_pnl !== null && p.daily_pnl !== undefined) {
-        sessionPnlRaw = Number(p.daily_pnl);
     }
+    // 2026-07-20 operator: big Session P&L = REALIZED ONLY. Removed total_pnl/daily_pnl
+    // fallbacks that made the big number FLASH open-position mark-to-market for ~5 min
+    // post-restart (before realized_pnl populated). Unrealized stays in the small sub only.
     const pnlEl = document.getElementById('hero-pnl');
     if (pnlEl) {
         if (Number.isFinite(sessionPnlRaw)) {
+            pnlEl.dataset.cuInit = '1';
             const sign = sessionPnlRaw < 0 ? '-' : '';
             pnlEl.textContent = sign + '$' + Math.abs(sessionPnlRaw).toFixed(2);
             pnlEl.style.color = sessionPnlRaw > 0 ? 'var(--green)' : sessionPnlRaw < 0 ? 'var(--red)' : 'var(--text)';
-        } else {
+        } else if (!pnlEl.dataset.cuInit) {
+            // transient feed without pnl fields (poll vs SSE) must NOT blank a good value
             pnlEl.textContent = '-';
             pnlEl.style.color = 'var(--text-muted)';
         }
@@ -4456,17 +4638,28 @@ function applyHeroMetrics(d) {
         // consistent with the pull-down, which is rendered from /api/status.
         openCount = lastStatusData.positions.length;
     }
+    const havePosData = hasPositionsArray
+        || (p && p.total_positions != null)
+        || (s && s.open != null)
+        || (lastStatusData && Array.isArray(lastStatusData.positions));
     const posEl = document.getElementById('hero-positions');
-    if (posEl) posEl.textContent = openCount;
+    if (posEl) {
+        if (havePosData) { posEl.dataset.cuInit = '1'; posEl.textContent = openCount; }
+        else if (!posEl.dataset.cuInit) { posEl.textContent = openCount; }
+    }
 
     const dailyTrades = Number(p.daily_trades || 0);
     const sessionFillsRaw = s && s.fills != null ? Number(s.fills) : NaN;
+    const haveFills = Number.isFinite(sessionFillsRaw) || dailyTrades > 0;
     const sessionFills = Number.isFinite(sessionFillsRaw) ? sessionFillsRaw : dailyTrades;
     const tradesEl = document.getElementById('hero-trades');
-    if (tradesEl) tradesEl.textContent = sessionFills;
+    if (tradesEl) {
+        if (haveFills) { tradesEl.dataset.cuInit = '1'; tradesEl.textContent = sessionFills; }
+        else if (!tradesEl.dataset.cuInit) { tradesEl.textContent = sessionFills; }
+    }
 
     const pnlSub = document.getElementById('hero-pnl-sub');
-    if (pnlSub) {
+    if (pnlSub && _fullTick) {
         if (Number.isFinite(realizedPnlRaw) && Number.isFinite(unrealizedPnlRaw) && Math.abs(unrealizedPnlRaw) >= 0.005) {
             const uSign = unrealizedPnlRaw < 0 ? '-' : '+';
             pnlSub.textContent = '$' + realizedPnlRaw.toFixed(2) + ' realized · ' + uSign + '$' + Math.abs(unrealizedPnlRaw).toFixed(2) + ' open';
@@ -4477,7 +4670,7 @@ function applyHeroMetrics(d) {
         }
     }
     const posSub = document.getElementById('hero-positions-sub');
-    if (posSub) {
+    if (posSub && _fullTick) {
         const byStrat = {};
         if (Array.isArray(d.positions)) {
             d.positions.forEach(function(pos) {
@@ -4496,9 +4689,24 @@ function applyHeroMetrics(d) {
                 : ''
         );
     }
-    dashUpdateHeroVisuals({ bankroll: bankroll, pnl: sessionPnlRaw, positions: Number(openCount || 0), trades: sessionFills });
+    // 2026-07-15: the NUMBER (hero-pnl) stays REALIZED to match Live Test closed, but the
+    // little sparkline keeps its ORIGINAL precedence (total_pnl -> realized -> daily) so it
+    // looks exactly as before the sync change.
+    let heroSparkPnlRaw = null;
+    // 2026-07-18 REALIZED-ONLY: hero P&L mini-spark + card color track realized only (the
+    // card is labeled "Realized PnL this session"); feeding total_pnl made the spark wiggle
+    // with open-position mark-to-market. Realized-first also fixes the label/value mismatch.
+    if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
+        heroSparkPnlRaw = Number(s.realized_pnl);
+    // 2026-07-20: spark/color realized-only too (removed total_pnl fallback = open-position wiggle)
+    } else if (p.daily_pnl !== null && p.daily_pnl !== undefined) {
+        heroSparkPnlRaw = Number(p.daily_pnl);
+    }
+    dashUpdateHeroVisuals({ bankroll: bankroll, pnl: Number.isFinite(heroSparkPnlRaw) ? heroSparkPnlRaw : sessionPnlRaw, positions: Number(openCount || 0), trades: sessionFills });
 
     _sampleCommandCenterPnl(d);
+    if (typeof updatePricingHealthTile === 'function') updatePricingHealthTile();
+    if (typeof loadLanePnlSparklines === 'function') loadLanePnlSparklines();
 
 }
 
@@ -4883,9 +5091,8 @@ function updateMetricDeck(d) {
         const posArr = Array.isArray(full.positions) ? full.positions : [];
         const openN = posArr.length || Number(p.total_positions || 0) || 0;
         let sessionPnlRaw = null;
-        if (s && s.total_pnl !== undefined && s.total_pnl !== null && String(s.total_pnl) !== '') {
-            sessionPnlRaw = Number(s.total_pnl);
-        } else if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
+        // 2026-07-20 operator: REALIZED ONLY (was total_pnl-first -> traced open-position P&L)
+        if (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '') {
             sessionPnlRaw = Number(s.realized_pnl);
         } else if (p.daily_pnl !== null && p.daily_pnl !== undefined) {
             sessionPnlRaw = Number(p.daily_pnl);
@@ -5426,6 +5633,11 @@ let _heroScannerNewestCycleMs = null;
 let _heroScannerFetchFailedAtMs = null;
 
 function _setHeroScannerOrb(ageSeconds, hasAny, fetchOk = true) {
+    // 2026-07-18: orb REPURPOSED as a pricing-health beacon (driven by _setPricingBeacon via
+    // updatePricingHealthTile). Scanner-cycle freshness now lives in the Vital Signs
+    // "Scanner loop" cell, so this legacy scanner driver is a no-op to avoid fighting the
+    // beacon for the same DOM nodes.
+    return;
     const orb = document.getElementById('hero-status-orb');
     const wrap = document.getElementById('hero-status-orb-wrap');
     const text = document.getElementById('hero-status-orb-text');
@@ -5445,7 +5657,7 @@ function _setHeroScannerOrb(ageSeconds, hasAny, fetchOk = true) {
         tip = 'Dashboard cannot reach scanner health endpoint; this is not proof the bot is stalled';
     } else if (!hasAny || !Number.isFinite(ageSeconds)) {
         cls = 'stopped';
-    } else if (ageSeconds < 90) {
+    } else if (ageSeconds < 120) {
         cls = 'running';
         label = 'Scanning';
         tip = `Scanner healthy · last cycle ${_dashAgeText(ageSeconds)} ago`;
@@ -5464,7 +5676,7 @@ function _setHeroScannerOrb(ageSeconds, hasAny, fetchOk = true) {
     if (text) text.textContent = label;
     if (wrap) wrap.title = tip;
     if (progress) {
-        const cycleWindow = cls === 'killed' ? 300 : 90;
+        const cycleWindow = cls === 'killed' ? 300 : 120;  // 2026-07-15 ORBFIX: scan cadence 60s overruns to ~97s; 90 flickered Lagging
         const pct = hasAny && Number.isFinite(ageSeconds)
             ? Math.max(4, Math.min(100, Math.round((ageSeconds / cycleWindow) * 100)))
             : 0;
@@ -6220,10 +6432,12 @@ async function loadJournalSessionList(opts = {}) {
 async function loadPnLChart() {
     try {
         const r = await fetchT(_journalApiPath('/api/journal/snapshots?limit=200'));
+        if (!r) return;  // 2026-07-18: fetchT returns null on timeout — do NOT crash on r.json(); leave chart as-is (no flash)
         const d = await r.json();
         const section = document.getElementById('journal-chart-section');
         if (!d.snapshots?.length || d.snapshots.length < 2) {
-            if (section) section.style.display = 'none';
+            // not enough data yet (e.g. fresh session) — leave section as-is instead of
+            // toggling display:none, which flickered block<->none across polls.
             return;
         }
         section.style.display = 'block';
@@ -6238,8 +6452,7 @@ async function loadPnLChart() {
             .map(s => Number(s.bankroll) + Number(s.unrealized_pnl || 0))
             .filter(v => Number.isFinite(v));
         if (values.length < 2) {
-            if (section) section.style.display = 'none';
-            return;
+            return;  // 2026-07-18: no display toggle (was flicker source)
         }
         const min = Math.min(...values) * 0.995;
         const max = Math.max(...values) * 1.005;
@@ -6288,31 +6501,39 @@ window._commandCenterPnlState = window._commandCenterPnlState || {
 
 async function _seedCommandCenterPnlFromServer(sessionId) {
     const state = window._commandCenterPnlState;
-    if (!state || !sessionId || state.seededFor === sessionId) return;
-    state.seededFor = sessionId; // prevent re-seeding even on failure
+    if (!state || !sessionId || state.seededFor === sessionId || state._seeding) return;
+    state._seeding = true; // 2026-07-15 FIX: guard concurrent seeds but RETRY on failure (was
+                           // marking seededFor upfront -> one timeout = permanent flat line)
     try {
         const r = await fetchT(`/api/session/equity_history?limit=600&session_id=${encodeURIComponent(sessionId)}`, 8000);
-        if (!r || !r.ok) return;
+        if (!r || !r.ok) return; // seededFor NOT set -> retries on next poll
         const data = await r.json();
         const pts = Array.isArray(data?.points) ? data.points : [];
-        if (!pts.length) return;
+        if (!pts.length) return; // retry next poll
         // Only seed if this is still the current session and we haven't
         // already accumulated meaningful live samples.
         if (state.sessionId && state.sessionId !== sessionId) return;
-        if (state.points.length > 2) return;
+        // 2026-07-15 FIX: only skip seeding if we somehow already hold MORE points than
+        // the server history; otherwise the authoritative full-session history wins so the
+        // trace spans START->finish and persists across refreshes (was `> 2`, which let a
+        // single early live sample permanently suppress the seed -> flat line).
+        if (state.points.length > pts.length) { state.seededFor = sessionId; return; }
         state.sessionId = sessionId;
         state.points = pts
             .filter((p) => Number.isFinite(Number(p.t)) && Number.isFinite(Number(p.v)))
-            .map((p) => ({ t: Number(p.t), v: Number(p.v) }));
+            .map((p) => ({ t: Number(p.t), v: Number(p.v), v2: Number.isFinite(Number(p.v2)) ? Number(p.v2) : Number(p.v) }));
         if (state.points.length) {
             const last = state.points[state.points.length - 1];
             state.lastValue = last.v;
             state.lastTs = last.t;
             state.baselineEquity = state.points[0].v;
         }
+        state.seededFor = sessionId; // 2026-07-15 FIX: only mark seeded on SUCCESS
         renderCommandCenterPnlChart();
     } catch (e) {
-        console.warn('pnl trace seed failed:', e);
+        console.warn('pnl trace seed failed:', e); // seededFor NOT set -> retry next poll
+    } finally {
+        state._seeding = false;
     }
 }
 
@@ -6346,8 +6567,23 @@ function _sampleCommandCenterPnl(d) {
         const section = document.getElementById('command-pnl-section');
         if (!state || !section) return;
         const sessionId = String(d?.session_id || d?.session?.session_id || window._dashSessionId || '');
-        const totalPnl = _commandCenterSessionPnl(d);
-        const equity = _commandCenterEquity(d);
+        // 2026-07-15 FIX: plot live samples on the SAME scale as
+        // /api/session/equity_history (v = 500 + realized + unrealized). The old code
+        // used d.bankroll (includes open notional, ~1013) for equity and total_pnl for
+        // the baseline, so live points landed on a DIFFERENT scale than the seeded
+        // history -> the seam jumped and the trace collapsed to a recent-only flat line.
+        // Session base = 500 (paper start), matching the endpoint.
+        const _ccS = d.session || {};
+        const _ccReal = Number(_ccS.realized_pnl);
+        // 2026-07-18 REALIZED-ONLY: plot realized P&L only. Including unrealized made the
+        // trace zig-zag with open-position mark-to-market (quote noise, not real trades).
+        // Realized-only = clean staircase that steps only when a trade banks. Matches the
+        // /api/session/equity_history seed (also realized-only) so the refresh seam is flush.
+        const totalPnl = Number.isFinite(_ccReal) ? _ccReal : _commandCenterSessionPnl(d);
+        const equity = _commandCenterEquity(d);  // 2026-07-20 clean realized = bankroll (500+realized_pnl was contaminated by unrealized -> zigzag)
+        // 2026-07-18 GHOST: total incl unrealized, plotted as a faint line behind the solid realized staircase.
+        const _ccUnreal = Number.isFinite(Number(_ccS.unrealized_pnl)) ? Number(_ccS.unrealized_pnl) : 0;
+        const equityTotal = Number.isFinite(equity) ? (equity + _ccUnreal) : NaN;
         if (!sessionId || !Number.isFinite(totalPnl) || !Number.isFinite(equity)) {
             if (!state.points.length) section.style.display = 'none';
             return;
@@ -6366,20 +6602,31 @@ function _sampleCommandCenterPnl(d) {
             state.baselineEquity = null;
         }
         if (state.baselineEquity === null) {
-            state.baselineEquity = equity - totalPnl;
+            state.baselineEquity = 500;  // 2026-07-20 paper start; seed overrides with points[0].v
         }
         if (!state.points.length) {
             // Seed from inferred session starting bankroll/equity so the chart
             // begins at the session base (e.g. 500) instead of at the first sampled PnL.
-            state.points.push({ t: now - 1, v: state.baselineEquity });
+            // 2026-07-16 FLATFIX: baseline(500) anchor removed - caused jump-then-flat on long sessions; history seed supplies the full curve
         }
         const shouldPush =
             state.lastValue === null
             || Math.abs(equity - state.lastValue) >= 0.005
             || (now - state.lastTs) >= 15000;
         if (shouldPush) {
-            state.points.push({ t: now, v: equity });
-            if (state.points.length > 240) state.points = state.points.slice(-240);
+            state.points.push({ t: now, v: equity, v2: Number.isFinite(equityTotal) ? equityTotal : equity });
+            // Keep the trace spanning session START->finish. Never drop index 0
+            // (the baseline/start anchor); on overflow, decimate the MIDDLE uniformly
+            // (keep first + last). The old slice(-240) sliced off the start after
+            // ~1h, so the chart lost its lower start point and stretched a recent-only
+            // window across the full canvas.
+            const _CC_PNL_CAP = 480;
+            if (state.points.length > _CC_PNL_CAP) {
+                const _first = state.points[0];
+                const _last = state.points[state.points.length - 1];
+                const _mid = state.points.slice(1, -1).filter((_, i) => i % 2 === 0);
+                state.points = [_first, ..._mid, _last];
+            }
             state.lastValue = equity;
             state.lastTs = now;
         }
@@ -6414,8 +6661,8 @@ function _commandCenterPnlDomain(values, baseline, minimumVisualRange = 25) {
     const crossedNegative = minSeen < 0;
     if (!crossedNegative) {
         return {
-            min: baseline,
-            max: Math.max(...values, baseline + minimumVisualRange),
+            min: Math.min(...values) - Math.max((Math.max(...values)-Math.min(...values))*0.12, minimumVisualRange/2),  // FLATFIX: auto-scale
+            max: Math.max(...values) + Math.max((Math.max(...values)-Math.min(...values))*0.12, minimumVisualRange/2),  // FLATFIX: auto-scale
             crossedNegative: false,
         };
     }
@@ -6444,6 +6691,11 @@ function renderCommandCenterPnlChart() {
             clearCommandCenterPnlChart();
             return;
         }
+        // 2026-07-18 GHOST: faint total (realized+unrealized); falls back to realized if absent.
+        const ghostValues = state.points.map((p) => {
+            const g = Number(p.v2);
+            return Number.isFinite(g) ? g : Number(p.v);
+        }).filter(Number.isFinite);
         const wrapW = canvas.offsetWidth || canvas.parentElement?.clientWidth || 0;
         if (!wrapW) return;
         const ctx = canvas.getContext('2d');
@@ -6487,6 +6739,10 @@ function renderCommandCenterPnlChart() {
         ctx.stroke();
         ctx.setLineDash([]);
 
+        // 2026-07-19 operator: REALIZED-ONLY trace. Ghost total (realized+unrealized) line
+        // removed — its open-position mark-to-market swing was the zig-zag. Unrealized is
+        // shown as the small print on the Session P&L hero card instead.
+
         ctx.beginPath();
         values.forEach((val, i) => {
             const x = pad.left + ((values.length === 1 ? 1 : i / (values.length - 1)) * innerW);
@@ -6523,6 +6779,136 @@ function renderCommandCenterPnlChart() {
     } catch (e) {
         console.error('command center pnl render error:', e);
     }
+}
+
+// ===== Pricing-health beacon: repurposed hero status orb (2026-07-18) =====
+function _setPricingBeacon(cls, txt, share, distinct, cand) {
+    const orb = document.getElementById('hero-status-orb');
+    const wrap = document.getElementById('hero-status-orb-wrap');
+    const text = document.getElementById('hero-status-orb-text');
+    const progress = document.getElementById('hero-scan-progress');
+    const ageText = document.getElementById('hero-scan-age');
+    if (!orb) return;
+    orb.classList.remove('running', 'paused', 'killed', 'stopped', 'healthy');
+    if (wrap) wrap.classList.remove('orb-running', 'orb-paused', 'orb-killed', 'orb-stopped', 'orb-healthy');
+    orb.classList.add(cls);
+    if (wrap) wrap.classList.add('orb-' + cls);
+    if (text) text.textContent = txt;
+    // 2026-07-20: center ring = CLEAN-pricing % (100 - 0.500-share); high = healthy (was showing the
+    // raw 0.500-share, so a healthy 23%-at-0.5 read as "23% okay" — misleading). Now 77% = healthy.
+    if (ageText) ageText.textContent = Number.isFinite(share) ? Math.round((1 - share) * 100) + '%' : '--';
+    // ring fill = clean-pricing %; near-full = healthy, empties as candidates degenerate to 0.500
+    if (progress) {
+        const pct = Number.isFinite(share) ? Math.max(4, Math.min(100, Math.round((1 - share) * 100))) : 0;
+        progress.setAttribute('stroke-dasharray', pct + ', 100');
+    }
+    if (wrap) wrap.title = 'Pricing health: ' + txt +
+        (Number.isFinite(share) ? (' \u00b7 ' + Math.round((1 - share) * 100) + '% clean (' + Math.round(share * 100) + '% at 0.500)') : '') +
+        (Number.isFinite(distinct) ? (' \u00b7 ' + distinct + ' distinct') : '') +
+        (Number.isFinite(cand) ? (' \u00b7 ' + cand + ' cand/10m') : '');
+}
+
+// ===== Pricing-health guardrail tile (2026-07-18) =====
+let _pricingHealthLastFetch = 0;
+async function updatePricingHealthTile() {
+    const tile = document.getElementById('pricing-health-tile');
+    const now = Date.now();
+    if (now - _pricingHealthLastFetch < 20000) return;
+    _pricingHealthLastFetch = now;
+    try {
+        const r = await fetchT('/api/lane_health', 7000);
+        if (!r || !r.ok) return;
+        const d = await r.json();
+        if (!d || d.available === false || !d.pricing) { if (tile) tile.style.display = 'none'; return; }
+        const pz = d.pricing;
+        const share = Number(pz.price_050_share);
+        const distinct = Number(pz.distinct_prices_10m);
+        const cand = Number(pz.candidates_10m);
+        const degen = !!pz.PRICE_DEGENERATE;
+        const age = Number(d.age_seconds);
+        const stale = Number.isFinite(age) && age > 420;
+        let label, color, orbCls, orbTxt;
+        if (degen) { label = 'PRICE DEGENERATE'; color = '#ff5f6d'; orbCls = 'killed'; orbTxt = 'DEGEN'; }
+        else if (stale) { label = 'HEALTH STALE'; color = '#f0c040'; orbCls = 'stopped'; orbTxt = 'STALE'; }
+        else if ((Number.isFinite(share) && share > 0.6) || (Number.isFinite(distinct) && distinct < 12)) { label = 'PRICING THIN'; color = '#f0c040'; orbCls = 'paused'; orbTxt = 'THIN'; }
+        else { label = 'PRICING HEALTHY'; color = '#36d98a'; orbCls = 'healthy'; orbTxt = 'PRICING OK'; }
+        _setPricingBeacon(orbCls, orbTxt, share, distinct, cand);
+        if (tile) tile.style.display = 'block';
+        const sharePct = Number.isFinite(share) ? (share * 100).toFixed(0) + '%' : '\u2014';
+        const ageTxt = Number.isFinite(age) ? (age < 90 ? Math.round(age) + 's' : Math.round(age / 60) + 'm') : '\u2014';
+        const body = document.getElementById('pricing-health-body');
+        if (body) body.innerHTML =
+            '<span class="ph-dot" style="background:' + color + ';box-shadow:0 0 8px ' + color + '"></span>' +
+            '<span class="ph-label" style="color:' + color + '">' + label + '</span>' +
+            '<span class="ph-metrics">0.500 share <b>' + sharePct + '</b> \u00b7 distinct <b>' + (Number.isFinite(distinct) ? distinct : '\u2014') + '</b> \u00b7 cand <b>' + (Number.isFinite(cand) ? cand : '\u2014') + '</b> \u00b7 age ' + ageTxt + '</span>';
+    } catch (e) { /* keep last render */ }
+}
+
+// ===== Per-lane P&L sparklines (2026-07-18) =====
+let _laneSparkLastFetch = 0;
+async function loadLanePnlSparklines() {
+    const sec = document.getElementById('lane-spark-section');
+    if (!sec) return;
+    const now = Date.now();
+    if (now - _laneSparkLastFetch < 20000) return;
+    _laneSparkLastFetch = now;
+    try {
+        const sid = window._dashSessionId ? ('?session_id=' + encodeURIComponent(window._dashSessionId)) : '';
+        const r = await fetchT('/api/session/lane_pnl_series' + sid, 8000);
+        if (!r || !r.ok) return;
+        const d = await r.json();
+        const lanes = Array.isArray(d && d.lanes) ? d.lanes : [];
+        const grid = document.getElementById('lane-spark-grid');
+        if (!grid) return;
+        if (!lanes.length) { sec.style.display = 'none'; return; }
+        sec.style.display = 'block';
+        const meta = document.getElementById('lane-spark-meta');
+        if (meta) {
+            const winners = lanes.filter((l) => Number(l.net) > 0).length;
+            meta.textContent = lanes.length + ' lanes \u00b7 ' + winners + ' green';
+        }
+        grid.innerHTML = lanes.map((l, i) => {
+            const pos = Number(l.net) >= 0;
+            const col = pos ? '#36d98a' : '#ff5f6d';
+            const netTxt = (pos ? '+' : '') + '$' + Number(l.net).toFixed(2);
+            return '<div class="lane-spark-card">' +
+                '<div class="lane-spark-top"><span class="lane-spark-name" title="' + l.lane + '">' + l.lane + '</span>' +
+                '<span class="lane-spark-net" style="color:' + col + '">' + netTxt + '</span></div>' +
+                '<canvas class="lane-spark-canvas" id="lspark-' + i + '" height="34"></canvas>' +
+                '<div class="lane-spark-n">n=' + l.n + '</div></div>';
+        }).join('');
+        lanes.forEach((l, i) => {
+            const cv = document.getElementById('lspark-' + i);
+            if (cv) _drawLaneSpark(cv, l.points || [], Number(l.net) >= 0);
+        });
+    } catch (e) { /* keep last render */ }
+}
+function _drawLaneSpark(cv, points, pos) {
+    try {
+        const w = cv.width = cv.offsetWidth || 120;
+        const h = cv.height = 34;
+        const ctx = cv.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+        const vals = points.map((p) => Number(p.cum)).filter(Number.isFinite);
+        if (vals.length < 2) return;
+        let mn = Math.min(...vals, 0), mx = Math.max(...vals, 0);
+        if (mx - mn < 1e-6) { mx += 1; mn -= 1; }
+        const span = mx - mn;
+        const pad = 3;
+        const col = pos ? '#36d98a' : '#ff5f6d';
+        const zy = pad + (h - 2 * pad) - (((0 - mn) / span) * (h - 2 * pad));
+        ctx.beginPath(); ctx.setLineDash([2, 2]); ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+        ctx.moveTo(0, zy); ctx.lineTo(w, zy); ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath();
+        vals.forEach((v, i) => {
+            const x = (vals.length === 1 ? 0 : (i / (vals.length - 1))) * (w - 2 * pad) + pad;
+            const y = pad + (h - 2 * pad) - (((v - mn) / span) * (h - 2 * pad));
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.lineWidth = 1.5; ctx.strokeStyle = col; ctx.stroke();
+        const lx = w - pad, ly = pad + (h - 2 * pad) - (((vals[vals.length - 1] - mn) / span) * (h - 2 * pad));
+        ctx.beginPath(); ctx.fillStyle = col; ctx.arc(lx, ly, 2, 0, Math.PI * 2); ctx.fill();
+    } catch (e) {}
 }
 
 // Config panel
@@ -8942,87 +9328,66 @@ function _hudFmtTime(sec) {
     try { return new Date(sec * 1000).toLocaleString(); } catch (_) { return String(sec); }
 }
 
-function _renderExitTimingHud() {
+async function _renderExitTimingHud() {
+    // 2026-07-16 Exit-quality view (BTC-decoupled). Per-strategy exit diagnostics
+    // from /api/exit-quality: net, WR, payoff, green-stop% (stops that cut a green
+    // trade), stop-share, ride0 (binary collapse), time-stop count. Worst-net first.
     const body = document.getElementById('exit-timing-hud-body');
     const winEl = document.getElementById('exit-timing-hud-window');
     if (!body) return;
-
-    const points = (_exitHudTradePoints || []).filter(p => p && _hudExitTimeSec(p) != null);
-
-    // Rollup numbers should reflect the loaded trade-point set, not whatever
-    // slice of the BTC chart happens to be visible after pan/zoom.
-    let from = null, to = null;
-    if (points.length) {
-        const times = points.map(_hudExitTimeSec).filter(Number.isFinite);
-        from = Math.min(...times);
-        to = Math.max(...times);
-        if (from === to) { from -= 60; to += 60; }
-    }
-
-    let inWindow = (points.length && from != null && to != null)
-        ? points.filter(p => {
-            const t = _hudExitTimeSec(p);
-            return t >= from && t <= to;
-        })
-        : [];
-
-    _exitHudWindow = { from, to };
-
+    let d;
+    try {
+        const r = await fetch('/api/exit-quality', { cache: 'no-store' });
+        if (!r.ok) return;
+        d = await r.json();
+    } catch (_) { return; }
+    if (!d || !Array.isArray(d.strategies)) return;
     if (winEl) {
-        winEl.textContent = (from != null && to != null)
-            ? `Window ${_hudFmtTime(from)} → ${_hudFmtTime(to)}`
+        const t = d.total;
+        winEl.textContent = t
+            ? ('Session ' + (t.net >= 0 ? '+' : '−') + '$' + Math.abs(t.net).toFixed(0) + ' · ' + t.n + ' exits')
             : 'Window —';
     }
-
-    if (!inWindow.length) {
-        body.innerHTML = '<div class="hud-empty">No closed trade points yet — awaiting /api/journal/trade-points</div>';
+    if (!d.strategies.length) {
+        body.innerHTML = '<div class="eq-empty">No closed exits yet this session</div>';
         return;
     }
-
-    const span = Math.max(1, to - from);
-    const rowsHtml = _HUD_STRATS.map(strat => {
-        const rowPts = inWindow
-            .filter(p => p.strategy === strat.key)
-            .map(p => ({ p, t: _hudExitTimeSec(p), pnl: Number(p.pnl) || 0 }))
-            .sort((a, b) => a.t - b.t);
-        let wins = 0, losses = 0, sum = 0;
-        const ticksHtml = rowPts.map(({ p, t, pnl }) => {
-            const pct = Math.max(0, Math.min(100, ((t - from) / span) * 100));
-            const win = pnl >= 0;
-            if (win) wins++; else losses++;
-            sum += pnl;
-            const reason = String(p.exit_reason || '').slice(0, 40);
-            const pnlStr = (pnl >= 0 ? '+' : '−') + '$' + Math.abs(pnl).toFixed(2);
-            const tip = `${reason ? reason + '\n' : ''}${pnlStr} · ${_hudFmtTime(t)}`;
-            return `<span class="hud-tick ${win ? 'win' : 'loss'}" data-time="${t}" style="left:${pct.toFixed(3)}%" title="${_htmlEscape(tip)}"></span>`;
-        }).join('');
-        const sparkD = _hudSparklinePath(rowPts.map(r => ({ t: r.t, pnl: r.pnl })), span);
-        const sparkSvg = sparkD
-            ? `<svg class="hud-spark" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${sparkD}" fill="none" stroke="${strat.c}" stroke-width="1" vector-effect="non-scaling-stroke" opacity=".85"/></svg>`
-            : '';
-        const total = rowPts.length;
-        const sumCls = sum >= 0 ? 'pos' : 'neg';
-        const sumStr = (sum >= 0 ? '+' : '−') + '$' + Math.abs(sum).toFixed(2);
-        const statsHtml = total
-            ? `<span>${wins}<span class="muted">W</span> / ${losses}<span class="muted">L</span> · <span class="${sumCls}">${sumStr}</span></span>`
-            : '<span class="muted">— / — · —</span>';
-        const mutedAttr = _exitHudMuted.has(strat.key) ? '1' : '0';
-        return `
-            <div class="hud-row" data-strat="${strat.key}" data-muted="${mutedAttr}">
-                <div class="hud-chip" data-strat="${strat.key}" role="button" tabindex="0" title="Click to mute/unmute" style="color:${strat.c};border-color:${strat.c}66;background:${strat.c}11">
-                    <span>${strat.label}</span><span class="hud-count">×${total}</span>
-                </div>
-                <div class="hud-track">
-                    ${sparkSvg}
-                    ${ticksHtml}
-                    <span class="hud-crosshair" aria-hidden="true"></span>
-                </div>
-                <div class="hud-stats">${statsHtml}</div>
-            </div>
-        `;
-    }).join('');
-
-    body.innerHTML = rowsHtml;
+    // High green-stop% / stop-share = leak (bad); high payoff = good.
+    const gcol = (v) => v == null ? 'var(--tm)' : (v >= 60 ? 'var(--re)' : v >= 45 ? 'var(--ye)' : 'var(--gr)');
+    const pcol = (v) => v == null ? 'var(--tm)' : (v >= 1.6 ? 'var(--gr)' : v >= 1.2 ? 'var(--ye)' : 'var(--re)');
+    const ncol = (v) => v >= 0 ? 'var(--gr)' : 'var(--re)';
+    const LBL = { hype_macro:'HYPE', bnb_macro:'BNB', eth_macro:'ETH', sol_macro:'SOL', bitcoin:'BTC', doge_macro:'DOGE', xrp_macro:'XRP' };
+    function eqRow(s, isTotal) {
+        const nm = isTotal ? 'PORTFOLIO' : (LBL[s.strategy] || s.strategy);
+        const net = (s.net >= 0 ? '+' : '−') + '$' + Math.abs(s.net).toFixed(0);
+        const wr = s.wr == null ? '—' : (s.wr + '%');
+        const po = s.payoff == null ? '—' : Number(s.payoff).toFixed(2);
+        const gp = s.green_pct == null ? '—' : (s.green_pct + '%');
+        const ss = s.stop_share + '%';
+        const r0col = s.ride0 >= 3 ? 'var(--re)' : s.ride0 > 0 ? 'var(--ye)' : 'var(--tm)';
+        const tscol = s.time_stop >= 5 ? 'var(--re)' : s.time_stop > 0 ? 'var(--ye)' : 'var(--tm)';
+        return '<div class="eq-row' + (isTotal ? ' eq-total' : '') + '">'
+            + '<span class="eq-nm">' + nm + '</span>'
+            + '<span class="eq-n">' + s.n + '</span>'
+            + '<span class="eq-net" style="color:' + ncol(s.net) + '">' + net + '</span>'
+            + '<span class="eq-wr">' + wr + '</span>'
+            + '<span class="eq-po" style="color:' + pcol(s.payoff) + '">' + po + '</span>'
+            + '<span class="eq-gp" style="color:' + gcol(s.green_pct) + '">' + gp + '</span>'
+            + '<span class="eq-ss">' + ss + '</span>'
+            + '<span class="eq-r0" style="color:' + r0col + '">' + s.ride0 + '</span>'
+            + '<span class="eq-ts" style="color:' + tscol + '">' + s.time_stop + '</span>'
+            + '</div>';
+    }
+    const head = '<div class="eq-row eq-head">'
+        + '<span class="eq-nm">lane</span><span class="eq-n">n</span><span class="eq-net">net</span>'
+        + '<span class="eq-wr">wr</span><span class="eq-po" title="avg win / avg loss">payoff</span>'
+        + '<span class="eq-gp" title="share of stop-loss exits that had already gone green (peaked +5% or more) then reversed into the stop">grn‑stop</span>'
+        + '<span class="eq-ss" title="share of all exits that were stop-loss">stop%</span>'
+        + '<span class="eq-r0" title="rode to binary zero — lost 80%+ of stake into resolution/time">ride0</span>'
+        + '<span class="eq-ts" title="time-stop exits">time</span></div>';
+    const rows = d.strategies.map(s => eqRow(s, false)).join('');
+    const totalRow = d.total ? eqRow(d.total, true) : '';
+    body.innerHTML = '<div class="eq-grid">' + head + rows + totalRow + '</div>';
 }
 
 function _updateHudCrosshair(timeSec) {
@@ -9636,6 +10001,8 @@ function _ensureTradePointRefresh() {
     _tradePointRefreshStarted = true;
     refreshTradePoints();
     _registerInterval(refreshTradePoints, 10000);
+    _registerInterval(_renderExitTimingHud, 30000);
+    _renderExitTimingHud();
 }
 
 function _findNearestBTCCandle(ts) {
@@ -10312,8 +10679,7 @@ async function loadBTCChart() {
 (function initChartWhenReady() {
     _ensureTradePointRefresh();
     if (typeof LightweightCharts !== 'undefined') {
-        initBTCChart();
-        _registerInterval(loadBTCChart, 20000);
+        // 2026-07-16 BTC candle chart REMOVED (trigger board took the slot; alts not BTC-decided; exits are on up/down markets not BTC spot). initBTCChart/loadBTCChart now dead code (never called); klines poll killed = latency win. Exit-HUD keeps working standalone (crosshair sync guarded by !_btcChart).
         loadMacroAlignChart();
         _registerInterval(loadMacroAlignChart, 20000);
     } else {
@@ -10362,6 +10728,37 @@ function checkHeroFlash(key, el, isPnl) {
         if (!el) return;
         _registerInterval(function() { checkHeroFlash(p.key, el, p.isPnl); }, 2100);
     });
+})();
+</script>
+<div id="dash-stale-banner" style="display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;background:linear-gradient(90deg,#2a1a3a,#1a2a3a);color:#e8e0ff;border:1px solid rgba(155,120,255,0.5);border-radius:10px;padding:9px 14px;font:600 12px/1.2 ui-monospace,Menlo,monospace;box-shadow:0 6px 24px rgba(0,0,0,0.5);letter-spacing:.03em;cursor:pointer;" onclick="location.reload(true)" title="Dashboard code updated - click to load the new version">&#x21bb; Dashboard updated &mdash; click to refresh</div>
+<script>
+// 2026-07-18: stale-tab guard. A tab left open across a dashboard deploy runs OLD
+// in-memory JS (this sawtoothed the Live P&L trace). We stamp the served HTML with
+// window.__DASH_BUILD (index.html mtime) and poll /api/dashboard/build; on mismatch we
+// show a banner AND auto-reload the moment the tab is hidden (never interrupts a live watch).
+(function(){
+  var loaded = (typeof window.__DASH_BUILD !== "undefined") ? String(window.__DASH_BUILD) : null;
+  if (!loaded) return; // older server without the stamp -> no-op
+  var stale = false;
+  function markStale(){
+    if (stale) return; stale = true;
+    var b = document.getElementById("dash-stale-banner");
+    if (b) b.style.display = "block";
+    // auto-refresh when the operator tabs away, so their return is always fresh.
+    document.addEventListener("visibilitychange", function(){
+      if (document.hidden) { try { location.reload(true); } catch(e){ location.reload(); } }
+    });
+  }
+  async function check(){
+    try{
+      var r = await fetch("/api/dashboard/build", {cache:"no-store"});
+      if (!r || !r.ok) return;
+      var d = await r.json();
+      if (d && d.build != null && String(d.build) !== loaded) markStale();
+    }catch(e){/* transient; retry next tick */}
+  }
+  setInterval(check, 30000);
+  setTimeout(check, 8000);
 })();
 </script>
 </body>
