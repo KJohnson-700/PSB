@@ -3382,6 +3382,54 @@ class PolyBot:
                                 _hw_mid = None
                         if _hw_mid is not None:
                             self._advance_held_peak_from_yes_mid(pos, float(_hw_mid))
+                        # 2026-07-21 WIDE-BOOK HOLD-TO-RESOLUTION (operator GO; default 0=off).
+                        # bnb 5m -$12.47 (mkt 3006688): a dead/illiquid updown book went WIDE
+                        # (spread 0.32->0.49) on a FLAT underlying (BNB $572.43->572.44); the
+                        # Polymarket book swung ~70% (mae -0.70) with NO real spot move, then
+                        # the stop fired at -51% when the spread briefly tightened. When the
+                        # book is wide AND resolution is imminent, the true 0/1 settle lands in
+                        # seconds -- strictly better than marking an aligned position against a
+                        # junk wide book. Scoped near-resolution so a FAR-from-resolution real
+                        # collapse still hits the wide_book_stop_through path below. Uses
+                        # pos.end_date (verified sane: secs_to_expiry_at_exit=128.2 on the
+                        # incident; the -25120s held-eff bug is in the min-hold window-OPEN
+                        # anchor, NOT end_date). Takes precedence over stop-through when close.
+                        _wb_hold_secs = float(
+                            _excfg.get("wide_book_hold_to_resolution_secs", 0.0) or 0.0
+                        )
+                        # Scope to updown lanes only (Codex 2026-07-21): the near-resolution
+                        # hold is an updown-book behaviour; identify via the canonical
+                        # window_size ('5m'/'15m'/'1h'), fall back to the "Up or Down" market
+                        # name. A non-updown binary near expiry must NOT skip its exit here.
+                        _wb_is_updown = (
+                            str(getattr(pos, "window_size", "") or "").lower()
+                            in ("5m", "15m", "1h")
+                            or "up or down" in str(getattr(pos, "market_question", "") or "").lower()
+                        )
+                        if (
+                            _wb_hold_secs > 0.0
+                            and _wb_is_updown
+                            and getattr(pos, "end_date", None) is not None
+                        ):
+                            try:
+                                _wb_ed = pos.end_date
+                                if _wb_ed.tzinfo is None:
+                                    _wb_ed = _wb_ed.replace(tzinfo=timezone.utc)
+                                _wb_secs_to_res = (
+                                    _wb_ed - datetime.now(timezone.utc)
+                                ).total_seconds()
+                            except Exception:
+                                _wb_secs_to_res = None
+                            if (
+                                _wb_secs_to_res is not None
+                                and 0.0 < _wb_secs_to_res <= _wb_hold_secs
+                            ):
+                                logging.info(
+                                    "wide-book hold-to-resolution: spread %.3f > %.3f for %s, "
+                                    "%.0fs to settle <= %.0fs — HOLDING to settle (skip wide-book exit)",
+                                    _spread, _max_spread, mid, _wb_secs_to_res, _wb_hold_secs,
+                                )
+                                continue
                         # 2026-07-21 WIDE-BOOK STOP-THROUGH (config-gated, default OFF).
                         # A position collapsing into resolution has a WIDE book BECAUSE
                         # it is collapsing; the unconditional skip below let it ride PAST

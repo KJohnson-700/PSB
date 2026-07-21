@@ -105,6 +105,7 @@ trading:
     # price guard phantoms; a /midpoint above stop leaves winners uncut). Break: revert
     # false if it cuts a two-sided winner in a thin patch over the next ~15-20 closes.
     wide_book_stop_through_enabled: true  # 2026-07-21 operator ORDER: ENABLE. Caps the stop-gap-throughs that ate the winners (xrp 5m up lost ~$53 to 10 gaps; doge 13 gaps). Winner-guard in live_testing.py requires /midpoint to confirm before the executable stop fires on a wide book. Needs the restart to take effect. Break: revert false if it cuts a two-sided winner in a thin patch over ~15-20 closes.
+    wide_book_hold_to_resolution_secs: 120  # 2026-07-21 operator GO: when an updown book is WIDE (>exit_max_book_spread) AND <=this many secs to resolution, HOLD to settle instead of exiting on the junk wide-book mark. Root: bnb 5m -$12.47 (mkt 3006688) — book swung ~70% on a FLAT underlying (BNB $572.43->572.44), aligned short marked at -51% into a 0.32-0.49 spread. Near resolution the true 0/1 settle beats a wide-book mark. Takes precedence over wide_book_stop_through when close; far-from-resolution collapses still hit stop-through. 0=off. Needs restart (main.py). Break: raise/lower secs or set 0 if it rides real losers to full loss over ~15-20 closes.
     exit_mark_use_clob_midpoint: true
     updown_stop_confirm_ticks: 2
     updown_min_hold_anchor_window_open: true
