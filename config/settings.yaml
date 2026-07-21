@@ -96,6 +96,15 @@ trading:
     realistic_paper_fills: false
     exit_require_two_sided_book: true
     exit_max_book_spread: 0.3
+    # 2026-07-21 wide-book STOP-THROUGH (default OFF; requires restart — main.py loop).
+    # When a two-sided book is wider than exit_max_book_spread the exit eval is SKIPPED
+    # entirely (phantom-stop guard, 2026-07-11 fix-a) — which let collapsing positions
+    # ride PAST their stop to ~0 near resolution (doge 1h|up -$10.47 0.53->0.16, 07-21;
+    # 4/5 doge losses gapped the 0.30 stop on NORMAL latency = stop never evaluated).
+    # true => still evaluate the exit on the SANE /midpoint (confirm-ticks + executable
+    # price guard phantoms; a /midpoint above stop leaves winners uncut). Break: revert
+    # false if it cuts a two-sided winner in a thin patch over the next ~15-20 closes.
+    wide_book_stop_through_enabled: true  # 2026-07-21 operator ORDER: ENABLE. Caps the stop-gap-throughs that ate the winners (xrp 5m up lost ~$53 to 10 gaps; doge 13 gaps). Winner-guard in live_testing.py requires /midpoint to confirm before the executable stop fires on a wide book. Needs the restart to take effect. Break: revert false if it cuts a two-sided winner in a thin patch over ~15-20 closes.
     exit_mark_use_clob_midpoint: true
     updown_stop_confirm_ticks: 2
     updown_min_hold_anchor_window_open: true
@@ -555,6 +564,7 @@ entry_policy:
     size_multiplier: 1.0
 strategies:
   bitcoin:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     buy_no_min_no_price_5m: 0.49  # 2026-07-16 STAGED (operator GO, restart-only w/ code port): mirror eth 5m short cap yes<=0.51; stops shorting into up-lean. 5m-ONLY so 15m|down winner untouched. Break: revert if 5m|down net<=-$8/10cl post-restart
     buy_yes_lane_repair:  # 2026-07-16 ENTRY-FAMILY GATE (operator GO, probationary): btc 1h up trend-chase longs
       enabled: true
@@ -741,8 +751,8 @@ strategies:
     # tape turned bearish; pre-B1 the lane would have faded the rally (bought NO) and won.
     # Back to the hardcoded-default 0.04/0.02. Re-enable (0.18/0.09) only in a confirmed
     # BULL tape where btc 5m is demonstrably fading rallies with cheap NO again.
-    btc_5m_htf_full_boost: 0.04
-    btc_5m_htf_partial_boost: 0.02
+    btc_5m_htf_full_boost: 0.18  # 2026-07-21 B1 ARMED (operator ORDER: un-starve btc 5m — "was doing well, now doesn't"). Was 0.04 = 4.5x weaker than same family's 1h (0.18) -> btc 5m bull LONGS couldn't clear lane_min_edge (4162 rejects) + hist_gate_5m_long_reject (1603) = 0 fills this session. Restore parity 0.04->0.18. Safety = the now-LIVE tape-arbitration gate (catches longs into a falling 5m tape). Break: revert 0.04 if btc 5m bleeds in a turn the gate doesn't catch.
+    btc_5m_htf_partial_boost: 0.09  # 2026-07-21 B1 ARMED: partial-boost parity 0.02->0.09 (half of full, mirrors 1h 0.18/0.09).
     btc_5m_buy_yes_bullish_floor_bump: 0.0
     btc_15m_buy_yes_bullish_floor_bump: 0.0  # 2026-07-08 P3: operator 07-02 ruling was ALL bumps 0.0; the 07-07 restore of 0.26 was a discrepancy. Judge lane on live realized only
     btc_1h_buy_yes_bullish_floor_bump: 0.0
@@ -821,6 +831,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   sol_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
@@ -1049,6 +1060,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   eth_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
@@ -1324,6 +1336,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   hype_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
@@ -1572,6 +1585,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   xrp_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
@@ -1581,9 +1595,9 @@ strategies:
     tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
     tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
     disable_buy_no_1h: false  # 2026-07-14 X1 operator GO (Codex COND-GO): reopened WITH price band — 7d banded: NO<=0.49 +$17.99/21, NO>=0.50 -$10.70/13 (the 07-13 disable killed a lane whose cheap half is +EV); break: net<=-$10 n>=6 -> true
-    lane_min_notional_5m_down: 18  # 2026-07-20 operator ORDER: RAISE the winning direction — xrp 5m NO engine +$78.57 @ $13.4 avg = UNDERSIZED (vault "deserves a lift"); floor 15->18. Losing up-side (cap 8) untouched.
-    lane_min_notional_ignores_minimal_5m_down: true  # 2026-07-20 reverted to true: engine protection is floor+ignores_minimal+max per vault; operator wants engine RAISED+PROTECTED not de-protected
-    lane_max_notional_5m_down: 25  # 2026-07-20 EVE phase-2 (size losers down): RESTORE baseline 25. The 30->40 lift (07-16) was when DOWN was the winner (+$217/60%); tape flipped — down now 1W/2L -$10.09 loser. Floor stays 18. Codex GO.
+    lane_min_notional_5m_down: 6  # 2026-07-21 DE-ENGINE the NO side (now the LOSER this session -$33.37 / 16% WR / n6). Engine floor moved to the UP winner. Floor 18->6 (default) so a losing NO side is NOT sized up in loss streaks. Break: restore 18 if NO turns winner again (WR>55% net>+15 n>=15).
+    lane_min_notional_ignores_minimal_5m_down: false  # 2026-07-21 de-protect the LOSING NO side: let MINIMAL loss-streak tiers shrink it (was true=kept it big while losing).
+    lane_max_notional_5m_down: 15  # 2026-07-21 size the LOSING NO side DOWN below the UP winner (25). NO now -$33.37/16%WR/n6 this session (tape flipped from 07-20 when NO was +winner). 25->15. Break: restore 25 if NO turns winner again.
     window_delta_flip_to_long_enabled: false  # 2026-07-12 restore: flip-to-long fake-edge fix (wiped by +70 revert)
     ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
     entry_admission_calibration_shrink: 1.0
@@ -1666,7 +1680,9 @@ strategies:
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27
     lane_max_notional_15m_up: 10  # 2026-07-16 AUDIT-2 operator GO (Codex): downsize loser xrp 15m|up -$10.46 WR41% payoff1.07 n17 (no cap, used tier ~25). Cap 10 halves bleed, keeps lane collecting. Break: lift/remove if net turns positive over next 15 or WR>50
-    lane_max_notional_5m_up: 15  # 2026-07-20 EVE operator ORDER (size winning engine up): probe now n=20 WR65% but only +$6.31 because wins avg $6.9 < losses avg $8.0 (choked at $8). Baseline had NO cap (~$15-25 tier). Raise 8->15; MINIMAL tier still shrinks losing runs. Codex GO.
+    lane_max_notional_5m_up: 25  # 2026-07-21 operator ORDER (match the +800 engine sizing on the WINNING side): xrp 5m UP is now THE engine this session +$44.89 / 59% WR / n32 but was CAP-BOUND at 15 (avg fill $12.9, maxed $15.2). Tape flipped since 07-20 (then NO was winner). Move the engine treatment (high cap + floor + ignores_minimal) to the UP side. 15->25 (asset max_position_size). Break: revert if UP net<=+0 or WR<50% over next 15.
+    lane_min_notional_5m_up: 18  # 2026-07-21 engine floor on the WINNING side (was on NO): keep the winner sized up through MINIMAL loss-streak tiers.
+    lane_min_notional_ignores_minimal_5m_up: true  # 2026-07-21 engine protection moved to UP (the current winner) — keep sizing the winner during loss-streak tiers.
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -1820,6 +1836,7 @@ strategies:
       band: 0.01
       min_edge: 0.12
   doge_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
@@ -1931,7 +1948,8 @@ strategies:
     entry_timing_window_5m_min: 0.5
     entry_timing_window_5m_max: 5.0
     kelly_fraction: 0.27
-    lane_max_notional_5m_down: 20  # 2026-07-17 operator+Codex GO: SCALE THE WINNER. Lane was CAP-BOUND at $10 yet made +$99.76/n91/WR51%/payoff1.45 = ~2.5x more cap-efficient than xrp 5m|down ($40->+$227). Original $10 was an explicit PROBE (review n=8); probe now n=91 and clearly +EV. Break: revert 10 if net<=+$0 over next 15 OR WR<45% (Codex: watch depth/slippage at 2x)
+    lane_max_notional_5m_down: 10  # 2026-07-21 BREAK RULE MET -> revert 20->10 (operator: cut losing directions). The 07-17 note set "Break: revert 10 if net<=+0 over next 15 OR WR<45%"; this session doge 5m|down = 40% WR / -$20.92 / n20 = BOTH conditions met. Downsize the loser. Break: restore 20 if net turns +EV / WR>50% over next 15.
+    lane_max_notional_1h_up: 15  # 2026-07-21 PROBATIONARY THROTTLE (operator: cut losing directions): doge 1h|up 0W/6L -$27.66 this session, ALL 6 gap-throughs. Was uncapped (kelly->$25). The wide-book stop-through fix caps the gap losses; this throttle bounds downside while that proves out WITHOUT killing the resolution edge (+EV at resolution historically, mfe p50 +29.8%). Break: lift/remove once wide-book fix proven + WR recovers, or if it starves the resolution winners.
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
@@ -2052,10 +2070,11 @@ strategies:
       band: 0.01
       min_edge: 0.12
   bnb_macro:
+    use_true_kelly_sizing: true  # 2026-07-21 operator ORDER: conviction sizing via size_binary_position (true Kelly) instead of the linear size_from_edge that was flattened by max_edge_updown. false = revert to legacy linear path. Restart-required (kelly_sizer not hot-reloadable).
     tape_arbitration_enabled: true  # 2026-07-21 tape-gate SHADOW (operator GO, Codex GO): closes the bias-aligned momentum-confirm BYPASS — evaluates+LOGS (does not block in shadow) a stale-1h-side entry when own-TF MACD contradicts the side AND regime is chop (er<er_chop_max). 5/22 ghost: broad bias-aligned blocking was harmful; chop-restriction is the mitigation (unproven) -> observe 1 session then flip shadow_only:false to block.
     tape_arbitration_shadow_only: false  # 2026-07-21 FLIPPED TO BLOCK (operator GO — do not gate on ghost data). Gate now SUPPRESSES the stale-1h-bias side in chop, not just logs.
     tape_arbitration_er_chop_max: 0.30
-    tape_arbitration_windows: ["5m", "15m"]
+    tape_arbitration_windows: ["15m"]  # 2026-07-21 operator ORDER (un-starve bnb 5m — "was winning, now starved"): the tape-gate was bnb 5m's #1 blocker THIS session (182 rejects, time-filtered). bnb 5m is a proven winner; exclude 5m from bnb's tape-gate so it trades again. bnb 15m stays gated. Reversible: restore ["5m","15m"] if bnb 5m bleeds wrong-direction over next ~15.
     # 2026-07-20 WINNER LIFT (operator GO, Codex GO): the 07-14 probe cap's own break condition
     # was "hold until n>=15" — n is now 55 and the lane inverted from -$1.79 to a confirmed
     # winner: aggregate 07-13+ n=55 WR49.1% +$32.89, last 3 days +$31.08, current session

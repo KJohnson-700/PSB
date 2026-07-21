@@ -173,6 +173,19 @@ class PositionExitManager:
         self._stop_use_executable_price = bool(
             exit_cfg.get("stop_use_executable_price", False)
         )
+        # Wide-book winner guard (2026-07-21). When the executable-price stop is
+        # evaluated on a book WIDER than exit_max_book_spread, also require the YES
+        # midpoint to confirm the loss before firing — the executable bid can sit far
+        # below a healthy midpoint on a wide book and phantom-stop a genuine winner
+        # (the risk wide_book_stop_through opens). Uses the existing (previously
+        # unwired) stop_dual_confirm_midpoint flag. No-ops on tight books and whenever
+        # wide_book_stop_through is OFF (those wide-book ticks never reach the stop).
+        self._stop_dual_confirm_midpoint = bool(
+            exit_cfg.get("stop_dual_confirm_midpoint", False)
+        )
+        self._exit_max_book_spread = float(
+            exit_cfg.get("exit_max_book_spread", 0.30) or 0.30
+        )
         # Require the percentage stop to trigger on N consecutive exit ticks before
         # firing (default 2). At the 3s fast-exit cadence this is ~6s of confirmation
         # and prevents a single noisy book read from cutting a winner — the
@@ -444,6 +457,27 @@ class PositionExitManager:
                         ) / cost_basis
                         exec_exit_price = float(_best_bid)
 
+            # Wide-book winner guard (2026-07-21): only fire the executable-price stop
+            # on a book wider than exit_max_book_spread if the YES MIDPOINT also
+            # confirms the loss. Prevents a thin low bid from cutting a genuine winner
+            # once wide_book_stop_through lets wide-book ticks reach the stop. False on
+            # tight books => the stop condition below is byte-identical to legacy.
+            _wide_book_stop_needs_mid = False
+            if (
+                self._stop_dual_confirm_midpoint
+                and self._stop_use_executable_price
+                and exec_exit_price is not None
+            ):
+                _liqw = (market_liquidity or {}).get(pos.market_id) or {}
+                _bbw = _liqw.get("best_bid")
+                _baw = _liqw.get("best_ask")
+                if (
+                    _bbw is not None
+                    and _baw is not None
+                    and (float(_baw) - float(_bbw)) > self._exit_max_book_spread
+                ):
+                    _wide_book_stop_needs_mid = True
+
             # Check exit conditions
             reason = None
             # Stop threshold in force at exit (for overshoot telemetry); set in the
@@ -547,7 +581,14 @@ class PositionExitManager:
                     and pnl_pct >= resolved.take_profit_pct
                 ):
                     reason = "take_profit"
-                elif effective_stop_loss_pct != 0 and stop_pnl_pct <= -effective_stop_loss_pct:
+                elif (
+                    effective_stop_loss_pct != 0
+                    and stop_pnl_pct <= -effective_stop_loss_pct
+                    and (
+                        not _wide_book_stop_needs_mid
+                        or pnl_pct <= -effective_stop_loss_pct
+                    )
+                ):
                     # Same-position percentage stop: cuts adverse drift early instead of
                     # waiting for the late-window cents stop, which fires at whatever price
                     # the position has already collapsed to. stop_pnl_pct == pnl_pct unless

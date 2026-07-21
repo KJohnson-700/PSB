@@ -3382,11 +3382,31 @@ class PolyBot:
                                 _hw_mid = None
                         if _hw_mid is not None:
                             self._advance_held_peak_from_yes_mid(pos, float(_hw_mid))
-                        logging.debug(
-                            "exit price guard: spread %.3f > %.3f for %s — skip exit eval this tick",
+                        # 2026-07-21 WIDE-BOOK STOP-THROUGH (config-gated, default OFF).
+                        # A position collapsing into resolution has a WIDE book BECAUSE
+                        # it is collapsing; the unconditional skip below let it ride PAST
+                        # its stop to ~0 (doge 1h|up -$10.47, 0.53->0.16, 07-21; 4 of 5
+                        # doge losses gapped through the 0.30 stop on NORMAL latency —
+                        # not a lag/gap-through-fill, the stop was never EVALUATED).
+                        # When enabled, do NOT skip: fall through to exit eval, which
+                        # marks on the SANE /midpoint (below, ~L3431) — the existing
+                        # updown_stop_confirm_ticks (needs N consecutive ticks) and
+                        # stop_use_executable_price guards prevent a one-tick phantom
+                        # stop, and a /midpoint still above the stop leaves a genuine
+                        # winner UNcut. Off => byte-identical legacy behavior (skip).
+                        if not bool(
+                            _excfg.get("wide_book_stop_through_enabled", False)
+                        ):
+                            logging.debug(
+                                "exit price guard: spread %.3f > %.3f for %s — skip exit eval this tick",
+                                _spread, _max_spread, mid,
+                            )
+                            continue
+                        logging.info(
+                            "wide-book stop-through: spread %.3f > %.3f for %s — evaluating exit on /midpoint",
                             _spread, _max_spread, mid,
                         )
-                        continue
+                        _mark_src = "midpoint_wide_book_stopthrough"
                 yes_price = (best_bid + best_ask) / 2.0
             elif _require_two_sided:
                 if not _use_clob_midpoint:

@@ -291,15 +291,23 @@ class KellySizer:
         win_probability: float,
         contract_price: float,
         streak_multiplier: float = None,
+        window: str = None,
     ) -> float:
-        """Kelly size for binary contracts using true payout odds from price."""
+        """Kelly size for binary contracts using true payout odds from price.
+
+        2026-07-21: window param added for parity with size_from_edge (window-scoped
+        streak fraction). This is the conviction-proportional sizing path — size scales
+        with the real win-probability edge AND the price odds, so high-conviction trades
+        run up to the cap and marginal ones sit near the floor (vs the linear
+        size_from_edge which was flattened by the max_edge_updown clamp).
+        """
         p = max(0.0, min(1.0, float(win_probability)))
         c = max(0.01, min(0.99, float(contract_price)))
         b = (1.0 - c) / c
         if b <= 0:
             return 0.0
 
-        frac = self.get_kelly_fraction(strategy, streak_multiplier)
+        frac = self.get_kelly_fraction(strategy, streak_multiplier, window)
         full_kelly = ((b * p) - (1.0 - p)) / b
         if full_kelly <= 0:
             return 0.0

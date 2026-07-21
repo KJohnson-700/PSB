@@ -2866,19 +2866,33 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("kelly_unavailable")
                 logger.error("ETH strategy: KellySizer unavailable — skipping entry sizing")
                 continue
-            # 2026-07-14 K2' (operator GO): window-scoped streak — pass the lane's
-            # window so a 5m win streak no longer inflates 15m/1h sizing. TypeError
-            # fallback = version-skew guard (kelly_sizer is not hot-reloadable;
-            # full behavior lands at restart).
-            try:
-                raw_size = self.kelly_sizer.size_from_edge(
-                    self._signal_strategy_name, bankroll, sizing_edge,
-                    window=_updown_tf if is_updown else None,
-                )
-            except TypeError:
-                raw_size = self.kelly_sizer.size_from_edge(
-                    self._signal_strategy_name, bankroll, sizing_edge
-                )
+            # 2026-07-21 TRUE-KELLY conviction sizing (operator ORDER) — mirror of the
+            # sol_macro change (eth duplicates the scan loop). Legacy size_from_edge
+            # clamped the sizing edge to max_edge_updown (0.15 here), flattening
+            # high-conviction trades. size_binary_position scales size with real
+            # win-prob + price odds. win_prob = our_price + edge (exact per side).
+            # Flag-gated (default on). TypeError = kelly_sizer version-skew guard.
+            _kf_kw = dict(window=_updown_tf) if is_updown else {}
+            if bool(self.config.get("use_true_kelly_sizing", True)):
+                _our_price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
+                _win_prob = min(0.99, max(0.01, float(_our_price) + float(edge)))
+                try:
+                    raw_size = self.kelly_sizer.size_binary_position(
+                        self._signal_strategy_name, bankroll, _win_prob, _our_price, **_kf_kw
+                    )
+                except TypeError:
+                    raw_size = self.kelly_sizer.size_binary_position(
+                        self._signal_strategy_name, bankroll, _win_prob, _our_price
+                    )
+            else:
+                try:
+                    raw_size = self.kelly_sizer.size_from_edge(
+                        self._signal_strategy_name, bankroll, sizing_edge, **_kf_kw
+                    )
+                except TypeError:
+                    raw_size = self.kelly_sizer.size_from_edge(
+                        self._signal_strategy_name, bankroll, sizing_edge
+                    )
             if (
                 self._btc_trade_inputs_enabled()
                 and self._btc_1h_regime_gates.get("enabled", False)
