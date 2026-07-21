@@ -26,7 +26,9 @@ def test_btc_ai_policy_is_marginal_15m_1h_not_5m() -> None:
     assert lanes == ["marginal"]
 
 
-def test_alt_ai_policy_keeps_sorting_gating_lanes_enabled() -> None:
+def test_alt_ai_enforced_lanes_removed() -> None:
+    # 2026-07-11: alt AI decision-layer enforcement pulled (frequency-first).
+    # AI stays available (use_ai) for observer/shadow, but no enforced lanes.
     cfg = _settings()
     enforced = cfg["ai"]["decision_layer"]["enforced_lanes"]
 
@@ -39,5 +41,4 @@ def test_alt_ai_policy_keeps_sorting_gating_lanes_enabled() -> None:
         "bnb_macro",
     ):
         assert cfg["strategies"][strategy]["use_ai"] is True
-        assert cfg["strategies"][strategy]["use_ai_updown"] is True
-        assert enforced[strategy] == ["default", "marginal"]
+        assert enforced[strategy] == []

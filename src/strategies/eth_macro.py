@@ -30,6 +30,7 @@ from src.strategies.sol_macro import (
     SolMacroStrategy,
     build_alt_resolver_metadata,
     macd_bearish_momentum_ok,
+    macd_bullish_momentum_ok,
     side_from_est_prob_up,
     side_from_momentum_bias,
 )
@@ -983,6 +984,7 @@ class ETHMacroStrategy(SolMacroStrategy):
             rsi_soft_delta = 0.0
             rsi_soft_penalty = 0.0
             _updown_tf = updown_timeframe_label(resolved_updown_window_minutes(market))
+            is_updown = self._is_updown_market(market)  # 2026-07-15 FIX: was referenced at ~2819/2845 but never assigned in eth_macro (latent NameError, only reachable once pocket_only=false let candidates flow to sizing). Mirrors sol_macro:3327.
             is_5m = _updown_tf == "5m"
             is_1h = _updown_tf == "1h"
             yes_price = market.yes_price
@@ -1176,6 +1178,61 @@ class ETHMacroStrategy(SolMacroStrategy):
                         )
                         if _block:
                             continue
+
+            # 2026-07-21 TAPE ARBITRATION (operator GO; Codex design-reviewed) — ETH port of the
+            # sol_macro gate. Same root: a bias-aligned entry (LONG into BULLISH 1h) bypasses the
+            # momentum-confirm above, admitting with no 5m/15m check -> stale-bias side into a turned
+            # tape. Chop-restricted (er < tape_arbitration_er_chop_max), own-TF contradiction only,
+            # shadow-capable. Config-gated, default OFF.
+            if (
+                self.config.get("tape_arbitration_enabled", False)
+                and is_updown
+                and (_eth_bias_aligned_long or _eth_bias_aligned_short)
+                and _updown_tf in set(self.config.get("tape_arbitration_windows", ["5m", "15m"]) or [])
+            ):
+                _ta_own = (
+                    eth.macd_5m if _updown_tf == "5m"
+                    else eth.macd_15m if _updown_tf == "15m"
+                    else eth.macd_1h
+                )
+                _ta_fast_against = (
+                    macd_bearish_momentum_ok(_ta_own) if action == "BUY_YES"
+                    else macd_bullish_momentum_ok(_ta_own)
+                )
+                _ta_er = None
+                try:
+                    _ta_rstate = _asset_regime.get_state(
+                        getattr(self.sol_service, "alt_symbol", None)
+                    )
+                    if _ta_rstate is not None and _ta_rstate.get("er") is not None:
+                        _ta_er = float(_ta_rstate.get("er"))
+                except Exception:
+                    _ta_er = None
+                _ta_chop = _ta_er is not None and _ta_er < float(
+                    self.config.get("tape_arbitration_er_chop_max", 0.30) or 0.30
+                )
+                if _ta_fast_against and _ta_chop:
+                    _ta_shadow = bool(self.config.get("tape_arbitration_shadow_only", False))
+                    _ta_reason = "tape_arbitration_stale_side_chop" + ("_shadow" if _ta_shadow else "")
+                    _bump_skip(_ta_reason)
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf,
+                        side=market_allowed_side,
+                        action=action,
+                        reason=_ta_reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "er": _ta_er,
+                            "own_tf": _updown_tf,
+                            "own_macd_hist": float(getattr(_ta_own, "histogram", 0.0) or 0.0),
+                            "own_macd_crossover": getattr(_ta_own, "crossover", None),
+                            "shadow": _ta_shadow,
+                        },
+                    )
+                    if not _ta_shadow:
+                        continue
 
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf,
@@ -1379,6 +1436,52 @@ class ETHMacroStrategy(SolMacroStrategy):
                     # settled 66% (n=7,541, 36h). 15m/5m longs stay pocketed.
                     if _updown_tf == "1h" and bool(
                         self.config.get("eth_pocket_allow_buy_yes_1h", False)
+                    ):
+                        _pocket_skip = None
+                    # 2026-07-13 operator GO (completeness audit, Codex GO): the pocket
+                    # predates the fade — 15m fade-longs died here (144 rejects in 30min)
+                    # after the momentum-confirm fix opened them. Allow ONLY fade-sourced
+                    # 15m longs; momentum/native 15m longs stay pocketed.
+                    elif (
+                        _updown_tf == "15m"
+                        and _fade_active
+                        and bool(self.config.get("eth_pocket_allow_15m_buy_yes_fade", False))
+                    ):
+                        _pocket_skip = None
+                    # 2026-07-14 eth-long-unlock A/B (operator GO): bull tape ran eth
+                    # native-LONG 600 scans vs SHORT 28 (since 10:31) and every long
+                    # died here — the pocket had no 5m BUY_YES allowance and 15m only
+                    # passed fade-sourced longs, so the eth5-win SHORT unlock could
+                    # never fill when the tape refuses to go native-short. Open both
+                    # through a quality bar mirroring the short side RSI floor:
+                    # pullback longs (RSI <= eth_buy_yes_rsi_max) OR rising MACD on
+                    # the lane timeframe. Sized 0.25x via lane config. Kill switches:
+                    # eth_pocket_allow_5m_buy_yes / eth_pocket_allow_15m_buy_yes_native.
+                    elif (
+                        _updown_tf == "5m"
+                        and bool(self.config.get("eth_pocket_allow_5m_buy_yes", False))
+                        and (
+                            eth.rsi_14 <= float(self.config.get("eth_buy_yes_rsi_max", 45.0))
+                            or (
+                                bool(eth.macd_5m.histogram_rising)
+                                and eth.rsi_14
+                                <= float(self.config.get("eth_buy_yes_rsi_momentum_max", 60.0))
+                            )
+                        )
+                    ):
+                        _pocket_skip = None
+                    elif (
+                        _updown_tf == "15m"
+                        and not _fade_active
+                        and bool(self.config.get("eth_pocket_allow_15m_buy_yes_native", False))
+                        and (
+                            eth.rsi_14 <= float(self.config.get("eth_buy_yes_rsi_max", 45.0))
+                            or (
+                                bool(eth.macd_15m.histogram_rising)
+                                and eth.rsi_14
+                                <= float(self.config.get("eth_buy_yes_rsi_momentum_max", 60.0))
+                            )
+                        )
                     ):
                         _pocket_skip = None
                     else:
@@ -2718,7 +2821,7 @@ class ETHMacroStrategy(SolMacroStrategy):
                 # still reject overly bearish YES where NO is already expensive.
                 # Floor the NO price though: NO<0.20 wins ~5% held-to-resolution
                 # across every asset (n~8k ghost), −$97 realized. Block cheap NO.
-                _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
+                _buy_no_min_no = float(self.config.get(f"buy_no_min_no_price_{_updown_tf}", self.config.get("buy_no_min_no_price", 0.20)))  # 2026-07-16 eth 5m|down cap (operator+Codex GO): per-window override; buy_no_min_no_price_5m=0.49 => yes<=0.51, cuts high-yes shorts (-$16/25%). 15m/1h fall back 0.20.
                 _entry_price_bad = (
                     yes_price < lane_policy.entry_price_min
                     or yes_price > (1.0 - _buy_no_min_no)
@@ -2763,9 +2866,19 @@ class ETHMacroStrategy(SolMacroStrategy):
                 _bump_skip("kelly_unavailable")
                 logger.error("ETH strategy: KellySizer unavailable — skipping entry sizing")
                 continue
-            raw_size = self.kelly_sizer.size_from_edge(
-                self._signal_strategy_name, bankroll, sizing_edge
-            )
+            # 2026-07-14 K2' (operator GO): window-scoped streak — pass the lane's
+            # window so a 5m win streak no longer inflates 15m/1h sizing. TypeError
+            # fallback = version-skew guard (kelly_sizer is not hot-reloadable;
+            # full behavior lands at restart).
+            try:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge,
+                    window=_updown_tf if is_updown else None,
+                )
+            except TypeError:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge
+                )
             if (
                 self._btc_trade_inputs_enabled()
                 and self._btc_1h_regime_gates.get("enabled", False)
@@ -2788,11 +2901,24 @@ class ETHMacroStrategy(SolMacroStrategy):
             # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
             if final_size >= 0.5 and is_updown:
                 _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
-                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
-                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
-                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
-                    if _ln_max > 0:
+                _tier_val = str(getattr(_cur_tier, "value", ""))
+                if _tier_val != "PAUSED":
+                    _ln_side = 'up' if action == 'BUY_YES' else 'down'
+                    _ln_max = float(self.config.get(f"lane_max_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    # lift toward kelly ask; still skips MINIMAL
+                    if _tier_val != "MINIMAL" and _ln_max > 0:
                         final_size = max(final_size, min(raw_size, _ln_max))
+                    # 2026-07-13 operator ORDER (Codex GO): winner-lane floors SURVIVE the
+                    # MINIMAL loss-streak tier — the $5 brake was shaving known winners
+                    # (btc 1h expiry wins at $5; xrp 5m engine at $5). Per-lane opt-in via
+                    # lane_min_notional_ignores_minimal_{tf}_{side}. PAUSED blocks all.
+                    _lnf = float(self.config.get(f"lane_min_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    _lnf_hard = bool(self.config.get(f"lane_min_notional_ignores_minimal_{_updown_tf}_{_ln_side}", False))
+                    if _lnf > 0 and (_tier_val != "MINIMAL" or _lnf_hard):
+                        final_size = max(final_size, _lnf)
+                    # lane_max is a HARD CAP last (per-lane downsize lever, e.g. sol 5m $15)
+                    if _ln_max > 0:
+                        final_size = min(final_size, _ln_max)
             if final_size < 0.5:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":

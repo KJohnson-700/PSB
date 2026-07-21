@@ -530,6 +530,19 @@ class PositionExitManager:
                 ):
                     reason = "updown_flatten_pre_resolution"
                 elif (
+                    # 2026-07-17 TIME-GATED LATE TP (default OFF; 0.0 => never fires).
+                    # Deliberately NOT gated by hold_winners: on a hold lane an ungated
+                    # TP/trail cuts the +85%% runner mid-window (failed 07-13 + 07-16),
+                    # but a green position inside the final N minutes is a FADE, not a
+                    # runner. Fires before the stop so it banks instead of stopping out.
+                    resolved.take_profit_late_pct > 0.0
+                    and resolved.take_profit_late_gate_mins > 0.0
+                    and _flat_mins_remaining is not None
+                    and 0.0 <= _flat_mins_remaining <= resolved.take_profit_late_gate_mins
+                    and pnl_pct >= resolved.take_profit_late_pct
+                ):
+                    reason = "take_profit_late"
+                elif (
                     not resolved.updown_hold_winners_to_resolution
                     and pnl_pct >= resolved.take_profit_pct
                 ):
@@ -686,6 +699,12 @@ class PositionExitManager:
                     "updown_flatten_pre_resolution",
                     "updown_expired",
                     "updown_time_stop",
+                    # 2026-07-17 (Codex catch): the time-gated late TP fires INSIDE the
+                    # final gate window, so it must take the bid NOW (FAK) like the other
+                    # near-resolution exits. Left as a resting GTC it would not fill at the
+                    # qualifying tick — which is exactly the execution gap the sim assumed
+                    # away and where the previous 3 give-back attempts died.
+                    "take_profit_late",
                 ):
                     # Near/at resolution: take the bid NOW (FAK) rather than resting a
                     # limit that won't fill into a one-sided book and lets the position

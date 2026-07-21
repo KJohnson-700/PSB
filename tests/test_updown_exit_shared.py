@@ -167,15 +167,18 @@ def test_zero_green_stop_knobs_preserve_base_stop_floor():
     )
 
 
-def test_settings_keep_global_green_stop_protection_enabled():
+def test_settings_global_exit_at_baseline_trail_protection():
+    # 2026-07-11: reverted the exit-tightening back to the 06-27 baseline. Green
+    # protection rides the trailing floor (arm 0.1 / gap 0.15); the in-profit
+    # tighten stop is OFF (0.0), matching the winning baseline config.
     cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
     exit_rules = cfg["trading"]["exit_rules"]
 
-    assert exit_rules["updown_in_profit_stop_trigger_pct"] == pytest.approx(0.05)
-    assert exit_rules["updown_in_profit_stop_tighten_to_pct"] == pytest.approx(0.07)
-    assert exit_rules["updown_trail_arm_pct"] == pytest.approx(0.06)
-    assert exit_rules["updown_trail_gap_pct"] == pytest.approx(0.05)
+    assert exit_rules["updown_in_profit_stop_trigger_pct"] == pytest.approx(0.0)
+    assert exit_rules["updown_in_profit_stop_tighten_to_pct"] == pytest.approx(0.0)
+    assert exit_rules["updown_trail_arm_pct"] == pytest.approx(0.1)
+    assert exit_rules["updown_trail_gap_pct"] == pytest.approx(0.15)
 
 
 def test_settings_exempt_btc_1h_up_from_green_stop_banking():

@@ -3756,6 +3756,67 @@ class SolMacroStrategy:
                     )
                     continue
 
+            # 2026-07-21 TAPE ARBITRATION (operator GO; Codex design-reviewed). ROOT: the
+            # momentum-confirm gate above runs ONLY when `not _bias_aligned`, so a bias-aligned
+            # entry (LONG into a BULLISH 1h) is admitted with NO 5m/15m check -> the bot rides the
+            # STALE 1h bias into a turned tape ("wrong direction into a regime change" — the live
+            # failure this session: longs stopped as 5m/15m MACD turned bearish while 1h stayed bull).
+            # CAVEAT (see comment ~3665): 5/22-5/27 ghost showed blocking bias-aligned trades BROADLY
+            # was HARMFUL (+11-16pp WR), so this gate is CHOP-RESTRICTED: suppress a bias-aligned entry
+            # ONLY when (a) the lane's own-TF MACD contradicts the side AND (b) the efficiency-ratio
+            # regime is chop (er < tape_arbitration_er_chop_max) where the 1h bias is unreliable. In
+            # trend (high er) the entry proceeds. shadow_only logs the counterfactual without blocking.
+            # Config-gated, default OFF.
+            if (
+                self.config.get("tape_arbitration_enabled", False)
+                and is_updown
+                and (_bias_aligned_long or _bias_aligned_short)
+                and _updown_tf in set(self.config.get("tape_arbitration_windows", ["5m", "15m"]) or [])
+            ):
+                _ta_own = (
+                    sol.macd_5m if _updown_tf == "5m"
+                    else sol.macd_15m if _updown_tf == "15m"
+                    else sol.macd_1h
+                )
+                _ta_fast_against = (
+                    macd_bearish_momentum_ok(_ta_own) if action == "BUY_YES"
+                    else macd_bullish_momentum_ok(_ta_own)
+                )
+                _ta_er = None
+                try:
+                    _ta_rstate = _asset_regime.get_state(
+                        getattr(self.sol_service, "alt_symbol", None)
+                    )
+                    if _ta_rstate is not None and _ta_rstate.get("er") is not None:
+                        _ta_er = float(_ta_rstate.get("er"))
+                except Exception:
+                    _ta_er = None
+                _ta_chop = _ta_er is not None and _ta_er < float(
+                    self.config.get("tape_arbitration_er_chop_max", 0.30) or 0.30
+                )
+                if _ta_fast_against and _ta_chop:
+                    _ta_shadow = bool(self.config.get("tape_arbitration_shadow_only", False))
+                    _ta_reason = "tape_arbitration_stale_side_chop" + ("_shadow" if _ta_shadow else "")
+                    _bump_skip(_ta_reason)
+                    _log_skip_reject(
+                        market=market,
+                        window=_updown_tf if is_updown else "15m",
+                        side=allowed_side,
+                        action=action,
+                        reason=_ta_reason,
+                        yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                        context={
+                            "er": _ta_er,
+                            "own_tf": _updown_tf,
+                            "own_macd_hist": float(getattr(_ta_own, "histogram", 0.0) or 0.0),
+                            "own_macd_crossover": getattr(_ta_own, "crossover", None),
+                            "shadow": _ta_shadow,
+                        },
+                    )
+                    if not _ta_shadow:
+                        continue
+
             _liq_floor = self._resolve_min_liquidity_floor(
                 window_size=_updown_tf if is_updown else "15m",
                 action=action,
@@ -4164,32 +4225,46 @@ class SolMacroStrategy:
                     # disagrees with trade direction. Magnitude matches macro weight so
                     # disagreement roughly cancels the macro tilt.
                     _macd_1h = sol.macd_1h
-                    # 2026-07-20 Fix A: damp on the RESOLVED alt 1H trend (mtt.h1_trend),
-                    # not just the borderline MACD histogram sign. ETH already keys on
-                    # mtt.h1_trend==BULLISH; the sol family was left on the weaker histogram
-                    # trigger, so a clean alt_1h_trend=BULLISH with a ~0 histogram slipped
-                    # through -> buy_no_against_alt_1h_bullish losses. Resolved trend is
-                    # authoritative. Toggle via alt_h1_resolved_trend_damp (default True).
-                    _alt_h1_trend = str(getattr(mtt, "h1_trend", "") or "").upper()
-                    _h1_resolved = bool(self.config.get("alt_h1_resolved_trend_damp", True))
-                    _h1_bull_ok = (_macd_1h.histogram_rising or _macd_1h.histogram > 0) and not (_h1_resolved and _alt_h1_trend == "BEARISH")
-                    _h1_bear_ok = ((not _macd_1h.histogram_rising) or _macd_1h.histogram < 0) and not (_h1_resolved and _alt_h1_trend == "BULLISH")
+                    _h1_resolved = str(getattr(mtt, "h1_trend", "") or "").upper()
+                    # 2026-07-20 B3 (operator GO, Codex-reviewed): the histogram trigger below
+                    # MISSES the case this damp exists for — a cleanly resolved BULLISH 1H with a
+                    # flat/non-rising histogram leaves _h1_bear_ok True, so a SHORT into a bullish
+                    # 1H gets NO damp at all. eth_macro was already upgraded to key on the resolved
+                    # mtt.h1_trend (eth_macro.py:1621/1732); this ports that to the sol family.
+                    # Parity with ETH: when the resolved 1H is BULLISH/BEARISH it decides the
+                    # damp (active opposition only). NEUTRAL/unknown keeps the baseline
+                    # histogram damp. Config-gated via self.config, which each subclass
+                    # repoints at its own strategies.<asset> block (xrp_macro.py:59,
+                    # hype:84, doge:81, bnb:107), so the flag is per-asset. Default OFF.
+                    # NOTE: whether a given asset is enabled is a CONFIG decision — this code
+                    # does not and cannot special-case any asset.
+                    if bool(self.config.get("alt_h1_resolved_trend_damp", False)) and _h1_resolved in ("BULLISH", "BEARISH"):
+                        # Resolved 1H has an actual direction -> it decides.
+                        _h1_bull_ok = _h1_resolved != "BEARISH"
+                        _h1_bear_ok = _h1_resolved != "BULLISH"
+                    else:
+                        # Flag off, OR 1H is NEUTRAL/unknown -> keep the baseline histogram
+                        # damp. 2026-07-20 (Codex catch): letting NEUTRAL skip the damp
+                        # entirely was an unrequested LOOSENING — old logic damped a LONG on a
+                        # neutral 1H with a bearish histogram, and that must be preserved.
+                        _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
+                        _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
                             est_prob_up -= 0.04
                             reason_parts.append("h1_dampen_long_5m")
                             logger.info(
                                 f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
-                                f"1H histogram against LONG, est_prob dampened -0.04 "
-                                f"(hist={_macd_1h.histogram:.4f})"
+                                f"1H against LONG, est_prob dampened -0.04 "
+                                f"(h1={_h1_resolved} hist={_macd_1h.histogram:.4f})"
                             )
                         if allowed_side == "SHORT" and not _h1_bear_ok:
                             est_prob_up += 0.04
                             reason_parts.append("h1_dampen_short_5m")
                             logger.info(
                                 f"  {_alt_label} [5m] allow '{market.question[:40]}' — "
-                                f"1H histogram against SHORT, est_prob dampened +0.04 "
-                                f"(hist={_macd_1h.histogram:.4f})"
+                                f"1H against SHORT, est_prob dampened +0.04 "
+                                f"(h1={_h1_resolved} hist={_macd_1h.histogram:.4f})"
                             )
 
                     # 2026-05-22: require_btc_catalyst_5m gate REMOVED.
@@ -4602,32 +4677,37 @@ class SolMacroStrategy:
                     # Dampen toward neutral when 1H disagrees (magnitude ~0.05, sized close
                     # to the 15m macro weight so disagreement cancels roughly the macro tilt).
                     _macd_1h = sol.macd_1h
-                    # 2026-07-20 Fix A: damp on the RESOLVED alt 1H trend (mtt.h1_trend),
-                    # not just the borderline MACD histogram sign. ETH already keys on
-                    # mtt.h1_trend==BULLISH; the sol family was left on the weaker histogram
-                    # trigger, so a clean alt_1h_trend=BULLISH with a ~0 histogram slipped
-                    # through -> buy_no_against_alt_1h_bullish losses. Resolved trend is
-                    # authoritative. Toggle via alt_h1_resolved_trend_damp (default True).
-                    _alt_h1_trend = str(getattr(mtt, "h1_trend", "") or "").upper()
-                    _h1_resolved = bool(self.config.get("alt_h1_resolved_trend_damp", True))
-                    _h1_bull_ok = (_macd_1h.histogram_rising or _macd_1h.histogram > 0) and not (_h1_resolved and _alt_h1_trend == "BEARISH")
-                    _h1_bear_ok = ((not _macd_1h.histogram_rising) or _macd_1h.histogram < 0) and not (_h1_resolved and _alt_h1_trend == "BULLISH")
+                    _h1_resolved = str(getattr(mtt, "h1_trend", "") or "").upper()
+                    # 2026-07-20 B3 (see the 5m site above for the full rationale): resolved
+                    # mtt.h1_trend instead of the histogram sign, ETH parity, damp only on ACTIVE
+                    # opposition. Config-gated, default OFF.
+                    if bool(self.config.get("alt_h1_resolved_trend_damp", False)) and _h1_resolved in ("BULLISH", "BEARISH"):
+                        # Resolved 1H has an actual direction -> it decides.
+                        _h1_bull_ok = _h1_resolved != "BEARISH"
+                        _h1_bear_ok = _h1_resolved != "BULLISH"
+                    else:
+                        # Flag off, OR 1H is NEUTRAL/unknown -> keep the baseline histogram
+                        # damp. 2026-07-20 (Codex catch): letting NEUTRAL skip the damp
+                        # entirely was an unrequested LOOSENING — old logic damped a LONG on a
+                        # neutral 1H with a bearish histogram, and that must be preserved.
+                        _h1_bull_ok = _macd_1h.histogram_rising or _macd_1h.histogram > 0
+                        _h1_bear_ok = (not _macd_1h.histogram_rising) or _macd_1h.histogram < 0
                     if self.enforce_alt_1h_alignment:
                         if allowed_side == "LONG" and not _h1_bull_ok:
                             est_prob_up -= h1_dampen
                             reason_parts.append(f"h1_dampen_long_{window_label}")
                             logger.info(
                                 f"  {_alt_label} [{window_label}] allow '{market.question[:40]}' — "
-                                f"1H histogram against LONG, est_prob dampened -{h1_dampen:.2f} "
-                                f"(hist={_macd_1h.histogram:.4f})"
+                                f"1H against LONG, est_prob dampened -{h1_dampen:.2f} "
+                                f"(h1={_h1_resolved} hist={_macd_1h.histogram:.4f})"
                             )
                         if allowed_side == "SHORT" and not _h1_bear_ok:
                             est_prob_up += h1_dampen
                             reason_parts.append(f"h1_dampen_short_{window_label}")
                             logger.info(
                                 f"  {_alt_label} [{window_label}] allow '{market.question[:40]}' — "
-                                f"1H histogram against SHORT, est_prob dampened +{h1_dampen:.2f} "
-                                f"(hist={_macd_1h.histogram:.4f})"
+                                f"1H against SHORT, est_prob dampened +{h1_dampen:.2f} "
+                                f"(h1={_h1_resolved} hist={_macd_1h.histogram:.4f})"
                             )
 
                     # 2026-05-22: require_btc_catalyst_15m_when_unconfirmed REMOVED.

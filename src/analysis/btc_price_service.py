@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 import requests
 from scipy.signal import argrelextrema
+from src.analysis import asset_regime as _asset_regime
 
 logger = logging.getLogger(__name__)
 
@@ -1087,6 +1088,8 @@ class BTCPriceService:
         df_4h = self.fetch_klines("4h", 200)
         df_1d = self.fetch_klines("1d", 200)
         df_5m = self.fetch_klines("5m", 120)
+        if not df_5m.empty:
+            _asset_regime.update("BTCUSDT", df_5m["close"].tolist())
         df_15m = self.fetch_klines("15m", 100)
         df_30m = self.fetch_klines("30m", 120)
 

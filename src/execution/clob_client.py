@@ -151,6 +151,16 @@ class CLOBClient:
         self._readonly_py_client: Optional[Any] = None
         self._fee_rate_cache: Dict[str, float] = {}
         self._tick_size_cache: Dict[str, str] = {}
+        # 2026-07-19 exit-mark /midpoint de-dup cache. The fast-exit loop (3s) marks
+        # each held token ~4-5x per tick across the hold/stop/TP + price-update sites,
+        # each = one httpx GET /midpoint via py_clob_client -> the dominant 429 source.
+        # Short TTL (< exit cadence) collapses the intra-tick duplicates into ONE GET;
+        # every new tick still marks off a fresh fetch. Only successful mids are cached.
+        self._midpoint_cache: Dict[str, tuple] = {}
+        try:
+            self._midpoint_cache_ttl = float(config.get('trading', {}).get('midpoint_cache_ttl_sec', 1.5) or 0.0)
+        except (TypeError, ValueError):
+            self._midpoint_cache_ttl = 1.5
         # Derived L2 credentials expire ~7 days after creation; Polymarket does not
         # rotate them and auth calls fail silently once stale. Track when they were
         # set and refuse to trade past a configurable age so we fail loud, not silent.
@@ -1398,6 +1408,13 @@ class CLOBClient:
         tid = str(token_id or "").strip()
         if not tid:
             return None
+        _ttl = getattr(self, "_midpoint_cache_ttl", 1.5)
+        if not hasattr(self, "_midpoint_cache"):
+            self._midpoint_cache = {}
+        if _ttl > 0:
+            _hit = self._midpoint_cache.get(tid)
+            if _hit is not None and (time.monotonic() - _hit[1]) < _ttl:
+                return _hit[0]
         pc = self._py_client_for_public_reads()
         if not pc:
             return None
@@ -1408,7 +1425,12 @@ class CLOBClient:
             if mid is None:
                 return None
             mid_f = float(mid)
-            return mid_f if 0.0 < mid_f < 1.0 else None
+            _out = mid_f if 0.0 < mid_f < 1.0 else None
+            if _out is not None and _ttl > 0:
+                if len(self._midpoint_cache) > 5000:
+                    self._midpoint_cache.clear()
+                self._midpoint_cache[tid] = (_out, time.monotonic())
+            return _out
         except Exception as e:
             logger.warning("[fetch_midpoint] %s", e)
             return None

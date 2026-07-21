@@ -111,12 +111,14 @@ def test_sol_entry_policy_supports_hourly_by_tf_overrides():
     assert policy["entry_price_max"] == 0.60
 
 
-def test_alt_macro_live_entry_ai_windows_exclude_5m():
+def test_alt_macro_ai_gate_removed():
+    # 2026-07-11: alt live-entry AI gate pulled (frequency-first; no evidence it
+    # helped, gated the active 15m/1h alt flow). Guard that it stays removed.
     cfg = _make_config()
     strategy = SolMacroStrategy(cfg, MagicMock(), MagicMock())
 
-    assert strategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
-    assert "5m" not in strategy._DECISION_GATE_WINDOWS
+    assert strategy._DECISION_GATE_WINDOWS == frozenset()
+    # BTC keeps its marginal 15m/1h AI gate (fail-open on timeout).
     assert BitcoinStrategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
 
 

@@ -1736,7 +1736,11 @@ class BitcoinStrategy:
         ta = await analysis_with_timeout(
             self.btc_service.get_full_analysis, lane="bitcoin", timeout_sec=_scan_to
         )
-        btc_1h_regime = "BULL"
+        # 2026-07-13 P1 (Codex GO): was a hardcoded "BULL" placeholder that fed
+        # est_prob (no BEAR/RANGE dampening ever), the composite chase/counter
+        # asymmetry, and every reject log. None = composite skips the regime
+        # block entirely and est_prob keeps current behavior; logs become honest.
+        btc_1h_regime = None
         if ta and self._btc_1h_regime_gates.get("enabled", False):
             btc_1h_regime = self._classify_btc_1h_regime(ta)
         if not ta:
@@ -2029,8 +2033,24 @@ class BitcoinStrategy:
                 # on purpose (bias-driven, +EV long-only). Runs BEFORE the
                 # disable_* sit-outs below, so they re-apply to the flipped side
                 # (no post-flip bypass — cf. the alt _post_flip_disabled_side fix).
-                # TODO(1h): extend this guard to "1h" if BTC 1h WR/PnL degrades.
-                if _updown_tf in ("5m", "15m"):
+                # 2026-07-20 B4 (operator GO, Codex-reviewed) — this resolves the TODO that
+                # was here ("extend this guard to 1h if BTC 1h WR/PnL degrades"). It has:
+                # btc 1h ran 30% WR / -$17, and live 07-20 btc|1h|up peaked +25.0% then
+                # reversed to -30.6% (held 375s, $20.77 given back). 1h was excluded as
+                # "bias-driven, +EV long-only", which is exactly the forced-long trap — with
+                # no short path the lane cannot leave a losing side. Enabling the flip gives
+                # 1h a tape-driven short path. This is the highest-variance change in the
+                # bundle (it alters the DIRECTION distribution, not just sizing), so it is
+                # config-gated and default OFF — flip btc_window_delta_flip_1h only after B1
+                # and B3 have been validated on their own.
+                # BREAK: revert to false if btc 1h net <= -$15 over the next 10 closed, or if
+                # flipped-to-SHORT 1h entries win < 40% at n>=8.
+                _wd_flip_windows = (
+                    ("5m", "15m", "1h")
+                    if bool(self.config.get("btc_window_delta_flip_1h", False))
+                    else ("5m", "15m")
+                )
+                if _updown_tf in _wd_flip_windows:
                     _btc_wd_flip = self._btc_window_delta_flip(
                         ta, _updown_tf, _eval_left, action
                     )
@@ -2251,6 +2271,8 @@ class BitcoinStrategy:
                         yes_price=yes_price,
                         m5_direction=m5_dir,
                         m5_in_prediction_window=bool(mom.m5_in_prediction_window),
+                        htf_full_boost=float(self.config.get("btc_5m_htf_full_boost", 0.04) or 0.04),
+                        htf_partial_boost=float(self.config.get("btc_5m_htf_partial_boost", 0.02) or 0.02),
                         hard_hist_gate=not (
                             (
                                 hist_reject == "hist_gate_5m_short_reject"
@@ -3131,6 +3153,27 @@ class BitcoinStrategy:
                     market.question[:40], float(estimated_prob), _yes_conv_floor,
                 )
                 continue
+            # 2026-07-14 BTC 1h BUY_YES OVERBOUGHT GUARD (operator GO): live 07-14 the
+            # 1h longs at RSI>=65 went 0/4 -$44.48 (top-buys that reverse) while RSI<=44
+            # oversold-bounce longs went +$16.44/2-5. est model stays ~0.57-0.61 bullish
+            # even at RSI 76 (blind to overbought exhaustion) so a soft edge nudge wont
+            # stop it. Hard-skip 1h longs at/above the ceiling. 1h-only, config-gated
+            # (buy_yes_overbought_rsi_1h, default 0=off). Break: 10 closed 1h YES, revert
+            # 0 if guard cuts winners (>=2 skipped-then-would-win) or lane net-neg.
+            _ob_rsi_1h = float(self.config.get("buy_yes_overbought_rsi_1h", 0.0) or 0.0)
+            if (
+                is_updown
+                and action == "BUY_YES"
+                and _updown_tf == "1h"
+                and _ob_rsi_1h > 0.0
+                and float(getattr(ta, "rsi_14", 50.0) or 50.0) >= _ob_rsi_1h
+            ):
+                _bump_skip("buy_yes_overbought_rsi_1h")
+                logger.info(
+                    "  BTC skip '%s' BUY_YES RSI %.1f >= overbought %.1f (buy_yes_overbought_rsi_1h)",
+                    market.question[:40], float(getattr(ta, "rsi_14", 50.0) or 50.0), _ob_rsi_1h,
+                )
+                continue
             if is_updown and action == "BUY_YES":
                 _lane_meta = build_lane_metadata(
                     strategy=self._signal_strategy_name,
@@ -3657,6 +3700,44 @@ class BitcoinStrategy:
                     )
                     continue
 
+            # 2026-07-13 P2 (operator GO, Codex GO): tape_veto_60s ported from the
+            # alt family — veto entries against the in-flight ~1m BTC spot move
+            # (never-green class; tonight's -$8.54 1h long entered straight into a
+            # -41% mae slide). Fail-open; reason-logged with bps context.
+            if is_updown and bool(self.config.get("tape_veto_60s_enabled", False)):
+                try:
+                    import time as _tv_time
+                    _tv_now = _tv_time.time()
+                    _tv_px = float(getattr(ta, "current_price", 0.0) or 0.0)
+                    _tv_hist = getattr(self, "_tape_veto_hist", [])
+                    if _tv_px > 0 and (not _tv_hist or _tv_now - _tv_hist[-1][1] >= 45.0):
+                        _tv_hist = (_tv_hist + [(_tv_px, _tv_now)])[-2:]
+                        self._tape_veto_hist = _tv_hist
+                    _tv_ref = _tv_hist[-2] if len(_tv_hist) >= 2 else None
+                    if _tv_ref and _tv_px > 0 and 30.0 <= _tv_now - _tv_ref[1] <= 180.0:
+                        _tv_bps = (_tv_px - _tv_ref[0]) / _tv_ref[0] * 10000.0
+                        _tv_thr = float(self.config.get("tape_veto_60s_bps", 25.0) or 25.0)
+                        if (action == "BUY_NO" and _tv_bps > _tv_thr) or (
+                            action == "BUY_YES" and _tv_bps < -_tv_thr
+                        ):
+                            _bump_skip("tape_veto_60s")
+                            log_rejected_candidate(
+                                strategy=self._signal_strategy_name,
+                                window=_updown_tf,
+                                side=allowed_side,
+                                action=action,
+                                reason="tape_veto_60s",
+                                market=market,
+                                yes_price=yes_price,
+                                est_prob_up=estimated_prob,
+                                htf_bias=htf_bias,
+                                btc_1h_regime=btc_1h_regime if ta else None,
+                                context={"tape_bps_60s": round(_tv_bps, 1), "thr": _tv_thr},
+                            )
+                            continue
+                except Exception:
+                    pass
+
             entry_convergence_score = None
             entry_composite_score = None
             _is_neutral_15m = is_updown and _updown_tf != "5m" and htf_bias == "NEUTRAL"
@@ -4028,7 +4109,7 @@ class BitcoinStrategy:
                 # Floor the NO price: shorting cheap NO (yes_price rich) is
                 # adverse selection — NO<0.20 wins ~5% held-to-resolution
                 # across every asset (n~8k ghost), −$97 realized. Block it.
-                _buy_no_min_no = float(self.config.get("buy_no_min_no_price", 0.20))
+                _buy_no_min_no = float(self.config.get(f"buy_no_min_no_price_{_updown_tf}", self.config.get("buy_no_min_no_price", 0.20)))  # 2026-07-16 STAGED per-window port (mirror eth_macro:2768, restart-only): buy_no_min_no_price_5m caps 5m shorts only; 15m/1h fall back base 0.20
                 _updown_band_bad = (
                     (yes_price < _up_min or yes_price > _up_max)
                     if action == "BUY_YES"
@@ -4067,9 +4148,19 @@ class BitcoinStrategy:
                 _bump_skip("kelly_unavailable")
                 logger.error("Bitcoin strategy: KellySizer unavailable — skipping entry sizing")
                 continue
-            raw_size = self.kelly_sizer.size_from_edge(
-                self._signal_strategy_name, bankroll, sizing_edge
-            )
+            # 2026-07-14 K2' (operator GO): window-scoped streak — pass the lane's
+            # window so a 5m win streak no longer inflates 15m/1h sizing. TypeError
+            # fallback = version-skew guard (kelly_sizer is not hot-reloadable;
+            # full behavior lands at restart).
+            try:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge,
+                    window=_updown_tf if is_updown else None,
+                )
+            except TypeError:
+                raw_size = self.kelly_sizer.size_from_edge(
+                    self._signal_strategy_name, bankroll, sizing_edge
+                )
             if raw_size <= 0:
                 _bump_skip("kelly_nonpositive")
                 continue
@@ -4091,11 +4182,56 @@ class BitcoinStrategy:
             # and NEVER during the MINIMAL loss-streak tier (hard risk brake stays).
             if size > 0 and is_updown:
                 _cur_tier = getattr(self.exposure_manager, "_current_tier", None)
-                if str(getattr(_cur_tier, "value", "")) not in ("MINIMAL", "PAUSED"):
-                    _ln_key = f"lane_max_notional_{_updown_tf}_{'up' if action == 'BUY_YES' else 'down'}"
-                    _ln_max = float(self.config.get(_ln_key, 0.0) or 0.0)
-                    if _ln_max > 0:
+                _tier_val = str(getattr(_cur_tier, "value", ""))
+                if _tier_val != "PAUSED":
+                    _ln_side = 'up' if action == 'BUY_YES' else 'down'
+                    _ln_max = float(self.config.get(f"lane_max_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    # lift toward kelly ask; still skips MINIMAL
+                    if _tier_val != "MINIMAL" and _ln_max > 0:
                         size = max(size, min(raw_size, _ln_max))
+                    # 2026-07-13 operator ORDER (Codex GO): winner-lane floors SURVIVE the
+                    # MINIMAL loss-streak tier — the $5 brake was shaving known winners
+                    # (btc 1h expiry wins at $5; xrp 5m engine at $5). Per-lane opt-in via
+                    # lane_min_notional_ignores_minimal_{tf}_{side}. PAUSED blocks all.
+                    _lnf = float(self.config.get(f"lane_min_notional_{_updown_tf}_{_ln_side}", 0.0) or 0.0)
+                    _lnf_hard = bool(self.config.get(f"lane_min_notional_ignores_minimal_{_updown_tf}_{_ln_side}", False))
+                    if _lnf > 0 and (_tier_val != "MINIMAL" or _lnf_hard):
+                        size = max(size, _lnf)
+                    # lane_max is a HARD CAP last (per-lane downsize lever, e.g. sol 5m $15)
+                    if _ln_max > 0:
+                        size = min(size, _ln_max)
+
+            # 2026-07-20 LEVER 2 (operator GO, Codex GO): BTC conviction CEILING.
+            # BTC is monotonically ANTI-predictive above ~0.60 raw directional conviction
+            # (07-13+: conv>=0.60 n=26 -$90.67, loss DEEPENS with confidence -2.36 -> -4.43
+            # -> -4.44 -> -6.74/trade; conv<0.60 = +$119, crossover exactly at 0.60).
+            # DOWNSIZE (not skip — keep frequency + calibration data) high-conviction btc
+            # entries. Conviction = raw_est_prob mapped to the traded side (raw = the field
+            # the analysis used). Config-gated, default 0.0 = OFF.
+            # APPLIED LAST, on the FINAL size AFTER the lane min/max block (Codex catch):
+            # applying it to raw_size let a lane_min_notional floor re-inflate the downsize
+            # back up. Here nothing can undo it — an overconfident btc entry is downsized
+            # even past a lane floor, which is the intended risk behavior.
+            # BREAK: set ceiling 0 if btc conv>=ceiling turns net-positive over the next 20
+            # closed, or if it downsizes more winners than losers.
+            _l2_ceiling = float(self.config.get("btc_max_est_prob_conviction", 0.0) or 0.0)
+            if _l2_ceiling > 0.0 and is_updown and size > 0:
+                _l2_raw = locals().get("raw_est_prob")
+                if _l2_raw is not None:
+                    _l2_conv = float(_l2_raw) if action == "BUY_YES" else 1.0 - float(_l2_raw)
+                    if _l2_conv >= _l2_ceiling:
+                        # clamp to [0,1] (Codex hardening): a config typo must never
+                        # UPSIZE a high-conviction loser — this lever can only downsize.
+                        _l2_mult = max(0.0, min(1.0, float(self.config.get("btc_max_est_prob_conviction_size_mult", 0.33) or 0.33)))
+                        size *= _l2_mult
+                        reason_parts.append(
+                            f"btc_conviction_ceiling(conv={_l2_conv:.3f}>={_l2_ceiling:.2f} x{_l2_mult:.2f})"
+                        )
+                        logger.info(
+                            "  BTC conviction-ceiling DOWNSIZE %s '%s' conv=%.3f >= %.2f -> x%.2f (size->%.2f)",
+                            action, market.question[:40], _l2_conv, _l2_ceiling, _l2_mult, size,
+                        )
+
             if size <= 0:
                 _bump_skip("lane_size_too_small")
                 if action == "BUY_NO":
@@ -4240,11 +4376,36 @@ class BitcoinStrategy:
                     "sabre_trend": int(ta.trend_sabre.trend or 0),
                 },
             )
-            signals.append(signal)
-            logger.info(
-                f"BTC SIGNAL: {action} '{market.question[:50]}...' "
-                f"edge={edge:.3f} conf={confidence:.2f} ai={ai_used} | {reason}"
-            )
+            _mlv_ok = True
+            try:
+                _mlv_agent = getattr(self, "ai_agent", None)
+                _mlv_cfg = (getattr(_mlv_agent, "main_lane_veto_cfg", {}) or {}) if _mlv_agent is not None else {}
+                if _mlv_agent is not None and bool(_mlv_cfg.get("enabled", False)):
+                    _mlv_win = getattr(signal, "window_size", "") or ""
+                    _mlv_side = "up" if action == "BUY_YES" else "down"
+                    _mlv_key = "%s|%s|%s" % (self._signal_strategy_name, _mlv_win, _mlv_side)
+                    if _mlv_key in set(_mlv_cfg.get("lanes", []) or []):
+                        _mlv_ok, _mlv_meta = await _mlv_agent.evaluate_main_lane_veto(
+                            market_question=market.question,
+                            market_description=getattr(market, "description", "") or "",
+                            current_yes_price=float(yes_price),
+                            market_id=str(market.id),
+                            strategy_hint=self._signal_strategy_name,
+                            lane_id=_mlv_key,
+                            quant_action=action,
+                        )
+                        if not _mlv_ok:
+                            self._mlv_skip_count = getattr(self, "_mlv_skip_count", 0) + 1
+                            logger.info("  MAIN-LANE VETO skip %s mkt=%s %s", _mlv_key, market.id, _mlv_meta)
+            except Exception as _mlv_e:
+                logger.warning("main_lane_veto wiring error (FAIL-OPEN, trade proceeds): %s", _mlv_e)
+                _mlv_ok = True
+            if _mlv_ok:
+                signals.append(signal)
+                logger.info(
+                    f"BTC SIGNAL: {action} '{market.question[:50]}...' "
+                    f"edge={edge:.3f} conf={confidence:.2f} ai={ai_used} | {reason}"
+                )
 
         if signals:
             logger.info(f"Bitcoin strategy: {len(signals)} signals")

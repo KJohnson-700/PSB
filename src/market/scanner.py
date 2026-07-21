@@ -432,12 +432,23 @@ class MarketScanner:
         # Tokens we last requested prices for -> the WS subscription want-set
         # (unioned with open positions in main, with stale-unsubscribe for OOM safety).
         self._last_priced_token_ids: Set[str] = set()
+        # tid -> (monotonic ts last priced, minutes to window end); accumulated
+        # across concurrent hydrate batches w/ TTL. See update_market_prices.
+        self._ws_want_meta: Dict[str, Tuple[float, float]] = {}
+        # tid -> (src "ws"/"rest", loop-time ts recorded, ws age_ms at pricing).
+        # Entry provenance (observe-only); read by main._entry_price_provenance.
+        self._last_price_src: Dict[str, Tuple[str, float, float]] = {}
         self._ws_price_stats: Dict[str, int] = {"ws_hit": 0, "rest": 0}
 
     def _reload_config_fields(self) -> None:
         """Refresh derived thresholds from the shared config dict."""
         _pm = self.config.get("polymarket", {}) or {}
         _tr = self.config.get("trading", {}) or {}
+        # 2026-07-17 degen-0.5 book verification (default ON; opt-out:
+        # trading.admit_real_05_books: false). Lives in _reload_config_fields,
+        # so once this code is loaded the flag is HOT-RELOADABLE via
+        # reload_from_config; the verification code itself is restart-only.
+        self._admit_real_05_books = bool(_tr.get("admit_real_05_books", True))
         self.min_liquidity = _pm.get("min_liquidity", 10000)
         self._cycle_interval_sec = float(_tr.get("cycle_interval_sec", 120))
         configured_timeout = float(_pm.get("scanner_sync_timeout_sec", 120))
@@ -462,6 +473,14 @@ class MarketScanner:
         _ws = _tr.get("clob_ws", {}) or {}
         self._ws_drive_prices = bool(_ws.get("drive_scanner_prices", False))
         self._ws_price_max_age_sec = float(_ws.get("price_max_age_sec", 8.0) or 8.0)
+        # 2026-07-18 batch REST midpoints: collapse per-token GET /midpoint fan-out
+        # into chunked POST /midpoints (verified endpoint) -> kills the 429 storm from
+        # WS-flap REST fallback. Opt-out: trading.clob_ws.rest_batch_midpoints=false.
+        self._rest_batch_midpoints = bool(_ws.get("rest_batch_midpoints", True))
+        try:
+            self._rest_batch_size = max(1, int(_ws.get("rest_batch_size", 100) or 100))
+        except (TypeError, ValueError):
+            self._rest_batch_size = 100
 
     def reload_from_config(self, config: Dict[str, Any]) -> None:
         """Apply updated config to the live scanner without replacing caches/pool."""
@@ -754,6 +773,22 @@ class MarketScanner:
     _CLOB_API = "https://clob.polymarket.com"
     _PRICE_CONCURRENCY = 20  # max simultaneous CLOB midpoint requests
 
+    def ws_want_token_ids(self, max_age_sec: float = 180.0) -> List[str]:
+        """Scan-universe CLOB tokens for the WS book subscription, most-
+        imminent (fewest minutes to window end) first, recently-priced only.
+        Consumed by main._wanted_clob_book_token_ids, which caps the set —
+        this ordering is what makes the cap keep the LIVE windows instead of
+        an arbitrary slice dominated by far-lookahead dead books (2026-07-11
+        ws_cov=0.003 root cause)."""
+        _now = time.monotonic()
+        items = [
+            (mins, ts, t)
+            for t, (ts, mins) in self._ws_want_meta.items()
+            if (_now - ts) <= max_age_sec
+        ]
+        items.sort()
+        return [t for _, _, t in items]
+
     async def fetch_prices(self, token_ids: List[str]) -> Dict[str, float]:
         """Fetch current mid prices for token IDs.
 
@@ -777,6 +812,7 @@ class MarketScanner:
                 loop_now = asyncio.get_event_loop().time()
                 max_age = self._ws_price_max_age_sec
                 covered: List[str] = []
+                _ws_src_batch: Dict[str, Tuple[str, float, float]] = {}
                 for tid in token_ids:
                     book = ws.order_books.get(tid)
                     if book is None:
@@ -787,11 +823,16 @@ class MarketScanner:
                     if (loop_now - float(book.last_update or 0)) > max_age:
                         continue  # stale -> let REST refresh it
                     prices[tid] = mid
+                    _ws_src_batch[tid] = (
+                        "ws", loop_now,
+                        (loop_now - float(book.last_update or 0)) * 1000.0,
+                    )
                     covered.append(tid)
                 if covered:
                     cov = set(covered)
                     remaining = [t for t in token_ids if t not in cov]
                     self._ws_price_stats["ws_hit"] += len(covered)
+                    self._last_price_src.update(_ws_src_batch)
             except Exception as e:  # never let the overlay break pricing
                 logger.debug("WS price overlay failed, full REST fallback: %s", e)
                 remaining = token_ids
@@ -829,14 +870,51 @@ class MarketScanner:
                     return token_id, f"err:{type(e).__name__}"
                 return token_id, None
 
+        async def _get_mid_chunk(chunk):
+            # Batch: one POST /midpoints per chunk; same output shape as _get_mid
+            # (list of (tid, float|None|"timeout"|"err:*")). Fail-safe to None.
+            async with sem:
+                try:
+                    async with session.post(
+                        f"{self._CLOB_API}/midpoints",
+                        json=[{"token_id": t} for t in chunk],
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            out = []
+                            for t in chunk:
+                                raw = data.get(str(t)) if isinstance(data, dict) else None
+                                try:
+                                    m = float(raw) if raw is not None else 0.0
+                                except (TypeError, ValueError):
+                                    m = 0.0
+                                out.append((t, m if m > 0 else None))
+                            return out
+                        if resp.status == 429:
+                            return [(t, "err:RateLimited") for t in chunk]
+                        return [(t, None) for t in chunk]
+                except asyncio.TimeoutError:
+                    return [(t, "timeout") for t in chunk]
+                except Exception as e:
+                    return [(t, f"err:{type(e).__name__}") for t in chunk]
+
         try:
-            results = await asyncio.gather(*[_get_mid(tid) for tid in remaining])
+            if self._rest_batch_midpoints:
+                _bsz = self._rest_batch_size
+                _chunks = [remaining[i:i + _bsz] for i in range(0, len(remaining), _bsz)]
+                _subs = await asyncio.gather(*[_get_mid_chunk(c) for c in _chunks])
+                results = [pair for sub in _subs for pair in sub]
+            else:
+                results = await asyncio.gather(*[_get_mid(tid) for tid in remaining])
+            _rest_now = asyncio.get_event_loop().time()
             timeouts = 0
             errors = 0
             misses = 0
             for tid, val in results:
                 if isinstance(val, float):
                     prices[tid] = val
+                    self._last_price_src[tid] = ("rest", _rest_now, 0.0)
                 elif val == "timeout":
                     timeouts += 1
                 elif isinstance(val, str) and val.startswith("err:"):
@@ -1015,9 +1093,34 @@ class MarketScanner:
         token_ids = []
         for market in markets:
             token_ids.extend([market.token_id_yes, market.token_id_no])
+
+        # 2026-07-11 WS-coverage fix (ws_cov was 0.003): remember each priced
+        # token's imminence so the capped WS subscribe set holds the CURRENT/
+        # near windows — the active, entry-relevant books. Hydrate batches run
+        # concurrently (asyncio.gather), so this ACCUMULATES with a TTL instead
+        # of overwriting (the old set() only ever held the last batch).
+        _now_m = time.monotonic()
+        for market in markets:
+            _h = market.hours_to_expiration
+            _mins = 1e9 if _h is None else max(0.0, _h * 60.0)
+            for _tid in (market.token_id_yes, market.token_id_no):
+                _tid = str(_tid or "").strip()
+                if _tid:
+                    self._ws_want_meta[_tid] = (_now_m, _mins)
+        if len(self._ws_want_meta) > 4000:
+            _cut = _now_m - 180.0
+            self._ws_want_meta = {
+                t: v for t, v in self._ws_want_meta.items() if v[0] >= _cut
+            }
+        if len(self._last_price_src) > 4000:
+            _cut2 = time.monotonic() - 180.0
+            self._last_price_src = {
+                t: v for t, v in self._last_price_src.items() if v[1] >= _cut2
+            }
         
         # Fetch prices
         prices = await self.fetch_prices(token_ids)
+        _degen_05_pending: List[Market] = []
         
         # Update markets
         for market in markets:
@@ -1060,7 +1163,30 @@ class MarketScanner:
             # imbalance), and a true coin-flip has ~0 edge anyway. Treat both-legs-0.5 as
             # unpriced so the _priced() filter drops it before the strategy scan.
             if hydrated and abs(yes_price - 0.5) < 1e-3 and abs(no_price - 0.5) < 1e-3:
+                # 2026-07-17: do NOT drop unconditionally. A REAL freshly-opened
+                # book parks at symmetric maker quotes (0.49/0.51 -> mid exactly
+                # 0.500), indistinguishable from the no-book placeholder by mid
+                # alone — this guard was silently discarding genuine two-sided
+                # books and 5m lanes missed 9-30%% of live windows (bnb worst;
+                # misses clustered in quiet hours). Defer the verdict to a book
+                # check below: verified two-sided book -> keep; else drop as
+                # before (the blind-0.5 protection stays for actual placeholders).
                 hydrated = False
+                # Codex fix (2026-07-17): only a market whose BOTH legs returned a
+                # real /midpoint (or WS mid) is a re-admission candidate. A
+                # one-sided-DERIVED 0.50 (one leg missed, derived = 1 - other)
+                # is exactly the placeholder shape the guard exists for.
+                if yes_hit and no_hit:
+                    # 2026-07-18 REVERT (operator debug): the 07-17 window-proximity
+                    # scope gate here dropped EVERY 0.50 parked book beyond ~17min
+                    # because window_minutes is None at this point (float(None or 15)
+                    # =15 -> mins_left<=17), which ZEROED the 15m lanes (windows
+                    # 120/135) and the 5m engine post-restart (A/B: xrp5m 5->0, sol5m
+                    # 4->0, eth15m 5->0). The proven morning behavior re-admits any
+                    # verified two-sided 0.50 book unconditionally; the far-out
+                    # parked-book risk it reintroduces is ONE rare trade vs an
+                    # engine-wide outage. Revert to that.
+                    _degen_05_pending.append(market)
             market.price_hydrated = hydrated
             if market.spread <= 0:
                 # Mid prices only reveal convergence, not true order-book spread.
@@ -1078,7 +1204,164 @@ class MarketScanner:
                 len(markets),
             )
 
+        if _degen_05_pending and self._admit_real_05_books:
+            try:
+                await self._verify_degenerate_05_books(_degen_05_pending)
+            except Exception:
+                # Fail-CLOSED: on any verification error the markets stay
+                # unpriced (exactly the pre-fix behavior).
+                logger.debug("degen-0.5 book verification failed (markets stay dropped)", exc_info=True)
+
         return markets
+
+    # Book-shape gates for re-admitting an exact-0.50 mid: must look like a real
+    # freshly-seeded two-sided book (0.49/0.51-style), never a placeholder and
+    # never a degenerate 0.01/0.99 shell whose mid also happens to be 0.50.
+    _DEGEN05_MIN_BID = 0.40
+    _DEGEN05_MAX_ASK = 0.60
+    _DEGEN05_MAX_SPREAD = 0.06
+    _DEGEN05_MIN_BEST_SIZE = 1.0
+    _DEGEN05_REST_CAP = 10  # bound added latency per hydrate batch
+
+    @classmethod
+    def _degen05_book_ok(
+        cls,
+        best_bid: Optional[float],
+        best_ask: Optional[float],
+        bid_size: float = None,
+        ask_size: float = None,
+    ) -> bool:
+        if best_bid is None or best_ask is None:
+            return False
+        try:
+            bb, aa = float(best_bid), float(best_ask)
+        except (TypeError, ValueError):
+            return False
+        if not (cls._DEGEN05_MIN_BID <= bb < aa <= cls._DEGEN05_MAX_ASK):
+            return False
+        if (aa - bb) > cls._DEGEN05_MAX_SPREAD:
+            return False
+        for sz in (bid_size, ask_size):
+            if sz is not None:
+                try:
+                    if float(sz) < cls._DEGEN05_MIN_BEST_SIZE:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+        return True
+
+    async def _verify_degenerate_05_books(self, pending: List[Market]) -> None:
+        """Re-admit exact-0.50-mid markets that have GENUINE two-sided books.
+
+        2026-07-17: the degenerate-0.5 guard (2026-06-20 blind-0.5 fix) cannot
+        distinguish "no book" from "real 0.49/0.51 book whose mid is exactly
+        0.500" by mid alone — 5m lanes were missing 9-30% of live windows.
+        Codex-hardened: BOTH outcome tokens' books must verify (a BUY_NO fills
+        against the NO book), sizes are checked on the WS path too, and
+        one-sided-derived mids never reach this function. Verified markets get
+        price_hydrated=True with their true 0.5 mid; everything unverified
+        stays dropped, preserving the blind-0.5 protection.
+        """
+
+        def _ws_book_quad(book):
+            # WS OrderBook: best level is INDEX 0; entries are {price, size}.
+            try:
+                bids = getattr(book, "bids", None) or []
+                asks = getattr(book, "asks", None) or []
+                if not bids or not asks:
+                    return None
+                bb, aa = bids[0] or {}, asks[0] or {}
+                return (bb.get("price"), aa.get("price"), bb.get("size"), aa.get("size"))
+            except Exception:
+                return None
+
+        remaining: List[Market] = []
+        readmitted_ws = 0
+        ws = self.ws_client
+        books = getattr(ws, "order_books", None) if ws is not None else None
+        _loop_now = asyncio.get_event_loop().time()
+        _max_age = float(getattr(self, "_ws_price_max_age_sec", 8.0) or 8.0)
+        for m in pending:
+            ok = False
+            if books and m.token_id_yes and m.token_id_no:
+                by = books.get(m.token_id_yes)
+                bn = books.get(m.token_id_no)
+                fresh = all(
+                    b is not None
+                    and (_loop_now - float(getattr(b, "last_update", 0) or 0)) <= _max_age
+                    for b in (by, bn)
+                )
+                if fresh:
+                    qy = _ws_book_quad(by)
+                    qn = _ws_book_quad(bn)
+                    if (
+                        qy is not None and qn is not None
+                        and self._degen05_book_ok(*qy)
+                        and self._degen05_book_ok(*qn)
+                    ):
+                        ok = True
+            if ok:
+                m.price_hydrated = True
+                m.book_verified_05 = True
+                readmitted_ws += 1
+            else:
+                remaining.append(m)
+
+        readmitted_rest = 0
+        # 2 REST calls per market (YES + NO book): cap MARKETS at half the call
+        # budget so a hydrate batch never adds more than ~10 concurrent calls.
+        rest_batch = [
+            m for m in remaining if m.token_id_yes and m.token_id_no
+        ][: max(1, self._DEGEN05_REST_CAP // 2)]
+        if rest_batch:
+            session = await self._get_session()
+
+            async def _rest_book_quad(token_id: str):
+                try:
+                    async with session.get(
+                        f"{self._CLOB_API}/book",
+                        params={"token_id": token_id},
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        if resp.status != 200:
+                            return None
+                        data = await resp.json()
+                except Exception:
+                    return None
+                bids = data.get("bids") or []
+                asks = data.get("asks") or []
+                if not bids or not asks:
+                    return None
+                # REST /book arrays: best price level is the LAST element.
+                bb, aa = bids[-1] or {}, asks[-1] or {}
+                return (bb.get("price"), aa.get("price"), bb.get("size"), aa.get("size"))
+
+            async def _check_market(m: Market):
+                qy, qn = await asyncio.gather(
+                    _rest_book_quad(m.token_id_yes),
+                    _rest_book_quad(m.token_id_no),
+                )
+                return m, qy, qn
+
+            for m, qy, qn in await asyncio.gather(*[_check_market(m) for m in rest_batch]):
+                if (
+                    qy is not None and qn is not None
+                    and self._degen05_book_ok(*qy)
+                    and self._degen05_book_ok(*qn)
+                ):
+                    m.price_hydrated = True
+                    m.book_verified_05 = True
+                    readmitted_rest += 1
+
+        if readmitted_ws or readmitted_rest:
+            logger.info(
+                "Scanner: re-admitted %d exact-0.50 markets with VERIFIED two-sided "
+                "YES+NO books (ws=%d rest=%d, %d stay dropped)",
+                readmitted_ws + readmitted_rest,
+                readmitted_ws,
+                readmitted_rest,
+                len(pending) - readmitted_ws - readmitted_rest,
+            )
 
     def _set_slug_fetch_stats(
         self, key: str, *, attempted: int, hit_slugs: int, empty_slugs: int

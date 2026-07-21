@@ -57,7 +57,14 @@ class OlympusClient:
         trading_cfg = (config.get("trading") or {}) if config else {}
         self.smoke_scale_live_sizing = bool(smoke_cfg.get("scale_live_sizing", True))
         self.smoke_scale_floor_usd = float(smoke_cfg.get("scale_floor_usd", 1.0) or 1.0)
-        self.smoke_true_max_usd = float(trading_cfg.get("max_position_size", 0.0) or 0.0)
+        # Live smoke-band denominator. Defaults to trading.max_position_size, but can be
+        # pinned via smoke_test.true_max_usd so paper Kelly caps can grow (e.g. $500
+        # bankroll) WITHOUT rescaling live smoke order sizes. Keeps the live band stable.
+        self.smoke_true_max_usd = float(
+            smoke_cfg.get("true_max_usd")
+            if smoke_cfg.get("true_max_usd") is not None
+            else (trading_cfg.get("max_position_size", 0.0) or 0.0)
+        )
         # Defense-in-depth: the smoke cap is a LIVE-only broker safety. CLOBClient
         # short-circuits paper (dry_run) before reaching Olympus, so this guard
         # should never fire in paper — but we keep it explicit so any future path

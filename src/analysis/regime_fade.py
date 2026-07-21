@@ -148,6 +148,21 @@ def predicted_p_win(side: Any, est_prob: Optional[float]) -> Optional[float]:
     return p
 
 
+def lane_key(strategy: Any, window: Any, side: Any) -> str:
+    """Composite per-(strategy, window, side) fade key.
+
+    2026-06-21: the fade was keyed on strategy alone, which idled a whole asset's
+    mid band across BOTH directions and ALL windows. The bleed is lane-specific
+    (e.g. xrp 5m BUY_NO, sol 1h BUY_YES) — so judge and fade each (asset, window,
+    side) on its OWN band WR, leaving the rest of that asset trading.
+    """
+    return "%s|%s|%s" % (
+        str(strategy or "").strip(),
+        str(window or "").strip(),
+        str(side or "").strip().upper(),
+    )
+
+
 def _row_est_prob(row: Dict[str, Any]) -> Optional[float]:
     for key in ("calibrated_est_prob", "stated_est_prob", "est_prob", "raw_est_prob"):
         if row.get(key) is not None:
@@ -251,9 +266,12 @@ def _compute_states(
             continue
         if not isinstance(row, dict) or row.get("shadow_mode"):
             continue
-        lane = row.get("strategy")
-        if not lane:
+        strat = row.get("strategy")
+        win_sz = row.get("window") or row.get("window_size")
+        side_tok = row.get("action") or row.get("side")
+        if not strat or not win_sz or not side_tok:
             continue
+        lane = lane_key(strat, win_sz, side_tok)
         win = row.get("win")
         if not isinstance(win, bool):
             continue

@@ -39,8 +39,9 @@ def test_alt_macro_btc_trade_inputs_are_disabled(strategy_cls: type) -> None:
         BNBMacroStrategy,
     ],
 )
-def test_alt_macro_ai_gate_windows_are_15m_1h_only(strategy_cls: type) -> None:
+def test_alt_macro_ai_gate_removed(strategy_cls: type) -> None:
+    # 2026-07-11: alt live-entry AI gate pulled for all alt macro strategies
+    # (ETH inherits SolMacro). Guard that no alt window re-enables it.
     strategy = strategy_cls.__new__(strategy_cls)
 
-    assert strategy._DECISION_GATE_WINDOWS == frozenset({"15m", "1h"})
-    assert "5m" not in strategy._DECISION_GATE_WINDOWS
+    assert strategy._DECISION_GATE_WINDOWS == frozenset()

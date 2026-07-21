@@ -52,6 +52,25 @@ def hyperliquid_kwargs_from_config(mapping: Optional[Dict[str, Any]] = None) -> 
         out["retry_backoff_base_sec"] = float(m["retry_backoff_base_sec"])
     if "stale_on_error_max_age_sec" in m and m["stale_on_error_max_age_sec"] is not None:
         out["stale_on_error_max_age_sec"] = float(m["stale_on_error_max_age_sec"])
+    if "hl_mid_ttl_sec" in m and m["hl_mid_ttl_sec"] is not None:
+        out["hl_mid_ttl_sec"] = float(m["hl_mid_ttl_sec"])
+    if (
+        "stale_on_error_max_age_by_interval" in m
+        and m["stale_on_error_max_age_by_interval"] is not None
+    ):
+        raw = m["stale_on_error_max_age_by_interval"]
+        if not isinstance(raw, dict):
+            raw = {}
+        parsed = {}
+        for _k, _v in raw.items():
+            if _v is None:
+                continue
+            try:
+                parsed[str(_k)] = float(_v)
+            except (TypeError, ValueError):
+                continue
+        if parsed:
+            out["stale_on_error_max_age_by_interval"] = parsed
     return out
 
 
@@ -102,6 +121,8 @@ class HyperliquidHypeService(SOLBTCService):
         max_retries: int = 4,
         retry_backoff_base_sec: float = 0.5,
         stale_on_error_max_age_sec: float = 180.0,
+        stale_on_error_max_age_by_interval: Optional[Dict[str, float]] = None,
+        hl_mid_ttl_sec: float = 5.0,
     ):
         super().__init__(
             polygon_rpc=polygon_rpc,
@@ -115,6 +136,9 @@ class HyperliquidHypeService(SOLBTCService):
         )
         self._hype_cache: Dict[str, Tuple[float, pd.DataFrame]] = {}
         self._hype_cache_ttl = 30  # seconds — fresh-window TTL
+        # 2026-07-03: settlement-aligned HL mid must stay FRESH on 5m/15m windows;
+        # was hardcoded 30s (=10% of a 5m window). Config: hyperliquid.hl_mid_ttl_sec.
+        self._hl_mid_ttl_sec = max(1.0, float(hl_mid_ttl_sec))
         self._request_timeout_sec = max(5.0, float(request_timeout_sec))
         self._range_request_timeout_sec = max(5.0, float(range_request_timeout_sec))
         self._connect_timeout_sec = max(2.0, float(connect_timeout_sec))
@@ -123,6 +147,17 @@ class HyperliquidHypeService(SOLBTCService):
         # Stale-on-error: when a fetch fails, keep returning the last good cached
         # frame for up to this age. Beats returning empty (which kills HYPE signals).
         self._stale_on_error_max_age_sec = max(0.0, float(stale_on_error_max_age_sec))
+        # Per-interval stale-fallback budget (operator 2026-07-20: skip a window
+        # rather than enter on stale data). On a 5m window a 180s-old candle is
+        # 60% window-stale, so 5m gets a tight budget (=> return empty => scanner
+        # skips) while 15m/1h stay generous to keep functioning through
+        # Hyperliquid's sparse pushes. Missing interval falls back to the scalar.
+        self._stale_max_age_by_interval: Dict[str, float] = {}
+        for _iv, _age in dict(stale_on_error_max_age_by_interval or {}).items():
+            try:
+                self._stale_max_age_by_interval[str(_iv)] = max(0.0, float(_age))
+            except (TypeError, ValueError):
+                continue
         # Last-good cache, separate from the TTL cache so it survives expiry.
         self._hype_last_good: Dict[str, Tuple[float, pd.DataFrame]] = {}
         # Connection-reused HTTP session — avoids per-call TLS handshake.
@@ -186,7 +221,9 @@ class HyperliquidHypeService(SOLBTCService):
             session=self._http_session,
         )
 
-    def _stale_fallback(self, cache_key: str, *, reason: str) -> pd.DataFrame:
+    def _stale_fallback(
+        self, cache_key: str, *, reason: str, interval: Optional[str] = None
+    ) -> pd.DataFrame:
         """Return last good frame if fresh enough, else empty.
 
         Logged at WARNING so blackouts surface in ops logs (the prior code
@@ -201,12 +238,17 @@ class HyperliquidHypeService(SOLBTCService):
             return self._empty_klines_df()
         ts, df = rec
         age = time.time() - ts
-        if age > self._stale_on_error_max_age_sec:
+        max_age = self._stale_max_age_by_interval.get(
+            str(interval), self._stale_on_error_max_age_sec
+        )
+        if age > max_age:
             logger.warning(
-                "Hyperliquid HYPE fetch failed (%s); last good cache is %.1fs old (>%s) — returning empty",
+                "Hyperliquid HYPE fetch failed (%s); last good cache is %.1fs old "
+                "(>%ss, interval=%s) — returning empty",
                 reason,
                 age,
-                self._stale_on_error_max_age_sec,
+                max_age,
+                interval,
             )
             return self._empty_klines_df()
         logger.warning(
@@ -231,7 +273,7 @@ class HyperliquidHypeService(SOLBTCService):
         """
         now = time.time()
         cached = getattr(self, "_hl_mid_cache", None)
-        if cached and (now - cached[0]) < 30.0:
+        if cached and (now - cached[0]) < self._hl_mid_ttl_sec:
             return cached[1]
         try:
             resp = self._post_candles(
@@ -384,10 +426,10 @@ class HyperliquidHypeService(SOLBTCService):
             if not df2.empty:
                 self._hype_last_good[cache_key] = (time.time(), df2)
                 return df2
-            return self._stale_fallback(cache_key, reason=f"empty {interval}")
+            return self._stale_fallback(cache_key, reason=f"empty {interval}", interval=interval)
         except Exception as e:
             logger.error("Hyperliquid HYPE candles unavailable (%s): %s", interval, e)
-            return self._stale_fallback(cache_key, reason=f"exception {interval}: {e}")
+            return self._stale_fallback(cache_key, reason=f"exception {interval}: {e}", interval=interval)
 
     def fetch_klines_range(
         self,
@@ -553,13 +595,21 @@ class HyperliquidHypeService(SOLBTCService):
         return df
 
     def get_current_price(self, symbol: str = "HYPEUSDT") -> Optional[float]:
-        """Get latest HYPE price from Hyperliquid; others from Binance."""
+        """HYPE price LEVEL = Hyperliquid native mid (settlement-aligned: the
+        Chainlink HYPE oracle references HL native spot, what the market resolves
+        on). Klines / momentum (MACD/RSI/ATR) stay on Binance USDM futures (deep,
+        fast, reliable). Futures 1m kline close is the fallback if HL allMids is
+        unreachable. 2026-06-26 option-C (Codex pick: futures momentum + HL level)
+        — fixes the basis/reference mismatch that took hype 0/31 without depending
+        on the flaky HL candleSnapshot for momentum history."""
         if symbol.upper() != self.alt_symbol.upper():
             return super().get_current_price(symbol=symbol)
         df = self.fetch_klines(symbol=self.alt_symbol, interval="1m", limit=1)
-        if df.empty:
-            return None
-        try:
-            return float(df["close"].iloc[-1])
-        except Exception:
-            return None
+        fallback = None
+        if not df.empty:
+            try:
+                fallback = float(df["close"].iloc[-1])
+            except Exception:
+                fallback = None
+        hl_mid = self._oracle_reference_spot(fallback=fallback)
+        return hl_mid if hl_mid is not None else fallback

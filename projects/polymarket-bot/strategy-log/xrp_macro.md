@@ -14,6 +14,15 @@ XRP **Up or Down** — inherits shared `SolMacroStrategy` signal path with XRP m
 
 ## Change Log
 
+### 2026-07-13 — Let XRP 5m DOWN floor survive MINIMAL sizing brake
+
+- **What changed:** In the shared SOL macro sizing path inherited by XRP, per-lane sizing now applies lift → floor → hard cap. `PAUSED` still blocks all overrides; `MINIMAL` skips lift but can honor explicit floor opt-ins. Config added `xrp_macro.lane_min_notional_5m_down: 15` and `xrp_macro.lane_min_notional_ignores_minimal_5m_down: true`.
+- **Why:** Operator observed the XRP 5m short engine lane running as a known winner (+$77 same-day live record) while still receiving $5 fills under the global MINIMAL loss-streak brake.
+- **Hypothesis:** XRP 5m DOWN keeps the intended $15 floor during MINIMAL while preserving the `PAUSED` kill switch and existing `lane_max_notional_5m_down: 25` hard cap.
+- **Expected outcome:** XRP 5m DOWN fills use at least $15 when the opt-in flag is present, unless `PAUSED` is active; hard cap still applies last.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected XRP 5m DOWN trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-15 — DIAGNOSIS (decision OPEN): xrp is -EV on EVERY lane, both sides
 
 - **Finding:** Net-of-fee ghost EV by (window, side), all-time / recent:
@@ -437,3 +446,6 @@ _(none yet — add only after data)_
 - **Also (exit-side, same batch):** 15m up stop 0.28→0.32 (held-WR 53%, +$45 n=15). Forward-test only — ghost log can't validate stop changes; basis is the fresh taken-exit settler (`held_win`/`hold_minus_exit_pnl`).
 - **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
 - **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~67% thesis.
+
+## 2026-07-12 01:18Z — per-lane composite floor / short-door reopen — STATUS: PENDING
+Settled-cohort basis (36h, sanctioned gate-flip use of ghost settles): see vault handoff #3 addendum. Change: 1h:SHORT composite floor -> 0.0 (blocked cohort 79%/112; was 65 blocks/75min live)   . Guards remaining: min_edge, shrink 0.28, conviction, momentum-confirm, oracle, sizing, kill-switch. **Outcome stays PENDING until >=15 closed trades on the lane; review then.**

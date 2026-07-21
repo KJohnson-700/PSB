@@ -8,14 +8,23 @@ from typing import Optional
 from src.analysis.btc_price_service import MACDResult, TrendSabreResult
 
 
-def btc_5m_htf_boost(sabre: TrendSabreResult, macd_4h: MACDResult) -> float:
+def btc_5m_htf_boost(
+    sabre: TrendSabreResult,
+    macd_4h: MACDResult,
+    *,
+    full_mag: float = 0.04,
+    partial_mag: float = 0.02,
+) -> float:
+    # 2026-07-20: magnitudes are config-driven (btc_5m_htf_full_boost/partial). The old
+    # hardcoded 0.04 capped bull conviction so est topped ~0.62 even in a full bull, below
+    # the bull-priced YES -> the lane bought cheap NO and faded every rally. Symmetric bear.
     if sabre.trend == 1 and macd_4h.above_zero:
-        return 0.04
+        return full_mag
     if sabre.trend == 1 or macd_4h.above_zero:
-        return 0.02
+        return partial_mag
     if sabre.trend == -1 and not macd_4h.above_zero:
-        return -0.04
-    return -0.02
+        return -full_mag
+    return -partial_mag
 
 
 def btc_5m_4h_1h_hist_gate(
@@ -108,11 +117,13 @@ def compute_btc_5m_quant(
     yes_price: float,
     m5_direction: str,
     m5_in_prediction_window: bool,
+    htf_full_boost: float = 0.04,
+    htf_partial_boost: float = 0.02,
     hard_hist_gate: bool = True,
 ) -> Btc5mQuantResult:
     """Raw quant path for BTC 5m (pre ``_calibrate_est_prob`` on live)."""
     est_prob_up = 0.50
-    htf_boost = btc_5m_htf_boost(sabre, macd_4h)
+    htf_boost = btc_5m_htf_boost(sabre, macd_4h, full_mag=htf_full_boost, partial_mag=htf_partial_boost)
     est_prob_up += htf_boost
 
     hist_ok = btc_5m_4h_1h_hist_gate(macd_4h, macd_1h, allowed_side)

@@ -32,6 +32,8 @@ _STRATEGY_CONFIG_KEYS = (
     "eth_macro",
     "hype_macro",
     "xrp_macro",
+    "doge_macro",
+    "bnb_macro",
 )
 
 

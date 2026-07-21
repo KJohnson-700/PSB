@@ -383,3 +383,6 @@ _(none yet — add only after data)_
 - **Change:** flip BUY_NO→BUY_YES at the 5m edge stage via the shared sol loop (`buy_no_5m_flip_to_yes: true`). Uses the **complement** of the native est_prob (`max(1−est, 0.50)`) so the normal edge gate then admits only the *cheap* longs (low yes_price) — the +EV pocket. Candidate has already cleared all short-side gates; downstream directional guards inert (`_btc_trade_inputs_enabled()==False`). Default opt-out flag.
 - **Status:** LIVE post-restart in session `test_20260611_181157`. Family flip (sol/xrp/doge/bnb) observed firing (`+buy_no_5m_to_yes_flip side=LONG`); eth/hype loaded but **dormant** until their 5m side next goes short (book was all-LONG at restart).
 - **Watch:** confirm flipped longs *convert to fills* over next sessions, not 100% re-skipped by lane_entry_window/composite/iql. Validate flipped-long held-WR vs the ~67% thesis.
+
+## 2026-07-12 01:18Z — per-lane composite floor / short-door reopen — STATUS: PENDING
+Settled-cohort basis (36h, sanctioned gate-flip use of ghost settles): see vault handoff #3 addendum. Change:  1h:SHORT composite floor -> 0.0 (60%/57)  . Guards remaining: min_edge, shrink 0.28, conviction, momentum-confirm, oracle, sizing, kill-switch. **Outcome stays PENDING until >=15 closed trades on the lane; review then.**

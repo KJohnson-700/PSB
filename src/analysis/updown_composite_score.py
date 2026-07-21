@@ -76,6 +76,8 @@ def validate_oracle_reference(
     allow_exchange_when_oracle_missing: bool = False,
     stale_basis_relax_max_bps: Optional[float] = None,
     basis_relax_max_bps: Optional[float] = None,
+    stale_spot_is_settlement: bool = False,
+    stale_spot_settlement_max_basis_bps: Optional[float] = 500.0,
 ) -> OracleValidation:
     """Validate oracle freshness and basis against the exchange spot feed.
 
@@ -142,6 +144,27 @@ def validate_oracle_reference(
     freshness = _freshness_seconds(oracle_updated_at, now)
     basis = ((spot_f - oracle_f) / oracle_f) * 10000.0
     if freshness > float(max_age_sec):
+        # 2026-07-03 staleness RECOVERY (operator order): when the lane's exchange
+        # spot IS the market's settlement source (hype: HL native mid, 5s TTL),
+        # a slow Chainlink round must not starve the lane — the fresh spot is the
+        # better truth. Basis vs the stale print is only used as a gross-failure
+        # cap (bad spot print / feed insanity), not as an agreement test.
+        if stale_spot_is_settlement:
+            # Codex amend 2026-07-04: cap must be FINITE — it is the only sanity
+            # check left against a bad spot print when the oracle is stale.
+            try:
+                _gross_cap = float(stale_spot_settlement_max_basis_bps)
+            except (TypeError, ValueError):
+                _gross_cap = 500.0
+            if abs(basis) <= _gross_cap:
+                return OracleValidation(
+                    passed=True,
+                    reason="oracle_stale_settlement_spot_ok",
+                    oracle_price=oracle_f,
+                    exchange_spot=spot_f,
+                    basis_bps=basis,
+                    freshness_sec=freshness,
+                )
         relax_cap = stale_basis_relax_max_bps
         if relax_cap is not None and abs(basis) <= float(relax_cap):
             return OracleValidation(
@@ -211,6 +234,7 @@ def apply_fresh_cross_override(
     macd_hist_5m: Optional[float] = None,
     macd_flip_enabled: bool = False,
     macd_flip_long_to_short_enabled: bool = False,
+    long_to_short_enabled: bool = False,  # F6 2026-07-14: gate the LONG->SHORT fresh-cross mirror (default OFF; shorts into strength in a rising tape). Keep protective SHORT->LONG always.
 ):
     """Flip to the momentum side when a FRESH MACD cross contradicts the
     lagging-bias-chosen side.
@@ -260,7 +284,7 @@ def apply_fresh_cross_override(
         if src_tf is not None:
             est_prob_up = max(est_prob_up, 0.55)
             flipped = "BUY_YES"
-    elif allowed_side == "LONG":
+    elif allowed_side == "LONG" and long_to_short_enabled:
         src_tf = _src("BEARISH_CROSS")
         if src_tf is not None:
             est_prob_up = min(est_prob_up, 0.45)

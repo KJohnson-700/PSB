@@ -44,7 +44,11 @@ RESOLUTION_CACHE_PATH = CALIB_DIR / "_market_resolution_cache.json"
 # hold-to-resolution counterfactual is unknown and worth settling. "RESOLVED:*"
 # rows were already held to resolution, so their outcome is already recorded.
 EARLY_EXIT_REASONS = frozenset(
-    {"updown_stop_loss", "stop_loss", "updown_time_stop", "take_profit", "updown_expired"}
+    # 2026-07-17 (Codex catch): "take_profit_late" MUST be here or time-gated
+    # late-TP exits never enter trades_settled.jsonl and the forward test that
+    # judges the change would have no data.
+    {"updown_stop_loss", "stop_loss", "updown_time_stop", "take_profit", "updown_expired",
+     "take_profit_late"}
 )
 
 

@@ -98,6 +98,11 @@ class ExposureManager:
             ExposureTier.PAUSED: 0.0,
         }
         self.tier_floors = self._resolve_tier_floors(exposure_config)
+        # Per-asset tier overrides (2026-07-11): e.g. exposure.per_asset.btc lets ONE
+        # lane's tier cap/multiplier differ (btc was pinned MINIMAL x0.2/$8 while alts
+        # ran MODERATE $15.60 — wins too small to matter). Per-lane rule: other assets
+        # untouched unless they get their own block.
+        self._apply_per_asset_overrides(exposure_config)
 
         # --- Loss-streak lane pause config ---
         self.loss_kill_switch_enabled = exposure_config.get('loss_kill_switch_enabled', True)
@@ -155,6 +160,41 @@ class ExposureManager:
         self._pause_recovery_target: float = 0.0
         self._latest_green_window: Optional[bool] = None
 
+    def _apply_per_asset_overrides(self, exposure_config: Dict[str, Any]) -> None:
+        """Apply exposure.per_asset.<lane_name.lower()> overrides to this manager.
+
+        Supported keys: full_size / moderate_size / minimal_size (tier USD caps) and
+        full_multiplier / moderate_multiplier / minimal_multiplier (tier multipliers).
+        Missing keys leave the shared defaults untouched. Never raises.
+        """
+        try:
+            pa = (exposure_config or {}).get("per_asset") or {}
+            mine = pa.get(str(getattr(self, "lane_name", "") or "").lower()) or {}
+            if not mine:
+                return
+            _size_keys = {
+                "full_size": ExposureTier.FULL,
+                "moderate_size": ExposureTier.MODERATE,
+                "minimal_size": ExposureTier.MINIMAL,
+            }
+            _mult_keys = {
+                "full_multiplier": ExposureTier.FULL,
+                "moderate_multiplier": ExposureTier.MODERATE,
+                "minimal_multiplier": ExposureTier.MINIMAL,
+            }
+            for k, tier in _size_keys.items():
+                if k in mine:
+                    self.tier_sizing[tier] = float(mine[k])
+            for k, tier in _mult_keys.items():
+                if k in mine:
+                    self.tier_multipliers[tier] = float(mine[k])
+            logger.info(
+                "Exposure per-asset overrides applied for %s: %s",
+                getattr(self, "lane_name", "?"), dict(mine),
+            )
+        except Exception:
+            logger.warning("per-asset exposure override failed (ignored)", exc_info=True)
+
     def reload_from_config(self, exposure_config: Dict[str, Any]) -> None:
         """Refresh sizing, kill-switch, and condition thresholds from YAML/dashboard.
 
@@ -170,6 +210,7 @@ class ExposureManager:
         }
         self.min_trade_usd = float(exposure_config.get("min_trade_usd", 0.0) or 0.0)
         self.tier_floors = self._resolve_tier_floors(exposure_config)
+        self._apply_per_asset_overrides(exposure_config)
         # Preserve the explicitly-configured value on partial reloads. A sizing-only
         # (or any key-missing) update must NOT silently re-enable the loss-streak
         # kill switch — that was flipping config `false` back to `true` at runtime
@@ -686,11 +727,8 @@ def _get_weekend_penalty() -> float:
     now_utc = datetime.now(timezone.utc)
     weekday = now_utc.weekday()  # 0=Mon … 5=Sat, 6=Sun
     utc_hour = now_utc.hour
-
-    if weekday >= 5:
-        return 0.65
-
-    if weekday == 4 and utc_hour >= 20:
-        return 0.85
-
+    # 2026-07-11 DATA-DISABLED (operator C): live era-split (>=06-18) shows WEEKEND
+    # avg -$0.043/trade (40% WR, n=1199) vs WEEKDAY -$0.227 (38%, n=2252) — the
+    # penalty was cutting size on the bot's BETTER days. Manipulation thesis (a4385)
+    # not supported by realized PnL. Restore by reverting to 0.65/0.85 returns.
     return 1.0

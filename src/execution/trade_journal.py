@@ -6,6 +6,15 @@ Every trade decision, price update, and exit is recorded to disk.
 
 import json
 import logging
+import os
+import sys
+
+# 2026-07-16: the --dashboard-only process reads the journal read-only. It must NOT
+# write summary.json (that is the bot's file -> write contention/mid-write reads) and
+# the get_summary()->entry_log_first_last rescan on every load was the dashboard's top
+# CPU cost (py-spy). The live bot (no --dashboard-only) is unaffected.
+_JOURNAL_READONLY = ("--dashboard-only" in sys.argv)
+import shutil
 import time
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta, timezone
@@ -14,9 +23,18 @@ from typing import Dict, List, Optional, Any
 
 from ..journal_features import enrich_entry_extra, enrich_exit_extra
 
+# 2026-07-16 JOURNAL-SLIM (operator GO, staged next-restart): diagnostic-noise events were
+# ~90% of a 50MB entries.jsonl (BUY_NO_SKIP 36% + ANNOTATION 34% + PRICE_UPDATE 15% + SKIP 5%)
+# and no trading path reads them back (PRICE_UPDATE has 0 consumers; BUY_NO_SKIP is redundant
+# with rejected_candidates.jsonl; ANNOTATION is skipped on load). Keeping ENTRY/EXIT/SNAPSHOT/
+# ERROR makes every dashboard parse ~9x cheaper. Escape hatch: set JOURNAL_LOG_ALL_EVENTS=1.
+_JOURNAL_NOISE_EVENTS = frozenset({"PRICE_UPDATE", "BUY_NO_SKIP", "SKIP", "ANNOTATION"})
+_JOURNAL_LOG_ALL_EVENTS = os.getenv("JOURNAL_LOG_ALL_EVENTS", "").strip().lower() in ("1", "true", "yes")
+
 logger = logging.getLogger(__name__)
 
 JOURNAL_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "paper_trades"
+MIN_COMPLETED_SESSION_TRADES_FOR_LISTING = 50
 
 # Append-only log of actual CLOB fill prices for updown markets.
 # Used by updown_engine to replace N(0.50, 0.06) with empirical distribution.
@@ -161,6 +179,38 @@ class TradeJournal:
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 pass
         return TradeJournal._summary_has_activity(summ)
+
+    @staticmethod
+    def session_trade_count(session_dir: Path) -> int:
+        """Best-effort count of fills for deciding whether a completed run is worth listing."""
+        summary_file = session_dir / "summary.json"
+        try:
+            if summary_file.exists():
+                with open(summary_file, encoding="utf-8", errors="replace") as f:
+                    data = json.load(f) or {}
+                total = int(data.get("total_entries", 0) or 0)
+                if total > 0:
+                    return total
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        entries_file = session_dir / "entries.jsonl"
+        total = 0
+        try:
+            if entries_file.exists():
+                with open(entries_file, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            row = json.loads(line)
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            continue
+                        if row.get("event") == "ENTRY":
+                            total += 1
+        except OSError:
+            return 0
+        return total
 
     @staticmethod
     def newest_resumable_session_dir(journal_dir: Optional[Path] = None) -> Optional[Path]:
@@ -864,25 +914,36 @@ class TradeJournal:
     @staticmethod
     def entry_log_first_last(entries_file: Path) -> tuple[Optional[str], Optional[str]]:
         """First and last ``timestamp`` values in entries.jsonl (any event)."""
-        if not entries_file.exists():
-            return None, None
+        # 2026-07-16 BOUNDED: only the FIRST and LAST timestamps are needed, so read the
+        # head and a tail chunk instead of json.loads-scanning the whole (50MB+) file. Same
+        # output; was the dashboard's #1 CPU leaf (full rescan on every _save_summary).
         first: Optional[str] = None
         last: Optional[str] = None
+        def _ts(raw: bytes) -> Optional[str]:
+            try:
+                v = json.loads(raw).get("timestamp")
+                return str(v) if v else None
+            except Exception:
+                return None
         try:
-            with open(entries_file, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    ts = e.get("timestamp")
-                    if ts:
-                        if first is None:
-                            first = str(ts)
-                        last = str(ts)
+            with open(entries_file, "rb") as f:
+                # first non-empty line with a timestamp (scan a few lines from the head)
+                for _i, raw in enumerate(f):
+                    raw = raw.strip()
+                    if raw:
+                        first = _ts(raw)
+                        if first is not None or _i > 50:
+                            break
+                # last non-empty line with a timestamp (tail chunk only)
+                f.seek(0, 2)
+                size = f.tell()
+                chunk = min(size, 262144)
+                f.seek(size - chunk)
+                tail_lines = [ln for ln in f.read().splitlines() if ln.strip()]
+                for raw in reversed(tail_lines):
+                    last = _ts(raw.strip())
+                    if last is not None:
+                        break
         except OSError:
             return None, None
         return first, last
@@ -930,8 +991,15 @@ class TradeJournal:
                         yield sub, source
 
     @staticmethod
-    def list_sessions() -> List[Dict]:
-        """List all past paper trade sessions from both active and archive directories."""
+    def list_sessions(
+        min_completed_trades: int = MIN_COMPLETED_SESSION_TRADES_FOR_LISTING,
+        include_short_current: bool = True,
+    ) -> List[Dict]:
+        """List paper sessions, hiding short completed runs by default.
+
+        The active/current session remains visible while it is still accumulating fills;
+        completed sessions need ``min_completed_trades`` fills to avoid noisy aborted runs.
+        """
         ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
         current_dir = TradeJournal.newest_resumable_session_dir()
         current_session_id = current_dir.name if current_dir else None
@@ -948,18 +1016,26 @@ class TradeJournal:
                 if d.name in seen:
                     continue
                 seen.add(d.name)
+                is_current = src == "active" and d.name == current_session_id
+                trade_count = TradeJournal.session_trade_count(d)
+                if (
+                    min_completed_trades > 0
+                    and (not is_current or not include_short_current)
+                    and trade_count < min_completed_trades
+                ):
+                    continue
                 summary_file = d / "summary.json"
                 if summary_file.exists():
                     try:
                         with open(summary_file) as f:
                             data = json.load(f)
-                            is_current = src == "active" and d.name == current_session_id
                             data["_source"] = src
                             data["_is_current"] = is_current
                             data["_status"] = (
                                 "active" if is_current else "completed" if src == "active" else "archived"
                             )
                             data["_path"] = str(d)
+                            data["_trade_count_for_listing"] = trade_count
                             data.update(
                                 TradeJournal.session_time_meta_for_dir(
                                     d, d.name, src
@@ -1002,35 +1078,35 @@ class TradeJournal:
                                     pass
                             sessions.append(data)
                     except Exception:
-                        is_current = source == "active" and d.name == current_session_id
                         sessions.append(
                             {
                                 "session_id": d.name,
-                                "_source": source,
+                                "_source": src,
                                 "_is_current": is_current,
                                 "_status": (
-                                    "active" if is_current else "completed" if source == "active" else "archived"
+                                    "active" if is_current else "completed" if src == "active" else "archived"
                                 ),
                                 "_path": str(d),
+                                "_trade_count_for_listing": trade_count,
                                 **TradeJournal.session_time_meta_for_dir(
-                                    d, d.name, source
+                                    d, d.name, src
                                 ),
                             }
                         )
                 else:
-                    is_current = source == "active" and d.name == current_session_id
-                    time_meta = TradeJournal.session_time_meta_for_dir(d, d.name, source)
+                    time_meta = TradeJournal.session_time_meta_for_dir(d, d.name, src)
                     if not is_current and not time_meta.get("ended_at"):
                         time_meta["ended_at"] = time_meta.get("last_activity_at")
                     sessions.append(
                         {
                             "session_id": d.name,
-                            "_source": source,
+                            "_source": src,
                             "_is_current": is_current,
                             "_status": (
-                                "active" if is_current else "completed" if source == "active" else "archived"
+                                "active" if is_current else "completed" if src == "active" else "archived"
                             ),
                             "_path": str(d),
+                            "_trade_count_for_listing": trade_count,
                             **time_meta,
                         }
                     )
@@ -1039,9 +1115,58 @@ class TradeJournal:
         sessions.sort(key=lambda s: s.get("session_id", ""), reverse=True)
         return sessions
 
+    @staticmethod
+    def prune_short_completed_sessions(
+        min_completed_trades: int = MIN_COMPLETED_SESSION_TRADES_FOR_LISTING,
+        execute: bool = False,
+    ) -> Dict[str, Any]:
+        """Delete completed active/archive session dirs below the listing threshold.
+
+        Dry-run by default. The current active session is never selected.
+        """
+        ARCHIVE_DIR = JOURNAL_DIR.parent / "paper_trades_archive"
+        current_dir = TradeJournal.newest_resumable_session_dir()
+        current_session_id = current_dir.name if current_dir else None
+        search_dirs = []
+        if JOURNAL_DIR.exists():
+            search_dirs.append((JOURNAL_DIR, "active"))
+        if ARCHIVE_DIR.exists():
+            search_dirs.append((ARCHIVE_DIR, "archived"))
+
+        candidates: List[Dict[str, Any]] = []
+        removed = 0
+        for base_dir, source in search_dirs:
+            for d, src in TradeJournal._iter_session_dirs(base_dir, source):
+                is_current = src == "active" and d.name == current_session_id
+                if is_current:
+                    continue
+                trade_count = TradeJournal.session_trade_count(d)
+                if trade_count >= min_completed_trades:
+                    continue
+                candidates.append(
+                    {
+                        "session_id": d.name,
+                        "source": src,
+                        "trades": trade_count,
+                        "path": str(d),
+                    }
+                )
+                if execute:
+                    shutil.rmtree(d)
+                    removed += 1
+        return {
+            "execute": bool(execute),
+            "min_completed_trades": min_completed_trades,
+            "candidates": candidates,
+            "removed": removed,
+        }
+
     # ── INTERNAL ──────────────────────────────────────────────────
 
     def _append_entry(self, entry: JournalEntry):
+        # JOURNAL-SLIM: drop diagnostic-noise events (see _JOURNAL_NOISE_EVENTS note at top).
+        if not _JOURNAL_LOG_ALL_EVENTS and str(getattr(entry, "event", "") or "").upper() in _JOURNAL_NOISE_EVENTS:
+            return
         with open(self._entries_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(entry), default=str) + "\n")
 
@@ -1094,8 +1219,17 @@ class TradeJournal:
             json.dump(self.open_positions, f, indent=2, default=str)
 
     def _save_summary(self):
-        with open(self._summary_file, "w", encoding="utf-8") as f:
-            json.dump(self.get_summary(), f, indent=2)
+        # Atomic write so readers never see an empty summary.json. Compute BEFORE
+        # truncating, write a temp file, then atomic os.replace. Pure I/O; no behavior
+        # change. (2026-07-15 STAGED, Codex GO -- takes effect at NEXT RESTART; the
+        # trade_journal instance is not in the code-hot-reload module list.)
+        import os as _os
+        data = self.get_summary()
+        _p = str(self._summary_file)
+        _tmp = _p + ".tmp"
+        with open(_tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        _os.replace(_tmp, _p)
 
     def _load_state(self):
         """Resume from disk if session exists."""
@@ -1211,5 +1345,6 @@ class TradeJournal:
 
         # Only flush a summary when the session has meaningful activity.
         # This suppresses empty stub sessions from being promoted into history.
-        if self.total_entries > 0 or self.total_exits > 0 or self.open_positions:
+        if (self.total_entries > 0 or self.total_exits > 0 or self.open_positions) \
+                and not _JOURNAL_READONLY:
             self._save_summary()

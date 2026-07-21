@@ -12,6 +12,8 @@ up/down backtest exits as an approximation for research, not proof of live PnL.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, FrozenSet, Optional, Tuple
@@ -87,6 +89,22 @@ class UpdownExitGlobals:
     # or "strategy|window". Exempt lanes keep their static config (e.g. take-profit),
     # never forced to hold. Used to keep BTC on pure take-profit while alts hold trend-side.
     rce_exclude: FrozenSet[str] = frozenset()
+    # ── Time-gated late take-profit (default OFF: 0.0 = disabled everywhere) ──
+    # 2026-07-17 operator GO. Banks a GREEN position only inside the final
+    # `take_profit_late_gate_mins` of the market, and only if it is up >=
+    # `take_profit_late_pct`. NOT gated by hold_winners — that is the point.
+    # WHY: an UNGATED peak exit (trail 07-13, Prop-A 07-16, flat-TP sim 07-17)
+    # kills the +85%% runner at minute 5 and lost every time. Winners on
+    # btc/doge 1h|up peak at +75..127%% and resolve; round-trip losers cap at
+    # +51..68%%. Gating on TIME separates them: a +40%% fade with 5min left is
+    # not a +40%% runner with 50min left. Sim on live journal: btc|1h|up
+    # +$14.80 -> +$53.26 (TP.40/gate5, positive at 6/6 TP levels); doge|1h|up
+    # +$7.20 -> +$23.42 (TP.40/gate15, 5/6). Whole GATE<=20 block positive;
+    # GATE30 and ungated mostly negative. CAVEAT: n=37/n=15, grid-picked —
+    # the BLOCK positivity is the evidence, not any single cell; sim assumes a
+    # fill at the qualifying tick, real near-resolution books may be worse.
+    take_profit_late_pct: float = 0.0
+    take_profit_late_gate_mins: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +133,8 @@ class UpdownResolvedExitParams:
     dynamic_stop_high_convergence_mult: float
     dynamic_stop_low_convergence_threshold: float
     dynamic_stop_high_convergence_threshold: float
+    take_profit_late_pct: float = 0.0
+    take_profit_late_gate_mins: float = 0.0
 
 
 _UPDOWN_EXIT_PARAM_KEYS = frozenset(
@@ -143,8 +163,54 @@ _UPDOWN_EXIT_PARAM_KEYS = frozenset(
         "dynamic_stop_high_convergence_mult",
         "dynamic_stop_low_convergence_threshold",
         "dynamic_stop_high_convergence_threshold",
+        "take_profit_late_pct",
+        "take_profit_late_gate_mins",
     }
 )
+
+
+_LATE_TP_LANE_ONLY_KEYS = frozenset({"take_profit_late_pct", "take_profit_late_gate_mins"})
+
+logger = logging.getLogger(__name__)
+
+# Warn-once dedupe: the resolver runs per position per exit tick (~3s), so an
+# unguarded warning here would flood the log.
+_LATE_TP_MISPLACED_WARNED: set = set()
+
+
+def _warn_misplaced_late_tp(dropped: Any, where: str) -> None:
+    key = (where, tuple(sorted(dropped)))
+    if key in _LATE_TP_MISPLACED_WARNED:
+        return
+    _LATE_TP_MISPLACED_WARNED.add(key)
+    logger.warning(
+        "late-TP key(s) %s set at %s are IGNORED — they are settable ONLY at "
+        "updown_overrides.<strategy>.window_lane_overrides.<window>.<side>. "
+        "Move them there or the late take-profit will never fire.",
+        sorted(dropped),
+        where,
+    )
+
+
+def _without_late_tp(overrides: Any, where: str = "a non-lane override layer") -> Dict[str, Any]:
+    """Strip late-TP keys from any override layer broader than window+side.
+
+    2026-07-20 HARDENING (Codex catch — the 07-17 guard was incomplete). late-TP must
+    be settable ONLY at window_lane_overrides.<window>.<side>. Every broader layer
+    would apply one value across multiple windows or assets — the asset-wide leak this
+    key set exists to prevent:
+      * the globals base (top-level trading.exit_rules) -> EVERY lane of EVERY asset
+      * g.updown_lane_overrides[lane]                   -> one side, ALL strategies
+      * strategy_cfg.lane_overrides[lane]               -> one strategy, ALL windows
+    The original guard only filtered the strategy level, so a top-level
+    `trading.exit_rules.take_profit_late_pct` still reached every lane.
+    """
+    if not isinstance(overrides, dict):
+        return {}
+    dropped = [k for k in overrides if k in _LATE_TP_LANE_ONLY_KEYS]
+    if dropped:
+        _warn_misplaced_late_tp(dropped, where)
+    return {k: v for k, v in overrides.items() if k not in _LATE_TP_LANE_ONLY_KEYS}
 
 
 def _normalize_override_map(raw: Any) -> Dict[str, Any]:
@@ -192,6 +258,9 @@ def _normalize_strategy_overrides(raw_overrides: Any) -> Dict[str, Dict[str, Any
 def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
     """Parse ``trading.exit_rules`` subset used by crypto up/down exits."""
     ec = exit_cfg or {}
+    _misplaced_late_tp = [k for k in ec if k in _LATE_TP_LANE_ONLY_KEYS]
+    if _misplaced_late_tp:
+        _warn_misplaced_late_tp(_misplaced_late_tp, "trading.exit_rules (top level)")
     base_stop = float(ec.get("updown_stop_cents", 0.03) or 0.03)
     base_win = float(ec.get("updown_exit_window_mins", 2.0) or 2.0)
     base_hold = float(ec.get("updown_max_hold_mins", 20.0) or 20.0)
@@ -222,6 +291,10 @@ def parse_updown_exit_globals(exit_cfg: Dict[str, Any]) -> UpdownExitGlobals:
         ),
         updown_trail_arm_pct=float(ec.get("updown_trail_arm_pct", 0.0) or 0.0),
         updown_trail_gap_pct=float(ec.get("updown_trail_gap_pct", 0.0) or 0.0),
+        # 2026-07-20 HARDENING: deliberately NOT parsed from the top level — the fields
+        # keep their 0.0 defaults. Reading them here is what let a single
+        # `trading.exit_rules.take_profit_late_pct` reach every lane of every asset.
+        # Nothing consumes UpdownExitGlobals.take_profit_late_* directly (verified).
         dynamic_stop_enabled=bool(ec.get("dynamic_stop_enabled", True)),
         dynamic_stop_bull_mult=float(ec.get("dynamic_stop_bull_mult", 0.95) or 0.95),
         dynamic_stop_range_mult=float(ec.get("dynamic_stop_range_mult", 1.05) or 1.05),
@@ -382,6 +455,12 @@ def resolve_updown_exit_params_for_position(
         "updown_in_profit_stop_tighten_to_pct": g.updown_in_profit_stop_tighten_to_pct,
         "updown_trail_arm_pct": g.updown_trail_arm_pct,
         "updown_trail_gap_pct": g.updown_trail_gap_pct,
+        # 2026-07-20 HARDENING: seeded 0.0, NOT from `g`. parse_updown_exit_globals()
+        # reads top-level trading.exit_rules, so seeding from g let a single top-level
+        # key enable late-TP on every lane of every asset. Only window_lane_overrides
+        # below may set these. See _without_late_tp().
+        "take_profit_late_pct": 0.0,
+        "take_profit_late_gate_mins": 0.0,
         "dynamic_stop_enabled": g.dynamic_stop_enabled,
         "dynamic_stop_bull_mult": g.dynamic_stop_bull_mult,
         "dynamic_stop_range_mult": g.dynamic_stop_range_mult,
@@ -393,11 +472,23 @@ def resolve_updown_exit_params_for_position(
         "dynamic_stop_low_convergence_threshold": g.dynamic_stop_low_convergence_threshold,
         "dynamic_stop_high_convergence_threshold": g.dynamic_stop_high_convergence_threshold,
     }
-    params.update(g.updown_lane_overrides.get(lane, {}))
-    params.update({k: v for k, v in strategy_cfg.items() if k in _UPDOWN_EXIT_PARAM_KEYS})
+    params.update(_without_late_tp(
+        g.updown_lane_overrides.get(lane, {}), "trading.exit_rules.updown_lane_overrides"
+    ))
+    # 2026-07-17 (Codex catch), tightened 2026-07-20: late-TP keys are LANE-ONLY by
+    # design. Allowing them at strategy level would apply one value to 5m+15m+1h at once
+    # — the exact asset-wide gate problem this change exists to avoid.
+    # window_lane_overrides.<window>.<side> ONLY (lane_overrides is no longer accepted).
+    params.update({
+        k: v for k, v in strategy_cfg.items()
+        if k in _UPDOWN_EXIT_PARAM_KEYS and k not in _LATE_TP_LANE_ONLY_KEYS
+    })
     strategy_lane = strategy_cfg.get("lane_overrides", {})
     if isinstance(strategy_lane, dict):
-        params.update(strategy_lane.get(lane, {}))
+        params.update(_without_late_tp(
+            strategy_lane.get(lane, {}),
+            "updown_overrides.%s.lane_overrides" % strategy_name,
+        ))
     strategy_window_lane = strategy_cfg.get("window_lane_overrides", {})
     if resolved_window and isinstance(strategy_window_lane, dict):
         window_cfg = strategy_window_lane.get(resolved_window, {})
@@ -437,6 +528,8 @@ def resolve_updown_exit_params_for_position(
         dynamic_stop_high_convergence_mult=float(params["dynamic_stop_high_convergence_mult"]),
         dynamic_stop_low_convergence_threshold=float(params["dynamic_stop_low_convergence_threshold"]),
         dynamic_stop_high_convergence_threshold=float(params["dynamic_stop_high_convergence_threshold"]),
+        take_profit_late_pct=float(params.get("take_profit_late_pct", 0.0) or 0.0),
+        take_profit_late_gate_mins=float(params.get("take_profit_late_gate_mins", 0.0) or 0.0),
     )
 
 
@@ -535,7 +628,20 @@ def effective_updown_stop_loss_pct(
     ):
         trail_floor = float(peak_pnl_pct) - float(trail_gap_pct)
         exit_floor = max(-stop_mag, trail_floor)
-        return -exit_floor
+        result = -exit_floor
+        # 2026-07-10: when trail_gap_pct == trail_arm_pct (now the common case --
+        # see xrp 5m / btc 1h-up / the global default), a position that peaks at
+        # EXACTLY the arm threshold computes a floor of exactly 0.0 (breakeven).
+        # The caller (PositionExitManager) uses `effective_stop_loss_pct != 0` to
+        # distinguish "a stop is configured" from "no stop" (the latter is the
+        # deliberate xrp-5m-style base_pct=0.0 pre-arm state). An exact 0.0 here
+        # would be misread as "no stop" and the check would be skipped for that
+        # tick even though the trail IS armed and should fire at breakeven. Nudge
+        # by an epsilon well below any real price-tick granularity so the armed
+        # trail always evaluates, without moving the actual trigger level.
+        if result == 0.0:
+            result = -1e-9
+        return result
     return stop_mag
 
 

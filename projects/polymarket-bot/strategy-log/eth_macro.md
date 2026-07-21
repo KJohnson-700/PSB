@@ -12,6 +12,15 @@ ETH **Up or Down** — inherits `SolMacroStrategy` (shared entry-window and scan
 
 ## Change Log
 
+### 2026-07-15 — Cap ETH 5m BUY_NO entries at yes<=0.51
+
+- **What changed:** Added timeframe-scoped `buy_no_min_no_price_{tf}` lookup in [src/strategies/eth_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/eth_macro.py) and set `strategies.eth_macro.buy_no_min_no_price_5m: 0.49` in [config/settings.yaml](/Users/mainfolder/Documents/psb-main%201/config/settings.yaml). ETH 15m/1h BUY_NO keep the legacy fallback `0.20`; ETH BUY_YES does not read this key.
+- **Why:** Operator review found ETH `5m|down` / `BUY_NO` at about `-$16` and `25%` WR, with losing shorts entering at high YES prices around `0.525-0.535`; wins clustered around `0.505-0.515`.
+- **Hypothesis:** Requiring NO >= 0.49 (equivalent to YES <= 0.51) removes the high-YES 5m short cohort while preserving the lower-YES winner cluster and leaving ETH 5m BUY_YES plus 15m/1h down unchanged.
+- **Expected outcome:** ETH 5m BUY_NO should stop taking shorts with `yes_price > 0.51`; estimated operator impact is removal of roughly `$12` of the observed `$16` loss cohort. Hot-reload should pick up the config/code path without a bot restart.
+- **Actual outcome:** `pending` — requires at least 15 closed ETH 5m BUY_NO trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-16 — ETH pocket-only: est_prob is unfixable noise, edge is SELECTION
 
 - **Root cause (operator red flag: all 6 ETH lanes -EV).** ETH's est_prob_up is built inline in its duplicated scan loop (eth_macro.py ~1366: base 0.50 + small htf/btc/macd/RSI nudges), NOT via the SOL family path. Calibration check: ETH est_prob AUC ≈ **0.49** (its 0.85-confidence bucket resolves UP only ~45%); SOL ≈ 0.52. BUT — investigated "route ETH through `_estimate_probability`" and REJECTED it: that method is for traditional strike markets (`ETH above $X`), needs a price threshold the Up/Down questions don't have. There is **no separate calibrated up/down path** — both SOL and ETH hand-build est_prob, both ~0.50 AUC. Matches `calibration_not_viable_signal_floor`: est_prob is ~coin-flip across all assets; **the edge is admission SELECTION, not signal.** So there is no est_prob "model" to fix.

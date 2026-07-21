@@ -17,6 +17,15 @@ BTC **Up or Down** markets (15m / 5m) with hierarchical HTF/LTF gates, optional 
 
 ## Change Log
 
+### 2026-07-13 — Let BTC 1h UP floor survive MINIMAL sizing brake
+
+- **What changed:** In [src/strategies/bitcoin.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/bitcoin.py), split per-lane sizing overrides into lift → floor → hard cap. `PAUSED` still blocks all overrides; `MINIMAL` skips lift but can honor `lane_min_notional_ignores_minimal_*`. Config added `bitcoin.lane_min_notional_1h_up: 20` and `bitcoin.lane_min_notional_ignores_minimal_1h_up: true`.
+- **Why:** Operator observed known-winner BTC 1h expiry wins being shrunk to ~$5 fills during the loss-streak MINIMAL tier, paying only $3.50/$4.29 instead of the intended ~$14-$17 at a $20 floor.
+- **Hypothesis:** BTC 1h UP entries keep known-winner sizing through global MINIMAL without violating the `PAUSED` kill switch.
+- **Expected outcome:** BTC 1h UP fills use at least $20 when the per-lane opt-in flag is present, while `lane_max_notional_1h_up: 25` remains a hard cap after lift/floor ordering.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected BTC 1h UP trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-06 — Zero BTC BUY_YES bullish-floor bumps
 
 - **What changed:** `bitcoin.btc_5m_buy_yes_bullish_floor_bump: 0.20 → 0.0` and `bitcoin.btc_15m_buy_yes_bullish_floor_bump: 0.26 → 0.0`.

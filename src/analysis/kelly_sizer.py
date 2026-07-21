@@ -210,19 +210,41 @@ class KellySizer:
                 result[strat][win] = self.get_window_stats(strat, win)
         return result
 
-    def get_streak_multiplier(self, strategy: str) -> float:
-        """Return streak multiplier for sizing (1.0 = no adjustment)."""
+    def get_streak_multiplier(self, strategy: str, window: Optional[str] = None) -> float:
+        """Return streak multiplier for sizing (1.0 = no adjustment).
+
+        2026-07-14 K2' (operator GO; reference = MrFadiAi spec, vault research
+        20260608): symmetric gradual streak — 1.0 + 0.1*win_streak −
+        0.2*loss_streak, clamped [0.5, per-asset max]. Replaces the win-only
+        step function (no boost until threshold, then instant max) that also
+        pooled ALL windows so a 5m win streak inflated 15m/1h sizing.
+        Window-scoped when the caller passes its window."""
         cfg = self._defaults.get(strategy)
         if not cfg:
             return 1.0
-        streak = self.get_current_streak(strategy, None)
-        if streak >= cfg.streak_threshold:
-            ratio = min(streak - cfg.streak_threshold + 1, cfg.streak_multiplier_max)
-            return ratio
-        return 1.0
+        if window is not None:
+            outcomes = self._recent_outcomes_by_window.get(
+                self._window_key(strategy, window), []
+            )
+        else:
+            outcomes = self._recent_outcomes.get(strategy, [])
+        streak_w = 0
+        streak_l = 0
+        for o in reversed(outcomes):
+            if o:
+                if streak_l:
+                    break
+                streak_w += 1
+            else:
+                if streak_w:
+                    break
+                streak_l += 1
+        mult = 1.0 + 0.1 * streak_w - 0.2 * streak_l
+        upper = min(1.5, float(cfg.streak_multiplier_max or 1.5))
+        return max(0.5, min(mult, upper))
 
     def get_kelly_fraction(
-        self, strategy: str, streak_multiplier: float = None
+        self, strategy: str, streak_multiplier: float = None, window: str = None
     ) -> float:
         """Return effective Kelly fraction after streak adjustment."""
         cfg = self._defaults.get(strategy)
@@ -230,7 +252,7 @@ class KellySizer:
             return self._global_kelly_fraction
         frac = cfg.base_kelly_fraction
         if streak_multiplier is None:
-            streak_multiplier = self.get_streak_multiplier(strategy)
+            streak_multiplier = self.get_streak_multiplier(strategy, window)
         frac = frac * streak_multiplier
         frac = frac * get_drift_kelly_mult(strategy, self._root_config)
         return max(cfg.min_kelly_fraction, min(frac, 1.0))
@@ -241,6 +263,7 @@ class KellySizer:
         bankroll: float,
         edge: float,
         streak_multiplier: float = None,
+        window: str = None,
     ) -> float:
         """
         Calculate Kelly size from edge using streak-adjusted Kelly fraction.
@@ -248,7 +271,7 @@ class KellySizer:
         if edge <= 0:
             return 0.0
 
-        frac = self.get_kelly_fraction(strategy, streak_multiplier)
+        frac = self.get_kelly_fraction(strategy, streak_multiplier, window)
 
         base_size = edge * frac * bankroll
 

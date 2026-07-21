@@ -442,6 +442,25 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
     except (TypeError, ValueError):
         btc_spot_f = None
 
+    # 2026-07-20 BANKROLL ACCURACY FIX (operator-reported "negative P&L but bankroll up";
+    # Codex-reviewed — do NOT rebind the `bankroll` field's meaning).
+    # `bot.bankroll` is the SIZING CASH — initial + REALIZED pnl only (main.py:2787 adds
+    # realized per closed trade; Kelly reads it at main.py:4029-4101 for base_size =
+    # edge*frac*bankroll, and it must stay realized-only so open mark-to-market never
+    # inflates position size). This SAME builder feeds both /api/ops/summary AND the JSONL
+    # ops log, and downstream parsers/alerts read `bankroll` expecting sizing cash — so
+    # `bankroll` KEEPS its meaning. We ADD `equity` (= cash + unrealized, the true account
+    # value that ties to total_pnl and to /api/status) and `cash_bankroll` (alias for
+    # clarity). The dashboard hero reads `equity`. Bad accounting fails LOUD (equity=None +
+    # accounting_error) rather than silently showing cash as equity.
+    _cash_bankroll = round(float(getattr(bot, "bankroll", 0) or 0), 4)
+    _equity = None
+    _accounting_error = None
+    try:
+        _unreal = float(summary["unrealized_pnl"] or 0)
+        _equity = round(_cash_bankroll + _unreal, 4)
+    except (KeyError, TypeError, ValueError):
+        _accounting_error = "invalid_unrealized_pnl"
     return {
         "event": "ops_pulse",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -451,7 +470,10 @@ def build_ops_snapshot(bot: Any, loop: str) -> Dict[str, Any]:
         "dry_run": bool(trading.get("dry_run", True)),
         "kill_switch": bool(bot._kill_switch_active()) if hasattr(bot, "_kill_switch_active") else False,
         "running": bool(getattr(bot, "running", False)),
-        "bankroll": round(float(getattr(bot, "bankroll", 0) or 0), 4),
+        "bankroll": _cash_bankroll,       # UNCHANGED: sizing cash (initial + realized) — what Kelly reads
+        "cash_bankroll": _cash_bankroll,  # explicit alias for the same sizing cash
+        "equity": _equity,                # NEW: true account value = cash + unrealized (matches /api/status; hero reads this)
+        "accounting_error": _accounting_error,  # non-null when equity could not be computed
         "open_positions": summary.get("open_positions", 0),
         "closed_trades": summary.get("total_exits", 0),
         "total_entries": summary.get("total_entries", 0),

@@ -13,6 +13,15 @@ SOL **Up or Down** vs BTC correlation/lag; macro + LTF + optional LLM; entry tim
 
 ## Change Log
 
+### 2026-07-13 — Make SOL 5m DOWN lane max a hard cap
+
+- **What changed:** In the shared SOL macro sizing path [src/strategies/sol_macro.py](/Users/mainfolder/Documents/psb-main%201/src/strategies/sol_macro.py), per-lane sizing now applies lift → floor → hard cap, with `PAUSED` blocking all overrides and `MINIMAL` skipping lift. Config changed `sol_macro.lane_max_notional_5m_down: 25 → 15`.
+- **Why:** Operator identified SOL 5m DOWN as swingy at $20-$24 Kelly sizing, with roughly +/-$11 per trade; the lane should be downsized even when a per-lane lift exists.
+- **Hypothesis:** Hard-capping SOL 5m DOWN at $15 reduces per-trade variance without changing admission, edge, or raw Kelly calculation.
+- **Expected outcome:** SOL 5m DOWN emitted sizes do not exceed $15 after exposure scaling and any lane-specific floor/lift interaction.
+- **Actual outcome:** `pending` — requires restart and at least 15 closed affected SOL 5m DOWN trades after rollout.
+- **Status:** `pending`
+
 ### 2026-06-15 — Add lane-local stop cooldown for SOL 5m BUY_YES bleed
 
 - **What changed:** Added `lane_stop_halt` config support and enabled `sol_macro|5m|BUY_YES` with a 10-minute cooldown after an `updown_stop_loss`.

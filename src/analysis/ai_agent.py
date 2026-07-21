@@ -285,6 +285,9 @@ OUTPUT (machine-parseable — follow exactly):
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         # Execution decision layer: the only AI config block that may gate entry.
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
+        # 2026-07-19 MAIN-LANE VETO (operator): confident-opposition veto on MAIN-LANE
+        # trouble-lane trades — INDEPENDENT of the marginal decision_layer above. Fail-OPEN.
+        self.main_lane_veto_cfg = dict(self.config.get("main_lane_veto", {}) or {})
         self.prompt_version = str(
             self.config.get("prompt_version", DEFAULT_PROMPT_VERSION)
         ).strip() or DEFAULT_PROMPT_VERSION
@@ -348,6 +351,9 @@ OUTPUT (machine-parseable — follow exactly):
         self.shadow_observer_cfg = dict(self.config.get("shadow_observer", {}) or {})
         self.preentry_veto_cfg = dict(self.config.get("preentry_veto", {}) or {})
         self.decision_layer_cfg = dict(self.config.get("decision_layer", {}) or {})
+        # 2026-07-19 MAIN-LANE VETO (operator): confident-opposition veto on MAIN-LANE
+        # trouble-lane trades — INDEPENDENT of the marginal decision_layer above. Fail-OPEN.
+        self.main_lane_veto_cfg = dict(self.config.get("main_lane_veto", {}) or {})
         self.prompt_version = str(
             self.config.get("prompt_version", DEFAULT_PROMPT_VERSION)
         ).strip() or DEFAULT_PROMPT_VERSION
@@ -1451,35 +1457,64 @@ OUTPUT (machine-parseable — follow exactly):
         rec = str(analysis.recommendation or "").strip().upper()
 
         if veto_only and bool(self.decision_layer_cfg.get("marginal_veto_only", True)):
-            # Marginal lane: veto only on a confident, directly-opposing call.
-            conf = float(analysis.confidence_score)
+            # 2026-07-03 FAIL-CLOSED marginal (Claude, Codex-audited). WAS fail-open:
+            # the branch approved everything that was not confident-opposition, so a
+            # HOLD / low-confidence / malformed verdict ADMITTED a sub-threshold trade.
+            # A marginal is BELOW the quant threshold, so it may trade ONLY on a strict
+            # AI blessing: agreement + finite confidence in [min_confidence, 1] +
+            # positive AI edge. Everything else (HOLD, disagreement, low/garbage conf)
+            # SKIPS. This is the same strict contract as the enforced non-veto path.
+            try:
+                conf = float(analysis.confidence_score)
+            except (TypeError, ValueError):
+                conf = float("nan")
             norm = self._normalize_recommendation(rec)
-            if norm in {"BUY_YES", "BUY_NO"} and norm != action and conf >= min_confidence:
+            try:
+                _est = float(analysis.estimated_probability)
+                ai_edge = (
+                    _est - float(current_yes_price)
+                    if action == "BUY_YES"
+                    else float(current_yes_price) - _est
+                )
+            except (TypeError, ValueError):
+                _est = None
+                ai_edge = None
+            # conf == conf rejects NaN; the [0,1] range rejects inf and out-of-range.
+            _conf_ok = (conf == conf) and (0.0 <= conf <= 1.0)
+            if (
+                norm == action
+                and _conf_ok
+                and conf >= min_confidence
+                and ai_edge is not None
+                and ai_edge > 0
+            ):
                 return AIDecision(
-                    False,
-                    norm,
+                    True,
+                    action,
                     conf,
-                    float(analysis.estimated_probability),
-                    None,
-                    "direct_ai_confident_opposition",
+                    _est,
+                    ai_edge,
+                    "direct_ai_marginal_confirm",
                     "direct",
                     direct_analysis=analysis,
                 )
-            # Pass: surface the AI edge only when it agrees and is positive, so the
-            # call site can bump; otherwise proceed on the quant edge (edge=None).
-            ai_edge = (
-                float(analysis.estimated_probability) - float(current_yes_price)
-                if action == "BUY_YES"
-                else float(current_yes_price) - float(analysis.estimated_probability)
+            _reason = (
+                "direct_ai_confident_opposition"
+                if (
+                    norm in {"BUY_YES", "BUY_NO"}
+                    and norm != action
+                    and _conf_ok
+                    and conf >= min_confidence
+                )
+                else "direct_ai_marginal_no_confirm"
             )
-            agree_bump = norm == action and ai_edge > 0
             return AIDecision(
-                True,
-                action,
-                conf,
-                float(analysis.estimated_probability),
-                ai_edge if agree_bump else None,
-                "direct_ai_marginal_pass",
+                False,
+                norm if norm in {"BUY_YES", "BUY_NO"} else rec,
+                conf if _conf_ok else 0.0,
+                _est,
+                None,
+                _reason,
                 "direct",
                 direct_analysis=analysis,
             )
@@ -2395,6 +2430,81 @@ OUTPUT (machine-parseable — follow exactly):
 
     def _set_cooldown(self, key: str, seconds: float) -> None:
         self._model_cooldown_until[key] = time.time() + max(1.0, seconds)
+
+    async def evaluate_main_lane_veto(
+        self,
+        *,
+        market_question: str,
+        market_description: str,
+        current_yes_price: float,
+        market_id: str,
+        strategy_hint: str = "",
+        lane_id: str = "",
+        quant_action: str,
+    ):
+        """2026-07-19 MAIN-LANE confident-opposition veto (operator-directed).
+
+        FAIL-OPEN by contract: returns (approved=True, meta) UNLESS the AI actively
+        recommends the OPPOSITE side with confidence >= main_lane_veto.min_confidence.
+        HOLD, agreement, low/garbage confidence, unavailability, or any error all
+        return approved=True (the quant trade proceeds). This is deliberately the
+        MIRROR of the marginal fail-CLOSED gate and is fully independent of
+        decision_layer_enabled(): enabling it does NOT change marginal admission.
+
+        Data basis (2026-07-19, 850 joined trades): conf>=0.6 active opposition on
+        main-lane trades flagged a 28%-WR subset; hard-skipping it nets +$84 with a
+        ~1.9:1 losers-saved / winners-killed ratio. HOLD was noise and is excluded.
+        """
+        cfg = getattr(self, "main_lane_veto_cfg", {}) or {}
+        if not bool(cfg.get("enabled", False)):
+            return True, {"reason": "mlv_disabled"}
+        if not (self.live_inferencing and self.is_available()):
+            return True, {"reason": "mlv_unavailable_failopen"}
+        action = str(quant_action or "").strip().upper()
+        if action not in ("BUY_YES", "BUY_NO"):
+            return True, {"reason": "mlv_no_action_failopen"}
+        try:
+            _mlv_timeout = float(cfg.get("timeout_sec", 6.0))
+        except (TypeError, ValueError):
+            _mlv_timeout = 6.0
+        if not (_mlv_timeout > 0):
+            _mlv_timeout = 6.0
+        try:
+            analysis = await asyncio.wait_for(
+                self.analyze_market(
+                    market_question=market_question,
+                    market_description=market_description,
+                    current_yes_price=current_yes_price,
+                    market_id=market_id,
+                    strategy_hint=strategy_hint,
+                    lane_id=lane_id,
+                    quant_action=action,
+                    provider_scope="main_lane_veto",
+                ),
+                timeout=_mlv_timeout,
+            )
+        except asyncio.TimeoutError:  # entry hot-path: never block admission on a slow AI
+            logger.warning("[main_lane_veto] AI timeout %.1fs (fail-open)", _mlv_timeout)
+            return True, {"reason": "mlv_timeout_failopen"}
+        except Exception as e:  # never let the veto break the entry path
+            logger.warning("[main_lane_veto] analyze error (fail-open): %s", e)
+            return True, {"reason": "mlv_error_failopen"}
+        if analysis is None:
+            return True, {"reason": "mlv_no_analysis_failopen"}
+        rec = self._normalize_recommendation(str(analysis.recommendation or "").strip().upper())
+        try:
+            conf = float(analysis.confidence_score)
+        except (TypeError, ValueError):
+            conf = float("nan")
+        opposite = "BUY_NO" if action == "BUY_YES" else "BUY_YES"
+        try:
+            min_conf = float(cfg.get("min_confidence", 0.6))
+        except (TypeError, ValueError):
+            min_conf = 0.6
+        conf_ok = (conf == conf) and (0.0 <= conf <= 1.0)
+        if rec == opposite and conf_ok and conf >= min_conf:
+            return False, {"reason": "mlv_confident_opposition", "ai_action": rec, "confidence": conf}
+        return True, {"reason": "mlv_pass", "ai_action": rec, "confidence": (conf if conf_ok else None)}
 
     async def analyze_market(
         self,

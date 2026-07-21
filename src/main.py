@@ -1259,6 +1259,21 @@ class PolyBot:
         # 10 min in-process. Gate default-on for back-compat; config sets false.
         _gc_cfg = (self.config.get("ghost_calibration") or {})
         if not bool(_gc_cfg.get("auto_settle_enabled", True)):
+            # 2026-07-13 T3 (Codex GO, live-settler-only): the ghost severance
+            # early-return collateral-disabled the taken-EXIT settler on OUR OWN
+            # closed trades (trades_settled.jsonl went dark — 0 rows this session).
+            # Run the live settler here, then bail before any ghost work. Ghost
+            # settle stays OFF; rejected candidates are never read on this path.
+            try:
+                exit_cfg = (self.config.get("lane_exit_policy") or {})
+                interval = float(exit_cfg.get("settle_interval_sec", 600) or 600)
+                if force or (now_mono - self._last_exit_settle_monotonic) >= interval:
+                    from src.analysis.taken_exit_settler import settle as _settle_exits
+                    since = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+                    _settle_exits(since=since)
+                    self._last_exit_settle_monotonic = now_mono
+            except Exception as _xe:  # noqa: BLE001 — settle must never break trading
+                logging.warning("taken-exit settle refresh skipped: %s", _xe)
             self._last_ghost_calibration_refresh_monotonic = now_mono
             return
         cal_cfg = (self.config.get("lane_calibration") or {})
@@ -2769,6 +2784,23 @@ class PolyBot:
 
     def _apply_realized_pnl_to_bankroll(self, pnl: float) -> float:
         """Apply realized PnL to paper/live bankroll with a hard floor at zero."""
+        # 2026-07-20 CREDITOR AUDIT: caught live — a fresh session's cash was credited
+        # +$2.77 with ZERO journal exits (a settle of a PREVIOUS session's orphaned
+        # position paid into the new bankroll). Log EVERY credit with its caller so the
+        # next phantom names itself; the watcher pages BANKROLL_DRIFT when
+        # bot.bankroll != initial + journal-realized.
+        import traceback as _tb
+        _caller = "?"
+        try:
+            _stack = _tb.extract_stack(limit=4)
+            _caller = " <- ".join(f"{f.name}:{f.lineno}" for f in _stack[:-1][-2:])
+        except Exception:
+            pass
+        logging.warning(
+            "[bankroll-credit] pnl=%+.2f bankroll %.2f -> %.2f | caller: %s",
+            float(pnl), float(self.bankroll),
+            max(0.0, float(self.bankroll) + float(pnl)), _caller,
+        )
         self.bankroll = max(0.0, float(self.bankroll) + float(pnl))
         self.risk_manager.update_pnl(float(pnl))
         self.risk_manager.bankroll = self.bankroll
@@ -4455,10 +4487,30 @@ class PolyBot:
                     )
         except Exception:
             pass
-        # Return scan-cycle churn arenas to the OS every few cycles (cheap; counters
-        # the RSS ratchet from per-market json/DataFrame allocation).
-        if int(getattr(self, "cycle_count", 0) or 0) % 5 == 0:
-            _release_memory_to_os()
+        # Return scan-cycle churn arenas to the OS EVERY cycle (cheap — a single
+        # malloc_zone_pressure_relief, sub-ms). 2026-07-20: measured this session
+        # ratcheting 230MB -> 840MB in ~15min/9 cycles (prior session hit 1676MB)
+        # BECAUSE relief ran only every 5 cycles and could not keep up with the
+        # per-market json/DataFrame allocation churn. Every-cycle relief reclaims the
+        # arenas right after the scan that created them, before they compound. It is a
+        # MITIGATION, not a cure: to eliminate the churn at its source, run with
+        # PSB_MEM_PROFILE=1 (arms tracemalloc + native gc census -> mem_profile.jsonl)
+        # to name the exact allocation site, then reuse buffers there.
+        # Instrumented (Codex condition): log reclaimed MB + call ms for the first 12
+        # cycles and every 20th after, so we can confirm it lowers the plateau without
+        # adding scan latency; if relief_ms is ever non-trivial, revert to adaptive gating.
+        _rel_rss0 = _self_rss_mb()
+        _rel_t0 = time.monotonic()
+        _release_memory_to_os()
+        _rel_ms = (time.monotonic() - _rel_t0) * 1000.0
+        _rel_cyc = int(getattr(self, "cycle_count", 0) or 0)
+        if _rel_cyc < 12 or _rel_cyc % 20 == 0:
+            _rel_rss1 = _self_rss_mb()
+            if _rel_rss0 is not None and _rel_rss1 is not None:
+                logging.info(
+                    "[mem-relief] cycle=%d rss %.0f->%.0fMB (reclaimed %.1fMB) in %.2fms",
+                    _rel_cyc, _rel_rss0, _rel_rss1, _rel_rss0 - _rel_rss1, _rel_ms,
+                )
         _write_runtime_status(
             phase="cycle_complete",
             session_id=getattr(self.journal, "session_id", None),

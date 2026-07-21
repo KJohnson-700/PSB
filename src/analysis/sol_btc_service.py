@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 import requests
+from src.analysis import asset_regime as _asset_regime
 
 logger = logging.getLogger(__name__)
 
@@ -1242,6 +1243,7 @@ class SOLBTCService:
         # --- 5m trend (entry timing via MACD crossover) ---
         df_5m = self.fetch_klines(self.alt_symbol, "5m", 100)
         if not df_5m.empty:
+            _asset_regime.update(self.alt_symbol, df_5m["close"].tolist())
             macd_5m = self.calc_macd(df_5m, fast=12, slow=26, signal=9)
 
             if macd_5m.crossover == "BULLISH_CROSS":

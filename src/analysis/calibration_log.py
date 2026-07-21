@@ -222,6 +222,13 @@ def build_record_from_closed_trade(
         "mfe_pct": _coerce_float(closed.get("mfe_pct")),
         "pnl_pct_at_exit": _coerce_float(closed.get("pnl_pct_at_exit")),
         "effective_stop_loss_pct": _coerce_float(closed.get("effective_stop_loss_pct")),
+        # 2026-07-13 (operator GO, Codex GO): exit feed-provenance passthrough — journal
+        # carries these via exit_telemetry; whitelist them so trades.jsonl is
+        # self-sufficient for per-exit feed-health / trail re-measure analysis.
+        "btc_1h_regime": signal.get("btc_1h_regime"),  # 2026-07-13 P3 (restart passenger): honest regime on fills once classifier enabled; None until then
+        "exit_mark_src": closed.get("exit_mark_src"),
+        "exit_mark_age_ms": _coerce_float(closed.get("exit_mark_age_ms")),
+        "ws_price_age_ms": _coerce_float(closed.get("ws_price_age_ms")),
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         **bucket_tags,
     }

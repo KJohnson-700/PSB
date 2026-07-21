@@ -4544,9 +4544,27 @@ function applyHeroMetrics(d) {
     // fastHeroCards() path (/api/ops/summary, counts only) reports a slightly different
     // realized/unrealized split, so letting it write the subs made them flip every 4s.
     const _fullTick = Array.isArray(d.positions);
-    const bankroll = (d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null;
+    // 2026-07-20 v3 (operator ruling): the BIG bankroll number = INITIAL + REALIZED,
+    // derived from the SAME journal field the Session P&L card uses — so the two cards
+    // can NEVER disagree. Not equity (wiggles with open marks — v1 mistake). Not
+    // bot.bankroll cash either (v2 mistake): live proof showed bot.bankroll drifting
+    // +$2.77 above 500+realized via a cross-session settle credit, so displaying it
+    // showed money no closed trade produced. Journal realized is the display truth;
+    // bot.bankroll drift is tracked separately by the watcher (BANKROLL_DRIFT).
+    const _INITIAL_BANKROLL = 500; // paper session start; TODO surface from config in payload
+    const _realizedForBankroll = (s && s.realized_pnl !== undefined && s.realized_pnl !== null && String(s.realized_pnl) !== '')
+        ? Number(s.realized_pnl) : null;
+    const bankroll = (_realizedForBankroll !== null && Number.isFinite(_realizedForBankroll))
+        ? _INITIAL_BANKROLL + _realizedForBankroll
+        : ((d.cash_bankroll !== null && d.cash_bankroll !== undefined) ? Number(d.cash_bankroll)
+        : ((d.bankroll !== null && d.bankroll !== undefined) ? Number(d.bankroll) : null));
     const bankEl = document.getElementById('hero-bankroll');
-    if (bankEl) {
+    // 2026-07-20 BANKROLL FLASH FIX: the two poll channels report DIFFERENT bankrolls
+    // (/api/status 509.78 vs /api/ops/summary 498.27, measured same instant), and BOTH
+    // called this function, so the hero number visibly flipped between them every few
+    // seconds. Write it only on the authoritative /api/status full tick — same _fullTick
+    // gate already used by brSub/pnlSub/posSub and the P&L trace sampler.
+    if (bankEl && _fullTick) {
         if (Number.isFinite(bankroll)) {
             // First reveal: animated count-up; subsequent updates: instant
             if (!bankEl.dataset.cuInit) {
@@ -4609,10 +4627,7 @@ function applyHeroMetrics(d) {
     // fallbacks that made the big number FLASH open-position mark-to-market for ~5 min
     // post-restart (before realized_pnl populated). Unrealized stays in the small sub only.
     const pnlEl = document.getElementById('hero-pnl');
-    // 2026-07-20: gate on _fullTick so the big Session P&L updates ONLY from the
-    // /api/status full poll (batched with /api/live/performance) and stays locked to
-    // Live Test 'NET PNL (CLOSED)'. The 4s ops-summary fast path could lag it a cycle.
-    if (pnlEl && _fullTick) {
+    if (pnlEl) {
         if (Number.isFinite(sessionPnlRaw)) {
             pnlEl.dataset.cuInit = '1';
             const sign = sessionPnlRaw < 0 ? '-' : '';
@@ -4707,7 +4722,18 @@ function applyHeroMetrics(d) {
     }
     dashUpdateHeroVisuals({ bankroll: bankroll, pnl: Number.isFinite(heroSparkPnlRaw) ? heroSparkPnlRaw : sessionPnlRaw, positions: Number(openCount || 0), trades: sessionFills });
 
-    _sampleCommandCenterPnl(d);
+    // 2026-07-20 ZIGZAG FIX: sample the trace from ONE channel — the fast
+    // /api/ops/summary tick (_fullTick === false) — because that is the only payload
+    // whose bankroll is REALIZED-ONLY.
+    //   /api/status      bankroll = 489.10  (INCLUDES open-position mark-to-market)
+    //   /api/ops/summary bankroll = 494.96  (EXCLUDES it)
+    //   status_bankroll - unrealized_pnl(-5.86) == ops_bankroll  <- verified identity
+    // _sampleCommandCenterPnl reads d.bankroll, so ungated it alternated between the
+    // two every few seconds = the dense sawtooth. Gating to the FULL tick instead was
+    // also wrong: that is the mark-to-market series, which drifts with every quote.
+    // /api/status exposes no unrealized field (session/top-level/portfolio all null),
+    // so it cannot be corrected there — sample the realized-only channel instead.
+    if (!_fullTick) _sampleCommandCenterPnl(d);
     if (typeof updatePricingHealthTile === 'function') updatePricingHealthTile();
     if (typeof loadLanePnlSparklines === 'function') loadLanePnlSparklines();
 
@@ -6469,9 +6495,14 @@ async function loadPnLChart() {
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
         }
 
-        // PnL line
+        // PnL line color follows the SAME realized session P&L source as #hero-pnl
+        // (the SESSION P&L card) — snapshots[].realized_pnl — so they can never
+        // disagree. Plotting the bankroll series was coloring green while realized<0
+        // because bankroll drifts above 500 (cross-session orphan-settle). Codex-verified 2026-07-20.
+        const _sessionRealized = Number(snaps[snaps.length - 1]?.realized_pnl);
+        const _pnlColorState = Number.isFinite(_sessionRealized) ? (_sessionRealized >= 0 ? 'profit' : 'loss') : 'neutral';
         ctx.beginPath();
-        ctx.strokeStyle = values[values.length-1] >= values[0] ? '#00e676' : '#ff1744';
+        ctx.strokeStyle = _pnlColorState === 'profit' ? '#00e676' : _pnlColorState === 'loss' ? '#ff1744' : '#7a8da0';
         ctx.lineWidth = 1.5;
         for (let i = 0; i < values.length; i++) {
             const x = (i / (values.length - 1)) * w;
@@ -6485,7 +6516,7 @@ async function loadPnLChart() {
         const lastY = h - ((values[values.length-1] - min) / range) * h;
         ctx.lineTo(lastX, h); ctx.lineTo(0, h); ctx.closePath();
         const grad = ctx.createLinearGradient(0, 0, 0, h);
-        const color = values[values.length-1] >= values[0] ? '0,230,118' : '255,23,68';
+        const color = _pnlColorState === 'profit' ? '0,230,118' : _pnlColorState === 'loss' ? '255,23,68' : '122,141,160';
         grad.addColorStop(0, `rgba(${color},0.15)`);
         grad.addColorStop(1, `rgba(${color},0.01)`);
         ctx.fillStyle = grad;
@@ -6583,7 +6614,15 @@ function _sampleCommandCenterPnl(d) {
         // Realized-only = clean staircase that steps only when a trade banks. Matches the
         // /api/session/equity_history seed (also realized-only) so the refresh seam is flush.
         const totalPnl = Number.isFinite(_ccReal) ? _ccReal : _commandCenterSessionPnl(d);
-        const equity = _commandCenterEquity(d);  // 2026-07-20 clean realized = bankroll (500+realized_pnl was contaminated by unrealized -> zigzag)
+        // 2026-07-20 FIX: persist SESSION REALIZED P&L so the trace colors by the SAME sign
+        // as the SESSION P&L card (red when realized<0). Coloring by equity-vs-$500 read the
+        // drifted bankroll (>500 via orphan-settle) and falsely showed GREEN while down.
+        state.lastRealized = Number.isFinite(totalPnl) ? totalPnl : (state.lastRealized ?? null);
+        // 2026-07-20 GEOMETRY FIX: plot 500+realized so the LINE POSITION reflects P&L vs the
+        // $500 midline (below=down/red, above=up/green). _commandCenterEquity returned d.bankroll,
+        // which drifts >500 via cross-session orphan-settle -> the line sat ABOVE the midline while
+        // realized was negative. 500+realized matches the equity_history seed scale too (no seam).
+        const equity = 500 + (Number.isFinite(totalPnl) ? totalPnl : 0);
         // 2026-07-18 GHOST: total incl unrealized, plotted as a faint line behind the solid realized staircase.
         const _ccUnreal = Number.isFinite(Number(_ccS.unrealized_pnl)) ? Number(_ccS.unrealized_pnl) : 0;
         const equityTotal = Number.isFinite(equity) ? (equity + _ccUnreal) : NaN;
@@ -6717,8 +6756,12 @@ function renderCommandCenterPnlChart() {
         const max = domain.max;
         const span = Math.max(1, max - min);
         const signEps = 0.005;
-        const isFlat = Math.abs(lastDelta) <= signEps;
-        const isProfit = lastDelta > signEps;
+        // 2026-07-20 FIX: color by SESSION REALIZED P&L sign (ties to the SESSION P&L card),
+        // NOT equity-vs-$500 baseline (which read the drifted bankroll and showed green while down).
+        const _ccReal2 = Number(state.lastRealized);
+        const _useReal = Number.isFinite(_ccReal2);
+        const isFlat = _useReal ? Math.abs(_ccReal2) <= signEps : Math.abs(lastDelta) <= signEps;
+        const isProfit = _useReal ? _ccReal2 > signEps : lastDelta > signEps;
         const stroke = isProfit ? '#36d98a' : isFlat ? '#f0c040' : '#ff5f6d';
         const glow = isProfit ? '54,217,138' : isFlat ? '240,192,64' : '255,95,109';
         const fillTop = isProfit ? '54,217,138' : isFlat ? '240,192,64' : '255,95,109';
@@ -7537,22 +7580,31 @@ function updateExitReasons(d) {
     const counts = d?.total_by_reason && typeof d.total_by_reason === 'object' ? d.total_by_reason : {};
     const pnlStats = d?.win_loss_by_reason && typeof d.win_loss_by_reason === 'object' ? d.win_loss_by_reason : {};
     const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    // 2026-07-20: house currency convention is "-$36.14", not "$-36.14" (matches the
+    // hero cards' (v<0?'-':'')+'$'+Math.abs(v) pattern).
+    const _usd = (v) => (v < 0 ? '-' : '') + '$' + Math.abs(Number(v) || 0).toFixed(2);
     const rows = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
     bar.innerHTML = rows.map(([reason, count]) => {
         const n = Number(count || 0);
         const color = EXIT_REASON_COLORS[reason] || UNKNOWN_EXIT_REASON_COLOR;
-        const avg = n ? Number((pnlStats[reason]?.pnl || 0) / n) : 0;
+        // 2026-07-20 FIX: show TOTAL pnl for the bucket, not the average. The legend
+        // printed avg next to the trade count, so "updown_stop_loss: 10 (-$2.74)" read
+        // as if 10 stops cost $2.74 when they actually cost -$27.37 (10x understated).
+        // Total is the number that matters for attribution; avg stays in the tooltip.
+        const sum = Number(pnlStats[reason]?.pnl || 0);
+        const avg = n ? sum / n : 0;
         const width = Math.max(1, (n / total) * 100);
-        return `<div title="${esc(reason)}: ${n} trades, avg pnl $${avg.toFixed(2)}" style="height:100%;width:${width}%;background:${color};"></div>`;
+        return `<div title="${esc(reason)}: ${n} trades, total ${_usd(sum)} (avg ${_usd(avg)})" style="height:100%;width:${width}%;background:${color};"></div>`;
     }).join('');
     legend.innerHTML = rows.map(([reason, count]) => {
         const n = Number(count || 0);
         const color = EXIT_REASON_COLORS[reason] || UNKNOWN_EXIT_REASON_COLOR;
-        const avg = n ? Number((pnlStats[reason]?.pnl || 0) / n) : 0;
-        const avgColor = avg > 0 ? 'var(--green)' : avg < 0 ? 'var(--red)' : 'var(--text-muted)';
-        return `<div title="${esc(reason)}: ${n} trades, avg pnl $${avg.toFixed(2)}" style="display:flex;align-items:center;gap:6px;min-width:0;">
+        const sum = Number(pnlStats[reason]?.pnl || 0);
+        const avg = n ? sum / n : 0;
+        const sumColor = sum > 0 ? 'var(--green)' : sum < 0 ? 'var(--red)' : 'var(--text-muted)';
+        return `<div title="${esc(reason)}: ${n} trades, total ${_usd(sum)} (avg ${_usd(avg)})" style="display:flex;align-items:center;gap:6px;min-width:0;">
             <span style="width:10px;height:10px;border-radius:2px;background:${color};flex:0 0 auto;"></span>
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(reason)}: ${n} <span style="color:${avgColor};">($${avg.toFixed(2)})</span></span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(reason)}: ${n} <span style="color:${sumColor};">(${_usd(sum)})</span></span>
         </div>`;
     }).join('');
 }
@@ -7907,8 +7959,10 @@ function updateUpdownBreakdown(ud) {
             labelEl.textContent = '🟢 New code since ' + ud.new_code_start.slice(11, 16);
             labelEl.style.color = 'var(--green)';
         } else {
-            labelEl.textContent = '🟡 No new-code marker in recent logs';
-            labelEl.style.color = '#f5a623';
+            // 2026-07-20: no marker just means the old/new split point is unknown; the
+            // trades are still real and are now shown (see the old_code fallback below).
+            labelEl.textContent = '🟢 All session trades';
+            labelEl.style.color = 'var(--green)';
         }
     }
 
@@ -7939,7 +7993,16 @@ function updateUpdownBreakdown(ud) {
             </div>`;
         }).join('');
     }
-    renderBucket(ud.new_code, 'updown-new');
+    // 2026-07-20 FIX: this panel rendered "No trades yet" permanently. The server splits
+    // trades into new_code/old_code using a timestamp found by scanning the logs for
+    // NEW_CODE_MARKERS ("Anti-LTF gate passed", "4H histogram", "1H histogram"). Those
+    // strings are from an older code era and are no longer emitted (0 occurrences in
+    // today's log), so new_code_start stayed null, `is_new` was always false, and EVERY
+    // trade landed in old_code while this panel only ever read new_code.
+    // With no marker there is no meaningful old/new split — the running process IS the
+    // current code — so fall back to old_code and show the session's real trades.
+    const _ncEmpty = !ud.new_code || Object.keys(ud.new_code).length === 0;
+    renderBucket(_ncEmpty ? ud.old_code : ud.new_code, 'updown-new');
 }
 
 function updateReasonBuckets(d) {

@@ -284,7 +284,14 @@ class LaneCalibrator:
         if self.per_lane_thresholds_enabled:
             override = self.per_lane_thresholds.get(lane_id) or self.per_lane_thresholds.get(lane_key)
             if override is not None and bool(override.get("veto_recommended")):
-                return True
+                # 2026-07-08 P1 (Codex B2 GO): honor the hard veto ONLY when backed by
+                # mature LIVE evidence (live_n >= live_mature_n=50). Ghost-only vetoes
+                # (live_n=0; 33 of 49 lanes at ship time) violate the 2026-06-29 operator
+                # rule (decisions = live realized ONLY) and acted as a hidden frequency
+                # ratchet - recompute_on_settle kept adding vetoes as ghosts settled,
+                # gradually choking baseline producers (e.g. xrp 15m up, hype 15m fade).
+                if int(override.get("live_n") or 0) >= 50:
+                    return True
         # Remaining paths apply a β floor against live posteriors and
         # require the global β-veto thresholds to be configured.
         if self.beta_veto_min_n <= 0 or self.beta_veto_max_mean <= 0.0:

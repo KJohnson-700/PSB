@@ -9,13 +9,23 @@ Fail-safe by construction: any error, staleness, or time-gap returns None and th
 caller uses the existing REST path, so the feed can NEVER feed a hole or break
 trading. Flag-gated (``trading.ws_candle_feed.enabled``).
 
+2026-06-29 REWIRE (perf): the previous store kept a per-key pandas DataFrame and
+``_apply_bar`` upserted with an O(n) boolean-mask ``df.loc[mask] = ...`` on EVERY
+ws tick. py-spy showed that single line ate ~52% of process CPU, held the GIL, and
+starved the asyncio loop -> 12-17s scan cycles. The store is now a columnar raw-bar
+ring buffer (``collections.deque`` of plain tuples): a live tick updates the last
+bar in O(1) with NO pandas on the write path. The downstream DataFrame is built
+only on read in ``get_klines`` and cached until the next write (dirty flag), so a
+scan's burst of reads rebuilds at most once. Output contract is byte-identical to
+before (same columns, dtypes, ordering, tail/copy semantics).
+
 Hardening (Codex review 2026-06-21):
   - HYPE streamed from Binance USDM **futures** (same venue as its seed + the
     HyperliquidHypeService Binance-primary rule); no venue mixing.
   - Reseed on every (re)connect before serving that stream's keys.
   - get_klines validates candle CONTINUITY (last open_time within ~1.5 intervals)
     and copies under the lock.
-  - _apply_bar upserts by open_time (sort + dedupe + cap) — out-of-order safe.
+  - _apply_bar upserts by open_time (in-order fast path + out-of-order safe fallback).
 
 Store/return DataFrame columns match Binance REST klines used downstream:
 open_time(datetime), open, high, low, close, volume(float), close_time.
@@ -27,7 +37,8 @@ import json
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from collections import deque
+from typing import Deque, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -45,15 +56,47 @@ _FUT_WS = "wss://fstream.binance.com/stream"
 _SPOT_REST = "https://api.binance.com/api/v3/klines"
 _FUT_REST = "https://fapi.binance.com/fapi/v1/klines"
 
+# A raw bar: (open_time_ms, open, high, low, close, volume, close_time_ms).
+# open_time_ms / close_time_ms are epoch-ms ints; OHLCV are floats. This maps
+# positionally onto _COLS; the two time columns are converted to datetime64 only
+# when the DataFrame is materialized for a reader.
+_Bar = Tuple[int, float, float, float, float, float, int]
+
 
 class WSCandleFeed:
     def __init__(self) -> None:
-        self._store: Dict[Tuple[str, str], pd.DataFrame] = {}
+        self._bars: Dict[Tuple[str, str], Deque[_Bar]] = {}
+        self._df_cache: Dict[Tuple[str, str], pd.DataFrame] = {}
+        self._dirty: Dict[Tuple[str, str], bool] = {}
         self._last_update: Dict[Tuple[str, str], float] = {}
         self._ready: Set[Tuple[str, str]] = set()   # only serve keys that have been seeded
         self._lock = threading.Lock()
         self._started = False
         self._stop = False
+
+    # ---- materialization (build downstream DataFrame on read; cached) ------
+    def _materialize_locked(self, key: Tuple[str, str]) -> Optional[pd.DataFrame]:
+        """Build the Binance-shaped DataFrame from raw bars. CALLER HOLDS _lock.
+
+        Cached until the next write marks the key dirty, so a scan's burst of
+        reads rebuilds at most once. The build is a single vectorized
+        DataFrame construction + two vectorized to_datetime calls -- orders of
+        magnitude cheaper than the old per-tick masked .loc assignment.
+        """
+        if not self._dirty.get(key, True):
+            cached = self._df_cache.get(key)
+            if cached is not None:
+                return cached
+        buf = self._bars.get(key)
+        if not buf:
+            return None
+        df = pd.DataFrame(list(buf), columns=_COLS)
+        # epoch-ms ints -> datetime64[ns], identical dtype to the REST seed path
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+        df["close_time"] = pd.to_datetime(df["close_time"], unit="ms")
+        self._df_cache[key] = df
+        self._dirty[key] = False
+        return df
 
     # ---- public read API (sync; called from the scan path) ----------------
     def get_klines(self, symbol: str, interval: str, limit: int) -> Optional[pd.DataFrame]:
@@ -66,17 +109,20 @@ class WSCandleFeed:
             with self._lock:
                 if key not in self._ready:
                     return None
-                df = self._store.get(key)
+                buf = self._bars.get(key)
                 upd = self._last_update.get(key, 0.0)
-                if df is None or df.empty or len(df) < min(limit, 30):
+                if not buf or len(buf) < min(limit, 30):
                     return None
                 # packet freshness AND candle continuity: last bar must be current
                 now = time.time()
                 if (now - upd) > (isec + 60):
                     return None
-                last_ot = df["open_time"].iloc[-1].timestamp()
-                if (now - last_ot) > (1.5 * isec + 60):
+                last_ot_ms = buf[-1][0]
+                if (now - last_ot_ms / 1000.0) > (1.5 * isec + 60):
                     return None  # gapped/stale grid -> REST
+                df = self._materialize_locked(key)
+                if df is None or df.empty or len(df) < min(limit, 30):
+                    return None
                 return df.tail(limit).reset_index(drop=True).copy()  # under lock
         except Exception:
             return None
@@ -87,13 +133,15 @@ class WSCandleFeed:
         try:
             r = requests.get(url, params={"symbol": symbol, "interval": interval, "limit": _MAX_BARS}, timeout=8)
             r.raise_for_status()
-            rows = [[int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5]), int(x[6])] for x in r.json()]
-            df = pd.DataFrame(rows, columns=_COLS)
-            df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
-            df["close_time"] = pd.to_datetime(df["close_time"], unit="ms")
+            bars: List[_Bar] = [
+                (int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5]), int(x[6]))
+                for x in r.json()
+            ]
             key = (symbol.upper(), interval)
             with self._lock:
-                self._store[key] = df
+                self._bars[key] = deque(bars, maxlen=_MAX_BARS)
+                self._df_cache.pop(key, None)
+                self._dirty[key] = True
                 self._last_update[key] = time.time()
                 self._ready.add(key)
             return True
@@ -107,21 +155,25 @@ class WSCandleFeed:
                 self._seed(s, iv)
 
     def _apply_bar(self, key: Tuple[str, str], ot_ms: int, o: float, h: float, l: float, c: float, v: float, ct_ms: int) -> None:
-        ot = pd.to_datetime(ot_ms, unit="ms")
-        ct = pd.to_datetime(ct_ms, unit="ms")
-        row = {"open_time": ot, "open": o, "high": h, "low": l, "close": c, "volume": v, "close_time": ct}
+        ot_ms = int(ot_ms)
+        bar: _Bar = (ot_ms, o, h, l, c, v, int(ct_ms))
         with self._lock:
-            df = self._store.get(key)
-            if df is None or df.empty:
-                self._store[key] = pd.DataFrame([row], columns=_COLS)
+            buf = self._bars.get(key)
+            if buf is None:
+                buf = deque(maxlen=_MAX_BARS)
+                self._bars[key] = buf
+            if buf and ot_ms == buf[-1][0]:
+                buf[-1] = bar                       # update in-progress bar -- O(1)
+            elif (not buf) or ot_ms > buf[-1][0]:
+                buf.append(bar)                     # new bar -- O(1) (auto-evicts oldest)
             else:
-                mask = df["open_time"] == ot
-                if mask.any():
-                    df.loc[mask, _COLS] = [ot, o, h, l, c, v, ct]   # upsert existing bar
-                else:
-                    df = pd.concat([df, pd.DataFrame([row], columns=_COLS)], ignore_index=True)
-                    df = df.drop_duplicates("open_time").sort_values("open_time").tail(_MAX_BARS).reset_index(drop=True)
-                    self._store[key] = df
+                # rare: out-of-order / late correction -> sorted upsert by open_time
+                merged: Dict[int, _Bar] = {b[0]: b for b in buf}
+                merged[ot_ms] = bar
+                ordered = [merged[k] for k in sorted(merged)][-_MAX_BARS:]
+                buf.clear()
+                buf.extend(ordered)
+            self._dirty[key] = True
             self._last_update[key] = time.time()
 
     # ---- background streams (reseed on every (re)connect) -----------------

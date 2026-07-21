@@ -781,11 +781,32 @@ def _classify_updown_trade(question: str, strategy: str, market_id: str = "") ->
 DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
 
+async def _status_cache_refresher():
+    """2026-07-15 DASHFIX (operator GO + Codex GO): background pre-compute of the ~20s split-
+    mode /api/status payload on a SLOW 3-min cadence (operator: Cyllene needs 3-5 min, not
+    live). Runs OFF the event loop so inline polls never assemble and the small VPS CPU is not
+    pegged (~20s work per ~200s cycle). Single coroutine = one refresh in flight, no lock."""
+    await asyncio.sleep(5)
+    while True:
+        try:
+            if _full_bot_instance() is None:
+                await asyncio.to_thread(_get_status_payload_sync, _force=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("status cache refresher error")
+        await asyncio.sleep(180)
+
+
 @asynccontextmanager
 async def _dashboard_lifespan(_app: FastAPI):
     """Pre-warm lightweight caches on startup without using deprecated event hooks."""
     _maybe_trigger_refresh(max_age=0)
-    yield
+    _status_refresher_task = asyncio.create_task(_status_cache_refresher())
+    try:
+        yield
+    finally:
+        _status_refresher_task.cancel()
 
 
 app = FastAPI(
@@ -833,6 +854,13 @@ def _health_payload() -> Dict[str, Any]:
 # ─── JOURNAL CACHE ────────────────────────────────────────────────
 # Avoid rebuilding TradeJournal (reads all of entries.jsonl) on every API call.
 # Cache is keyed by the entries.jsonl path; only reload when its mtime changes.
+
+# 2026-07-16: per-session TTL cache for _journal_for_query (archive/non-active sessions).
+# Active-session queries route through the throttled _get_journal() cache instead.
+_jfq_cache: Dict[str, tuple] = {}
+_JFQ_TTL_SEC = 45.0
+_journal_build_lock = threading.Lock()  # single-flight: 1 journal rebuild at a time
+
 
 _journal_cache: Dict[str, object] = {
     "path": None,   # Path object for entries.jsonl
@@ -925,19 +953,48 @@ def _get_journal():
     cached_journal = _journal_cache.get("journal")
 
     # Re-use cache if same session directory and file has not been modified
+    # 2026-07-15 DASHFIX (operator GO): TTL floor. entries.jsonl mtime changes every few
+    # seconds (price updates), so an mtime-only cache rebuilt the ~3s journal on nearly every
+    # poll and, worse, all concurrent polls cache-missed at once (thundering herd) -> the small
+    # dashboard thread pool saturated -> every endpoint 504'd. Rebuild at most once per 45s and
+    # share the cached journal across endpoints; 45s staleness is fine for a monitoring UI.
+    # 2026-07-16 BUMP 8s->45s (operator GO): py-spy showed the 8s floor = a 3s full 50MB
+    # entries.jsonl reparse (+_save_summary rescan) every 8s = ~40% CPU floor with the
+    # browser open -> event loop starved, sockets stuck CLOSE-WAIT. Hero stats already come
+    # from summary.json (60s); only the closed-trade equity curve needs the journal, which
+    # tolerates 45s. journal-slim (staged) makes mtime stable so this cache holds far longer.
+    _jc_ts = float(_journal_cache.get("built_ts") or 0.0)
     if (
         cached_journal is not None
         and cached_path == entries_file
-        and cached_mtime == current_mtime
+        and (cached_mtime == current_mtime or (_time_mod.time() - _jc_ts) < 45.0)
     ):
         return cached_journal
 
-    # Cache miss — rebuild
-    journal = TradeJournal(session_id=chosen.name)
-    _journal_cache["path"] = entries_file
-    _journal_cache["mtime"] = current_mtime
-    _journal_cache["journal"] = journal
-    return journal
+    # Cache miss — SINGLE-FLIGHT rebuild. 2026-07-16: concurrent cache-misses each built a
+    # full TradeJournal in parallel (thundering herd) -> N x 50MB parse -> thread pool
+    # saturated -> event loop starved -> browser retried -> death spiral (95pct CPU, 000
+    # replies). Now only ONE thread rebuilds; everyone else serves the stale journal (or
+    # None before the first build) instantly instead of piling on.
+    if not _journal_build_lock.acquire(blocking=False):
+        return cached_journal
+    try:
+        # Re-check: another thread may have just finished the build while we waited.
+        _jc_ts2 = float(_journal_cache.get("built_ts") or 0.0)
+        if (
+            _journal_cache.get("journal") is not None
+            and _journal_cache.get("path") == entries_file
+            and (_time_mod.time() - _jc_ts2) < 45.0
+        ):
+            return _journal_cache["journal"]
+        journal = TradeJournal(session_id=chosen.name)
+        _journal_cache["path"] = entries_file
+        _journal_cache["mtime"] = current_mtime
+        _journal_cache["journal"] = journal
+        _journal_cache["built_ts"] = _time_mod.time()
+        return journal
+    finally:
+        _journal_build_lock.release()
 
 
 def _get_journal_summary() -> Dict:
@@ -967,6 +1024,29 @@ def _get_journal_summary() -> Dict:
         "summary_source": "none",
     }
 
+    # 2026-07-15 SPLIT-MODE FAST PATH (operator GO + Codex GO): in --dashboard-only
+    # mode (bot_instance is None) prefer the bot-written summary.json over rebuilding
+    # TradeJournal from the multi-thousand-line entries.jsonl. That rebuild (~3s, grows
+    # with the session) runs on the uvicorn event loop here and, past the 12s deadline,
+    # HANGS every endpoint (504) -> blank Live Test boxes. summary.json is written every
+    # ~60s + on fills and carries all hero fields incl strategy_stats. The empty-new-
+    # session overlay is still applied by the _get_current_session_summary() caller.
+    if _full_bot_instance() is None:
+        try:
+            _chosen = _latest_session_dir_by_name() or TradeJournal.newest_resumable_session_dir()  # 2026-07-18 flip-flop fix
+            if _chosen is None and JOURNAL_DIR.exists():
+                _dirs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
+                _chosen = _dirs[0] if _dirs else None
+            if _chosen is not None:
+                _sf = _chosen / "summary.json"
+                if _sf.exists():
+                    with open(_sf, encoding="utf-8") as _f:
+                        _out = json.load(_f)
+                    _out["summary_source"] = "summary_json_fast"
+                    return _out
+        except Exception:
+            pass
+
     j = _get_journal()
     if j:
         out = j.get_summary()
@@ -976,7 +1056,7 @@ def _get_journal_summary() -> Dict:
     if not JOURNAL_DIR.exists():
         return _empty
 
-    chosen = TradeJournal.newest_resumable_session_dir()
+    chosen = _latest_session_dir_by_name() or TradeJournal.newest_resumable_session_dir()  # 2026-07-18 flip-flop fix: prefer LIVE newest-by-name session
     if chosen is None:
         sessions = sorted(
             [d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True
@@ -1009,7 +1089,15 @@ _JOURNAL_SUMMARY_TTL = 6.0  # seconds
 
 
 async def _run_dashboard_blocking(fn, *args, timeout: float = 5.0, label: str = "dashboard_io", **kwargs):
-    """Run blocking dashboard I/O off the uvicorn event loop with a hard deadline."""
+    """Run blocking dashboard I/O off the uvicorn event loop with a hard deadline.
+
+    2026-07-16: a bounding Semaphore was trialed here but REVERTED. On the 2-core VPS a
+    single status assembly holds the GIL in C-level json.loads for ~25s and freezes the
+    event loop regardless of slot count, so a semaphore could not prevent the freeze and
+    a tight value only starved interactive endpoints. The real status fix is a sidecar
+    (compute the payload in a separate process). Trade-points/exit-quality were made
+    off-loop + incremental separately, which removed their contribution to the freeze.
+    """
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(fn, *args, **kwargs),
@@ -1242,15 +1330,37 @@ def _kelly_state_payload() -> Dict[str, Any]:
 
 
 def _journal_for_query(session_id: Optional[str]):
-    """Load ``TradeJournal`` for a specific session (active or archive), or None."""
+    """Load ``TradeJournal`` for a specific session (active or archive), or None.
+
+    2026-07-16 CPU FIX (py-spy): this used to construct a fresh TradeJournal on EVERY
+    call (full 50MB entries.jsonl parse + _save_summary rescan + summary.json write).
+    _tradepoints_named_sync / updown / exit-reason endpoints hammer it -> 60-75pct CPU
+    floor, event loop starved, sockets stuck CLOSE-WAIT. Now: active-session queries
+    reuse the throttled _get_journal() cache; archive sessions get a 45s TTL cache.
+    """
     if not session_id:
         return None
     from src.execution.trade_journal import TradeJournal, JOURNAL_DIR
 
-    if (JOURNAL_DIR / session_id).is_dir():
-        return TradeJournal(session_id=session_id)
-    if TradeJournal._find_archive_session_path(session_id):
-        return TradeJournal(session_id=session_id)
+    # Active/current session -> reuse the shared throttled journal cache.
+    try:
+        cur = _latest_session_dir_by_name()
+        if cur is not None and cur.name == session_id:
+            j = _get_journal()
+            if j is not None:
+                return j
+    except Exception:
+        pass
+
+    # Archive / non-active session -> per-session TTL cache.
+    now = _time_mod.time()
+    ent = _jfq_cache.get(session_id)
+    if ent is not None and (now - ent[1]) < _JFQ_TTL_SEC:
+        return ent[0]
+    if (JOURNAL_DIR / session_id).is_dir() or TradeJournal._find_archive_session_path(session_id):
+        j = TradeJournal(session_id=session_id)
+        _jfq_cache[session_id] = (j, now)
+        return j
     return None
 
 
@@ -1341,7 +1451,16 @@ def _dashboard_html_with_injections() -> str:
     html_path = Path(__file__).parent / "index.html"
     with open(html_path, "r", encoding="utf-8") as f:
         content = f.read()
-    inject_parts: List[str] = []
+    try:
+        _dash_build = str(int(html_path.stat().st_mtime))
+    except OSError:
+        _dash_build = "0"
+    # 2026-07-18: build stamp = index.html mtime. A tab left open across a
+    # dashboard deploy runs STALE in-memory JS (this is what sawtoothed the P&L
+    # trace); the client polls /api/dashboard/build and self-refreshes on mismatch.
+    inject_parts: List[str] = [
+        "<script>window.__DASH_BUILD=" + json.dumps(_dash_build) + ";</script>"
+    ]
     browser_dsn = os.getenv("SENTRY_BROWSER_DSN", "").strip()
     if browser_dsn:
         rep = os.getenv("SENTRY_REPLAY_SESSION_SAMPLE_RATE", "0.05").strip() or "0.05"
@@ -1383,6 +1502,17 @@ async def get_dashboard():
 
 
 # ─── HEALTH (container / PaaS uptime check) ──────────────────────
+
+@app.get("/api/dashboard/build")
+async def dashboard_build():
+    """index.html mtime; client compares to window.__DASH_BUILD to detect a
+    stale open tab after a dashboard deploy and self-refresh (no silent stale JS)."""
+    try:
+        m = int((Path(__file__).parent / "index.html").stat().st_mtime)
+    except OSError:
+        m = 0
+    return JSONResponse({"build": str(m)}, headers={"Cache-Control": "no-store"})
+
 
 @app.get("/health")
 async def health_check():
@@ -1533,7 +1663,7 @@ def _dashboard_journal_session_dir() -> Optional[Path]:
 
     if not JOURNAL_DIR.exists():
         return None
-    chosen = TradeJournal.newest_resumable_session_dir()
+    chosen = _latest_session_dir_by_name() or TradeJournal.newest_resumable_session_dir()  # 2026-07-18 flip-flop fix: prefer LIVE newest-by-name session
     if chosen is not None:
         return chosen
     subs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
@@ -1547,6 +1677,34 @@ def _latest_session_dir_by_name() -> Optional[Path]:
         return None
     subs = sorted([d for d in JOURNAL_DIR.iterdir() if d.is_dir()], reverse=True)
     return subs[0] if subs else None
+
+
+def _current_session_dir_str() -> Optional[str]:
+    """THE canonical 'current session' directory for every session-scoped panel.
+
+    2026-07-20 (operator-reported: after a restart the performance tab showed the
+    PREVIOUS session's trades while the header showed the new session id). Root
+    cause: three payload builders each resolved the session independently as
+    ``max(paper_trades/*, key=mtime)``. After a restart the OLD dir keeps
+    receiving writes (settlers, final summary flush) while the fresh dir sits
+    empty — so mtime points at the previous session and those panels go stale.
+
+    Resolution order:
+      1. the live bot's own journal (authoritative when the dashboard is embedded)
+      2. newest directory by NAME — session ids embed the timestamp
+         (test_YYYYMMDD_HHMMSS) so lexicographic max is chronological, and unlike
+         mtime it cannot be dragged backwards by late writes to an old dir.
+    NEVER resolve a session by mtime.
+    """
+    if bot_instance is not None:
+        try:
+            sd = getattr(getattr(bot_instance, "journal", None), "session_dir", None)
+            if sd:
+                return str(sd)
+        except Exception:
+            pass
+    p = _latest_session_dir_by_name()
+    return str(p) if p is not None else None
 
 
 def _newer_empty_startup_session(summary: Optional[Dict[str, Any]]) -> Optional[Path]:
@@ -1712,7 +1870,7 @@ async def get_status():
     # Uses _get_cached_journal_summary() inside the worker thread.
     return await _run_dashboard_blocking(
         _get_status_payload_sync,
-        timeout=12.0,
+        timeout=20.0,
         label="api_status",
     )
 
@@ -1725,15 +1883,340 @@ async def get_scanner_health():
         label="scanner_health",
     )
 
+@app.get("/api/vitals")
+async def get_vitals():
+    # 2026-07-16 Live-tab Vital Signs strip. Fast process-health from the two runtime
+    # files the bot rewrites every cycle (heartbeat + runtime_status). File reads only
+    # -> no GIL contention with the heavy /api/status assembly.
+    # Inline (NOT _run_dashboard_blocking): the shared thread pool is saturated by the
+    # heavy /api/status assembly, so a pooled task queues >2s and 504s. Two tiny file
+    # reads block the event loop only microseconds -> read them inline for true low latency.
+    return _vitals_payload_sync()
+
+
+def _vitals_payload_sync():
+    import json as _vjson
+    now_ms = int(_time_mod.time() * 1000)
+
+    def _load(name):
+        try:
+            with open(DATA_ROOT / "runtime" / name) as f:
+                return _vjson.load(f)
+        except Exception:
+            return {}
+
+    hb = _load("bot_heartbeat.json")
+    rt = _load("bot_runtime_status.json")
+
+    def _age(ts):
+        ms = _parse_cycle_epoch_ms(ts)
+        return round((now_ms - ms) / 1000.0, 1) if ms is not None else None
+
+    def _state(v, ok, warn):
+        if v is None:
+            return "unknown"
+        return "ok" if v <= ok else ("warn" if v <= warn else "dead")
+
+    def _secs(ms):
+        return round(ms / 1000.0, 1) if isinstance(ms, (int, float)) and ms else None
+
+    ct = rt.get("cycle_timings_ms") or {}
+    hb_age = _age(hb.get("ts"))
+    rt_age = _age(rt.get("ts"))
+    rss = hb.get("rss_mb")
+    overrun = ct.get("cycle_overrun_ms")
+    exit_ms = ct.get("cycle_exit_check_ms")
+    cyc_ms = ct.get("cycle_elapsed_ms")
+
+    vitals = [
+        {"key": "heartbeat", "label": "Bot heartbeat", "value": (str(hb_age) + "s" if hb_age is not None else "--"),
+         "sub": "phase " + str(hb.get("phase") or rt.get("phase") or "?"), "state": _state(hb_age, 30, 90), "beat": 1.2},
+        {"key": "scanner", "label": "Scanner loop", "value": (str(rt_age) + "s" if rt_age is not None else "--"),
+         "sub": "cycle " + str(rt.get("cycle_count") or "?"), "state": _state(rt_age, 90, 180), "beat": 2.4},
+        {"key": "exit_check", "label": "Exit check", "value": ((str(_secs(exit_ms)) + "s") if _secs(exit_ms) else "--"),
+         "sub": "per-cycle", "state": _state(exit_ms, 12000, 25000), "beat": 0.9},
+        {"key": "cycle", "label": "Cycle pace", "value": ((str(_secs(cyc_ms)) + "s") if _secs(cyc_ms) else "--"),
+         "sub": (("+" + str(_secs(overrun)) + "s over") if _secs(overrun) else "on pace"), "state": _state(overrun, 8000, 20000), "beat": 0},
+        {"key": "memory", "label": "Memory RSS", "value": ((str(round(rss)) + " MB") if isinstance(rss, (int, float)) else "--"),
+         "sub": "pid " + str(hb.get("pid") or rt.get("pid") or "?"), "state": _state(rss, 750, 900), "beat": 0},
+    ]
+    return {"ts": now_ms, "mode": rt.get("mode"), "open_positions": rt.get("open_positions"),
+            "daily_trades": rt.get("daily_trades"), "session_id": rt.get("session_id"), "vitals": vitals}
+
+
+_triggers_cache = {"ts": 0.0, "value": None}
+_TRIGGERS_TTL = 15.0
+
+
+@app.get("/api/triggers")
+async def get_triggers():
+    # 2026-07-16 Live-tab break-trigger board. Joins data/dashboard/break_triggers.json
+    # to live per-lane closes since each trigger `since`. Inline + 15s cache (heavy
+    # entries.jsonl read runs at most once / 15s; the pool is saturated by /api/status).
+    import time as _tt
+    now = _tt.time()
+    c = _triggers_cache
+    if c["value"] is not None and (now - c["ts"]) < _TRIGGERS_TTL:
+        return c["value"]
+    val = await _run_dashboard_blocking(_triggers_payload_sync, timeout=10.0, label="triggers")
+    c["value"] = val
+    c["ts"] = now
+    return val
+
+
+def _triggers_payload_sync():
+    import json as _tj, glob as _tg, os as _to
+    from datetime import datetime as _dt
+
+    def _epoch(s):
+        if not s:
+            return None
+        try:
+            return _dt.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+
+    def _f(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    try:
+        cfg = _tj.load(open(DATA_ROOT / "dashboard" / "break_triggers.json"))
+    except Exception:
+        return {"triggers": [], "error": "no break_triggers.json"}
+    trigs = cfg.get("triggers") or []
+
+    # 2026-07-20: canonical session resolution (was max-by-mtime = stale after restart)
+    S = _current_session_dir_str()
+    if not S:
+        return {"triggers": [], "error": "no session"}
+    byid = {}
+    exits = []
+    _epath = _to.path.join(S, "entries.jsonl")
+    try:
+        with open(_epath) as fh:
+            _sz = _to.path.getsize(_epath)
+            if _sz > 12000000:
+                fh.seek(_sz - 12000000)
+                fh.readline()  # discard partial first line
+            for ln in fh:
+                try:
+                    d = _tj.loads(ln)
+                except Exception:
+                    continue
+                ev = d.get("event")
+                if ev == "ENTRY":
+                    byid[d.get("trade_id")] = ((d.get("extra") or {}).get("lane_id") or "")
+                elif ev == "EXIT":
+                    p = d.get("pnl")
+                    if p is None:
+                        continue
+                    lid = byid.get(d.get("trade_id")) or ""
+                    lane3 = "|".join(lid.split("|")[:3]) if lid else ""
+                    exits.append((_epoch(d.get("timestamp")), lane3, float(p), d.get("current_price")))
+    except Exception:
+        pass
+
+    out = []
+    for t in trigs:
+        lane = t.get("lane")
+        since = _epoch(t.get("since"))
+        rows = [e for e in exits if e[1] == lane and (since is None or (e[0] or 0) >= since)]
+        closed = len(rows)
+        net = round(sum(e[2] for e in rows), 2)
+        wins = sum(1 for e in rows if e[2] > 0)
+        wr = round(100.0 * wins / closed) if closed else None
+        ride0 = sum(1 for e in rows if _f(e[3]) is not None and _f(e[3]) <= 0.12 and e[2] < 0)
+        tn = t.get("thresh_net")
+        tw = t.get("thresh_wr")
+        tr = t.get("thresh_ride0")
+        mc = t.get("min_closed") or 10
+        fired = False
+        if tn is not None and net <= tn:
+            fired = True
+        if tw is not None and wr is not None and closed >= mc and wr < tw:
+            fired = True
+        if tr is not None and ride0 >= tr:
+            fired = True
+        near = (tn is not None and net <= tn + 4) or (tw is not None and wr is not None and closed >= mc and wr < tw + 6)
+        if fired:
+            state = "fire"
+        elif near:
+            state = "watch"
+        elif closed < mc and net < 3 and tr is None:
+            state = "wait"
+        else:
+            state = "safe"
+        out.append({"id": t.get("id"), "label": t.get("label"), "lane": lane, "cond": t.get("cond"),
+                    "action": t.get("action"), "closed": closed, "min_closed": mc, "net": net,
+                    "wr": wr, "ride0": ride0, "state": state})
+    return {"updated": cfg.get("updated"), "session": _to.path.basename(S), "triggers": out}
+
+
+
+
+_exitquality_cache = {"ts": 0.0, "value": None}
+_EXITQ_TTL = 60.0
+
+
+@app.get("/api/exit-quality")
+async def get_exit_quality():
+    # 2026-07-16 Exit-quality view (replaces the BTC-coupled exit-timing HUD).
+    # Per-strategy exit diagnostics from the live session's EXIT events: net, WR,
+    # payoff, stop-share, green-stop% (stops that cut a winner), ride0 (binary
+    # collapse), time-stop count. Full-session read (string-prefiltered to EXIT
+    # lines) behind a 60s cache -- the aggregate moves slowly.
+    import time as _tt
+    now = _tt.time()
+    c = _exitquality_cache
+    if c["value"] is not None and (now - c["ts"]) < _EXITQ_TTL:
+        return c["value"]
+    val = await _run_dashboard_blocking(_exitquality_payload_sync, timeout=15.0, label="exitq")
+    c["value"] = val
+    c["ts"] = now
+    return val
+
+
+_exitq_state = {"path": None, "offset": 0, "acc": {}, "lock": None}
+
+
+def _exitquality_payload_sync():
+    # 2026-07-16 LATENCY FIX #2: incremental. First call builds the aggregate from the
+    # whole file; every later call reads only the NEW complete lines since the last byte
+    # offset (resets on session change / truncation). Combined with the 60s result cache
+    # the per-rebuild parse is tiny, so it adds ~no GIL pressure.
+    import json as _ej, glob as _eg, os as _eo, threading as _et
+
+    # 2026-07-20: canonical session resolution (was max-by-mtime = stale after restart)
+    S = _current_session_dir_str()
+    if not S:
+        return {"strategies": [], "error": "no session"}
+    epath = _eo.path.join(S, "entries.jsonl")
+
+    st = _exitq_state
+    if st["lock"] is None:
+        st["lock"] = _et.Lock()
+
+    with st["lock"]:
+        try:
+            size = _eo.path.getsize(epath)
+        except OSError:
+            return {"strategies": [], "error": "no entries"}
+        if st["path"] != epath or st["offset"] > size:
+            st["path"] = epath
+            st["offset"] = 0
+            st["acc"] = {}
+        acc = st["acc"]
+
+        def _slot(k):
+            v = acc.get(k)
+            if v is None:
+                v = {"n": 0, "net": 0.0, "wins": 0, "win_n": 0, "win_sum": 0.0,
+                     "loss_n": 0, "loss_sum": 0.0, "stops": 0, "green_stops": 0,
+                     "ride0": 0, "time_stop": 0}
+                acc[k] = v
+            return v
+
+        try:
+            with open(epath, "rb") as fh:
+                fh.seek(st["offset"])
+                data = fh.read()
+        except OSError:
+            data = b""
+        nl = data.rfind(b"\n")
+        if nl >= 0:
+            chunk = data[:nl + 1]
+            st["offset"] += nl + 1
+            for ln in chunk.decode("utf-8", "replace").splitlines():
+                if '"EXIT"' not in ln:
+                    continue
+                try:
+                    d = _ej.loads(ln)
+                except Exception:
+                    continue
+                if d.get("event") != "EXIT":
+                    continue
+                stt = d.get("strategy") or "?"
+                if stt == "scan_diagnostics":
+                    continue
+                x = d.get("extra") or {}
+                try:
+                    pnl = float(d.get("pnl") or 0.0)
+                except Exception:
+                    pnl = 0.0
+                er = (x.get("exit_reason") or d.get("reason") or "").lower()
+                mf = x.get("mfe_pct")
+                pp = x.get("pnl_pct_at_exit")
+                _w = x.get("lane_window") or x.get("window_size") or "?"
+                _side = x.get("lane_side") or {"BUY_YES": "up", "BUY_NO": "down"}.get(d.get("action"), "?")
+                _lane_key = "L::" + stt + "::" + str(_w) + "::" + str(_side)
+                for k in (stt, "__ALL__", _lane_key):
+                    v = _slot(k)
+                    v["n"] += 1
+                    v["net"] += pnl
+                    if pnl > 0:
+                        v["wins"] += 1
+                        v["win_n"] += 1
+                        v["win_sum"] += pnl
+                    elif pnl < 0:
+                        v["loss_n"] += 1
+                        v["loss_sum"] += -pnl
+                    if "stop_loss" in er:
+                        v["stops"] += 1
+                        try:
+                            if mf is not None and float(mf) >= 0.05:
+                                v["green_stops"] += 1
+                        except Exception:
+                            pass
+                    if "time_stop" in er:
+                        v["time_stop"] += 1
+                    try:
+                        if pp is not None and float(pp) <= -0.80:
+                            v["ride0"] += 1
+                    except Exception:
+                        pass
+        acc_snapshot = {k: dict(v) for k, v in acc.items()}
+        sess = _eo.path.basename(S)
+
+    def _row(name, s2):
+        n = s2["n"]
+        wr = round(100.0 * s2["wins"] / n) if n else None
+        aw = s2["win_sum"] / s2["win_n"] if s2["win_n"] else 0.0
+        al = s2["loss_sum"] / s2["loss_n"] if s2["loss_n"] else 0.0
+        payoff = round(aw / al, 2) if al else None
+        stop_share = round(100.0 * s2["stops"] / n) if n else 0
+        green_pct = round(100.0 * s2["green_stops"] / s2["stops"]) if s2["stops"] else None
+        return {"strategy": name, "n": n, "net": round(s2["net"], 2), "wr": wr,
+                "payoff": payoff, "stop_share": stop_share, "green_pct": green_pct,
+                "ride0": s2["ride0"], "time_stop": s2["time_stop"]}
+
+    def _lane_row(k, s2):
+        _, _stt, _w, _side = k.split("::", 3)
+        r = _row(_stt, s2)
+        r["strategy"] = _stt
+        r["window"] = _w
+        r["side"] = _side
+        r["lane"] = _stt.replace("_macro", "") + "|" + _w + "|" + _side
+        return r
+
+    total = _row("PORTFOLIO", acc_snapshot["__ALL__"]) if "__ALL__" in acc_snapshot else None
+    rows = [_row(k, v) for k, v in acc_snapshot.items() if k != "__ALL__" and not k.startswith("L::")]
+    rows.sort(key=lambda r: r["net"])
+    lanes = [_lane_row(k, v) for k, v in acc_snapshot.items() if k.startswith("L::")]
+    lanes.sort(key=lambda r: r["net"])
+    return {"session": sess, "total": total, "strategies": rows, "lanes": lanes}
+
 
 # Short-TTL snapshot of the disk-assembled status payload for split/dashboard-only
 # mode (see note in _get_status_payload_sync). Keyed by nothing — there is exactly
 # one trading process — so a plain {ts,value} cell suffices.
-_split_status_cache: Dict[str, Any] = {"ts": 0.0, "value": None}
-_SPLIT_STATUS_TTL = 5.0
+_split_status_cache: Dict[str, Any] = {"ts": 0.0, "value": None, "refresh_started": 0.0}
+_SPLIT_STATUS_TTL = 20.0  # 2026-07-15 DASHFIX: was 5.0; status assembly ~13s > 5s made every poll re-run it (herd). 20s = at most one assembly / 20s, cache serves the rest.
 
 
-def _get_status_payload_sync():
+def _get_status_payload_sync(_force: bool = False):
     """Bot status.
 
     Journal summary for PnL fields uses the same source as ``/api/journal/summary``
@@ -1756,8 +2239,15 @@ def _get_status_payload_sync():
     # assembly runs at most once per TTL; all other polls return instantly.
     if bot is None:
         _sc = _split_status_cache
-        if _sc["value"] is not None and (_time_mod.time() - _sc["ts"]) < _SPLIT_STATUS_TTL:
+        # 2026-07-15 DASHFIX (operator GO + Codex GO): BACKGROUND PRE-COMPUTE @ 3-min cadence.
+        # The ~20s split-mode assembly is CPU-heavy; _status_cache_refresher() runs it OFF the
+        # event loop every ~3 min (operator: Cyllene only needs 3-5 min updates). Inline polls
+        # (_force=False) NEVER assemble once any value exists -> they serve the cached feed
+        # instantly, so browser + Cyllene share one feed and can't saturate the small VPS CPU.
+        # Only the first request before the refresher warms the cache builds inline once.
+        if not _force and _sc["value"] is not None:
             return _sc["value"]
+        _sc["refresh_started"] = _time_mod.time()
     strategy_names = (
         "bitcoin",
         "sol_macro",
@@ -1898,7 +2388,10 @@ def _get_status_payload_sync():
             "loss_pause_latest_trigger": _loss_pause.get("latest_trigger"),
             "can_trade": can_trade,
             "can_trade_reason": can_trade_reason,
-            "bankroll": bankroll,
+            "bankroll": bankroll,  # /api/status: already equity (cash + unrealized, line 2298)
+            "equity": _ops.get("equity"),  # 2026-07-20: expose equity on this channel too so hero reads it consistently
+            "cash_bankroll": _ops.get("cash_bankroll"),
+            "accounting_error": _ops.get("accounting_error"),
             "bankroll_source": getattr(bot, "bankroll_source", "bot_mark_to_market"),
             "bankroll_warning": None,
             "portfolio": portfolio,
@@ -1984,11 +2477,13 @@ def _get_status_payload_sync():
         if "--live" in argv:
             dry_run = False
 
-    j_disk = (
-        j_runtime
-        if j_runtime is not None
-        else (None if empty_startup_dir is not None else _get_journal())
-    )
+    # 2026-07-15 DASHFIX (operator GO): in split/--dashboard-only mode do NOT rebuild
+    # TradeJournal here (~3s+ on a large session, on the event loop) — it was hanging
+    # /api/status >12s -> 504 -> blank Command Center. j_disk is only used for a
+    # supplementary bankroll read; _resolve_bankroll_snapshot already falls back to the
+    # fresh summary.json equity (initial_bankroll 500 + realized), which is the correct
+    # figure, and session_dir_disk falls back to _dashboard_journal_session_dir().
+    j_disk = j_runtime if j_runtime is not None else None
     session_dir_disk = (
         empty_startup_dir
         if empty_startup_dir is not None
@@ -2079,8 +2574,10 @@ def _get_status_payload_sync():
         "performance_feedback": _feedback_status_nonblocking(),
         "ts": int(_time_mod.time()),
     }
+    _split_payload["status_generated_at"] = _time_mod.time()
     _split_status_cache["value"] = _split_payload
     _split_status_cache["ts"] = _time_mod.time()
+    _split_status_cache["refresh_started"] = 0.0
     return _split_payload
 
 
@@ -3110,12 +3607,18 @@ async def get_live_performance():
             k: v for k, v in strategy_stats.items() if k in _DASHBOARD_STRATEGY_NAMES
         }
 
-    # Build closed-trade list for equity curve etc. using the cached journal
+    # 2026-07-16: equity curve / avg-win-loss from the bounded, cached trade-points TAIL
+    # (last N EXITs) instead of a full TradeJournal build. get_closed_trades() forced a
+    # 50MB entries.jsonl parse on this hot polled endpoint (py-spy: 5-7s, event-loop
+    # starvation). Hero totals still come from summary.json; the curve only needs the tail.
     closed_trades: List[Dict] = []
     try:
-        j = _get_journal()
-        if j:
-            closed_trades = j.get_closed_trades()
+        _tc = _tradepoints_cache
+        if _tc.get("value") is not None and (_time_mod.time() - float(_tc.get("ts") or 0)) < 20.0:
+            closed_trades = (_tc.get("value") or {}).get("points", [])
+        else:
+            _tp = await _run_dashboard_blocking(_tradepoints_current_sync, 500, timeout=12.0, label="live-perf-points")
+            closed_trades = (_tp or {}).get("points", [])
     except Exception:
         pass
 
@@ -3172,6 +3675,17 @@ async def get_live_performance():
         "total_pnl": round(total_pnl, 2),
         "max_drawdown": round(max_drawdown, 2),
         "sharpe_ratio": 0.0,
+        # 2026-07-17: these are computed from a BOUNDED TAIL, not the whole session,
+        # while wins/losses/win_rate/realized_pnl above come from summary.json (full
+        # session). Surfacing the scope so the UI can label it -- a profit_factor of
+        # 1.0 next to a full-session +$798 is two different windows in one card.
+        "tail_scope": {
+            "applies_to": [
+                "avg_win", "avg_loss", "profit_factor", "equity_curve", "max_drawdown",
+            ],
+            "n": len(closed_trades),
+            "is_full_session": len(closed_trades) >= int(total_exits or 0),
+        },
         "by_strategy": strategy_stats_filtered,
         "equity_curve": equity_curve,
         "kelly_state": kelly,
@@ -4211,6 +4725,112 @@ def _closed_trades_to_chart_points(trades: List[Dict[str, Any]], limit: int) -> 
     return points
 
 
+_tradepoints_cache = {"key": None, "ts": 0.0, "value": None}
+_tradepoints_named_cache: dict = {}   # (session_id, limit) -> (ts, payload|None)
+_TRADEPOINTS_TTL = 20.0
+
+
+def _tradepoints_current_sync(limit):
+    # 2026-07-16 LATENCY FIX #1: build chart points by TAIL-reading recent EXIT events
+    # from the live session entries.jsonl (last ~14MB) instead of a full journal rebuild.
+    # Sub-second vs ~30s. Same point shape as _closed_trades_to_chart_points.
+    import glob as _tpg, os as _tpo
+
+    # 2026-07-20: canonical session resolution (was max-by-mtime = stale after restart)
+    S = _current_session_dir_str()
+    if not S:
+        return {"points": [], "session_id": None}
+    return _tradepoints_tail_sync(S, limit)
+
+
+def _tradepoints_tail_sync(S, limit):
+    # 2026-07-17: extracted from _tradepoints_current_sync so the NAMED-session path
+    # can use the same bounded tail. The named path previously kept the full journal
+    # rebuild on the assumption it was "infrequent" -- it is not: it timed out at 15s
+    # 752 times, and the timeout surfaced to the UI as a misleading 404 "Session not
+    # found" for sessions that exist. Same read, parameterised by session dir.
+    import json as _tpj, os as _tpo
+    from datetime import datetime as _tpd
+
+    if not S or not _tpo.path.isdir(S):
+        return None
+    epath = _tpo.path.join(S, "entries.jsonl")
+    if not _tpo.path.exists(epath):
+        return {"points": [], "session_id": _tpo.path.basename(S)}
+    lim = max(10, min(int(limit or 300), 2000))
+
+    def _ep(v):
+        try:
+            return int(_tpd.fromisoformat(str(v).replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return None
+
+    pts = []
+    try:
+        with open(epath) as fh:
+            sz = _tpo.path.getsize(epath)
+            if sz > 14000000:
+                fh.seek(sz - 14000000)
+                fh.readline()
+            for ln in fh:
+                if '"EXIT"' not in ln:
+                    continue
+                try:
+                    d = _tpj.loads(ln)
+                except Exception:
+                    continue
+                if d.get("event") != "EXIT":
+                    continue
+                stt = d.get("strategy") or "unknown"
+                if stt == "scan_diagnostics":
+                    continue
+                x = d.get("extra") or {}
+                entry_ep = _ep(x.get("opened_at") or d.get("timestamp"))
+                if not entry_ep:
+                    continue
+                try:
+                    pnl = float(d.get("pnl") or 0)
+                except Exception:
+                    pnl = 0.0
+                try:
+                    entry_price = float(d.get("entry_price") or 0)
+                except Exception:
+                    entry_price = 0.0
+                try:
+                    exit_price = float(d.get("current_price") or 0)
+                except Exception:
+                    exit_price = 0.0
+                pts.append({
+                    "time": entry_ep,
+                    "closed_at": _ep(d.get("timestamp")),
+                    "strategy": stt,
+                    "market_id": d.get("market_id"),
+                    "market_question": d.get("market_question", ""),
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "outcome": "win" if pnl >= 0 else "loss",
+                    "exit_reason": x.get("exit_reason") or d.get("reason"),
+                })
+    except OSError:
+        return {"points": [], "session_id": _tpo.path.basename(S)}
+    pts.sort(key=lambda pt: pt["time"])
+    if len(pts) > lim:
+        pts = pts[-lim:]
+    return {"points": pts, "session_id": _tpo.path.basename(S)}
+
+
+def _tradepoints_named_sync(session_id, limit):
+    # 2026-07-17: use the bounded tail (same as the current-session path) instead of
+    # j.get_closed_trades(), which rebuilt the whole ~80MB journal and blew the 15s
+    # timeout on every call (752 logged). Returns None only when the session dir is
+    # genuinely absent, so the caller's 404 now means "not found" and not "too slow".
+    import os as _tpo
+
+    return _tradepoints_tail_sync(
+        _tpo.path.join(str(DATA_ROOT / "paper_trades"), str(session_id)), limit
+    )
+
 @app.get("/api/journal/trade-points")
 async def get_journal_trade_points(
     limit: int = 300,
@@ -4219,26 +4839,68 @@ async def get_journal_trade_points(
 ):
     """Normalized closed-trade points for charting.
 
-    Returns epoch `time` + entry/exit prices so frontend can render bubble/marker
-    overlays without guessing field names. ``include_recent`` is retained only
-    for backward-compatible query parsing; fresh sessions must not inherit old
-    closed-trade points.
+    2026-07-16 LATENCY FIX #1: the hot no-session path tail-reads recent EXIT events
+    from entries.jsonl (last ~14MB) behind a 20s cache + the pool, instead of a full
+    journal rebuild that ran ON the event loop (~30s, polled every 10s -> froze the
+    whole dashboard). Named-session queries keep the journal path (infrequent).
     """
-    empty_startup_session_id = None
-    if not session_id:
-        empty_startup_dir = _newer_empty_startup_session(_get_cached_journal_summary())
-        if empty_startup_dir is not None:
-            empty_startup_session_id = empty_startup_dir.name
-            return {"points": [], "session_id": empty_startup_session_id}
-    j = _journal_for_query(session_id) if session_id else _get_journal()
-    if session_id and not j:
-        raise HTTPException(status_code=404, detail="Session not found")
-    points = _closed_trades_to_chart_points(j.get_closed_trades() if j else [], limit)
-    return {"points": points, "session_id": getattr(j, "session_id", None) if j else session_id}
+    if session_id:
+        # 2026-07-17 flicker fix: the morning tail fix removed the 80MB journal
+        # rebuild here but left the path UNCACHED — stale browser tabs (loaded
+        # before a bot restart, still polling the OLD session id) re-read a 14MB
+        # tail per poll, saturating the GIL and timing out EVERY dashboard
+        # endpoint (765 logged timeouts -> UI flicker). Same 20s TTL pattern as
+        # the current-session cache. 404s are cached too, so a dead session id
+        # cannot re-trigger the read storm.
+        _nk = (str(session_id), int(limit or 300))
+        _nc = _tradepoints_named_cache.get(_nk)
+        now = _time_mod.time()
+        # 2026-07-18 restart-flash fix: only serve a CACHED HIT (real payload).
+        # The earlier version also cached None and re-served it as a 404 for 20s —
+        # so during a bot restart, the split-second where the new session exists but
+        # has not written trades yet got PINNED as "Session not found" for a full
+        # 20s, turning a sub-second blank into a visible dead-view flash on every
+        # restart. Never cache a miss: a transient None must be re-checked next poll.
+        if _nc is not None and _nc[1] is not None and (now - _nc[0]) < 20.0:
+            return _nc[1]
+        val = await _run_dashboard_blocking(
+            _tradepoints_named_sync, session_id, limit, timeout=15.0, label="trade-points-named"
+        )
+        if val is None:
+            # do NOT cache the miss — the session may be mid-spin-up after a restart.
+            raise HTTPException(status_code=404, detail="Session not found")
+        _tradepoints_named_cache[_nk] = (now, val)
+        if len(_tradepoints_named_cache) > 64:
+            _oldest = min(_tradepoints_named_cache.items(), key=lambda kv: kv[1][0])[0]
+            _tradepoints_named_cache.pop(_oldest, None)
+        return val
+    # No fresh-session guard needed: _tradepoints_current_sync picks the newest-mtime
+    # session dir, so a fresh empty restart naturally yields [] (no EXIT events yet)
+    # WITHOUT the ~30s journal-summary parse that used to block the event loop here.
+    now = _time_mod.time()
+    ck = ("cur", int(limit or 300))
+    c = _tradepoints_cache
+    if c["value"] is not None and c["key"] == ck and (now - c["ts"]) < _TRADEPOINTS_TTL:
+        return c["value"]
+    val = await _run_dashboard_blocking(_tradepoints_current_sync, limit, timeout=12.0, label="trade-points")
+    c["key"] = ck
+    c["ts"] = now
+    c["value"] = val
+    return val
+
+
+_equity_history_cache: Dict[str, Any] = {"key": None, "ts": 0.0, "value": None}
+_EQUITY_HISTORY_TTL = 20.0
 
 
 @app.get("/api/session/equity_history")
 def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = None):
+    # 2026-07-15 DASHFIX: TTL-cache the 1400+ line snapshots.jsonl parse so repeated seed
+    # retries (and browser+Cyllene polls) don't re-parse the file each call and saturate.
+    _eh = _equity_history_cache
+    _ehk = str(session_id or "current") + "|" + str(limit)
+    if _eh["value"] is not None and _eh["key"] == _ehk and (_time_mod.time() - _eh["ts"]) < _EQUITY_HISTORY_TTL:
+        return _eh["value"]
     """Equity time-series for the current (or named) session, sourced from
     ``snapshots.jsonl``. Each row contains ``t`` (epoch ms) and ``v`` (equity =
     bankroll + realized_pnl + unrealized_pnl). Used to restore the Live P&L
@@ -4284,17 +4946,121 @@ def get_session_equity_history(limit: int = 1000, session_id: Optional[str] = No
                     upnl = float(o.get("unrealized_pnl") or 0)
                 except (TypeError, ValueError):
                     continue
-                points.append({"t": epoch_ms, "v": round(base + rpnl + upnl, 4)})
+                # 2026-07-18 REALIZED-ONLY: v = paper start (500) + realized_pnl only.
+                # Excludes unrealized so open-position mark-to-market noise no longer
+                # zig-zags the trace; the curve is a clean staircase that steps only when
+                # a trade actually banks. (upnl still parsed above but intentionally unused.)
+                # v = realized-only (solid staircase); v2 = total incl unrealized (faint ghost)
+                points.append({"t": epoch_ms, "v": round(base, 4), "v2": round(base + upnl, 4)})  # 2026-07-20 v=bankroll (clean realized equity); realized_pnl field is total-unrealized -> zigzag
     except OSError:
         return {"points": [], "session_id": getattr(j, "session_id", None) if j else None}
     if len(points) > limit:
         # Decimate evenly so the shape survives without flooding the chart.
         step = len(points) / float(limit)
         points = [points[int(i * step)] for i in range(limit)]
-    return {
+    _eh_result = {
         "points": points,
         "session_id": getattr(j, "session_id", None) if j else None,
     }
+    _equity_history_cache["key"] = _ehk
+    _equity_history_cache["ts"] = _time_mod.time()
+    _equity_history_cache["value"] = _eh_result
+    return _eh_result
+
+
+# 2026-07-18: pricing-health guardrail + per-lane P&L sparkline series (read-only tiles).
+@app.get("/api/lane_health")
+def get_lane_health_file():
+    """Serve the standalone lane-health detector output (pricing guardrail +
+    per-lane loss-cause), written by scripts/psb_lane_health.py cron every 3 min."""
+    p = Path("/home/ubuntu/psb/data/calibration/lane_health.json")
+    if not p.exists():
+        return {"available": False}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"available": False}
+    try:
+        data["age_seconds"] = round(_time_mod.time() - p.stat().st_mtime, 1)
+    except Exception:
+        data["age_seconds"] = None
+    data["available"] = True
+    return data
+
+
+_lane_pnl_series_cache: Dict[str, Any] = {"key": None, "ts": 0.0, "value": None}
+
+
+@app.get("/api/session/lane_pnl_series")
+def get_lane_pnl_series(session_id: Optional[str] = None, limit_points: int = 80):
+    """Per-lane cumulative REALIZED pnl series for the current (or named) session,
+    built from entries.jsonl ENTRY/EXIT pairs. Powers the per-lane sparklines."""
+    ck = str(session_id or "current")
+    c = _lane_pnl_series_cache
+    if c["value"] is not None and c["key"] == ck and (_time_mod.time() - c["ts"]) < 15:
+        return c["value"]
+    j = _journal_for_query(session_id) if session_id else _get_journal()
+    if session_id and not j:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session_dir = getattr(j, "session_dir", None) if j else None
+    if session_dir is None:
+        session_dir = _dashboard_journal_session_dir()
+    if not session_dir:
+        return {"lanes": [], "session_id": None}
+    ent_path = Path(session_dir) / "entries.jsonl"
+    if not ent_path.exists():
+        return {"lanes": [], "session_id": getattr(j, "session_id", None) if j else None}
+    entries: Dict[str, Any] = {}
+    series: Dict[str, list] = {}
+    cum: Dict[str, float] = {}
+    ncount: Dict[str, int] = {}
+    try:
+        with open(ent_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ev = o.get("event")
+                if ev == "ENTRY":
+                    entries[o.get("trade_id")] = o
+                elif ev == "EXIT":
+                    e = entries.get(o.get("trade_id"))
+                    if not e:
+                        continue
+                    ex = e.get("extra") or {}
+                    strat = (e.get("strategy") or "").replace("_macro", "").replace("bitcoin", "btc")
+                    lane = "%s|%s|%s" % (strat, ex.get("window_size"),
+                                        "up" if e.get("action") == "BUY_YES" else "down")
+                    try:
+                        pnl = float(o.get("pnl") or 0)
+                    except (TypeError, ValueError):
+                        pnl = 0.0
+                    try:
+                        epoch_ms = int(datetime.fromisoformat(str(o.get("timestamp"))).timestamp() * 1000)
+                    except Exception:
+                        epoch_ms = None
+                    cum[lane] = cum.get(lane, 0.0) + pnl
+                    ncount[lane] = ncount.get(lane, 0) + 1
+                    series.setdefault(lane, []).append({"t": epoch_ms, "cum": round(cum[lane], 4)})
+    except OSError:
+        return {"lanes": [], "session_id": None}
+    lp = max(8, min(int(limit_points), 240))
+    lanes = []
+    for lane, pts in series.items():
+        if len(pts) > lp:
+            step = len(pts) / float(lp)
+            pts = [pts[int(i * step)] for i in range(lp)] + [pts[-1]]
+        lanes.append({"lane": lane, "n": ncount[lane], "net": round(cum[lane], 2), "points": pts})
+    lanes.sort(key=lambda z: z["net"])  # worst net first
+    result = {"lanes": lanes, "session_id": getattr(j, "session_id", None) if j else None}
+    c["key"] = ck
+    c["ts"] = _time_mod.time()
+    c["value"] = result
+    return result
 
 
 @app.get("/api/journal/trade_journey")
@@ -4382,6 +5148,8 @@ def get_updown_breakdown(session_id: Optional[str] = None):
                 pass
         get_updown_breakdown._nc_cache = {"v": new_code_start}
 
+    _no_new_code_marker = new_code_start is None
+
     j = _journal_for_query(session_id) if session_id else _get_journal()
     closed = j.get_closed_trades() if j else []
 
@@ -4399,7 +5167,16 @@ def get_updown_breakdown(session_id: Optional[str] = None):
         mid = str(t.get("market_id", "") or "")
         ts  = (t.get("closed_at") or t.get("timestamp") or "")[:19]
         cat = _classify_updown_trade(q, strat, mid)
-        is_new = new_code_start is not None and ts >= new_code_start
+        # 2026-07-20 FIX: NEW_CODE_MARKERS ("Anti-LTF gate passed", "4H histogram",
+        # "1H histogram") are from an older code era and are no longer emitted — 0
+        # occurrences in today's polybot log — so new_code_start stayed None and this
+        # test was ALWAYS False. Every trade fell into old_code and the "Updown Strategy
+        # Win Rates / NEW CODE (post-restart)" panel rendered "No trades yet" forever.
+        # A restart IS the new-code boundary, so with no marker treat the queried
+        # session's trades as new code. This also sidesteps a latent format bug: trade
+        # ts is UTC ISO with 'T' ("2026-07-20T21:47:06") while the marker is local with
+        # a space ("2026-07-20 15:31:00"), so 'T' > ' ' made the compare unreliable.
+        is_new = _no_new_code_marker or (new_code_start is not None and ts >= new_code_start)
         bucket = new_stats if is_new else old_stats
         if pnl > 0.01:
             bucket[cat]["wins"] += 1
