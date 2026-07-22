@@ -3660,6 +3660,55 @@ class SolMacroStrategy:
                             continue
                 except Exception:
                     pass
+            # 2026-07-22 xrp 5m RISING-MOMENTUM CONFIRM (operator GO, Codex).
+            # The bias-aligned bypass below SKIPS momentum-confirm for bias-aligned
+            # entries; in chop this let xrp 5m WHIPSAW — bought the top (LONG, 5m
+            # hist rising=False) at 00:20 and shorted the bottom (SHORT, 5m hist
+            # ~-0.0003 then reversed +0.05% one min later) at 01:26 = 0W/2L -$26.32.
+            # For xrp 5m ONLY (per-strategy config key => only xrp carries it, and
+            # only when _updown_tf==5m), require the OWN 5m histogram to be moving in
+            # the entry direction WITH magnitude, EVEN on bias-aligned entries. A
+            # cross in-direction always qualifies. Trade both would have been blocked:
+            # LONG rising=False -> fail; SHORT |hist|<floor (flat) -> fail. Default OFF.
+            if (
+                is_updown
+                and _updown_tf == "5m"
+                and bool(self.config.get("require_rising_momentum_confirm_5m", False))
+            ):
+                _rm = getattr(sol, "macd_5m", None)
+                if _rm is not None:
+                    _rm_hist = float(getattr(_rm, "histogram", 0.0) or 0.0)
+                    _rm_rising = bool(getattr(_rm, "histogram_rising", False))
+                    _rm_xover = getattr(_rm, "crossover", None)
+                    _rm_floor = float(
+                        self.config.get("rising_momentum_min_abs_hist_5m", 0.0) or 0.0
+                    )
+                    if action == "BUY_YES":
+                        _rm_ok = (_rm_xover == "BULLISH_CROSS") or (
+                            _rm_hist > _rm_floor and _rm_rising
+                        )
+                    else:  # BUY_NO
+                        _rm_ok = (_rm_xover == "BEARISH_CROSS") or (
+                            _rm_hist < -_rm_floor and not _rm_rising
+                        )
+                    if not _rm_ok:
+                        _bump_skip("xrp_5m_no_rising_momentum")
+                        _log_skip_reject(
+                            market=market,
+                            window="5m",
+                            side=allowed_side,
+                            action=action,
+                            reason="xrp_5m_no_rising_momentum",
+                            yes_price=yes_price,
+                            htf_bias=primary_htf_bias,
+                            context={
+                                "hist_5m": round(_rm_hist, 5),
+                                "rising": _rm_rising,
+                                "floor": _rm_floor,
+                                "xover": _rm_xover,
+                            },
+                        )
+                        continue
             _alt_mc_cfg = self.config.get("alt_momentum_confirm") or {}
             _alt_mc_window = _updown_tf if is_updown else "15m"
             # Bias-aligned bypass: when the trade aligns with primary_htf_bias the

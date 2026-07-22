@@ -1684,6 +1684,8 @@ strategies:
     lane_max_notional_5m_up: 25  # 2026-07-21 operator ORDER (match the +800 engine sizing on the WINNING side): xrp 5m UP is now THE engine this session +$44.89 / 59% WR / n32 but was CAP-BOUND at 15 (avg fill $12.9, maxed $15.2). Tape flipped since 07-20 (then NO was winner). Move the engine treatment (high cap + floor + ignores_minimal) to the UP side. 15->25 (asset max_position_size). Break: revert if UP net<=+0 or WR<50% over next 15.
     lane_min_notional_5m_up: 18  # 2026-07-21 engine floor on the WINNING side (was on NO): keep the winner sized up through MINIMAL loss-streak tiers.
     lane_min_notional_ignores_minimal_5m_up: true  # 2026-07-21 engine protection moved to UP (the current winner) — keep sizing the winner during loss-streak tiers.
+    require_rising_momentum_confirm_5m: true  # 2026-07-22 operator GO (Codex): close the bias-aligned momentum-confirm BYPASS for xrp 5m — the whipsaw root. Both -$26 losses (00:20 LONG rising=False, 01:26 SHORT flat hist then reversed) were bias-aligned so the confirm was skipped. Now xrp 5m requires OWN 5m hist moving in-direction (rising+green long / falling+red short) or an in-direction cross, EVEN when bias-aligned. Break: false if it starves the xrp 5m engine (watch fill count next session).
+    rising_momentum_min_abs_hist_5m: 0.0005  # magnitude floor so near-zero-momentum chop entries (e.g. the 01:26 short at hist=-0.0003) are blocked, not just wrong-sign ones. xrp MACD hist scale ~0.001; 0.0005 blocks flat, allows real momentum. Tune up if starving / down if whipsaws still slip.
     calibration_size_multiplier_5m: 0.3
     entry_price_min: 0.42
     entry_price_max: 0.58
