@@ -960,6 +960,44 @@ class PolyBot:
             self.topup_shadow = FinalWindowTopupShadow.from_config(self.config)
         except Exception:
             self.topup_shadow = FinalWindowTopupShadow(enabled=False)
+        # Spot-reversal bank — SHADOW stage (logging-only; default off/shadow via
+        # spot_reversal_bank.mode). Instruments the exit gap-through leak: flags when an
+        # in-profit hold-to-resolution position's UNDERLYING spot reverses before the CLOB
+        # book gaps through the trail floor (doge 5m down 2026-07-22: +35.6% -> -11% in one
+        # tick). Logging-only until forward-proven; never mutates trading state. See
+        # spot_reversal_bank.py.
+        _srb = (self.config.get("spot_reversal_bank", {}) or {})
+        self._spot_rev_mode = str(_srb.get("mode", "off") or "off").lower()  # off|shadow|live
+        try:
+            if self._spot_rev_mode in ("shadow", "live"):
+                from src.execution.spot_reversal_bank import SpotReversalBank
+                self._spot_rev_bank = SpotReversalBank(
+                    arm_pct=float(_srb.get("arm_pct", 0.12) or 0.12),
+                    reversal_pct=float(_srb.get("reversal_pct", 0.003) or 0.003),
+                )
+            else:
+                self._spot_rev_bank = None
+        except Exception:
+            self._spot_rev_bank = None
+        # Never-green fast-cut — SHADOW stage (logging-only; default off via
+        # never_green_cut.mode). Instruments the dominant exit leak: a position whose
+        # peak pnl never clears green_threshold within cut_after_secs is (per 07-22 data)
+        # 0% WR and rides to −36% avg — separable from winners by MFE-timing, which entry
+        # conviction cannot do. Logs NEVER_GREEN_SHADOW would-cut events; never exits. See
+        # never_green_cut.py.
+        _ngc = (self.config.get("never_green_cut", {}) or {})
+        self._never_green_mode = str(_ngc.get("mode", "off") or "off").lower()  # off|shadow|live
+        try:
+            if self._never_green_mode in ("shadow", "live"):
+                from src.execution.never_green_cut import NeverGreenCut
+                self._never_green_cut = NeverGreenCut(
+                    green_threshold_pct=float(_ngc.get("green_threshold_pct", 0.02) or 0.02),
+                    cut_after_secs=float(_ngc.get("cut_after_secs", 60.0) or 60.0),
+                )
+            else:
+                self._never_green_cut = None
+        except Exception:
+            self._never_green_cut = None
         # WIDE final-window sampler: the standalone (not position-bound) version that
         # samples ALL BTC 5m markets in their final window with REAL /midpoint marks.
         # Position-mode shadow is starved (bot exits before expiry); this is where the
@@ -3157,6 +3195,116 @@ class PolyBot:
         )
         return False
 
+    def _observe_spot_reversal(self, market_prices: Dict[str, float]) -> None:
+        """SHADOW: flag in-profit updown positions whose UNDERLYING spot has reversed
+        before the CLOB book gaps through the trail floor. Logging-only; never exits,
+        never mutates any position/risk state. Inert unless spot_reversal_bank.mode set."""
+        bank = getattr(self, "_spot_rev_bank", None)
+        if bank is None:
+            return
+        try:
+            from src.execution.spot_reversal_bank import symbol_for_strategy
+            from src.market import ws_candle_feed as _wcf
+            live_ids = set()
+            for pos_id, pos in list(self.risk_manager.active_positions.items()):
+                strat = str(getattr(pos, "strategy", "") or "")
+                sym = symbol_for_strategy(strat)
+                if not sym:
+                    continue
+                cy = market_prices.get(pos.market_id)
+                entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                if cy is None or entry <= 0:
+                    continue
+                live_ids.add(pos_id)
+                cy = float(cy)
+                entry_leg = getattr(pos, "entry_leg", "YES") or "YES"
+                outcome = getattr(pos, "outcome", "") or ""
+                if entry_leg == "NO":
+                    down_bet, pnl_pct = True, (1.0 - cy - entry) / entry
+                elif outcome == "NO":
+                    down_bet = True
+                    pnl_pct = (entry - cy) / (1.0 - entry) if entry < 1.0 else 0.0
+                else:
+                    down_bet, pnl_pct = False, (cy - entry) / entry
+                spot = None
+                try:
+                    _df = _wcf.get_feed().get_klines(sym, "1m", 1)
+                    if _df is not None and len(_df):
+                        spot = float(_df["close"].iloc[-1])
+                except Exception:
+                    spot = None
+                ev = bank.observe(
+                    position_id=pos_id, down_bet=down_bet,
+                    current_spot=spot, current_pnl_pct=pnl_pct,
+                )
+                if ev:
+                    win = getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "?"
+                    logging.info(
+                        "SPOT_REVERSAL_SHADOW %s|%s mode=%s peak=%+.1f%% now=%+.1f%% "
+                        "giveback=%.1f%% rev=%.2f%% would_bank_at=%+.1f%% (LIVE exit follows separately)",
+                        strat.replace("_macro", ""), win, self._spot_rev_mode,
+                        ev["peak_pnl_pct"] * 100, ev["current_pnl_pct"] * 100,
+                        ev["giveback_pct"] * 100, ev["reversal_pct"] * 100,
+                        ev["current_pnl_pct"] * 100,
+                    )
+            for pid in list(getattr(bank, "_state", {}).keys()):
+                if pid not in live_ids:
+                    bank.drop(pid)
+        except Exception as e:
+            logging.debug("spot-reversal shadow error: %s", e)
+
+    def _observe_never_green(self, market_prices: Dict[str, float]) -> None:
+        """SHADOW: flag held updown positions that stay never-green past cut_after_secs.
+        Logging-only; never exits, never mutates any position/risk state. Inert unless
+        never_green_cut.mode set."""
+        ng = getattr(self, "_never_green_cut", None)
+        if ng is None:
+            return
+        try:
+            from datetime import datetime, timezone
+            live_ids = set()
+            for pos_id, pos in list(self.risk_manager.active_positions.items()):
+                strat = str(getattr(pos, "strategy", "") or "")
+                if strat not in CRYPTO_UPDOWN_STRATEGIES:
+                    continue
+                cy = market_prices.get(pos.market_id)
+                entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+                if cy is None or entry <= 0:
+                    continue
+                opened = getattr(pos, "opened_at", None)
+                if opened is None:
+                    continue
+                tz = getattr(opened, "tzinfo", None)
+                now = datetime.now(tz) if tz is not None else datetime.now()
+                hold_s = (now - opened).total_seconds()
+                if hold_s < 0:
+                    continue
+                live_ids.add(pos_id)
+                cy = float(cy)
+                entry_leg = getattr(pos, "entry_leg", "YES") or "YES"
+                outcome = getattr(pos, "outcome", "") or ""
+                if entry_leg == "NO":
+                    pnl_pct = (1.0 - cy - entry) / entry
+                elif outcome == "NO":
+                    pnl_pct = (entry - cy) / (1.0 - entry) if entry < 1.0 else 0.0
+                else:
+                    pnl_pct = (cy - entry) / entry
+                ev = ng.observe(position_id=pos_id, hold_seconds=hold_s, current_pnl_pct=pnl_pct)
+                if ev:
+                    win = getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "?"
+                    logging.info(
+                        "NEVER_GREEN_SHADOW %s|%s mode=%s hold=%.0fs peak=%+.1f%% "
+                        "would_cut_at=%+.1f%% (LIVE exit follows separately)",
+                        strat.replace("_macro", ""), win, self._never_green_mode,
+                        ev["hold_seconds"], ev["peak_pnl_pct"] * 100,
+                        ev["would_cut_pnl_pct"] * 100,
+                    )
+            for pid in list(getattr(ng, "_state", {}).keys()):
+                if pid not in live_ids:
+                    ng.drop(pid)
+        except Exception as e:
+            logging.debug("never-green shadow error: %s", e)
+
     async def _run_exit_checks(
         self,
         market_prices: Dict[str, float],
@@ -3694,6 +3842,8 @@ class PolyBot:
                 if self.risk_manager.active_positions:
                     market_prices, market_token_ids, market_liquidity = await self._fetch_held_market_prices()
                     if market_prices and self.risk_manager.active_positions:
+                        self._observe_spot_reversal(market_prices)
+                        self._observe_never_green(market_prices)
                         n = await self._run_exit_checks(market_prices, market_token_ids, market_liquidity)
                         if n:
                             logging.info("[fast-exit] handled %d exit(s)", n)
