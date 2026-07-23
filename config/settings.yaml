@@ -1817,7 +1817,7 @@ strategies:
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.04  # 2026-07-08 RESTORE operator 07-04 freq-unlock trim (was 0.04->raised to 0.06 by my wholesale revert; this lane won +$ in 07-04/05)
+            min_edge: 0.10  # 2026-07-23 operator GO: xrp 5m SHORT edge floor 0.04->0.10. Root of "consistent loser": thin-edge shorts (edge 0.062-0.065) = near-coin-flip entries near even (yes 0.47-0.53) that never-green collapse (-$13.43/-$10.97). Floor flips xrp 5m short -$7.08->+$15.64 (cuts 3 sub-0.10, keeps ALL real-edge >=0.11). This wso.5m.down OVERRIDES by_tf/defaults (that's why defaults.min_edge_buy_no 0.08 didn't bind). Side+window isolated (5m down only; up stays 0.04). Break: revert 0.04 if xrp 5m down >=10cl AND (net<=-$8 OR WR<40%) or lane starves >24h
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
