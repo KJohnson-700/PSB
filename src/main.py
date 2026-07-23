@@ -3269,6 +3269,7 @@ class PolyBot:
             return
         try:
             from datetime import datetime, timezone
+            from src.execution.updown_exit_shared import CRYPTO_UPDOWN_STRATEGIES
             live_ids = set()
             for pos_id, pos in list(self.risk_manager.active_positions.items()):
                 strat = str(getattr(pos, "strategy", "") or "")
