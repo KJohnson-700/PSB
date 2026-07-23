@@ -3281,6 +3281,12 @@ class PolyBot:
                 opened = getattr(pos, "opened_at", None)
                 if opened is None:
                     continue
+                if isinstance(opened, str):
+                    # defensive: a serialized/reloaded position may carry an ISO string
+                    try:
+                        opened = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
                 tz = getattr(opened, "tzinfo", None)
                 now = datetime.now(tz) if tz is not None else datetime.now()
                 hold_s = (now - opened).total_seconds()
@@ -3314,7 +3320,10 @@ class PolyBot:
                 if pid not in live_ids:
                     ng.drop(pid)
         except Exception as e:
-            logging.debug("never-green shadow error: %s", e)
+            # 2026-07-23: was logging.debug (invisible at INFO) which hid why the shadow
+            # logged 0 events despite qualifying positions. Surface it so the next session
+            # shows the exact throw. Still shadow-only — never affects trading.
+            logging.warning("NEVER_GREEN_SHADOW error: %s", e, exc_info=True)
 
     async def _run_exit_checks(
         self,
