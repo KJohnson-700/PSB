@@ -47,9 +47,14 @@ class NeverGreenCut:
         position_id: str,
         hold_seconds: float,
         current_pnl_pct: float,
+        cut_after_secs: Optional[float] = None,
     ) -> Optional[dict]:
         """Update state for one held position; return a shadow event the first time a
-        still-never-green position crosses the hold threshold, else None."""
+        still-never-green position crosses the hold threshold, else None. Pass
+        ``cut_after_secs`` to override the default threshold per call (e.g. a longer
+        window for 1h lanes, which develop slower than 5m); falls back to
+        ``self.cut_after_secs`` when None."""
+        thr = self.cut_after_secs if cut_after_secs is None else float(cut_after_secs)
         st = self._state.get(position_id)
         if st is None:
             st = _PosState(peak_pnl_pct=float(current_pnl_pct))
@@ -61,13 +66,14 @@ class NeverGreenCut:
         if (
             not st.fired
             and not went_green
-            and float(hold_seconds) >= self.cut_after_secs
+            and float(hold_seconds) >= thr
         ):
             st.fired = True
             return {
                 "would_cut_pnl_pct": round(float(current_pnl_pct), 4),
                 "peak_pnl_pct": round(st.peak_pnl_pct, 4),
                 "hold_seconds": round(float(hold_seconds), 1),
+                "cut_after_secs": round(float(thr), 1),
             }
         return None
 

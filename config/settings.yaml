@@ -49,7 +49,15 @@ spot_reversal_bank:
 never_green_cut:
   mode: shadow
   green_threshold_pct: 0.02  # peak pnl below this == "never went green"
-  cut_after_secs: 60         # flag if still-not-green past this hold time
+  cut_after_secs: 60         # fallback threshold if a window is absent from the map below
+  # 2026-07-23 per-window thresholds: 1h lanes develop slower than 5m (winners can go
+  # green at 3-5min), so a single 60s threshold false-cuts slow 1h winners. Measures each
+  # timeframe at a fit threshold — the global 1h never-green drag (-$38, holds 40-234min)
+  # needs ~300s, not 60s. SHADOW only; logs would_cut per window, never exits.
+  cut_after_secs_by_window:
+    5m: 60
+    15m: 120
+    1h: 300
 trading:
   persistent_session: false
   cycle_interval_sec: 60
@@ -1370,6 +1378,7 @@ strategies:
     oracle_ref_use_exchange_spot: true  # 2026-07-13 A operator GO: HL-mid oracle ref (Chainlink 42-50min stale on Arbitrum); re-applies lost 07-01 fix
     disable_buy_yes_5m_native: true  # 2026-07-13 H1 operator GO: momentum 5m longs WR19% -$114 July; fade longs pass
     disable_buy_yes_15m_native: false  # 2026-07-15 HYPE-15M-LONG-REVIVE operator+Codex GO: native-both-ways (fade off); disable LEAKED via macd5m_flip anyway + those oversold-flip longs (entry~0.43) WIN (+6.88/+1.76) while top-buy momentum longs lost. trail_gap 0.10 banks give-backs. Break: 10 closed hype 15m up, re-disable true if net<=-$10 or WR<40%. Was HYPE-MIX operator GO (Codex): suppress aligned-bull 15m native momentum-longs (-$22.82/45t/33% loser); keep 15m fade (chop) + 1h BUY_YES winner (+$18/64%) for long. Break: 10 closed, revert false if suppressed cohort net-positive
+    buy_yes_15m_pocket_rsi_max: 55  # 2026-07-22 operator GO: hype 15m|up surgical entry fix (improve-not-cut, supersedes the disable break-rule). Admit longs ONLY when hype RSI<55 (oversold/pullback = the proven winners per disable_buy_yes_15m_native comment) OR htf BEARISH (contrarian pocket). Session test_20260722_043413: rejects the 3 top-buy chasers (RSI 60/61/65, NEUTRAL htf, entry~0.44, ALL never-green, -$7.43) while keeping the oversold long (RSI 41). Reuses the 06-16 pocket gate (sol_macro:3468, inherited — no ETH port); include_bearish default true. Ghost-logs rejects as buy_yes_15m_pocket_off. Break: revert if hype 15m|up >=10 closed AND (net<=-$8 OR WR<40%)
     ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
     oracle_stale_spot_is_settlement: true
     oracle_stale_spot_settlement_max_basis_bps: 500.0

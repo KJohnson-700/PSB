@@ -987,6 +987,13 @@ class PolyBot:
         # never_green_cut.py.
         _ngc = (self.config.get("never_green_cut", {}) or {})
         self._never_green_mode = str(_ngc.get("mode", "off") or "off").lower()  # off|shadow|live
+        # Per-window cut threshold: 1h lanes develop slower than 5m, so a single 60s
+        # threshold false-cuts slow 1h winners. Map window -> seconds; falls back to
+        # cut_after_secs when a window is absent. Keys are strings ("5m","15m","1h").
+        self._never_green_cut_by_window = {
+            str(k): float(v)
+            for k, v in (_ngc.get("cut_after_secs_by_window", {}) or {}).items()
+        }
         try:
             if self._never_green_mode in ("shadow", "live"):
                 from src.execution.never_green_cut import NeverGreenCut
@@ -3289,14 +3296,18 @@ class PolyBot:
                     pnl_pct = (entry - cy) / (1.0 - entry) if entry < 1.0 else 0.0
                 else:
                     pnl_pct = (cy - entry) / entry
-                ev = ng.observe(position_id=pos_id, hold_seconds=hold_s, current_pnl_pct=pnl_pct)
+                win = getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "?"
+                _cut_secs = self._never_green_cut_by_window.get(str(win))
+                ev = ng.observe(
+                    position_id=pos_id, hold_seconds=hold_s, current_pnl_pct=pnl_pct,
+                    cut_after_secs=_cut_secs,
+                )
                 if ev:
-                    win = getattr(pos, "window_size", "") or getattr(pos, "updown_window", "") or "?"
                     logging.info(
-                        "NEVER_GREEN_SHADOW %s|%s mode=%s hold=%.0fs peak=%+.1f%% "
+                        "NEVER_GREEN_SHADOW %s|%s mode=%s hold=%.0fs (thr=%.0fs) peak=%+.1f%% "
                         "would_cut_at=%+.1f%% (LIVE exit follows separately)",
                         strat.replace("_macro", ""), win, self._never_green_mode,
-                        ev["hold_seconds"], ev["peak_pnl_pct"] * 100,
+                        ev["hold_seconds"], ev["cut_after_secs"], ev["peak_pnl_pct"] * 100,
                         ev["would_cut_pnl_pct"] * 100,
                     )
             for pid in list(getattr(ng, "_state", {}).keys()):
