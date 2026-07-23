@@ -889,6 +889,7 @@ strategies:
     buy_no_5m_flip_to_yes: false
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
+    window_delta_flip_to_long_enabled: false  # 2026-07-23 operator GO: mirror doge/xrp — was UNSET=default TRUE, flipping correct bearish shorts into fake-edge longs (Codex-GO 07-12 fix missed eth+sol; ETH-port gap). 8 eth 15m longs this session were bearish-native SHORT flipped ->BUY_YES. Inherited _window_delta_flip (sol_macro:2034) reads this. Break: revert true if native shorts starve or flip-longs prove +EV
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
     rsi_momentum_flip_1h: true
@@ -1125,6 +1126,7 @@ strategies:
     eth_buy_no_rsi_min: 35.0  # 2026-07-14 E1 operator GO (Codex GO): RSI never exceeded 39.6 all session (p50=28, n=1509) — 50/45/40 admit 0%; 35 admits 19% = bounce-fade shorts; break: eth 15m NO net<=-$12 or WR<30% n>=8 -> 50
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
+    window_delta_flip_to_long_enabled: false  # 2026-07-23 operator GO: mirror doge/xrp — was UNSET=default TRUE, flipping correct bearish shorts into fake-edge longs (Codex-GO 07-12 fix missed eth+sol; ETH-port gap). 8 eth 15m longs this session were bearish-native SHORT flipped ->BUY_YES. Inherited _window_delta_flip (sol_macro:2034) reads this. Break: revert true if native shorts starve or flip-longs prove +EV
     window_delta_confirm_enabled: true
     window_delta_confirm_margin: 0.1
     low_atr_only_lanes: []  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was ['15m:LONG'] = blocked 15m longs outside low-ATR)
@@ -1307,7 +1309,7 @@ strategies:
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 1.0
-            entry_window_max: 120.0
+            entry_window_max: 15  # 2026-07-23 operator GO: was 120 = admitted eth 15m longs up to ~2h PRE-WINDOW (7 open positions held 40-119min, capital-locked). Pre-window 15m is a coin-flip LOSER (IN n=4 WR75% +$24.76 vs PRE n=13 WR31% -$35.22; task#29 -$13.61). Cap to in-window only (15=15m span). This is the task#29 intent that was reverted/never-applied. wso.15m.up binds. Break: revert 120 if eth 15m up starves >24h or IN-window WR<pre-window blended
             size_multiplier: 0.25  # 2026-07-14 eth-long-unlock B operator GO: new native-long lane, sized down
           down:
             min_edge: 0.025  # 2026-07-15 ETH-CARRY-FIX operator GO + Codex GO: was 0.05; post-shrink native BUY_NO edge ~0.03 < 0.05. Calibration frequency. Break: 10 closed 15m NO, revert 0.05 if net<=-$12/WR<35%
