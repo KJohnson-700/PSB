@@ -1123,7 +1123,8 @@ strategies:
     disable_buy_yes_15m: false
     disable_buy_yes_5m: false
     eth_pocket_only: false  # 2026-07-15 ETH-SYMM-RESET operator GO + Codex GO: symmetric calibration, no direction pre-favored, poison-era long-blocks cleared (was true = RSI-gated pocket layer both sides). Off = trade any lane/dir clearing symmetric min_edge. Break: revert true if firehose/net<=-$15
-    eth_buy_no_rsi_min: 35.0  # 2026-07-14 E1 operator GO (Codex GO): RSI never exceeded 39.6 all session (p50=28, n=1509) — 50/45/40 admit 0%; 35 admits 19% = bounce-fade shorts; break: eth 15m NO net<=-$12 or WR<30% n>=8 -> 50
+    eth_buy_no_rsi_min: 35.0  # 2026-07-14 E1 operator GO (Codex GO): RSI never exceeded 39.6 all session (p50=28, n=1509) — 50/45/40 admit 0%; 35 admits 19% = bounce-fade shorts; break: eth 15m NO net<=-$12 or WR<30% n>=8 -> 50. NOTE 2026-07-24: INERT (only used inside eth_pocket_only block, which is off). Superseded by eth_buy_no_rsi_min_floor below.
+    eth_buy_no_rsi_min_floor: 55.0  # 2026-07-24 operator GO (A) + Codex: ALWAYS-ON eth BUY_NO RSI floor (eth_macro.py post-flip gate), independent of eth_pocket_only. Live realized: eth shorts -EV below RSI ~55 (15m<50 -$47, 1h<60 -$23), +EV above (15m>=60 +$61, 1h>=60 +$14). Low-RSI regimes -> few/zero eth shorts = INTENDED (those lose). break: revert (remove key) if eth 15m/1h NO 0-fill 24h AND no high-RSI window occurred.
     macd_momentum_flip_5m15m: true
     macd_momentum_flip_long_to_short: false
     window_delta_flip_to_long_enabled: false  # 2026-07-23 operator GO: mirror doge/xrp — was UNSET=default TRUE, flipping correct bearish shorts into fake-edge longs (Codex-GO 07-12 fix missed eth+sol; ETH-port gap). 8 eth 15m longs this session were bearish-native SHORT flipped ->BUY_YES. Inherited _window_delta_flip (sol_macro:2034) reads this. Break: revert true if native shorts starve or flip-longs prove +EV
@@ -1904,7 +1905,8 @@ strategies:
     - 5m
     - 15m
     disable_buy_no_5m: false
-    disable_buy_yes_5m: true
+    disable_buy_yes_5m: false  # 2026-07-24 operator GO + Codex: re-enable doge 5m LONG. 06-16 disable was ghost EV -0.084 + Kimi-flag (both distrusted); LIVE realized +$37.45 9/15 60%WR contradicts it. Probation @0.3x size / 0.06 edge; review after 10-15 fresh closed fills; re-disable ONLY on fresh live -EV, never ghost.
+    5m_buy_yes_bullish_floor_bump_rsi_max: 70.0  # 2026-07-24 Codex guard: rsi_hard_gate is off so rsi_buy_block_above:70 is only a soft penalty; with +0.17 bullish bump overbought longs still net +0.13 edge inflation. Cap the bump at RSI 70 to avoid forcing longs into tops.
     buy_yes_15m_pocket_rsi_max: 35
     est_prob:
       atr_low_pct: 0.0035
@@ -2009,6 +2011,8 @@ strategies:
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
+    buy_no_5m_pocket_rsi_min: 35.0   # 2026-07-24 operator GO + Codex: doge 5m SHORT oversold-fault. Live RSI<35 = -$35.64 43%WR (30t), RSI>=35 = +$28.45 49% (70t). This session median entry RSI 32 -> -$57. Gate=sol_macro:3496 (bnb already uses).
+    buy_no_15m_pocket_rsi_min: 35.0  # 2026-07-24 same fault: doge 15m SHORT RSI<35 = -$35.94 30%WR (33t), RSI>=35 = +$51.30 49% (35t). Turns both doge shorts into winners at lower freq.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04

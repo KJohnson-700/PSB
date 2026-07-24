@@ -1993,6 +1993,26 @@ class ETHMacroStrategy(SolMacroStrategy):
                     htf_bias=primary_htf_bias,
                 )
                 continue
+            # 2026-07-24 (operator GO + Codex): ETH BUY_NO RSI floor at FINAL action
+            # (post-flip) so it binds on native + fade + window_delta_flip paths — unlike
+            # the eth_pocket_only block (pre-flip, default off). ETH shorts are -EV below
+            # RSI ~55 (live: 15m<50 -$47, 1h<60 -$23) and +EV above (15m>=60 +$61, 1h>=60
+            # +$14). NEW key eth_buy_no_rsi_min_floor to avoid stacking with the existing
+            # eth_buy_no_rsi_min/eth_pocket_only gate; unset => no-op.
+            # 15m/1h ONLY (Codex 2026-07-24): the edge is on 15m/1h shorts (+$61/+$14);
+            # excluding 5m avoids clobbering the later eth_5m_buy_no_flip_to_yes inversion
+            # path AND protects the eth 5m collection lane. 5m short is a tiny -$21 lane.
+            _bn_rsi_floor = self.config.get("eth_buy_no_rsi_min_floor")
+            if action == "BUY_NO" and _updown_tf in ("15m", "1h") and _bn_rsi_floor is not None:
+                _eth_rsi = getattr(eth, "rsi_14", None)
+                if _eth_rsi is not None and float(_eth_rsi) < float(_bn_rsi_floor):
+                    _bump_skip("eth_buy_no_rsi_floor_off")
+                    _log_skip_reject(
+                        market=market, window=_updown_tf, side=market_allowed_side,
+                        action=action, reason="eth_buy_no_rsi_floor_off", yes_price=yes_price,
+                        htf_bias=primary_htf_bias,
+                    )
+                    continue
             # Low-ATR volatility gate (inherited) — configured losing lanes only
             # trade in low vol; mid/high-ATR is where they bleed. Side is final.
             _atr_block = self._low_atr_gate_blocks(eth, _updown_tf, action)
