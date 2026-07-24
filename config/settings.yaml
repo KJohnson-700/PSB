@@ -1380,7 +1380,7 @@ strategies:
     alt_1h_hard_block_5m_longs: false  # 2026-07-13 operator GO (macro completeness audit): key was MISSING -> code default TRUE hard-blocked hype 5m fade-longs in bearish 1h — the only long path this asset has; all 4 siblings run false
     disable_buy_no_1h: false  # 2026-07-17 STAGED operator+Codex GO (restart-only, frozen self.config): THE real hype 1h fix. Reject log: 912/912 candidates are SHORT, 100% BEARISH htf, 100% blocked here — lane wants to short, shorts hard-disabled (07-13 'unacceptable math', 0 live data since). Controlled re-test, not a proven unlock. Break: re-disable if net<=-$8/10cl OR WR<35%
     oracle_ref_use_exchange_spot: true  # 2026-07-13 A operator GO: HL-mid oracle ref (Chainlink 42-50min stale on Arbitrum); re-applies lost 07-01 fix
-    disable_buy_yes_5m_native: true  # 2026-07-13 H1 operator GO: momentum 5m longs WR19% -$114 July; fade longs pass
+    disable_buy_yes_5m_native: false    # 2026-07-24 operator GO(sharp)+Codex GO: RE-ENABLE hype 5m up on PROBATION (0.3x). Disable was 07-13 on GHOST/momentum-subset (-$114 ghost); live realized JUN +$209/n234/51% vs JUL n=1 -> same stale-ghost disable as doge5m up. Break: revert true if next 10 closed 5m up net<=-$8 OR WR<40%.
     disable_buy_yes_15m_native: false  # 2026-07-15 HYPE-15M-LONG-REVIVE operator+Codex GO: native-both-ways (fade off); disable LEAKED via macd5m_flip anyway + those oversold-flip longs (entry~0.43) WIN (+6.88/+1.76) while top-buy momentum longs lost. trail_gap 0.10 banks give-backs. Break: 10 closed hype 15m up, re-disable true if net<=-$10 or WR<40%. Was HYPE-MIX operator GO (Codex): suppress aligned-bull 15m native momentum-longs (-$22.82/45t/33% loser); keep 15m fade (chop) + 1h BUY_YES winner (+$18/64%) for long. Break: 10 closed, revert false if suppressed cohort net-positive
     buy_yes_15m_pocket_rsi_max: 55  # 2026-07-22 operator GO: hype 15m|up surgical entry fix (improve-not-cut, supersedes the disable break-rule). Admit longs ONLY when hype RSI<55 (oversold/pullback = the proven winners per disable_buy_yes_15m_native comment) OR htf BEARISH (contrarian pocket). Session test_20260722_043413: rejects the 3 top-buy chasers (RSI 60/61/65, NEUTRAL htf, entry~0.44, ALL never-green, -$7.43) while keeping the oversold long (RSI 41). Reuses the 06-16 pocket gate (sol_macro:3468, inherited — no ETH port); include_bearish default true. Ghost-logs rejects as buy_yes_15m_pocket_off. Break: revert if hype 15m|up >=10 closed AND (net<=-$8 OR WR<40%)
     ai_updown_observe_only: true  # 2026-07-08 operator: AI marginal veto OBSERVE-ONLY (net-harmful per live finding; blocked 76 clean +edge/session). AI still logs, no longer vetoes/gates.
@@ -1542,6 +1542,7 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 0.0
             entry_window_max: 5.5
+            size_multiplier: 0.3  # 2026-07-24 probation size (mirror doge5m up 0.3x)
           down:
             min_edge: 0.05  # 2026-07-16 operator GO (Codex GO): un-starve hype 5m SHORT, parity w/ 15m-down engine; lane_min_edge was the gate (55 rejects post-un-starve). Break: revert 0.08 if net<=-$8/10cl OR WR<40%
             entry_price_min: 0.46
@@ -1556,6 +1557,7 @@ strategies:
             entry_price_max: 0.58
             entry_window_min: 2.0
             entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135.0 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=13 WR46% +$7.04 vs PRE n=16 WR31% -$2.42. 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135.0 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
+            enabled: false        # 2026-07-24 operator GO(sharp)+Codex GO: DISABLE hype 15m up (loser both eras: JUN -$116/n147/41%, JUL -$6.46/n24/29%). enabled:false = hard kill before edge logic (honored sol_macro:5436). Revert true to restore.
           down:
             min_edge: 0.05  # 2026-07-15 HYPE-UNSTARVE operator+Codex GO: was 0.06 -> starved the +$13 July 15m short-engine (signals arrive ~0.05, 0 fills/session). Keep NO>=0.50 price band. Break: 10 closed, revert 0.06 if net<=-$8 or WR<40%
             hard_min_edge: 0.0
@@ -1572,6 +1574,7 @@ strategies:
             entry_window_min: 1.0
             entry_window_max: 360
             size_multiplier: 0.15
+            enabled: false  # 2026-07-24 operator GO(sharp)+Codex GO: DISABLE hype 1h up (FLIPPED: JUN +$49/62% -> JUL -$19.70/n9/33%). enabled:false hard kill. Revert true to restore.
           down:
             min_edge: 0.06
             entry_price_min: 0.42
@@ -1851,7 +1854,7 @@ strategies:
             size_multiplier: 0.3
           down:
             entry_price_min: 0.53  # 2026-07-14 X1+X3 operator GO: 0.51 leaked band-edge fills (band checks MID, fill pays ASK — NO landed 0.50-0.51, the losing zone); 0.53 = filled NO <=0.49 after ~2c spread
-            min_edge: 0.02  # 2026-07-08 RESTORE operator 07-04 freq-unlock trim (was 0.02->raised to 0.04 by my wholesale revert; this lane won +$ in 07-04/05)
+            min_edge: 0.08  # 2026-07-24 operator GO + Codex GO: gate the 0%-WR sub-0.08 admitted band. LIFETIME band-split (live realized): edge<0.08 = -$12.72/0%WR/n5 (all losers); edge>=0.08 = +$89.02/61%/n33 (the winning engine). Lane is +$76 lifetime DESPITE the junk. 0.02 was 3-4x looser than sol0.07/bnb0.08. Cuts loser sub-band ONLY; winning band is by-def >=0.08 so untouched. Hot-reload, side-isolated (1h down). Break: revert if 24h zero-fill WITH normal candidate flow, OR >=0.08 band net-neg over next 15 closed. Prior: 0.02 restored 07-08 from 0.04 on "lane won" (stale=win was the >=0.08 band, not sub-0.08).
             entry_price_max: 0.55
             entry_window_min: 0.0
             entry_window_max: 360
