@@ -484,6 +484,12 @@ def _resolve_lane_gate(
     if side == "BUY_NO" and window == "5m" and bool(strategy_cfg.get("disable_buy_no_5m_native", False)):
         return {"open": False, "kind": "disabled", "flag": "disable_buy_no_5m_native"}
 
+    # 4b. Native 5m BUY_YES suppression (symmetric to 4) — hype uses
+    # disable_buy_yes_5m_native; without this the lane shows OPEN on the dash
+    # while it is actually suppressed (241 native_suppressed rejects/session).
+    if side == "BUY_YES" and window == "5m" and bool(strategy_cfg.get("disable_buy_yes_5m_native", False)):
+        return {"open": False, "kind": "disabled", "flag": "disable_buy_yes_5m_native"}
+
     # 5. BTC counter-trend BUY_NO suppression
     if side == "BUY_NO" and bool(strategy_cfg.get("disable_buy_no_counter_trend", False)):
         return {"open": False, "kind": "disabled", "flag": "disable_buy_no_counter_trend"}

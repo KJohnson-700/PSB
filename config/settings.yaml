@@ -1059,7 +1059,7 @@ strategies:
             entry_window_max: 15  # 2026-07-17 operator+Codex GO (SELECTIVE cap): was 135 -> 15 = the window's own span, so this lane can only trade a LIVE market. PRE-WINDOW ENTRIES PROVEN: ENTRY.minutes_to_market_end>15 on a 15-MINUTE market means the window had not opened; falsified 176/176 with 0 counter-examples (market_question start vs entry ts; leads up to +64min — bot bought 4 different eth 15m windows in one minute at 06:39). Aggregate 15m: IN n=200 WR46% +$195.27 vs PRE n=189 WR37% -$110.42; the 15-30min bucket alone = n=143 WR29% -$135.12 (largest loss pool in the session). THIS LANE: IN n=48 WR40% -$5.96 vs PRE n=17 WR6% -$24.47 (pre wins 1 of 17). 5m lanes already do this implicitly (entry_window_max 4.0-4.5 < 5-min span) and win 53% — that is WHY 5m outperforms 15m/1h, not exits or asset. btc|15m|down is already capped at 15 and is the best 15m lane. Operator accepted the frequency cut (~48% of 15m volume). 5m + 1h + asset-level UNTOUCHED; eth|15m|up and xrp|15m|down EXCLUDED per Codex (their pre-window cohorts are positive/noise). Break: revert 135 if IN-window WR drops below the pre-cap blended WR over the next 15-20 closes, or the lane starves >24h.
         1h:
           up:
-            min_edge: 0.07
+            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): sol 1h up = -$25.46 pooled good-config (43%WR n14), ALL lo-edge, ZERO +band; 0 fills this session. NOTE side-isolated: sol 1h DOWN (+$23) + sol 5m (winner) UNTOUCHED. Prohibitive 0.07->0.30 = effective CUT, instantly revertible.
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1326,7 +1326,7 @@ strategies:
             entry_window_max: 360
             size_multiplier: 0.3
           down:
-            min_edge: 0.06  # 2026-07-15 E-A operator GO (Codex): eth 1h SHORT fade edges 0.09-0.11 arriving now blocked by base 0.09 + far-from-expiry ramp 0.03 = eff 0.12. Base 0.06 -> eff 0.09 admits them (est 0.69 fade shorts). Break: 10 closed 1h NO, revert 0.09 if net<=-$12 or WR<35%
+            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): eth 1h down = -$23.49 pooled good-config (32%WR n38), 97% lo-edge (-$25.9/n37), only +band is n=1 -> nothing to floor-salvage; this session -$15 too (cross-check). Prohibitive 0.06->0.30 = effective CUT, instantly revertible. Prior: E-A fade-short admit 0.06.
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 0.0
@@ -1548,7 +1548,7 @@ strategies:
             entry_window_max: 11.0
         15m:
           up:
-            min_edge: 0.03  # 2026-07-13 operator GO (starve-2, Codex GO): observed edges p90=0.010 max=0.045; admits best tail only; break WR<40% over 10 -> 0.06
+            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): hype 15m up = -$29.09 pooled good-config (18%WR n11), ALL lo-edge, ZERO +band -> nothing to floor-salvage; this session -$8 too (cross-check). Prohibitive 0.03->0.30 = effective CUT (near-zero fills), instantly revertible. Prior: p90 edge 0.010 max 0.045.
             hard_min_edge: 0.0
             entry_price_min: 0.42
             entry_price_max: 0.58
@@ -1819,7 +1819,7 @@ strategies:
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.10  # 2026-07-23 operator GO: xrp 5m SHORT edge floor 0.04->0.10. Root of "consistent loser": thin-edge shorts (edge 0.062-0.065) = near-coin-flip entries near even (yes 0.47-0.53) that never-green collapse (-$13.43/-$10.97). Floor flips xrp 5m short -$7.08->+$15.64 (cuts 3 sub-0.10, keeps ALL real-edge >=0.11). This wso.5m.down OVERRIDES by_tf/defaults (that's why defaults.min_edge_buy_no 0.08 didn't bind). Side+window isolated (5m down only; up stays 0.04). Break: revert 0.04 if xrp 5m down >=10cl AND (net<=-$8 OR WR<40%) or lane starves >24h
+            min_edge: 0.13  # 2026-07-23 BITE-VERIFY RAISE 0.10->0.13 (operator GO). The 0.10 floor BIT but was too low: pooled good-config (n=35) shows the killer band is edge [0.10-0.13) = 17% WR / -$34.47 (-$5.74/t), which 0.10 let straight through. [0.13-0.15) 60%WR breakeven, [0.18+] 54%WR +. Floor 0.13 cuts the -$63 sub-floor loss cluster -> lane breakeven (was -$37/9-stops this session, all losers entered 0.10-0.14). This IS xrp's binding wso block (verified: safe_load + ruamel resolve here; strict dup-key scan clean; the line ~712 block is a DIFFERENT strategy, not a conflict). wso.5m.down OVERRIDES by_tf/defaults. 5m down only; up stays 0.04. Break: revert 0.10 if xrp 5m down >=10cl AND (net<=-$8 OR WR<40%) or starves >24h
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -1840,7 +1840,7 @@ strategies:
             entry_window_max: 135  # 2026-07-13 starve-1: 2248 rejects at p50=74min lead; matches hype 15m; early-positioning noted per Codex
         1h:
           up:
-            min_edge: 0.0
+            min_edge: 0.30  # 2026-07-23 operator GO CUT (loser): xrp 1h up = -$12.19 pooled good-config (12%WR n8), lo -$9.4/mid -$2.8, ZERO +band; this session -$1/n1. Prohibitive 0.0->0.30 = effective CUT, instantly revertible.
             entry_price_min: 0.42
             entry_price_max: 0.58
             entry_window_min: 30  # 2026-07-17 operator GO: was 0.0. Lower edge of the same band — see entry_window_max note. Cuts the late/in-window tail where xrp|1h|up loses.
@@ -1891,7 +1891,7 @@ strategies:
         entry_family: standard
         min_edge_add: 0.30
         probability_haircut: 0.0
-    lane_max_notional_15m_down: 10  # 2026-07-14 S5 operator GO (Codex GO): n=14 WR28% -$4.03 filling $15 — mild cap, keep probe data. Break: ->$8 if next 8-10 fills negative WR<40%; lift after +net over 10+.
+    lane_max_notional_15m_down: 5  # 2026-07-23 operator GO (Codex CLEAN): DOWNSIZE 10->5. doge 15m down = June->July EDGE DECAY (Jun ~+$36 -> Jul ~-$24; good-config 4W/13L -$16.01 24%WR n=17; this session 0W/7L -$14.10, all doge_15m_native, 5/7 healthy-edge losers = NOT thin-admit, edge decayed like xrp). Halve exposure, keep firing for data. Break: revert 10 if starves 0-fill 24h; lift if net-positive at $5. (Prev 07-14: 10 was a mild cap from $15.)
     fresh_cross_override: true  # 2026-07-14 F6 RESTART STEP (pre-approved design): asymmetric code loaded at 07:02 restart — LONG->SHORT mirror now code-gated OFF (long_to_short_enabled default false); protective SHORT->LONG restored
     tape_veto_60s_enabled: true  # 2026-07-13 operator GO action 1 (Codex GO): veto entries against in-flight 1m move — kills the never-green class (-$96 today)
     tape_veto_60s_bps: 20  # 2026-07-13 action 1: veto threshold, tune from tape_bps_60s reject context
@@ -2053,7 +2053,7 @@ strategies:
             entry_window_max: 4.5
             size_multiplier: 0.3
           down:
-            min_edge: 0.08
+            min_edge: 0.15  # 2026-07-23 operator GO (ATTACK loser): doge 5m down = good-config WINNER (+$24.28/n62/50%WR pooled, stops ~breakeven) DRAGGED by the lo-edge band. Edge<0.15: -$7.81 good-config / -$15.16 this session (17-44%WR); mid(.15-.22)=+$23.53, hi(>=.22)=+$8.56. Floor 0.08->0.15 cuts the coin-flip drag, KEEPS the earning bands (same pattern as xrp5m down 0.13). This session's -$39 was stop-sum -$34 (flap-aggravated bad fills) on top of the lo-band. wso.5m.down binding (line 2056). Break: revert 0.08 if lane starves 0-fill 24h OR the kept bands turn net<=-$8/10cl.
             entry_price_min: 0.46
             entry_price_max: 0.55
             entry_window_min: 0.0
@@ -2067,7 +2067,7 @@ strategies:
             entry_window_min: 2.0
             entry_window_max: 32.0
           down:
-            min_edge: 0.06
+            min_edge: 0.15  # 2026-07-23 operator GO (ATTACK loser): doge 15m down = GENUINE loser (-$13.19/n36/36%WR pooled good-config, stop-sum -$41.30). The loss IS the lo-edge band: edge<0.15 = n=32 of 36 (89% of volume) at -$13.98; mid+hi (n=4) ~breakeven+ (+$0.78). Floor 0.06->0.15 cuts the coin-flip 89% -> rare-fire hi-conviction only. Already downsized cap 10->5 (03:49). Combined = downsize-loser-with-data. Expect low frequency (that's correct for a coin-flip loser). wso.15m.down binding (line 2070). Break: revert 0.06 if hi-conviction (>=0.15) proves net-positive at n>=8 AND wants more volume, or lane starves 0-fill 24h with the hi-band still +EV.
             entry_price_min: 0.42
             entry_price_max: 0.55
             entry_window_min: 2.0

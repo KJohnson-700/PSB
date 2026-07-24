@@ -272,8 +272,10 @@ class HyperliquidHypeService(SOLBTCService):
         Falls back to the Binance kline ``fallback`` if HL is unreachable.
         """
         now = time.time()
+        _po0 = time.perf_counter()
         cached = getattr(self, "_hl_mid_cache", None)
         if cached and (now - cached[0]) < self._hl_mid_ttl_sec:
+            self._perf_note("ORACLE", self.HYPE_COIN, "allMids", "cache", _po0)
             return cached[1]
         try:
             resp = self._post_candles(
@@ -284,12 +286,15 @@ class HyperliquidHypeService(SOLBTCService):
             mids = resp.json() or {}
             raw = mids.get(self.HYPE_COIN)
             if raw is None:
+                self._perf_note("ORACLE", self.HYPE_COIN, "allMids", "rest_nohit", _po0)
                 return fallback
             mid = float(raw)
             self._hl_mid_cache = (now, mid)
+            self._perf_note("ORACLE", self.HYPE_COIN, "allMids", "rest", _po0)
             return mid
         except Exception as e:
             logger.info("Hyperliquid allMids unavailable (%s); using Binance kline for basis", e)
+            self._perf_note("ORACLE", self.HYPE_COIN, "allMids", "rest_exc", _po0)
             return fallback
 
     def _fetch_binance_hype_klines(self, interval: str, limit: int) -> pd.DataFrame:
@@ -348,10 +353,12 @@ class HyperliquidHypeService(SOLBTCService):
           - On empty/error, fall through to Hyperliquid ``candleSnapshot``.
           - Hyperliquid path retains existing retry + stale-cache fallback.
         """
+        _pf0 = time.perf_counter()
         try:
             from src.market import ws_candle_feed as _wcf
             _wdf = _wcf.get_feed().get_klines("HYPEUSDT", interval, limit)
             if _wdf is not None and len(_wdf) >= min(limit, 30):
+                self._perf_note("HYPEKL", "HYPEUSDT", interval, "ws", _pf0)
                 return _wdf
         except Exception:
             pass
@@ -359,6 +366,7 @@ class HyperliquidHypeService(SOLBTCService):
         if not binance_df.empty:
             cache_key = f"hype_{interval}_{limit}"
             self._hype_last_good[cache_key] = (time.time(), binance_df)
+            self._perf_note("HYPEKL", "HYPEUSDT", interval, "binance_rest", _pf0)
             return binance_df
         mapped = self._INTERVAL_MAP.get(interval)
         if not mapped:
@@ -419,16 +427,20 @@ class HyperliquidHypeService(SOLBTCService):
             df = _attempt()
             if not df.empty:
                 self._hype_last_good[cache_key] = (time.time(), df)
+                self._perf_note("HYPEKL", "HYPEUSDT", interval, "hyperliquid", _pf0)
                 return df
             # Empty-result retry (one extra shot — Hyperliquid intermittently returns [])
             logger.warning("Hyperliquid HYPE empty response (%s); retrying once", interval)
             df2 = _attempt()
             if not df2.empty:
                 self._hype_last_good[cache_key] = (time.time(), df2)
+                self._perf_note("HYPEKL", "HYPEUSDT", interval, "hyperliquid_retry", _pf0)
                 return df2
+            self._perf_note("HYPEKL", "HYPEUSDT", interval, "stale", _pf0)
             return self._stale_fallback(cache_key, reason=f"empty {interval}", interval=interval)
         except Exception as e:
             logger.error("Hyperliquid HYPE candles unavailable (%s): %s", interval, e)
+            self._perf_note("HYPEKL", "HYPEUSDT", interval, "stale_exc", _pf0)
             return self._stale_fallback(cache_key, reason=f"exception {interval}: {e}", interval=interval)
 
     def fetch_klines_range(
@@ -584,10 +596,12 @@ class HyperliquidHypeService(SOLBTCService):
         if symbol.upper() != self.alt_symbol.upper():
             return super().fetch_klines(symbol=symbol, interval=interval, limit=limit)
 
+        _pt0 = time.perf_counter()
         cache_key = f"hype_{interval}_{limit}"
         if cache_key in self._hype_cache:
             ts, df = self._hype_cache[cache_key]
             if time.time() - ts < self._hype_cache_ttl:
+                self._perf_note("KLINES", self.alt_symbol, interval, "hype_cache", _pt0)
                 return df
 
         df = self._fetch_hype_klines(interval=interval, limit=limit)

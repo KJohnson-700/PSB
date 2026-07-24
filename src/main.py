@@ -3317,6 +3317,31 @@ class PolyBot:
                         ev["hold_seconds"], ev["cut_after_secs"], ev["peak_pnl_pct"] * 100,
                         ev["would_cut_pnl_pct"] * 100,
                     )
+                    # 2026-07-23: persist a STRUCTURED record so the would-cut event
+                    # joins cleanly to its exit outcome. pos_id == entries.jsonl trade_id
+                    # (position_id is set from trade_id, main.py:1855); ts in UTC so there
+                    # is no PT/UTC mismatch. Shadow-only: append to a jsonl, never touches
+                    # trading state. Nested try so one bad write can't abort the loop.
+                    try:
+                        import json as _json
+                        _rec = {
+                            "trade_id": str(pos_id),
+                            "market_id": str(getattr(pos, "market_id", "") or ""),
+                            "strategy": strat.replace("_macro", ""),
+                            "window": str(win),
+                            "ts_utc": datetime.now(timezone.utc).isoformat(),
+                            "hold_seconds": ev["hold_seconds"],
+                            "cut_after_secs": ev["cut_after_secs"],
+                            "peak_pnl_pct": ev["peak_pnl_pct"],
+                            "would_cut_pnl_pct": ev["would_cut_pnl_pct"],
+                            "mode": self._never_green_mode,
+                        }
+                        with open("data/calibration/never_green_shadow.jsonl", "a") as _f:
+                            _f.write(_json.dumps(_rec) + "\n")
+                    except Exception as _we:
+                        logging.warning(
+                            "NEVER_GREEN_SHADOW write error: %s", _we, exc_info=True
+                        )
             for pid in list(getattr(ng, "_state", {}).keys()):
                 if pid not in live_ids:
                     ng.drop(pid)

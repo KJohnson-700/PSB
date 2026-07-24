@@ -416,12 +416,32 @@ class SOLBTCService:
     # Binance API
     # ──────────────────────────────────────────────────────────────────
 
+    def _perf_note(self, kind: str, symbol: str, interval: str, source: str, t0: float) -> None:
+        """READ-ONLY feed-latency instrumentation (2026-07-21, staged for restart).
+
+        Emits one compact greppable line per non-trivial klines fetch so we can
+        prove where the HYPE lane's ~2.5s goes (ws-warm vs REST-fallback vs cache)
+        and whether the shared cold-cycle cost is analysis-side. Volume-guarded:
+        fast ws hits (the common case) stay silent. Wrapped by the caller so it
+        can NEVER affect the fetch result. Pure logging — no behavior change.
+        """
+        try:
+            ms = (time.perf_counter() - t0) * 1000.0
+            if source != "ws" or ms >= 100.0:
+                logger.info(
+                    "PERF_%s sym=%s iv=%s src=%s ms=%d", kind, symbol, interval, source, int(ms)
+                )
+        except Exception:
+            pass
+
     def fetch_klines(self, symbol: str, interval: str = "1h", limit: int = 200) -> pd.DataFrame:
         """Fetch klines from Binance for any symbol (SOLUSDT, BTCUSDT, etc.)."""
+        _pt0 = time.perf_counter()
         try:
             from src.market import ws_candle_feed as _wcf
             _wdf = _wcf.get_feed().get_klines(symbol, interval, limit)
             if _wdf is not None and len(_wdf) >= min(limit, 30):
+                self._perf_note("KLINES", symbol, interval, "ws", _pt0)
                 return _wdf
         except Exception:
             pass
@@ -429,6 +449,7 @@ class SOLBTCService:
         if cache_key in self._cache:
             ts, df = self._cache[cache_key]
             if time.time() - ts < self._cache_ttl:
+                self._perf_note("KLINES", symbol, interval, "cache", _pt0)
                 return df
 
         last_exc = None
@@ -453,6 +474,7 @@ class SOLBTCService:
                 df["close_time"] = pd.to_datetime(df["close_time"], unit="ms")
 
                 self._cache[cache_key] = (time.time(), df)
+                self._perf_note("KLINES", symbol, interval, "rest", _pt0)
                 return df
 
             except Exception as e:
@@ -1293,17 +1315,37 @@ class SOLBTCService:
         - Multi-timeframe trend (1H/15m/5m)
         """
         try:
+            # PERF instrumentation (2026-07-21, read-only, staged for restart):
+            # sub-phase timers isolate WHERE a lane's scan time goes — proves whether
+            # the shared cold-cycle cost is analysis-side and which asset/phase is slow.
+            _pa0 = time.perf_counter()
             # SOL indicators
             sol = self.calc_sol_indicators()
+            _pa1 = time.perf_counter()
             if sol.current_price == 0.0:
                 logger.warning("Could not fetch SOL price data for analysis")
                 return None
 
             # BTC-SOL correlation
             correlation = self.calc_correlation()
+            _pa2 = time.perf_counter()
 
             # Multi-timeframe trend
             multi_tf = self.calc_multi_tf_trend()
+            _pa3 = time.perf_counter()
+            try:
+                _tot = (_pa3 - _pa0) * 1000.0
+                if _tot >= 300.0:  # only surface non-trivial analyses (skip warm sub-second)
+                    logger.info(
+                        "PERF_ANALYSIS sym=%s calc_ind_ms=%d corr_ms=%d multitf_ms=%d total_ms=%d",
+                        self.alt_symbol,
+                        int((_pa1 - _pa0) * 1000.0),
+                        int((_pa2 - _pa1) * 1000.0),
+                        int((_pa3 - _pa2) * 1000.0),
+                        int(_tot),
+                    )
+            except Exception:
+                pass
 
             # Populate sol_trend on the correlation object from the multi-TF 1H reading.
             # BTCSOLCorrelation.sol_trend defaults to "NEUTRAL" and calc_correlation()

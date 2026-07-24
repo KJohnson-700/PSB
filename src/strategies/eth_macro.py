@@ -2876,6 +2876,16 @@ class ETHMacroStrategy(SolMacroStrategy):
             if bool(self.config.get("use_true_kelly_sizing", True)):
                 _our_price = yes_price if action == "BUY_YES" else (1.0 - yes_price)
                 _win_prob = min(0.99, max(0.01, float(_our_price) + float(edge)))
+                # 2026-07-22 calibration-correction apply hook (flag-gated, default OFF).
+                # ETH port of the sol_macro hook — eth|15m|up is the primary corrected lane.
+                # Sizing-only; matches the shadow that earned the apply-gate. Fail-safe.
+                if is_updown and bool(self.config.get("apply_calibration_correction", False)):
+                    try:
+                        from src.analysis.calibration_apply import corrected_win_prob as _cwp
+                        _cal_key = f"{str(self._signal_strategy_name).replace('_macro', '')}|{_updown_tf}|{'up' if action == 'BUY_YES' else 'down'}"
+                        _win_prob = _cwp(_win_prob, _cal_key)
+                    except Exception:
+                        pass
                 try:
                     raw_size = self.kelly_sizer.size_binary_position(
                         self._signal_strategy_name, bankroll, _win_prob, _our_price, **_kf_kw
