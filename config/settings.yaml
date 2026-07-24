@@ -983,6 +983,7 @@ strategies:
     alt_1h_hard_block_5m_longs: false
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
+    buy_no_5m_pocket_rsi_min: 30.0   # 2026-07-24 operator GO + Codex (30 not 35): sol 5m SHORT workhorse. RSI<30 = -$34.82 (bleed), 30-35 = +$23.59 WINNER (keep!), 35+ = +$100. 35 would cut a winner. break: raise to 35 if 30-35 turns -EV.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
@@ -1744,6 +1745,7 @@ strategies:
     min_edge_buy_no: 0.08
     rsi_buy_block_above: 70.0
     rsi_sell_block_below: 30.0
+    buy_no_5m_pocket_rsi_min: 45.0   # 2026-07-24 operator GO + Codex: xrp 5m SHORT oversold-fault. Live RSI<45 = -$103 (58t ~35%WR), RSI>=45 = +$119 (34t 65%). Gate=sol_macro:3496.
     rsi_hard_gate_enabled: false
     rsi_soft_penalty_enabled: true
     rsi_soft_penalty_buy_yes: 0.04
